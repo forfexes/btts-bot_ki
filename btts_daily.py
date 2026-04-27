@@ -49,7 +49,7 @@ GROQ_API_KEYS = [
     "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",
     "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",
 ]
-GROQ_MODEL = "llama-3.3-70b-versatile"
+GROQ_MODEL = "llama-3.1-8b-instant"
 
 ODDS_API_KEYS = [
     "4b66fb8339b88da06e6bf49fec19efdf",
@@ -86,9 +86,9 @@ SUPABASE_URL = "https://sugycqnjncgfheueqaee.supabase.co"
 SUPABASE_KEY = "sb_secret_SuIolwQOeMa1mekoyhrnbQ_N36pUi4-"
 
 # ═══ FILTER ═════════════════════════════════════════════════
-MIN_PROBABILITY = 65
-MIN_ODDS = 1.6
-MAX_ODDS = 3.0
+MIN_PROBABILITY = 60
+MIN_ODDS = 1.5
+MAX_ODDS = 3.5
 MIN_CONFIDENCE = 3
 
 MARKETS_TO_RUN = ["btts", "over25", "combo", "1x2"]
@@ -579,6 +579,7 @@ def call_gemini(prompt):
         "tools": [{"google_search": {}}],
         "generationConfig": {"temperature": 0.2, "maxOutputTokens": 32000}
     }
+    last_error = None
     for idx, key in enumerate(GEMINI_API_KEYS):
         try:
             r = requests.post(
@@ -587,20 +588,57 @@ def call_gemini(prompt):
             )
             data = r.json()
             if "error" in data:
+                last_error = data.get("error", {}).get("message", "")[:100]
+                continue
+            candidates = data.get("candidates", [])
+            if not candidates:
+                last_error = "no candidates"
+                continue
+            text = "".join(p.get("text", "") for p in candidates[0].get("content", {}).get("parts", []))
+            if not text.strip():
+                last_error = "empty response"
+                continue
+            results = extract_json_array(text)
+            if results is not None:
+                return results, f"Gemini #{idx+1}"
+            last_error = "no JSON in response"
+        except Exception as e:
+            last_error = str(e)[:50]
+            continue
+    return None, f"Gemini erschöpft ({last_error})"
+
+
+def call_gemini_no_tools(prompt):
+    """Fallback ohne google_search tool (für Rate-Limits)"""
+    payload = {
+        "contents": [{"parts": [{"text": prompt}]}],
+        "generationConfig": {"temperature": 0.2, "maxOutputTokens": 16000}
+    }
+    for idx, key in enumerate(GEMINI_API_KEYS):
+        try:
+            r = requests.post(
+                f"https://generativelanguage.googleapis.com/v1beta/models/{GEMINI_MODEL}:generateContent?key={key}",
+                json=payload, timeout=120
+            )
+            data = r.json()
+            if "error" in data:
                 continue
             candidates = data.get("candidates", [])
             if not candidates:
                 continue
             text = "".join(p.get("text", "") for p in candidates[0].get("content", {}).get("parts", []))
+            if not text.strip():
+                continue
             results = extract_json_array(text)
             if results is not None:
-                return results, f"Gemini #{idx+1}"
+                return results, f"Gemini-NoTools #{idx+1}"
         except:
             continue
-    return None, "Gemini erschöpft"
+    return None, "Gemini-NoTools erschöpft"
 
 
 def call_groq(prompt):
+    last_error = None
     for idx, key in enumerate(GROQ_API_KEYS):
         try:
             r = requests.post(
@@ -612,17 +650,23 @@ def call_groq(prompt):
             )
             data = r.json()
             if "error" in data:
+                last_error = data.get("error", {}).get("message", "")[:100]
                 continue
             choices = data.get("choices", [])
             if not choices:
+                last_error = "no choices"
                 continue
             text = choices[0].get("message", {}).get("content", "")
+            if not text.strip():
+                continue
             results = extract_json_array(text)
             if results is not None:
                 return results, f"Groq #{idx+1}"
-        except:
+            last_error = "no JSON in response"
+        except Exception as e:
+            last_error = str(e)[:50]
             continue
-    return None, "Groq erschöpft"
+    return None, f"Groq erschöpft ({last_error})"
 
 
 def normalize_team_name(name):
@@ -710,23 +754,33 @@ def is_future_game(time_str, target_date):
 
 def filter_top_tips(tips, target_date, market):
     filtered = []
+    rejected_reasons = {"future": 0, "tip_value": 0, "prob": 0, "conf": 0, "odds": 0}
     for r in tips:
         if not is_future_game(r.get("time", ""), target_date):
+            rejected_reasons["future"] += 1
             continue
         if market == "1x2":
             if r.get("tip") not in ["1", "X", "2"]:
+                rejected_reasons["tip_value"] += 1
                 continue
         else:
             if r.get("tip") != "YES":
+                rejected_reasons["tip_value"] += 1
                 continue
         if r.get("probability", 0) < MIN_PROBABILITY:
+            rejected_reasons["prob"] += 1
             continue
         if r.get("confidence", 0) < MIN_CONFIDENCE:
+            rejected_reasons["conf"] += 1
             continue
         odds = parse_odds(r.get("oddsYes", 0))
         if odds < MIN_ODDS or odds > MAX_ODDS:
+            rejected_reasons["odds"] += 1
             continue
         filtered.append(r)
+    
+    if tips and not filtered:
+        log(f"   📋 {len(tips)} Tipps verworfen: {rejected_reasons}")
     
     seen = set()
     unique = []
@@ -754,16 +808,23 @@ def analyze_market(market, league, target_date):
     if not odds and not fixtures:
         return [], "Keine echten Spiele heute", []
     
+    log(f"   📊 Quellen: Odds={len(odds)}, FD={len(fd_fix)}, AF={len(af_fix)}, FJ={len(fj_fix)}, OL={len(ol_fix)} → Total: {len(fixtures)}")
+    
     ctx = build_context(odds, fixtures, league)
     prompt = build_prompt(market, league, target_date, ctx)
     
     results, source = call_gemini(prompt)
     if not results:
+        results, source = call_gemini_no_tools(prompt)
+    if not results:
         results, source = call_groq(prompt)
     if not results:
         return [], source, fixtures
     
+    log(f"   🤖 KI gab {len(results)} Tipps zurück")
     validated = validate_tips(results, fixtures, odds)
+    if results and not validated:
+        log(f"   ⚠️ {len(results)} Tipps verworfen bei Validierung (Team-Names matchen nicht)")
     return validated, source, fixtures
 
 
