@@ -49,7 +49,7 @@ GROQ_API_KEYS = [
     "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",
     "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",
 ]
-GROQ_MODEL = "llama-3.1-8b-instant"
+GROQ_MODEL = "llama-3.3-70b-versatile"
 
 ODDS_API_KEYS = [
     "4b66fb8339b88da06e6bf49fec19efdf",
@@ -639,13 +639,16 @@ def call_gemini_no_tools(prompt):
 
 def call_groq(prompt):
     last_error = None
+    # Kürze Prompt wenn zu lang (Llama 3.3 hat 32k context)
+    if len(prompt) > 30000:
+        prompt = prompt[:30000] + "\n\nAntworte mit JSON-Array."
     for idx, key in enumerate(GROQ_API_KEYS):
         try:
             r = requests.post(
                 "https://api.groq.com/openai/v1/chat/completions",
                 headers={"Authorization": f"Bearer {key}", "Content-Type": "application/json"},
                 json={"model": GROQ_MODEL, "messages": [{"role": "user", "content": prompt}],
-                      "temperature": 0.2, "max_tokens": 8000},
+                      "temperature": 0.2, "max_tokens": 4000},
                 timeout=120
             )
             data = r.json()
@@ -867,10 +870,61 @@ def save_to_supabase(tip):
         return False
 
 
+def get_overall_stats():
+    """Holt Gesamt-Statistik aus Supabase"""
+    try:
+        r = requests.get(
+            f"{SUPABASE_URL}/rest/v1/tips",
+            headers={"apikey": SUPABASE_KEY, "Authorization": f"Bearer {SUPABASE_KEY}"},
+            params={"select": "status,odds,market"},
+            timeout=15
+        )
+        if not r.ok:
+            return None
+        tips = r.json()
+        won = [t for t in tips if t.get("status") == "won"]
+        lost = [t for t in tips if t.get("status") == "lost"]
+        pending = [t for t in tips if t.get("status") == "pending"]
+        
+        if not won and not lost:
+            return None
+        
+        total = len(won) + len(lost)
+        quote_pct = round(len(won) / total * 100) if total else 0
+        
+        roi = 0
+        for t in won:
+            try:
+                roi += float(str(t.get('odds', '1')).replace(",", ".")) - 1
+            except:
+                pass
+        roi -= len(lost)
+        
+        # Pro Markt
+        by_market = {"btts": {"w": 0, "l": 0}, "over25": {"w": 0, "l": 0},
+                     "combo": {"w": 0, "l": 0}, "1x2": {"w": 0, "l": 0}}
+        for t in won + lost:
+            m = t.get("market", "")
+            if m in by_market:
+                if t.get("status") == "won":
+                    by_market[m]["w"] += 1
+                else:
+                    by_market[m]["l"] += 1
+        
+        return {
+            "won": len(won), "lost": len(lost), "pending": len(pending),
+            "total": total, "quote_pct": quote_pct, "roi": round(roi, 2),
+            "by_market": by_market
+        }
+    except:
+        return None
+
+
 def send_top_tips(tips_by_market, target_date):
     icons = {"YES": "✅", "NO": "❌", "MAYBE": "⚠️", "1": "🏠", "X": "🤝", "2": "✈️"}
     val_icons = {"HIGH": "🔥", "OK": "🟡", "LOW": "🔴"}
     market_emoji = {"btts": "⚽", "over25": "🎯", "combo": "🔥", "1x2": "🏆"}
+    market_names = {"btts": "⚽ BTTS", "over25": "🎯 Over 2.5", "combo": "🔥 Combo", "1x2": "🏆 1X2"}
     
     total_tips = sum(len(t) for t in tips_by_market.values())
     
@@ -881,6 +935,28 @@ def send_top_tips(tips_by_market, target_date):
         count = len(tips_by_market.get(m_id, []))
         stats_header += f"• {MARKET_INFO[m_id]['name']}: <b>{count}</b> Tipps\n"
     stats_header += f"\n💎 <b>Total: {total_tips} Top-Tipps</b>"
+    
+    # Gesamt-Statistik anhängen
+    stats = get_overall_stats()
+    if stats:
+        stats_header += f"\n\n━━━━━━━━━━━━━━━━━━\n"
+        stats_header += f"📈 <b>GESAMT-STATISTIK</b>\n"
+        stats_header += f"✅ Gewonnen: <b>{stats['won']}</b>\n"
+        stats_header += f"❌ Verloren: <b>{stats['lost']}</b>\n"
+        if stats['pending']:
+            stats_header += f"⏳ Pending: <b>{stats['pending']}</b>\n"
+        stats_header += f"🎯 Trefferquote: <b>{stats['quote_pct']}%</b>\n"
+        roi_emoji = "🟢" if stats['roi'] >= 0 else "🔴"
+        stats_header += f"💰 ROI: <b>{'+' if stats['roi'] >= 0 else ''}{stats['roi']}</b> € {roi_emoji}\n\n"
+        stats_header += f"<b>Pro Markt:</b>\n"
+        for m_id in MARKETS_TO_RUN:
+            mb = stats['by_market'].get(m_id, {"w": 0, "l": 0})
+            tot = mb["w"] + mb["l"]
+            if tot > 0:
+                pct = round(mb["w"] / tot * 100)
+                emoji = "🟢" if pct >= 60 else "🟡" if pct >= 40 else "🔴"
+                stats_header += f"{market_names[m_id]}: {mb['w']}/{tot} ({pct}%) {emoji}\n"
+    
     send_telegram(stats_header, TELEGRAM_GROUPS["stats"])
     
     if total_tips == 0:
