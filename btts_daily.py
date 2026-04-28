@@ -871,12 +871,12 @@ def save_to_supabase(tip):
 
 
 def get_overall_stats():
-    """Holt Gesamt-Statistik aus Supabase"""
+    """Holt Gesamt-Statistik aus Supabase mit allen Profi-Stats"""
     try:
         r = requests.get(
             f"{SUPABASE_URL}/rest/v1/tips",
             headers={"apikey": SUPABASE_KEY, "Authorization": f"Bearer {SUPABASE_KEY}"},
-            params={"select": "status,odds,market"},
+            params={"select": "*", "order": "date.desc,id.desc"},
             timeout=15
         )
         if not r.ok:
@@ -892,6 +892,7 @@ def get_overall_stats():
         total = len(won) + len(lost)
         quote_pct = round(len(won) / total * 100) if total else 0
         
+        # ROI gesamt
         roi = 0
         for t in won:
             try:
@@ -901,20 +902,112 @@ def get_overall_stats():
         roi -= len(lost)
         
         # Pro Markt
-        by_market = {"btts": {"w": 0, "l": 0}, "over25": {"w": 0, "l": 0},
-                     "combo": {"w": 0, "l": 0}, "1x2": {"w": 0, "l": 0}}
+        by_market = {"btts": {"w": 0, "l": 0, "roi": 0},
+                     "over25": {"w": 0, "l": 0, "roi": 0},
+                     "combo": {"w": 0, "l": 0, "roi": 0},
+                     "1x2": {"w": 0, "l": 0, "roi": 0}}
         for t in won + lost:
             m = t.get("market", "")
             if m in by_market:
                 if t.get("status") == "won":
                     by_market[m]["w"] += 1
+                    try:
+                        by_market[m]["roi"] += float(str(t.get('odds', '1')).replace(",", ".")) - 1
+                    except:
+                        pass
                 else:
                     by_market[m]["l"] += 1
+                    by_market[m]["roi"] -= 1
+        
+        # Pro Liga
+        by_league = {}
+        for t in won + lost:
+            lg = t.get("league", "?")
+            if lg not in by_league:
+                by_league[lg] = {"w": 0, "l": 0, "roi": 0}
+            if t.get("status") == "won":
+                by_league[lg]["w"] += 1
+                try:
+                    by_league[lg]["roi"] += float(str(t.get('odds', '1')).replace(",", ".")) - 1
+                except:
+                    pass
+            else:
+                by_league[lg]["l"] += 1
+                by_league[lg]["roi"] -= 1
+        
+        # Top-3 Ligen (mind. 3 Tipps, nach Quote sortiert)
+        top_leagues = []
+        for lg, s in by_league.items():
+            tot = s["w"] + s["l"]
+            if tot >= 3:
+                pct = round(s["w"] / tot * 100)
+                top_leagues.append((lg, s["w"], tot, pct, round(s["roi"], 2)))
+        top_leagues.sort(key=lambda x: (-x[3], -x[4]))
+        
+        # Streak-Counter (aktuelle Serie)
+        sorted_tips = [t for t in tips if t.get("status") in ["won", "lost"]]
+        sorted_tips.sort(key=lambda t: (t.get("date", ""), t.get("id", 0)), reverse=True)
+        
+        current_streak = 0
+        streak_type = None
+        for t in sorted_tips:
+            status = t.get("status")
+            if streak_type is None:
+                streak_type = status
+                current_streak = 1
+            elif status == streak_type:
+                current_streak += 1
+            else:
+                break
+        
+        # Letzte 7 Tage
+        from datetime import date as date_class, timedelta as td
+        seven_days_ago = (date_class.today() - td(days=7)).isoformat()
+        last7_won = [t for t in won if t.get("date", "") >= seven_days_ago]
+        last7_lost = [t for t in lost if t.get("date", "") >= seven_days_ago]
+        last7_total = len(last7_won) + len(last7_lost)
+        last7_pct = round(len(last7_won) / last7_total * 100) if last7_total else 0
+        last7_roi = 0
+        for t in last7_won:
+            try:
+                last7_roi += float(str(t.get('odds', '1')).replace(",", ".")) - 1
+            except:
+                pass
+        last7_roi -= len(last7_lost)
+        
+        # Aktueller Monat
+        today = date_class.today()
+        month_start = today.replace(day=1).isoformat()
+        month_won = [t for t in won if t.get("date", "") >= month_start]
+        month_lost = [t for t in lost if t.get("date", "") >= month_start]
+        month_total = len(month_won) + len(month_lost)
+        month_pct = round(len(month_won) / month_total * 100) if month_total else 0
+        month_roi = 0
+        for t in month_won:
+            try:
+                month_roi += float(str(t.get('odds', '1')).replace(",", ".")) - 1
+            except:
+                pass
+        month_roi -= len(month_lost)
+        month_names = ["", "Januar", "Februar", "März", "April", "Mai", "Juni",
+                       "Juli", "August", "September", "Oktober", "November", "Dezember"]
+        month_name = month_names[today.month]
         
         return {
             "won": len(won), "lost": len(lost), "pending": len(pending),
             "total": total, "quote_pct": quote_pct, "roi": round(roi, 2),
-            "by_market": by_market
+            "by_market": by_market,
+            "top_leagues": top_leagues[:3],
+            "streak": current_streak, "streak_type": streak_type,
+            "last7": {
+                "won": len(last7_won), "lost": len(last7_lost),
+                "total": last7_total, "pct": last7_pct, "roi": round(last7_roi, 2)
+            },
+            "month": {
+                "name": month_name,
+                "won": len(month_won), "lost": len(month_lost),
+                "total": month_total, "pct": month_pct, "roi": round(month_roi, 2)
+            }
         }
     except:
         return None
@@ -936,7 +1029,7 @@ def send_top_tips(tips_by_market, target_date):
         stats_header += f"• {MARKET_INFO[m_id]['name']}: <b>{count}</b> Tipps\n"
     stats_header += f"\n💎 <b>Total: {total_tips} Top-Tipps</b>"
     
-    # Gesamt-Statistik anhängen
+    # PROFI-STATISTIK anhängen
     stats = get_overall_stats()
     if stats:
         stats_header += f"\n\n━━━━━━━━━━━━━━━━━━\n"
@@ -947,15 +1040,50 @@ def send_top_tips(tips_by_market, target_date):
             stats_header += f"⏳ Pending: <b>{stats['pending']}</b>\n"
         stats_header += f"🎯 Trefferquote: <b>{stats['quote_pct']}%</b>\n"
         roi_emoji = "🟢" if stats['roi'] >= 0 else "🔴"
-        stats_header += f"💰 ROI: <b>{'+' if stats['roi'] >= 0 else ''}{stats['roi']}</b> € {roi_emoji}\n\n"
-        stats_header += f"<b>Pro Markt:</b>\n"
+        stats_header += f"💰 ROI: <b>{'+' if stats['roi'] >= 0 else ''}{stats['roi']}</b> € {roi_emoji}\n"
+        
+        # Streak
+        if stats['streak'] >= 2 and stats['streak_type']:
+            if stats['streak_type'] == "won":
+                if stats['streak'] >= 5:
+                    stats_header += f"🔥 <b>Streak: {stats['streak']}× gewonnen!</b>\n"
+                else:
+                    stats_header += f"⭐ Streak: {stats['streak']}× gewonnen\n"
+            else:
+                stats_header += f"❄️ Streak: {stats['streak']}× verloren\n"
+        
+        # Letzte 7 Tage
+        if stats['last7']['total'] > 0:
+            stats_header += f"\n📅 <b>Letzte 7 Tage:</b>\n"
+            stats_header += f"• {stats['last7']['won']}/{stats['last7']['total']} ({stats['last7']['pct']}%) · "
+            stats_header += f"ROI: {'+' if stats['last7']['roi'] >= 0 else ''}{stats['last7']['roi']} €\n"
+        
+        # Aktueller Monat
+        if stats['month']['total'] > 0:
+            month_emoji = "🟢" if stats['month']['roi'] >= 0 else "🔴"
+            stats_header += f"\n📆 <b>{stats['month']['name']} (Monat):</b>\n"
+            stats_header += f"• {stats['month']['won']}/{stats['month']['total']} ({stats['month']['pct']}%) · "
+            stats_header += f"ROI: <b>{'+' if stats['month']['roi'] >= 0 else ''}{stats['month']['roi']} €</b> {month_emoji}\n"
+        
+        # Pro Markt
+        stats_header += f"\n<b>📊 Pro Markt:</b>\n"
         for m_id in MARKETS_TO_RUN:
-            mb = stats['by_market'].get(m_id, {"w": 0, "l": 0})
+            mb = stats['by_market'].get(m_id, {"w": 0, "l": 0, "roi": 0})
             tot = mb["w"] + mb["l"]
             if tot > 0:
                 pct = round(mb["w"] / tot * 100)
                 emoji = "🟢" if pct >= 60 else "🟡" if pct >= 40 else "🔴"
-                stats_header += f"{market_names[m_id]}: {mb['w']}/{tot} ({pct}%) {emoji}\n"
+                roi_str = f"+{round(mb['roi'],2)}" if mb['roi'] >= 0 else f"{round(mb['roi'],2)}"
+                stats_header += f"{market_names[m_id]}: {mb['w']}/{tot} ({pct}%) · {roi_str}€ {emoji}\n"
+        
+        # Top-Ligen
+        if stats['top_leagues']:
+            stats_header += f"\n<b>🏆 Top-Ligen:</b>\n"
+            medals = ["🥇", "🥈", "🥉"]
+            for i, (lg, w, tot, pct, lg_roi) in enumerate(stats['top_leagues']):
+                medal = medals[i] if i < 3 else "•"
+                roi_str = f"+{lg_roi}" if lg_roi >= 0 else f"{lg_roi}"
+                stats_header += f"{medal} {lg}: {w}/{tot} ({pct}%) · {roi_str}€\n"
     
     send_telegram(stats_header, TELEGRAM_GROUPS["stats"])
     
