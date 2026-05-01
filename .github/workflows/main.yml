@@ -1,12 +1,10 @@
-name: Check Results
+name: Daily BTTS Tipps
 
 on:
-  schedule:
-    - cron: "30 6,12,17,21 * * *"
   workflow_dispatch:
 
 jobs:
-  check:
+  run-bot:
     runs-on: ubuntu-latest
 
     steps:
@@ -18,11 +16,7 @@ jobs:
 
       - run: pip install requests
 
-      - run: python btts_check.py
+      - run: python btts_daily.py
         env:
-          API_FOOTBALL_KEY: ${{ secrets.API_FOOTBALL_KEY }}
-          SUPABASE_URL: ${{ secrets.SUPABASE_URL }}
-          SUPABASE_KEY: ${{ secrets.SUPABASE_KEY }}
-
           TELEGRAM_TOKEN: ${{ secrets.TELEGRAM_TOKEN }}
           TELEGRAM_CHAT_ID: ${{ secrets.TELEGRAM_CHAT_ID }}
