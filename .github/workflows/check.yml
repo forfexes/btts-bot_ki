@@ -1,0 +1,32 @@
+name: Check Results
+
+on:
+  schedule:
+    - cron: "30 6,12,17,21 * * *"
+  workflow_dispatch:
+
+jobs:
+  check:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Repo laden
+        uses: actions/checkout@v4
+
+      - name: Python installieren
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
+      - name: Abhängigkeiten
+        run: pip install requests
+
+      - name: Checker starten
+        run: python btts_check.py
+        env:
+          TELEGRAM_TOKEN: ${{ secrets.TELEGRAM_TOKEN }}
+          TELEGRAM_CHAT_ID: ${{ secrets.TELEGRAM_CHAT_ID }}
+
+          API_FOOTBALL_KEY: ${{ secrets.API_FOOTBALL_KEY }}
+          SUPABASE_URL: ${{ secrets.SUPABASE_URL }}
+          SUPABASE_KEY: ${{ secrets.SUPABASE_KEY }}
