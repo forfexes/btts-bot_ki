@@ -2,7 +2,7 @@ name: Daily BTTS Tipps
 
 on:
   schedule:
-    - cron: "0 6,12,17,19 * * *"
+    - cron: "0 6,12,17 * * *"
   workflow_dispatch:
 
 jobs:
@@ -26,7 +26,6 @@ jobs:
         run: python btts_daily.py
         env:
           GEMINI_API_KEYS: ${{ secrets.GEMINI_API_KEYS }}
-          GROQ_API_KEYS: ${{ secrets.GROQ_API_KEYS }}
           ODDS_API_KEYS: ${{ secrets.ODDS_API_KEYS }}
           FOOTBALL_DATA_API_KEY: ${{ secrets.FOOTBALL_DATA_API_KEY }}
           API_FOOTBALL_KEY: ${{ secrets.API_FOOTBALL_KEY }}
@@ -36,11 +35,25 @@ jobs:
           TELEGRAM_GROUP_BTTS: ${{ secrets.TELEGRAM_GROUP_BTTS }}
           TELEGRAM_GROUP_OVER25: ${{ secrets.TELEGRAM_GROUP_OVER25 }}
           TELEGRAM_GROUP_COMBO: ${{ secrets.TELEGRAM_GROUP_COMBO }}
-          TELEGRAM_GROUP_1X2: ${{ secrets.TELEGRAM_GROUP_1X2 }}
           TELEGRAM_GROUP_STATS: ${{ secrets.TELEGRAM_GROUP_STATS }}
 
           SUPABASE_URL: ${{ secrets.SUPABASE_URL }}
           SUPABASE_KEY: ${{ secrets.SUPABASE_KEY }}
+
+          MARKETS_TO_RUN: "btts,over25,combo,btts_ht"
+
+          MIN_ODDS: "1.60"
+          MAX_ODDS: "3.20"
+          MIN_PROBABILITY: "62"
+          MIN_CONFIDENCE: "4"
+
+          MIN_PROBABILITY_BTTS_HT: "60"
+          MIN_ODDS_BTTS_HT: "1.80"
+          MAX_ODDS_BTTS_HT: "3.80"
+
+          MIN_VALUE_EDGE_PCT: "6"
+          REQUIRE_HIGH_VALUE: "true"
+          VALUE_SCORE_MIN: "65"
 
           AUTO_LEAGUE_SWITCH: "true"
           USE_GROQ_FALLBACK: "false"
