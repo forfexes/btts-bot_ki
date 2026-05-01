@@ -29,6 +29,7 @@ import re
 import sys
 import json
 import traceback
+import time
 from datetime import date, datetime, timedelta, timezone
 
 import requests
@@ -91,6 +92,12 @@ AUTO_LEAGUE_MIN_TIPS = int(env("AUTO_LEAGUE_MIN_TIPS", "10"))
 AUTO_LEAGUE_MIN_WINRATE = float(env("AUTO_LEAGUE_MIN_WINRATE", "48"))  # Prozent
 AUTO_LEAGUE_MIN_ROI = float(env("AUTO_LEAGUE_MIN_ROI", "-2.0"))        # Einheiten/Euro bei 1€ Einsatz
 AUTO_LEAGUE_LOOKBACK_DAYS = int(env("AUTO_LEAGUE_LOOKBACK_DAYS", "120"))
+
+# Performance / Rate-Limit Schutz
+MAX_LEAGUES_PER_RUN = int(env("MAX_LEAGUES_PER_RUN", "0"))  # 0 = alle Ligen
+AI_SLEEP_SECONDS = float(env("AI_SLEEP_SECONDS", "1.5"))
+GROQ_SLEEP_SECONDS = float(env("GROQ_SLEEP_SECONDS", "2.5"))
+USE_GROQ_FALLBACK = env("USE_GROQ_FALLBACK", "true").lower() in ["1", "true", "yes", "on"]
 
 # Diese Ligen bleiben immer AN, egal was die Statistik sagt.
 ALWAYS_ON_LEAGUES = [
@@ -766,6 +773,9 @@ def call_groq(prompt):
     if not GROQ_API_KEYS:
         return None, "Keine Groq Keys"
 
+    if not USE_GROQ_FALLBACK:
+        return None, "Groq deaktiviert"
+
     if len(prompt) > 30000:
         prompt = prompt[:30000] + "\n\nAntworte mit JSON-Array."
 
@@ -792,12 +802,14 @@ def call_groq(prompt):
 
             if "error" in data:
                 last_error = data.get("error", {}).get("message", "")[:120]
+                time.sleep(GROQ_SLEEP_SECONDS)
                 continue
 
             choices = data.get("choices", [])
 
             if not choices:
                 last_error = "no choices"
+                time.sleep(GROQ_SLEEP_SECONDS)
                 continue
 
             text = choices[0].get("message", {}).get("content", "")
@@ -808,6 +820,7 @@ def call_groq(prompt):
 
         except Exception as e:
             last_error = str(e)[:120]
+            time.sleep(GROQ_SLEEP_SECONDS)
             continue
 
     return None, f"Groq erschöpft ({last_error})"
@@ -1105,6 +1118,53 @@ def filter_top_tips(tips, target_date, market):
     return unique
 
 
+
+def fetch_league_data_once(league, target_date):
+    """
+    Holt alle Daten für eine Liga nur EINMAL pro Run.
+    Früher wurde das pro Markt gemacht. Das spart viele API-Calls.
+    """
+    odds = fetch_odds_api(league, target_date)
+    fd_fix = fetch_football_data(league, target_date)
+    af_fix = fetch_api_football(league, target_date)
+    fj_fix = fetch_football_json(league, target_date)
+    ol_fix = fetch_openligadb(league, target_date)
+
+    fixtures = merge_fixtures(fd_fix, af_fix, fj_fix, ol_fix)
+
+    log(
+        f"   Quellen: Odds={len(odds)}, FD={len(fd_fix)}, "
+        f"AF={len(af_fix)}, FJ={len(fj_fix)}, OL={len(ol_fix)} "
+        f"→ Total={len(fixtures)}"
+    )
+
+    return odds, fixtures
+
+
+def analyze_market_with_data(market, league, target_date, odds, fixtures):
+    """
+    Analysiert einen Markt mit bereits geladenen Liga-Daten.
+    """
+    if not odds and not fixtures:
+        return [], "Keine echten Spiele heute"
+
+    ctx = build_context(odds, fixtures, league)
+    prompt = build_prompt(market, league, target_date, ctx)
+
+    results, source = call_gemini(prompt, use_tools=True)
+
+    if not results:
+        results, source = call_gemini(prompt, use_tools=False)
+
+    if not results and USE_GROQ_FALLBACK:
+        results, source = call_groq(prompt)
+
+    if not results:
+        return [], source
+
+    validated = validate_tips(results, fixtures, odds)
+    return validated, source
+
 def analyze_market(market, league, target_date):
     odds = fetch_odds_api(league, target_date)
     fd_fix = fetch_football_data(league, target_date)
@@ -1131,7 +1191,7 @@ def analyze_market(market, league, target_date):
     if not results:
         results, source = call_gemini(prompt, use_tools=False)
 
-    if not results:
+    if not results and USE_GROQ_FALLBACK:
         results, source = call_groq(prompt)
 
     if not results:
@@ -1662,18 +1722,30 @@ def main():
     tips_by_market = {m: [] for m in MARKETS_TO_RUN}
     total_analyzed = 0
 
-    for market in MARKETS_TO_RUN:
-        log(f"╔══ {MARKET_INFO[market]['name']} ══╗")
+    if MAX_LEAGUES_PER_RUN > 0:
+        active_leagues = active_leagues[:MAX_LEAGUES_PER_RUN]
+        log(f"MAX_LEAGUES_PER_RUN aktiv: Es werden nur {len(active_leagues)} Ligen analysiert.")
 
-        for league in active_leagues:
-            log(f" → {league}")
+    for league in active_leagues:
+        log(f"╔══ Liga: {league} ══╗")
 
-            try:
-                results, source, fixtures = analyze_market(market, league, target_date)
+        try:
+            odds, fixtures = fetch_league_data_once(league, target_date)
 
-                if "Keine echten Spiele" in source:
-                    log("   - Keine Spiele heute")
-                    continue
+            if not odds and not fixtures:
+                log("   - Keine Spiele heute")
+                continue
+
+            for market in MARKETS_TO_RUN:
+                log(f"   → Markt: {MARKET_INFO[market]['name']}")
+
+                results, source = analyze_market_with_data(
+                    market=market,
+                    league=league,
+                    target_date=target_date,
+                    odds=odds,
+                    fixtures=fixtures,
+                )
 
                 if results:
                     log(f"   ✓ {len(results)} via {source}")
@@ -1687,9 +1759,11 @@ def main():
                 else:
                     log(f"   - {source}")
 
-            except Exception as e:
-                log(f"   ✗ {e}", "ERROR")
-                continue
+                time.sleep(AI_SLEEP_SECONDS)
+
+        except Exception as e:
+            log(f"   ✗ {e}", "ERROR")
+            continue
 
     total_top = sum(len(t) for t in tips_by_market.values())
 
