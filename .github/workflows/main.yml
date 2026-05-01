@@ -2,7 +2,7 @@ name: Daily BTTS Tipps
 
 on:
   schedule:
-    - cron: '0 8 * * *'
+    - cron: "0 6,12,17 * * *"
   workflow_dispatch:
 
 jobs:
@@ -11,15 +11,16 @@ jobs:
     timeout-minutes: 60
 
     steps:
-      - uses: actions/checkout@v4
+      - name: Checkout repo
+        uses: actions/checkout@v4
 
       - name: Setup Python
         uses: actions/setup-python@v5
         with:
-          python-version: '3.11'
+          python-version: "3.11"
 
       - name: Install dependencies
-        run: pip install requests python-dotenv
+        run: pip install requests
 
       - name: Run bot
         run: python btts_daily.py
@@ -27,13 +28,11 @@ jobs:
           GEMINI_API_KEYS: ${{ secrets.GEMINI_API_KEYS }}
           GROQ_API_KEYS: ${{ secrets.GROQ_API_KEYS }}
           ODDS_API_KEYS: ${{ secrets.ODDS_API_KEYS }}
-
           FOOTBALL_DATA_API_KEY: ${{ secrets.FOOTBALL_DATA_API_KEY }}
           API_FOOTBALL_KEY: ${{ secrets.API_FOOTBALL_KEY }}
 
           TELEGRAM_TOKEN: ${{ secrets.TELEGRAM_TOKEN }}
           TELEGRAM_CHAT_ID: ${{ secrets.TELEGRAM_CHAT_ID }}
-
           TELEGRAM_GROUP_BTTS: ${{ secrets.TELEGRAM_GROUP_BTTS }}
           TELEGRAM_GROUP_OVER25: ${{ secrets.TELEGRAM_GROUP_OVER25 }}
           TELEGRAM_GROUP_COMBO: ${{ secrets.TELEGRAM_GROUP_COMBO }}
@@ -44,3 +43,6 @@ jobs:
           SUPABASE_KEY: ${{ secrets.SUPABASE_KEY }}
 
           AUTO_LEAGUE_SWITCH: "true"
+          USE_GROQ_FALLBACK: "false"
+          MAX_LEAGUES_PER_RUN: "20"
+          AI_SLEEP_SECONDS: "1.5"
