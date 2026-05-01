@@ -2,7 +2,7 @@ name: Daily BTTS Tipps
 
 on:
   schedule:
-    - cron: "0 6,12,17 * * *"
+    - cron: "0 6,12,17,19 * * *"
   workflow_dispatch:
 
 jobs:
