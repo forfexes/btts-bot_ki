@@ -306,51 +306,72 @@ def is_likely_finished(tip):
 
 def send_result(tip, score, won):
     chat_id = tip.get("telegram_chat_id") or TELEGRAM_GROUPS.get(tip.get("market"), TELEGRAM_CHAT_ID)
-    msg_id = tip.get("telegram_msg_id")  # Original Tipp-Nachricht
+    msg_id = tip.get("telegram_msg_id")
 
+    result_line = f"\n━━━━━━━━━━━━━━━━━━\n"
     if won:
-        msg = f"✅ <b>GEWONNEN!</b>\n"
-        msg += f"🏁 Endstand: <b>{score}</b>\n"
         try:
             odds = float(str(tip.get('odds', '1')).replace(",", "."))
             units = float(tip.get('units', 1.0) or 1.0)
             profit = round(units * (odds - 1), 2)
-            msg += f"💰 Gewinn: <b>+{profit} Units</b>"
+            result_line += f"✅ <b>GEWONNEN!</b> · Endstand: <b>{score}</b> · +{profit}U 💰"
         except:
-            pass
+            result_line += f"✅ <b>GEWONNEN!</b> · Endstand: <b>{score}</b>"
     else:
-        msg = f"❌ <b>VERLOREN!</b>\n"
-        msg += f"🏁 Endstand: <b>{score}</b>\n"
         try:
             units = float(tip.get('units', 1.0) or 1.0)
-            msg += f"💸 Verlust: <b>-{units} Units</b>"
+            result_line += f"❌ <b>VERLOREN!</b> · Endstand: <b>{score}</b> · -{units}U 💸"
         except:
-            msg += f"💸 Verlust: <b>-1.0 Units</b>"
+            result_line += f"❌ <b>VERLOREN!</b> · Endstand: <b>{score}</b>"
 
-    # Als Antwort auf Original-Tipp senden
+    # Versuche Original-Nachricht zu editieren
+    if msg_id and chat_id:
+        try:
+            # Hole originalen Text
+            r = requests.get(
+                f"https://api.telegram.org/bot{TELEGRAM_TOKEN}/getMessages",
+                params={"chat_id": chat_id, "message_ids": [int(msg_id)]},
+                timeout=10
+            )
+            # editMessageText - füge Ergebnis am Ende an
+            original_text = ""
+            if r.ok:
+                msgs = r.json().get("result", [])
+                if msgs:
+                    original_text = msgs[0].get("text", "")
+
+            if original_text:
+                new_text = original_text + result_line
+                edit_r = requests.post(
+                    f"https://api.telegram.org/bot{TELEGRAM_TOKEN}/editMessageText",
+                    json={
+                        "chat_id": chat_id,
+                        "message_id": int(msg_id),
+                        "text": new_text,
+                        "parse_mode": "HTML",
+                    },
+                    timeout=15
+                )
+                if edit_r.ok:
+                    return True
+        except:
+            pass
+
+    # Fallback: Reply wenn Edit nicht klappt
     try:
         payload = {
             "chat_id": chat_id,
-            "text": msg,
+            "text": result_line.strip(),
             "parse_mode": "HTML",
         }
         if msg_id:
             payload["reply_to_message_id"] = int(msg_id)
             payload["allow_sending_without_reply"] = True
-
         r = requests.post(
             f"https://api.telegram.org/bot{TELEGRAM_TOKEN}/sendMessage",
             json=payload,
             timeout=15
         )
-        if not r.ok:
-            # Fallback ohne Reply
-            payload.pop("reply_to_message_id", None)
-            r = requests.post(
-                f"https://api.telegram.org/bot{TELEGRAM_TOKEN}/sendMessage",
-                json=payload,
-                timeout=15
-            )
         return r.ok
     except:
         return False
