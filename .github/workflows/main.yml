@@ -1,26 +1,31 @@
-- name: Debug + Run bot
-  run: |
-    echo "Dateien:"
-    ls -la
-    echo "Erste Zeilen btts_daily.py:"
-    head -40 btts_daily.py
-    echo "Bot starten:"
-    python -u btts_daily.py
-  env:
-    API_FOOTBALL_KEY: ${{ secrets.API_FOOTBALL_KEY }}
-    GEMINI_API_KEYS: ${{ secrets.GEMINI_API_KEYS }}
-    ODDS_API_KEYS: ${{ secrets.ODDS_API_KEYS }}
-    TELEGRAM_TOKEN: ${{ secrets.TELEGRAM_TOKEN }}
-    TELEGRAM_CHAT_ID: ${{ secrets.TELEGRAM_CHAT_ID }}
-    TELEGRAM_GROUP_BTTS: ${{ secrets.TELEGRAM_GROUP_BTTS }}
-    TELEGRAM_GROUP_OVER25: ${{ secrets.TELEGRAM_GROUP_OVER25 }}
-    TELEGRAM_GROUP_COMBO: ${{ secrets.TELEGRAM_GROUP_COMBO }}
-    TELEGRAM_GROUP_BTTS_HT: ${{ secrets.TELEGRAM_GROUP_BTTS_HT }}
-    TELEGRAM_GROUP_STATS: ${{ secrets.TELEGRAM_GROUP_STATS }}
-    SUPABASE_URL: ${{ secrets.SUPABASE_URL }}
-    SUPABASE_KEY: ${{ secrets.SUPABASE_KEY }}
-    MARKETS_TO_RUN: "btts,over25,combo,btts_ht"
-    MIN_PROBABILITY: "55"
-    MIN_CONFIDENCE: "3"
-    MAX_MATCHES: "25"
-# test
+name: Daily BTTS Tipps
+
+on:
+  workflow_dispatch:
+  schedule:
+    - cron: "0 6,12,17 * * *"
+
+jobs:
+  run-bot:
+    runs-on: ubuntu-latest
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
+      - run: pip install requests
+
+      - run: python btts_daily.py
+        env:
+          API_FOOTBALL_KEY: ${{ secrets.API_FOOTBALL_KEY }}
+          GEMINI_API_KEYS: ${{ secrets.GEMINI_API_KEYS }}
+          TELEGRAM_TOKEN: ${{ secrets.TELEGRAM_TOKEN }}
+          TELEGRAM_CHAT_ID: ${{ secrets.TELEGRAM_CHAT_ID }}
+
+          MARKETS_TO_RUN: "btts,over25,combo,btts_ht"
+          MIN_PROBABILITY: "55"
+          MIN_CONFIDENCE: "3"
+          MAX_MATCHES: "25"
