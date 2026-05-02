@@ -75,10 +75,10 @@ TELEGRAM_GROUPS = {
 SUPABASE_URL = env("SUPABASE_URL")
 SUPABASE_KEY = env("SUPABASE_KEY")
 
-MIN_PROBABILITY = int(env("MIN_PROBABILITY", "60"))
-MIN_ODDS = float(env("MIN_ODDS", "1.5"))
-MAX_ODDS = float(env("MAX_ODDS", "3.5"))
-MIN_CONFIDENCE = int(env("MIN_CONFIDENCE", "3"))
+MIN_PROBABILITY = int(env("MIN_PROBABILITY", "70"))
+MIN_ODDS = float(env("MIN_ODDS", "1.65"))
+MAX_ODDS = float(env("MAX_ODDS", "3.0"))
+MIN_CONFIDENCE = int(env("MIN_CONFIDENCE", "4"))
 
 MARKETS_TO_RUN = ["btts", "over25", "combo", "btts_ht"]
 
