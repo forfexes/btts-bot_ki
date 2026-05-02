@@ -1163,6 +1163,7 @@ def fetch_league_data_once(league, target_date):
 def analyze_market_with_data(market, league, target_date, odds, fixtures):
     """
     Analysiert einen Markt mit bereits geladenen Liga-Daten.
+    Gemini-NoTools zuerst (schneller, kein Rate-Limit), dann Tools, dann Groq.
     """
     if not odds and not fixtures:
         return [], "Keine echten Spiele heute"
@@ -1170,10 +1171,11 @@ def analyze_market_with_data(market, league, target_date, odds, fixtures):
     ctx = build_context(odds, fixtures, league)
     prompt = build_prompt(market, league, target_date, ctx)
 
-    results, source = call_gemini(prompt, use_tools=True)
+    # Reihenfolge: NoTools zuerst (vermeidet Groq Rate-Limit!)
+    results, source = call_gemini(prompt, use_tools=False)
 
     if not results:
-        results, source = call_gemini(prompt, use_tools=False)
+        results, source = call_gemini(prompt, use_tools=True)
 
     if not results and USE_GROQ_FALLBACK:
         results, source = call_groq(prompt)
