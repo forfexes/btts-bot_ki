@@ -18,7 +18,7 @@ TELEGRAM_CHAT_ID=...
 TELEGRAM_GROUP_BTTS=...
 TELEGRAM_GROUP_OVER25=...
 TELEGRAM_GROUP_COMBO=...
-TELEGRAM_GROUP_1X2=...
+TELEGRAM_GROUP_BTTS_HT=...
 TELEGRAM_GROUP_STATS=...
 SUPABASE_URL=...
 SUPABASE_KEY=...
@@ -68,7 +68,7 @@ TELEGRAM_GROUPS = {
     "btts": env("TELEGRAM_GROUP_BTTS", TELEGRAM_CHAT_ID),
     "over25": env("TELEGRAM_GROUP_OVER25", TELEGRAM_CHAT_ID),
     "combo": env("TELEGRAM_GROUP_COMBO", TELEGRAM_CHAT_ID),
-    "1x2": env("TELEGRAM_GROUP_1X2", TELEGRAM_CHAT_ID),
+    "btts_ht": env("TELEGRAM_GROUP_BTTS_HT", TELEGRAM_CHAT_ID),
     "stats": env("TELEGRAM_GROUP_STATS", TELEGRAM_CHAT_ID),
 }
 
@@ -80,7 +80,7 @@ MIN_ODDS = float(env("MIN_ODDS", "1.5"))
 MAX_ODDS = float(env("MAX_ODDS", "3.5"))
 MIN_CONFIDENCE = int(env("MIN_CONFIDENCE", "3"))
 
-MARKETS_TO_RUN = ["btts", "over25", "combo", "1x2"]
+MARKETS_TO_RUN = ["btts", "over25", "combo", "btts_ht"]
 
 # ============================================================
 # AUTO LIGA SWITCH
@@ -142,6 +142,16 @@ LEAGUES_TO_RUN = [
     "MLS", "Brasileirao Serie A", "Liga Argentinien",
     "Liga MX", "A-League", "K League 1", "J1 League Japan",
     "China Super League", "Saudi Pro League",
+
+    # 🏃 JUGENDLIGAS
+    "Bundesliga U19",
+    "Bundesliga U17",
+    "Premier League U18",
+    "Premier League U21",
+    "La Liga U19",
+    "Serie A U19",
+    "Ligue 1 U19",
+    "UEFA Youth League",
 ]
 
 LEAGUE_KEYS = {
@@ -236,6 +246,15 @@ API_FOOTBALL_LEAGUES = {
     "Serbia SuperLiga": 286,
     "Romania Liga I": 283,
     "Czech First League": 345,
+    # Jugendligas
+    "Bundesliga U19": 63,
+    "Bundesliga U17": 64,
+    "Premier League U18": 48,
+    "Premier League U21": 45,
+    "La Liga U19": 384,
+    "Serie A U19": 233,
+    "Ligue 1 U19": 114,
+    "UEFA Youth League": 10,
 }
 
 FOOTBALL_JSON_LEAGUES = {
@@ -285,9 +304,9 @@ MARKET_INFO = {
         "name": "🔥 BTTS + Over 2.5",
         "instr": "Analysiere BTTS & Over 2.5 KOMBO.",
     },
-    "1x2": {
-        "name": "🏆 1X2 Sieger",
-        "instr": "Analysiere den Sieger des Spiels (1=Heim, X=Unentschieden, 2=Auswärts).",
+    "btts_ht": {
+        "name": "🕐 BTTS HT",
+        "instr": "Analysiere BTTS in der 1. Halbzeit (Beide Teams treffen bis zur Pause). Wichtig: xG HT, Pressing der Teams, frühe Tore Statistik.",
     },
 }
 
@@ -1071,17 +1090,17 @@ def is_future_game(time_str, target_date):
 
 def filter_top_tips(tips, target_date, market):
     filtered = []
+    
+    # BTTS HT hat höhere Quoten → andere Limits
+    max_odds_for_market = 4.5 if market == "btts_ht" else MAX_ODDS
+    min_odds_for_market = 1.6 if market == "btts_ht" else MIN_ODDS
 
     for r in tips:
         if not is_future_game(r.get("time", ""), target_date):
             continue
 
-        if market == "1x2":
-            if r.get("tip") not in ["1", "X", "2"]:
-                continue
-        else:
-            if r.get("tip") != "YES":
-                continue
+        if r.get("tip") != "YES":
+            continue
 
         if int(r.get("probability", 0)) < MIN_PROBABILITY:
             continue
@@ -1091,7 +1110,7 @@ def filter_top_tips(tips, target_date, market):
 
         odds = parse_odds(r.get("oddsYes", 0))
 
-        if odds < MIN_ODDS or odds > MAX_ODDS:
+        if odds < min_odds_for_market or odds > max_odds_for_market:
             continue
 
         filtered.append(r)
