@@ -113,6 +113,13 @@ ALWAYS_OFF_LEAGUES = [
     if x.strip()
 ]
 
+# Wenn gesetzt: nur diese Ligen analysieren (für Abend-Run!)
+ACTIVE_LEAGUES_OVERRIDE = [
+    x.strip()
+    for x in env("ACTIVE_LEAGUES", "").split(",")
+    if x.strip()
+]
+
 GEMINI_MODEL = "gemini-2.5-flash"
 GROQ_MODEL = "llama-3.3-70b-versatile"
 
@@ -2170,8 +2177,14 @@ def should_run_league(league, league_stats):
 
 def get_active_leagues():
     """
-    Gibt die Ligen zurück, die heute analysiert werden.
+    Gibt die Ligen zurück die heute analysiert werden.
+    ACTIVE_LEAGUES env = nur diese Ligen (z.B. für Abend-Run!)
     """
+    # Abend-Run: nur bestimmte Ligen
+    if ACTIVE_LEAGUES_OVERRIDE:
+        log(f"🌙 Abend-Run: nur {len(ACTIVE_LEAGUES_OVERRIDE)} Ligen")
+        return ACTIVE_LEAGUES_OVERRIDE, {}
+
     if not AUTO_LEAGUE_SWITCH:
         log("Auto Liga Switch: AUS")
         return LEAGUES_TO_RUN, {}
