@@ -1540,10 +1540,10 @@ def analyze_market(market, league, target_date):
     ctx = build_context(odds, fixtures, league)
     prompt = build_prompt(market, league, target_date, ctx)
 
-    results, source = call_gemini(prompt, use_tools=True)
+    results, source = call_gemini(prompt, use_tools=False)
 
     if not results:
-        results, source = call_gemini(prompt, use_tools=False)
+        results, source = call_gemini(prompt, use_tools=True)
 
     if not results and USE_GROQ_FALLBACK:
         results, source = call_groq(prompt)
