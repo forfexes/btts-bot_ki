@@ -1269,6 +1269,51 @@ def send_telegram(text, chat_id=None):
     return None
 
 
+def is_duplicate_tip(match, market, target_date):
+    """Prüft ob Tipp für dieses Spiel+Markt heute schon in Supabase ist"""
+    if not SUPABASE_URL or not SUPABASE_KEY:
+        return False
+    try:
+        r = requests.get(
+            f"{SUPABASE_URL}/rest/v1/tips",
+            headers={"apikey": SUPABASE_KEY, "Authorization": f"Bearer {SUPABASE_KEY}"},
+            params={
+                "date": f"eq.{target_date}",
+                "market": f"eq.{market}",
+                "match": f"eq.{match}",
+                "select": "id",
+                "limit": "1",
+            },
+            timeout=10,
+        )
+        if r.ok and len(r.json()) > 0:
+            return True
+    except Exception:
+        pass
+    return False
+
+
+def is_valid_tip(tip, target_date):
+    """
+    Prüft ob ein Tipp wirklich heute + in der Zukunft liegt.
+    Verhindert alte Tipps oder Spiele die schon laufen/beendet sind.
+    """
+    # 1. Datum muss heute sein
+    tip_date = tip.get("date", "")
+    today_str = str(target_date)
+    if tip_date and tip_date != today_str:
+        log(f"   ⚠️ Falsches Datum: {tip_date} (erwartet {today_str})")
+        return False
+
+    # 2. Spiel muss noch in der Zukunft liegen
+    time_str = tip.get("time", "")
+    if not is_future_game(time_str, target_date):
+        log(f"   ⚠️ Spiel bereits vorbei: {tip.get('match','')} um {time_str}")
+        return False
+
+    return True
+
+
 def save_to_supabase(tip):
     if not SUPABASE_URL or not SUPABASE_KEY:
         return False
@@ -1464,10 +1509,21 @@ def send_top_tips(tips_by_market, target_date):
 
         for i, r in enumerate(tips, 1):
             confidence = int(r.get("confidence", 0))
+            match_name = r.get("match", "?")
+
+            # 🛡️ Validierung: Richtiges Datum + Spiel noch nicht gestartet
+            r["date"] = str(target_date)
+            if not is_valid_tip(r, target_date):
+                continue
+
+            # 🛡️ Duplikat-Check: Schon heute gesendet?
+            if is_duplicate_tip(match_name, market_id, target_date):
+                log(f"   ⏭️ Duplikat übersprungen: {match_name} ({market_id})")
+                continue
 
             msg = f"<b>💎 Tipp {i}/{len(tips)}</b>\n"
             msg += "━━━━━━━━━━━━━━━━━━\n"
-            msg += f"<b>{r.get('match', '?')}</b>\n"
+            msg += f"<b>{match_name}</b>\n"
             msg += f"📍 {r.get('league', '')}\n"
             msg += f"⏰ {r.get('time', 'TBD')} Uhr\n\n"
             msg += f"{icons.get(r.get('tip', '?'), '')} <b>Tipp: {r.get('tip', '?')}</b>\n"
@@ -1494,14 +1550,14 @@ def send_top_tips(tips_by_market, target_date):
 
             msg_id = send_telegram(msg, target_chat)
 
-            tip_id = f"{market_id}_{target_date}_{i}_{abs(hash(r.get('match', ''))) % 100000}"
+            tip_id = f"{market_id}_{target_date}_{i}_{abs(hash(match_name)) % 100000}"
 
             tip_data = {
                 "tip_id": tip_id,
                 "date": str(target_date),
                 "market": market_id,
                 "market_name": market_name,
-                "match": r.get("match", ""),
+                "match": match_name,
                 "league": r.get("league", ""),
                 "time": r.get("time", ""),
                 "tip": r.get("tip", ""),
