@@ -75,10 +75,10 @@ TELEGRAM_GROUPS = {
 SUPABASE_URL = env("SUPABASE_URL")
 SUPABASE_KEY = env("SUPABASE_KEY")
 
-MIN_PROBABILITY = int(env("MIN_PROBABILITY", "70"))
+MIN_PROBABILITY = int(env("MIN_PROBABILITY", "69"))
 MIN_ODDS = float(env("MIN_ODDS", "1.65"))
 MAX_ODDS = float(env("MAX_ODDS", "3.0"))
-MIN_CONFIDENCE = int(env("MIN_CONFIDENCE", "4"))
+MIN_CONFIDENCE = int(env("MIN_CONFIDENCE", "3"))
 
 MARKETS_TO_RUN = ["btts", "over25", "combo", "btts_ht"]
 
@@ -150,6 +150,9 @@ LEAGUES_TO_RUN = [
     "Liga MX", "A-League", "K League 1", "J1 League Japan",
     "China Super League", "Saudi Pro League",
 
+    "Iceland Premier League", "Iceland 1. Deild",
+    "Australia A-League Women",
+
     # 🏃 JUGENDLIGAS
     "Bundesliga U19",
     "Bundesliga U17",
@@ -189,6 +192,7 @@ LEAGUE_KEYS = {
     "Saudi Pro League": "soccer_saudi_arabia_league",
     "Liga MX": "soccer_mexico_ligamx",
     "A-League": "soccer_australia_aleague",
+    "Iceland Premier League": "soccer_iceland_urvalsdeild",
     "K League 1": "soccer_korea_kleague1",
     "China Super League": "soccer_china_superleague",
     "Danish Superliga": "soccer_denmark_superliga",
@@ -243,6 +247,9 @@ API_FOOTBALL_LEAGUES = {
     "Saudi Pro League": 307,
     "Liga MX": 262,
     "A-League": 188,
+    "Iceland Premier League": 271,
+    "Iceland 1. Deild": 272,
+    "Australia A-League Women": 187,
     "K League 1": 292,
     "China Super League": 169,
     "Danish Superliga": 119,
@@ -1960,6 +1967,72 @@ def send_top_tips(tips_by_market, target_date):
 
             msg_id = send_telegram(msg, target_chat)
 
+            # ML Features sammeln
+            try:
+                tip_hour = int(r.get("time", "00:00").split(":")[0])
+                tip_weekday = datetime.now().weekday()  # 0=Mo, 6=So
+            except:
+                tip_hour = 0
+                tip_weekday = 0
+
+            # xG Daten
+            xg_home = xg_away = xga_home = xga_away = 0.0
+            if league in UNDERSTAT_LEAGUES:
+                try:
+                    parts = match_name.split(" vs ")
+                    if len(parts) == 2:
+                        hxg = get_team_xg(parts[0].strip(), league)
+                        axg = get_team_xg(parts[1].strip(), league)
+                        if hxg:
+                            xg_home = float(hxg.get("xG", 0))
+                            xga_home = float(hxg.get("xGA", 0))
+                        if axg:
+                            xg_away = float(axg.get("xG", 0))
+                            xga_away = float(axg.get("xGA", 0))
+                except:
+                    pass
+
+            # Sharp Money + Line Movement
+            sharp = line_mov = 0.0
+            try:
+                parts = match_name.split(" vs ")
+                if len(parts) == 2:
+                    signals = analyze_pinnacle_value(odds, parts[0], parts[1])
+                    if signals:
+                        for sig in signals:
+                            if "+" in sig:
+                                m = re.search(r'\+(\d+\.?\d*)', sig)
+                                if m:
+                                    sharp = float(m.group(1))
+                            elif "-" in sig:
+                                m = re.search(r'(-\d+\.?\d*)', sig)
+                                if m:
+                                    sharp = float(m.group(1))
+                    lm_signals = analyze_line_movement(odds, parts[0], parts[1])
+                    if lm_signals:
+                        for sig in lm_signals:
+                            m = re.search(r'([+-]\d+\.?\d*)%', sig)
+                            if m:
+                                line_mov = float(m.group(1))
+            except:
+                pass
+
+            # Historische BTTS Rate
+            btts_h = btts_a = avg_g_h = avg_g_a = 0.0
+            try:
+                parts = match_name.split(" vs ")
+                if len(parts) == 2:
+                    hist = get_historical_btts_rate(league, parts[0], parts[1])
+                    if hist:
+                        if hist.get("home"):
+                            btts_h = hist["home"].get("btts_rate", 0)
+                            avg_g_h = hist["home"].get("avg_goals", 0)
+                        if hist.get("away"):
+                            btts_a = hist["away"].get("btts_rate", 0)
+                            avg_g_a = hist["away"].get("avg_goals", 0)
+            except:
+                pass
+
             tip_id = f"{market_id}_{target_date}_{i}_{abs(hash(match_name)) % 100000}"
 
             # Units berechnen
@@ -1993,6 +2066,19 @@ def send_top_tips(tips_by_market, target_date):
                 "telegram_msg_id": msg_id,
                 "units": tip_units,
                 "status": "pending",
+                # ML Features
+                "weekday": tip_weekday,
+                "hour": tip_hour,
+                "xg_home": xg_home,
+                "xg_away": xg_away,
+                "xga_home": xga_home,
+                "xga_away": xga_away,
+                "sharp_money": sharp,
+                "line_movement": line_mov,
+                "btts_rate_home": btts_h,
+                "btts_rate_away": btts_a,
+                "avg_goals_home": avg_g_h,
+                "avg_goals_away": avg_g_a,
             }
 
             if save_to_supabase(tip_data):
