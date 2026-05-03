@@ -75,7 +75,7 @@ TELEGRAM_GROUPS = {
 SUPABASE_URL = env("SUPABASE_URL")
 SUPABASE_KEY = env("SUPABASE_KEY")
 
-MIN_PROBABILITY = int(env("MIN_PROBABILITY", "65"))
+MIN_PROBABILITY = int(env("MIN_PROBABILITY", "69"))
 MIN_ODDS = float(env("MIN_ODDS", "1.65"))
 MAX_ODDS = float(env("MAX_ODDS", "3.0"))
 MIN_CONFIDENCE = int(env("MIN_CONFIDENCE", "3"))
@@ -85,35 +85,29 @@ MARKETS_TO_RUN = ["btts", "over25", "combo", "btts_ht"]
 # ============================================================
 # AUTO LIGA SWITCH
 # ============================================================
-# Der Bot kann Ligen automatisch deaktivieren, wenn sie in Supabase schlecht laufen.
-# Wichtig: Eine Liga wird erst bewertet, wenn genug abgeschlossene Tipps vorhanden sind.
 AUTO_LEAGUE_SWITCH = env("AUTO_LEAGUE_SWITCH", "true").lower() in ["1", "true", "yes", "on"]
 AUTO_LEAGUE_MIN_TIPS = int(env("AUTO_LEAGUE_MIN_TIPS", "10"))
-AUTO_LEAGUE_MIN_WINRATE = float(env("AUTO_LEAGUE_MIN_WINRATE", "48"))  # Prozent
-AUTO_LEAGUE_MIN_ROI = float(env("AUTO_LEAGUE_MIN_ROI", "-2.0"))        # Einheiten/Euro bei 1€ Einsatz
+AUTO_LEAGUE_MIN_WINRATE = float(env("AUTO_LEAGUE_MIN_WINRATE", "48"))
+AUTO_LEAGUE_MIN_ROI = float(env("AUTO_LEAGUE_MIN_ROI", "-2.0"))
 AUTO_LEAGUE_LOOKBACK_DAYS = int(env("AUTO_LEAGUE_LOOKBACK_DAYS", "120"))
 
-# Performance / Rate-Limit Schutz
-MAX_LEAGUES_PER_RUN = int(env("MAX_LEAGUES_PER_RUN", "0"))  # 0 = alle Ligen
+MAX_LEAGUES_PER_RUN = int(env("MAX_LEAGUES_PER_RUN", "0"))
 AI_SLEEP_SECONDS = float(env("AI_SLEEP_SECONDS", "1.5"))
 GROQ_SLEEP_SECONDS = float(env("GROQ_SLEEP_SECONDS", "2.5"))
 USE_GROQ_FALLBACK = env("USE_GROQ_FALLBACK", "true").lower() in ["1", "true", "yes", "on"]
 
-# Diese Ligen bleiben immer AN, egal was die Statistik sagt.
 ALWAYS_ON_LEAGUES = [
     x.strip()
     for x in env("ALWAYS_ON_LEAGUES", "Champions League,Europa League,Premier League,Bundesliga,La Liga,Serie A,Ligue 1").split(",")
     if x.strip()
 ]
 
-# Diese Ligen bleiben immer AUS.
 ALWAYS_OFF_LEAGUES = [
     x.strip()
     for x in env("ALWAYS_OFF_LEAGUES", "").split(",")
     if x.strip()
 ]
 
-# Wenn gesetzt: nur diese Ligen analysieren (für Abend-Run!)
 ACTIVE_LEAGUES_OVERRIDE = [
     x.strip()
     for x in env("ACTIVE_LEAGUES", "").split(",")
@@ -705,13 +699,12 @@ def fetch_football_data_co_uk(league_name, season="2425"):
         )
         if not r.ok:
             return []
-        # CSV parsen
         lines = r.text.strip().split("\n")
         if len(lines) < 2:
             return []
         headers = lines[0].split(",")
         results = []
-        for line in lines[-20:]:  # Letzte 20 Spiele
+        for line in lines[-20:]:
             try:
                 vals = line.split(",")
                 if len(vals) < len(headers):
@@ -721,10 +714,10 @@ def fetch_football_data_co_uk(league_name, season="2425"):
                     "date": row.get("Date", ""),
                     "home": row.get("HomeTeam", ""),
                     "away": row.get("AwayTeam", ""),
-                    "fthg": row.get("FTHG", ""),  # Heim-Tore Vollzeit
-                    "ftag": row.get("FTAG", ""),  # Gast-Tore Vollzeit
-                    "hthg": row.get("HTHG", ""),  # Heim-Tore Halbzeit
-                    "htag": row.get("HTAG", ""),  # Gast-Tore Halbzeit
+                    "fthg": row.get("FTHG", ""),
+                    "ftag": row.get("FTAG", ""),
+                    "hthg": row.get("HTHG", ""),
+                    "htag": row.get("HTAG", ""),
                     "b365_over": row.get("B365>2.5", row.get("B365O", "")),
                     "pin_over": row.get("PINN>2.5", row.get("PINO", "")),
                 })
@@ -739,19 +732,18 @@ def analyze_line_movement(odds_data, home_team, away_team):
     """
     Analysiert Line Movement via Odds API.
     Vergleicht Pinnacle vs Markt-Durchschnitt als Proxy für Opening/Closing.
-    Pinnacle = schärfster Markt = Closing Line Proxy.
     """
     if not odds_data:
         return None
-    
+
     all_over25 = {}
     all_h2h_home = {}
-    
+
     for g in odds_data:
         gh = g.get("home_team", "").lower()
         if home_team.lower() not in gh and gh not in home_team.lower():
             continue
-        
+
         for bm in g.get("bookmakers", []):
             title = bm.get("title", "")
             for m in bm.get("markets", []):
@@ -765,13 +757,12 @@ def analyze_line_movement(odds_data, home_team, away_team):
                               if o["name"] == g.get("home_team")), None)
                     if ho:
                         all_h2h_home[title] = ho
-    
+
     if not all_over25:
         return None
-    
+
     signals = []
-    
-    # Pinnacle als Closing Line Proxy
+
     pinnacle_over = None
     soft_overs = []
     for bm, odds in all_over25.items():
@@ -779,24 +770,23 @@ def analyze_line_movement(odds_data, home_team, away_team):
             pinnacle_over = odds
         elif bm.lower() in ["bet365", "william hill", "bwin", "unibet", "betway"]:
             soft_overs.append(odds)
-    
+
     if pinnacle_over and soft_overs:
         soft_avg = sum(soft_overs) / len(soft_overs)
         movement = pinnacle_over - soft_avg
         pct = (movement / soft_avg) * 100
-        
+
         if pct > 4:
             signals.append(f"📈 Line Movement Over 2.5: +{round(pct,1)}% (Pin:{pinnacle_over} vs Soft:{round(soft_avg,2)})")
         elif pct < -4:
             signals.append(f"📉 Line Movement Over 2.5: {round(pct,1)}% (Pin:{pinnacle_over} vs Soft:{round(soft_avg,2)})")
-    
-    # Spread zwischen Bookies als Unsicherheits-Indikator
+
     if len(all_over25) >= 3:
         vals = list(all_over25.values())
         spread = max(vals) - min(vals)
         if spread > 0.15:
             signals.append(f"⚡ Hohe Quoten-Divergenz Over 2.5: {min(vals)}-{max(vals)} (Spread: {round(spread,2)})")
-    
+
     return signals if signals else None
 
 
@@ -808,22 +798,22 @@ def get_historical_btts_rate(league_name, home_team, away_team):
         data = fetch_football_data_co_uk(league_name)
         if not data:
             return None
-        
+
         home_l = home_team.lower()
         away_l = away_team.lower()
-        
+
         home_games = []
         away_games = []
-        
+
         for g in data:
             gh = g.get("home", "").lower()
             ga = g.get("away", "").lower()
             fthg = g.get("fthg", "")
             ftag = g.get("ftag", "")
-            
+
             if not fthg or not ftag:
                 continue
-            
+
             try:
                 h_goals = int(fthg)
                 a_goals = int(ftag)
@@ -831,15 +821,15 @@ def get_historical_btts_rate(league_name, home_team, away_team):
                 total = h_goals + a_goals
             except:
                 continue
-            
+
             if home_l in gh or gh in home_l:
                 home_games.append({"btts": btts, "total": total})
             if away_l in ga or ga in away_l:
                 away_games.append({"btts": btts, "total": total})
-        
+
         if not home_games and not away_games:
             return None
-        
+
         result = {}
         if home_games:
             btts_rate = sum(1 for g in home_games if g["btts"]) / len(home_games)
@@ -1080,29 +1070,20 @@ def merge_fixtures(*sources):
 def calculate_kelly_units(probability, odds, max_units=3.0, bank_units=100):
     """
     Kelly Kriterium für optimale Einsatzgröße in Units.
-    
-    Kelly % = (p × (odds-1) - (1-p)) / (odds-1)
-    
-    Wir nutzen Half-Kelly für Sicherheit.
-    Max 3 Units pro Tipp.
+    Half-Kelly für Sicherheit. Max 3 Units pro Tipp.
     """
     try:
         p = probability / 100
         b = odds - 1
         kelly = (p * b - (1 - p)) / b
-        
+
         if kelly <= 0:
-            return 0.5  # Minimum wenn kein Edge
-        
-        # Half-Kelly für Sicherheit
+            return 0.5
+
         half_kelly = kelly / 2
-        
-        # In Units umrechnen (1 Unit = 1% der Bank)
         units = round(half_kelly * 100, 1)
-        
-        # Begrenzen auf max_units
         units = max(0.5, min(units, max_units))
-        
+
         return units
     except Exception:
         return 1.0
@@ -1111,7 +1092,6 @@ def calculate_kelly_units(probability, odds, max_units=3.0, bank_units=100):
 def fetch_fbref_team_stats(team_name, league_name):
     """Holt erweiterte Stats von FBref (xG, Pressing, etc.)"""
     try:
-        # FBref League URLs
         fbref_urls = {
             "Premier League": "https://fbref.com/en/comps/9/stats/Premier-League-Stats",
             "Bundesliga": "https://fbref.com/en/comps/20/stats/Bundesliga-Stats",
@@ -1129,12 +1109,10 @@ def fetch_fbref_team_stats(team_name, league_name):
         )
         if not r.ok:
             return None
-        # Suche nach Team in HTML
         team_lower = team_name.lower()
         text = r.text.lower()
         if team_lower[:6] not in text:
             return None
-        # Extrahiere xG Daten via Regex
         pattern = rf'{re.escape(team_lower[:8])}.*?(\d+\.\d+).*?(\d+\.\d+)'
         m = re.search(pattern, text)
         if m:
@@ -1147,27 +1125,25 @@ def fetch_fbref_team_stats(team_name, league_name):
 def analyze_pinnacle_value(odds_data, home_team, away_team):
     """
     Analysiert Sharp Money via Pinnacle vs andere Bookies.
-    Pinnacle = professionelle Quoten, niedrigste Margin.
-    Wenn Pinnacle höher als Durchschnitt = Value!
     """
     if not odds_data:
         return None
-    
+
     pinnacle_over = None
     avg_over = []
     pinnacle_home = None
     avg_home = []
-    
+
     for g in odds_data:
         gh = g.get("home_team", "").lower()
         ga = g.get("away_team", "").lower()
         if home_team.lower() not in gh and gh not in home_team.lower():
             continue
-            
+
         for bm in g.get("bookmakers", []):
             title = bm.get("title", "").lower()
             is_pinnacle = "pinnacle" in title
-            
+
             for m in bm.get("markets", []):
                 if m["key"] == "totals":
                     ov = next((o["price"] for o in m["outcomes"]
@@ -1177,7 +1153,7 @@ def analyze_pinnacle_value(odds_data, home_team, away_team):
                             pinnacle_over = float(ov)
                         else:
                             avg_over.append(float(ov))
-                            
+
                 if m["key"] == "h2h":
                     ho = next((o["price"] for o in m["outcomes"]
                               if o["name"] == g.get("home_team")), None)
@@ -1186,9 +1162,9 @@ def analyze_pinnacle_value(odds_data, home_team, away_team):
                             pinnacle_home = float(ho)
                         else:
                             avg_home.append(float(ho))
-    
+
     signals = []
-    
+
     if pinnacle_over and avg_over:
         avg = sum(avg_over) / len(avg_over)
         diff_pct = ((pinnacle_over - avg) / avg) * 100
@@ -1196,7 +1172,7 @@ def analyze_pinnacle_value(odds_data, home_team, away_team):
             signals.append(f"🔥 Over 2.5: Pinnacle {pinnacle_over} > Markt {round(avg,2)} (+{round(diff_pct,1)}%)")
         elif diff_pct < -3:
             signals.append(f"⚠️ Over 2.5: Pinnacle {pinnacle_over} < Markt {round(avg,2)} ({round(diff_pct,1)}%)")
-    
+
     if pinnacle_home and avg_home:
         avg = sum(avg_home) / len(avg_home)
         diff_pct = ((pinnacle_home - avg) / avg) * 100
@@ -1204,7 +1180,7 @@ def analyze_pinnacle_value(odds_data, home_team, away_team):
             signals.append(f"🔥 Heimsieg: Pinnacle {pinnacle_home} > Markt {round(avg,2)} (+{round(diff_pct,1)}%)")
         elif diff_pct < -3:
             signals.append(f"⚠️ Heimsieg: Pinnacle {pinnacle_home} < Markt {round(avg,2)} ({round(diff_pct,1)}%)")
-    
+
     return signals if signals else None
 
 
@@ -1217,7 +1193,6 @@ def build_context(odds_data, fixtures, league):
         for f in fixtures:
             line = f"• {f['home']} vs {f['away']} · {f.get('time_local', 'TBD')} Uhr [{f.get('source', '?')}]"
 
-            # xG Daten (Understat für Top-5-Ligen)
             if league in UNDERSTAT_LEAGUES:
                 home_xg = get_team_xg(f["home"], league)
                 away_xg = get_team_xg(f["away"], league)
@@ -1227,7 +1202,6 @@ def build_context(odds_data, fixtures, league):
                 if away_xg:
                     line += f"\n   📊 {f['away']}: xG {away_xg['xG']}/Spiel, xGA {away_xg['xGA']} [Understat]"
 
-            # Historische BTTS-Rate aus football-data.co.uk
             hist = get_historical_btts_rate(league, f["home"], f["away"])
             if hist:
                 if hist.get("home"):
@@ -1282,7 +1256,6 @@ def build_context(odds_data, fixtures, league):
                             if home_o:
                                 ctx += f"  [{bm['title']}] 1: {home_o} / X: {draw_o} / 2: {away_o}\n"
 
-                # 💹 Line Movement Analyse (Pinnacle vs Soft Bookies)
                 line_signals = analyze_line_movement(
                     odds_data, g["home_team"], g["away_team"]
                 )
@@ -1291,7 +1264,6 @@ def build_context(odds_data, fixtures, league):
                     for sig in line_signals:
                         ctx += f"    {sig}\n"
 
-                # 💹 Pinnacle Sharp Money Analyse
                 pinnacle_signals = analyze_pinnacle_value(
                     odds_data, g["home_team"], g["away_team"]
                 )
@@ -1437,8 +1409,7 @@ def is_future_game(time_str, target_date):
 
 def filter_top_tips(tips, target_date, market):
     filtered = []
-    
-    # BTTS HT hat höhere Quoten → andere Limits
+
     max_odds_for_market = 4.5 if market == "btts_ht" else MAX_ODDS
     min_odds_for_market = 1.6 if market == "btts_ht" else MIN_ODDS
 
@@ -1484,11 +1455,9 @@ def filter_top_tips(tips, target_date, market):
     return unique
 
 
-
 def fetch_league_data_once(league, target_date):
     """
     Holt alle Daten für eine Liga nur EINMAL pro Run.
-    Früher wurde das pro Markt gemacht. Das spart viele API-Calls.
     """
     odds = fetch_odds_api(league, target_date)
     fd_fix = fetch_football_data(league, target_date)
@@ -1510,7 +1479,6 @@ def fetch_league_data_once(league, target_date):
 def analyze_market_with_data(market, league, target_date, odds, fixtures):
     """
     Analysiert einen Markt mit bereits geladenen Liga-Daten.
-    Gemini-NoTools zuerst (schneller, kein Rate-Limit), dann Tools, dann Groq.
     """
     if not odds and not fixtures:
         return [], "Keine echten Spiele heute"
@@ -1518,11 +1486,8 @@ def analyze_market_with_data(market, league, target_date, odds, fixtures):
     ctx = build_context(odds, fixtures, league)
     prompt = build_prompt(market, league, target_date, ctx)
 
-    # Reihenfolge: NoTools zuerst (vermeidet Groq Rate-Limit!)
     results, source = call_gemini(prompt, use_tools=False)
 
-    # Nur Fallback wenn Gemini wirklich fehlgeschlagen ist (None)
-    # Leere Liste = Gemini hat keinen Tipp gefunden = kein Fallback nötig!
     if results is None:
         results, source = call_gemini(prompt, use_tools=True)
 
@@ -1533,43 +1498,17 @@ def analyze_market_with_data(market, league, target_date, odds, fixtures):
         return [], source
 
     validated = validate_tips(results, fixtures, odds)
+
+    # 🆕 FIX: League + Odds-Daten an jeden Tipp hängen
+    # So sind die Daten auch in send_top_tips() verfügbar
+    for tip in validated:
+        if not tip.get("league"):
+            tip["league"] = league
+        # Odds-Daten als _internal Feld (wird nicht in Supabase gespeichert)
+        tip["_odds_data"] = odds
+        tip["_source_league"] = league
+
     return validated, source
-
-def analyze_market(market, league, target_date):
-    odds = fetch_odds_api(league, target_date)
-    fd_fix = fetch_football_data(league, target_date)
-    af_fix = fetch_api_football(league, target_date)
-    fj_fix = fetch_football_json(league, target_date)
-    ol_fix = fetch_openligadb(league, target_date)
-
-    fixtures = merge_fixtures(fd_fix, af_fix, fj_fix, ol_fix)
-
-    if not odds and not fixtures:
-        return [], "Keine echten Spiele heute", []
-
-    log(
-        f"   Quellen: Odds={len(odds)}, FD={len(fd_fix)}, "
-        f"AF={len(af_fix)}, FJ={len(fj_fix)}, OL={len(ol_fix)} "
-        f"→ Total={len(fixtures)}"
-    )
-
-    ctx = build_context(odds, fixtures, league)
-    prompt = build_prompt(market, league, target_date, ctx)
-
-    results, source = call_gemini(prompt, use_tools=False)
-
-    if results is None:
-        results, source = call_gemini(prompt, use_tools=True)
-
-    if results is None and USE_GROQ_FALLBACK:
-        results, source = call_groq(prompt)
-
-    if not results:
-        return [], source, fixtures
-
-    validated = validate_tips(results, fixtures, odds)
-
-    return validated, source, fixtures
 
 
 # ============================================================
@@ -1645,16 +1584,13 @@ def is_duplicate_tip(match, market, target_date):
 def is_valid_tip(tip, target_date):
     """
     Prüft ob ein Tipp wirklich heute + in der Zukunft liegt.
-    Verhindert alte Tipps oder Spiele die schon laufen/beendet sind.
     """
-    # 1. Datum muss heute sein
     tip_date = tip.get("date", "")
     today_str = str(target_date)
     if tip_date and tip_date != today_str:
         log(f"   ⚠️ Falsches Datum: {tip_date} (erwartet {today_str})")
         return False
 
-    # 2. Spiel muss noch in der Zukunft liegen
     time_str = tip.get("time", "")
     if not is_future_game(time_str, target_date):
         log(f"   ⚠️ Spiel bereits vorbei: {tip.get('match','')} um {time_str}")
@@ -1668,6 +1604,9 @@ def save_to_supabase(tip):
         return False
 
     try:
+        # 🆕 FIX: Internal Felder vor dem Speichern entfernen
+        clean_tip = {k: v for k, v in tip.items() if not k.startswith("_")}
+
         r = requests.post(
             f"{SUPABASE_URL}/rest/v1/tips",
             headers={
@@ -1676,7 +1615,7 @@ def save_to_supabase(tip):
                 "Content-Type": "application/json",
                 "Prefer": "return=minimal",
             },
-            json=tip,
+            json=clean_tip,
             timeout=10,
         )
 
@@ -1707,7 +1646,6 @@ def get_overall_stats():
         total = len(won) + len(lost)
         quote_pct = round(len(won) / total * 100) if total else 0
 
-        # ROI in Units (Kelly-gewichtet)
         units_won = 0.0
         units_lost = 0.0
         for t in won:
@@ -1724,7 +1662,6 @@ def get_overall_stats():
                 units_lost += 1.0
         roi_units = round(units_won - units_lost, 2)
 
-        # Pro Markt mit Units
         by_market = {
             "btts": {"w": 0, "l": 0, "units": 0.0},
             "over25": {"w": 0, "l": 0, "units": 0.0},
@@ -1746,7 +1683,6 @@ def get_overall_stats():
                 by_market[m]["l"] += 1
                 by_market[m]["units"] -= u
 
-        # Aktueller Monat
         from datetime import date as date_cls
         today = date_cls.today()
         month_start = today.replace(day=1).isoformat()
@@ -1770,7 +1706,6 @@ def get_overall_stats():
                        "Juli","August","September","Oktober","November","Dezember"]
         month_name = month_names[today.month]
 
-        # Top 10 Ligen Ranking (nach Units)
         by_league = {}
         for t in won + lost:
             lg = t.get("league","?")
@@ -1793,7 +1728,6 @@ def get_overall_stats():
             if tot >= 2:
                 pct = round(s["w"]/tot*100)
                 top_leagues.append((lg, s["w"], tot, pct, round(s["units"],2)))
-        # Sortierung: erst nach Units, dann nach Trefferquote
         top_leagues.sort(key=lambda x: (-x[4], -x[3]))
 
         return {
@@ -1858,14 +1792,12 @@ def send_top_tips(tips_by_market, target_date):
         roi_emoji = "🟢" if stats["roi_units"] >= 0 else "🔴"
         stats_header += f"💰 ROI: <b>{'+' if stats['roi_units'] >= 0 else ''}{stats['roi_units']}</b> Units {roi_emoji}\n"
 
-        # Monat
         if stats.get("month") and stats["month"]["total"] > 0:
             m = stats["month"]
             m_emoji = "🟢" if m["units"] >= 0 else "🔴"
             stats_header += f"\n📆 <b>{m['name']}:</b> {m['won']}/{m['total']} ({m['pct']}%) · "
             stats_header += f"<b>{'+' if m['units'] >= 0 else ''}{m['units']} Units</b> {m_emoji}\n"
 
-        # Pro Markt mit Units
         stats_header += f"\n<b>📊 Pro Markt:</b>\n"
         market_names = {"btts": "⚽ BTTS", "over25": "🎯 Over 2.5",
                        "combo": "🔥 Combo", "btts_ht": "🕐 BTTS HT"}
@@ -1878,7 +1810,6 @@ def send_top_tips(tips_by_market, target_date):
                 u_str = f"+{round(mb['units'],2)}" if mb["units"] >= 0 else f"{round(mb['units'],2)}"
                 stats_header += f"{market_names.get(m_id,m_id)}: {mb['w']}/{tot} ({pct}%) · {u_str}U {emoji}\n"
 
-        # Top 10 Ligen
         if stats.get("top_leagues"):
             stats_header += f"\n<b>🏆 Top Ligen Ranking:</b>\n"
             medals = ["🥇","🥈","🥉","4️⃣","5️⃣","6️⃣","7️⃣","8️⃣","9️⃣","🔟"]
@@ -1920,12 +1851,10 @@ def send_top_tips(tips_by_market, target_date):
             confidence = int(r.get("confidence", 0))
             match_name = r.get("match", "?")
 
-            # 🛡️ Validierung: Richtiges Datum + Spiel noch nicht gestartet
             r["date"] = str(target_date)
             if not is_valid_tip(r, target_date):
                 continue
 
-            # 🛡️ Duplikat-Check: Schon heute gesendet?
             if is_duplicate_tip(match_name, market_id, target_date):
                 log(f"   ⏭️ Duplikat übersprungen: {match_name} ({market_id})")
                 continue
@@ -1934,7 +1863,13 @@ def send_top_tips(tips_by_market, target_date):
             msg += "━━━━━━━━━━━━━━━━━━\n"
             msg += f"<b>{match_name}</b>\n"
             msg += f"📍 {r.get('league', '')}\n"
-            msg += f"⏰ {r.get('time', 'TBD')} Uhr\n\n"
+
+            tip_time = r.get('time', '').strip()
+            if tip_time and tip_time not in ['TBD', 'N/A', '-', '']:
+                msg += f"⏰ {tip_time} Uhr\n\n"
+            else:
+                msg += f"⏰ Spielzeit folgt\n\n"
+
             msg += f"{icons.get(r.get('tip', '?'), '')} <b>Tipp: {r.get('tip', '?')}</b>\n"
             msg += f"📈 Wahrscheinlichkeit: <b>{r.get('probability', 0)}%</b>\n"
             msg += f"⭐ Confidence: {'⭐' * confidence}\n\n"
@@ -1942,7 +1877,6 @@ def send_top_tips(tips_by_market, target_date):
             msg += f"🎯 Fair Odds: {r.get('fairOdds', '-')}\n"
             msg += f"{val_icons.get(r.get('valueRating', 'OK'), '🟡')} Value: <b>{r.get('valueRating', 'OK')}</b>\n"
 
-            # 💵 Units Empfehlung (Kelly)
             try:
                 odds_val = float(str(r.get('oddsYes', '1.5')).replace(',', '.'))
                 prob_val = int(r.get('probability', 60))
@@ -1955,9 +1889,15 @@ def send_top_tips(tips_by_market, target_date):
             if r.get("bookie"):
                 msg += f"🏦 Bookie: {r.get('bookie')}\n"
 
-            msg += "\n📊 <b>Form</b>\n"
-            msg += f"🏠 Heim: {r.get('homeForm', '-')}\n"
-            msg += f"✈️ Auswärts: {r.get('awayForm', '-')}\n"
+            home_form = r.get('homeForm', '').strip()
+            away_form = r.get('awayForm', '').strip()
+            if (home_form and home_form not in ['N/A', '-', '?', '']) or \
+               (away_form and away_form not in ['N/A', '-', '?', '']):
+                msg += "\n📊 <b>Form</b>\n"
+                if home_form and home_form not in ['N/A', '-', '?', '']:
+                    msg += f"🏠 Heim: {home_form}\n"
+                if away_form and away_form not in ['N/A', '-', '?', '']:
+                    msg += f"✈️ Auswärts: {away_form}\n"
 
             if r.get("keyFactor"):
                 msg += f"\n⚡ <i>{r.get('keyFactor')}</i>\n"
@@ -1969,22 +1909,28 @@ def send_top_tips(tips_by_market, target_date):
 
             msg_id = send_telegram(msg, target_chat)
 
-            # ML Features sammeln
+            # ============================================================
+            # ML Features sammeln (FIX: tip_league + tip_odds aus dem Tipp)
+            # ============================================================
             try:
                 tip_hour = int(r.get("time", "00:00").split(":")[0])
-                tip_weekday = datetime.now().weekday()  # 0=Mo, 6=So
+                tip_weekday = datetime.now().weekday()
             except:
                 tip_hour = 0
                 tip_weekday = 0
 
+            # 🆕 FIX: League und Odds aus dem Tipp selbst holen
+            tip_league = r.get("league", "") or r.get("_source_league", "")
+            tip_odds_data = r.get("_odds_data", [])
+
             # xG Daten
             xg_home = xg_away = xga_home = xga_away = 0.0
-            if league in UNDERSTAT_LEAGUES:
+            if tip_league in UNDERSTAT_LEAGUES:
                 try:
                     parts = match_name.split(" vs ")
                     if len(parts) == 2:
-                        hxg = get_team_xg(parts[0].strip(), league)
-                        axg = get_team_xg(parts[1].strip(), league)
+                        hxg = get_team_xg(parts[0].strip(), tip_league)
+                        axg = get_team_xg(parts[1].strip(), tip_league)
                         if hxg:
                             xg_home = float(hxg.get("xG", 0))
                             xga_home = float(hxg.get("xGA", 0))
@@ -1998,8 +1944,8 @@ def send_top_tips(tips_by_market, target_date):
             sharp = line_mov = 0.0
             try:
                 parts = match_name.split(" vs ")
-                if len(parts) == 2:
-                    signals = analyze_pinnacle_value(odds, parts[0], parts[1])
+                if len(parts) == 2 and tip_odds_data:
+                    signals = analyze_pinnacle_value(tip_odds_data, parts[0], parts[1])
                     if signals:
                         for sig in signals:
                             if "+" in sig:
@@ -2010,7 +1956,7 @@ def send_top_tips(tips_by_market, target_date):
                                 m = re.search(r'(-\d+\.?\d*)', sig)
                                 if m:
                                     sharp = float(m.group(1))
-                    lm_signals = analyze_line_movement(odds, parts[0], parts[1])
+                    lm_signals = analyze_line_movement(tip_odds_data, parts[0], parts[1])
                     if lm_signals:
                         for sig in lm_signals:
                             m = re.search(r'([+-]\d+\.?\d*)%', sig)
@@ -2023,8 +1969,8 @@ def send_top_tips(tips_by_market, target_date):
             btts_h = btts_a = avg_g_h = avg_g_a = 0.0
             try:
                 parts = match_name.split(" vs ")
-                if len(parts) == 2:
-                    hist = get_historical_btts_rate(league, parts[0], parts[1])
+                if len(parts) == 2 and tip_league:
+                    hist = get_historical_btts_rate(tip_league, parts[0], parts[1])
                     if hist:
                         if hist.get("home"):
                             btts_h = hist["home"].get("btts_rate", 0)
@@ -2037,7 +1983,6 @@ def send_top_tips(tips_by_market, target_date):
 
             tip_id = f"{market_id}_{target_date}_{i}_{abs(hash(match_name)) % 100000}"
 
-            # Units berechnen
             try:
                 odds_val = float(str(r.get('oddsYes', '1.5')).replace(',', '.'))
                 prob_val = int(r.get('probability', 60))
@@ -2098,7 +2043,6 @@ def send_top_tips(tips_by_market, target_date):
     log(f"Gespeichert in Supabase: {saved}")
 
 
-
 # ============================================================
 # AUTO LEAGUE SWITCH FUNKTIONEN
 # ============================================================
@@ -2106,7 +2050,6 @@ def send_top_tips(tips_by_market, target_date):
 def fetch_all_closed_tips_from_supabase():
     """
     Holt abgeschlossene Tipps aus Supabase.
-    Status muss 'won' oder 'lost' sein.
     """
     if not SUPABASE_URL or not SUPABASE_KEY:
         log("Auto Liga Switch: Supabase fehlt, alle Ligen bleiben aktiv.", "WARN")
@@ -2143,14 +2086,9 @@ def fetch_all_closed_tips_from_supabase():
 
 def calculate_league_performance(tips):
     """
-    Berechnet pro Liga:
-    - Anzahl abgeschlossene Tipps
-    - Wins / Losses
-    - Winrate + ROI gesamt
-    - Winrate + ROI letzte 10 Tipps (für Reaktivierung!)
+    Berechnet pro Liga Performance-Metriken.
     """
     stats = {}
-    # Sortiere nach Datum (neueste zuerst)
     sorted_tips = sorted(tips, key=lambda t: t.get("date", ""), reverse=True)
 
     for t in sorted_tips:
@@ -2169,7 +2107,6 @@ def calculate_league_performance(tips):
             try:
                 odds = float(str(t.get("odds", "1")).replace(",", "."))
                 stats[league]["roi"] += odds - 1
-                # Letzte 10
                 if stats[league]["total"] < 10:
                     stats[league]["recent"]["won"] += 1
                     stats[league]["recent"]["roi"] += odds - 1
@@ -2202,18 +2139,7 @@ def calculate_league_performance(tips):
 
 def should_run_league(league, league_stats):
     """
-    Entscheidung:
-    - ALWAYS_OFF = immer aus
-    - ALWAYS_ON = immer an
-    - zu wenig Daten = anlassen
-    - genug Daten:
-        ✅ aktiv wenn Winrate + ROI gut
-        ❌ deaktiviert wenn Winrate + ROI schlecht
-        🔄 REAKTIVIERT wenn nach Deaktivierung Verbesserung erkennbar
-    
-    Reaktivierungs-Logik:
-    - Letzte 10 Tipps werden separat geprüft
-    - Wenn letzte 10 besser als Gesamt → Liga bekommt zweite Chance
+    Entscheidung ob Liga laufen soll.
     """
     if league in ALWAYS_OFF_LEAGUES:
         return False, "ALWAYS_OFF"
@@ -2229,19 +2155,16 @@ def should_run_league(league, league_stats):
     if s["total"] < AUTO_LEAGUE_MIN_TIPS:
         return True, f"zu wenig Daten ({s['total']}/{AUTO_LEAGUE_MIN_TIPS})"
 
-    # Liga würde normal deaktiviert werden
     winrate_bad = s["winrate"] < AUTO_LEAGUE_MIN_WINRATE
     roi_bad = s["roi"] < AUTO_LEAGUE_MIN_ROI
 
     if winrate_bad or roi_bad:
-        # 🔄 REAKTIVIERUNGS-CHECK: Letzte 10 Tipps
         recent = s.get("recent", {})
         recent_total = recent.get("total", 0)
         recent_winrate = recent.get("winrate", 0)
         recent_roi = recent.get("roi", 0)
 
         if recent_total >= 5:
-            # Wenn letzte 5+ Tipps deutlich besser → reaktivieren!
             recent_good = (
                 recent_winrate >= AUTO_LEAGUE_MIN_WINRATE + 5 and
                 recent_roi >= AUTO_LEAGUE_MIN_ROI + 1.0
@@ -2266,9 +2189,7 @@ def should_run_league(league, league_stats):
 def get_active_leagues():
     """
     Gibt die Ligen zurück die heute analysiert werden.
-    ACTIVE_LEAGUES env = nur diese Ligen (z.B. für Abend-Run!)
     """
-    # Abend-Run: nur bestimmte Ligen
     if ACTIVE_LEAGUES_OVERRIDE:
         log(f"🌙 Abend-Run: nur {len(ACTIVE_LEAGUES_OVERRIDE)} Ligen")
         return ACTIVE_LEAGUES_OVERRIDE, {}
@@ -2304,6 +2225,7 @@ def get_active_leagues():
     log(f"Auto Liga Switch Ergebnis: {len(active)} aktiv, {len(disabled)} deaktiviert")
 
     return active, league_stats
+
 
 # ============================================================
 # MAIN
