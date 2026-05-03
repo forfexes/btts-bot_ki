@@ -75,7 +75,7 @@ TELEGRAM_GROUPS = {
 SUPABASE_URL = env("SUPABASE_URL")
 SUPABASE_KEY = env("SUPABASE_KEY")
 
-MIN_PROBABILITY = int(env("MIN_PROBABILITY", "69"))
+MIN_PROBABILITY = int(env("MIN_PROBABILITY", "65"))
 MIN_ODDS = float(env("MIN_ODDS", "1.65"))
 MAX_ODDS = float(env("MAX_ODDS", "3.0"))
 MIN_CONFIDENCE = int(env("MIN_CONFIDENCE", "3"))
@@ -924,7 +924,16 @@ def get_team_xg(team_name, league_name):
 # AI CLIENTS
 # ============================================================
 
+# 🆕 Globaler Status: Wenn Groq rate-limited → nicht mehr probieren
+_GROQ_RATE_LIMITED = False
+
+# 🆕 Round-Robin Counter für Gemini Keys (verteilt Last gleichmäßig)
+_GEMINI_KEY_OFFSET = 0
+
+
 def call_gemini(prompt, use_tools=True):
+    global _GEMINI_KEY_OFFSET
+
     if not GEMINI_API_KEYS:
         return None, "Keine Gemini Keys"
 
@@ -940,8 +949,13 @@ def call_gemini(prompt, use_tools=True):
         payload["tools"] = [{"google_search": {}}]
 
     last_error = None
+    n = len(GEMINI_API_KEYS)
 
-    for idx, key in enumerate(GEMINI_API_KEYS):
+    # 🆕 Round-Robin: Beim nächsten Key starten (verteilt Last gleichmäßig)
+    for offset in range(n):
+        idx = (_GEMINI_KEY_OFFSET + offset) % n
+        key = GEMINI_API_KEYS[idx]
+
         try:
             r = requests.post(
                 f"https://generativelanguage.googleapis.com/v1beta/models/{GEMINI_MODEL}:generateContent?key={key}",
@@ -973,6 +987,8 @@ def call_gemini(prompt, use_tools=True):
             results = extract_json_array(text)
 
             if results is not None:
+                # 🆕 Beim nächsten Aufruf rotieren
+                _GEMINI_KEY_OFFSET = (idx + 1) % n
                 label = f"Gemini #{idx + 1}" if use_tools else f"Gemini-NoTools #{idx + 1}"
                 return results, label
 
@@ -984,16 +1000,23 @@ def call_gemini(prompt, use_tools=True):
 
 
 def call_groq(prompt):
+    global _GROQ_RATE_LIMITED
+
     if not GROQ_API_KEYS:
         return None, "Keine Groq Keys"
 
     if not USE_GROQ_FALLBACK:
         return None, "Groq deaktiviert"
 
+    # 🆕 Wenn Groq schon erschöpft ist, nicht nochmal probieren!
+    if _GROQ_RATE_LIMITED:
+        return None, "Groq übersprungen (Rate Limit erreicht)"
+
     if len(prompt) > 30000:
         prompt = prompt[:30000] + "\n\nAntworte mit JSON-Array."
 
     last_error = None
+    rate_limit_hits = 0
 
     for idx, key in enumerate(GROQ_API_KEYS):
         try:
@@ -1015,7 +1038,11 @@ def call_groq(prompt):
             data = r.json()
 
             if "error" in data:
-                last_error = data.get("error", {}).get("message", "")[:120]
+                err_msg = data.get("error", {}).get("message", "")[:120]
+                last_error = err_msg
+                # 🆕 Rate Limit erkennen
+                if "rate limit" in err_msg.lower() or "rate_limit" in err_msg.lower():
+                    rate_limit_hits += 1
                 time.sleep(GROQ_SLEEP_SECONDS)
                 continue
 
@@ -1036,6 +1063,11 @@ def call_groq(prompt):
             last_error = str(e)[:120]
             time.sleep(GROQ_SLEEP_SECONDS)
             continue
+
+    # 🆕 Wenn ALLE Groq Keys Rate-Limit haben → global deaktivieren
+    if rate_limit_hits >= len(GROQ_API_KEYS):
+        _GROQ_RATE_LIMITED = True
+        log("⚠️  Groq global deaktiviert (alle Keys rate-limited)", "WARN")
 
     return None, f"Groq erschöpft ({last_error})"
 
@@ -2234,8 +2266,18 @@ def get_active_leagues():
 def check_config():
     warnings = []
 
+    # 🆕 Anzahl der Keys loggen
+    log(f"🔑 API Keys geladen:")
+    log(f"   • Gemini: {len(GEMINI_API_KEYS)} Keys")
+    log(f"   • Groq: {len(GROQ_API_KEYS)} Keys")
+    log(f"   • Odds API: {len(ODDS_API_KEYS)} Keys")
+    log(f"   • Football-Data: {'✅' if FOOTBALL_DATA_API_KEY else '❌'}")
+    log(f"   • API-Football: {'✅' if API_FOOTBALL_KEY else '❌'}")
+
     if not GEMINI_API_KEYS:
         warnings.append("GEMINI_API_KEYS fehlt")
+    elif len(GEMINI_API_KEYS) < 5:
+        warnings.append(f"Nur {len(GEMINI_API_KEYS)} Gemini Keys - bei vielen Ligen besser 5-8 Keys")
 
     if not GROQ_API_KEYS:
         warnings.append("GROQ_API_KEYS fehlt")
@@ -2250,7 +2292,7 @@ def check_config():
         warnings.append("TELEGRAM_CHAT_ID fehlt")
 
     if warnings:
-        log("Config Warnungen:", "WARN")
+        log("⚠️  Config Warnungen:", "WARN")
         for w in warnings:
             log(f" - {w}", "WARN")
 
