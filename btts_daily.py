@@ -1521,10 +1521,12 @@ def analyze_market_with_data(market, league, target_date, odds, fixtures):
     # Reihenfolge: NoTools zuerst (vermeidet Groq Rate-Limit!)
     results, source = call_gemini(prompt, use_tools=False)
 
-    if not results:
+    # Nur Fallback wenn Gemini wirklich fehlgeschlagen ist (None)
+    # Leere Liste = Gemini hat keinen Tipp gefunden = kein Fallback nötig!
+    if results is None:
         results, source = call_gemini(prompt, use_tools=True)
 
-    if not results and USE_GROQ_FALLBACK:
+    if results is None and USE_GROQ_FALLBACK:
         results, source = call_groq(prompt)
 
     if not results:
@@ -1556,10 +1558,10 @@ def analyze_market(market, league, target_date):
 
     results, source = call_gemini(prompt, use_tools=False)
 
-    if not results:
+    if results is None:
         results, source = call_gemini(prompt, use_tools=True)
 
-    if not results and USE_GROQ_FALLBACK:
+    if results is None and USE_GROQ_FALLBACK:
         results, source = call_groq(prompt)
 
     if not results:
