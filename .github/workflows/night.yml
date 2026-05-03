@@ -34,5 +34,5 @@ jobs:
           SUPABASE_URL: ${{ secrets.SUPABASE_URL }}
           SUPABASE_KEY: ${{ secrets.SUPABASE_KEY }}
           # Nur Südamerika + Asien Ligen
-          ACTIVE_LEAGUES: "MLS,Brasileirao Serie A,Liga Argentinien,Liga MX,A-League,K League 1,J1 League Japan,China Super League,Saudi Pro League"
+          ACTIVE_LEAGUES: "MLS,Brasileirao Serie A,Liga Argentinien,Liga MX"
         run: python btts_daily.py
