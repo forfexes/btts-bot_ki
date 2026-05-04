@@ -24,6 +24,12 @@ TELEGRAM_CHAT_ID = os.getenv("TELEGRAM_CHAT_ID", "")
 # Odds API Keys (für Resultate)
 ODDS_API_KEYS = [k.strip() for k in os.getenv("ODDS_API_KEYS", "").split(",") if k.strip()]
 
+# 🆕 BSD Config
+BSD_API_URL = "https://sports.bzzoiro.com/api"
+
+# 🆕 Sportmonks Config
+SPORTMONKS_API_KEY = os.getenv("SPORTMONKS_API_KEY", "")
+
 # League Keys für Odds API
 LEAGUE_KEYS = {
     "Premier League": "soccer_epl",
@@ -99,9 +105,45 @@ def get_pending_tips():
 
 def get_match_result(match_name, league, date_str):
     """
-    Holt Match-Ergebnis von Odds API.
-    Returns: {'home_score': 2, 'away_score': 1} oder None
+    Holt Match-Ergebnis von mehreren Quellen.
+    Versucht der Reihe nach: Odds API → BSD → Sportmonks
+    Returns: {'home_score': 2, 'away_score': 1, 'completed': True} oder None
     """
+    if not match_name or not league:
+        return None
+    
+    # Spiel muss mindestens 2h vorbei sein
+    try:
+        match_date = datetime.fromisoformat(date_str)
+        now = datetime.now(timezone.utc)
+        if match_date > now - timedelta(hours=2):
+            return None
+    except:
+        return None
+    
+    # 1️⃣ Versuche Odds API (primäre Quelle)
+    result = get_result_from_odds_api(match_name, league, date_str)
+    if result:
+        log(f"   ✅ Ergebnis von Odds API: {match_name} {result['home_score']}-{result['away_score']}")
+        return result
+    
+    # 2️⃣ Versuche BSD (Fallback für 8 Top-Ligen)
+    result = get_result_from_bsd(match_name, league, date_str)
+    if result:
+        log(f"   ✅ Ergebnis von BSD: {match_name} {result['home_score']}-{result['away_score']}")
+        return result
+    
+    # 3️⃣ Versuche Sportmonks (Fallback für DK/SCO)
+    result = get_result_from_sportmonks(match_name, league, date_str)
+    if result:
+        log(f"   ✅ Ergebnis von Sportmonks: {match_name} {result['home_score']}-{result['away_score']}")
+        return result
+    
+    return None
+
+
+def get_result_from_odds_api(match_name, league, date_str):
+    """Odds API Scores Endpoint"""
     if not ODDS_API_KEYS:
         return None
     
@@ -109,57 +151,144 @@ def get_match_result(match_name, league, date_str):
     if not sport_key:
         return None
     
-    # Match muss mindestens 2h in der Vergangenheit sein
-    try:
-        match_date = datetime.fromisoformat(date_str)
-        now = datetime.now(timezone.utc)
-        if match_date > now - timedelta(hours=2):
-            return None  # Noch zu früh
-    except:
-        return None
-    
     for key in ODDS_API_KEYS:
         try:
-            # Scores endpoint
             r = requests.get(
                 f"https://api.the-odds-api.com/v4/sports/{sport_key}/scores/",
-                params={
-                    "apiKey": key,
-                    "daysFrom": 3,  # Letzte 3 Tage
-                },
+                params={"apiKey": key, "daysFrom": 3},
                 timeout=15,
             )
             
             if r.status_code == 429:
-                continue  # Rate limit, nächster Key
-            
+                continue
             if not r.ok:
                 continue
             
             games = r.json()
             
-            # Match finden
+            # Fuzzy Match Team Names
             for g in games:
-                home = g.get("home_team", "")
-                away = g.get("away_team", "")
+                home = g.get("home_team", "").lower()
+                away = g.get("away_team", "").lower()
+                match_lower = match_name.lower()
                 
-                # Fuzzy Match
-                if match_name.lower() in f"{home} vs {away}".lower():
+                if (home in match_lower or away in match_lower or
+                    f"{home} vs {away}" in match_lower):
+                    
                     scores = g.get("scores")
-                    if scores:
+                    if scores and len(scores) >= 2:
                         return {
                             "home_score": int(scores[0].get("score", 0)),
                             "away_score": int(scores[1].get("score", 0)),
                             "completed": g.get("completed", False),
                         }
             
-            return None  # Match nicht gefunden
-        
-        except Exception as e:
-            log(f"Odds API Error: {e}", "WARN")
+            return None
+        except Exception:
             continue
     
     return None
+
+
+def get_result_from_bsd(match_name, league, date_str):
+    """BSD API für 8 Top-Ligen (Premier, La Liga, Serie A, etc.)"""
+    # BSD deckt nur diese 8 Ligen ab
+    bsd_leagues = [
+        "Premier League", "La Liga", "Serie A", "Bundesliga",
+        "Ligue 1", "Championship", "Primeira Liga", "Eredivisie"
+    ]
+    
+    if league not in bsd_leagues:
+        return None
+    
+    try:
+        r = requests.get(
+            f"{BSD_API_URL}/matches",
+            params={
+                "league": league,
+                "date": date_str.split("T")[0],  # YYYY-MM-DD
+                "status": "finished",
+            },
+            timeout=12,
+        )
+        
+        if not r.ok:
+            return None
+        
+        data = r.json()
+        match_lower = match_name.lower()
+        
+        for match in data.get("matches", []):
+            home = match.get("home_team", {}).get("name", "").lower()
+            away = match.get("away_team", {}).get("name", "").lower()
+            
+            if (home in match_lower or away in match_lower or
+                f"{home} vs {away}" in match_lower):
+                
+                return {
+                    "home_score": int(match.get("score", {}).get("home", 0)),
+                    "away_score": int(match.get("score", {}).get("away", 0)),
+                    "completed": True,
+                }
+        
+        return None
+    except Exception:
+        return None
+
+
+def get_result_from_sportmonks(match_name, league, date_str):
+    """Sportmonks API für Dänemark + Schottland"""
+    if not SPORTMONKS_API_KEY:
+        return None
+    
+    sportmonks_leagues = ["Danish Superligaen", "Scottish Premiership"]
+    if league not in sportmonks_leagues:
+        return None
+    
+    try:
+        r = requests.get(
+            f"https://api.sportmonks.com/v2.0/fixtures",
+            params={
+                "api_token": SPORTMONKS_API_KEY,
+                "filters": f"statusId:3",  # 3 = Finished
+                "include": "teams,scores",
+            },
+            timeout=12,
+        )
+        
+        if not r.ok:
+            return None
+        
+        data = r.json()
+        match_lower = match_name.lower()
+        
+        for match in data.get("data", []):
+            # Check date
+            match_date = match.get("date", "").split("T")[0]
+            if match_date != date_str.split("T")[0]:
+                continue
+            
+            teams = match.get("teams", {}).get("data", [])
+            if len(teams) < 2:
+                continue
+            
+            home = teams[0].get("name", "").lower()
+            away = teams[1].get("name", "").lower()
+            
+            if (home in match_lower or away in match_lower or
+                f"{home} vs {away}" in match_lower):
+                
+                scores = match.get("scores", {}).get("data", [])
+                if len(scores) >= 2:
+                    return {
+                        "home_score": int(scores[0].get("score", 0)),
+                        "away_score": int(scores[1].get("score", 0)),
+                        "completed": True,
+                    }
+        
+        return None
+    except Exception:
+        return None
 
 
 def check_btts_result(home_score, away_score, tip):
