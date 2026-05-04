@@ -157,6 +157,14 @@ LEAGUES_TO_RUN = [
     "Romania Liga I", "Czech First League",
     "Poland Ekstraklasa", "Slovak Super Liga",
 
+    # 🆕 20 B/C-Ligen mit hohen BTTS-Raten
+    "Eerste Divisie", "3. Liga Deutschland", "Norwegian 1. Division",
+    "Austria 2. Liga", "Turkish 1. Lig", "Belgium Challenger Pro",
+    "Danish 1. Division", "Czech 2. Liga", "Scottish Championship",
+    "Swedish Superettan", "Swiss Challenge League", "Croatian HNL",
+    "Israeli Liga Leumit", "Romanian Liga 1", "Bulgarian First League",
+    "Hungarian NB I", "Serbian Super Liga", "Icelandic Úrvalsdeild",
+
     "MLS", "Brasileirao Serie A", "Liga Argentinien",
     "Liga MX", "A-League", "K League 1", "J1 League Japan",
     "China Super League", "Saudi Pro League",
@@ -212,6 +220,15 @@ LEAGUE_KEYS = {
     "Greece Super League": "soccer_greece_super_league",
     "Poland Ekstraklasa": "soccer_poland_ekstraklasa",
     "Slovak Super Liga": "soccer_slovakia_super_liga",
+    # 🆕 B/C-Ligen (falls Odds API sie hat)
+    "Eerste Divisie": "soccer_netherlands_eerste_divisie",
+    "Norwegian 1. Division": "soccer_norway_first_division",
+    "Turkish 1. Lig": "soccer_turkey_first_league",
+    "Belgian Challenger Pro": "soccer_belgium_first_div_b",
+    "Czech 2. Liga": "soccer_czech_2_liga",
+    "Scottish Championship": "soccer_scotland_championship",
+    "Swedish Superettan": "soccer_sweden_superettan",
+    "Israeli Liga Leumit": "soccer_israel_liga_leumit",
 }
 
 FOOTBALL_DATA_CODES = {
@@ -271,6 +288,27 @@ API_FOOTBALL_LEAGUES = {
     "Serbia SuperLiga": 286,
     "Romania Liga I": 283,
     "Czech First League": 345,
+    # 🆕 20 B/C-Ligen mit guten BTTS-Raten
+    "Eerste Divisie": 89,                # Niederlande (65% BTTS)
+    "3. Liga Deutschland": 82,           # Deutschland
+    "Norwegian 1. Division": 104,        # Norwegen (61% BTTS)
+    "Austria 2. Liga": 293,              # Österreich (60% BTTS)
+    "Turkish 1. Lig": 200,               # Türkei (60% BTTS)
+    "Belgium Challenger Pro": 296,       # Belgien (59% BTTS)
+    "Danish 1. Division": 120,           # Dänemark (59% BTTS)
+    "Czech 2. Liga": 346,                # Tschechien (58% BTTS)
+    "Polish Ekstraklasa": 106,           # Polen (58% BTTS)
+    "Scottish Championship": 181,        # Schottland (58% BTTS)
+    "Swedish Superettan": 114,           # Schweden (57% BTTS)
+    "Swiss Challenge League": 265,       # Schweiz (57% BTTS)
+    "Croatian HNL": 210,                 # Kroatien (56% BTTS)
+    "Slovak Super Liga": 332,            # Slowakei (56% BTTS)
+    "Israeli Liga Leumit": 289,          # Israel (61% BTTS)
+    "Romanian Liga 1": 283,              # Rumänien (55% BTTS)
+    "Bulgarian First League": 348,       # Bulgarien (55% BTTS)
+    "Hungarian NB I": 325,               # Ungarn (55% BTTS)
+    "Serbian Super Liga": 286,           # Serbien (56% BTTS)
+    "Icelandic Úrvalsdeild": 271,       # Island (57% BTTS)
     # Jugendligas
     "Bundesliga U19": 63,
     "Bundesliga U17": 64,
@@ -672,6 +710,139 @@ APIFOOTBALL_ENABLE_TEAM_STATS = env("APIFOOTBALL_TEAM_STATS", "true").lower() in
 APIFOOTBALL_ENABLE_H2H = env("APIFOOTBALL_H2H", "true").lower() in ["1", "true", "yes"]
 APIFOOTBALL_ENABLE_INJURIES = env("APIFOOTBALL_INJURIES", "true").lower() in ["1", "true", "yes"]
 APIFOOTBALL_ENABLE_PREDICTIONS = env("APIFOOTBALL_PREDICTIONS", "true").lower() in ["1", "true", "yes"]
+
+# ============================================================
+# 🆕 LEAGUE ROTATION SYSTEM - Auto Ligen ein/ausschalten
+# ============================================================
+LEAGUE_ROTATION_ENABLED = env("LEAGUE_ROTATION_ENABLED", "true").lower() in ["1", "true", "yes"]
+LEAGUE_ROTATION_MIN_SAMPLES = int(env("LEAGUE_ROTATION_MIN_SAMPLES", "5"))  # Mindest 5 Tipps pro Liga
+LEAGUE_ROTATION_MIN_QUOTE = float(env("LEAGUE_ROTATION_MIN_QUOTE", "0.50"))  # <50% = rausnehmen
+LEAGUE_ROTATION_MAX_QUOTE = float(env("LEAGUE_ROTATION_MAX_QUOTE", "0.70"))  # >70% = reinmachen
+LEAGUE_ROTATION_CHECK_DAY = env("LEAGUE_ROTATION_CHECK_DAY", "6")  # Sonntag (6) = weekly check
+
+# Aktive Ligen - wird dynamisch aktualisiert
+ACTIVE_LEAGUES = set(LEAGUES_TO_RUN)  # Alle starten aktiv
+LEAGUE_STATS_CACHE = {}
+
+
+def get_league_performance(league_name):
+    """
+    Holt Performance-Stats für eine Liga aus Supabase.
+    Returns: {"won": 5, "lost": 2, "pending": 3, "quote": 0.714}
+    """
+    if not SUPABASE_URL or not SUPABASE_ANON_KEY:
+        return None
+    
+    try:
+        url = f"{SUPABASE_URL}/rest/v1/tips"
+        headers = {
+            "apikey": SUPABASE_ANON_KEY,
+            "Authorization": f"Bearer {SUPABASE_ANON_KEY}",
+        }
+        
+        # Alle tips für diese Liga (status = won/lost)
+        params = {
+            "league": f"eq.{league_name}",
+            "select": "status",
+        }
+        
+        r = requests.get(url, headers=headers, params=params, timeout=10)
+        
+        if not r.ok:
+            return None
+        
+        tips = r.json()
+        won = sum(1 for t in tips if t.get("status") == "won")
+        lost = sum(1 for t in tips if t.get("status") == "lost")
+        total = won + lost
+        
+        if total < LEAGUE_ROTATION_MIN_SAMPLES:
+            return None  # Zu wenig Daten
+        
+        quote = won / total if total > 0 else 0
+        
+        return {
+            "league": league_name,
+            "won": won,
+            "lost": lost,
+            "total": total,
+            "quote": quote,
+        }
+    
+    except Exception as e:
+        log(f"League Stats Error ({league_name}): {e}", "WARN")
+        return None
+
+
+def rotate_leagues():
+    """
+    Checkt Liga-Performance und nimmt schlecht/gut performende Ligen raus/rein.
+    Wird 1x pro Woche aufgerufen (Sonntag).
+    """
+    global ACTIVE_LEAGUES
+    
+    if not LEAGUE_ROTATION_ENABLED:
+        return
+    
+    log("🔄 League Rotation Check startet...")
+    
+    to_remove = []
+    to_add = []
+    
+    # Check alle Ligen (auch inactive)
+    all_leagues = set(LEAGUES_TO_RUN)
+    
+    for league in all_leagues:
+        stats = get_league_performance(league)
+        
+        if not stats:
+            continue  # Zu wenig Daten
+        
+        is_active = league in ACTIVE_LEAGUES
+        quote = stats["quote"]
+        
+        # Rausnehmen: <50% quote
+        if is_active and quote < LEAGUE_ROTATION_MIN_QUOTE:
+            to_remove.append(league)
+            log(f"   ❌ {league}: {quote*100:.0f}% - RAUSNEHMEN")
+        
+        # Reinmachen: >70% quote
+        if not is_active and quote > LEAGUE_ROTATION_MAX_QUOTE:
+            to_add.append(league)
+            log(f"   ✅ {league}: {quote*100:.0f}% - REINMACHEN")
+    
+    # Applizieren
+    for league in to_remove:
+        ACTIVE_LEAGUES.discard(league)
+    
+    for league in to_add:
+        ACTIVE_LEAGUES.add(league)
+    
+    log(f"🔄 Rotation done: -{len(to_remove)} Ligen, +{len(to_add)} Ligen")
+    log(f"   Aktive Ligen jetzt: {len(ACTIVE_LEAGUES)}/{len(LEAGUES_TO_RUN)}")
+    
+    # Telegram Info
+    if to_remove or to_add:
+        msg = f"🔄 <b>League Rotation</b>\n\n"
+        if to_remove:
+            msg += f"❌ Raus: {', '.join(to_remove)}\n"
+        if to_add:
+            msg += f"✅ Rein: {', '.join(to_add)}\n"
+        msg += f"\n📊 Aktiv: {len(ACTIVE_LEAGUES)}/{len(LEAGUES_TO_RUN)}"
+        send_telegram(msg, TELEGRAM_GROUPS.get("stats"))
+
+
+def check_rotation_schedule():
+    """
+    Checkt ob heute der Rotation-Tag ist (Sonntag).
+    """
+    if not LEAGUE_ROTATION_ENABLED:
+        return
+    
+    today = datetime.now()
+    if today.weekday() == int(LEAGUE_ROTATION_CHECK_DAY):
+        rotate_leagues()
+
 
 
 def _af_request(endpoint, params, timeout=12):
@@ -2118,13 +2289,15 @@ def fetch_league_data_once(league, target_date):
     af_fix = fetch_api_football(league, target_date)
     fj_fix = fetch_football_json(league, target_date)
     ol_fix = fetch_openligadb(league, target_date)
+    bsd_fix = fetch_bsd_fixtures(league, target_date)
+    sm_fix = fetch_sportmonks_fixtures(league, target_date)  # 🆕 Sportmonks für DK, SCO
 
-    fixtures = merge_fixtures(fd_fix, af_fix, fj_fix, ol_fix)
+    fixtures = merge_fixtures(fd_fix, af_fix, fj_fix, ol_fix, bsd_fix, sm_fix)
 
     log(
         f"   Quellen: Odds={len(odds)}, FD={len(fd_fix)}, "
-        f"AF={len(af_fix)}, FJ={len(fj_fix)}, OL={len(ol_fix)} "
-        f"→ Total={len(fixtures)}"
+        f"AF={len(af_fix)}, FJ={len(fj_fix)}, OL={len(ol_fix)}, "
+        f"BSD={len(bsd_fix)}, SM={len(sm_fix)} → Total={len(fixtures)}"
     )
 
     return odds, fixtures
@@ -2214,8 +2387,188 @@ def get_team_badge(team_name):
 
 
 # ============================================================
-# TELEGRAM + SUPABASE
+# 🆕 SPORTMONKS - Free Forever für 2 Ligen
 # ============================================================
+SPORTMONKS_API_KEY = env("SPORTMONKS_API_KEY", "")  # Free tier API Key
+SPORTMONKS_CACHE = {}
+
+SPORTMONKS_LEAGUE_IDS = {
+    # Nur 2 Ligen im Free Tier verfügbar
+    "Danish Superligaen": 271,      # Dänemark
+    "Scottish Premiership": 501,    # Schottland
+}
+
+
+def fetch_sportmonks_fixtures(league_name, target_date):
+    """
+    Holt Spielpläne von Sportmonks (Free Tier: Dänemark, Schottland).
+    Returns: Liste mit Fixtures oder []
+    """
+    if not SPORTMONKS_API_KEY:
+        return []
+    
+    league_id = SPORTMONKS_LEAGUE_IDS.get(league_name)
+    if not league_id:
+        return []  # Sportmonks deckt diese Liga nicht ab (nur 2 im Free Tier)
+    
+    try:
+        # Sportmonks V2 API
+        r = requests.get(
+            f"https://api.sportmonks.com/v2.0/fixtures",
+            params={
+                "api_token": SPORTMONKS_API_KEY,
+                "filters": f"leagueId:{league_id},statusId:1",  # Status 1 = Not Started
+                "include": "teams",
+                "sort": "-date",
+            },
+            timeout=12,
+        )
+        
+        if not r.ok:
+            return []
+        
+        data = r.json()
+        now_utc = datetime.now(timezone.utc)
+        fixtures = []
+        
+        for match in data.get("data", []):
+            try:
+                kickoff_str = match.get("date")
+                if not kickoff_str:
+                    continue
+                
+                # Sportmonks gibt UTC Zeit
+                kickoff = datetime.fromisoformat(kickoff_str.replace("Z", "+00:00"))
+                
+                if kickoff > now_utc:
+                    # Teams aus nested data
+                    teams = match.get("teams", {})
+                    home_team = teams.get("data", [])[0] if teams.get("data") else {}
+                    away_team = teams.get("data", [])[1] if len(teams.get("data", [])) > 1 else {}
+                    
+                    fixtures.append({
+                        "home": home_team.get("name", ""),
+                        "away": away_team.get("name", ""),
+                        "match_id": match.get("id"),
+                        "home_id": home_team.get("id"),
+                        "away_id": away_team.get("id"),
+                        "time_utc": kickoff_str,
+                        "time_local": get_local_time(kickoff_str),
+                        "source": "sportmonks",
+                    })
+            except Exception:
+                continue
+        
+        return fixtures
+    
+    except Exception as e:
+        log(f"Sportmonks Error: {e}", "WARN")
+        return []
+# ============================================================
+BSD_API_URL = "https://sports.bzzoiro.com/api"
+BSD_CACHE = {}
+
+BSD_LEAGUE_IDS = {
+    # 8 Top-Ligen die BSD abdeckt
+    "Premier League": 1,          # England
+    "La Liga": 8,                 # Spain
+    "Serie A": 10,                # Italy
+    "Bundesliga": 12,             # Germany
+    "Ligue 1": 61,                # France
+    "Championship": 2,            # England 2nd
+    "Primeira Liga": 32,          # Portugal
+    "Eredivisie": 13,             # Netherlands
+}
+
+
+def fetch_bsd_fixtures(league_name, target_date):
+    """
+    Holt Spielpläne von BSD für die 8 unterstützten Top-Ligen.
+    Returns: Liste mit Fixtures oder []
+    """
+    league_id = BSD_LEAGUE_IDS.get(league_name)
+    if not league_id:
+        return []  # BSD deckt diese Liga nicht ab
+    
+    try:
+        # BSD API für matches
+        r = requests.get(
+            f"{BSD_API_URL}/matches",
+            params={
+                "league_id": league_id,
+                "date": target_date.isoformat(),
+                "status": "upcoming",
+            },
+            timeout=12,
+        )
+        
+        if not r.ok:
+            return []
+        
+        data = r.json()
+        now_utc = datetime.now(timezone.utc)
+        fixtures = []
+        
+        for match in data.get("matches", []):
+            try:
+                kickoff_str = match.get("datetime")
+                if not kickoff_str:
+                    continue
+                    
+                kickoff = datetime.fromisoformat(kickoff_str.replace("Z", "+00:00"))
+                
+                if kickoff > now_utc:
+                    fixtures.append({
+                        "home": match.get("home_team", {}).get("name", ""),
+                        "away": match.get("away_team", {}).get("name", ""),
+                        "match_id": match.get("id"),
+                        "home_id": match.get("home_team", {}).get("id"),
+                        "away_id": match.get("away_team", {}).get("id"),
+                        "time_utc": kickoff_str,
+                        "time_local": get_local_time(kickoff_str),
+                        "source": "bsd",
+                    })
+            except Exception:
+                continue
+        
+        return fixtures
+    
+    except Exception as e:
+        log(f"BSD Error: {e}", "WARN")
+        return []
+
+
+def get_bsd_odds(match_id):
+    """
+    Holt aktuelle Quoten von 41+ Bookies für ein Match.
+    Returns: {'btts_yes': 1.85, 'over25': 2.10, ...} oder None
+    """
+    if not match_id:
+        return None
+    
+    try:
+        r = requests.get(
+            f"{BSD_API_URL}/odds/compare/{match_id}",
+            timeout=10,
+        )
+        
+        if not r.ok:
+            return None
+        
+        data = r.json()
+        odds = {}
+        
+        # BTTS Quoten sammeln
+        for market in data.get("markets", []):
+            if market.get("name") == "btts":
+                yes_odds = market.get("outcomes", {}).get("yes", {}).get("odds")
+                if yes_odds:
+                    odds["btts_yes"] = float(yes_odds)
+        
+        return odds if odds else None
+    
+    except Exception:
+        return None
 
 # 🆕 BOOKIE DEEPLINK CONFIG
 # Diese Bookies werden als Buttons unter jedem Tipp angezeigt.
@@ -3080,6 +3433,15 @@ def check_config():
     log(f"   • Groq: {len(GROQ_API_KEYS)} Keys")
     log(f"   • Odds API: {len(ODDS_API_KEYS)} Keys")
     log(f"   • Football-Data: {len(FOOTBALL_DATA_API_KEYS)} Keys" if FOOTBALL_DATA_API_KEYS else "   • Football-Data: ❌")
+    log(f"   • BSD: ✅ (8 Top-Ligen, unlimited Calls)")
+    log(f"   • Sportmonks: ✅ (Dänemark + Schottland, Free Forever)")
+    log(f"")
+    log(f"🔄 League Rotation:")
+    log(f"   • Status: {'✅ AKTIV' if LEAGUE_ROTATION_ENABLED else '❌ AUS'}")
+    log(f"   • Min Tipps: {LEAGUE_ROTATION_MIN_SAMPLES}")
+    log(f"   • Rausnehmen: <{LEAGUE_ROTATION_MIN_QUOTE*100:.0f}%")
+    log(f"   • Reinmachen: >{LEAGUE_ROTATION_MAX_QUOTE*100:.0f}%")
+    log(f"   • Check: Sonntag (weekly)")
     log(f"   • API-Football: {len(API_FOOTBALL_KEYS)} Keys ({len(API_FOOTBALL_KEYS)*100} Calls/Tag bei Free Plan)")
 
     # 🆕 API-Football Erweiterungen Status
@@ -3120,6 +3482,9 @@ def main():
     log("=" * 60)
 
     check_config()
+    
+    # 🆕 Check ob heute Rotation stattfinden soll (Sonntag)
+    check_rotation_schedule()
 
     target_date = date.today()
 
