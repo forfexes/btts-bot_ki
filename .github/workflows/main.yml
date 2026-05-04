@@ -1,36 +1,52 @@
-name: Daily BTTS Tipps
+name: Europe BTTS Tipps 🇪🇺
 
 on:
   schedule:
-    - cron: '0 8 * * *'   # 08:00 UTC = 10:00 CH
+    - cron: '0 8 * * *'   # 08:00 UTC = 10:00 CH Sommer / 09:00 CH Winter
   workflow_dispatch:
 
 jobs:
-  run-bot:
+  run-bot-europe:
     runs-on: ubuntu-latest
-    timeout-minutes: 60
+    timeout-minutes: 30
     steps:
       - uses: actions/checkout@v4
+      
       - name: Setup Python
         uses: actions/setup-python@v5
         with:
           python-version: '3.11'
+      
       - name: Install dependencies
         run: pip install requests python-dotenv
-      - name: Run bot
+      
+      - name: Run Europe Bot 🇪🇺
         env:
           GEMINI_API_KEYS: ${{ secrets.GEMINI_API_KEYS }}
           GROQ_API_KEYS: ${{ secrets.GROQ_API_KEYS }}
           ODDS_API_KEYS: ${{ secrets.ODDS_API_KEYS }}
-          FOOTBALL_DATA_API_KEY: ${{ secrets.FOOTBALL_DATA_API_KEY }}
-          API_FOOTBALL_KEY: ${{ secrets.API_FOOTBALL_KEY }}
+          FOOTBALL_DATA_API_KEYS: ${{ secrets.FOOTBALL_DATA_API_KEYS }}
+          API_FOOTBALL_KEYS: ${{ secrets.API_FOOTBALL_KEYS }}
+          SPORTMONKS_API_KEY: ${{ secrets.SPORTMONKS_API_KEY }}
           TELEGRAM_TOKEN: ${{ secrets.TELEGRAM_TOKEN }}
           TELEGRAM_CHAT_ID: ${{ secrets.TELEGRAM_CHAT_ID }}
           TELEGRAM_GROUP_BTTS: ${{ secrets.TELEGRAM_GROUP_BTTS }}
           TELEGRAM_GROUP_OVER25: ${{ secrets.TELEGRAM_GROUP_OVER25 }}
           TELEGRAM_GROUP_COMBO: ${{ secrets.TELEGRAM_GROUP_COMBO }}
-          TELEGRAM_GROUP_1X2: ${{ secrets.TELEGRAM_GROUP_1X2 }}
+          TELEGRAM_GROUP_BTTS_HT: ${{ secrets.TELEGRAM_GROUP_BTTS_HT }}
           TELEGRAM_GROUP_STATS: ${{ secrets.TELEGRAM_GROUP_STATS }}
           SUPABASE_URL: ${{ secrets.SUPABASE_URL }}
-          SUPABASE_KEY: ${{ secrets.SUPABASE_KEY }}
+          SUPABASE_ANON_KEY: ${{ secrets.SUPABASE_ANON_KEY }}
+          # 🌍 EUROPA: Alle 68 Ligen
+          LEAGUE_ROTATION_ENABLED: "true"
+          LEAGUE_ROTATION_MIN_SAMPLES: "5"
+          LEAGUE_ROTATION_MIN_QUOTE: "0.50"
+          LEAGUE_ROTATION_MAX_QUOTE: "0.70"
         run: python btts_daily.py
+      
+      - name: Log Summary
+        if: always()
+        run: |
+          echo "✅ Europe Bot Run Complete"
+          echo "Schedule: 08:00 UTC täglich"
+          echo "Zeit: 10:00 Sommer-Schweiz / 09:00 Winter-Schweiz"
