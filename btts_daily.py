@@ -7,7 +7,6 @@ Action: $ sed -n '1,900p' /app/uploaded_bot/btts_daily.py
 Observation: """
 AI TIPP BOT - GITHUB SINGLE FILE EDITION
 =======================================
-
 WICHTIG:
 - Keine API Keys direkt in diesen Code schreiben.
 - Lokal: .env Datei erstellen.
@@ -29,7 +28,6 @@ TELEGRAM_GROUP_STATS=...
 SUPABASE_URL=...
 SUPABASE_KEY=...
 """
-
 import os
 import re
 import sys
@@ -37,33 +35,23 @@ import json
 import traceback
 import time
 from datetime import date, datetime, timedelta, timezone
-
 import requests
-
 try:
     from dotenv import load_dotenv
     load_dotenv()
 except Exception:
     pass
-
-
 # ============================================================
 # CONFIG
 # ============================================================
-
 def env(name: str, default: str = "") -> str:
     return os.getenv(name, default).strip()
-
-
 def env_list(name: str) -> list[str]:
     value = env(name)
     return [x.strip() for x in value.split(",") if x.strip()]
-
-
 GEMINI_API_KEYS = env_list("GEMINI_API_KEYS")
 GROQ_API_KEYS = env_list("GROQ_API_KEYS")
 ODDS_API_KEYS = env_list("ODDS_API_KEYS")
-
 FOOTBALL_DATA_API_KEY = env("FOOTBALL_DATA_API_KEY")
 # 🆕 Mehrere Football-Data Keys unterstützen (kommasepariert, 10 Requests/Min pro Key)
 FOOTBALL_DATA_API_KEYS = env_list("FOOTBALL_DATA_API_KEYS")
@@ -71,7 +59,6 @@ if not FOOTBALL_DATA_API_KEYS and FOOTBALL_DATA_API_KEY:
     FOOTBALL_DATA_API_KEYS = [FOOTBALL_DATA_API_KEY]
 # Erster Key für Backwards-Kompatibilität
 FOOTBALL_DATA_API_KEY = FOOTBALL_DATA_API_KEYS[0] if FOOTBALL_DATA_API_KEYS else ""
-
 # 🆕 Mehrere API-Football Keys unterstützen (kommasepariert)
 # Backwards-kompatibel: Falls API_FOOTBALL_KEY (singular) gesetzt ist, wird der genutzt
 API_FOOTBALL_KEYS = env_list("API_FOOTBALL_KEYS")
@@ -92,19 +79,15 @@ TELEGRAM_GROUPS = {
     "btts_ht": env("TELEGRAM_GROUP_BTTS_HT", TELEGRAM_CHAT_ID),
     "stats": env("TELEGRAM_GROUP_STATS", TELEGRAM_CHAT_ID),
 }
-
 SUPABASE_URL = env("SUPABASE_URL")
 SUPABASE_KEY = env("SUPABASE_KEY")
-
 MIN_PROBABILITY = int(env("MIN_PROBABILITY", "67"))  # 🆕 Hybrid: 67% (zwischen 65-69)
 MIN_ODDS = float(env("MIN_ODDS", "1.65"))
 MAX_ODDS = float(env("MAX_ODDS", "3.0"))
 MIN_CONFIDENCE = int(env("MIN_CONFIDENCE", "3"))
 # 🆕 Nur HIGH + OK Value (LOW fliegt raus)
 MIN_VALUE_RATING = env("MIN_VALUE_RATING", "OK")  # HIGH, OK, oder LOW
-
 MARKETS_TO_RUN = ["btts", "over25", "combo", "btts_ht"]
-
 # ============================================================
 # AUTO LIGA SWITCH
 # ============================================================
@@ -113,41 +96,32 @@ AUTO_LEAGUE_MIN_TIPS = int(env("AUTO_LEAGUE_MIN_TIPS", "10"))
 AUTO_LEAGUE_MIN_WINRATE = float(env("AUTO_LEAGUE_MIN_WINRATE", "48"))
 AUTO_LEAGUE_MIN_ROI = float(env("AUTO_LEAGUE_MIN_ROI", "-2.0"))
 AUTO_LEAGUE_LOOKBACK_DAYS = int(env("AUTO_LEAGUE_LOOKBACK_DAYS", "120"))
-
 MAX_LEAGUES_PER_RUN = int(env("MAX_LEAGUES_PER_RUN", "0"))
 AI_SLEEP_SECONDS = float(env("AI_SLEEP_SECONDS", "1.5"))
 GROQ_SLEEP_SECONDS = float(env("GROQ_SLEEP_SECONDS", "2.5"))
 USE_GROQ_FALLBACK = env("USE_GROQ_FALLBACK", "true").lower() in ["1", "true", "yes", "on"]
-
 ALWAYS_ON_LEAGUES = [
     x.strip()
     for x in env("ALWAYS_ON_LEAGUES", "Champions League,Europa League,Premier League,Bundesliga,La Liga,Serie A,Ligue 1").split(",")
     if x.strip()
 ]
-
 ALWAYS_OFF_LEAGUES = [
     x.strip()
     for x in env("ALWAYS_OFF_LEAGUES", "").split(",")
     if x.strip()
 ]
-
 ACTIVE_LEAGUES_OVERRIDE = [
     x.strip()
     for x in env("ACTIVE_LEAGUES", "").split(",")
     if x.strip()
 ]
-
 GEMINI_MODEL = "gemini-2.5-flash"
 GROQ_MODEL = "llama-3.3-70b-versatile"
-
-
 # ============================================================
 # LIGEN
 # ============================================================
-
 LEAGUES_TO_RUN = [
     "Champions League", "Europa League", "Conference League",
-
     "Bundesliga", "2. Bundesliga",
     "Premier League", "Championship",
     "La Liga", "La Liga 2",
@@ -157,12 +131,10 @@ LEAGUES_TO_RUN = [
     "Pro League Belgien", "Süper Lig",
     "Bundesliga Österreich", "Super League Schweiz",
     "Scottish Premiership",
-
     "Danish Superliga", "Norway Eliteserien", "Sweden Allsvenskan",
     "Greece Super League", "Croatia HNL", "Serbia SuperLiga",
     "Romania Liga I", "Czech First League",
     "Poland Ekstraklasa", "Slovak Super Liga",
-
     # 🆕 20 B/C-Ligen mit hohen BTTS-Raten
     "Eerste Divisie", "3. Liga Deutschland", "Norwegian 1. Division",
     "Austria 2. Liga", "Turkish 1. Lig", "Belgium Challenger Pro",
@@ -170,14 +142,11 @@ LEAGUES_TO_RUN = [
     "Swedish Superettan", "Swiss Challenge League", "Croatian HNL",
     "Israeli Liga Leumit", "Romanian Liga 1", "Bulgarian First League",
     "Hungarian NB I", "Serbian Super Liga", "Icelandic Úrvalsdeild",
-
     "MLS", "Brasileirao Serie A", "Liga Argentinien",
     "Liga MX", "A-League", "K League 1", "J1 League Japan",
     "China Super League", "Saudi Pro League",
-
     "Iceland Premier League", "Iceland 1. Deild",
     "Australia A-League Women",
-
     # 🏃 JUGENDLIGAS
     "Bundesliga U19",
     "Bundesliga U17",
@@ -188,7 +157,6 @@ LEAGUES_TO_RUN = [
     "Ligue 1 U19",
     "UEFA Youth League",
 ]
-
 LEAGUE_KEYS = {
     "Champions League": "soccer_uefa_champs_league",
     "Europa League": "soccer_uefa_europa_league",
@@ -236,7 +204,6 @@ LEAGUE_KEYS = {
     "Swedish Superettan": "soccer_sweden_superettan",
     "Israeli Liga Leumit": "soccer_israel_liga_leumit",
 }
-
 FOOTBALL_DATA_CODES = {
     "Champions League": "CL",
     "Bundesliga": "BL1",
@@ -250,7 +217,6 @@ FOOTBALL_DATA_CODES = {
     "Primeira Liga": "PPL",
     "Brasileirao Serie A": "BSA",
 }
-
 API_FOOTBALL_LEAGUES = {
     "Champions League": 2,
     "Europa League": 3,
@@ -325,7 +291,6 @@ API_FOOTBALL_LEAGUES = {
     "Ligue 1 U19": 114,
     "UEFA Youth League": 10,
 }
-
 FOOTBALL_JSON_LEAGUES = {
     "Bundesliga": "de.1",
     "2. Bundesliga": "de.2",
@@ -342,7 +307,6 @@ FOOTBALL_JSON_LEAGUES = {
     "Champions League": "uefa.cl",
     "Europa League": "uefa.el",
 }
-
 OPENLIGADB_LEAGUES = {
     "Bundesliga": "bl1",
     "2. Bundesliga": "bl2",
@@ -351,7 +315,6 @@ OPENLIGADB_LEAGUES = {
     "Champions League": "ucl",
     "Europa League": "uel",
 }
-
 UNDERSTAT_LEAGUES = {
     "Premier League": "EPL",
     "La Liga": "La_liga",
@@ -359,7 +322,6 @@ UNDERSTAT_LEAGUES = {
     "Serie A": "Serie_A",
     "Ligue 1": "Ligue_1",
 }
-
 MARKET_INFO = {
     "btts": {
         "name": "⚽ BTTS",
@@ -378,16 +340,12 @@ MARKET_INFO = {
         "instr": "Analysiere BTTS in der 1. Halbzeit (Beide Teams treffen bis zur Pause). Wichtig: xG HT, Pressing der Teams, frühe Tore Statistik.",
     },
 }
-
-
-# ============================================================
+# ===========================================================
 # UTILS
 # ============================================================
 
 def log(msg, level="INFO"):
     print(f"[{datetime.now().strftime('%H:%M:%S')}] [{level}] {msg}", flush=True)
-
-
 def get_local_time(utc_iso_str):
     try:
         dt_utc = datetime.fromisoformat(utc_iso_str.replace("Z", "+00:00"))
@@ -405,11 +363,8 @@ def get_local_time(utc_iso_str):
         return (dt_utc + timedelta(hours=offset)).strftime("%H:%M")
     except Exception:
         return "TBD"
-
-
 def extract_json_array(text):
     cleaned = text.replace("```json", "").replace("```", "").strip()
-
     try:
         s = cleaned.find("[")
         e = cleaned.rfind("]")
@@ -417,11 +372,9 @@ def extract_json_array(text):
             return json.loads(cleaned[s:e + 1])
     except Exception:
         pass
-
     objects = []
     depth = 0
     start_idx = -1
-
     for i, c in enumerate(cleaned):
         if c == "{":
             if depth == 0:
@@ -437,34 +390,24 @@ def extract_json_array(text):
                 except Exception:
                     pass
                 start_idx = -1
-
     return objects
-
-
 def normalize_team_name(name):
     if not name:
         return ""
-
     n = name.lower().strip()
     remove = [
         " fc", " cf", " ac", " sc", " sv", " 1.",
         "fc ", "ac ", "sc ", "sv ", "1. ",
         " e.v.", " ev",
     ]
-
     for x in remove:
         n = n.replace(x, " ")
-
     return " ".join(n.split())
-
-
 def teams_match(name1, name2):
     n1 = normalize_team_name(name1)
     n2 = normalize_team_name(name2)
-
     if not n1 or not n2:
         return False
-
     if n1 == n2 or n1 in n2 or n2 in n1:
         return True
 
