@@ -59,7 +59,22 @@ GROQ_API_KEYS = env_list("GROQ_API_KEYS")
 ODDS_API_KEYS = env_list("ODDS_API_KEYS")
 
 FOOTBALL_DATA_API_KEY = env("FOOTBALL_DATA_API_KEY")
-API_FOOTBALL_KEY = env("API_FOOTBALL_KEY")
+# 🆕 Mehrere Football-Data Keys unterstützen (kommasepariert, 10 Requests/Min pro Key)
+FOOTBALL_DATA_API_KEYS = env_list("FOOTBALL_DATA_API_KEYS")
+if not FOOTBALL_DATA_API_KEYS and FOOTBALL_DATA_API_KEY:
+    FOOTBALL_DATA_API_KEYS = [FOOTBALL_DATA_API_KEY]
+# Erster Key für Backwards-Kompatibilität
+FOOTBALL_DATA_API_KEY = FOOTBALL_DATA_API_KEYS[0] if FOOTBALL_DATA_API_KEYS else ""
+
+# 🆕 Mehrere API-Football Keys unterstützen (kommasepariert)
+# Backwards-kompatibel: Falls API_FOOTBALL_KEY (singular) gesetzt ist, wird der genutzt
+API_FOOTBALL_KEYS = env_list("API_FOOTBALL_KEYS")
+if not API_FOOTBALL_KEYS:
+    single_key = env("API_FOOTBALL_KEY")
+    if single_key:
+        API_FOOTBALL_KEYS = [single_key]
+# Erster Key für Backwards-Kompatibilität
+API_FOOTBALL_KEY = API_FOOTBALL_KEYS[0] if API_FOOTBALL_KEYS else ""
 
 TELEGRAM_TOKEN = env("TELEGRAM_TOKEN")
 TELEGRAM_CHAT_ID = env("TELEGRAM_CHAT_ID")
@@ -75,10 +90,12 @@ TELEGRAM_GROUPS = {
 SUPABASE_URL = env("SUPABASE_URL")
 SUPABASE_KEY = env("SUPABASE_KEY")
 
-MIN_PROBABILITY = int(env("MIN_PROBABILITY", "65"))
+MIN_PROBABILITY = int(env("MIN_PROBABILITY", "67"))  # 🆕 Hybrid: 67% (zwischen 65-69)
 MIN_ODDS = float(env("MIN_ODDS", "1.65"))
 MAX_ODDS = float(env("MAX_ODDS", "3.0"))
 MIN_CONFIDENCE = int(env("MIN_CONFIDENCE", "3"))
+# 🆕 Nur HIGH + OK Value (LOW fliegt raus)
+MIN_VALUE_RATING = env("MIN_VALUE_RATING", "OK")  # HIGH, OK, oder LOW
 
 MARKETS_TO_RUN = ["btts", "over25", "combo", "btts_ht"]
 
@@ -442,6 +459,8 @@ def fetch_odds_api(league_name, target_date):
                     "regions": "eu",
                     "markets": "h2h,totals",
                     "oddsFormat": "decimal",
+                    "includeLinks": "true",  # 🆕 Deeplinks zu Betslips holen
+                    "includeSids": "true",
                 },
                 timeout=15,
             )
@@ -478,104 +497,438 @@ def fetch_odds_api(league_name, target_date):
     return []
 
 
+# 🆕 Round-Robin Counter für Football-Data Keys
+_FD_KEY_OFFSET = 0
+_FD_DEAD_KEYS = set()
+
+
 def fetch_football_data(league_name, target_date):
+    global _FD_KEY_OFFSET
+
     code = FOOTBALL_DATA_CODES.get(league_name)
 
-    if not code or not FOOTBALL_DATA_API_KEY:
+    if not code or not FOOTBALL_DATA_API_KEYS:
         return []
 
-    try:
-        r = requests.get(
-            f"https://api.football-data.org/v4/competitions/{code}/matches",
-            params={
-                "dateFrom": target_date.isoformat(),
-                "dateTo": target_date.isoformat(),
-            },
-            headers={"X-Auth-Token": FOOTBALL_DATA_API_KEY},
-            timeout=15,
-        )
+    n = len(FOOTBALL_DATA_API_KEYS)
 
-        if not r.ok:
-            return []
+    # Round-Robin: Probiere Keys, überspringe tote
+    for offset in range(n):
+        idx = (_FD_KEY_OFFSET + offset) % n
+        if idx in _FD_DEAD_KEYS:
+            continue
+        key = FOOTBALL_DATA_API_KEYS[idx]
 
-        data = r.json()
-        now_utc = datetime.now(timezone.utc)
-        fixtures = []
+        try:
+            r = requests.get(
+                f"https://api.football-data.org/v4/competitions/{code}/matches",
+                params={
+                    "dateFrom": target_date.isoformat(),
+                    "dateTo": target_date.isoformat(),
+                },
+                headers={"X-Auth-Token": key},
+                timeout=15,
+            )
 
-        for m in data.get("matches", []):
-            try:
-                kickoff = datetime.fromisoformat(m["utcDate"].replace("Z", "+00:00"))
-                if kickoff > now_utc:
-                    fixtures.append({
-                        "home": m["homeTeam"]["name"],
-                        "away": m["awayTeam"]["name"],
-                        "match_id": m.get("id"),
-                        "time_utc": m["utcDate"],
-                        "time_local": get_local_time(m["utcDate"]),
-                        "source": "football-data",
-                    })
-            except Exception:
+            # 429 = Rate Limit (10 req/min) → Key kurz tot markieren
+            if r.status_code == 429:
+                _FD_DEAD_KEYS.add(idx)
                 continue
 
-        return fixtures
+            # 403 = Key ungültig oder gesperrt
+            if r.status_code == 403:
+                _FD_DEAD_KEYS.add(idx)
+                continue
 
-    except Exception:
-        return []
+            if not r.ok:
+                continue
+
+            # Erfolg → beim nächsten Call den nächsten Key nehmen
+            _FD_KEY_OFFSET = (idx + 1) % n
+
+            data = r.json()
+            now_utc = datetime.now(timezone.utc)
+            fixtures = []
+
+            for m in data.get("matches", []):
+                try:
+                    kickoff = datetime.fromisoformat(m["utcDate"].replace("Z", "+00:00"))
+                    if kickoff > now_utc:
+                        fixtures.append({
+                            "home": m["homeTeam"]["name"],
+                            "away": m["awayTeam"]["name"],
+                            "match_id": m.get("id"),
+                            "time_utc": m["utcDate"],
+                            "time_local": get_local_time(m["utcDate"]),
+                            "source": "football-data",
+                        })
+                except Exception:
+                    continue
+
+            return fixtures
+
+        except Exception:
+            continue
+
+    return []
 
 
 def fetch_api_football(league_name, target_date):
     league_id = API_FOOTBALL_LEAGUES.get(league_name)
 
-    if not league_id or not API_FOOTBALL_KEY:
+    if not league_id or not API_FOOTBALL_KEYS:
         return []
 
     try:
         season = target_date.year if target_date.month > 6 else target_date.year - 1
 
-        r = requests.get(
-            "https://v3.football.api-sports.io/fixtures",
-            headers={
-                "x-rapidapi-key": API_FOOTBALL_KEY,
-                "x-rapidapi-host": "v3.football.api-sports.io",
-            },
-            params={
-                "date": target_date.isoformat(),
-                "league": league_id,
-                "season": season,
-                "status": "NS",
-            },
-            timeout=15,
-        )
+        # 🆕 Round-Robin Key-Auswahl, tote Keys überspringen
+        n = len(API_FOOTBALL_KEYS)
+        for offset in range(n):
+            idx = (APIFOOTBALL_KEY_OFFSET + offset) % n
+            if idx in APIFOOTBALL_DEAD_KEYS:
+                continue
+            key = API_FOOTBALL_KEYS[idx]
 
-        if not r.ok:
-            return []
-
-        data = r.json()
-        now_utc = datetime.now(timezone.utc)
-        fixtures = []
-
-        for fix in data.get("response", []):
             try:
-                kickoff_str = fix.get("fixture", {}).get("date", "")
-                kickoff = datetime.fromisoformat(kickoff_str.replace("Z", "+00:00"))
-
-                if kickoff > now_utc:
-                    teams = fix.get("teams", {})
-                    fixtures.append({
-                        "home": teams.get("home", {}).get("name", ""),
-                        "away": teams.get("away", {}).get("name", ""),
-                        "match_id": fix.get("fixture", {}).get("id"),
-                        "time_utc": kickoff_str,
-                        "time_local": get_local_time(kickoff_str),
-                        "source": "api-football",
-                    })
+                r = requests.get(
+                    "https://v3.football.api-sports.io/fixtures",
+                    headers={
+                        "x-rapidapi-key": key,
+                        "x-rapidapi-host": "v3.football.api-sports.io",
+                    },
+                    params={
+                        "date": target_date.isoformat(),
+                        "league": league_id,
+                        "season": season,
+                        "status": "NS",
+                    },
+                    timeout=15,
+                )
             except Exception:
                 continue
 
-        return fixtures
+            # 429 = Rate Limit
+            if r.status_code == 429:
+                APIFOOTBALL_DEAD_KEYS.add(idx)
+                continue
+
+            if not r.ok:
+                continue
+
+            # Erfolg verbucht
+            data = r.json()
+            now_utc = datetime.now(timezone.utc)
+            fixtures = []
+
+            for fix in data.get("response", []):
+                try:
+                    kickoff_str = fix.get("fixture", {}).get("date", "")
+                    kickoff = datetime.fromisoformat(kickoff_str.replace("Z", "+00:00"))
+
+                    if kickoff > now_utc:
+                        teams = fix.get("teams", {})
+                        fixtures.append({
+                            "home": teams.get("home", {}).get("name", ""),
+                            "away": teams.get("away", {}).get("name", ""),
+                            "match_id": fix.get("fixture", {}).get("id"),
+                            "home_id": teams.get("home", {}).get("id"),
+                            "away_id": teams.get("away", {}).get("id"),
+                            "time_utc": kickoff_str,
+                            "time_local": get_local_time(kickoff_str),
+                            "source": "api-football",
+                        })
+                except Exception:
+                    continue
+
+            return fixtures
+
+        return []
 
     except Exception:
         return []
+
+
+# ============================================================
+# 🆕 API-FOOTBALL ERWEITERUNGEN (Team Stats, Verletzungen, H2H, Predictions)
+# ============================================================
+APIFOOTBALL_TEAM_STATS_CACHE = {}
+APIFOOTBALL_INJURIES_CACHE = {}
+APIFOOTBALL_H2H_CACHE = {}
+APIFOOTBALL_PREDICTIONS_CACHE = {}
+
+# 🆕 QUOTA-SCHUTZ für Free Plan (100 Calls/Tag pro Key)
+# Wir reservieren Calls für die wichtigsten Funktionen.
+APIFOOTBALL_CALL_COUNTER = 0
+# 🆕 Default 100 Calls/Run (bei 3 Keys × 100 Calls = 300/Tag, also reichen 100/Run für 2-3 Runs)
+APIFOOTBALL_MAX_CALLS_PER_RUN = int(env("APIFOOTBALL_MAX_CALLS", "100"))
+APIFOOTBALL_QUOTA_EXHAUSTED = False
+# 🆕 Round-Robin Counter für Keys
+APIFOOTBALL_KEY_OFFSET = 0
+# 🆕 Set für erschöpfte Keys (per-Run)
+APIFOOTBALL_DEAD_KEYS = set()
+# Steuerung welche Erweiterungen aktiv sind (mit 3 Keys = 300 Calls/Tag → alles AN möglich)
+APIFOOTBALL_ENABLE_TEAM_STATS = env("APIFOOTBALL_TEAM_STATS", "true").lower() in ["1", "true", "yes"]
+APIFOOTBALL_ENABLE_H2H = env("APIFOOTBALL_H2H", "true").lower() in ["1", "true", "yes"]
+APIFOOTBALL_ENABLE_INJURIES = env("APIFOOTBALL_INJURIES", "true").lower() in ["1", "true", "yes"]
+APIFOOTBALL_ENABLE_PREDICTIONS = env("APIFOOTBALL_PREDICTIONS", "true").lower() in ["1", "true", "yes"]
+
+
+def _af_request(endpoint, params, timeout=12):
+    """
+    Helper für API-Football Requests mit Quota-Schutz und Round-Robin über mehrere Keys.
+    Bei Free Plan: 100 Calls/Tag PRO KEY.
+    """
+    global APIFOOTBALL_CALL_COUNTER, APIFOOTBALL_QUOTA_EXHAUSTED, APIFOOTBALL_KEY_OFFSET
+
+    if not API_FOOTBALL_KEYS:
+        return None
+
+    if APIFOOTBALL_QUOTA_EXHAUSTED:
+        return None
+
+    if APIFOOTBALL_CALL_COUNTER >= APIFOOTBALL_MAX_CALLS_PER_RUN:
+        if not APIFOOTBALL_QUOTA_EXHAUSTED:
+            log(f"   ⚠️ API-Football Limit erreicht ({APIFOOTBALL_MAX_CALLS_PER_RUN} Calls) - Erweiterungen aus", "WARN")
+            APIFOOTBALL_QUOTA_EXHAUSTED = True
+        return None
+
+    n = len(API_FOOTBALL_KEYS)
+    # Probiere bis zu n Keys (Round-Robin), überspringe tote Keys
+    for offset in range(n):
+        idx = (APIFOOTBALL_KEY_OFFSET + offset) % n
+        if idx in APIFOOTBALL_DEAD_KEYS:
+            continue
+        key = API_FOOTBALL_KEYS[idx]
+
+        try:
+            r = requests.get(
+                f"https://v3.football.api-sports.io{endpoint}",
+                headers={
+                    "x-rapidapi-key": key,
+                    "x-rapidapi-host": "v3.football.api-sports.io",
+                },
+                params=params,
+                timeout=timeout,
+            )
+            APIFOOTBALL_CALL_COUNTER += 1
+
+            # Rate Limit Header lesen
+            remaining = r.headers.get("x-ratelimit-requests-remaining")
+            if remaining is not None:
+                try:
+                    rem = int(remaining)
+                    # Wenn dieser Key fast leer → markiere als tot, nimm nächsten beim nächsten Call
+                    if rem < 3:
+                        APIFOOTBALL_DEAD_KEYS.add(idx)
+                        log(f"   ℹ️ API-Football Key #{idx+1} fast leer ({rem} übrig) - Wechsel auf nächsten", "INFO")
+                except:
+                    pass
+
+            # 429 = Rate Limit überschritten → Key tot markieren
+            if r.status_code == 429:
+                APIFOOTBALL_DEAD_KEYS.add(idx)
+                log(f"   ⚠️ API-Football Key #{idx+1} rate-limited - Wechsel", "WARN")
+                continue
+
+            # Wenn alle Keys tot sind → Quota total leer
+            if len(APIFOOTBALL_DEAD_KEYS) >= n:
+                log(f"   ⚠️ Alle {n} API-Football Keys erschöpft", "WARN")
+                APIFOOTBALL_QUOTA_EXHAUSTED = True
+                return None
+
+            if not r.ok:
+                continue
+
+            data = r.json()
+            if data.get("errors"):
+                continue
+
+            # Erfolg! Beim nächsten Call den nächsten Key nehmen
+            APIFOOTBALL_KEY_OFFSET = (idx + 1) % n
+            return data.get("response", [])
+        except Exception:
+            continue
+
+    return None
+
+
+def fetch_team_statistics(team_id, league_id, season):
+    """
+    Holt Saison-Statistiken eines Teams.
+    Liefert: Form, Goals avg, Clean Sheets, BTTS-Approximation
+    """
+    cache_key = f"{team_id}_{league_id}_{season}"
+    if cache_key in APIFOOTBALL_TEAM_STATS_CACHE:
+        return APIFOOTBALL_TEAM_STATS_CACHE[cache_key]
+
+    response = _af_request("/teams/statistics", {
+        "team": team_id,
+        "league": league_id,
+        "season": season,
+    })
+
+    stats = response if isinstance(response, dict) else None
+    if not stats:
+        APIFOOTBALL_TEAM_STATS_CACHE[cache_key] = None
+        return None
+
+    try:
+        played = stats.get("fixtures", {}).get("played", {}).get("total", 0) or 0
+        clean_sheets = stats.get("clean_sheet", {}).get("total", 0) or 0
+        failed_to_score = stats.get("failed_to_score", {}).get("total", 0) or 0
+
+        # BTTS-Rate Approximation
+        scored_games = max(0, played - failed_to_score)
+        conceded_games = max(0, played - clean_sheets)
+        btts_approx = round(min(scored_games, conceded_games) / played * 100, 1) if played > 0 else 0
+
+        result = {
+            "form": (stats.get("form") or "")[-5:],
+            "goals_for_avg": stats.get("goals", {}).get("for", {}).get("average", {}).get("total", "0"),
+            "goals_against_avg": stats.get("goals", {}).get("against", {}).get("average", {}).get("total", "0"),
+            "matches_played": played,
+            "clean_sheets": clean_sheets,
+            "failed_to_score": failed_to_score,
+            "btts_rate_approx": btts_approx,
+            "wins": stats.get("fixtures", {}).get("wins", {}).get("total", 0),
+            "draws": stats.get("fixtures", {}).get("draws", {}).get("total", 0),
+            "losses": stats.get("fixtures", {}).get("loses", {}).get("total", 0),
+        }
+
+        APIFOOTBALL_TEAM_STATS_CACHE[cache_key] = result
+        return result
+    except Exception:
+        APIFOOTBALL_TEAM_STATS_CACHE[cache_key] = None
+        return None
+
+
+def fetch_injuries(team_id, league_id, season):
+    """
+    Holt verletzte/gesperrte Spieler.
+    """
+    cache_key = f"{team_id}_{league_id}_{season}"
+    if cache_key in APIFOOTBALL_INJURIES_CACHE:
+        return APIFOOTBALL_INJURIES_CACHE[cache_key]
+
+    response = _af_request("/injuries", {
+        "team": team_id,
+        "league": league_id,
+        "season": season,
+    })
+
+    if not response:
+        APIFOOTBALL_INJURIES_CACHE[cache_key] = []
+        return []
+
+    injuries = []
+    for entry in response:
+        try:
+            player = entry.get("player", {})
+            name = player.get("name", "")
+            if name:
+                injuries.append({
+                    "name": name,
+                    "reason": player.get("reason", ""),
+                    "type": player.get("type", ""),
+                })
+        except Exception:
+            continue
+
+    APIFOOTBALL_INJURIES_CACHE[cache_key] = injuries
+    return injuries
+
+
+def fetch_head_to_head(home_id, away_id, last=5):
+    """
+    Head-to-Head Historie zwischen 2 Teams.
+    """
+    cache_key = f"{home_id}_{away_id}_{last}"
+    if cache_key in APIFOOTBALL_H2H_CACHE:
+        return APIFOOTBALL_H2H_CACHE[cache_key]
+
+    response = _af_request("/fixtures/headtohead", {
+        "h2h": f"{home_id}-{away_id}",
+        "last": last,
+    })
+
+    if not response:
+        APIFOOTBALL_H2H_CACHE[cache_key] = None
+        return None
+
+    matches = []
+    for m in response:
+        try:
+            goals = m.get("goals", {})
+            home_g = goals.get("home", 0) or 0
+            away_g = goals.get("away", 0) or 0
+            teams = m.get("teams", {})
+            matches.append({
+                "date": m.get("fixture", {}).get("date", "")[:10],
+                "home": teams.get("home", {}).get("name", ""),
+                "away": teams.get("away", {}).get("name", ""),
+                "home_goals": home_g,
+                "away_goals": away_g,
+                "btts": (home_g > 0 and away_g > 0),
+                "total_goals": home_g + away_g,
+                "over25": (home_g + away_g) > 2,
+            })
+        except Exception:
+            continue
+
+    if not matches:
+        APIFOOTBALL_H2H_CACHE[cache_key] = None
+        return None
+
+    btts_count = sum(1 for m in matches if m["btts"])
+    over25_count = sum(1 for m in matches if m["over25"])
+    avg_goals = sum(m["total_goals"] for m in matches) / len(matches)
+
+    result = {
+        "matches": matches,
+        "count": len(matches),
+        "btts_rate": round(btts_count / len(matches) * 100, 1),
+        "over25_rate": round(over25_count / len(matches) * 100, 1),
+        "avg_goals": round(avg_goals, 2),
+    }
+
+    APIFOOTBALL_H2H_CACHE[cache_key] = result
+    return result
+
+
+def fetch_predictions(fixture_id):
+    """
+    API-Football's eingebaute Predictions für ein Fixture.
+    """
+    if fixture_id in APIFOOTBALL_PREDICTIONS_CACHE:
+        return APIFOOTBALL_PREDICTIONS_CACHE[fixture_id]
+
+    response = _af_request("/predictions", {
+        "fixture": fixture_id,
+    })
+
+    if not response or not isinstance(response, list) or not response:
+        APIFOOTBALL_PREDICTIONS_CACHE[fixture_id] = None
+        return None
+
+    try:
+        pred = response[0].get("predictions", {})
+        result = {
+            "winner": (pred.get("winner") or {}).get("name"),
+            "win_or_draw": pred.get("win_or_draw"),
+            "under_over": pred.get("under_over"),
+            "goals_home": (pred.get("goals") or {}).get("home"),
+            "goals_away": (pred.get("goals") or {}).get("away"),
+            "advice": pred.get("advice", ""),
+            "percent_home": (pred.get("percent") or {}).get("home", "?"),
+            "percent_draw": (pred.get("percent") or {}).get("draw", "?"),
+            "percent_away": (pred.get("percent") or {}).get("away", "?"),
+        }
+        APIFOOTBALL_PREDICTIONS_CACHE[fixture_id] = result
+        return result
+    except Exception:
+        APIFOOTBALL_PREDICTIONS_CACHE[fixture_id] = None
+        return None
 
 
 def fetch_football_json(league_name, target_date):
@@ -1122,36 +1475,192 @@ def calculate_kelly_units(probability, odds, max_units=3.0, bank_units=100):
 
 
 def fetch_fbref_team_stats(team_name, league_name):
-    """Holt erweiterte Stats von FBref (xG, Pressing, etc.)"""
+    """
+    Holt erweiterte Stats von FBref (xG, xGA, Pressing, Possession).
+    DEPRECATED - benutze besser get_fbref_stats() mit Caching.
+    """
+    return get_fbref_stats(team_name, league_name)
+
+
+# 🆕 FBref Cache (pro Liga 1x laden, dann alle Teams aus dem Cache)
+FBREF_CACHE = {}
+FBREF_BLOCKED = False  # Wenn FBref blockt, schalten wir ab
+
+
+def load_fbref_league(league_name):
+    """
+    Lädt FBref-Ligadaten EINMAL pro Run und cached sie.
+    Parsed das Squad Standard Stats Table für xG, xGA, Possession.
+    """
+    global FBREF_BLOCKED
+
+    if FBREF_BLOCKED:
+        return {}
+
+    if league_name in FBREF_CACHE:
+        return FBREF_CACHE[league_name]
+
+    fbref_urls = {
+        "Premier League": "https://fbref.com/en/comps/9/Premier-League-Stats",
+        "Bundesliga": "https://fbref.com/en/comps/20/Bundesliga-Stats",
+        "La Liga": "https://fbref.com/en/comps/12/La-Liga-Stats",
+        "Serie A": "https://fbref.com/en/comps/11/Serie-A-Stats",
+        "Ligue 1": "https://fbref.com/en/comps/13/Ligue-1-Stats",
+        "Eredivisie": "https://fbref.com/en/comps/23/Eredivisie-Stats",
+        "Primeira Liga": "https://fbref.com/en/comps/32/Primeira-Liga-Stats",
+        "Championship": "https://fbref.com/en/comps/10/Championship-Stats",
+        "Champions League": "https://fbref.com/en/comps/8/Champions-League-Stats",
+        "Europa League": "https://fbref.com/en/comps/19/Europa-League-Stats",
+    }
+
+    url = fbref_urls.get(league_name)
+    if not url:
+        FBREF_CACHE[league_name] = {}
+        return {}
+
     try:
-        fbref_urls = {
-            "Premier League": "https://fbref.com/en/comps/9/stats/Premier-League-Stats",
-            "Bundesliga": "https://fbref.com/en/comps/20/stats/Bundesliga-Stats",
-            "La Liga": "https://fbref.com/en/comps/12/stats/La-Liga-Stats",
-            "Serie A": "https://fbref.com/en/comps/11/stats/Serie-A-Stats",
-            "Ligue 1": "https://fbref.com/en/comps/13/stats/Ligue-1-Stats",
-        }
-        url = fbref_urls.get(league_name)
-        if not url:
-            return None
         r = requests.get(
             url,
-            headers={"User-Agent": "Mozilla/5.0 (compatible; research bot)"},
-            timeout=15
+            headers={
+                "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
+                "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9",
+                "Accept-Language": "en-US,en;q=0.9",
+            },
+            timeout=20,
         )
+
+        # FBref blockt mit 403 oder 429 wenn zu viele Requests
+        if r.status_code in [403, 429]:
+            # Nur 1x loggen, dann still bleiben
+            if not FBREF_BLOCKED:
+                log(f"   ℹ️  FBref nicht erreichbar ({r.status_code}) - überspringe (kein Problem, andere Quellen reichen)")
+            FBREF_BLOCKED = True
+            FBREF_CACHE[league_name] = {}
+            return {}
+
         if not r.ok:
-            return None
-        team_lower = team_name.lower()
-        text = r.text.lower()
-        if team_lower[:6] not in text:
-            return None
-        pattern = rf'{re.escape(team_lower[:8])}.*?(\d+\.\d+).*?(\d+\.\d+)'
-        m = re.search(pattern, text)
-        if m:
-            return {"xG": m.group(1), "xGA": m.group(2), "source": "FBref"}
+            FBREF_CACHE[league_name] = {}
+            return {}
+
+        html = r.text
+
+        # FBref versteckt einige Tables in HTML-Kommentaren - rauspulen
+        html = html.replace("<!--", "").replace("-->", "")
+
+        # Parse Squad Standard Stats Table
+        # Format: <tr><th>...<a href=".../squads/...">TeamName</a>...<td>games</td>...<td>xG</td><td>xGA</td>...
+        result = {}
+
+        # Suche alle Team-Zeilen aus der "stats_squads_standard_for" Tabelle
+        # FBref Pattern: <tr ...><th ...><a href="/en/squads/.../...">TeamName</a></th>
+        team_pattern = re.compile(
+            r'<tr[^>]*>\s*<th[^>]*data-stat="team"[^>]*>\s*<a[^>]*href="/en/squads/[^"]+"[^>]*>([^<]+)</a>',
+            re.IGNORECASE
+        )
+
+        # Suche xG, xGA, Possession via data-stat Attribut (zuverlässiger)
+        # Wir finden Zeilen, dann extrahieren wir alle Werte aus der Zeile
+
+        # Vereinfachter Ansatz: für jede gefundene Zeile, hole die Stats
+        rows = re.findall(
+            r'<tr[^>]*>\s*<th[^>]*data-stat="team"[^>]*>\s*<a[^>]*href="/en/squads/[^"]+"[^>]*>([^<]+)</a>.*?</tr>',
+            html,
+            re.DOTALL | re.IGNORECASE
+        )
+
+        # Alternative: Komplette Tabellenzeilen finden
+        for match in re.finditer(
+            r'<tr[^>]*>(.*?)</tr>',
+            html,
+            re.DOTALL
+        ):
+            row_html = match.group(1)
+
+            # Team-Name extrahieren
+            team_m = re.search(
+                r'data-stat="team"[^>]*>\s*<a[^>]*href="/en/squads/[^"]+"[^>]*>([^<]+)</a>',
+                row_html
+            )
+            if not team_m:
+                continue
+
+            team_title = team_m.group(1).strip()
+
+            # Stats extrahieren via data-stat
+            xg_m = re.search(r'data-stat="xg_for"[^>]*>([\d.]+)<', row_html)
+            xga_m = re.search(r'data-stat="xg_against"[^>]*>([\d.]+)<', row_html)
+            poss_m = re.search(r'data-stat="possession"[^>]*>([\d.]+)<', row_html)
+            games_m = re.search(r'data-stat="games"[^>]*>([\d.]+)<', row_html)
+            goals_for_m = re.search(r'data-stat="goals_for"[^>]*>([\d.]+)<', row_html)
+            goals_against_m = re.search(r'data-stat="goals_against"[^>]*>([\d.]+)<', row_html)
+
+            stats = {}
+            if games_m:
+                games = float(games_m.group(1))
+                stats["games"] = int(games) if games > 0 else 0
+            else:
+                continue  # Ohne games-Anzahl ist die Zeile nutzlos
+
+            # Werte sind kumuliert über die Saison → pro Spiel umrechnen
+            games = stats["games"] or 1
+
+            if xg_m:
+                stats["xG"] = round(float(xg_m.group(1)) / games, 2)
+            if xga_m:
+                stats["xGA"] = round(float(xga_m.group(1)) / games, 2)
+            if poss_m:
+                stats["possession"] = round(float(poss_m.group(1)), 1)
+            if goals_for_m:
+                stats["goals_for"] = round(float(goals_for_m.group(1)) / games, 2)
+            if goals_against_m:
+                stats["goals_against"] = round(float(goals_against_m.group(1)) / games, 2)
+
+            if stats and len(stats) > 1:
+                result[team_title.lower()] = stats
+
+        FBREF_CACHE[league_name] = result
+
+        if result:
+            log(f"   📊 FBref geladen: {len(result)} Teams in {league_name}")
+
+        return result
+
+    except Exception as e:
+        log(f"   ⚠️ FBref Fehler: {str(e)[:80]}", "WARN")
+        FBREF_CACHE[league_name] = {}
+        return {}
+
+
+def get_fbref_stats(team_name, league_name):
+    """
+    Holt FBref-Stats für ein Team aus dem Cache.
+    Lädt die Liga beim ersten Aufruf, dann nur Cache-Lookup.
+    """
+    data = load_fbref_league(league_name)
+
+    if not data:
         return None
-    except Exception:
-        return None
+
+    t = team_name.lower().strip()
+
+    # Exakter Match
+    if t in data:
+        return data[t]
+
+    # Fuzzy Match: Team-Name beginnt gleich oder ist enthalten
+    for title, stats in data.items():
+        if t in title or title in t:
+            return stats
+
+        # Wort-basierter Match (z.B. "Bayern" vs "Bayern Munich")
+        t_words = [w for w in t.split() if len(w) > 3]
+        title_words = [w for w in title.split() if len(w) > 3]
+
+        if t_words and title_words:
+            if any(w in title for w in t_words) or any(w in t for w in title_words):
+                return stats
+
+    return None
 
 
 def analyze_pinnacle_value(odds_data, home_team, away_team):
@@ -1219,6 +1728,13 @@ def analyze_pinnacle_value(odds_data, home_team, away_team):
 def build_context(odds_data, fixtures, league):
     ctx = ""
 
+    league_id = API_FOOTBALL_LEAGUES.get(league)
+    season = None
+    if league_id:
+        from datetime import date as _date
+        td = _date.today()
+        season = td.year if td.month > 6 else td.year - 1
+
     if fixtures:
         ctx += f"\n📅 ECHTER SPIELPLAN für {league} HEUTE:\n"
 
@@ -1234,6 +1750,28 @@ def build_context(odds_data, fixtures, league):
                 if away_xg:
                     line += f"\n   📊 {f['away']}: xG {away_xg['xG']}/Spiel, xGA {away_xg['xGA']} [Understat]"
 
+            # 🆕 FBref Stats (xG, Possession, Goals)
+            home_fb = get_fbref_stats(f["home"], league)
+            away_fb = get_fbref_stats(f["away"], league)
+
+            if home_fb:
+                fb_str = f"\n   ⚡ {f['home']}: xG {home_fb.get('xG','?')}, xGA {home_fb.get('xGA','?')}"
+                if 'possession' in home_fb:
+                    fb_str += f", Poss {home_fb['possession']}%"
+                if 'goals_for' in home_fb:
+                    fb_str += f", Tore {home_fb['goals_for']}/Spiel"
+                fb_str += f" [FBref · {home_fb.get('games',0)} Spiele]"
+                line += fb_str
+
+            if away_fb:
+                fb_str = f"\n   ⚡ {f['away']}: xG {away_fb.get('xG','?')}, xGA {away_fb.get('xGA','?')}"
+                if 'possession' in away_fb:
+                    fb_str += f", Poss {away_fb['possession']}%"
+                if 'goals_for' in away_fb:
+                    fb_str += f", Tore {away_fb['goals_for']}/Spiel"
+                fb_str += f" [FBref · {away_fb.get('games',0)} Spiele]"
+                line += fb_str
+
             hist = get_historical_btts_rate(league, f["home"], f["away"])
             if hist:
                 if hist.get("home"):
@@ -1242,6 +1780,83 @@ def build_context(odds_data, fixtures, league):
                 if hist.get("away"):
                     a = hist["away"]
                     line += f"\n   📈 {f['away']} (Auswärts): BTTS {a['btts_rate']}%, Ø {a['avg_goals']} Tore ({a['games']} Spiele) [fd.co.uk]"
+
+            # 🆕 API-Football Erweiterungen (nur wenn fixture aus api-football kommt)
+            # WICHTIG: Free Plan = 100 Calls/Tag. Daher nur für Top-Ligen!
+            home_id = f.get("home_id")
+            away_id = f.get("away_id")
+            fixture_id = f.get("match_id")
+
+            # Top-Ligen die API-Calls "wert" sind
+            APIF_PRIORITY_LEAGUES = {
+                "Champions League", "Europa League", "Conference League",
+                "Premier League", "Bundesliga", "La Liga", "Serie A", "Ligue 1",
+                "Eredivisie", "Primeira Liga", "Süper Lig",
+                "Championship", "Bundesliga Österreich", "Super League Schweiz",
+            }
+
+            is_priority = league in APIF_PRIORITY_LEAGUES
+
+            if home_id and away_id and league_id and season and is_priority:
+                # 1. Team-Statistiken (2 Calls pro Spiel)
+                if APIFOOTBALL_ENABLE_TEAM_STATS and not APIFOOTBALL_QUOTA_EXHAUSTED:
+                    home_stats = fetch_team_statistics(home_id, league_id, season)
+                    if home_stats and home_stats.get("matches_played", 0) >= 3:
+                        line += (
+                            f"\n   🏠 {f['home']} Stats: Form {home_stats['form']}, "
+                            f"⚽{home_stats['goals_for_avg']}/Spiel, "
+                            f"🛡️{home_stats['goals_against_avg']} kassiert, "
+                            f"BTTS≈{home_stats['btts_rate_approx']}%, "
+                            f"Clean Sheets {home_stats['clean_sheets']}/{home_stats['matches_played']} "
+                            f"[API-Football]"
+                        )
+
+                    away_stats = fetch_team_statistics(away_id, league_id, season)
+                    if away_stats and away_stats.get("matches_played", 0) >= 3:
+                        line += (
+                            f"\n   ✈️ {f['away']} Stats: Form {away_stats['form']}, "
+                            f"⚽{away_stats['goals_for_avg']}/Spiel, "
+                            f"🛡️{away_stats['goals_against_avg']} kassiert, "
+                            f"BTTS≈{away_stats['btts_rate_approx']}%, "
+                            f"Clean Sheets {away_stats['clean_sheets']}/{away_stats['matches_played']} "
+                            f"[API-Football]"
+                        )
+
+                # 2. H2H History (1 Call pro Spiel)
+                if APIFOOTBALL_ENABLE_H2H and not APIFOOTBALL_QUOTA_EXHAUSTED:
+                    h2h = fetch_head_to_head(home_id, away_id, last=5)
+                    if h2h and h2h["count"] >= 2:
+                        line += (
+                            f"\n   ⚔️ Direkter Vergleich (letzte {h2h['count']}): "
+                            f"BTTS {h2h['btts_rate']}%, "
+                            f"Over 2.5 {h2h['over25_rate']}%, "
+                            f"Ø {h2h['avg_goals']} Tore [API-Football H2H]"
+                        )
+
+                # 3. Verletzungen (2 Calls pro Spiel) - DEFAULT AUS für Free Plan
+                if APIFOOTBALL_ENABLE_INJURIES and not APIFOOTBALL_QUOTA_EXHAUSTED:
+                    home_inj = fetch_injuries(home_id, league_id, season)
+                    away_inj = fetch_injuries(away_id, league_id, season)
+                    if home_inj:
+                        inj_names = ", ".join([i["name"] for i in home_inj[:5]])
+                        line += f"\n   🤕 {f['home']} Ausfälle ({len(home_inj)}): {inj_names}"
+                    if away_inj:
+                        inj_names = ", ".join([i["name"] for i in away_inj[:5]])
+                        line += f"\n   🤕 {f['away']} Ausfälle ({len(away_inj)}): {inj_names}"
+
+            # 4. API-Football Predictions (1 Call pro Spiel) - DEFAULT AUS für Free Plan
+            if (APIFOOTBALL_ENABLE_PREDICTIONS and fixture_id and is_priority
+                and f.get("source") == "api-football" and not APIFOOTBALL_QUOTA_EXHAUSTED):
+                pred = fetch_predictions(fixture_id)
+                if pred and pred.get("advice"):
+                    line += (
+                        f"\n   🎯 API-Football Tip: '{pred['advice']}' "
+                        f"({pred.get('percent_home','?')}/"
+                        f"{pred.get('percent_draw','?')}/"
+                        f"{pred.get('percent_away','?')})"
+                    )
+                    if pred.get("under_over"):
+                        line += f", Goals: {pred['under_over']}"
 
             ctx += line + "\n"
 
@@ -1458,6 +2073,13 @@ def filter_top_tips(tips, target_date, market):
         if int(r.get("confidence", 0)) < MIN_CONFIDENCE:
             continue
 
+        # 🆕 Value Rating Filter (nur HIGH oder OK je nach Setting)
+        value_rating = r.get("valueRating", "OK")
+        if MIN_VALUE_RATING == "HIGH" and value_rating != "HIGH":
+            continue
+        elif MIN_VALUE_RATING == "OK" and value_rating == "LOW":
+            continue
+
         odds = parse_odds(r.get("oddsYes", 0))
 
         if odds < min_odds_for_market or odds > max_odds_for_market:
@@ -1544,10 +2166,153 @@ def analyze_market_with_data(market, league, target_date, odds, fixtures):
 
 
 # ============================================================
+# 🆕 THESPORTSDB - Team Logos/Wappen (kostenlos)
+# ============================================================
+THESPORTSDB_CACHE = {}
+
+def get_team_badge(team_name):
+    """
+    Holt Team-Wappen URL von TheSportsDB.
+    Returns: {'badge_url': '...', 'team_id': '...'} oder None
+    """
+    if team_name in THESPORTSDB_CACHE:
+        return THESPORTSDB_CACHE[team_name]
+
+    try:
+        # Free API Key "123" für Test-Nutzung
+        r = requests.get(
+            "https://www.thesportsdb.com/api/v1/json/123/searchteams.php",
+            params={"t": team_name},
+            timeout=10,
+        )
+
+        if not r.ok:
+            THESPORTSDB_CACHE[team_name] = None
+            return None
+
+        data = r.json()
+        teams = data.get("teams")
+
+        if not teams:
+            THESPORTSDB_CACHE[team_name] = None
+            return None
+
+        # Erstes Match nehmen
+        team = teams[0]
+        result = {
+            "badge_url": team.get("strBadge"),  # PNG transparent
+            "team_id": team.get("idTeam"),
+            "team_name": team.get("strTeam"),
+        }
+
+        THESPORTSDB_CACHE[team_name] = result
+        return result
+
+    except Exception:
+        THESPORTSDB_CACHE[team_name] = None
+        return None
+
+
+# ============================================================
 # TELEGRAM + SUPABASE
 # ============================================================
 
-def send_telegram(text, chat_id=None):
+# 🆕 BOOKIE DEEPLINK CONFIG
+# Diese Bookies werden als Buttons unter jedem Tipp angezeigt.
+# Reihenfolge bestimmt Reihenfolge der Buttons im Telegram.
+BOOKIE_BUTTONS = [
+    {"key": "pinnacle", "label": "🎯 Pinnacle", "search_url": "https://www.pinnacle.com/de/soccer/matchups"},
+    {"key": "betfair_ex_eu", "label": "📊 Betfair", "search_url": "https://www.betfair.com/exchange/plus/football"},
+    {"key": "onexbet", "label": "🎰 1xBet", "search_url": "https://1xbet.com/en/line/football/"},
+    {"key": "bet365", "label": "🎰 Bet365", "search_url": "https://www.bet365.com/#/AS/B1/"},
+]
+
+
+def get_bookie_links(odds_data, home_team, away_team):
+    """
+    Sucht Deeplinks zu Betslips aus Odds API für ein bestimmtes Spiel.
+    Gibt dict zurück: {bookie_key: betslip_url}
+    Fallback ist die jeweilige Search/Home URL des Bookies.
+    """
+    links = {}
+
+    if not odds_data:
+        return links
+
+    # Suche das passende Game in odds_data
+    for g in odds_data:
+        gh = g.get("home_team", "").lower()
+        ga = g.get("away_team", "").lower()
+        h_low = home_team.lower()
+        a_low = away_team.lower()
+
+        # Match-Check (gleiche Logic wie teams_match)
+        if not (h_low in gh or gh in h_low):
+            continue
+        if not (a_low in ga or ga in a_low):
+            continue
+
+        # Event-Level Link
+        event_link = g.get("link")
+
+        # Pro Bookmaker schauen
+        for bm in g.get("bookmakers", []):
+            bm_key = bm.get("key", "")
+            bm_link = bm.get("link") or event_link
+
+            if bm_link:
+                links[bm_key] = bm_link
+
+        break  # Spiel gefunden, fertig
+
+    return links
+
+
+def build_inline_keyboard(odds_data, match_name):
+    """
+    Baut die Telegram Inline-Keyboard Struktur mit Bookie-Buttons.
+    Pro Reihe 2 Buttons (auf Handy lesbarer).
+    """
+    if not match_name or " vs " not in match_name:
+        return None
+
+    parts = match_name.split(" vs ", 1)
+    if len(parts) != 2:
+        return None
+
+    home, away = parts[0].strip(), parts[1].strip()
+
+    # Deeplinks aus Odds API holen
+    deeplinks = get_bookie_links(odds_data, home, away)
+
+    buttons = []
+    row = []
+
+    for bookie in BOOKIE_BUTTONS:
+        key = bookie["key"]
+        label = bookie["label"]
+
+        # Wenn echter Deeplink existiert: nimm den. Sonst Search-URL.
+        url = deeplinks.get(key) or bookie["search_url"]
+
+        # Falls Deeplink vorhanden, mit ⚡ markieren
+        if key in deeplinks:
+            label = "⚡ " + label
+
+        row.append({"text": label, "url": url})
+
+        # Alle 2 Buttons neue Reihe
+        if len(row) == 2:
+            buttons.append(row)
+            row = []
+
+    if row:
+        buttons.append(row)
+
+    return {"inline_keyboard": buttons}
+
+
+def send_telegram(text, chat_id=None, reply_markup=None):
     if not TELEGRAM_TOKEN:
         log("Telegram Token fehlt", "WARN")
         return None
@@ -1559,24 +2324,31 @@ def send_telegram(text, chat_id=None):
         log("Telegram Chat ID fehlt", "WARN")
         return None
 
+    payload = {
+        "chat_id": chat_id,
+        "text": text,
+        "parse_mode": "HTML",
+        "disable_web_page_preview": True,
+    }
+
+    # 🆕 Inline-Buttons hinzufügen wenn vorhanden
+    if reply_markup:
+        payload["reply_markup"] = json.dumps(reply_markup)
+
     try:
         r = requests.post(
             f"https://api.telegram.org/bot{TELEGRAM_TOKEN}/sendMessage",
-            json={
-                "chat_id": chat_id,
-                "text": text,
-                "parse_mode": "HTML",
-            },
+            json=payload,
             timeout=15,
         )
 
         if not r.ok:
+            # Fallback ohne HTML-Tags
+            payload["text"] = re.sub(r"<[^>]+>", "", text)
+            payload.pop("parse_mode", None)
             r = requests.post(
                 f"https://api.telegram.org/bot{TELEGRAM_TOKEN}/sendMessage",
-                json={
-                    "chat_id": chat_id,
-                    "text": re.sub(r"<[^>]+>", "", text),
-                },
+                json=payload,
                 timeout=15,
             )
 
@@ -1893,7 +2665,31 @@ def send_top_tips(tips_by_market, target_date):
 
             msg = f"<b>💎 Tipp {i}/{len(tips)}</b>\n"
             msg += "━━━━━━━━━━━━━━━━━━\n"
-            msg += f"<b>{match_name}</b>\n"
+            
+            # 🆕 Team-Emojis basierend auf bekannten Teams (ohne API Call)
+            team_icons = {
+                "bayern": "🔴⚪", "dortmund": "🟡⚫", "leipzig": "🔴⚪",
+                "real madrid": "⚪", "barcelona": "🔵🔴", "atletico": "🔴⚪",
+                "liverpool": "🔴", "chelsea": "🔵", "arsenal": "🔴⚪",
+                "manchester united": "🔴", "manchester city": "🔵",
+                "juventus": "⚫⚪", "milan": "🔴⚫", "inter": "🔵⚫",
+                "psg": "🔵🔴", "marseille": "⚪🔵", "lyon": "🔴🔵",
+            }
+            
+            # Simple Icon-Suche
+            match_lower = match_name.lower()
+            home_icon = ""
+            away_icon = ""
+            
+            for team, icon in team_icons.items():
+                if team in match_lower:
+                    parts = match_name.split(" vs ")
+                    if len(parts) == 2 and team in parts[0].lower():
+                        home_icon = icon + " "
+                    elif len(parts) == 2 and team in parts[1].lower():
+                        away_icon = " " + icon
+            
+            msg += f"<b>{home_icon}{match_name}{away_icon}</b>\n"
             msg += f"📍 {r.get('league', '')}\n"
 
             tip_time = r.get('time', '').strip()
@@ -1939,7 +2735,19 @@ def send_top_tips(tips_by_market, target_date):
             if reasoning:
                 msg += f"\n💭 <i>{reasoning}</i>"
 
-            msg_id = send_telegram(msg, target_chat)
+            # 🆕 Footer mit Hinweis zu Buttons
+            try:
+                stake_chf = float(units) if 'units' in dir() and units else 1.0
+            except:
+                stake_chf = 1.0
+            msg += f"\n\n━━━━━━━━━━━━━━━━━━"
+            msg += f"\n<i>⚡ = direkter Betslip-Link · Sonst: Bookie öffnen</i>"
+
+            # 🆕 Inline-Buttons mit Bookie-Links bauen
+            tip_odds_data = r.get("_odds_data", [])
+            inline_keyboard = build_inline_keyboard(tip_odds_data, match_name)
+
+            msg_id = send_telegram(msg, target_chat, reply_markup=inline_keyboard)
 
             # ============================================================
             # ML Features sammeln (FIX: tip_league + tip_odds aus dem Tipp)
@@ -2271,8 +3079,17 @@ def check_config():
     log(f"   • Gemini: {len(GEMINI_API_KEYS)} Keys")
     log(f"   • Groq: {len(GROQ_API_KEYS)} Keys")
     log(f"   • Odds API: {len(ODDS_API_KEYS)} Keys")
-    log(f"   • Football-Data: {'✅' if FOOTBALL_DATA_API_KEY else '❌'}")
-    log(f"   • API-Football: {'✅' if API_FOOTBALL_KEY else '❌'}")
+    log(f"   • Football-Data: {len(FOOTBALL_DATA_API_KEYS)} Keys" if FOOTBALL_DATA_API_KEYS else "   • Football-Data: ❌")
+    log(f"   • API-Football: {len(API_FOOTBALL_KEYS)} Keys ({len(API_FOOTBALL_KEYS)*100} Calls/Tag bei Free Plan)")
+
+    # 🆕 API-Football Erweiterungen Status
+    if API_FOOTBALL_KEYS:
+        log(f"📊 API-Football Erweiterungen:")
+        log(f"   • Max Calls/Run: {APIFOOTBALL_MAX_CALLS_PER_RUN}")
+        log(f"   • Team Stats: {'✅' if APIFOOTBALL_ENABLE_TEAM_STATS else '❌'}")
+        log(f"   • H2H: {'✅' if APIFOOTBALL_ENABLE_H2H else '❌'}")
+        log(f"   • Injuries: {'✅' if APIFOOTBALL_ENABLE_INJURIES else '❌'} (kostet 2 Calls/Spiel)")
+        log(f"   • Predictions: {'✅' if APIFOOTBALL_ENABLE_PREDICTIONS else '❌'} (kostet 1 Call/Spiel)")
 
     if not GEMINI_API_KEYS:
         warnings.append("GEMINI_API_KEYS fehlt")
@@ -2374,6 +3191,8 @@ def main():
         log(f"   • {MARKET_INFO[m]['name']}: {len(tips)}")
 
     log("════════════════════════════════════════")
+    if APIFOOTBALL_CALL_COUNTER > 0:
+        log(f"📊 API-Football Calls verbraucht: {APIFOOTBALL_CALL_COUNTER}/{APIFOOTBALL_MAX_CALLS_PER_RUN}")
     log("Sende an Telegram + Supabase...")
 
     send_top_tips(tips_by_market, target_date)
