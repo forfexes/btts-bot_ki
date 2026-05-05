@@ -125,7 +125,6 @@ ALWAYS_OFF_LEAGUES = [
     if x.strip()
 ]
 
-# 🌏 ACTIVE_LEAGUES override - wird vom Workflow gesetzt!
 ACTIVE_LEAGUES_OVERRIDE = [
     x.strip()
     for x in env("ACTIVE_LEAGUES", "").split(",")
@@ -2697,6 +2696,16 @@ def send_telegram(text, chat_id=None, reply_markup=None):
         )
 
         if not r.ok:
+            # 🆕 Fallback: Wenn Channel fehlt (400 error) → Main Chat nutzen
+            if r.status_code == 400 and chat_id != TELEGRAM_CHAT_ID:
+                log(f"⚠️ Chat {chat_id} nicht gefunden - fallback zu Main Chat", "WARN")
+                payload["chat_id"] = TELEGRAM_CHAT_ID
+                r = requests.post(
+                    f"https://api.telegram.org/bot{TELEGRAM_TOKEN}/sendMessage",
+                    json=payload,
+                    timeout=15,
+                )
+            
             # Fallback ohne HTML-Tags
             payload["text"] = re.sub(r"<[^>]+>", "", text)
             payload.pop("parse_mode", None)
@@ -3479,7 +3488,7 @@ def check_config():
 
 def main():
     log("=" * 60)
-    log("AI TIPP BOT - GITHUB SINGLE FILE EDITION")
+    log("AI TIPP BOT - GITHUB SINGLE FILE EDITION (ASIA)")
     log("=" * 60)
 
     check_config()
@@ -3487,9 +3496,21 @@ def main():
     # 🆕 Check ob heute Rotation stattfinden soll (Sonntag)
     check_rotation_schedule()
 
-    target_date = date.today()
+    # 🔧 FIX: UTC-basiertes Datum (nicht lokale Zeitzone!)
+    now_utc = datetime.now(timezone.utc)
+    
+    # Smart Target Date:
+    # - Vor 14:00 UTC → heute
+    # - Nach 14:00 UTC → morgen
+    # (Meiste Spiele sind abends, 14:00 UTC = 16:00 Schweiz)
+    if now_utc.hour < 14:
+        target_date = now_utc.date()
+        log(f"⏰ {now_utc.strftime('%H:%M')} UTC - Suche Spiele für HEUTE")
+    else:
+        target_date = (now_utc + timedelta(days=1)).date()
+        log(f"⏰ {now_utc.strftime('%H:%M')} UTC - Suche Spiele für MORGEN")
 
-    log(f"Datum: {target_date}")
+    log(f"🗓️  Datum (Target): {target_date}")
     log(f"Märkte: {[MARKET_INFO[m]['name'] for m in MARKETS_TO_RUN]}")
     active_leagues, league_stats = get_active_leagues()
     log(f"Ligen aktiv: {len(active_leagues)} von {len(LEAGUES_TO_RUN)}")
