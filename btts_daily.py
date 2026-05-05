@@ -3496,9 +3496,21 @@ def main():
     # 🆕 Check ob heute Rotation stattfinden soll (Sonntag)
     check_rotation_schedule()
 
-    target_date = date.today()
+    # 🔧 FIX: UTC-basiertes Datum (nicht lokale Zeitzone!)
+    now_utc = datetime.now(timezone.utc)
+    
+    # Smart Target Date:
+    # - Vor 14:00 UTC → heute
+    # - Nach 14:00 UTC → morgen
+    # (Meiste Spiele sind abends, 14:00 UTC = 16:00 Schweiz)
+    if now_utc.hour < 14:
+        target_date = now_utc.date()
+        log(f"⏰ {now_utc.strftime('%H:%M')} UTC - Suche Spiele für HEUTE")
+    else:
+        target_date = (now_utc + timedelta(days=1)).date()
+        log(f"⏰ {now_utc.strftime('%H:%M')} UTC - Suche Spiele für MORGEN")
 
-    log(f"Datum: {target_date}")
+    log(f"🗓️  Datum (Target): {target_date}")
     log(f"Märkte: {[MARKET_INFO[m]['name'] for m in MARKETS_TO_RUN]}")
     active_leagues, league_stats = get_active_leagues()
     log(f"Ligen aktiv: {len(active_leagues)} von {len(LEAGUES_TO_RUN)}")
