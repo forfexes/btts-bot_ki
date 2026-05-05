@@ -170,7 +170,6 @@ LEAGUES_TO_RUN = [
     "China Super League", "Saudi Pro League",
 
     "Iceland Premier League", "Iceland 1. Deild",
-    "Australia A-League Women",
 
     # 🏃 JUGENDLIGAS
     "Bundesliga U19",
