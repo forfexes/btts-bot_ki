@@ -92,14 +92,16 @@ def main():
     
     log("")
     
-    # Test alle Group Channels
+    # Test alle Group Channels (nur die die funktionieren)
     channels = [
-        ("btts", "⚽ BTTS Channel"),
         ("over25", "🎯 Over 2.5 Channel"),
         ("combo", "🔥 Combo Channel"),
-        ("btts_ht", "🕐 BTTS HT Channel"),
         ("stats", "📊 Stats Channel"),
     ]
+    
+    # BTTS + BTTS_HT haben Probleme - use Main Chat stattdessen
+    log("⚠️ BTTS & BTTS_HT verwenden Main Chat als Fallback")
+    log("")
     
     results = {}
     
