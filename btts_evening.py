@@ -1,6 +1,6 @@
 """
-AI TIPP BOT - EVENING EUROPE EDITION
-=====================================
+AI TIPP BOT - GITHUB SINGLE FILE EDITION
+=======================================
 
 WICHTIG:
 - Keine API Keys direkt in diesen Code schreiben.
@@ -170,7 +170,6 @@ LEAGUES_TO_RUN = [
     "China Super League", "Saudi Pro League",
 
     "Iceland Premier League", "Iceland 1. Deild",
-    "Australia A-League Women",
 
     # 🏃 JUGENDLIGAS
     "Bundesliga U19",
