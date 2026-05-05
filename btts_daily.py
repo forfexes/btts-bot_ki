@@ -90,10 +90,10 @@ TELEGRAM_GROUPS = {
 SUPABASE_URL = env("SUPABASE_URL")
 SUPABASE_KEY = env("SUPABASE_KEY")
 
-MIN_PROBABILITY = int(env("MIN_PROBABILITY", "70"))  # 🆕 70% Minimum
+MIN_PROBABILITY = int(env("MIN_PROBABILITY", "67"))  # 🆕 Hybrid: 67% (zwischen 65-69)
 MIN_ODDS = float(env("MIN_ODDS", "1.65"))
 MAX_ODDS = float(env("MAX_ODDS", "3.0"))
-MIN_CONFIDENCE = int(env("MIN_CONFIDENCE", "4"))  # 🆕 Confidence ≥ 4/5
+MIN_CONFIDENCE = int(env("MIN_CONFIDENCE", "3"))
 # 🆕 Nur HIGH + OK Value (LOW fliegt raus)
 MIN_VALUE_RATING = env("MIN_VALUE_RATING", "OK")  # HIGH, OK, oder LOW
 
@@ -2912,6 +2912,113 @@ def get_overall_stats():
         return None
 
 
+def generate_multi_combo_bets(all_tips, num_tips=3):
+    """
+    🆕 Generiert automatisch Multi-Combos aus den besten Tipps.
+    num_tips: 3, 4, 5, 6, 7 oder 8 Tipps pro Combo
+    """
+    if not all_tips:
+        return None
+
+    # Alle Tipps normalisieren (oddsYes → odds)
+    normalized = []
+    for t in all_tips:
+        try:
+            odds = float(str(t.get("oddsYes", t.get("odds", 0))).replace(",", "."))
+            if odds >= 1.50:
+                normalized.append({
+                    "match": t.get("match", ""),
+                    "league": t.get("league", ""),
+                    "market": t.get("market", "btts"),
+                    "tip": t.get("tip", "YES"),
+                    "odds": odds,
+                    "confidence": int(t.get("confidence", 0)),
+                    "value_rating": t.get("valueRating", "OK"),
+                    "probability": int(t.get("probability", 0)),
+                })
+        except Exception:
+            continue
+
+    if not normalized:
+        return None
+
+    # Sortiere nach Confidence + Probability
+    sorted_tips = sorted(
+        normalized,
+        key=lambda x: (x.get("confidence", 0), x.get("probability", 0)),
+        reverse=True
+    )
+
+    # Genug Tipps vorhanden?
+    if len(sorted_tips) < num_tips:
+        return None
+
+    # Beste N Tipps nehmen
+    selected = sorted_tips[:num_tips]
+
+    # Berechne Gesamt-Quote
+    total_odds = 1.0
+    for tip in selected:
+        total_odds *= tip.get("odds", 1.0)
+
+    avg_confidence = sum(t.get("confidence", 0) for t in selected) / len(selected)
+
+    # Combo Label basierend auf Anzahl
+    labels = {
+        3: ("🥉 COMBO 3", "Einsteiger-Kombi"),
+        4: ("🥈 COMBO 4", "Solide Kombi"),
+        5: ("🥇 COMBO 5", "Standard-Kombi"),
+        6: ("💎 COMBO 6", "Value-Kombi"),
+        7: ("🔥 COMBO 7", "High-Risk Kombi"),
+        8: ("🚀 COMBO 8", "Jackpot-Kombi"),
+    }
+    label, desc = labels.get(num_tips, (f"🎲 COMBO {num_tips}", "Multi-Kombi"))
+
+    # Stake Suggestion (weniger bei mehr Tipps)
+    stakes = {3: 5, 4: 4, 5: 3, 6: 2, 7: 2, 8: 1}
+    stake = stakes.get(num_tips, 1)
+
+    return {
+        "num_tips": num_tips,
+        "label": label,
+        "desc": desc,
+        "tips": selected,
+        "total_odds": round(total_odds, 2),
+        "expected_confidence": round(avg_confidence, 1),
+        "stake_suggestion": stake,
+    }
+
+
+def format_combo_telegram_message(combo):
+    """🆕 Formatiert Multi-Combo für Telegram"""
+    if not combo:
+        return ""
+
+    msg = f"<b>{combo['label']}</b>\n"
+    msg += "━━━━━━━━━━━━━━━━━━\n"
+    msg += f"🎯 <b>Gesamt-Quote: {combo['total_odds']}</b>\n"
+    msg += f"⚡ Ø Confidence: {combo['expected_confidence']}/5\n"
+    msg += f"💰 Empfehlung: {combo['stake_suggestion']} Units\n"
+    msg += f"📋 Anzahl Tipps: {combo['num_tips']}\n\n"
+    msg += f"<b>🎫 TIPPS:</b>\n"
+
+    for i, tip in enumerate(combo["tips"], 1):
+        conf_stars = "⭐" * int(tip.get("confidence", 0))
+        msg += f"\n{i}. <b>{tip.get('match', 'N/A')}</b>\n"
+        msg += f"   📍 {tip.get('league', 'N/A')}\n"
+        msg += f"   ⚽ {tip.get('market', 'BTTS').upper()}: <b>{tip.get('tip', 'YES')}</b>\n"
+        msg += f"   💰 Quote: <b>{tip.get('odds', 0.0)}</b>\n"
+        msg += f"   {conf_stars} {tip.get('confidence', 0)}/5\n"
+
+    msg += f"\n━━━━━━━━━━━━━━━━━━\n"
+    msg += f"<b>💡 {combo['desc']}</b>\n"
+    msg += f"• Einsatz: {combo['stake_suggestion']} Units\n"
+    msg += f"• Möglicher Gewinn: ~{round(combo['total_odds'] * combo['stake_suggestion'], 1)} Units\n\n"
+    msg += f"<i>⚠️ Verantwortungsvoll spielen!</i>"
+
+    return msg
+
+
 def send_top_tips(tips_by_market, target_date):
     icons = {
         "YES": "✅",
@@ -3583,6 +3690,41 @@ def main():
     log("Sende an Telegram + Supabase...")
 
     send_top_tips(tips_by_market, target_date)
+
+    # 🆕 MULTI-COMBO SYSTEM (3,4,5,6,7,8 Tipps)
+    all_tips_flat = []
+    for market_id, tips in tips_by_market.items():
+        for tip in tips:
+            tip["market"] = market_id
+            all_tips_flat.append(tip)
+
+    if len(all_tips_flat) >= 3:
+        log("")
+        log("🎰 Generiere Multi-Combos (3-8 Tipps)...")
+        combo_chat = TELEGRAM_GROUPS.get("combo", TELEGRAM_CHAT_ID)
+
+        # Header für Combo Channel
+        combo_header = f"<b>🎰 MULTI-COMBO TIPPS</b>\n"
+        combo_header += f"<i>📅 {target_date}</i>\n"
+        combo_header += f"<i>Basis: {len(all_tips_flat)} Top-Tipps</i>"
+        send_telegram(combo_header, combo_chat)
+
+        # Alle Combo-Größen generieren (3 bis 8)
+        generated = 0
+        for n in [3, 4, 5, 6, 7, 8]:
+            combo = generate_multi_combo_bets(all_tips_flat, num_tips=n)
+            if combo:
+                log(f"   {combo['label']}: Quote {combo['total_odds']}")
+                msg = format_combo_telegram_message(combo)
+                if msg:
+                    send_telegram(msg, combo_chat)
+                    generated += 1
+            else:
+                log(f"   ⚠️ Combo {n}: Zu wenig Tipps")
+
+        log(f"✅ {generated} Combos generiert und gesendet!")
+    else:
+        log(f"ℹ️ Nur {len(all_tips_flat)} Tipps - min. 3 für Combos nötig")
 
     log("Fertig!")
 
