@@ -171,6 +171,16 @@ LEAGUES_TO_RUN = [
 
     "Iceland Premier League", "Iceland 1. Deild",
 
+    # 🆕 8 NEUE LIGEN (hohe BTTS + Over 2.5 Rate)
+    "EFL League 1",           # England 3. Liga (~65% BTTS)
+    "EFL League 2",           # England 4. Liga (~63% BTTS)
+    "Finland Veikkausliiga",  # Finnland (~60% BTTS, Sommer-Liga!)
+    "Uruguay Primera",        # Uruguay (~62% BTTS)
+    "India Super League",     # Indien (~64% BTTS)
+    "Qatar Stars League",     # Katar (~63% BTTS)
+    "South Africa PSL",       # Südafrika (~61% BTTS)
+    "Vietnam V-League",       # Vietnam (~63% BTTS)
+
     # 🏃 JUGENDLIGAS
     "Bundesliga U19",
     "Bundesliga U17",
@@ -213,6 +223,15 @@ LEAGUE_KEYS = {
     "Iceland Premier League": "soccer_iceland_urvalsdeild",
     "K League 1": "soccer_korea_kleague1",
     "China Super League": "soccer_china_superleague",
+    # 🆕 8 neue Ligen
+    "EFL League 1": "soccer_england_league1",
+    "EFL League 2": "soccer_england_league2",
+    "Finland Veikkausliiga": "soccer_finland_veikkausliiga",
+    "Uruguay Primera": "soccer_uruguay_primera_division",
+    "India Super League": "soccer_india_superleague",
+    "Qatar Stars League": "soccer_qatar_league",
+    "South Africa PSL": "soccer_south_africa_premier_league",
+    "Vietnam V-League": "soccer_vietnam_v_league",
     "Danish Superliga": "soccer_denmark_superliga",
     "Norway Eliteserien": "soccer_norway_eliteserien",
     "Sweden Allsvenskan": "soccer_sweden_allsvenskan",
@@ -276,6 +295,15 @@ API_FOOTBALL_LEAGUES = {
     "A-League": 188,
     "Iceland Premier League": 271,
     "Iceland 1. Deild": 272,
+    # 🆕 8 neue Ligen
+    "EFL League 1": 41,           # England 3. Liga
+    "EFL League 2": 42,           # England 4. Liga
+    "Finland Veikkausliiga": 244, # Finnland
+    "Uruguay Primera": 268,       # Uruguay
+    "India Super League": 323,    # Indien
+    "Qatar Stars League": 98,     # Katar
+    "South Africa PSL": 288,      # Südafrika
+    "Vietnam V-League": 340,      # Vietnam
     "Australia A-League Women": 187,
     "K League 1": 292,
     "China Super League": 169,
