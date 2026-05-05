@@ -757,14 +757,14 @@ def get_league_performance(league_name):
     Holt Performance-Stats für eine Liga aus Supabase.
     Returns: {"won": 5, "lost": 2, "pending": 3, "quote": 0.714}
     """
-    if not SUPABASE_URL or not SUPABASE_ANON_KEY:
+    if not SUPABASE_URL or not SUPABASE_KEY:
         return None
     
     try:
         url = f"{SUPABASE_URL}/rest/v1/tips"
         headers = {
-            "apikey": SUPABASE_ANON_KEY,
-            "Authorization": f"Bearer {SUPABASE_ANON_KEY}",
+            "apikey": SUPABASE_KEY,
+            "Authorization": f"Bearer {SUPABASE_KEY}",
         }
         
         # Alle tips für diese Liga (status = won/lost)
