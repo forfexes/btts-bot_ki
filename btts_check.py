@@ -17,7 +17,7 @@ load_dotenv()
 # CONFIG
 # ============================================================
 SUPABASE_URL = os.getenv("SUPABASE_URL", "")
-SUPABASE_ANON_KEY = os.getenv("SUPABASE_ANON_KEY", "")
+SUPABASE_KEY = os.getenv("SUPABASE_KEY", "")
 TELEGRAM_TOKEN = os.getenv("TELEGRAM_TOKEN", "")
 TELEGRAM_CHAT_ID = os.getenv("TELEGRAM_CHAT_ID", "")
 
@@ -73,15 +73,15 @@ def send_telegram(text):
 
 def get_pending_tips():
     """Holt alle pending Tipps aus Supabase"""
-    if not SUPABASE_URL or not SUPABASE_ANON_KEY:
+    if not SUPABASE_URL or not SUPABASE_KEY:
         log("Supabase Config fehlt", "ERROR")
         return []
     
     try:
         url = f"{SUPABASE_URL}/rest/v1/tips"
         headers = {
-            "apikey": SUPABASE_ANON_KEY,
-            "Authorization": f"Bearer {SUPABASE_ANON_KEY}",
+            "apikey": SUPABASE_KEY,
+            "Authorization": f"Bearer {SUPABASE_KEY}",
         }
         params = {
             "status": "eq.pending",
@@ -308,14 +308,14 @@ def check_btts_result(home_score, away_score, tip):
 
 def update_tip_status(tip_id, new_status, result_info=None):
     """Updated Tipp-Status in Supabase"""
-    if not SUPABASE_URL or not SUPABASE_ANON_KEY:
+    if not SUPABASE_URL or not SUPABASE_KEY:
         return False
     
     try:
         url = f"{SUPABASE_URL}/rest/v1/tips"
         headers = {
-            "apikey": SUPABASE_ANON_KEY,
-            "Authorization": f"Bearer {SUPABASE_ANON_KEY}",
+            "apikey": SUPABASE_KEY,
+            "Authorization": f"Bearer {SUPABASE_KEY}",
             "Content-Type": "application/json",
             "Prefer": "return=minimal",
         }
