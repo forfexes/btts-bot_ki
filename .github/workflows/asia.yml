@@ -1,14 +1,14 @@
-name: Evening BTTS Tipps 🌙
+name: Asia BTTS Tipps 🌏
 
 on:
   schedule:
-    - cron: '0 15 * * *'   # 15:00 UTC = 17:00 CH Sommer
+    - cron: '0 2 * * *'   # 02:00 UTC = 04:00 CH Sommer
   workflow_dispatch:
 
 jobs:
-  run-bot-evening:
+  run-bot-asia:
     runs-on: ubuntu-latest
-    timeout-minutes: 60
+    timeout-minutes: 30
     steps:
       - uses: actions/checkout@v4
       - name: Setup Python
@@ -17,7 +17,7 @@ jobs:
           python-version: '3.11'
       - name: Install dependencies
         run: pip install requests python-dotenv
-      - name: Run Evening Bot 🌙
+      - name: Run Asia Bot 🌏
         env:
           GEMINI_API_KEYS: ${{ secrets.GEMINI_API_KEYS }}
           GROQ_API_KEYS: ${{ secrets.GROQ_API_KEYS }}
@@ -47,9 +47,10 @@ jobs:
           MIN_PROBABILITY: "67"
           MIN_CONFIDENCE: "3"
           MIN_VALUE_RATING: "OK"
-          # 🌙 Amerika + Asien + neue Ligen
-          ACTIVE_LEAGUES: "MLS,Brasileirao Serie A,Liga Argentinien,Liga MX,J1 League Japan,K League 1,China Super League,Saudi Pro League,A-League,Iceland Premier League,Iceland 1. Deild,Uruguay Primera,India Super League,Qatar Stars League,Vietnam V-League,South Africa PSL"
-        run: python btts_daily.py
+          LEAGUE_ROTATION_ENABLED: "true"
+          # 🌏 Asien + Ozeanien + Naher Osten
+          ACTIVE_LEAGUES: "J1 League Japan,K League 1,China Super League,A-League,Saudi Pro League,Iceland Premier League,Iceland 1. Deild,India Super League,Qatar Stars League,Vietnam V-League"
+        run: python btts_asia.py
       - name: Log Summary
         if: always()
-        run: echo "✅ Evening Bot Complete - 15:00 UTC = 17:00 CH"
+        run: echo "✅ Asia Bot Complete - 02:00 UTC = 04:00 CH"
