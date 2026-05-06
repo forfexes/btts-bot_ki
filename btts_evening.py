@@ -82,7 +82,7 @@ TELEGRAM_CHAT_ID = env("TELEGRAM_CHAT_ID")
 TELEGRAM_GROUPS = {
     "btts": env("TELEGRAM_GROUP_BTTS", TELEGRAM_CHAT_ID),
     "over25": env("TELEGRAM_GROUP_OVER25", TELEGRAM_CHAT_ID),
-    "combo": env("TELEGRAM_GROUP_COMBO", TELEGRAM_CHAT_ID),
+    "combo": env("TELEGRAM_GROUP_COMBO") or env("TELEGRAM_GROUP_COMBOS", TELEGRAM_CHAT_ID),
     "btts_ht": env("TELEGRAM_GROUP_BTTS_HT", TELEGRAM_CHAT_ID),
     "stats": env("TELEGRAM_GROUP_STATS", TELEGRAM_CHAT_ID),
 }
@@ -507,6 +507,197 @@ def parse_odds(val):
 # ============================================================
 
 UNDERSTAT_CACHE = {}
+
+# ============================================================
+# 🆕 OPENWEATHERMAP - Wetterdaten (kostenlos, 1000 Calls/Tag)
+# ============================================================
+WEATHER_API_KEY = env("OPENWEATHER_API_KEY", "")
+WEATHER_CACHE = {}
+
+STADIUM_CITIES = {
+    "Premier League": "London",
+    "Bundesliga": "Munich",
+    "La Liga": "Madrid",
+    "Serie A": "Rome",
+    "Ligue 1": "Paris",
+    "Eredivisie": "Amsterdam",
+    "Primeira Liga": "Lisbon",
+    "Champions League": "London",
+    "Europa League": "London",
+    "Scottish Premiership": "Glasgow",
+    "Danish Superliga": "Copenhagen",
+    "Norway Eliteserien": "Oslo",
+    "Sweden Allsvenskan": "Stockholm",
+    "MLS": "New York",
+    "Brasileirao Serie A": "Sao Paulo",
+    "Liga Argentinien": "Buenos Aires",
+    "J1 League Japan": "Tokyo",
+    "K League 1": "Seoul",
+    "China Super League": "Beijing",
+    "A-League": "Sydney",
+    "Saudi Pro League": "Riyadh",
+}
+
+def get_weather_for_league(league_name, target_date):
+    """
+    Holt Wetterdaten für eine Liga (Stadt-basiert).
+    Returns: {'temp': 18, 'rain': 2.5, 'wind': 15, 'condition': 'Rain', 'impact': 'negative'}
+    """
+    if not WEATHER_API_KEY:
+        return None
+
+    city = STADIUM_CITIES.get(league_name)
+    if not city:
+        return None
+
+    cache_key = f"{city}_{target_date}"
+    if cache_key in WEATHER_CACHE:
+        return WEATHER_CACHE[cache_key]
+
+    try:
+        r = requests.get(
+            "https://api.openweathermap.org/data/2.5/forecast",
+            params={
+                "q": city,
+                "appid": WEATHER_API_KEY,
+                "units": "metric",
+                "cnt": 8,
+            },
+            timeout=10,
+        )
+
+        if not r.ok:
+            return None
+
+        data = r.json()
+        forecasts = data.get("list", [])
+
+        if not forecasts:
+            return None
+
+        # Nehme Mittags-Forecast (12:00-18:00 Uhr)
+        best = forecasts[0]
+        for f in forecasts:
+            dt = datetime.fromtimestamp(f["dt"], tz=timezone.utc)
+            if 12 <= dt.hour <= 18:
+                best = f
+                break
+
+        temp = best.get("main", {}).get("temp", 20)
+        wind = best.get("wind", {}).get("speed", 0) * 3.6  # m/s → km/h
+        rain = best.get("rain", {}).get("3h", 0)
+        condition = best.get("weather", [{}])[0].get("main", "Clear")
+
+        # Impact auf BTTS berechnen
+        impact = "neutral"
+        impact_notes = []
+
+        if rain > 3:
+            impact = "negative"
+            impact_notes.append(f"🌧️ Starker Regen ({rain:.1f}mm) → weniger Tore")
+        elif rain > 1:
+            impact_notes.append(f"🌦️ Leichter Regen ({rain:.1f}mm)")
+
+        if wind > 50:
+            impact = "negative"
+            impact_notes.append(f"💨 Starker Wind ({wind:.0f}km/h) → schlechtere Pässe")
+        elif wind > 30:
+            impact_notes.append(f"🌬️ Wind {wind:.0f}km/h")
+
+        if temp > 32:
+            impact_notes.append(f"🥵 Hitze ({temp:.0f}°C) → Teams langsamer")
+        elif temp < 2:
+            impact_notes.append(f"🥶 Kälte ({temp:.0f}°C) → harter Rasen")
+
+        result = {
+            "city": city,
+            "temp": round(temp, 1),
+            "rain": round(rain, 1),
+            "wind": round(wind, 1),
+            "condition": condition,
+            "impact": impact,
+            "notes": impact_notes,
+        }
+
+        WEATHER_CACHE[cache_key] = result
+        return result
+
+    except Exception as e:
+        log(f"Weather Error: {e}", "WARN")
+        return None
+
+
+# ============================================================
+# 🆕 FOOTYSTATS - BTTS + Over 2.5 Statistiken
+# ============================================================
+FOOTYSTATS_API_KEY = env("FOOTYSTATS_API_KEY", "")
+FOOTYSTATS_CACHE = {}
+
+FOOTYSTATS_LEAGUE_IDS = {
+    "Premier League": 1625,
+    "Bundesliga": 1617,
+    "La Liga": 1621,
+    "Serie A": 1627,
+    "Ligue 1": 1619,
+    "Eredivisie": 1631,
+    "Primeira Liga": 1629,
+    "Championship": 1626,
+    "Scottish Premiership": 1637,
+    "MLS": 1651,
+    "Brasileirao Serie A": 1671,
+}
+
+def get_footystats_team(team_name, league_name):
+    """
+    Holt BTTS + Over 2.5 Statistiken von FootyStats.
+    Returns: {'btts_rate': 65, 'over25_rate': 72, 'avg_goals': 2.8}
+    """
+    if not FOOTYSTATS_API_KEY:
+        return None
+
+    league_id = FOOTYSTATS_LEAGUE_IDS.get(league_name)
+    if not league_id:
+        return None
+
+    cache_key = f"{team_name}_{league_id}"
+    if cache_key in FOOTYSTATS_CACHE:
+        return FOOTYSTATS_CACHE[cache_key]
+
+    try:
+        r = requests.get(
+            f"https://api.football-data-api.com/league-teams",
+            params={
+                "key": FOOTYSTATS_API_KEY,
+                "season_id": league_id,
+            },
+            timeout=12,
+        )
+
+        if not r.ok:
+            return None
+
+        data = r.json()
+        teams = data.get("data", [])
+
+        for team in teams:
+            name = team.get("cleanName", "").lower()
+            if team_name.lower()[:6] in name or name[:6] in team_name.lower():
+                stats = team.get("stats", {})
+                result = {
+                    "btts_rate": stats.get("btts_percentage", 0),
+                    "over25_rate": stats.get("over25_percentage", 0),
+                    "avg_goals": stats.get("avg_goals_per_game_scored", 0),
+                    "avg_conceded": stats.get("avg_goals_per_game_conceded", 0),
+                    "clean_sheets_pct": stats.get("clean_sheet_percentage", 0),
+                }
+                FOOTYSTATS_CACHE[cache_key] = result
+                return result
+
+        return None
+
+    except Exception as e:
+        log(f"FootyStats Error: {e}", "WARN")
+        return None
 
 
 def fetch_odds_api(league_name, target_date):
@@ -1926,6 +2117,19 @@ def analyze_pinnacle_value(odds_data, home_team, away_team):
 def build_context(odds_data, fixtures, league):
     ctx = ""
 
+    # 🆕 WETTERDATEN
+    weather = get_weather_for_league(league, date.today())
+    if weather:
+        ctx += f"\n🌤️ WETTER ({weather['city']}):\n"
+        ctx += f"• {weather['condition']} · {weather['temp']}°C · "
+        ctx += f"Wind {weather['wind']}km/h · Regen {weather['rain']}mm\n"
+        if weather['notes']:
+            for note in weather['notes']:
+                ctx += f"• {note}\n"
+        if weather['impact'] == 'negative':
+            ctx += f"⚠️ Wetter-Impact: Schlechtere Bedingungen → weniger Tore erwartet!\n"
+        ctx += "\n"
+
     league_id = API_FOOTBALL_LEAGUES.get(league)
     season = None
     if league_id:
@@ -1970,7 +2174,24 @@ def build_context(odds_data, fixtures, league):
                 fb_str += f" [FBref · {away_fb.get('games',0)} Spiele]"
                 line += fb_str
 
-            hist = get_historical_btts_rate(league, f["home"], f["away"])
+            # 🆕 FootyStats BTTS + Over 2.5 Stats
+            home_fs = get_footystats_team(f["home"], league)
+            away_fs = get_footystats_team(f["away"], league)
+
+            if home_fs:
+                line += (
+                    f"\n   📊 {f['home']} [FootyStats]: "
+                    f"BTTS {home_fs['btts_rate']}%, "
+                    f"Over2.5 {home_fs['over25_rate']}%, "
+                    f"Ø {home_fs['avg_goals']} Tore/Spiel"
+                )
+            if away_fs:
+                line += (
+                    f"\n   📊 {f['away']} [FootyStats]: "
+                    f"BTTS {away_fs['btts_rate']}%, "
+                    f"Over2.5 {away_fs['over25_rate']}%, "
+                    f"Ø {away_fs['avg_goals']} Tore/Spiel"
+                )
             if hist:
                 if hist.get("home"):
                     h = hist["home"]
@@ -3579,6 +3800,8 @@ def check_config():
     log(f"   • Football-Data: {len(FOOTBALL_DATA_API_KEYS)} Keys" if FOOTBALL_DATA_API_KEYS else "   • Football-Data: ❌")
     log(f"   • BSD: ✅ (8 Top-Ligen, unlimited Calls)")
     log(f"   • Sportmonks: ✅ (Dänemark + Schottland, Free Forever)")
+    log(f"   • Wetter: {'✅ OpenWeatherMap aktiv!' if WEATHER_API_KEY else '❌ OPENWEATHER_API_KEY fehlt'}")
+    log(f"   • FootyStats: {'✅ BTTS Stats aktiv!' if FOOTYSTATS_API_KEY else '❌ FOOTYSTATS_API_KEY fehlt (optional)'}")
     log(f"")
     log(f"🔄 League Rotation:")
     log(f"   • Status: {'✅ AKTIV' if LEAGUE_ROTATION_ENABLED else '❌ AUS'}")
