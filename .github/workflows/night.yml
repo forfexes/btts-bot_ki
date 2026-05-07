@@ -5,6 +5,10 @@ on:
     - cron: '0 15 * * *'   # 15:00 UTC = 17:00 CH Sommer
   workflow_dispatch:
 
+concurrency:
+  group: ${{ github.workflow }}
+  cancel-in-progress: false
+
 jobs:
   run-bot-evening:
     runs-on: ubuntu-latest
@@ -49,7 +53,7 @@ jobs:
           MIN_VALUE_RATING: "OK"
           # 🌙 Amerika + Asien + neue Ligen
           ACTIVE_LEAGUES: "MLS,Brasileirao Serie A,Liga Argentinien,Liga MX,J1 League Japan,K League 1,China Super League,Saudi Pro League,A-League,Iceland Premier League,Iceland 1. Deild,Uruguay Primera,India Super League,Qatar Stars League,Vietnam V-League,South Africa PSL"
-        run: python btts_daily.py
+        run: python btts_evening.py
       - name: Log Summary
         if: always()
         run: echo "✅ Evening Bot Complete - 15:00 UTC = 17:00 CH"
