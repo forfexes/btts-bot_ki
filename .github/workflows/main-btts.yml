@@ -5,6 +5,10 @@ on:
     - cron: '0 8 * * *'   # 08:00 UTC = 10:00 CH Sommer
   workflow_dispatch:
 
+concurrency:
+  group: ${{ github.workflow }}
+  cancel-in-progress: false
+
 jobs:
   run-bot-europe:
     runs-on: ubuntu-latest
