@@ -2442,14 +2442,22 @@ def validate_tips(tips, real_fixtures, real_odds):
 
 
 def is_future_game(time_str, target_date):
+    """
+    Gibt nur TRUE zurück, wenn das Spiel sicher noch nicht begonnen hat.
+    Wichtig: Keine vergangenen oder bereits gestarteten Tipps senden.
+    """
     try:
-        if not time_str or time_str == "TBD":
-            return True
-
-        hour, minute = map(int, time_str.split(":")[:2])
         now_utc = datetime.now(timezone.utc)
-        year = now_utc.year
 
+        # Wenn keine Uhrzeit vorhanden ist, heute lieber NICHT senden.
+        # Für zukünftige Tage ist es okay, weil das Spiel sicher nicht vorbei ist.
+        if not time_str or str(time_str).strip() in ["TBD", "N/A", "-", ""]:
+            return target_date > now_utc.date()
+
+        hour, minute = map(int, str(time_str).strip().split(":")[:2])
+        year = target_date.year
+
+        # Schweiz/Europa: Sommerzeit grob berechnen, damit lokale Uhrzeit -> UTC passt.
         march_last = datetime(year, 3, 31, tzinfo=timezone.utc)
         while march_last.weekday() != 6:
             march_last -= timedelta(days=1)
@@ -2467,10 +2475,12 @@ def is_future_game(time_str, target_date):
 
         game_utc = (game_local - timedelta(hours=offset)).replace(tzinfo=timezone.utc)
 
-        return game_utc > now_utc - timedelta(minutes=15)
+        # Streng: Nur Spiele in der Zukunft. Keine 15-Minuten-Toleranz mehr.
+        return game_utc > now_utc
 
     except Exception:
-        return True
+        # Bei Fehlern lieber überspringen statt aus Versehen alte Tipps zu senden.
+        return False
 
 
 def filter_top_tips(tips, target_date, market):
