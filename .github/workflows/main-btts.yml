@@ -1,14 +1,11 @@
 name: Europe BTTS Tipps 🇪🇺
-
 on:
   schedule:
     - cron: '0 8 * * *'   # 08:00 UTC = 10:00 CH Sommer
   workflow_dispatch:
-
 concurrency:
   group: ${{ github.workflow }}
   cancel-in-progress: false
-
 jobs:
   run-bot-europe:
     runs-on: ubuntu-latest
@@ -40,20 +37,17 @@ jobs:
           SUPABASE_URL: ${{ secrets.SUPABASE_URL }}
           SUPABASE_KEY: ${{ secrets.SUPABASE_KEY }}
           SPORTDB_API_KEY: ${{ secrets.SPORTDB_API_KEY }}
-          # 🔧 API-Football Erweiterungen
+          OPENWEATHER_API_KEY: ${{ secrets.OPENWEATHER_API_KEY }}
+          FOOTYSTATS_API_KEY: ${{ secrets.FOOTYSTATS_API_KEY }}
           APIFOOTBALL_INJURIES: "true"
           APIFOOTBALL_TEAM_STATS: "true"
           APIFOOTBALL_H2H: "true"
           APIFOOTBALL_PREDICTIONS: "true"
           APIFOOTBALL_MAX_CALLS: "150"
-          # 🤖 ML Settings
           AI_SLEEP_SECONDS: "1.5"
-          OPENWEATHER_API_KEY: ${{ secrets.OPENWEATHER_API_KEY }}
-          FOOTYSTATS_API_KEY: ${{ secrets.FOOTYSTATS_API_KEY }}
           MIN_PROBABILITY: "67"
           MIN_CONFIDENCE: "3"
           MIN_VALUE_RATING: "OK"
-          # 🔄 League Rotation
           LEAGUE_ROTATION_ENABLED: "true"
           LEAGUE_ROTATION_MIN_SAMPLES: "5"
           LEAGUE_ROTATION_MIN_QUOTE: "0.50"
