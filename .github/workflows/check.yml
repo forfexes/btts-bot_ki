@@ -1,14 +1,15 @@
-name: Check Results
-
+name: BTTS Settlement Check ✅
 on:
   schedule:
-    - cron: '0 16,18,20,22,0,2,4 * * *'
+    - cron: '0 22 * * *'   # 22:00 UTC = 00:00 CH Sommer
   workflow_dispatch:
-
+concurrency:
+  group: ${{ github.workflow }}
+  cancel-in-progress: false
 jobs:
-  check:
+  run-bot-check:
     runs-on: ubuntu-latest
-    timeout-minutes: 20
+    timeout-minutes: 30
     steps:
       - uses: actions/checkout@v4
       - name: Setup Python
@@ -17,20 +18,41 @@ jobs:
           python-version: '3.11'
       - name: Install dependencies
         run: pip install requests python-dotenv
-      - name: Run checker
+      - name: Run Settlement Bot ✅
         env:
           GEMINI_API_KEYS: ${{ secrets.GEMINI_API_KEYS }}
           GROQ_API_KEYS: ${{ secrets.GROQ_API_KEYS }}
-          FOOTBALL_DATA_API_KEY: ${{ secrets.FOOTBALL_DATA_API_KEY }}
-          API_FOOTBALL_KEY: ${{ secrets.API_FOOTBALL_KEY }}
+          ODDS_API_KEYS: ${{ secrets.ODDS_API_KEYS }}
+          FOOTBALL_DATA_API_KEYS: ${{ secrets.FOOTBALL_DATA_API_KEYS }}
+          API_FOOTBALL_KEYS: ${{ secrets.API_FOOTBALL_KEYS }}
+          SPORTMONKS_API_KEY: ${{ secrets.SPORTMONKS_API_KEY }}
           TELEGRAM_TOKEN: ${{ secrets.TELEGRAM_TOKEN }}
           TELEGRAM_CHAT_ID: ${{ secrets.TELEGRAM_CHAT_ID }}
           TELEGRAM_GROUP_BTTS: ${{ secrets.TELEGRAM_GROUP_BTTS }}
           TELEGRAM_GROUP_OVER25: ${{ secrets.TELEGRAM_GROUP_OVER25 }}
           TELEGRAM_GROUP_COMBO: ${{ secrets.TELEGRAM_GROUP_COMBO }}
-          TELEGRAM_GROUP_1X2: ${{ secrets.TELEGRAM_GROUP_1X2 }}
+          TELEGRAM_GROUP_COMBOS: ${{ secrets.TELEGRAM_GROUP_COMBOS }}
+          TELEGRAM_GROUP_BTTS_HT: ${{ secrets.TELEGRAM_GROUP_BTTS_HT }}
           TELEGRAM_GROUP_STATS: ${{ secrets.TELEGRAM_GROUP_STATS }}
           SUPABASE_URL: ${{ secrets.SUPABASE_URL }}
           SUPABASE_KEY: ${{ secrets.SUPABASE_KEY }}
           SPORTDB_API_KEY: ${{ secrets.SPORTDB_API_KEY }}
+          OPENWEATHER_API_KEY: ${{ secrets.OPENWEATHER_API_KEY }}
+          FOOTYSTATS_API_KEY: ${{ secrets.FOOTYSTATS_API_KEY }}
+          APIFOOTBALL_INJURIES: "true"
+          APIFOOTBALL_TEAM_STATS: "true"
+          APIFOOTBALL_H2H: "true"
+          APIFOOTBALL_PREDICTIONS: "true"
+          APIFOOTBALL_MAX_CALLS: "150"
+          AI_SLEEP_SECONDS: "1.5"
+          MIN_PROBABILITY: "67"
+          MIN_CONFIDENCE: "3"
+          MIN_VALUE_RATING: "OK"
+          LEAGUE_ROTATION_ENABLED: "true"
+          LEAGUE_ROTATION_MIN_SAMPLES: "5"
+          LEAGUE_ROTATION_MIN_QUOTE: "0.50"
+          LEAGUE_ROTATION_MAX_QUOTE: "0.70"
         run: python btts_check.py
+      - name: Log Summary
+        if: always()
+        run: echo "✅ Settlement Bot Complete - 22:00 UTC"
