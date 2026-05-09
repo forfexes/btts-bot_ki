@@ -32,4 +32,5 @@ jobs:
           TELEGRAM_GROUP_STATS: ${{ secrets.TELEGRAM_GROUP_STATS }}
           SUPABASE_URL: ${{ secrets.SUPABASE_URL }}
           SUPABASE_KEY: ${{ secrets.SUPABASE_KEY }}
+          SPORTDB_API_KEY: ${{ secrets.SPORTDB_API_KEY }}
         run: python btts_check.py
