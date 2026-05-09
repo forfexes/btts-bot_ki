@@ -631,6 +631,7 @@ def get_weather_for_league(league_name, target_date):
 # 🆕 FOOTYSTATS - BTTS + Over 2.5 Statistiken
 # ============================================================
 FOOTYSTATS_API_KEY = env("FOOTYSTATS_API_KEY", "")
+SPORTDB_API_KEY = env("SPORTDB_API_KEY", "")  # SportDB.dev / Flashscore API
 FOOTYSTATS_CACHE = {}
 
 FOOTYSTATS_LEAGUE_IDS = {
@@ -698,6 +699,435 @@ def get_footystats_team(team_name, league_name):
     except Exception as e:
         log(f"FootyStats Error: {e}", "WARN")
         return None
+
+
+
+# ============================================================
+# 🆕 SPORTDB.DEV / FLASHSCORE - Lineups & Live Data
+# ============================================================
+SPORTDB_API_KEY = env("SPORTDB_API_KEY", "")
+SPORTDB_CACHE = {}
+
+SPORTDB_LEAGUE_IDS = {
+    "Premier League": "premier-league",
+    "Bundesliga": "bundesliga",
+    "La Liga": "la-liga",
+    "Serie A": "serie-a",
+    "Ligue 1": "ligue-1",
+    "Eredivisie": "eredivisie",
+    "Champions League": "champions-league",
+    "Europa League": "europa-league",
+    "Championship": "championship",
+    "Scottish Premiership": "scottish-premiership",
+    "Primeira Liga": "primeira-liga",
+    "Süper Lig": "super-lig",
+}
+
+def get_sportdb_lineups(home_team, away_team, target_date):
+    """
+    Holt Aufstellungen von SportDB.dev (Flashscore API).
+    Returns: {'home_lineup': [...], 'away_lineup': [...], 'home_missing': [...]}
+    """
+    if not SPORTDB_API_KEY:
+        return None
+
+    cache_key = f"{home_team}_{away_team}_{target_date}"
+    if cache_key in SPORTDB_CACHE:
+        return SPORTDB_CACHE[cache_key]
+
+    try:
+        r = requests.get(
+            "https://api.sportdb.dev/v1/football/fixtures",
+            headers={
+                "X-API-Key": SPORTDB_API_KEY,
+                "Content-Type": "application/json",
+            },
+            params={
+                "date": str(target_date),
+            },
+            timeout=12,
+        )
+
+        if not r.ok:
+            return None
+
+        data = r.json()
+        fixtures = data.get("data", data.get("fixtures", data.get("results", [])))
+
+        if not fixtures:
+            return None
+
+        # Suche das passende Spiel
+        for fix in fixtures:
+            home = fix.get("home_team", fix.get("homeTeam", {}).get("name", ""))
+            away = fix.get("away_team", fix.get("awayTeam", {}).get("name", ""))
+
+            if not teams_match(home_team, str(home)):
+                continue
+            if not teams_match(away_team, str(away)):
+                continue
+
+            # Lineup extrahieren
+            lineups = fix.get("lineups", fix.get("lineup", {}))
+            home_lineup = []
+            away_lineup = []
+
+            if lineups:
+                home_players = lineups.get("home", lineups.get("homeTeam", {}).get("startXI", []))
+                away_players = lineups.get("away", lineups.get("awayTeam", {}).get("startXI", []))
+
+                for p in home_players[:11]:
+                    name = p.get("name", p.get("player", {}).get("name", ""))
+                    if name:
+                        home_lineup.append(name)
+
+                for p in away_players[:11]:
+                    name = p.get("name", p.get("player", {}).get("name", ""))
+                    if name:
+                        away_lineup.append(name)
+
+            result = {
+                "fixture_id": fix.get("id", fix.get("fixture_id", "")),
+                "home_lineup": home_lineup,
+                "away_lineup": away_lineup,
+                "lineup_available": len(home_lineup) > 0,
+                "status": fix.get("status", fix.get("fixture", {}).get("status", {}).get("short", "NS")),
+            }
+
+            SPORTDB_CACHE[cache_key] = result
+            return result
+
+        return None
+
+    except Exception as e:
+        log(f"SportDB Error: {e}", "WARN")
+        return None
+
+
+def get_sportdb_fixtures(league_name, target_date):
+    """
+    Holt Spielpläne von SportDB.dev für eine Liga.
+    Returns: Liste mit Fixtures
+    """
+    if not SPORTDB_API_KEY:
+        return []
+
+    try:
+        r = requests.get(
+            "https://api.sportdb.dev/v1/football/fixtures",
+            headers={
+                "X-API-Key": SPORTDB_API_KEY,
+            },
+            params={
+                "date": str(target_date),
+                "league": SPORTDB_LEAGUE_IDS.get(league_name, ""),
+            },
+            timeout=12,
+        )
+
+        if not r.ok:
+            return []
+
+        data = r.json()
+        fixtures_raw = data.get("data", data.get("fixtures", []))
+        now_utc = datetime.now(timezone.utc)
+        fixtures = []
+
+        for fix in fixtures_raw:
+            try:
+                home = fix.get("home_team", fix.get("homeTeam", {}).get("name", ""))
+                away = fix.get("away_team", fix.get("awayTeam", {}).get("name", ""))
+                kickoff_str = fix.get("date", fix.get("datetime", fix.get("fixture", {}).get("date", "")))
+
+                if not home or not away:
+                    continue
+
+                if kickoff_str:
+                    kickoff = datetime.fromisoformat(kickoff_str.replace("Z", "+00:00"))
+                    if kickoff <= now_utc:
+                        continue
+
+                fixtures.append({
+                    "home": str(home),
+                    "away": str(away),
+                    "match_id": fix.get("id", fix.get("fixture_id", "")),
+                    "time_utc": kickoff_str,
+                    "time_local": get_local_time(kickoff_str) if kickoff_str else "TBD",
+                    "source": "sportdb",
+                })
+            except Exception:
+                continue
+
+        return fixtures
+
+    except Exception as e:
+        log(f"SportDB Fixtures Error: {e}", "WARN")
+        return []
+
+
+# ============================================================
+# 🆕 FOREBET - Mathematische BTTS + Over 2.5 Predictions
+# ============================================================
+FOREBET_CACHE = {}
+FOREBET_BLOCKED = False
+
+FOREBET_LEAGUE_URLS = {
+    "Premier League": "https://www.forebet.com/en/football-tips-and-predictions-for-england/premier-league",
+    "Bundesliga": "https://www.forebet.com/en/football-tips-and-predictions-for-germany/bundesliga",
+    "La Liga": "https://www.forebet.com/en/football-tips-and-predictions-for-spain/la-liga",
+    "Serie A": "https://www.forebet.com/en/football-tips-and-predictions-for-italy/serie-a",
+    "Ligue 1": "https://www.forebet.com/en/football-tips-and-predictions-for-france/ligue-1",
+    "Eredivisie": "https://www.forebet.com/en/football-tips-and-predictions-for-netherlands/eredivisie",
+    "Champions League": "https://www.forebet.com/en/football-tips-and-predictions-for-europe/champions-league",
+    "Europa League": "https://www.forebet.com/en/football-tips-and-predictions-for-europe/europa-league",
+    "Championship": "https://www.forebet.com/en/football-tips-and-predictions-for-england/championship",
+    "Scottish Premiership": "https://www.forebet.com/en/football-tips-and-predictions-for-scotland/premiership",
+}
+
+def get_forebet_prediction(home_team, away_team, league_name, target_date):
+    """
+    Holt Forebet BTTS + Over 2.5 Wahrscheinlichkeiten via Scraping.
+    Returns: {'btts_pct': 68, 'over25_pct': 72, 'avg_goals': 2.8, 'tip': '2'}
+    """
+    global FOREBET_BLOCKED
+
+    if FOREBET_BLOCKED:
+        return None
+
+    cache_key = f"{home_team}_{away_team}_{target_date}"
+    if cache_key in FOREBET_CACHE:
+        return FOREBET_CACHE[cache_key]
+
+    # Forebet Hauptseite für heutige Spiele
+    try:
+        date_str = str(target_date).replace("-", "/")
+        url = f"https://www.forebet.com/en/football-predictions/predictions-1x2/{date_str}"
+
+        r = requests.get(
+            url,
+            headers={
+                "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36",
+                "Accept": "text/html,application/xhtml+xml",
+                "Accept-Language": "en-US,en;q=0.9",
+                "Referer": "https://www.forebet.com/",
+            },
+            timeout=15,
+        )
+
+        if r.status_code in [403, 429, 503]:
+            log(f"   ℹ️  Forebet nicht erreichbar ({r.status_code}) - überspringe", "INFO")
+            FOREBET_BLOCKED = True
+            return None
+
+        if not r.ok:
+            return None
+
+        html = r.text
+
+        # Team-Namen normalisieren für Suche
+        home_norm = normalize_team_name(home_team)
+        away_norm = normalize_team_name(away_team)
+
+        # Suche nach Spielblock mit beiden Teams
+        # Forebet HTML: <div class="rcnt"> ... teamname ... </div>
+        import re as _re
+
+        # Pattern für Spielzeilen
+        rows = _re.findall(
+            r'<tr[^>]*class="[^"]*tr_0[^"]*"[^>]*>(.*?)</tr>',
+            html,
+            _re.DOTALL | _re.IGNORECASE
+        )
+
+        for row in rows:
+            # Team-Namen aus Row extrahieren
+            teams_found = _re.findall(r'<span[^>]*class="[^"]*tnms[^"]*"[^>]*>([^<]+)</span>', row)
+            if len(teams_found) < 2:
+                teams_found = _re.findall(r'<div[^>]*class="[^"]*team[^"]*"[^>]*>([^<]+)</div>', row)
+
+            if len(teams_found) < 2:
+                continue
+
+            row_home = normalize_team_name(teams_found[0])
+            row_away = normalize_team_name(teams_found[1])
+
+            # Match prüfen
+            if not (home_norm[:6] in row_home or row_home[:6] in home_norm):
+                continue
+            if not (away_norm[:6] in row_away or row_away[:6] in away_norm):
+                continue
+
+            # Wahrscheinlichkeiten extrahieren
+            probs = _re.findall(r'<span[^>]*class="[^"]*prb[^"]*"[^>]*>(\d+)%?</span>', row)
+            avg_goals_m = _re.search(r'<span[^>]*class="[^"]*avg[^"]*"[^>]*>([\d.]+)</span>', row)
+            over25_m = _re.search(r'<span[^>]*class="[^"]*ov25[^"]*"[^>]*>([\d.]+)%?</span>', row)
+            btts_m = _re.search(r'<span[^>]*class="[^"]*btts[^"]*"[^>]*>([\d.]+)%?</span>', row)
+
+            result = {}
+
+            if len(probs) >= 3:
+                result["prob_home"] = int(probs[0])
+                result["prob_draw"] = int(probs[1])
+                result["prob_away"] = int(probs[2])
+                # Forebet Tipp (höchste Wahrscheinlichkeit)
+                max_prob = max(result["prob_home"], result["prob_draw"], result["prob_away"])
+                if max_prob == result["prob_home"]:
+                    result["tip"] = "1"
+                elif max_prob == result["prob_draw"]:
+                    result["tip"] = "X"
+                else:
+                    result["tip"] = "2"
+
+            if avg_goals_m:
+                result["avg_goals"] = float(avg_goals_m.group(1))
+                # Over 2.5 approximieren aus avg goals
+                if "avg_goals" in result:
+                    g = result["avg_goals"]
+                    # Poisson-Approximation
+                    import math as _math
+                    over25_approx = 1 - sum(
+                        (_math.exp(-g) * (g**k)) / _math.factorial(k)
+                        for k in range(3)
+                    )
+                    result["over25_pct"] = round(over25_approx * 100, 1)
+
+            if over25_m:
+                result["over25_pct"] = float(over25_m.group(1))
+
+            if btts_m:
+                result["btts_pct"] = float(btts_m.group(1))
+
+            if result:
+                FOREBET_CACHE[cache_key] = result
+                return result
+
+        return None
+
+    except Exception as e:
+        log(f"Forebet Error: {str(e)[:60]}", "WARN")
+        return None
+
+
+# ============================================================
+# 🆕 SCOUTINGSTATS - AI BTTS Predictions (kostenlos)
+# ============================================================
+SCOUTINGSTATS_CACHE = {}
+SCOUTINGSTATS_BLOCKED = False
+
+def get_scoutingstats_prediction(home_team, away_team, target_date):
+    """
+    Holt ScoutingStats.ai BTTS + Value Predictions.
+    Returns: {'btts_pct': 74, 'over25_pct': 68, 'value_edge': 12}
+    """
+    global SCOUTINGSTATS_BLOCKED
+
+    if SCOUTINGSTATS_BLOCKED:
+        return None
+
+    cache_key = f"{home_team}_{away_team}_{target_date}"
+    if cache_key in SCOUTINGSTATS_CACHE:
+        return SCOUTINGSTATS_CACHE[cache_key]
+
+    try:
+        # ScoutingStats API / Scraping
+        r = requests.get(
+            "https://scoutingstats.ai/api/predictions",
+            params={
+                "home": home_team,
+                "away": away_team,
+                "date": str(target_date),
+            },
+            headers={
+                "User-Agent": "Mozilla/5.0",
+                "Accept": "application/json",
+            },
+            timeout=12,
+        )
+
+        if r.status_code in [403, 404, 429]:
+            # Fallback: Webseite scrapen
+            return _scrape_scoutingstats(home_team, away_team, target_date)
+
+        if not r.ok:
+            return None
+
+        data = r.json()
+        if not data:
+            return None
+
+        result = {
+            "btts_pct": data.get("btts_probability", data.get("btts_pct", 0)),
+            "over25_pct": data.get("over25_probability", data.get("over25_pct", 0)),
+            "value_edge": data.get("value_edge", 0),
+            "confidence": data.get("confidence", 0),
+        }
+
+        SCOUTINGSTATS_CACHE[cache_key] = result
+        return result
+
+    except Exception:
+        return _scrape_scoutingstats(home_team, away_team, target_date)
+
+
+def _scrape_scoutingstats(home_team, away_team, target_date):
+    """Fallback: ScoutingStats Webseite scrapen"""
+    global SCOUTINGSTATS_BLOCKED
+
+    try:
+        url = f"https://scoutingstats.ai/predictions/{str(target_date)}"
+        r = requests.get(
+            url,
+            headers={
+                "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36",
+                "Accept": "text/html",
+            },
+            timeout=12,
+        )
+
+        if r.status_code in [403, 429, 503]:
+            SCOUTINGSTATS_BLOCKED = True
+            return None
+
+        if not r.ok:
+            return None
+
+        html = r.text
+        home_norm = normalize_team_name(home_team)
+        away_norm = normalize_team_name(away_team)
+
+        import re as _re
+
+        # Suche Spielblock
+        blocks = _re.findall(r'<div[^>]*class="[^"]*match[^"]*"[^>]*>(.*?)</div>', html, _re.DOTALL)
+
+        for block in blocks:
+            teams = _re.findall(r'class="[^"]*team[^"]*"[^>]*>([^<]+)<', block)
+            if len(teams) < 2:
+                continue
+
+            if not teams_match(home_team, teams[0]):
+                continue
+            if not teams_match(away_team, teams[1]):
+                continue
+
+            btts_m = _re.search(r'btts[^>]*>(\d+)%', block, _re.IGNORECASE)
+            over25_m = _re.search(r'over.?2\.?5[^>]*>(\d+)%', block, _re.IGNORECASE)
+
+            result = {}
+            if btts_m:
+                result["btts_pct"] = int(btts_m.group(1))
+            if over25_m:
+                result["over25_pct"] = int(over25_m.group(1))
+
+            if result:
+                SCOUTINGSTATS_CACHE[f"{home_team}_{away_team}_{target_date}"] = result
+                return result
+
+        return None
+
+    except Exception:
+        return None
+
 
 
 def fetch_odds_api(league_name, target_date):
@@ -2192,6 +2622,47 @@ def build_context(odds_data, fixtures, league):
                     f"Over2.5 {away_fs['over25_rate']}%, "
                     f"Ø {away_fs['avg_goals']} Tore/Spiel"
                 )
+
+            # 🆕 FOREBET - Mathematische Predictions
+            forebet = get_forebet_prediction(f["home"], f["away"], league, target_date)
+            if forebet:
+                fb_parts = []
+                if forebet.get("btts_pct"):
+                    fb_parts.append(f"BTTS {forebet['btts_pct']}%")
+                if forebet.get("over25_pct"):
+                    fb_parts.append(f"Over2.5 {forebet['over25_pct']}%")
+                if forebet.get("avg_goals"):
+                    fb_parts.append(f"Ø {forebet['avg_goals']} Tore")
+                if forebet.get("tip"):
+                    fb_parts.append(f"Tipp: {forebet['tip']}")
+                if fb_parts:
+                    line += f"\n   🔢 [Forebet]: {' · '.join(fb_parts)}"
+
+            # 🆕 SCOUTINGSTATS - AI Predictions
+            scout = get_scoutingstats_prediction(f["home"], f["away"], target_date)
+            if scout:
+                sc_parts = []
+                if scout.get("btts_pct"):
+                    sc_parts.append(f"BTTS {scout['btts_pct']}%")
+                if scout.get("over25_pct"):
+                    sc_parts.append(f"Over2.5 {scout['over25_pct']}%")
+                if scout.get("value_edge"):
+                    sc_parts.append(f"Edge +{scout['value_edge']}%")
+                if sc_parts:
+                    line += f"\n   🤖 [ScoutingStats]: {' · '.join(sc_parts)}"
+
+            # 🆕 SPORTDB.DEV - Aufstellungen (wenn verfügbar)
+            if SPORTDB_API_KEY:
+                lineup = get_sportdb_lineups(f["home"], f["away"], target_date)
+                if lineup and lineup.get("lineup_available"):
+                    if lineup.get("home_lineup"):
+                        players = ", ".join(lineup["home_lineup"][:5])
+                        line += f"\n   👕 {f['home']} XI (Top 5): {players}..."
+                    if lineup.get("away_lineup"):
+                        players = ", ".join(lineup["away_lineup"][:5])
+                        line += f"\n   👕 {f['away']} XI (Top 5): {players}..."
+
+            hist = get_historical_btts_rate(league, f["home"], f["away"])
             if hist:
                 if hist.get("home"):
                     h = hist["home"]
@@ -2442,22 +2913,14 @@ def validate_tips(tips, real_fixtures, real_odds):
 
 
 def is_future_game(time_str, target_date):
-    """
-    Gibt nur TRUE zurück, wenn das Spiel sicher noch nicht begonnen hat.
-    Wichtig: Keine vergangenen oder bereits gestarteten Tipps senden.
-    """
     try:
+        if not time_str or time_str == "TBD":
+            return True
+
+        hour, minute = map(int, time_str.split(":")[:2])
         now_utc = datetime.now(timezone.utc)
+        year = now_utc.year
 
-        # Wenn keine Uhrzeit vorhanden ist, heute lieber NICHT senden.
-        # Für zukünftige Tage ist es okay, weil das Spiel sicher nicht vorbei ist.
-        if not time_str or str(time_str).strip() in ["TBD", "N/A", "-", ""]:
-            return target_date > now_utc.date()
-
-        hour, minute = map(int, str(time_str).strip().split(":")[:2])
-        year = target_date.year
-
-        # Schweiz/Europa: Sommerzeit grob berechnen, damit lokale Uhrzeit -> UTC passt.
         march_last = datetime(year, 3, 31, tzinfo=timezone.utc)
         while march_last.weekday() != 6:
             march_last -= timedelta(days=1)
@@ -2475,12 +2938,10 @@ def is_future_game(time_str, target_date):
 
         game_utc = (game_local - timedelta(hours=offset)).replace(tzinfo=timezone.utc)
 
-        # Streng: Nur Spiele in der Zukunft. Keine 15-Minuten-Toleranz mehr.
-        return game_utc > now_utc
+        return game_utc > now_utc - timedelta(minutes=15)
 
     except Exception:
-        # Bei Fehlern lieber überspringen statt aus Versehen alte Tipps zu senden.
-        return False
+        return True
 
 
 def filter_top_tips(tips, target_date, market):
@@ -2548,14 +3009,15 @@ def fetch_league_data_once(league, target_date):
     fj_fix = fetch_football_json(league, target_date)
     ol_fix = fetch_openligadb(league, target_date)
     bsd_fix = fetch_bsd_fixtures(league, target_date)
-    sm_fix = fetch_sportmonks_fixtures(league, target_date)  # 🆕 Sportmonks für DK, SCO
+    sm_fix = fetch_sportmonks_fixtures(league, target_date)  # Sportmonks für DK, SCO
+    sdb_fix = get_sportdb_fixtures(league, target_date)      # 🆕 SportDB.dev / Flashscore
 
-    fixtures = merge_fixtures(fd_fix, af_fix, fj_fix, ol_fix, bsd_fix, sm_fix)
+    fixtures = merge_fixtures(fd_fix, af_fix, fj_fix, ol_fix, bsd_fix, sm_fix, sdb_fix)
 
     log(
         f"   Quellen: Odds={len(odds)}, FD={len(fd_fix)}, "
         f"AF={len(af_fix)}, FJ={len(fj_fix)}, OL={len(ol_fix)}, "
-        f"BSD={len(bsd_fix)}, SM={len(sm_fix)} → Total={len(fixtures)}"
+        f"BSD={len(bsd_fix)}, SM={len(sm_fix)}, SDB={len(sdb_fix)} → Total={len(fixtures)}"
     )
 
     return odds, fixtures
@@ -3812,6 +4274,9 @@ def check_config():
     log(f"   • Sportmonks: ✅ (Dänemark + Schottland, Free Forever)")
     log(f"   • Wetter: {'✅ OpenWeatherMap aktiv!' if WEATHER_API_KEY else '❌ OPENWEATHER_API_KEY fehlt'}")
     log(f"   • FootyStats: {'✅ BTTS Stats aktiv!' if FOOTYSTATS_API_KEY else '❌ FOOTYSTATS_API_KEY fehlt (optional)'}")
+    log(f"   • SportDB.dev: {'✅ Lineups + Flashscore!' if SPORTDB_API_KEY else '❌ SPORTDB_API_KEY fehlt (optional)'}")
+    log(f"   • Forebet: ✅ Scraping aktiv (kein Key)")
+    log(f"   • ScoutingStats: ✅ Scraping aktiv (kein Key)")
     log(f"")
     log(f"🔄 League Rotation:")
     log(f"   • Status: {'✅ AKTIV' if LEAGUE_ROTATION_ENABLED else '❌ AUS'}")
@@ -3866,16 +4331,9 @@ def main():
     # 🔧 FIX: UTC-basiertes Datum (nicht lokale Zeitzone!)
     now_utc = datetime.now(timezone.utc)
     
-    # Smart Target Date:
-    # - Vor 14:00 UTC → heute
-    # - Nach 14:00 UTC → morgen
-    # (Meiste Spiele sind abends, 14:00 UTC = 16:00 Schweiz)
-    if now_utc.hour < 14:
-        target_date = now_utc.date()
-        log(f"⏰ {now_utc.strftime('%H:%M')} UTC - Suche Spiele für HEUTE")
-    else:
-        target_date = (now_utc + timedelta(days=1)).date()
-        log(f"⏰ {now_utc.strftime('%H:%M')} UTC - Suche Spiele für MORGEN")
+    # UTC-basiertes Datum - immer HEUTE
+    target_date = now_utc.date()
+    log(f"⏰ {now_utc.strftime('%H:%M')} UTC - Suche Spiele für HEUTE")
 
     log(f"🗓️  Datum (Target): {target_date}")
     log(f"Märkte: {[MARKET_INFO[m]['name'] for m in MARKETS_TO_RUN]}")
