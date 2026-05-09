@@ -1,14 +1,11 @@
 name: Asia BTTS Tipps 🌏
-
 on:
   schedule:
     - cron: '0 2 * * *'   # 02:00 UTC = 04:00 CH Sommer
   workflow_dispatch:
-
 concurrency:
   group: ${{ github.workflow }}
   cancel-in-progress: false
-
 jobs:
   run-bot-asia:
     runs-on: ubuntu-latest
@@ -40,22 +37,22 @@ jobs:
           SUPABASE_URL: ${{ secrets.SUPABASE_URL }}
           SUPABASE_KEY: ${{ secrets.SUPABASE_KEY }}
           SPORTDB_API_KEY: ${{ secrets.SPORTDB_API_KEY }}
-          # 🔧 API-Football Erweiterungen
+          OPENWEATHER_API_KEY: ${{ secrets.OPENWEATHER_API_KEY }}
+          FOOTYSTATS_API_KEY: ${{ secrets.FOOTYSTATS_API_KEY }}
           APIFOOTBALL_INJURIES: "true"
           APIFOOTBALL_TEAM_STATS: "true"
           APIFOOTBALL_H2H: "true"
           APIFOOTBALL_PREDICTIONS: "true"
           APIFOOTBALL_MAX_CALLS: "150"
           AI_SLEEP_SECONDS: "1.5"
-          OPENWEATHER_API_KEY: ${{ secrets.OPENWEATHER_API_KEY }}
-          FOOTYSTATS_API_KEY: ${{ secrets.FOOTYSTATS_API_KEY }}
           MIN_PROBABILITY: "67"
           MIN_CONFIDENCE: "3"
           MIN_VALUE_RATING: "OK"
           LEAGUE_ROTATION_ENABLED: "true"
-          # 🌏 Asien + Ozeanien + Naher Osten
-          ACTIVE_LEAGUES: "J1 League Japan,K League 1,China Super League,A-League,Saudi Pro League,Iceland Premier League,Iceland 1. Deild,India Super League,Qatar Stars League,Vietnam V-League"
+          LEAGUE_ROTATION_MIN_SAMPLES: "5"
+          LEAGUE_ROTATION_MIN_QUOTE: "0.50"
+          LEAGUE_ROTATION_MAX_QUOTE: "0.70"
         run: python btts_asia.py
       - name: Log Summary
         if: always()
-        run: echo "✅ Asia Bot Complete - 02:00 UTC = 04:00 CH"
+        run: echo "✅ Asia Bot Complete - 02:00 UTC"
