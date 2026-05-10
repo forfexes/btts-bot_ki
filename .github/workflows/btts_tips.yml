@@ -4,8 +4,8 @@ on:
     - cron: '0 2 * * *'    # 02:00 UTC - Asien/Australien
     - cron: '0 8 * * *'    # 08:00 UTC - Europa Morgen
     - cron: '0 13 * * *'   # 13:00 UTC - Mittag/Naher Osten
-    - cron: '0 17 * * *'   # 17:00 UTC - Europa Abend
-    - cron: '0 22 * * *'   # 22:00 UTC - Americas/Nacht
+    - cron: '0 16 * * *'   # 17:00 UTC - Europa Abend
+    - cron: '0 18 * * *'   # 22:00 UTC - Americas/Nacht
   workflow_dispatch:
 concurrency:
   group: btts-tips
@@ -35,6 +35,7 @@ jobs:
           ALLSPORTS_API_KEY: ${{ secrets.ALLSPORTS_API_KEY }}
           OPENWEATHER_API_KEY: ${{ secrets.OPENWEATHER_API_KEY }}
           FOOTYSTATS_API_KEY: ${{ secrets.FOOTYSTATS_API_KEY }}
+          API_NINJAS_KEY: ${{ secrets.API_NINJAS_KEY }}
           TELEGRAM_TOKEN: ${{ secrets.TELEGRAM_TOKEN }}
           TELEGRAM_CHAT_ID: ${{ secrets.TELEGRAM_CHAT_ID }}
           TELEGRAM_GROUP_BTTS: ${{ secrets.TELEGRAM_GROUP_BTTS }}
