@@ -1483,21 +1483,33 @@ def fetch_sofascore_fixtures(league_name, target_date):
         
         url = f"https://api.sofascore.com/api/v1/sport/football/scheduled-events/{date_str}"
         
+        # Rotate User-Agents um 403 zu vermeiden
+        import random as _random
+        _ua_list = [
+            "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/121.0.0.0 Safari/537.36",
+            "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
+            "Mozilla/5.0 (Windows NT 10.0; Win64; x64; rv:122.0) Gecko/20100101 Firefox/122.0",
+            "Mozilla/5.0 (iPhone; CPU iPhone OS 17_0 like Mac OS X) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/17.0 Mobile/15E148 Safari/604.1",
+            "Mozilla/5.0 (Linux; Android 13; SM-G991B) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Mobile Safari/537.36",
+        ]
         r = requests.get(
             url,
             headers={
-                "User-Agent": "Mozilla/5.0 (iPhone; CPU iPhone OS 16_0 like Mac OS X) AppleWebKit/605.1.15",
-                "Accept": "application/json",
-                "Accept-Language": "en-US,en;q=0.9",
+                "User-Agent": _random.choice(_ua_list),
+                "Accept": "application/json, text/plain, */*",
+                "Accept-Language": "en-US,en;q=0.9,de;q=0.8",
+                "Accept-Encoding": "gzip, deflate, br",
                 "Referer": "https://www.sofascore.com/",
                 "Origin": "https://www.sofascore.com",
+                "Cache-Control": "no-cache",
+                "Connection": "keep-alive",
             },
             timeout=15,
         )
         
         if r.status_code in [403, 429, 503]:
-            log(f"   ℹ️  SofaScore nicht erreichbar ({r.status_code})", "INFO")
-            SOFASCORE_BLOCKED = True
+            log(f"   ℹ️  SofaScore nicht erreichbar ({r.status_code}) - versuche Fallback", "INFO")
+            # Nicht dauerhaft blockieren - beim nächsten Aufruf nochmal versuchen
             return []
         
         if not r.ok:
@@ -1596,18 +1608,26 @@ def fetch_sofascore_all_today(target_date):
         date_str = str(target_date)
         url = f"https://api.sofascore.com/api/v1/sport/football/scheduled-events/{date_str}"
         
+        import random as _random2
+        _ua_list2 = [
+            "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/121.0.0.0 Safari/537.36",
+            "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 Chrome/120.0.0.0 Safari/537.36",
+            "Mozilla/5.0 (Windows NT 10.0; Win64; x64; rv:122.0) Gecko/20100101 Firefox/122.0",
+        ]
         r = requests.get(
             url,
             headers={
-                "User-Agent": "Mozilla/5.0 (iPhone; CPU iPhone OS 16_0 like Mac OS X) AppleWebKit/605.1.15",
-                "Accept": "application/json",
+                "User-Agent": _random2.choice(_ua_list2),
+                "Accept": "application/json, text/plain, */*",
+                "Accept-Language": "en-US,en;q=0.9",
                 "Referer": "https://www.sofascore.com/",
+                "Origin": "https://www.sofascore.com",
             },
             timeout=20,
         )
         
         if r.status_code in [403, 429, 503]:
-            SOFASCORE_BLOCKED = True
+            log(f"   ℹ️  SofaScore All blockiert ({r.status_code})", "INFO")
             return {}
         
         if not r.ok:
@@ -2333,6 +2353,209 @@ def get_espn_result(match_id, league_name):
 
     except Exception:
         return None
+
+
+
+# ============================================================
+# 🆕 FLASHSCORE - Inoffizielle API für Ergebnisse
+# ============================================================
+FLASHSCORE_CACHE = {}
+
+def fetch_flashscore_fixtures(league_name, target_date):
+    """
+    Holt Spielpläne von Flashscore (inoffiziell).
+    Gute Alternative wenn SofaScore blockiert.
+    """
+    cache_key = f"flash_{league_name}_{target_date}"
+    if cache_key in FLASHSCORE_CACHE:
+        return FLASHSCORE_CACHE[cache_key]
+
+    # Flashscore Sport-IDs
+    FLASHSCORE_IDS = {
+        "Bundesliga": "football/germany/bundesliga",
+        "Premier League": "football/england/premier-league",
+        "La Liga": "football/spain/laliga",
+        "Serie A": "football/italy/serie-a",
+        "Ligue 1": "football/france/ligue-1",
+        "Champions League": "football/europe/champions-league",
+        "Europa League": "football/europe/europa-league",
+        "Eredivisie": "football/netherlands/eredivisie",
+        "Primeira Liga": "football/portugal/liga-portugal",
+        "Süper Lig": "football/turkey/super-lig",
+        "J1 League Japan": "football/japan/j1-league",
+        "K League 1": "football/south-korea/k-league-1",
+        "MLS": "football/usa/mls",
+        "Brasileirao Serie A": "football/brazil/serie-a",
+    }
+
+    sport_path = FLASHSCORE_IDS.get(league_name)
+    if not sport_path:
+        return []
+
+    try:
+        # Flashscore Widget API
+        date_str = str(target_date).replace("-", "")
+        url = f"https://d.flashscore.com/x/feed/f_1_{date_str}_1_de_1"
+        
+        r = requests.get(
+            url,
+            headers={
+                "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36",
+                "X-GeoIP": "1",
+                "Referer": "https://www.flashscore.com/",
+            },
+            timeout=12,
+        )
+
+        if not r.ok:
+            return []
+
+        # Parse Flashscore format (pipe-separated)
+        text = r.text
+        fixtures = []
+        now_utc = datetime.now(timezone.utc)
+
+        # Flashscore gibt alle Spiele zurück - wir filtern nach Liga
+        lines = text.split("¬")
+        current_league = ""
+        
+        for line in lines:
+            if "~ZA÷" in line:  # Liga-Name
+                current_league = line.split("ZA÷")[-1].split("¬")[0] if "ZA÷" in line else ""
+            
+            if "~AA÷" in line and league_name.lower()[:6] in current_league.lower():
+                # Spiel-Zeile parsen
+                parts = {p.split("÷")[0]: p.split("÷")[1] for p in line.split("¬") if "÷" in p}
+                
+                home = parts.get("AE", "")
+                away = parts.get("AF", "")
+                timestamp = parts.get("AD", "0")
+                
+                if not home or not away:
+                    continue
+                
+                try:
+                    kickoff = datetime.fromtimestamp(int(timestamp), tz=timezone.utc)
+                    if kickoff <= now_utc:
+                        continue
+                    
+                    fixtures.append({
+                        "home": home,
+                        "away": away,
+                        "match_id": parts.get("AA", ""),
+                        "time_utc": kickoff.strftime("%Y-%m-%dT%H:%M:%SZ"),
+                        "time_local": get_local_time(kickoff.strftime("%Y-%m-%dT%H:%M:%SZ")),
+                        "source": "flashscore",
+                    })
+                except Exception:
+                    continue
+
+        FLASHSCORE_CACHE[cache_key] = fixtures
+        return fixtures
+
+    except Exception as e:
+        log(f"Flashscore Error: {str(e)[:60]}", "WARN")
+        return []
+
+
+
+# ============================================================
+# 🆕 LIVESCORE API - Echtzeit Fixtures (60 Calls/Stunde gratis)
+# ============================================================
+LIVESCORE_API_KEY = env("LIVESCORE_API_KEY", "")
+LIVESCORE_SECRET = env("LIVESCORE_SECRET", "")
+LIVESCORE_CACHE = {}
+
+LIVESCORE_COMPETITION_IDS = {
+    "Premier League": 2,
+    "Bundesliga": 25,
+    "La Liga": 4,
+    "Serie A": 13,
+    "Ligue 1": 16,
+    "Champions League": 1,
+    "Europa League": 8,
+    "Eredivisie": 21,
+    "Primeira Liga": 27,
+    "MLS": 45,
+    "J1 League Japan": 65,
+    "K League 1": 74,
+    "Brasileirao Serie A": 38,
+    "Liga Argentinien": 39,
+    "A-League Australia": 67,
+    "Saudi Pro League": 78,
+    "EFL League 1": 6,
+    "EFL League 2": 7,
+    "Championship": 5,
+    "Scottish Premiership": 29,
+}
+
+def fetch_livescore_fixtures(league_name, target_date):
+    """
+    Holt Fixtures von Livescore API (livescore-api.com).
+    Gratis: 60 Calls/Stunde.
+    """
+    if not LIVESCORE_API_KEY:
+        return []
+
+    comp_id = LIVESCORE_COMPETITION_IDS.get(league_name)
+    if not comp_id:
+        return []
+
+    cache_key = f"livescore_{league_name}_{target_date}"
+    if cache_key in LIVESCORE_CACHE:
+        return LIVESCORE_CACHE[cache_key]
+
+    try:
+        r = requests.get(
+            "https://livescore-api.com/api-client/fixtures/matches.json",
+            params={
+                "key": LIVESCORE_API_KEY,
+                "secret": LIVESCORE_SECRET,
+                "competition_id": comp_id,
+                "date": str(target_date),
+            },
+            timeout=12,
+        )
+
+        if not r.ok:
+            return []
+
+        data = r.json()
+        matches = data.get("data", {}).get("match", [])
+
+        if not matches:
+            return []
+
+        now_utc = datetime.now(timezone.utc)
+        fixtures = []
+
+        for m in matches:
+            try:
+                date_str = m.get("date", "")
+                time_str = m.get("time", "00:00")
+                kickoff_str = f"{date_str}T{time_str}:00Z"
+                kickoff = datetime.fromisoformat(kickoff_str.replace("Z", "+00:00"))
+
+                if kickoff <= now_utc:
+                    continue
+
+                fixtures.append({
+                    "home": m.get("home_name", ""),
+                    "away": m.get("away_name", ""),
+                    "match_id": str(m.get("id", "")),
+                    "time_utc": kickoff_str,
+                    "time_local": get_local_time(kickoff_str),
+                    "source": "livescore",
+                })
+            except Exception:
+                continue
+
+        LIVESCORE_CACHE[cache_key] = fixtures
+        return fixtures
+
+    except Exception as e:
+        log(f"Livescore Error: {str(e)[:60]}", "WARN")
+        return []
 
 
 def fetch_odds_api(league_name, target_date):
@@ -4269,16 +4492,19 @@ def fetch_league_data_once(league, target_date):
     sm_fix = fetch_sportmonks_fixtures(league, target_date)
     sdb_fix = get_sportdb_fixtures(league, target_date)
     sofa_fix = fetch_sofascore_fixtures(league, target_date)   # Alle Ligen!
-    espn_fix = fetch_espn_fixtures(league, target_date)        # 🆕 ESPN
-    asp_fix = fetch_allsports_fixtures(league, target_date)    # 🆕 AllSports
+    espn_fix = fetch_espn_fixtures(league, target_date)        # ESPN
+    asp_fix = fetch_allsports_fixtures(league, target_date)    # AllSports
+    flash_fix = fetch_flashscore_fixtures(league, target_date) # Flashscore
+    ls_fix = fetch_livescore_fixtures(league, target_date)      # 🆕 Livescore
 
-    fixtures = merge_fixtures(fd_fix, af_fix, fj_fix, ol_fix, bsd_fix, sm_fix, sdb_fix, sofa_fix, espn_fix, asp_fix)
+    fixtures = merge_fixtures(fd_fix, af_fix, fj_fix, ol_fix, bsd_fix, sm_fix, sdb_fix, sofa_fix, espn_fix, asp_fix, flash_fix, ls_fix)
 
     log(
         f"   Quellen: Odds={len(odds)}, FD={len(fd_fix)}, "
         f"AF={len(af_fix)}, FJ={len(fj_fix)}, OL={len(ol_fix)}, "
         f"BSD={len(bsd_fix)}, SM={len(sm_fix)}, SDB={len(sdb_fix)}, "
-        f"Sofa={len(sofa_fix)}, ESPN={len(espn_fix)}, ASP={len(asp_fix)} → Total={len(fixtures)}"
+        f"Sofa={len(sofa_fix)}, ESPN={len(espn_fix)}, ASP={len(asp_fix)}, "
+        f"Flash={len(flash_fix)}, LS={len(ls_fix)} → Total={len(fixtures)}"
     )
 
     return odds, fixtures
@@ -4469,10 +4695,15 @@ def fetch_bsd_fixtures(league_name, target_date):
     """
     league_id = BSD_LEAGUE_IDS.get(league_name)
     if not league_id:
-        return []  # BSD deckt diese Liga nicht ab
-    
+        return []
+
     try:
-        # BSD API für matches
+        # Versuche mehrere BSD Endpoints
+        urls_to_try = [
+            f"https://api.b365api.com/v3/events/upcoming?sport_id=1&league_id={league_id}&token=YOUR_TOKEN",
+            f"https://betsapi.com/api/v2/events/upcoming?sport_id=1&league_id={league_id}",
+        ]
+        
         r = requests.get(
             f"{BSD_API_URL}/matches",
             params={
@@ -4480,6 +4711,7 @@ def fetch_bsd_fixtures(league_name, target_date):
                 "date": target_date.isoformat(),
                 "status": "upcoming",
             },
+            headers={"User-Agent": "Mozilla/5.0"},
             timeout=12,
         )
         
@@ -5854,6 +6086,8 @@ def check_config():
     log(f"   • Wetter: {'✅ OpenWeatherMap aktiv!' if WEATHER_API_KEY else '❌ OPENWEATHER_API_KEY fehlt'}")
     log(f"   • FootyStats: {'✅ BTTS Stats aktiv!' if FOOTYSTATS_API_KEY else '❌ FOOTYSTATS_API_KEY fehlt (optional)'}")
     log(f"   • SportDB.dev: {'✅ Lineups + Flashscore!' if SPORTDB_API_KEY else '❌ SPORTDB_API_KEY fehlt (optional)'}")
+    log(f"   • Livescore API: {'✅ aktiv!' if LIVESCORE_API_KEY else '❌ LIVESCORE_API_KEY fehlt (optional)'}")
+    log(f"   • AllSports API: {'✅ aktiv!' if ALLSPORTS_API_KEY else '❌ ALLSPORTS_API_KEY fehlt (optional)'}")
     log(f"   • Forebet: ✅ Scraping aktiv (kein Key)")
     log(f"   • ScoutingStats: ✅ Scraping aktiv (kein Key)")
     log(f"")
