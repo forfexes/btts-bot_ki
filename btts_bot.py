@@ -111,8 +111,8 @@ AUTO_LEAGUE_MIN_ROI = float(env("AUTO_LEAGUE_MIN_ROI", "-2.0"))
 AUTO_LEAGUE_LOOKBACK_DAYS = int(env("AUTO_LEAGUE_LOOKBACK_DAYS", "120"))
 
 MAX_LEAGUES_PER_RUN = int(env("MAX_LEAGUES_PER_RUN", "0"))
-AI_SLEEP_SECONDS = float(env("AI_SLEEP_SECONDS", "1.5"))
-GROQ_SLEEP_SECONDS = float(env("GROQ_SLEEP_SECONDS", "2.5"))
+AI_SLEEP_SECONDS = float(env("AI_SLEEP_SECONDS", "2.5"))
+GROQ_SLEEP_SECONDS = float(env("GROQ_SLEEP_SECONDS", "4.0"))
 USE_GROQ_FALLBACK = env("USE_GROQ_FALLBACK", "true").lower() in ["1", "true", "yes", "on"]
 
 ALWAYS_ON_LEAGUES = [
@@ -2575,6 +2575,274 @@ def fetch_livescore_fixtures(league_name, target_date):
         return []
 
 
+
+# ============================================================
+# 🆕 API-NINJAS Football - Fixtures (10.000 Calls/Monat gratis)
+# ============================================================
+API_NINJAS_KEY = env("API_NINJAS_KEY", "")
+API_NINJAS_CACHE = {}
+
+API_NINJAS_LEAGUES = {
+    "Champions League": "UEFA Champions League",
+    "Europa League": "UEFA Europa League",
+    "Bundesliga": "Bundesliga",
+    "2. Bundesliga": "2. Bundesliga",
+    "Premier League": "Premier League",
+    "Championship": "Championship",
+    "EFL League 1": "League One",
+    "EFL League 2": "League Two",
+    "La Liga": "La Liga",
+    "La Liga 2": "La Liga 2",
+    "Serie A": "Serie A",
+    "Serie B": "Serie B",
+    "Ligue 1": "Ligue 1",
+    "Ligue 2": "Ligue 2",
+    "Eredivisie": "Eredivisie",
+    "Primeira Liga": "Primeira Liga",
+    "Pro League Belgien": "First Division A",
+    "Süper Lig": "Süper Lig",
+    "Scottish Premiership": "Scottish Premiership",
+    "MLS": "MLS",
+    "Brasileirao Serie A": "Série A",
+    "Liga Argentinien": "Primera División",
+    "J1 League Japan": "J1 League",
+    "K League 1": "K League 1",
+    "Saudi Pro League": "Saudi Pro League",
+    "A-League Australia": "A-League",
+    "Danish Superliga": "Superliga",
+    "Norway Eliteserien": "Eliteserien",
+    "Sweden Allsvenskan": "Allsvenskan",
+    "Finland Veikkausliiga": "Veikkausliiga",
+    "Greece Super League": "Super League",
+    "Poland Ekstraklasa": "Ekstraklasa",
+    "Czech First League": "Czech First League",
+    "Romania Liga I": "Liga I",
+    "Croatia HNL": "HNL",
+    "Serbia SuperLiga": "SuperLiga",
+    "Ukraine Premier": "Premier League",
+    "EFL League 1": "League One",
+    "EFL League 2": "League Two",
+}
+
+def fetch_api_ninjas_fixtures(league_name, target_date):
+    """
+    Holt Fixtures von API-Ninjas Football API.
+    10.000 Calls/Monat gratis - GitHub freundlich!
+    """
+    if not API_NINJAS_KEY:
+        return []
+
+    league_str = API_NINJAS_LEAGUES.get(league_name)
+    if not league_str:
+        return []
+
+    cache_key = f"ninjas_{league_name}_{target_date}"
+    if cache_key in API_NINJAS_CACHE:
+        return API_NINJAS_CACHE[cache_key]
+
+    try:
+        r = requests.get(
+            "https://api.api-ninjas.com/v1/sports/events",
+            headers={
+                "X-Api-Key": API_NINJAS_KEY,
+                "Accept": "application/json",
+            },
+            params={
+                "league": league_str,
+                "date": str(target_date),
+            },
+            timeout=12,
+        )
+
+        if not r.ok:
+            log(f"API-Ninjas Error: {r.status_code}", "WARN")
+            return []
+
+        data = r.json()
+        if not data:
+            return []
+
+        now_utc = datetime.now(timezone.utc)
+        fixtures = []
+
+        for event in data:
+            try:
+                home = event.get("home_team", "")
+                away = event.get("away_team", "")
+
+                if not home or not away:
+                    continue
+
+                # Zeit parsen
+                time_str = event.get("time", "")
+                date_str = str(target_date)
+
+                kickoff_str = f"{date_str}T{time_str}:00Z" if time_str else f"{date_str}T12:00:00Z"
+
+                try:
+                    kickoff = datetime.fromisoformat(kickoff_str.replace("Z", "+00:00"))
+                    if kickoff <= now_utc:
+                        continue
+                except:
+                    pass
+
+                fixtures.append({
+                    "home": home,
+                    "away": away,
+                    "match_id": f"ninjas_{hash(home+away)}",
+                    "time_utc": kickoff_str,
+                    "time_local": get_local_time(kickoff_str),
+                    "source": "api-ninjas",
+                })
+
+            except Exception:
+                continue
+
+        API_NINJAS_CACHE[cache_key] = fixtures
+        if fixtures:
+            log(f"   🥷 API-Ninjas: {len(fixtures)} Spiele für {league_name}")
+        return fixtures
+
+    except Exception as e:
+        log(f"API-Ninjas Error: {str(e)[:60]}", "WARN")
+        return []
+
+
+
+# ============================================================
+# 🆕 THESPORTSDB - Fixtures (Free Key "123", alle Ligen!)
+# ============================================================
+THESPORTSDB_FIXTURES_CACHE = {}
+
+THESPORTSDB_LEAGUE_IDS = {
+    "Champions League": 4480,
+    "Europa League": 4735,
+    "Bundesliga": 4331,
+    "2. Bundesliga": 4332,
+    "Premier League": 4328,
+    "Championship": 4329,
+    "EFL League 1": 4330,
+    "La Liga": 4335,
+    "Serie A": 4332,
+    "Ligue 1": 4334,
+    "Eredivisie": 4337,
+    "Primeira Liga": 4344,
+    "Pro League Belgien": 4342,
+    "Süper Lig": 4340,
+    "Scottish Premiership": 4330,
+    "MLS": 4346,
+    "Brasileirao Serie A": 4351,
+    "Liga Argentinien": 4406,
+    "J1 League Japan": 4396,
+    "K League 1": 4397,
+    "Saudi Pro League": 4406,
+    "A-League Australia": 4356,
+    "Danish Superliga": 4341,
+    "Norway Eliteserien": 4345,
+    "Sweden Allsvenskan": 4349,
+    "Greece Super League": 4336,
+    "Poland Ekstraklasa": 4422,
+    "Czech First League": 4418,
+    "Champions League": 4480,
+    "UEFA Youth League": 4481,
+}
+
+def fetch_thesportsdb_fixtures(league_name, target_date):
+    """
+    Holt Fixtures von TheSportsDB (Free Key 123 - kein Account nötig!).
+    Funktioniert mit GitHub Actions IPs!
+    """
+    league_id = THESPORTSDB_LEAGUE_IDS.get(league_name)
+    if not league_id:
+        return []
+
+    cache_key = f"tsdb_{league_name}_{target_date}"
+    if cache_key in THESPORTSDB_FIXTURES_CACHE:
+        return THESPORTSDB_FIXTURES_CACHE[cache_key]
+
+    try:
+        # TheSportsDB Events by League and Round
+        # Oder Events by Date
+        r = requests.get(
+            f"https://www.thesportsdb.com/api/v1/json/123/eventsday.php",
+            params={
+                "d": str(target_date),
+                "s": "Soccer",
+            },
+            headers={"User-Agent": "Mozilla/5.0"},
+            timeout=12,
+        )
+
+        if not r.ok:
+            return []
+
+        data = r.json()
+        events = data.get("events") or []
+
+        if not events:
+            THESPORTSDB_FIXTURES_CACHE[cache_key] = []
+            return []
+
+        now_utc = datetime.now(timezone.utc)
+        fixtures = []
+
+        for event in events:
+            try:
+                # Liga filtern
+                event_league = event.get("strLeague", "")
+                event_league_id = event.get("idLeague", "")
+
+                if str(event_league_id) != str(league_id):
+                    # Fallback: Liga-Name prüfen
+                    league_lower = league_name.lower()
+                    if not any(w in event_league.lower() for w in league_lower.split() if len(w) > 4):
+                        continue
+
+                home = event.get("strHomeTeam", "")
+                away = event.get("strAwayTeam", "")
+
+                if not home or not away:
+                    continue
+
+                # Status prüfen
+                status = event.get("strStatus", "")
+                if status in ["Match Finished", "FT", "AET", "PEN"]:
+                    continue
+
+                # Zeit
+                date_str = event.get("dateEvent", str(target_date))
+                time_str = event.get("strTime", "12:00:00")
+                kickoff_str = f"{date_str}T{time_str}Z"
+
+                try:
+                    kickoff = datetime.fromisoformat(kickoff_str.replace("Z", "+00:00"))
+                    if kickoff <= now_utc:
+                        continue
+                except:
+                    kickoff_str = f"{date_str}T12:00:00Z"
+
+                fixtures.append({
+                    "home": home,
+                    "away": away,
+                    "match_id": event.get("idEvent", ""),
+                    "time_utc": kickoff_str,
+                    "time_local": get_local_time(kickoff_str),
+                    "source": "thesportsdb",
+                })
+
+            except Exception:
+                continue
+
+        THESPORTSDB_FIXTURES_CACHE[cache_key] = fixtures
+        if fixtures:
+            log(f"   🏆 TheSportsDB: {len(fixtures)} Spiele für {league_name}")
+        return fixtures
+
+    except Exception as e:
+        log(f"TheSportsDB Error: {str(e)[:60]}", "WARN")
+        return []
+
+
 def fetch_odds_api(league_name, target_date):
     sport_key = LEAGUE_KEYS.get(league_name)
 
@@ -3613,6 +3881,9 @@ def call_gemini(prompt, use_tools=True):
             last_error = str(e)[:120]
             continue
 
+    # Kurze Pause vor Fallback
+    import time as _t
+    _t.sleep(2)
     return None, f"Gemini erschöpft ({last_error})"
 
 
@@ -3681,10 +3952,12 @@ def call_groq(prompt):
             time.sleep(GROQ_SLEEP_SECONDS)
             continue
 
-    # 🆕 Wenn ALLE Groq Keys Rate-Limit haben → global deaktivieren
+    # Reset nach kurzer Pause statt global deaktivieren
     if rate_limit_hits >= len(GROQ_API_KEYS):
-        _GROQ_RATE_LIMITED = True
-        log("⚠️  Groq global deaktiviert (alle Keys rate-limited)", "WARN")
+        import time as _gt
+        log("⚠️  Groq rate-limited - warte 60 Sekunden...", "WARN")
+        _gt.sleep(60)
+        _GROQ_RATE_LIMITED = False  # Reset nach Pause
 
     return None, f"Groq erschöpft ({last_error})"
 
@@ -4508,20 +4781,22 @@ def fetch_league_data_once(league, target_date):
     bsd_fix = fetch_bsd_fixtures(league, target_date)
     sm_fix = fetch_sportmonks_fixtures(league, target_date)
     sdb_fix = get_sportdb_fixtures(league, target_date)
-    sofa_fix = fetch_sofascore_fixtures(league, target_date)   # Alle Ligen!
+    sofa_fix = []  # SofaScore blockiert GitHub IPs → deaktiviert
     espn_fix = fetch_espn_fixtures(league, target_date)        # ESPN
     asp_fix = fetch_allsports_fixtures(league, target_date)    # AllSports
-    flash_fix = fetch_flashscore_fixtures(league, target_date) # Flashscore
-    ls_fix = fetch_livescore_fixtures(league, target_date)      # 🆕 Livescore
+    flash_fix = fetch_flashscore_fixtures(league, target_date)
+    ls_fix = fetch_livescore_fixtures(league, target_date)
+    ninjas_fix = fetch_api_ninjas_fixtures(league, target_date)
+    tsdb_fix = fetch_thesportsdb_fixtures(league, target_date)   # 🆕 TheSportsDB
 
-    fixtures = merge_fixtures(fd_fix, af_fix, fj_fix, ol_fix, bsd_fix, sm_fix, sdb_fix, sofa_fix, espn_fix, asp_fix, flash_fix, ls_fix)
+    fixtures = merge_fixtures(fd_fix, af_fix, fj_fix, ol_fix, bsd_fix, sm_fix, sdb_fix, sofa_fix, espn_fix, asp_fix, flash_fix, ls_fix, ninjas_fix, tsdb_fix)
 
     log(
         f"   Quellen: Odds={len(odds)}, FD={len(fd_fix)}, "
         f"AF={len(af_fix)}, FJ={len(fj_fix)}, OL={len(ol_fix)}, "
         f"BSD={len(bsd_fix)}, SM={len(sm_fix)}, SDB={len(sdb_fix)}, "
-        f"Sofa={len(sofa_fix)}, ESPN={len(espn_fix)}, ASP={len(asp_fix)}, "
-        f"Flash={len(flash_fix)}, LS={len(ls_fix)} → Total={len(fixtures)}"
+        f"ESPN={len(espn_fix)}, ASP={len(asp_fix)}, "
+        f"Ninjas={len(ninjas_fix)}, TSDB={len(tsdb_fix)} → Total={len(fixtures)}"
     )
 
     return odds, fixtures
@@ -6719,6 +6994,7 @@ def check_config():
     log(f"   • FootyStats: {'✅ BTTS Stats aktiv!' if FOOTYSTATS_API_KEY else '❌ FOOTYSTATS_API_KEY fehlt (optional)'}")
     log(f"   • SportDB.dev: {'✅ Lineups + Flashscore!' if SPORTDB_API_KEY else '❌ SPORTDB_API_KEY fehlt (optional)'}")
     log(f"   • Livescore API: {'✅ aktiv!' if LIVESCORE_API_KEY else '❌ LIVESCORE_API_KEY fehlt (optional)'}")
+    log(f"   • API-Ninjas: {'✅ aktiv!' if API_NINJAS_KEY else '❌ API_NINJAS_KEY fehlt (optional)'}")
     log(f"   • AllSports API: {'✅ aktiv!' if ALLSPORTS_API_KEY else '❌ ALLSPORTS_API_KEY fehlt (optional)'}")
     log(f"   • Forebet: ✅ Scraping aktiv (kein Key)")
     log(f"   • ScoutingStats: ✅ Scraping aktiv (kein Key)")
