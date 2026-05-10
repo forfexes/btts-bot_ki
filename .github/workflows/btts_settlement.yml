@@ -1,0 +1,37 @@
+name: BTTS Settlement ✅
+on:
+  schedule:
+    - cron: '0 0 * * *'    # 00:00 UTC - Mitternacht
+    - cron: '0 6 * * *'    # 06:00 UTC - Morgens
+    - cron: '0 12 * * *'   # 12:00 UTC - Mittags
+    - cron: '0 20 * * *'   # 20:00 UTC - Abends
+  workflow_dispatch:
+concurrency:
+  group: btts-settlement
+  cancel-in-progress: false
+jobs:
+  run-settlement:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v4
+      - name: Setup Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+      - name: Install dependencies
+        run: pip install requests python-dotenv
+      - name: Run Settlement ✅
+        env:
+          RUN_MODE: "settlement"
+          API_FOOTBALL_KEYS: ${{ secrets.API_FOOTBALL_KEYS }}
+          ALLSPORTS_API_KEY: ${{ secrets.ALLSPORTS_API_KEY }}
+          TELEGRAM_TOKEN: ${{ secrets.TELEGRAM_TOKEN }}
+          TELEGRAM_CHAT_ID: ${{ secrets.TELEGRAM_CHAT_ID }}
+          TELEGRAM_GROUP_STATS: ${{ secrets.TELEGRAM_GROUP_STATS }}
+          SUPABASE_URL: ${{ secrets.SUPABASE_URL }}
+          SUPABASE_KEY: ${{ secrets.SUPABASE_KEY }}
+        run: python btts_bot.py
+      - name: Done
+        if: always()
+        run: echo "✅ Settlement Complete"
