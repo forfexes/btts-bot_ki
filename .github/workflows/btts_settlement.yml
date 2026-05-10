@@ -25,6 +25,7 @@ jobs:
         env:
           RUN_MODE: "settlement"
           API_FOOTBALL_KEYS: ${{ secrets.API_FOOTBALL_KEYS }}
+          API_NINJAS_KEY: ${{ secrets.API_NINJAS_KEY }}
           ALLSPORTS_API_KEY: ${{ secrets.ALLSPORTS_API_KEY }}
           TELEGRAM_TOKEN: ${{ secrets.TELEGRAM_TOKEN }}
           TELEGRAM_CHAT_ID: ${{ secrets.TELEGRAM_CHAT_ID }}
