@@ -1,10 +1,9 @@
 name: BTTS Settlement ✅
 on:
   schedule:
-    - cron: '0 0 * * *'    # 00:00 UTC - Mitternacht
-    - cron: '0 6 * * *'    # 06:00 UTC - Morgens
-    - cron: '0 12 * * *'   # 12:00 UTC - Mittags
-    - cron: '0 20 * * *'   # 20:00 UTC - Abends
+    - cron: '0 15 * * *'    # 15:00 UTC - Nach Asien
+    - cron: '45 23 * * *'   # 23:45 UTC - Nach Europa
+    - cron: '30 5 * * *'    # 05:30 UTC - Nach Amerika
   workflow_dispatch:
 concurrency:
   group: btts-settlement
@@ -12,7 +11,7 @@ concurrency:
 jobs:
   run-settlement:
     runs-on: ubuntu-latest
-    timeout-minutes: 30
+    timeout-minutes: 10
     steps:
       - uses: actions/checkout@v4
       - name: Setup Python
@@ -25,8 +24,8 @@ jobs:
         env:
           RUN_MODE: "settlement"
           API_FOOTBALL_KEYS: ${{ secrets.API_FOOTBALL_KEYS }}
-          API_NINJAS_KEY: ${{ secrets.API_NINJAS_KEY }}
           ALLSPORTS_API_KEY: ${{ secrets.ALLSPORTS_API_KEY }}
+          API_NINJAS_KEY: ${{ secrets.API_NINJAS_KEY }}
           TELEGRAM_TOKEN: ${{ secrets.TELEGRAM_TOKEN }}
           TELEGRAM_CHAT_ID: ${{ secrets.TELEGRAM_CHAT_ID }}
           TELEGRAM_GROUP_STATS: ${{ secrets.TELEGRAM_GROUP_STATS }}
