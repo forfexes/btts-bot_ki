@@ -1,13 +1,10 @@
-name: BTTS Settlement ✅
+name: BTTS Settlement
 on:
   schedule:
     - cron: '0 15 * * *'
     - cron: '45 23 * * *'
     - cron: '30 5 * * *'
   workflow_dispatch:
-concurrency:
-  group: btts-settlement
-  cancel-in-progress: false
 jobs:
   run-settlement:
     runs-on: ubuntu-latest
@@ -21,18 +18,18 @@ jobs:
       - name: Run Settlement
         env:
           RUN_MODE: "settlement"
+          GEMINI_API_KEYS: ${{ secrets.GEMINI_API_KEYS }}
+          GROQ_API_KEYS: ${{ secrets.GROQ_API_KEYS }}
+          ODDS_API_KEYS: ${{ secrets.ODDS_API_KEYS }}
+          FOOTBALL_DATA_API_KEYS: ${{ secrets.FOOTBALL_DATA_API_KEYS }}
           API_FOOTBALL_KEYS: ${{ secrets.API_FOOTBALL_KEYS }}
           ALLSPORTS_API_KEY: ${{ secrets.ALLSPORTS_API_KEY }}
+          OPENWEATHER_API_KEY: ${{ secrets.OPENWEATHER_API_KEY }}
           TELEGRAM_TOKEN: ${{ secrets.TELEGRAM_TOKEN }}
           TELEGRAM_CHAT_ID: ${{ secrets.TELEGRAM_CHAT_ID }}
           TELEGRAM_GROUP_STATS: ${{ secrets.TELEGRAM_GROUP_STATS }}
           SUPABASE_URL: ${{ secrets.SUPABASE_URL }}
           SUPABASE_KEY: ${{ secrets.SUPABASE_KEY }}
-          FOOTBALL_DATA_API_KEYS: ${{ secrets.FOOTBALL_DATA_API_KEYS }}
-          ODDS_API_KEYS: ${{ secrets.ODDS_API_KEYS }}
-          OPENWEATHER_API_KEY: ${{ secrets.OPENWEATHER_API_KEY }}
-          GEMINI_API_KEYS: ${{ secrets.GEMINI_API_KEYS }}
-           GROQ_API_KEYS: ${{ secrets.GROQ_API_KEYS }}
         run: python btts_bot.py
       - if: always()
-        run: echo "✅ Done"
+        run: echo "Done"
