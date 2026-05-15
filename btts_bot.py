@@ -8341,13 +8341,14 @@ def run_corners_and_scorer_bots(target_date, active_leagues, odds_data_cache, fi
     corners_tips = []
     scorer_tips = []
 
+    seen_corner_matches = set()  # Duplikat-Check
+
     for league in active_leagues:
         fixtures = fixtures_cache.get(league, [])
         if not fixtures:
             continue
 
         league_id = API_FOOTBALL_LEAGUES.get(league)
-
         now_utc = datetime.now(timezone.utc)
         season = now_utc.year if now_utc.month > 6 else now_utc.year - 1
 
@@ -8355,7 +8356,14 @@ def run_corners_and_scorer_bots(target_date, active_leagues, odds_data_cache, fi
         if group_hz:
             for fixture in fixtures:
                 try:
-                    # Verwende Poisson ohne API-Football IDs
+                    # Duplikat Check
+                    home_norm = normalize_team_name(fixture.get("home", ""))
+                    away_norm = normalize_team_name(fixture.get("away", ""))
+                    match_key = f"{home_norm[:8]}_{away_norm[:8]}"
+                    if match_key in seen_corner_matches:
+                        continue
+                    seen_corner_matches.add(match_key)
+
                     tip = analyze_corners_tip_simple(fixture, league)
                     if tip:
                         corners_tips.append(tip)
@@ -8364,16 +8372,32 @@ def run_corners_and_scorer_bots(target_date, active_leagues, odds_data_cache, fi
                 except Exception as e:
                     log(f"   Corners Error: {e}", "WARN")
 
-        # Scorer-Tipps
-        if group_late and league_id:
+        # Scorer-Tipps - nutze Understat + geschätzte Werte
+        if group_late:
             try:
-                scorers = get_top_scorers(league_id, season)
+                scorers = []
+
+                # Versuche API-Football zuerst
+                if league_id and not APIFOOTBALL_QUOTA_EXHAUSTED:
+                    scorers = get_top_scorers(league_id, season)
+
+                # Fallback: Understat Top Scorer
+                if not scorers:
+                    scorers = get_understat_top_scorers(league, season)
+
                 if scorers:
                     for fixture in fixtures:
+                        # Duplikat Check für Scorer
+                        home_norm = normalize_team_name(fixture.get("home", ""))
+                        away_norm = normalize_team_name(fixture.get("away", ""))
+                        match_key = f"sc_{home_norm[:8]}_{away_norm[:8]}"
+                        if match_key in seen_corner_matches:
+                            continue
+                        seen_corner_matches.add(match_key)
+
                         tips = analyze_scorer_tips(fixture, league, scorers)
                         for tip in tips:
-                            msg = format_scorer_message(tip)
-                            send_telegram(msg, group_late)
+                            scorer_tips.append(tip)
                             scorer_count += 1
                             log(f"   ⚽ Scorer: {tip['player']} ({tip['probability']}%)")
             except Exception as e:
