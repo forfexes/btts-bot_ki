@@ -2757,11 +2757,94 @@ THESPORTSDB_LEAGUE_IDS = {
 
 def fetch_thesportsdb_fixtures(league_name, target_date):
     """
-    Holt Fixtures von TheSportsDB (Free Key 123 - kein Account nötig!).
-    Funktioniert mit GitHub Actions IPs!
+    TheSportsDB mit strengem Datum-Filter.
+    Nur Spiele die EXAKT am target_date sind UND in der Zukunft!
     """
     league_id = THESPORTSDB_LEAGUE_IDS.get(league_name)
     if not league_id:
+        return []
+
+    cache_key = f"tsdb_{league_name}_{target_date}"
+    if cache_key in THESPORTSDB_FIXTURES_CACHE:
+        return THESPORTSDB_FIXTURES_CACHE[cache_key]
+
+    try:
+        r = requests.get(
+            f"https://www.thesportsdb.com/api/v1/json/123/eventsday.php",
+            params={"d": str(target_date), "s": "Soccer"},
+            headers={"User-Agent": "Mozilla/5.0"},
+            timeout=12,
+        )
+
+        if not r.ok:
+            return []
+
+        data = r.json()
+        events = data.get("events") or []
+
+        if not events:
+            return []
+
+        now_utc = datetime.now(timezone.utc)
+        target_str = str(target_date)
+        fixtures = []
+
+        for event in events:
+            try:
+                # Strenger Datum Check!
+                event_date = event.get("dateEvent", "")
+                if event_date != target_str:
+                    continue
+
+                # Liga ID Check!
+                event_league_id = str(event.get("idLeague", ""))
+                if event_league_id != str(league_id):
+                    continue
+
+                # Status Check - nur zukünftige!
+                status = event.get("strStatus", "")
+                if status in ["Match Finished", "FT", "AET", "PEN", "After Extra Time"]:
+                    continue
+
+                home = event.get("strHomeTeam", "")
+                away = event.get("strAwayTeam", "")
+
+                if not home or not away:
+                    continue
+
+                # Sanity Check - keine bekannten falschen Matches
+                if home == away:
+                    continue
+
+                # Zeit Check
+                time_str = event.get("strTime", "12:00:00")
+                kickoff_str = f"{target_str}T{time_str}Z"
+                try:
+                    kickoff = datetime.fromisoformat(kickoff_str.replace("Z", "+00:00"))
+                    if kickoff <= now_utc:
+                        continue
+                except Exception:
+                    kickoff_str = f"{target_str}T12:00:00Z"
+
+                fixtures.append({
+                    "home": home,
+                    "away": away,
+                    "match_id": event.get("idEvent", ""),
+                    "time_utc": kickoff_str,
+                    "time_local": get_local_time(kickoff_str),
+                    "source": "thesportsdb",
+                })
+
+            except Exception:
+                continue
+
+        THESPORTSDB_FIXTURES_CACHE[cache_key] = fixtures
+        if fixtures:
+            log(f"   🏆 TheSportsDB: {len(fixtures)} Spiele für {league_name}")
+        return fixtures
+
+    except Exception as e:
+        log(f"TheSportsDB Error: {str(e)[:60]}", "WARN")
         return []
 
     cache_key = f"tsdb_{league_name}_{target_date}"
