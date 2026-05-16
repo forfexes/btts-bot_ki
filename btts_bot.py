@@ -118,7 +118,7 @@ USE_GROQ_FALLBACK = env("USE_GROQ_FALLBACK", "true").lower() in ["1", "true", "y
 
 ALWAYS_ON_LEAGUES = [
     x.strip()
-    for x in env("ALWAYS_ON_LEAGUES", "Champions League,Europa League,Premier League,Bundesliga,La Liga,Serie A,Ligue 1").split(",")
+    for x in env("ALWAYS_ON_LEAGUES", "Champions League,Europa League,Premier League,Bundesliga,La Liga,Serie A,Ligue 1,WM 2026,UEFA Nations League,Copa America,Afrika Cup").split(",")
     if x.strip()
 ]
 
@@ -275,6 +275,17 @@ LEAGUES_TO_RUN = [
     "Kazakhstan Premier",
     "Uzbekistan Super",
     "Tajikistan League",
+    # 🌍 WM 2026 + Länderspiele
+    "WM 2026 Qualifikation Europa",
+    "WM 2026 Qualifikation Südamerika",
+    "WM 2026 Qualifikation Asien",
+    "WM 2026 Qualifikation Afrika",
+    "WM 2026 Qualifikation CONCACAF",
+    "WM 2026",
+    "UEFA Nations League",
+    "Copa America",
+    "Afrika Cup",
+    "Freundschaftsspiele International",
 ]
 
 # Zeitfenster pro Liga (UTC Stunden)
@@ -410,6 +421,17 @@ LEAGUES_TIME_MAP = {
     "Kazakhstan Premier": "morning",
     "Uzbekistan Super": "morning",
     "Tajikistan League": "morning",
+    # 🌍 WM 2026 + Länderspiele
+    "WM 2026": "evening",
+    "WM 2026 Qualifikation Europa": "evening",
+    "WM 2026 Qualifikation Südamerika": "night",
+    "WM 2026 Qualifikation Asien": "morning",
+    "WM 2026 Qualifikation Afrika": "evening",
+    "WM 2026 Qualifikation CONCACAF": "night",
+    "UEFA Nations League": "evening",
+    "Copa America": "night",
+    "Afrika Cup": "evening",
+    "Freundschaftsspiele International": "evening",
 }
 
 
@@ -616,6 +638,17 @@ API_FOOTBALL_LEAGUES = {
     "Kazakhstan Premier": 381,
     "Uzbekistan Super": 382,
     "Tajikistan League": 383,
+    # 🌍 WM 2026 + Länderspiele
+    "WM 2026": 1,
+    "WM 2026 Qualifikation Europa": 32,
+    "WM 2026 Qualifikation Südamerika": 29,
+    "WM 2026 Qualifikation Asien": 30,
+    "WM 2026 Qualifikation Afrika": 31,
+    "WM 2026 Qualifikation CONCACAF": 33,
+    "UEFA Nations League": 5,
+    "Copa America": 9,
+    "Afrika Cup": 6,
+    "Freundschaftsspiele International": 10,
 }
 
 FOOTBALL_JSON_LEAGUES = {
@@ -2230,6 +2263,12 @@ ESPN_LEAGUE_IDS = {
     "EFL League 2": ("soccer", "eng.4"),
     "Championship": ("soccer", "eng.2"),
     "Scottish Premiership": ("soccer", "sco.1"),
+    # 🌍 WM + Länderspiele
+    "WM 2026": ("soccer", "fifa.world"),
+    "UEFA Nations League": ("soccer", "uefa.nations"),
+    "Copa America": ("soccer", "conmebol.copa"),
+    "Afrika Cup": ("soccer", "caf.nations"),
+    "Freundschaftsspiele International": ("soccer", "fifa.friendly"),
 }
 
 def fetch_espn_fixtures(league_name, target_date):
@@ -4836,6 +4875,247 @@ def get_vitibet_prediction(home_team, away_team, target_date):
     return None
 
 
+
+# ============================================================
+# 🎭 PLAYWRIGHT - Alle 403-blockierten Seiten
+# ============================================================
+
+def pw_get_sofascore_fixtures(league_name, target_date):
+    """SofaScore via Playwright - alle Ligen"""
+    if not PLAYWRIGHT_AVAILABLE:
+        return []
+    cache_key = f"pw_sofa_{league_name}_{target_date}"
+    if cache_key in PLAYWRIGHT_CACHE:
+        return PLAYWRIGHT_CACHE[cache_key]
+    try:
+        slug = SOFASCORE_SLUG_MAP.get(league_name, "")
+        if not slug:
+            return []
+        html = scrape_with_playwright(
+            f"https://www.sofascore.com/football/{slug}",
+            timeout=20000
+        )
+        if not html:
+            return []
+        import re as _re
+        import json as _json
+        # SofaScore JSON in Script Tags
+        matches = _re.findall(r'"homeTeam":\{"id":(\d+),"name":"([^"]+)".*?"awayTeam":\{"id":(\d+),"name":"([^"]+)".*?"startTimestamp":(\d+)', html)
+        now_utc = datetime.now(timezone.utc)
+        fixtures = []
+        for hid, home, aid, away, ts in matches[:20]:
+            try:
+                kickoff = datetime.fromtimestamp(int(ts), tz=timezone.utc)
+                if kickoff.date() != target_date or kickoff <= now_utc:
+                    continue
+                kickoff_str = kickoff.strftime("%Y-%m-%dT%H:%M:%SZ")
+                fixtures.append({
+                    "home": home, "away": away,
+                    "home_id": hid, "away_id": aid,
+                    "time_utc": kickoff_str,
+                    "time_local": get_local_time(kickoff_str),
+                    "source": "sofascore_pw",
+                })
+            except Exception:
+                continue
+        PLAYWRIGHT_CACHE[cache_key] = fixtures
+        if fixtures:
+            log(f"   🎭 SofaScore PW: {len(fixtures)} Spiele für {league_name}")
+        return fixtures
+    except Exception as e:
+        log(f"SofaScore PW Error: {str(e)[:50]}", "WARN")
+        return []
+
+
+def pw_get_fbref_xg(home_team, away_team, league_name):
+    """FBref xG via Playwright"""
+    if not PLAYWRIGHT_AVAILABLE:
+        return None
+    cache_key = f"pw_fbref_{home_team}_{away_team}"
+    if cache_key in PLAYWRIGHT_CACHE:
+        return PLAYWRIGHT_CACHE[cache_key]
+    try:
+        FBREF_LEAGUES = {
+            "Premier League": "9", "Bundesliga": "20",
+            "La Liga": "12", "Serie A": "11", "Ligue 1": "13",
+            "Champions League": "8", "Europa League": "19",
+        }
+        lid = FBREF_LEAGUES.get(league_name)
+        if not lid:
+            return None
+        html = scrape_with_playwright(
+            f"https://fbref.com/en/comps/{lid}/schedule/",
+            timeout=20000
+        )
+        if not html:
+            return None
+        import re as _re
+        home_norm = normalize_team_name(home_team)
+        rows = _re.findall(r'<tr[^>]*>(.*?)</tr>', html, _re.DOTALL)
+        for row in rows:
+            if home_norm[:6] not in row.lower():
+                continue
+            xg_home = _re.search(r'xg.*?>([\d.]+)<', row, _re.IGNORECASE)
+            xg_away = _re.search(r'xga.*?>([\d.]+)<', row, _re.IGNORECASE)
+            if xg_home:
+                result = {
+                    "xg_home": float(xg_home.group(1)),
+                    "xg_away": float(xg_away.group(1)) if xg_away else 0,
+                    "source": "fbref_pw"
+                }
+                PLAYWRIGHT_CACHE[cache_key] = result
+                return result
+    except Exception:
+        pass
+    return None
+
+
+def pw_get_understat_scorers(league_name, season):
+    """Understat Top Scorer via Playwright"""
+    if not PLAYWRIGHT_AVAILABLE:
+        return []
+    cache_key = f"pw_understat_{league_name}_{season}"
+    if cache_key in PLAYWRIGHT_CACHE:
+        return PLAYWRIGHT_CACHE[cache_key]
+    try:
+        UNDERSTAT_MAP = {
+            "Premier League": "EPL", "Bundesliga": "Bundesliga",
+            "La Liga": "La_liga", "Serie A": "Serie_A",
+            "Ligue 1": "Ligue_1", "Eredivisie": "Eredivisie",
+        }
+        slug = UNDERSTAT_MAP.get(league_name)
+        if not slug:
+            return []
+        html = scrape_with_playwright(
+            f"https://understat.com/league/{slug}/{season}",
+            timeout=20000
+        )
+        if not html:
+            return []
+        import re as _re, json as _json
+        m = _re.search(r"var playersData\s*=\s*JSON\.parse\('(.+?)'\)", html)
+        if not m:
+            return []
+        players = _json.loads(m.group(1).encode().decode('unicode_escape'))
+        scorers = []
+        for p in players:
+            try:
+                goals = int(p.get("goals", 0) or 0)
+                games = int(p.get("games", 1) or 1)
+                if games < 5 or goals < 3:
+                    continue
+                gpg = round(goals / games, 2)
+                if gpg >= 0.3:
+                    scorers.append({
+                        "name": p.get("player_name", ""),
+                        "team": p.get("team_title", ""),
+                        "goals_total": goals,
+                        "appearances": games,
+                        "goals_per_game": gpg,
+                    })
+            except Exception:
+                continue
+        scorers.sort(key=lambda x: x["goals_per_game"], reverse=True)
+        PLAYWRIGHT_CACHE[cache_key] = scorers[:20]
+        if scorers:
+            log(f"   🎭 Understat PW: {len(scorers[:20])} Scorer für {league_name}")
+        return scorers[:20]
+    except Exception:
+        return []
+
+
+def pw_get_transfermarkt_injuries(team_name, league_name):
+    """Transfermarkt Verletzungen via Playwright"""
+    if not PLAYWRIGHT_AVAILABLE:
+        return None
+    cache_key = f"pw_tm_{team_name}"
+    if cache_key in PLAYWRIGHT_CACHE:
+        return PLAYWRIGHT_CACHE[cache_key]
+    try:
+        search = team_name.lower().replace(" ", "-").replace(".", "")
+        html = scrape_with_playwright(
+            f"https://www.transfermarkt.com/schnellsuche/ergebnis/schnellsuche?query={search}",
+            timeout=20000
+        )
+        if not html:
+            return None
+        import re as _re
+        injuries = _re.findall(
+            r'class="[^"]*verletzt[^"]*"[^>]*>.*?<a[^>]*>([^<]+)</a>',
+            html, _re.DOTALL
+        )
+        if injuries:
+            result = {
+                "injured": [{"name": p.strip()} for p in injuries[:5]],
+                "total_out": len(injuries),
+                "has_data": True,
+                "source": "transfermarkt_pw",
+            }
+            PLAYWRIGHT_CACHE[cache_key] = result
+            return result
+    except Exception:
+        pass
+    return None
+
+
+def pw_get_worldfootballdb(league_name, target_date):
+    """WorldFootballDatabase via Playwright"""
+    if not PLAYWRIGHT_AVAILABLE:
+        return []
+    cache_key = f"pw_wfdb_{league_name}_{target_date}"
+    if cache_key in PLAYWRIGHT_CACHE:
+        return PLAYWRIGHT_CACHE[cache_key]
+    try:
+        WFDB_LEAGUES = {
+            "Premier League": "england/premier-league",
+            "Bundesliga": "germany/bundesliga",
+            "La Liga": "spain/la-liga",
+            "Serie A": "italy/serie-a",
+            "Ligue 1": "france/ligue-1",
+            "Champions League": "europe/champions-league",
+        }
+        slug = WFDB_LEAGUES.get(league_name)
+        if not slug:
+            return []
+        html = scrape_with_playwright(
+            f"https://worldfootballdatabase.com/{slug}/fixtures/",
+            timeout=20000
+        )
+        if not html:
+            return []
+        import re as _re
+        target_str = str(target_date)
+        now_utc = datetime.now(timezone.utc)
+        fixtures = []
+        matches = _re.findall(
+            r'(\d{4}-\d{2}-\d{2}).*?(\d{2}:\d{2}).*?<[^>]*>([^<]+)</[^>]*>\s*[-–vs]+\s*<[^>]*>([^<]+)<',
+            html, _re.DOTALL
+        )
+        for date_str, time_str, home, away in matches[:20]:
+            if date_str != target_str:
+                continue
+            kickoff_str = f"{date_str}T{time_str}:00Z"
+            try:
+                kickoff = datetime.fromisoformat(kickoff_str.replace("Z", "+00:00"))
+                if kickoff <= now_utc:
+                    continue
+            except Exception:
+                pass
+            fixtures.append({
+                "home": home.strip(),
+                "away": away.strip(),
+                "time_utc": kickoff_str,
+                "time_local": get_local_time(kickoff_str),
+                "source": "worldfootballdb_pw",
+            })
+        PLAYWRIGHT_CACHE[cache_key] = fixtures
+        if fixtures:
+            log(f"   🎭 WorldFootballDB: {len(fixtures)} Spiele für {league_name}")
+        return fixtures
+    except Exception:
+        return []
+
+
 def fetch_odds_api(league_name, target_date):
     sport_key = LEAGUE_KEYS.get(league_name)
 
@@ -6458,6 +6738,13 @@ def build_context(odds_data, fixtures, league, target_date=None):
                 if news and news.get("summary"):
                     line += f"\n   📰 News: {news['summary'][:150]}"
 
+            # 🎭 TRANSFERMARKT via Playwright
+            if PLAYWRIGHT_AVAILABLE:
+                tm_home = pw_get_transfermarkt_injuries(f["home"], league)
+                if tm_home and tm_home.get("has_data"):
+                    names = ", ".join([p["name"] for p in tm_home["injured"][:3]])
+                    line += f"\n   🏥 TM {f['home']}: {names} fehlen"
+
             # 🆕 RSSSF + FUSSBALLDATEN - Historische Stats
             rsssf = get_rsssf_stats(league)
             if rsssf and rsssf.get("btts_rate"):
@@ -6916,9 +7203,11 @@ def fetch_league_data_once(league, target_date):
     gh_fix = fetch_github_football_data(league, target_date)
     fbd_fix = scrape_fussballdaten(league, target_date)
     fbde_fix = fetch_fussball_de(league, target_date)
-    fl_fix = fetch_fortuna_liga(target_date) if league == "Slovak Super Liga" else []  # 🆕 Fortuna Liga SK
+    fl_fix = fetch_fortuna_liga(target_date) if league == "Slovak Super Liga" else []
+    pw_sofa = pw_get_sofascore_fixtures(league, target_date)    # 🎭 SofaScore Playwright
+    pw_wfdb = pw_get_worldfootballdb(league, target_date)       # 🎭 WorldFootballDB
 
-    fixtures = merge_fixtures(fd_fix, af_fix, fj_fix, ol_fix, bsd_fix, sm_fix, sdb_fix, sofa_fix, espn_fix, asp_fix, flash_fix, ls_fix, ninjas_fix, tsdb_fix, sw_fix, gh_fix, fbd_fix, fbde_fix, fl_fix)
+    fixtures = merge_fixtures(fd_fix, af_fix, fj_fix, ol_fix, bsd_fix, sm_fix, sdb_fix, sofa_fix, espn_fix, asp_fix, flash_fix, ls_fix, ninjas_fix, tsdb_fix, sw_fix, gh_fix, fbd_fix, fbde_fix, fl_fix, pw_sofa, pw_wfdb)
 
     log(
         f"   Quellen: Odds={len(odds)}, FD={len(fd_fix)}, "
@@ -7581,28 +7870,51 @@ def send_telegram(text, chat_id=None, reply_markup=None):
     return None
 
 
+# In-Memory Duplikat Cache für diesen Run
+_SENT_TIPS_CACHE = set()
+
 def is_duplicate_tip(match, market, target_date):
-    """Prüft ob Tipp für dieses Spiel+Markt heute schon in Supabase ist"""
-    if not SUPABASE_URL or not SUPABASE_KEY:
-        return False
-    try:
-        r = requests.get(
-            f"{SUPABASE_URL}/rest/v1/tips",
-            headers={"apikey": SUPABASE_KEY, "Authorization": f"Bearer {SUPABASE_KEY}"},
-            params={
-                "date": f"eq.{target_date}",
-                "market": f"eq.{market}",
-                "match": f"eq.{match}",
-                "select": "id",
-                "limit": "1",
-            },
-            timeout=10,
-        )
-        if r.ok and len(r.json()) > 0:
-            return True
-    except Exception:
-        pass
+    """Prüft ob Tipp bereits gesendet wurde - In-Memory + Supabase"""
+    global _SENT_TIPS_CACHE
+
+    # Normalisiere Match-Name für Vergleich
+    match_norm = normalize_team_name(match)
+    cache_key = f"{match_norm[:20]}_{market}_{target_date}"
+
+    # 1. In-Memory Check (schnell!)
+    if cache_key in _SENT_TIPS_CACHE:
+        return True
+
+    # 2. Supabase Check
+    if SUPABASE_URL and SUPABASE_KEY:
+        try:
+            r = requests.get(
+                f"{SUPABASE_URL}/rest/v1/tips",
+                headers={"apikey": SUPABASE_KEY, "Authorization": f"Bearer {SUPABASE_KEY}"},
+                params={
+                    "date": f"eq.{target_date}",
+                    "market": f"eq.{market}",
+                    "match": f"eq.{match}",
+                    "select": "id",
+                    "limit": "1",
+                },
+                timeout=5,
+            )
+            if r.ok and len(r.json()) > 0:
+                _SENT_TIPS_CACHE.add(cache_key)
+                return True
+        except Exception:
+            pass
+
     return False
+
+
+def mark_tip_sent(match, market, target_date):
+    """Markiert Tipp als gesendet im In-Memory Cache"""
+    global _SENT_TIPS_CACHE
+    match_norm = normalize_team_name(match)
+    cache_key = f"{match_norm[:20]}_{market}_{target_date}"
+    _SENT_TIPS_CACHE.add(cache_key)
 
 
 def is_valid_tip(tip, target_date):
@@ -8062,6 +8374,7 @@ def send_top_tips(tips_by_market, target_date):
             inline_keyboard = build_inline_keyboard(tip_odds_data, match_name)
 
             msg_id = send_telegram(msg, target_chat, reply_markup=inline_keyboard)
+            mark_tip_sent(match_name, market_id, target_date)
 
             # ============================================================
             # ML Features sammeln (FIX: tip_league + tip_odds aus dem Tipp)
@@ -9399,7 +9712,7 @@ def run_corners_and_scorer_bots(target_date, active_leagues, odds_data_cache, fi
     corners_tips = []
     scorer_tips = []
 
-    seen_corner_matches = set()  # Duplikat-Check
+    seen_corner_matches = set()  # Duplikat-Check über ALLE Ligen
 
     for league in active_leagues:
         fixtures = fixtures_cache.get(league, [])
@@ -9417,8 +9730,11 @@ def run_corners_and_scorer_bots(target_date, active_leagues, odds_data_cache, fi
                     # Duplikat Check
                     home_norm = normalize_team_name(fixture.get("home", ""))
                     away_norm = normalize_team_name(fixture.get("away", ""))
-                    match_key = f"{home_norm[:8]}_{away_norm[:8]}"
-                    if match_key in seen_corner_matches:
+                    # Verwende längeren Key für bessere Erkennung
+                    match_key = f"{home_norm[:12]}_{away_norm[:12]}"
+                    # Auch umgekehrte Reihenfolge prüfen
+                    match_key_rev = f"{away_norm[:12]}_{home_norm[:12]}"
+                    if match_key in seen_corner_matches or match_key_rev in seen_corner_matches:
                         continue
                     seen_corner_matches.add(match_key)
 
@@ -9442,6 +9758,9 @@ def run_corners_and_scorer_bots(target_date, active_leagues, odds_data_cache, fi
                 # Fallback: Understat Top Scorer
                 if not scorers:
                     scorers = get_understat_top_scorers(league, season)
+                # Fallback: Understat via Playwright
+                if not scorers and PLAYWRIGHT_AVAILABLE:
+                    scorers = pw_get_understat_scorers(league, season)
 
                 if scorers:
                     for fixture in fixtures:
