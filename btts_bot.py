@@ -8239,37 +8239,59 @@ def send_top_tips(tips_by_market, target_date):
 
     total_tips = sum(len(t) for t in tips_by_market.values())
 
-    stats_header = f"<b>🤖 AI TIPP BOT - DAILY</b>\n<i>{target_date}</i>\n\n"
-    stats_header += "📊 <b>Übersicht heute:</b>\n"
+    # ============================================================
+    # STATS NACHRICHT - Vollständig mit allen Märkten
+    # ============================================================
+    now_utc = datetime.now(timezone.utc)
+    month_name = now_utc.strftime("%B %Y")
 
+    stats_header = f"<b>🤖 AI TIPP BOT - DAILY</b>\n<i>{target_date}</i>\n\n"
+
+    # Tagesübersicht - ALLE Märkte
+    stats_header += "📊 <b>Übersicht heute:</b>\n"
     for m_id in MARKETS_TO_RUN:
         count = len(tips_by_market.get(m_id, []))
         stats_header += f"• {MARKET_INFO[m_id]['name']}: <b>{count}</b> Tipps\n"
 
+    # Ecken + Scorer + Combos
+    corners_today = getattr(run_corners_and_scorer_bots, '_last_corners', 0)
+    scorer_today = getattr(run_corners_and_scorer_bots, '_last_scorer', 0)
+    stats_header += f"• 🔵 Ecken: <b>{corners_count if 'corners_count' in dir() else 0}</b> Tipps\n"
+    stats_header += f"• 🎰 Combos: <b>{combos_sent if 'combos_sent' in dir() else 0}</b> generiert\n"
     stats_header += f"\n💎 <b>Total: {total_tips} Top-Tipps</b>"
 
     stats = get_overall_stats()
 
     if stats:
+        # Auto-void alte pendings
+        old_pending = stats.get("pending", 0)
+        
         stats_header += "\n\n━━━━━━━━━━━━━━━━━━\n"
         stats_header += "📈 <b>GESAMT-STATISTIK</b>\n"
         stats_header += f"✅ Gewonnen: <b>{stats['won']}</b>\n"
         stats_header += f"❌ Verloren: <b>{stats['lost']}</b>\n"
-        if stats["pending"]:
+        # Pending nur zeigen wenn sinnvoll (< 50)
+        if stats["pending"] and stats["pending"] < 50:
             stats_header += f"⏳ Pending: <b>{stats['pending']}</b>\n"
         stats_header += f"🎯 Trefferquote: <b>{stats['quote_pct']}%</b>\n"
         roi_emoji = "🟢" if stats["roi_units"] >= 0 else "🔴"
         stats_header += f"💰 ROI: <b>{'+' if stats['roi_units'] >= 0 else ''}{stats['roi_units']}</b> Units {roi_emoji}\n"
 
+        # Monatsübersicht
         if stats.get("month") and stats["month"]["total"] > 0:
             m = stats["month"]
             m_emoji = "🟢" if m["units"] >= 0 else "🔴"
-            stats_header += f"\n📆 <b>{m['name']}:</b> {m['won']}/{m['total']} ({m['pct']}%) · "
+            stats_header += f"\n📅 <b>{m['name']}:</b> {m['won']}/{m['total']} ({m['pct']}%) · "
             stats_header += f"<b>{'+' if m['units'] >= 0 else ''}{m['units']} Units</b> {m_emoji}\n"
 
+        # Pro Markt - ALLE inkl Ecken
         stats_header += f"\n<b>📊 Pro Markt:</b>\n"
-        market_names = {"btts": "⚽ BTTS", "over25": "🎯 Over 2.5",
-                       "combo": "🔥 Combo", "btts_ht": "🕐 BTTS HT"}
+        market_names = {
+            "btts": "⚽ BTTS",
+            "over25": "🎯 Over 2.5",
+            "combo": "🔥 BTTS+Over 2.5",
+            "btts_ht": "🕐 BTTS HT",
+        }
         for m_id in MARKETS_TO_RUN:
             mb = stats["by_market"].get(m_id, {"w":0,"l":0,"units":0.0})
             tot = mb["w"] + mb["l"]
@@ -8279,15 +8301,19 @@ def send_top_tips(tips_by_market, target_date):
                 u_str = f"+{round(mb['units'],2)}" if mb["units"] >= 0 else f"{round(mb['units'],2)}"
                 stats_header += f"{market_names.get(m_id,m_id)}: {mb['w']}/{tot} ({pct}%) · {u_str}U {emoji}\n"
 
+        # Top Ligen
         if stats.get("top_leagues"):
-            stats_header += f"\n<b>🏆 Top Ligen Ranking:</b>\n"
+            stats_header += f"\n<b>🏆 Top Ligen:</b>\n"
             medals = ["🥇","🥈","🥉","4️⃣","5️⃣","6️⃣","7️⃣","8️⃣","9️⃣","🔟"]
-            for i, (lg, w, tot, pct, units) in enumerate(stats["top_leagues"]):
+            for i, (lg, w, tot, pct, units) in enumerate(stats["top_leagues"][:10]):
                 medal = medals[i] if i < len(medals) else "•"
                 u_str = f"+{units}" if units >= 0 else str(units)
                 stats_header += f"{medal} {lg}: {w}/{tot} ({pct}%) · {u_str}U\n"
 
     send_telegram(stats_header, TELEGRAM_GROUPS.get("stats"))
+
+    # Auto-void alte Pending Tipps (älter als 3 Tage)
+    _auto_void_old_pending()
 
     if total_tips == 0:
         send_telegram(
@@ -8310,11 +8336,7 @@ def send_top_tips(tips_by_market, target_date):
         market_name = MARKET_INFO[market_id]["name"]
         emoji = market_emoji.get(market_id, "💎")
 
-        header = f"<b>{emoji} {market_name} TOP-TIPPS</b>\n"
-        header += f"<i>📅 {target_date}</i>\n"
-        header += f"<i>{len(tips)} Top-Tipps · validiert ✓</i>"
-
-        send_telegram(header, target_chat)
+        # Kein Header - direkt Tipps senden
 
         for i, r in enumerate(tips, 1):
             confidence = int(r.get("confidence", 0))
@@ -8631,12 +8653,7 @@ def send_top_tips(tips_by_market, target_date):
 
         value_count = sum(1 for r in tips if r.get("valueRating") == "HIGH")
 
-        footer = "━━━━━━━━━━━━━━━━━━\n"
-        footer += "📊 <b>Zusammenfassung</b>\n"
-        footer += f"• {len(tips)} Tipps · 🔥 {value_count} Value-Bets\n"
-        footer += "<i>Viel Erfolg! 🍀</i>"
-
-        send_telegram(footer, target_chat)
+        # Kein Footer - direkt Tipps ohne Zusammenfassung
 
     log(f"Gespeichert in Supabase: {saved}")
 
