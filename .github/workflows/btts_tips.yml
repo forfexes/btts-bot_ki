@@ -21,7 +21,7 @@ jobs:
           python-version: '3.11'
       - name: Install dependencies
         run: |
-          pip install requests python-dotenv playwright
+          pip install requests python-dotenv playwright soccerdata
           playwright install chromium
       - name: Run Tips Bot 🤖
         env:
@@ -39,7 +39,6 @@ jobs:
           SPORTMONKS_API_KEY: ${{ secrets.SPORTMONKS_API_KEY }}
           SPORTDB_API_KEY: ${{ secrets.SPORTDB_API_KEY }}
           ALLSPORTS_API_KEY: ${{ secrets.ALLSPORTS_API_KEY }}
-          API_NINJAS_KEY: ${{ secrets.API_NINJAS_KEY }}
           FOOTYSTATS_API_KEY: ${{ secrets.FOOTYSTATS_API_KEY }}
           OPENWEATHER_API_KEY: ${{ secrets.OPENWEATHER_API_KEY }}
           TELEGRAM_TOKEN: ${{ secrets.TELEGRAM_TOKEN }}
@@ -54,15 +53,12 @@ jobs:
           TELEGRAM_GROUP_LATE_GOALS: ${{ secrets.TELEGRAM_GROUP_LATE_GOALS }}
           SUPABASE_URL: ${{ secrets.SUPABASE_URL }}
           SUPABASE_KEY: ${{ secrets.SUPABASE_KEY }}
-          MAX_LEAGUES_PER_RUN: "25"
+          MAX_LEAGUES_PER_RUN: "141"
           AI_SLEEP_SECONDS: "2.0"
           MIN_PROBABILITY: "67"
           MIN_CONFIDENCE: "3"
           MIN_VALUE_RATING: "OK"
           APIFOOTBALL_MAX_CALLS: "150"
-          APIFOOTBALL_INJURIES: "true"
-          APIFOOTBALL_TEAM_STATS: "true"
-          APIFOOTBALL_H2H: "true"
           LEAGUE_ROTATION_ENABLED: "true"
           ENABLE_CORNERS_SCORER: "true"
         run: python btts_bot.py
