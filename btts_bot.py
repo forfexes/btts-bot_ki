@@ -7063,7 +7063,9 @@ def is_future_game(time_str, target_date):
 
         game_utc = (game_local - timedelta(hours=offset)).replace(tzinfo=timezone.utc)
 
-        return game_utc > now_utc - timedelta(minutes=15)
+        # Spiel muss noch mindestens 5 Min in der Zukunft liegen
+        # 90 Min Puffer = Spiele die bereits laufen auch ausschließen
+        return game_utc > now_utc + timedelta(minutes=5)
 
     except Exception:
         return True
@@ -8326,9 +8328,12 @@ def send_top_tips(tips_by_market, target_date):
                 log(f"   ⏭️ Duplikat übersprungen: {match_name} ({market_id})")
                 continue
 
-            # Kompaktes Format
+            # ✅ NEUES FORMAT - Variante 3
+            market_icons2 = {"btts": "⚽", "over25": "🎯", "combo": "🔥", "btts_ht": "🕐"}
+            market_names2 = {"btts": "BTTS", "over25": "OVER 2.5", "combo": "BTTS + OVER 2.5", "btts_ht": "BTTS HT"}
             val_icon = val_icons.get(r.get('valueRating', 'OK'), '🟡')
-            tip_icon = icons.get(r.get('tip', '?'), '✅')
+            mkt_icon = market_icons2.get(market_id, "🎯")
+            mkt_name = market_names2.get(market_id, market_id.upper())
 
             tip_time = r.get('time', '').strip()
             if not tip_time or tip_time in ['TBD', 'N/A', '-', '']:
@@ -8343,35 +8348,138 @@ def send_top_tips(tips_by_market, target_date):
                 units = 1.0
                 units_emoji = "💚"
 
-            msg = f"💎 <b>{i}/{len(tips)} | {match_name}</b>\n"
-            msg += f"📍 {r.get('league','')} · ⏰ {tip_time}\n"
+            # Wetter
+            weather_data = r.get("weather", {})
+            weather_line = ""
+            if weather_data and weather_data.get("temp"):
+                temp = weather_data.get("temp", "")
+                rain = weather_data.get("rain", 0)
+                wind = weather_data.get("wind", 0)
+                if rain > 1:
+                    weather_line = f"🌧️ {temp}°C · Regen {rain}mm"
+                elif wind > 30:
+                    weather_line = f"💨 {temp}°C · Wind {wind}km/h"
+                else:
+                    weather_line = f"🌤️ {temp}°C"
+
+            # Form
+            def fmt_form(fs):
+                if not fs or fs in ['N/A', '-', '?']:
+                    return ""
+                icons2 = {"W": "🟢", "D": "🟡", "L": "🔴"}
+                return " ".join([icons2.get(c, "⚪") for c in str(fs)[-5:]])
+
+            home_form = r.get('homeForm', r.get('home_form', '')).strip()
+            away_form = r.get('awayForm', r.get('away_form', '')).strip()
+
+            # Sharp Money
+            sharp = r.get('sharp_money', '')
+            sharp_line = ""
+            if sharp == "strong":
+                sharp_line = "📌 Starkes Sharp Money Signal!"
+            elif sharp:
+                sharp_line = "📌 Sharp Money aktiv"
+
+            # Opening Odds
+            opening = r.get('opening_odds', 0)
+            odds_move_line = ""
+            if opening and odds_val and opening != odds_val:
+                diff = round(odds_val - opening, 2)
+                arrow = "▼" if diff < 0 else "▲"
+                odds_move_line = f"📉 Opening: {opening} → {odds_val} {arrow}"
+
+            # Verletzungen
+            inj_home = r.get('injuries_home', '')
+            inj_away = r.get('injuries_away', '')
+
+            # Schiri
+            ref = r.get('referee', r.get('ref', ''))
+
+            # H2H
+            h2h_btts = r.get('h2h_btts', '')
+            h2h_goals = r.get('h2h_avg_goals', '')
+
+            # Build Message
+            msg = f"💎 {i}/{len(tips)} | <b>{match_name}</b>\n"
+            msg += f"📍 {r.get('league', league)} · ⏰ {tip_time}\n"
+            if weather_line:
+                msg += f"{weather_line}\n"
             msg += f"━━━━━━━━━━━━━━━━━━\n"
-            msg += f"{tip_icon} <b>{r.get('tip','?')}</b> · 📈 {r.get('probability',0)}% · {'⭐' * confidence}\n"
-            msg += f"💰 {r.get('oddsYes','-')} · 🎯 {r.get('fairOdds','-')} · {val_icon} {r.get('valueRating','OK')}\n"
+            msg += f"{mkt_icon} <b>{mkt_name}</b>\n"
+            msg += f"✅ Tipp: <b>{r.get('tip','YES')}</b>\n"
+            msg += f"📈 Wahrscheinlichkeit: <b>{r.get('probability',0)}%</b>\n"
+            msg += f"⭐ Confidence: {'⭐' * confidence}\n"
+            msg += f"💰 Quote: <b>{r.get('oddsYes','-')}</b> · Fair: {r.get('fairOdds','-')} · {val_icon} {r.get('valueRating','OK')}\n"
             msg += f"{units_emoji} <b>{units} Units</b>"
 
-            if r.get('bookie'):
-                msg += f" · 🏦 {r.get('bookie')}"
+            # Stats
+            stats = []
+            if r.get('xg_home') and r.get('xg_away'):
+                stats.append(f"⚡ xG: {r['xg_home']} / {r['xg_away']}")
+            if r.get('btts_rate_home') and r.get('btts_rate_away'):
+                stats.append(f"📊 BTTS Rate: {r['btts_rate_home']}% / {r['btts_rate_away']}%")
+            if h2h_btts:
+                stats.append(f"🔄 H2H BTTS: {h2h_btts}")
+            if h2h_goals:
+                stats.append(f"⚽ H2H Ø Tore: {h2h_goals}")
+            if stats:
+                msg += f"\n━━━━━━━━━━━━━━━━━━\n"
+                msg += "\n".join(stats)
 
-            home_form = r.get('homeForm', '').strip()
-            away_form = r.get('awayForm', '').strip()
-            if home_form and home_form not in ['N/A', '-', '?', '']:
-                msg += f"\n🏠 {home_form}"
-            if away_form and away_form not in ['N/A', '-', '?', '']:
-                msg += f" · ✈️ {away_form}"
+            # Quoten Bewegung
+            if odds_move_line or sharp_line:
+                msg += f"\n━━━━━━━━━━━━━━━━━━\n"
+                if odds_move_line:
+                    msg += f"{odds_move_line}\n"
+                if sharp_line:
+                    msg += f"{sharp_line}\n"
 
+            # Team Info
+            team_info = []
+            if inj_home:
+                team_info.append(f"🏥 Verletzt Heim: {inj_home}")
+            if inj_away:
+                team_info.append(f"🏥 Verletzt Gast: {inj_away}")
+            if ref:
+                team_info.append(f"👨‍⚖️ Schiri: {ref}")
+            if team_info:
+                msg += f"\n━━━━━━━━━━━━━━━━━━\n"
+                msg += "\n".join(team_info)
+
+            # Form
+            hf = fmt_form(home_form)
+            af = fmt_form(away_form)
+            if hf or af:
+                msg += f"\n━━━━━━━━━━━━━━━━━━\n"
+                home_name = match_name.split(" vs ")[0][:12] if " vs " in match_name else "Heim"
+                away_name = match_name.split(" vs ")[1][:12] if " vs " in match_name else "Gast"
+                if hf:
+                    msg += f"🏠 {home_name}: {hf}\n"
+                if af:
+                    msg += f"✈️ {away_name}: {af}\n"
+
+            # Key Factor + Reasoning
             if r.get('keyFactor'):
-                msg += f"\n⚡ <i>{r.get('keyFactor')[:100]}</i>"
+                msg += f"\n━━━━━━━━━━━━━━━━━━\n"
+                msg += f"⚡ <i>{r.get('keyFactor')[:100]}</i>\n"
 
-            reasoning = r.get('reasoning', '')[:200]
+            reasoning = r.get('reasoning', '')
             if reasoning:
+                if len(reasoning) > 150:
+                    reasoning = reasoning[:147] + "..."
                 msg += f"\n💭 <i>{reasoning}</i>"
 
             msg += f"\n━━━━━━━━━━━━━━━━━━"
 
-            # 🆕 Inline-Buttons mit Bookie-Links bauen
+            # Beste Quote Empfehlung
             tip_odds_data = r.get("_odds_data", [])
             inline_keyboard = build_inline_keyboard(tip_odds_data, match_name)
+
+            # Bookie Empfehlung
+            best_bookie = r.get("bookie", "")
+            best_odds = r.get("oddsYes", "")
+            if best_bookie and best_odds:
+                msg += f"\n🏆 Empfehlung: <b>{best_bookie}</b> · Quote {best_odds}"
 
             msg_id = send_telegram(msg, target_chat, reply_markup=inline_keyboard)
             mark_tip_sent(match_name, market_id, target_date)
@@ -8883,6 +8991,7 @@ def edit_telegram_message(chat_id, message_id, new_text):
 
 
 def format_result_text(tip, result, status):
+    """Zeigt Ergebnis nach Spiel mit ✅ oder ❌"""
     """
     Formatiert den Ergebnis-Text für Telegram Edit.
     """
