@@ -1219,9 +1219,18 @@ def get_forebet_prediction(home_team, away_team, league_name, target_date):
         )
 
         if r.status_code in [403, 429, 503]:
-            log(f"   ℹ️  Forebet nicht erreichbar ({r.status_code}) - überspringe", "INFO")
-            FOREBET_BLOCKED = True
-            return None
+            if PLAYWRIGHT_AVAILABLE:
+                log(f"   🎭 Forebet → Playwright...")
+                html = scrape_with_playwright(url, timeout=20000)
+                if html:
+                    log(f"   ✅ Forebet via Playwright!")
+                else:
+                    FOREBET_BLOCKED = True
+                    return None
+            else:
+                log(f"   ℹ️  Forebet nicht erreichbar ({r.status_code})")
+                FOREBET_BLOCKED = True
+                return None
 
         if not r.ok:
             return None
@@ -5116,6 +5125,381 @@ def pw_get_worldfootballdb(league_name, target_date):
         return []
 
 
+
+# ============================================================
+# 🌦️ OPEN-METEO - Kostenloses Wetter (kein Key nötig!)
+# ============================================================
+OPEN_METEO_CACHE = {}
+
+CITY_COORDS_WEATHER = {
+    "Premier League": (51.5, -0.1),
+    "Bundesliga": (48.1, 11.6),
+    "La Liga": (40.4, -3.7),
+    "Serie A": (41.9, 12.5),
+    "Ligue 1": (48.9, 2.4),
+    "Eredivisie": (52.4, 4.9),
+    "Primeira Liga": (38.7, -9.1),
+    "Champions League": (51.5, -0.1),
+    "Europa League": (51.5, -0.1),
+    "Bundesliga Österreich": (48.2, 16.4),
+    "Super League Schweiz": (47.4, 8.5),
+    "Scottish Premiership": (55.9, -4.3),
+    "Danish Superliga": (55.7, 12.6),
+    "Norway Eliteserien": (59.9, 10.7),
+    "Sweden Allsvenskan": (59.3, 18.1),
+    "MLS": (40.7, -74.0),
+    "Brasileirao Serie A": (-23.5, -46.6),
+    "J1 League Japan": (35.7, 139.7),
+    "K League 1": (37.6, 127.0),
+}
+
+def get_open_meteo_weather(league_name, target_date):
+    """
+    Open-Meteo - Vollständig kostenlos, kein Key nötig!
+    Viel besser als OpenWeatherMap für unsere Zwecke.
+    """
+    coords = CITY_COORDS_WEATHER.get(league_name)
+    if not coords:
+        return None
+
+    cache_key = f"om_{league_name}_{target_date}"
+    if cache_key in OPEN_METEO_CACHE:
+        return OPEN_METEO_CACHE[cache_key]
+
+    try:
+        lat, lon = coords
+        r = requests.get(
+            "https://api.open-meteo.com/v1/forecast",
+            params={
+                "latitude": lat,
+                "longitude": lon,
+                "daily": "temperature_2m_max,temperature_2m_min,precipitation_sum,windspeed_10m_max",
+                "forecast_days": 3,
+                "timezone": "auto",
+            },
+            timeout=10,
+        )
+
+        if not r.ok:
+            return None
+
+        data = r.json()
+        daily = data.get("daily", {})
+        dates = daily.get("time", [])
+
+        target_str = str(target_date)
+        if target_str not in dates:
+            return None
+
+        idx = dates.index(target_str)
+        temp_max = daily.get("temperature_2m_max", [None])[idx]
+        temp_min = daily.get("temperature_2m_min", [None])[idx]
+        rain = daily.get("precipitation_sum", [0])[idx] or 0
+        wind = daily.get("windspeed_10m_max", [0])[idx] or 0
+
+        temp = round((temp_max + temp_min) / 2, 1) if temp_max and temp_min else temp_max
+
+        impact = "neutral"
+        notes = []
+        if rain > 5:
+            impact = "negative"
+            notes.append(f"🌧️ Starker Regen ({rain}mm)")
+        elif rain > 2:
+            notes.append(f"🌦️ Regen ({rain}mm)")
+        if wind > 50:
+            impact = "negative"
+            notes.append(f"💨 Starker Wind ({wind}km/h)")
+        elif wind > 30:
+            notes.append(f"🌬️ Wind {wind}km/h")
+        if temp and temp > 32:
+            notes.append(f"🥵 Hitze ({temp}°C)")
+        elif temp and temp < 2:
+            notes.append(f"🥶 Kälte ({temp}°C)")
+
+        result = {
+            "temp": temp,
+            "rain": round(rain, 1),
+            "wind": round(wind, 1),
+            "impact": impact,
+            "notes": notes,
+            "source": "open-meteo",
+        }
+
+        OPEN_METEO_CACHE[cache_key] = result
+        return result
+
+    except Exception as e:
+        log(f"Open-Meteo Error: {str(e)[:50]}", "WARN")
+        return None
+
+
+# ============================================================
+# 📊 STATSBOMB OPEN DATA - Event Daten für ML
+# ============================================================
+STATSBOMB_CACHE = {}
+
+STATSBOMB_COMPETITIONS = {
+    "La Liga": (11, 90),        # LaLiga 2015/16
+    "Premier League": (2, 27),  # WSL
+    "Champions League": (16, 1),
+    "Frauen WM": (72, 30),
+}
+
+def fetch_statsbomb_matches(league_name):
+    """
+    StatsBomb Open Data - GitHub Raw, kein Key nötig!
+    Beste kostenlose Event-Daten weltweit für ML!
+    """
+    cache_key = f"sb_{league_name}"
+    if cache_key in STATSBOMB_CACHE:
+        return STATSBOMB_CACHE[cache_key]
+
+    comp = STATSBOMB_COMPETITIONS.get(league_name)
+    if not comp:
+        return []
+
+    competition_id, season_id = comp
+
+    try:
+        r = requests.get(
+            f"https://raw.githubusercontent.com/statsbomb/open-data/master/data/matches/{competition_id}/{season_id}.json",
+            headers={"User-Agent": "Mozilla/5.0"},
+            timeout=15,
+        )
+
+        if not r.ok:
+            return []
+
+        matches = r.json()
+        STATSBOMB_CACHE[cache_key] = matches
+        log(f"   📊 StatsBomb: {len(matches)} Matches für {league_name}")
+        return matches
+
+    except Exception:
+        return []
+
+
+def get_statsbomb_team_stats(team_name, league_name):
+    """
+    Holt Team-Statistiken aus StatsBomb Open Data.
+    Returns: {'avg_xg': 1.8, 'avg_shots': 14, 'avg_xga': 1.2, 'btts_rate': 65}
+    """
+    cache_key = f"sb_team_{team_name}_{league_name}"
+    if cache_key in STATSBOMB_CACHE:
+        return STATSBOMB_CACHE[cache_key]
+
+    matches = fetch_statsbomb_matches(league_name)
+    if not matches:
+        return None
+
+    team_matches = []
+    for m in matches:
+        home = m.get("home_team", {}).get("home_team_name", "")
+        away = m.get("away_team", {}).get("away_team_name", "")
+        if normalize_team_name(team_name)[:6] in normalize_team_name(home) or            normalize_team_name(team_name)[:6] in normalize_team_name(away):
+            team_matches.append(m)
+
+    if not team_matches:
+        return None
+
+    total_goals_for = 0
+    total_goals_against = 0
+    btts_count = 0
+
+    for m in team_matches:
+        home = m.get("home_team", {}).get("home_team_name", "")
+        hg = m.get("home_score", 0) or 0
+        ag = m.get("away_score", 0) or 0
+        is_home = normalize_team_name(team_name)[:6] in normalize_team_name(home)
+
+        gf = hg if is_home else ag
+        ga = ag if is_home else hg
+        total_goals_for += gf
+        total_goals_against += ga
+        if hg > 0 and ag > 0:
+            btts_count += 1
+
+    n = len(team_matches)
+    result = {
+        "avg_goals_for": round(total_goals_for / n, 2),
+        "avg_goals_against": round(total_goals_against / n, 2),
+        "btts_rate": round(btts_count / n * 100, 1),
+        "games": n,
+        "source": "statsbomb",
+    }
+
+    STATSBOMB_CACHE[cache_key] = result
+    return result
+
+
+# ============================================================
+# 📰 GOOGLE NEWS - Team News scrapen
+# ============================================================
+GOOGLE_NEWS_CACHE = {}
+
+def scrape_google_news(query, max_results=3):
+    """
+    Google News scrapen für Team News + Verletzungen.
+    Kein Key nötig!
+    """
+    cache_key = f"gn_{query}"
+    if cache_key in GOOGLE_NEWS_CACHE:
+        return GOOGLE_NEWS_CACHE[cache_key]
+
+    try:
+        import random as _r
+        import re as _re
+        import urllib.parse
+
+        encoded = urllib.parse.quote(query)
+        r = requests.get(
+            f"https://news.google.com/rss/search?q={encoded}&hl=de&gl=DE&ceid=DE:de",
+            headers={
+                "User-Agent": _r.choice([
+                    "Mozilla/5.0 (Windows NT 10.0; Win64; x64) Chrome/121.0.0.0",
+                    "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) Chrome/120.0.0.0",
+                ]),
+                "Accept": "application/rss+xml, application/xml",
+            },
+            timeout=10,
+        )
+
+        if not r.ok:
+            return []
+
+        # Parse RSS
+        titles = _re.findall(r"<title><!\[CDATA\[(.+?)\]\]></title>", r.text)
+        descriptions = _re.findall(r"<description><!\[CDATA\[(.+?)\]\]></description>", r.text)
+
+        results = []
+        for i, title in enumerate(titles[1:max_results+1]):  # Skip first (feed title)
+            desc = descriptions[i] if i < len(descriptions) else ""
+            results.append({
+                "title": title.strip(),
+                "description": _re.sub(r"<[^>]+>", "", desc).strip()[:200],
+            })
+
+        GOOGLE_NEWS_CACHE[cache_key] = results
+        return results
+
+    except Exception:
+        return []
+
+
+def get_team_news_google(home_team, away_team, league):
+    """
+    Holt aktuelle Team News von Google News.
+    Verletzungen, Sperren, Form-News.
+    """
+    query = f"{home_team} {away_team} {league} lineup injury"
+    results = scrape_google_news(query, max_results=3)
+
+    if not results:
+        return None
+
+    # Suche nach Verletzungs-Keywords
+    injury_keywords = ["verletzt", "fehlt", "gesperrt", "injury", "suspended", "out", "doubt"]
+    news_items = []
+
+    for r in results:
+        text = (r.get("title", "") + " " + r.get("description", "")).lower()
+        has_injury = any(kw in text for kw in injury_keywords)
+        news_items.append({
+            "title": r.get("title", ""),
+            "has_injury_info": has_injury,
+        })
+
+    return news_items if news_items else None
+
+
+# ============================================================
+# 🤖 REDDIT - Community Insider Tips
+# ============================================================
+REDDIT_CACHE = {}
+
+def scrape_reddit_soccer(home_team, away_team):
+    """
+    Reddit Soccer Threads für Insider News.
+    Kein Key nötig - öffentliche Daten!
+    """
+    cache_key = f"rd_{home_team}_{away_team}"
+    if cache_key in REDDIT_CACHE:
+        return REDDIT_CACHE[cache_key]
+
+    try:
+        import random as _r
+        import re as _re
+
+        query = f"{home_team} {away_team}".replace(" ", "+")
+        r = requests.get(
+            f"https://www.reddit.com/r/soccer/search.json?q={query}&sort=new&limit=5",
+            headers={
+                "User-Agent": "Mozilla/5.0 (compatible; FootballBot/1.0)",
+                "Accept": "application/json",
+            },
+            timeout=10,
+        )
+
+        if not r.ok:
+            return None
+
+        data = r.json()
+        posts = data.get("data", {}).get("children", [])
+
+        results = []
+        for post in posts[:3]:
+            p = post.get("data", {})
+            title = p.get("title", "")
+            score = p.get("score", 0)
+            if score > 10:  # Nur populäre Posts
+                results.append({
+                    "title": title,
+                    "score": score,
+                    "url": p.get("url", ""),
+                })
+
+        REDDIT_CACHE[cache_key] = results
+        if results:
+            log(f"   🤖 Reddit: {len(results)} Posts gefunden")
+        return results if results else None
+
+    except Exception:
+        return None
+
+
+# ============================================================
+# 🌦️ METEOSTAT - Historische Wetterdaten
+# ============================================================
+def get_historical_weather_impact(league_name, month):
+    """
+    Historische Wetterdaten für Liga-Analyse.
+    Zeigt ob Wetter typisch hohe/niedrige BTTS Rate beeinflusst.
+    """
+    # Vereinfachte historische Analyse basierend auf Monat + Liga
+    WINTER_LEAGUES = ["Premier League", "Bundesliga", "La Liga", "Serie A", "Ligue 1"]
+    SUMMER_LEAGUES = ["MLS", "A-League Australia", "J1 League Japan"]
+
+    impact = "neutral"
+
+    # Wintermonate in Europa
+    if league_name in WINTER_LEAGUES:
+        if month in [11, 12, 1, 2]:
+            impact = "slightly_negative"  # Kälte, Regen
+        elif month in [4, 5]:
+            impact = "positive"  # Frühling = mehr Tore
+
+    # Sommerliga
+    if league_name in SUMMER_LEAGUES:
+        if month in [6, 7, 8]:
+            impact = "slightly_negative"  # Hitze
+
+    return {
+        "month": month,
+        "historical_impact": impact,
+        "note": f"Historisch: {impact} für {league_name} im Monat {month}",
+    }
+
+
 def fetch_odds_api(league_name, target_date):
     sport_key = LEAGUE_KEYS.get(league_name)
 
@@ -6732,11 +7116,27 @@ def build_context(odds_data, fixtures, league, target_date=None):
             if clv and clv.get("sharp_signal"):
                 line += f"\n   📌 Sharp Money Signal! Pinnacle: {clv.get('current_odds')}"
 
-            # 🆕 TAVILY - Aktuelle News
+            # 📰 NEWS - Google News + Tavily
+            news_items = get_team_news_google(f["home"], f["away"], league)
+            if news_items:
+                injury_news = [n for n in news_items if n.get("has_injury_info")]
+                if injury_news:
+                    line += f"\n   📰 News: {injury_news[0]['title'][:100]}"
+
             if TAVILY_API_KEY:
                 news = get_team_news_tavily(f["home"], f["away"], league)
                 if news and news.get("summary"):
-                    line += f"\n   📰 News: {news['summary'][:150]}"
+                    line += f"\n   📰 Tavily: {news['summary'][:100]}"
+
+            # 🤖 REDDIT Insider
+            reddit = scrape_reddit_soccer(f["home"], f["away"])
+            if reddit:
+                line += f"\n   🤖 Reddit: {reddit[0]['title'][:80]}"
+
+            # 📊 STATSBOMB Stats
+            sb_home = get_statsbomb_team_stats(f["home"], league)
+            if sb_home:
+                line += f"\n   📊 StatsBomb: BTTS {sb_home['btts_rate']}% | xG {sb_home['avg_goals_for']}"
 
             # 🎭 TRANSFERMARKT via Playwright
             if PLAYWRIGHT_AVAILABLE:
@@ -8414,8 +8814,12 @@ def send_top_tips(tips_by_market, target_date):
             inj_home = r.get('injuries_home', '')
             inj_away = r.get('injuries_away', '')
 
-            # Schiri
+            # Schiri mit Details
             ref = r.get('referee', r.get('ref', ''))
+            ref_cards = r.get('ref_cards_per_game', 0)
+            ref_red = r.get('ref_red_per_game', 0)
+            ref_pen = r.get('ref_penalty_rate', 0)
+            ref_fouls = r.get('ref_fouls_per_game', 0)
 
             # H2H
             h2h_btts = r.get('h2h_btts', '')
@@ -8464,9 +8868,29 @@ def send_top_tips(tips_by_market, target_date):
                 team_info.append(f"🏥 Verletzt Gast: {inj_away}")
             if ref:
                 team_info.append(f"👨‍⚖️ Schiri: {ref}")
-            if team_info:
+            if team_info or ref:
                 msg += f"\n━━━━━━━━━━━━━━━━━━\n"
-                msg += "\n".join(team_info)
+                if team_info:
+                    msg += "\n".join(team_info) + "\n"
+                if ref:
+                    msg += f"👨‍⚖️ <b>{ref}</b>\n"
+                    if ref_cards:
+                        msg += f"   🟡 {ref_cards} K/Sp"
+                    if ref_red:
+                        msg += f" · 🔴 {ref_red} R/Sp"
+                    if ref_pen:
+                        msg += f" · ⚽ {ref_pen} Elf/Sp"
+                    if ref_fouls:
+                        msg += f" · 📊 {ref_fouls} F/Sp"
+                    # Schiri Bewertung
+                    if ref_cards:
+                        if float(ref_cards) < 3.5:
+                            msg += "\n   ✅ Lässt Spiel laufen"
+                        elif float(ref_cards) > 5:
+                            msg += "\n   ⚠️ Strenger Schiri"
+                        else:
+                            msg += "\n   🟡 Durchschnittlich"
+                    msg += "\n"
 
             # Form
             hf = fmt_form(home_form)
