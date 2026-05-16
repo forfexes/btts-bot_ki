@@ -8614,6 +8614,35 @@ def format_combo_telegram_message(combo):
     return msg
 
 
+
+def _auto_void_old_pending():
+    """Bereinigt alte Pending Tipps automatisch (älter als 3 Tage)"""
+    if not SUPABASE_URL or not SUPABASE_KEY:
+        return
+    try:
+        from datetime import date, timedelta
+        cutoff = str(date.today() - timedelta(days=3))
+        r = requests.patch(
+            f"{SUPABASE_URL}/rest/v1/tips",
+            headers={
+                "apikey": SUPABASE_KEY,
+                "Authorization": f"Bearer {SUPABASE_KEY}",
+                "Content-Type": "application/json",
+                "Prefer": "return=minimal",
+            },
+            params={
+                "status": "eq.pending",
+                "date": f"lt.{cutoff}",
+            },
+            json={"status": "void"},
+            timeout=10,
+        )
+        if r.ok:
+            log("✅ Alte Pending Tipps bereinigt!")
+    except Exception as e:
+        log(f"Auto-void Error: {str(e)[:50]}", "WARN")
+
+
 def send_top_tips(tips_by_market, target_date):
     icons = {
         "YES": "✅",
