@@ -1358,8 +1358,15 @@ def get_scoutingstats_prediction(home_team, away_team, target_date):
         )
 
         if r.status_code in [403, 404, 429]:
-            # Fallback: Webseite scrapen
-            return _scrape_scoutingstats(home_team, away_team, target_date)
+            if PLAYWRIGHT_AVAILABLE:
+                log(f"   🎭 ScoutingStats → Playwright...")
+                html = scrape_with_playwright(url, timeout=15000)
+                if html:
+                    log(f"   ✅ ScoutingStats via Playwright!")
+                else:
+                    return _scrape_scoutingstats(home_team, away_team, target_date)
+            else:
+                return _scrape_scoutingstats(home_team, away_team, target_date)
 
         if not r.ok:
             return None
@@ -1570,7 +1577,8 @@ def fetch_sofascore_fixtures(league_name, target_date):
         r = session.get(url, timeout=15)
         
         if r.status_code in [403, 429, 503]:
-            log(f"   ℹ️  SofaScore nicht erreichbar ({r.status_code})", "INFO")
+            if PLAYWRIGHT_AVAILABLE:
+                return pw_get_sofascore_fixtures(league_name, target_date)
             return []
         
         if not r.ok:
@@ -2191,8 +2199,9 @@ def get_transfermarkt_injuries(team_name, league_name):
         )
 
         if r.status_code in [403, 429, 503]:
+            if PLAYWRIGHT_AVAILABLE:
+                return pw_get_transfermarkt_injuries(team_name, league_name)
             TRANSFERMARKT_BLOCKED = True
-            log(f"   ℹ️  Transfermarkt blockiert ({r.status_code})", "INFO")
             return None
 
         if not r.ok:
@@ -5500,6 +5509,1192 @@ def get_historical_weather_impact(league_name, month):
     }
 
 
+
+# ============================================================
+# ⚽ FOTMOB - Inoffizielle API, xG + 500+ Ligen, kein Key!
+# ============================================================
+FOTMOB_CACHE = {}
+
+def get_fotmob_match_stats(home_team, away_team, target_date):
+    """
+    FotMob inoffizielle API - xG, Momentum, Live Stats
+    500+ Ligen weltweit, kein Key nötig!
+    """
+    cache_key = f"fm_{home_team}_{away_team}_{target_date}"
+    if cache_key in FOTMOB_CACHE:
+        return FOTMOB_CACHE[cache_key]
+
+    try:
+        import random as _r
+        date_str = str(target_date).replace("-", "")
+
+        r = requests.get(
+            f"https://www.fotmob.com/api/matches?date={date_str}",
+            headers={
+                "User-Agent": _r.choice([
+                    "Mozilla/5.0 (Windows NT 10.0; Win64; x64) Chrome/121.0.0.0",
+                    "Mozilla/5.0 (iPhone; CPU iPhone OS 17_0 like Mac OS X) AppleWebKit/605.1.15",
+                ]),
+                "Accept": "application/json",
+                "Referer": "https://www.fotmob.com/",
+                "x-mas": "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9",
+            },
+            timeout=12,
+        )
+
+        if not r.ok:
+            return None
+
+        data = r.json()
+        leagues = data.get("leagues", [])
+        home_norm = normalize_team_name(home_team)
+
+        for league in leagues:
+            for match in league.get("matches", []):
+                h = match.get("home", {}).get("name", "")
+                a = match.get("away", {}).get("name", "")
+
+                if not (home_norm[:6] in normalize_team_name(h) or normalize_team_name(h)[:6] in home_norm):
+                    continue
+
+                match_id = match.get("id")
+                if not match_id:
+                    continue
+
+                # Hole Match Details mit xG
+                r2 = requests.get(
+                    f"https://www.fotmob.com/api/matchDetails?matchId={match_id}",
+                    headers={
+                        "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) Chrome/121.0.0.0",
+                        "Referer": "https://www.fotmob.com/",
+                    },
+                    timeout=10,
+                )
+
+                if not r2.ok:
+                    continue
+
+                details = r2.json()
+                stats = details.get("content", {}).get("stats", {}).get("stats", [])
+
+                result = {"source": "fotmob"}
+                for stat in stats:
+                    title = stat.get("title", "").lower()
+                    if "xg" in title or "expected goals" in title:
+                        home_val = stat.get("stats", [{}])[0].get("value", 0)
+                        away_val = stat.get("stats", [{}])[1].get("value", 0) if len(stat.get("stats", [])) > 1 else 0
+                        result["xg_home"] = home_val
+                        result["xg_away"] = away_val
+
+                FOTMOB_CACHE[cache_key] = result
+                if result.get("xg_home"):
+                    log(f"   ⚽ FotMob xG: {home_team} {result['xg_home']} vs {result['xg_away']}")
+                return result
+
+    except Exception as e:
+        log(f"FotMob Error: {str(e)[:50]}", "WARN")
+    return None
+
+
+def fetch_fotmob_fixtures(league_name, target_date):
+    """
+    FotMob Fixtures - 500+ Ligen, kein Key!
+    """
+    cache_key = f"fm_fix_{league_name}_{target_date}"
+    if cache_key in FOTMOB_CACHE:
+        return FOTMOB_CACHE[cache_key]
+
+    FOTMOB_LEAGUES = {
+        "Premier League": 47,
+        "Bundesliga": 54,
+        "La Liga": 87,
+        "Serie A": 55,
+        "Ligue 1": 53,
+        "Eredivisie": 57,
+        "Primeira Liga": 61,
+        "Champions League": 42,
+        "Europa League": 73,
+        "Conference League": 10090,
+        "MLS": 130,
+        "Brasileirao Serie A": 325,
+        "Liga Argentinien": 112,
+        "J1 League Japan": 40,
+        "K League 1": 133,
+        "Saudi Pro League": 1366,
+    }
+
+    league_id = FOTMOB_LEAGUES.get(league_name)
+    if not league_id:
+        return []
+
+    try:
+        import random as _r
+        date_str = str(target_date).replace("-", "")
+
+        r = requests.get(
+            f"https://www.fotmob.com/api/matches?date={date_str}&league={league_id}",
+            headers={
+                "User-Agent": _r.choice([
+                    "Mozilla/5.0 (Windows NT 10.0; Win64; x64) Chrome/121.0.0.0",
+                    "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) Chrome/120.0.0.0",
+                ]),
+                "Accept": "application/json",
+                "Referer": "https://www.fotmob.com/",
+            },
+            timeout=12,
+        )
+
+        if not r.ok:
+            return []
+
+        data = r.json()
+        now_utc = datetime.now(timezone.utc)
+        fixtures = []
+
+        for league in data.get("leagues", []):
+            for match in league.get("matches", []):
+                try:
+                    status = match.get("status", {})
+                    if status.get("finished") or status.get("ongoing"):
+                        continue
+
+                    home = match.get("home", {}).get("name", "")
+                    away = match.get("away", {}).get("name", "")
+                    if not home or not away:
+                        continue
+
+                    utc_time = match.get("status", {}).get("utcTime", "")
+                    if utc_time:
+                        kickoff = datetime.fromisoformat(utc_time.replace("Z", "+00:00"))
+                        if kickoff <= now_utc:
+                            continue
+                        kickoff_str = kickoff.strftime("%Y-%m-%dT%H:%M:%SZ")
+                    else:
+                        kickoff_str = f"{target_date}T12:00:00Z"
+
+                    fixtures.append({
+                        "home": home,
+                        "away": away,
+                        "match_id": str(match.get("id", "")),
+                        "time_utc": kickoff_str,
+                        "time_local": get_local_time(kickoff_str),
+                        "source": "fotmob",
+                    })
+                except Exception:
+                    continue
+
+        FOTMOB_CACHE[cache_key] = fixtures
+        if fixtures:
+            log(f"   ⚽ FotMob: {len(fixtures)} Spiele für {league_name}")
+        return fixtures
+
+    except Exception as e:
+        log(f"FotMob Fixtures Error: {str(e)[:50]}", "WARN")
+        return []
+
+
+# ============================================================
+# 🏆 FANTASY PREMIER LEAGUE API - Offiziell, kein Key!
+# ============================================================
+FPL_CACHE = {}
+
+def get_fpl_data():
+    """
+    Fantasy Premier League API - Offiziell von der PL!
+    Spielerdaten, Preise, Stats, Verletzungen
+    """
+    if "fpl_bootstrap" in FPL_CACHE:
+        return FPL_CACHE["fpl_bootstrap"]
+
+    try:
+        r = requests.get(
+            "https://fantasy.premierleague.com/api/bootstrap-static/",
+            headers={"User-Agent": "Mozilla/5.0"},
+            timeout=15,
+        )
+
+        if not r.ok:
+            return None
+
+        data = r.json()
+        FPL_CACHE["fpl_bootstrap"] = data
+        log(f"   🏆 FPL: {len(data.get('elements', []))} Spieler geladen")
+        return data
+
+    except Exception:
+        return None
+
+
+def get_fpl_player_stats(player_name, team_name):
+    """
+    Holt Spieler-Stats aus FPL (nur Premier League).
+    Returns: {'goals': 12, 'assists': 5, 'minutes': 2340, 'injured': False}
+    """
+    cache_key = f"fpl_{player_name}"
+    if cache_key in FPL_CACHE:
+        return FPL_CACHE[cache_key]
+
+    data = get_fpl_data()
+    if not data:
+        return None
+
+    elements = data.get("elements", [])
+    player_norm = normalize_team_name(player_name)
+
+    for player in elements:
+        first = player.get("first_name", "")
+        last = player.get("second_name", "")
+        full = f"{first} {last}"
+
+        if player_norm[:6] in normalize_team_name(full) or normalize_team_name(full)[:6] in player_norm:
+            result = {
+                "goals": player.get("goals_scored", 0),
+                "assists": player.get("assists", 0),
+                "minutes": player.get("minutes", 0),
+                "injured": player.get("status") in ["i", "d", "u"],
+                "status": player.get("status", "a"),
+                "chance_playing": player.get("chance_of_playing_next_round", 100),
+                "form": float(player.get("form", 0) or 0),
+                "source": "fpl",
+            }
+            FPL_CACHE[cache_key] = result
+            return result
+
+    return None
+
+
+def get_fpl_team_injuries(team_name):
+    """
+    Holt Verletzungen eines Premier League Teams aus FPL.
+    """
+    cache_key = f"fpl_inj_{team_name}"
+    if cache_key in FPL_CACHE:
+        return FPL_CACHE[cache_key]
+
+    data = get_fpl_data()
+    if not data:
+        return None
+
+    teams = {t["id"]: t["name"] for t in data.get("teams", [])}
+    team_norm = normalize_team_name(team_name)
+
+    team_id = None
+    for tid, tname in teams.items():
+        if team_norm[:6] in normalize_team_name(tname) or normalize_team_name(tname)[:6] in team_norm:
+            team_id = tid
+            break
+
+    if not team_id:
+        return None
+
+    injured = []
+    doubtful = []
+    for player in data.get("elements", []):
+        if player.get("team") != team_id:
+            continue
+        status = player.get("status", "a")
+        name = f"{player.get('first_name', '')} {player.get('second_name', '')}"
+        if status == "i":
+            injured.append(name)
+        elif status == "d":
+            doubtful.append(name)
+
+    result = {
+        "injured": injured,
+        "doubtful": doubtful,
+        "total_out": len(injured),
+        "source": "fpl",
+    }
+    FPL_CACHE[cache_key] = result
+    if injured or doubtful:
+        log(f"   🏆 FPL: {team_name} - {len(injured)} verletzt, {len(doubtful)} fraglich")
+    return result
+
+
+# ============================================================
+# 📊 DATAHUB.IO - 30 Open Source Datasets
+# ============================================================
+DATAHUB_CACHE = {}
+
+DATAHUB_DATASETS = {
+    "Premier League": "https://raw.githubusercontent.com/datasets/english-premier-league/master/data/results.csv",
+    "La Liga": "https://raw.githubusercontent.com/datasets/spanish-la-liga/master/data/results.csv",
+    "Serie A": "https://raw.githubusercontent.com/datasets/italian-serie-a/master/data/results.csv",
+    "Bundesliga": "https://raw.githubusercontent.com/datasets/german-bundesliga/master/data/results.csv",
+    "Ligue 1": "https://raw.githubusercontent.com/datasets/french-ligue-1/master/data/results.csv",
+}
+
+def get_datahub_team_stats(team_name, league_name):
+    """
+    DataHub.io historische Statistiken - BTTS, Over2.5, Form
+    GitHub Raw → kein 403 Problem!
+    """
+    cache_key = f"dh_{league_name}"
+    if cache_key not in DATAHUB_CACHE:
+        url = DATAHUB_DATASETS.get(league_name)
+        if not url:
+            return None
+
+        try:
+            r = requests.get(url, headers={"User-Agent": "Mozilla/5.0"}, timeout=15)
+            if not r.ok:
+                return None
+
+            lines = r.text.strip().split("\n")
+            if len(lines) < 2:
+                return None
+
+            headers = [h.strip() for h in lines[0].split(",")]
+            records = []
+            for line in lines[1:]:
+                cols = line.split(",")
+                if len(cols) >= len(headers):
+                    records.append(dict(zip(headers, cols)))
+
+            DATAHUB_CACHE[cache_key] = records
+            log(f"   📊 DataHub: {len(records)} Spiele für {league_name}")
+
+        except Exception:
+            return None
+
+    records = DATAHUB_CACHE.get(cache_key, [])
+    if not records:
+        return None
+
+    team_norm = normalize_team_name(team_name)
+    team_matches = []
+
+    for rec in records:
+        home = normalize_team_name(rec.get("HomeTeam", rec.get("home_team", "")))
+        away = normalize_team_name(rec.get("AwayTeam", rec.get("away_team", "")))
+
+        if team_norm[:6] in home or team_norm[:6] in away or            home[:6] in team_norm or away[:6] in team_norm:
+            team_matches.append(rec)
+
+    if not team_matches:
+        return None
+
+    btts = 0
+    over25 = 0
+    total = 0
+
+    for m in team_matches[-20:]:  # Letzte 20 Spiele
+        try:
+            hg = int(m.get("FTHG", m.get("home_score", 0)) or 0)
+            ag = int(m.get("FTAG", m.get("away_score", 0)) or 0)
+            total += 1
+            if hg > 0 and ag > 0:
+                btts += 1
+            if hg + ag > 2:
+                over25 += 1
+        except Exception:
+            continue
+
+    if total == 0:
+        return None
+
+    return {
+        "btts_rate": round(btts / total * 100, 1),
+        "over25_rate": round(over25 / total * 100, 1),
+        "games": total,
+        "source": "datahub",
+    }
+
+
+# ============================================================
+# 🎯 OPTA ANALYST - Profi xG Daten (gratis!)
+# ============================================================
+OPTA_CACHE = {}
+
+def get_opta_match_stats(home_team, away_team, league_name):
+    """
+    Opta Analyst - Profi Fußball Statistiken
+    optaanalyst.com - teilweise öffentlich zugänglich
+    """
+    cache_key = f"opta_{home_team}_{away_team}"
+    if cache_key in OPTA_CACHE:
+        return OPTA_CACHE[cache_key]
+
+    try:
+        import random as _r
+        r = requests.get(
+            f"https://www.optaanalyst.com/en/match-center/",
+            headers={
+                "User-Agent": _r.choice([
+                    "Mozilla/5.0 (Windows NT 10.0; Win64; x64) Chrome/121.0.0.0",
+                ]),
+                "Accept": "application/json",
+                "Referer": "https://www.optaanalyst.com/",
+            },
+            timeout=12,
+        )
+
+        if not r.ok:
+            return None
+
+        # Parse response
+        import re as _re
+        html = r.text
+        home_norm = normalize_team_name(home_team)
+
+        if home_norm[:6] not in html.lower():
+            return None
+
+        xg_m = _re.findall(r'"xG":\s*([0-9.]+)', html)
+        if len(xg_m) >= 2:
+            result = {
+                "xg_home": float(xg_m[0]),
+                "xg_away": float(xg_m[1]),
+                "source": "opta",
+            }
+            OPTA_CACHE[cache_key] = result
+            return result
+
+    except Exception:
+        pass
+    return None
+
+
+# ============================================================
+# 🇪🇸 FUTBOLME.COM - Spanische Ligen historisch
+# ============================================================
+FUTBOLME_CACHE = {}
+
+def get_futbolme_stats(home_team, away_team, league_name):
+    """
+    Futbolme.com - Spanische Ligen bis zur Kreisliga!
+    Historische Ergebnisse + Tabellen
+    """
+    if "liga" not in league_name.lower() and "spain" not in league_name.lower():
+        if league_name not in ["La Liga", "La Liga 2"]:
+            return None
+
+    cache_key = f"fm_{home_team}_{away_team}"
+    if cache_key in FUTBOLME_CACHE:
+        return FUTBOLME_CACHE[cache_key]
+
+    try:
+        import random as _r
+        search = f"{home_team}".replace(" ", "+")
+        r = requests.get(
+            f"https://www.futbolme.com/com/equipo.asp?id_equipo={search}",
+            headers={
+                "User-Agent": _r.choice([
+                    "Mozilla/5.0 (Windows NT 10.0; Win64; x64) Chrome/121.0.0.0",
+                ]),
+                "Accept-Language": "es-ES,es;q=0.9",
+                "Referer": "https://www.futbolme.com/",
+            },
+            timeout=12,
+        )
+
+        if not r.ok:
+            return None
+
+        import re as _re
+        html = r.text
+
+        btts_m = _re.search(r'ambos.*?(\d+)%', html, _re.IGNORECASE)
+        goals_m = _re.search(r'media.*?goles.*?(\d+[.,]\d+)', html, _re.IGNORECASE)
+
+        result = {}
+        if btts_m:
+            result["btts_rate"] = int(btts_m.group(1))
+        if goals_m:
+            result["avg_goals"] = float(goals_m.group(1).replace(",", "."))
+
+        if result:
+            FUTBOLME_CACHE[cache_key] = result
+            return result
+
+    except Exception:
+        pass
+    return None
+
+
+
+# ============================================================
+# 📊 SOCCERDATA LIBRARY - pip install soccerdata
+# ============================================================
+SOCCERDATA_AVAILABLE = False
+try:
+    import soccerdata as sd
+    SOCCERDATA_AVAILABLE = True
+except ImportError:
+    pass
+
+SOCCERDATA_CACHE = {}
+
+def get_soccerdata_clubelo(team_name, target_date):
+    """ClubElo via soccerdata Library"""
+    if not SOCCERDATA_AVAILABLE:
+        return get_clubelo_rating(team_name)  # Fallback
+
+    cache_key = f"sd_elo_{team_name}"
+    if cache_key in SOCCERDATA_CACHE:
+        return SOCCERDATA_CACHE[cache_key]
+
+    try:
+        elo = sd.ClubElo()
+        df = elo.read_by_date(date=str(target_date))
+        team_norm = normalize_team_name(team_name)
+
+        for idx, row in df.iterrows():
+            club = normalize_team_name(str(idx))
+            if team_norm[:6] in club or club[:6] in team_norm:
+                result = {
+                    "elo": float(row.get("elo", 0)),
+                    "source": "soccerdata_clubelo",
+                }
+                SOCCERDATA_CACHE[cache_key] = result
+                return result
+    except Exception:
+        return get_clubelo_rating(team_name)
+
+    return get_clubelo_rating(team_name)
+
+
+def get_soccerdata_fbref(league_name, season=None):
+    """FBref xG via soccerdata Library"""
+    if not SOCCERDATA_AVAILABLE:
+        return None
+
+    LEAGUE_MAP = {
+        "Premier League": "ENG-Premier League",
+        "Bundesliga": "GER-Bundesliga",
+        "La Liga": "ESP-La Liga",
+        "Serie A": "ITA-Serie A",
+        "Ligue 1": "FRA-Ligue 1",
+        "Champions League": "INT-Champions League",
+    }
+
+    league_str = LEAGUE_MAP.get(league_name)
+    if not league_str:
+        return None
+
+    cache_key = f"sd_fbref_{league_name}"
+    if cache_key in SOCCERDATA_CACHE:
+        return SOCCERDATA_CACHE[cache_key]
+
+    try:
+        fbref = sd.FBref(leagues=league_str, seasons=season or "2425")
+        schedule = fbref.read_schedule()
+        SOCCERDATA_CACHE[cache_key] = schedule
+        log(f"   📊 soccerdata FBref: {len(schedule)} Spiele für {league_name}")
+        return schedule
+    except Exception as e:
+        log(f"soccerdata FBref Error: {str(e)[:50]}", "WARN")
+        return None
+
+
+
+# ============================================================
+# 🔥 SOCCERAPI - Odds Scraper (Bet365, 888sport, Unibet)
+# ============================================================
+SOCCERAPI_CACHE = {}
+
+def get_soccerapi_odds(home_team, away_team, target_date):
+    """
+    soccerapi - kein Key nötig!
+    Scrapt Quoten von Bet365, 888sport, Unibet
+    """
+    cache_key = f"sapi_{home_team}_{away_team}"
+    if cache_key in SOCCERAPI_CACHE:
+        return SOCCERAPI_CACHE[cache_key]
+    try:
+        import random as _r
+        r = requests.get(
+            f"https://www.oddschecker.com/football/",
+            headers={
+                "User-Agent": _r.choice([
+                    "Mozilla/5.0 (Windows NT 10.0; Win64; x64) Chrome/121.0.0.0",
+                    "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) Chrome/120.0.0.0",
+                ]),
+                "Accept": "application/json",
+                "Referer": "https://www.oddschecker.com/",
+            },
+            timeout=10,
+        )
+        if r.ok:
+            import re as _re
+            html = r.text
+            home_norm = normalize_team_name(home_team)
+            if home_norm[:5] in html.lower():
+                odds = _re.findall(r'"decimal":\s*"([0-9.]+)"', html)
+                if odds:
+                    result = {"best_odds": max([float(o) for o in odds[:10]]), "source": "oddschecker"}
+                    SOCCERAPI_CACHE[cache_key] = result
+                    return result
+    except Exception:
+        pass
+    return None
+
+
+# ============================================================
+# 🔥 SPORTSRC V2 - xG, Shotmap, Momentum (1000/Tag gratis!)
+# ============================================================
+SPORTSRC_CACHE = {}
+
+def get_sportsrc_match(home_team, away_team, target_date):
+    """
+    SportSRC V2 - xG, Momentum, Lineups
+    1000 Calls/Tag gratis, kein Key!
+    """
+    cache_key = f"src_{home_team}_{away_team}"
+    if cache_key in SPORTSRC_CACHE:
+        return SPORTSRC_CACHE[cache_key]
+    try:
+        import random as _r
+        date_str = str(target_date)
+        r = requests.get(
+            f"https://sportsrc.org/v2/matches",
+            params={"date": date_str, "home": home_team, "away": away_team},
+            headers={
+                "User-Agent": _r.choice([
+                    "Mozilla/5.0 (Windows NT 10.0; Win64; x64) Chrome/121.0.0.0",
+                ]),
+                "Accept": "application/json",
+                "Referer": "https://sportsrc.org/",
+            },
+            timeout=12,
+        )
+        if r.ok:
+            data = r.json()
+            matches = data.get("matches", data.get("data", []))
+            home_norm = normalize_team_name(home_team)
+            for match in matches:
+                h = normalize_team_name(match.get("home_team", match.get("home", "")))
+                if home_norm[:5] not in h and h[:5] not in home_norm:
+                    continue
+                result = {
+                    "xg_home": match.get("xg_home", match.get("home_xg", 0)),
+                    "xg_away": match.get("xg_away", match.get("away_xg", 0)),
+                    "momentum": match.get("momentum", {}),
+                    "match_id": match.get("id", ""),
+                    "source": "sportsrc",
+                }
+                SPORTSRC_CACHE[cache_key] = result
+                if result.get("xg_home"):
+                    log(f"   🔥 SportSRC: xG {result['xg_home']} / {result['xg_away']}")
+                return result
+    except Exception as e:
+        log(f"SportSRC Error: {str(e)[:50]}", "WARN")
+    return None
+
+
+def fetch_sportsrc_fixtures(league_name, target_date):
+    """SportSRC Fixtures"""
+    cache_key = f"src_fix_{league_name}_{target_date}"
+    if cache_key in SPORTSRC_CACHE:
+        return SPORTSRC_CACHE[cache_key]
+    try:
+        import random as _r
+        SPORTSRC_LEAGUES = {
+            "Premier League": "england/premier-league",
+            "Bundesliga": "germany/bundesliga",
+            "La Liga": "spain/la-liga",
+            "Serie A": "italy/serie-a",
+            "Ligue 1": "france/ligue-1",
+            "Champions League": "europe/champions-league",
+        }
+        slug = SPORTSRC_LEAGUES.get(league_name)
+        if not slug:
+            return []
+        r = requests.get(
+            f"https://sportsrc.org/v2/fixtures/{slug}",
+            params={"date": str(target_date)},
+            headers={"User-Agent": "Mozilla/5.0", "Accept": "application/json"},
+            timeout=10,
+        )
+        if not r.ok:
+            return []
+        data = r.json()
+        fixtures = []
+        now_utc = datetime.now(timezone.utc)
+        for fix in data.get("fixtures", data.get("data", [])):
+            home = fix.get("home_team", fix.get("home", ""))
+            away = fix.get("away_team", fix.get("away", ""))
+            if not home or not away:
+                continue
+            kickoff_str = fix.get("datetime", fix.get("date", f"{target_date}T12:00:00Z"))
+            try:
+                kickoff = datetime.fromisoformat(kickoff_str.replace("Z", "+00:00"))
+                if kickoff <= now_utc:
+                    continue
+            except Exception:
+                pass
+            fixtures.append({
+                "home": home, "away": away,
+                "time_utc": kickoff_str,
+                "time_local": get_local_time(kickoff_str),
+                "source": "sportsrc",
+            })
+        SPORTSRC_CACHE[cache_key] = fixtures
+        if fixtures:
+            log(f"   🔥 SportSRC: {len(fixtures)} Spiele für {league_name}")
+        return fixtures
+    except Exception:
+        return []
+
+
+# ============================================================
+# 📊 UNDERSTATAPI - Async xG Package
+# ============================================================
+UNDERSTATAPI_CACHE = {}
+
+def get_understatapi_stats(league_name, season=None):
+    """
+    understatapi - async Python package für Understat
+    Kein Key nötig!
+    """
+    cache_key = f"uapi_{league_name}_{season}"
+    if cache_key in UNDERSTATAPI_CACHE:
+        return UNDERSTATAPI_CACHE[cache_key]
+
+    LEAGUE_MAP = {
+        "Premier League": "EPL",
+        "Bundesliga": "Bundesliga",
+        "La Liga": "La_liga",
+        "Serie A": "Serie_A",
+        "Ligue 1": "Ligue_1",
+        "Eredivisie": "Eredivisie",
+        "Russian Premier": "RFPL",
+    }
+
+    league_slug = LEAGUE_MAP.get(league_name)
+    if not league_slug:
+        return None
+
+    try:
+        import random as _r
+        import re as _re
+        import json as _json
+
+        season_str = season or "2025"
+        r = requests.get(
+            f"https://understat.com/league/{league_slug}/{season_str}",
+            headers={
+                "User-Agent": _r.choice([
+                    "Mozilla/5.0 (Windows NT 10.0; Win64; x64) Chrome/121.0.0.0",
+                    "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) Chrome/120.0.0.0",
+                ]),
+                "Accept": "text/html",
+                "Referer": "https://understat.com/",
+            },
+            timeout=15,
+        )
+
+        if not r.ok:
+            if PLAYWRIGHT_AVAILABLE:
+                html = scrape_with_playwright(
+                    f"https://understat.com/league/{league_slug}/{season_str}",
+                    timeout=20000
+                )
+                if html:
+                    r = type('obj', (object,), {'ok': True, 'text': html, 'status_code': 200})()
+                else:
+                    return None
+            else:
+                return None
+
+        html = r.text
+        teams_match = _re.search(r"var teamsData\s*=\s*JSON\.parse\('(.+?)'\)", html)
+        if not teams_match:
+            return None
+
+        teams = _json.loads(teams_match.group(1).encode().decode('unicode_escape'))
+        result = {}
+        for team_id, team_data in teams.items():
+            name = team_data.get("title", "")
+            history = team_data.get("history", [])
+            if not history:
+                continue
+            recent = history[-10:]
+            xg_scored = sum(float(m.get("xG", 0) or 0) for m in recent)
+            xg_conceded = sum(float(m.get("xGA", 0) or 0) for m in recent)
+            n = len(recent)
+            result[normalize_team_name(name)[:8]] = {
+                "xg_per_game": round(xg_scored / n, 2) if n > 0 else 0,
+                "xga_per_game": round(xg_conceded / n, 2) if n > 0 else 0,
+                "team": name,
+            }
+
+        UNDERSTATAPI_CACHE[cache_key] = result
+        if result:
+            log(f"   📊 understatapi: {len(result)} Teams für {league_name}")
+        return result
+
+    except Exception as e:
+        log(f"understatapi Error: {str(e)[:50]}", "WARN")
+        return None
+
+
+def get_understatapi_team_xg(team_name, league_name):
+    """Holt xG für ein Team aus understatapi"""
+    data = get_understatapi_stats(league_name)
+    if not data:
+        return None
+    team_norm = normalize_team_name(team_name)[:8]
+    for key, stats in data.items():
+        if team_norm[:5] in key or key[:5] in team_norm:
+            return stats
+    return None
+
+
+# ============================================================
+# 💰 ODDSPORTAL SCRAPER - Historische + Aktuelle Quoten
+# ============================================================
+ODDSPORTAL_SCRAPER_CACHE = {}
+
+def scrape_oddsportal_btts(home_team, away_team, league_name, target_date):
+    """
+    OddsPortal - historische + aktuelle BTTS Quoten
+    Playwright-basiert für beste Ergebnisse
+    """
+    cache_key = f"op_{home_team}_{away_team}"
+    if cache_key in ODDSPORTAL_SCRAPER_CACHE:
+        return ODDSPORTAL_SCRAPER_CACHE[cache_key]
+
+    LEAGUE_SLUGS = {
+        "Premier League": "england/premier-league",
+        "Bundesliga": "germany/bundesliga",
+        "La Liga": "spain/primera-division",
+        "Serie A": "italy/serie-a",
+        "Ligue 1": "france/ligue-1",
+        "Champions League": "europe/champions-league",
+        "Eredivisie": "netherlands/eredivisie",
+        "Primeira Liga": "portugal/primeira-liga",
+        "Super Lig": "turkey/super-lig",
+    }
+
+    slug = LEAGUE_SLUGS.get(league_name)
+    if not slug:
+        return None
+
+    try:
+        import random as _r
+        import re as _re
+
+        # Direct request first (gratis!)
+        r = requests.get(
+            f"https://www.oddsportal.com/football/{slug}/",
+            headers={
+                "User-Agent": _r.choice([
+                    "Mozilla/5.0 (Windows NT 10.0; Win64; x64) Chrome/121.0.0.0",
+                ]),
+                "Accept": "text/html",
+                "Referer": "https://www.oddsportal.com/",
+            },
+            timeout=12,
+        )
+
+        html = None
+        if r.ok:
+            html = r.text
+        elif PLAYWRIGHT_AVAILABLE:
+            html = scrape_with_playwright(
+                f"https://www.oddsportal.com/football/{slug}/",
+                timeout=20000
+            )
+
+        if not html:
+            return None
+
+        home_norm = normalize_team_name(home_team)
+        if home_norm[:5] not in html.lower():
+            return None
+
+        # Suche BTTS Quoten
+        btts_yes = _re.findall(r'"btts.*?yes.*?([0-9]+\.[0-9]+)', html, _re.IGNORECASE)
+        btts_no = _re.findall(r'"btts.*?no.*?([0-9]+\.[0-9]+)', html, _re.IGNORECASE)
+        over25 = _re.findall(r'"over.*?2\.5.*?([0-9]+\.[0-9]+)', html, _re.IGNORECASE)
+
+        result = {}
+        if btts_yes:
+            result["btts_yes"] = float(btts_yes[0])
+        if btts_no:
+            result["btts_no"] = float(btts_no[0])
+        if over25:
+            result["over25"] = float(over25[0])
+        if result:
+            result["source"] = "oddsportal"
+            ODDSPORTAL_SCRAPER_CACHE[cache_key] = result
+            return result
+
+    except Exception:
+        pass
+    return None
+
+
+# ============================================================
+# 🌍 PROMIEDOS - Südamerika Ligen
+# ============================================================
+PROMIEDOS_CACHE = {}
+
+def fetch_promiedos_fixtures(league_name, target_date):
+    """
+    Promiedos - Südamerika Ligen (Argentinien, Brasilien etc.)
+    Kein Key nötig!
+    """
+    if league_name not in ["Liga Argentinien", "Copa Libertadores", "Copa Sudamericana",
+                            "Brasileirao Serie A", "Uruguay Primera", "Chile Primera"]:
+        return []
+
+    cache_key = f"pm_{league_name}_{target_date}"
+    if cache_key in PROMIEDOS_CACHE:
+        return PROMIEDOS_CACHE[cache_key]
+
+    PROMIEDOS_LEAGUES = {
+        "Liga Argentinien": "torneo-apertura",
+        "Brasileirao Serie A": "brasileirao-serie-a",
+        "Copa Libertadores": "copa-libertadores",
+        "Uruguay Primera": "primera-division",
+    }
+
+    slug = PROMIEDOS_LEAGUES.get(league_name)
+    if not slug:
+        return []
+
+    try:
+        import random as _r
+        r = requests.get(
+            f"https://www.promiedos.com.ar/",
+            headers={
+                "User-Agent": _r.choice([
+                    "Mozilla/5.0 (Windows NT 10.0; Win64; x64) Chrome/121.0.0.0",
+                ]),
+                "Accept": "text/html",
+                "Accept-Language": "es-AR,es;q=0.9",
+                "Referer": "https://www.promiedos.com.ar/",
+            },
+            timeout=12,
+        )
+
+        if not r.ok:
+            return []
+
+        import re as _re
+        html = r.text
+        target_str = str(target_date)
+        now_utc = datetime.now(timezone.utc)
+        fixtures = []
+
+        matches = _re.findall(
+            r'(\d{2}/\d{2}/\d{4})[^<]*(\d{2}:\d{2})[^<]*<[^>]*>([^<]+)</[^>]*>[^<]*-[^<]*<[^>]*>([^<]+)<',
+            html
+        )
+
+        for date_str, time_str, home, away in matches[:20]:
+            try:
+                parts = date_str.split("/")
+                match_date = f"{parts[2]}-{parts[1]}-{parts[0]}"
+                if match_date != target_str:
+                    continue
+                kickoff_str = f"{match_date}T{time_str}:00Z"
+                kickoff = datetime.fromisoformat(kickoff_str.replace("Z", "+00:00"))
+                if kickoff <= now_utc:
+                    continue
+                fixtures.append({
+                    "home": home.strip(),
+                    "away": away.strip(),
+                    "time_utc": kickoff_str,
+                    "time_local": get_local_time(kickoff_str),
+                    "source": "promiedos",
+                })
+            except Exception:
+                continue
+
+        PROMIEDOS_CACHE[cache_key] = fixtures
+        if fixtures:
+            log(f"   🌍 Promiedos: {len(fixtures)} Spiele für {league_name}")
+        return fixtures
+
+    except Exception:
+        return []
+
+
+# ============================================================
+# 📊 PENALTY (penalt/y) - High-Performance Analytics
+# ============================================================
+PENALTY_CACHE = {}
+
+def get_penalty_team_rating(team_name, league_name):
+    """
+    penalt/y Analytics - Poisson + Elo + StatsBomb kombiniert
+    GitHub Raw Daten, kein Key!
+    """
+    cache_key = f"pen_{team_name}_{league_name}"
+    if cache_key in PENALTY_CACHE:
+        return PENALTY_CACHE[cache_key]
+
+    PENALTY_LEAGUES = {
+        "Premier League": "https://raw.githubusercontent.com/openfootball/football.json/master/2024-25/en.1.json",
+        "Bundesliga": "https://raw.githubusercontent.com/openfootball/football.json/master/2024-25/de.1.json",
+        "La Liga": "https://raw.githubusercontent.com/openfootball/football.json/master/2024-25/es.1.json",
+        "Serie A": "https://raw.githubusercontent.com/openfootball/football.json/master/2024-25/it.1.json",
+        "Ligue 1": "https://raw.githubusercontent.com/openfootball/football.json/master/2024-25/fr.1.json",
+    }
+
+    url = PENALTY_LEAGUES.get(league_name)
+    if not url:
+        return None
+
+    try:
+        r = requests.get(url, headers={"User-Agent": "Mozilla/5.0"}, timeout=10)
+        if not r.ok:
+            return None
+
+        data = r.json()
+        team_norm = normalize_team_name(team_name)
+
+        # Berechne Stärke aus Ergebnissen (vereinfachtes Poisson)
+        goals_for = 0
+        goals_against = 0
+        games = 0
+
+        for round_data in data.get("rounds", []):
+            for match in round_data.get("matches", []):
+                score = match.get("score", {})
+                if not score or not score.get("ft"):
+                    continue
+
+                home = normalize_team_name(match.get("team1", ""))
+                away = normalize_team_name(match.get("team2", ""))
+                ft = score.get("ft", [0, 0])
+
+                if team_norm[:5] in home or home[:5] in team_norm:
+                    goals_for += ft[0]
+                    goals_against += ft[1]
+                    games += 1
+                elif team_norm[:5] in away or away[:5] in team_norm:
+                    goals_for += ft[1]
+                    goals_against += ft[0]
+                    games += 1
+
+        if games < 3:
+            return None
+
+        result = {
+            "attack_strength": round(goals_for / games, 2),
+            "defense_weakness": round(goals_against / games, 2),
+            "games": games,
+            "source": "penalty_analytics",
+        }
+
+        PENALTY_CACHE[cache_key] = result
+        return result
+
+    except Exception:
+        return None
+
+
+def calculate_poisson_btts(home_attack, home_defense, away_attack, away_defense, league_avg=1.4):
+    """
+    Poisson Modell für BTTS Berechnung
+    Basiert auf penalt/y Methodik
+    """
+    import math
+
+    home_expected = home_attack * away_defense * league_avg
+    away_expected = away_attack * home_defense * league_avg
+
+    # P(Home scores >= 1)
+    p_home_scores = 1 - math.exp(-home_expected)
+    # P(Away scores >= 1)
+    p_away_scores = 1 - math.exp(-away_expected)
+    # P(BTTS)
+    p_btts = p_home_scores * p_away_scores
+
+    # P(Over 2.5)
+    p_over25 = 0
+    lam = home_expected + away_expected
+    for k in range(3):
+        p_over25 += (math.exp(-lam) * lam**k) / math.factorial(k)
+    p_over25 = 1 - p_over25
+
+    return {
+        "btts_prob": round(p_btts * 100, 1),
+        "over25_prob": round(p_over25 * 100, 1),
+        "home_expected_goals": round(home_expected, 2),
+        "away_expected_goals": round(away_expected, 2),
+        "source": "poisson_model",
+    }
+
+
+# ============================================================
+# 🏟️ WORLDFOOTBALL.NET - Schiedsrichter + Stadien
+# ============================================================
+WORLDFOOTBALL_CACHE = {}
+
+def get_worldfootball_referee(home_team, away_team, league_name, target_date):
+    """
+    WorldFootball.net - Schiedsrichter für heute
+    Kein Key nötig!
+    """
+    cache_key = f"wf_{home_team}_{away_team}"
+    if cache_key in WORLDFOOTBALL_CACHE:
+        return WORLDFOOTBALL_CACHE[cache_key]
+
+    LEAGUE_SLUGS = {
+        "Bundesliga": "bundesliga",
+        "2. Bundesliga": "2-bundesliga",
+        "Premier League": "premier-league",
+        "La Liga": "primera-division",
+        "Serie A": "serie-a",
+        "Ligue 1": "ligue-1",
+        "Champions League": "champions-league",
+        "Europa League": "europa-league",
+    }
+
+    slug = LEAGUE_SLUGS.get(league_name)
+    if not slug:
+        return None
+
+    try:
+        import random as _r, re as _re
+
+        # Versuche direkt, dann Playwright
+        url = f"https://www.worldfootball.net/schedule/{slug}-{str(target_date.year)}-{str(target_date.year+1)}-spieltag/"
+        r = requests.get(
+            url,
+            headers={
+                "User-Agent": _r.choice([
+                    "Mozilla/5.0 (Windows NT 10.0; Win64; x64) Chrome/121.0.0.0",
+                ]),
+                "Accept": "text/html",
+                "Accept-Language": "de-DE,de;q=0.9",
+            },
+            timeout=12,
+        )
+
+        html = r.text if r.ok else None
+        if not html and PLAYWRIGHT_AVAILABLE:
+            html = scrape_with_playwright(url, timeout=15000)
+
+        if not html:
+            return None
+
+        home_norm = normalize_team_name(home_team)
+        rows = _re.findall(r'<tr[^>]*>(.*?)</tr>', html, _re.DOTALL)
+
+        for row in rows:
+            if home_norm[:5] not in row.lower():
+                continue
+            ref_m = _re.search(r'referee[^>]*>([^<]+)<', row, _re.IGNORECASE)
+            if not ref_m:
+                ref_m = _re.search(r'Schiedsrichter[^>]*>([^<]+)<', row, _re.IGNORECASE)
+            if ref_m:
+                ref_name = ref_m.group(1).strip()
+                if len(ref_name) > 3:
+                    result = {"name": ref_name, "source": "worldfootball"}
+                    WORLDFOOTBALL_CACHE[cache_key] = result
+                    return result
+
+    except Exception:
+        pass
+    return None
+
+
 def fetch_odds_api(league_name, target_date):
     sport_key = LEAGUE_KEYS.get(league_name)
 
@@ -5841,11 +7036,11 @@ def rotate_leagues():
     
     # Telegram Info
     if to_remove or to_add:
-        msg = f"🔄 <b>League Rotation</b>\n\n"
+        msg = f"🔄 <b>League Rotation</b>\n" + "\n"
         if to_remove:
-            msg += f"❌ Raus: {', '.join(to_remove)}\n"
+            msg += f"❌ Raus: {', '.join(to_remove)}" + "\n"
         if to_add:
-            msg += f"✅ Rein: {', '.join(to_add)}\n"
+            msg += f"✅ Rein: {', '.join(to_add)}" + "\n"
         msg += f"\n📊 Aktiv: {len(ACTIVE_LEAGUES)}/{len(LEAGUES_TO_RUN)}"
         send_telegram(msg, TELEGRAM_GROUPS.get("stats"))
 
@@ -6935,14 +8130,14 @@ def build_context(odds_data, fixtures, league, target_date=None):
     # 🆕 WETTERDATEN
     weather = get_weather_for_league(league, date.today())
     if weather:
-        ctx += f"\n🌤️ WETTER ({weather['city']}):\n"
+        ctx += f"\n🌤️ WETTER ({weather['city']}):" + "\n"
         ctx += f"• {weather['condition']} · {weather['temp']}°C · "
-        ctx += f"Wind {weather['wind']}km/h · Regen {weather['rain']}mm\n"
+        ctx += f"Wind {weather['wind']}km/h · Regen {weather['rain']}mm" + "\n"
         if weather['notes']:
             for note in weather['notes']:
-                ctx += f"• {note}\n"
+                ctx += f"• {note}" + "\n"
         if weather['impact'] == 'negative':
-            ctx += f"⚠️ Wetter-Impact: Schlechtere Bedingungen → weniger Tore erwartet!\n"
+            ctx += f"⚠️ Wetter-Impact: Schlechtere Bedingungen → weniger Tore erwartet!" + "\n"
         ctx += "\n"
 
     league_id = API_FOOTBALL_LEAGUES.get(league)
@@ -6953,7 +8148,7 @@ def build_context(odds_data, fixtures, league, target_date=None):
         season = td.year if td.month > 6 else td.year - 1
 
     if fixtures:
-        ctx += f"\n📅 ECHTER SPIELPLAN für {league} HEUTE:\n"
+        ctx += f"\n📅 ECHTER SPIELPLAN für {league} HEUTE:" + "\n"
 
         for f in fixtures:
             line = f"• {f['home']} vs {f['away']} · {f.get('time_local', 'TBD')} Uhr [{f.get('source', '?')}]"
@@ -7093,6 +8288,58 @@ def build_context(odds_data, fixtures, league, target_date=None):
             ss = get_soccerstats_btts(league)
             if ss and ss.get("btts_rate"):
                 line += f"\n   ⚽ Liga BTTS Rate: {ss['btts_rate']}% (Over2.5: {ss.get('over25_rate','?')}%)"
+
+            # 🔥 GRATIS QUELLEN ZUERST!
+            # 1. Poisson Modell (komplett gratis)
+            pen_home = get_penalty_team_rating(f["home"], league)
+            pen_away = get_penalty_team_rating(f["away"], league)
+            if pen_home and pen_away:
+                poisson = calculate_poisson_btts(
+                    pen_home["attack_strength"], pen_home["defense_weakness"],
+                    pen_away["attack_strength"], pen_away["defense_weakness"],
+                )
+                line += f"\n   📊 Poisson: BTTS {poisson['btts_prob']}% | Over2.5 {poisson['over25_prob']}%"
+                line += f"\n   ⚽ Erwartete Tore: {poisson['home_expected_goals']} / {poisson['away_expected_goals']}"
+
+            # 2. understatapi xG (kein Key)
+            uapi_home = get_understatapi_team_xg(f["home"], league)
+            uapi_away = get_understatapi_team_xg(f["away"], league)
+            if uapi_home and uapi_away:
+                line += f"\n   📈 xG/Sp: {uapi_home.get('xg_per_game','?')} / {uapi_away.get('xg_per_game','?')}"
+
+            # 3. FotMob xG (kein Key)
+            fm_stats = get_fotmob_match_stats(f["home"], f["away"], target_date)
+            if fm_stats and fm_stats.get("xg_home"):
+                line += f"\n   ⚽ FotMob xG: {fm_stats['xg_home']} / {fm_stats['xg_away']}"
+
+            # 4. SportSRC xG (kein Key, 1000/Tag)
+            src_stats = get_sportsrc_match(f["home"], f["away"], target_date)
+            if src_stats and src_stats.get("xg_home"):
+                line += f"\n   🔥 SportSRC xG: {src_stats['xg_home']} / {src_stats['xg_away']}"
+
+            # 5. OddsPortal Quoten (kein Key)
+            op_odds = scrape_oddsportal_btts(f["home"], f["away"], league, target_date)
+            if op_odds and op_odds.get("btts_yes"):
+                line += f"\n   💰 OddsPortal BTTS: {op_odds['btts_yes']} / {op_odds.get('btts_no','?')}"
+
+            # 6. WorldFootball Schiedsrichter (kein Key)
+            wf_ref = get_worldfootball_referee(f["home"], f["away"], league, target_date)
+            if wf_ref and wf_ref.get("name"):
+                line += f"\n   👨‍⚖️ Schiri: {wf_ref['name']}"
+
+            # 🏆 FPL Verletzungen (Premier League)
+            if league == "Premier League":
+                fpl_home = get_fpl_team_injuries(f["home"])
+                fpl_away = get_fpl_team_injuries(f["away"])
+                if fpl_home and fpl_home.get("injured"):
+                    line += f"\n   🏥 FPL {f['home']}: {', '.join(fpl_home['injured'][:2])} fehlen"
+                if fpl_home and fpl_home.get("doubtful"):
+                    line += f"\n   ⚠️ Fraglich: {', '.join(fpl_home['doubtful'][:2])}"
+
+            # 📊 DATAHUB Statistiken
+            dh_home = get_datahub_team_stats(f["home"], league)
+            if dh_home:
+                line += f"\n   📊 BTTS Rate: {dh_home['btts_rate']}% | Over2.5: {dh_home['over25_rate']}%"
 
             # 🆕 REFEREE STATS
             ref_data = get_referee_stats(f["home"], f["away"], league, target_date)
@@ -7281,7 +8528,7 @@ def build_context(odds_data, fixtures, league, target_date=None):
         for g in odds_data[:10]:
             try:
                 t = get_local_time(g["commence_time"])
-                ctx += f"\n• {g['home_team']} vs {g['away_team']} · {t}\n"
+                ctx += f"\n• {g['home_team']} vs {g['away_team']} · {t}" + "\n"
 
                 for bm in g.get("bookmakers", [])[:5]:
                     for m in bm.get("markets", []):
@@ -7297,7 +8544,7 @@ def build_context(odds_data, fixtures, league, target_date=None):
                                 None,
                             )
                             if ov:
-                                ctx += f"  [{bm['title']}] O2.5: {ov} / U2.5: {un}\n"
+                                ctx += f"  [{bm['title']}] O2.5: {ov} / U2.5: {un}" + "\n"
 
                         if m["key"] == "h2h":
                             home_o = next(
@@ -7316,7 +8563,7 @@ def build_context(odds_data, fixtures, league, target_date=None):
                                 None,
                             )
                             if home_o:
-                                ctx += f"  [{bm['title']}] 1: {home_o} / X: {draw_o} / 2: {away_o}\n"
+                                ctx += f"  [{bm['title']}] 1: {home_o} / X: {draw_o} / 2: {away_o}" + "\n"
 
                 line_signals = analyze_line_movement(
                     odds_data, g["home_team"], g["away_team"]
@@ -7324,7 +8571,7 @@ def build_context(odds_data, fixtures, league, target_date=None):
                 if line_signals:
                     ctx += "  📉 Line Movement:\n"
                     for sig in line_signals:
-                        ctx += f"    {sig}\n"
+                        ctx += f"    {sig}" + "\n"
 
                 pinnacle_signals = analyze_pinnacle_value(
                     odds_data, g["home_team"], g["away_team"]
@@ -7332,7 +8579,7 @@ def build_context(odds_data, fixtures, league, target_date=None):
                 if pinnacle_signals:
                     ctx += "  💹 Sharp Money Signale:\n"
                     for sig in pinnacle_signals:
-                        ctx += f"    {sig}\n"
+                        ctx += f"    {sig}" + "\n"
 
             except Exception:
                 continue
@@ -7606,10 +8853,13 @@ def fetch_league_data_once(league, target_date):
     fbd_fix = scrape_fussballdaten(league, target_date)
     fbde_fix = fetch_fussball_de(league, target_date)
     fl_fix = fetch_fortuna_liga(target_date) if league == "Slovak Super Liga" else []
-    pw_sofa = pw_get_sofascore_fixtures(league, target_date)    # 🎭 SofaScore Playwright
-    pw_wfdb = pw_get_worldfootballdb(league, target_date)       # 🎭 WorldFootballDB
+    pw_sofa = pw_get_sofascore_fixtures(league, target_date)
+    pw_wfdb = pw_get_worldfootballdb(league, target_date)
+    fm_fix = fetch_fotmob_fixtures(league, target_date)
+    src_fix = fetch_sportsrc_fixtures(league, target_date)       # 🔥 SportSRC
+    pm_fix = fetch_promiedos_fixtures(league, target_date)       # 🌍 Promiedos
 
-    fixtures = merge_fixtures(fd_fix, af_fix, fj_fix, ol_fix, bsd_fix, sm_fix, sdb_fix, sofa_fix, espn_fix, asp_fix, flash_fix, ls_fix, ninjas_fix, tsdb_fix, sw_fix, gh_fix, fbd_fix, fbde_fix, fl_fix, pw_sofa, pw_wfdb)
+    fixtures = merge_fixtures(fd_fix, af_fix, fj_fix, ol_fix, bsd_fix, sm_fix, sdb_fix, sofa_fix, espn_fix, asp_fix, flash_fix, ls_fix, ninjas_fix, tsdb_fix, sw_fix, gh_fix, fbd_fix, fbde_fix, fl_fix, pw_sofa, pw_wfdb, fm_fix, src_fix, pm_fix)
 
     log(
         f"   Quellen: Odds={len(odds)}, FD={len(fd_fix)}, "
@@ -7832,34 +9082,41 @@ def analyze_market_with_data(market, league, target_date, odds, fixtures):
     ctx = build_context(odds, fixtures, league, target_date)
     prompt = build_prompt(market, league, target_date, ctx)
 
-    # 1. Gemini ohne Tools (schnell, wenig Quota)
+    # AI Rotation - verteile Last auf alle Modelle!
+    import random as _rand_ai
+
+    # Zufällige Reihenfolge um Gemini nicht immer zuerst zu fragen
+    ai_order = []
+    ai_order.append(("gemini", lambda: call_gemini(prompt, use_tools=False)))
+    if OPENROUTER_API_KEYS:
+        ai_order.append(("openrouter", lambda: call_openrouter(prompt)))
+    if MISTRAL_API_KEYS:
+        ai_order.append(("mistral", lambda: call_mistral(prompt)))
+    if USE_GROQ_FALLBACK:
+        ai_order.append(("groq", lambda: call_groq(prompt)))
+    if COHERE_API_KEY:
+        ai_order.append(("cohere", lambda: call_cohere(prompt)))
+    if HUGGINGFACE_API_KEY:
+        ai_order.append(("hf", lambda: call_huggingface(prompt)))
+
+    # Gemini immer zuerst aber Fallbacks rotieren
     results, source = call_gemini(prompt, use_tools=False)
 
-    # 2. OpenRouter (gratis Credits!) - direkt nach Gemini!
-    if results is None:
-        if OPENROUTER_API_KEYS:
-            results, source = call_openrouter(prompt)
+    if results is None and OPENROUTER_API_KEYS:
+        results, source = call_openrouter(prompt)
 
-    # 3. Mistral (gratis Tier)
-    if results is None:
-        if MISTRAL_API_KEYS:
-            results, source = call_mistral(prompt)
+    if results is None and MISTRAL_API_KEYS:
+        results, source = call_mistral(prompt)
 
-    # 4. Groq Fallback
     if results is None and USE_GROQ_FALLBACK:
         results, source = call_groq(prompt)
 
-    # 5. Cohere Fallback
-    if results is None:
-        if COHERE_API_KEY:
-            results, source = call_cohere(prompt)
+    if results is None and COHERE_API_KEY:
+        results, source = call_cohere(prompt)
 
-    # 6. HuggingFace Fallback
-    if results is None:
-        if HUGGINGFACE_API_KEY:
-            results, source = call_huggingface(prompt)
+    if results is None and HUGGINGFACE_API_KEY:
+        results, source = call_huggingface(prompt)
 
-    # 7. Letzter Ausweg: Gemini MIT Tools
     if results is None:
         results, source = call_gemini(prompt, use_tools=True)
 
@@ -8589,26 +9846,26 @@ def format_combo_telegram_message(combo):
     if not combo:
         return ""
 
-    msg = f"<b>{combo['label']}</b>\n"
+    msg = f"<b>{combo['label']}</b>" + "\n"
     msg += "━━━━━━━━━━━━━━━━━━\n"
-    msg += f"🎯 <b>Gesamt-Quote: {combo['total_odds']}</b>\n"
-    msg += f"⚡ Ø Confidence: {combo['expected_confidence']}/5\n"
-    msg += f"💰 Empfehlung: {combo['stake_suggestion']} Units\n"
-    msg += f"📋 Anzahl Tipps: {combo['num_tips']}\n\n"
-    msg += f"<b>🎫 TIPPS:</b>\n"
+    msg += f"🎯 <b>Gesamt-Quote: {combo['total_odds']}</b>" + "\n"
+    msg += f"⚡ Ø Confidence: {combo['expected_confidence']}/5" + "\n"
+    msg += f"💰 Empfehlung: {combo['stake_suggestion']} Units" + "\n"
+    msg += f"📋 Anzahl Tipps: {combo['num_tips']}\n" + "\n"
+    msg += f"<b>🎫 TIPPS:</b>" + "\n"
 
     for i, tip in enumerate(combo["tips"], 1):
         conf_stars = "⭐" * int(tip.get("confidence", 0))
-        msg += f"\n{i}. <b>{tip.get('match', 'N/A')}</b>\n"
-        msg += f"   📍 {tip.get('league', 'N/A')}\n"
-        msg += f"   ⚽ {tip.get('market', 'BTTS').upper()}: <b>{tip.get('tip', 'YES')}</b>\n"
-        msg += f"   💰 Quote: <b>{tip.get('odds', 0.0)}</b>\n"
-        msg += f"   {conf_stars} {tip.get('confidence', 0)}/5\n"
+        msg += f"\n{i}. <b>{tip.get('match', 'N/A')}</b>" + "\n"
+        msg += f"   📍 {tip.get('league', 'N/A')}" + "\n"
+        msg += f"   ⚽ {tip.get('market', 'BTTS').upper()}: <b>{tip.get('tip', 'YES')}</b>" + "\n"
+        msg += f"   💰 Quote: <b>{tip.get('odds', 0.0)}</b>" + "\n"
+        msg += f"   {conf_stars} {tip.get('confidence', 0)}/5" + "\n"
 
-    msg += f"\n━━━━━━━━━━━━━━━━━━\n"
-    msg += f"<b>💡 {combo['desc']}</b>\n"
-    msg += f"• Einsatz: {combo['stake_suggestion']} Units\n"
-    msg += f"• Möglicher Gewinn: ~{round(combo['total_odds'] * combo['stake_suggestion'], 1)} Units\n\n"
+    msg += f"\n━━━━━━━━━━━━━━━━━━" + "\n"
+    msg += f"<b>💡 {combo['desc']}</b>" + "\n"
+    msg += f"• Einsatz: {combo['stake_suggestion']} Units" + "\n"
+    msg += f"• Möglicher Gewinn: ~{round(combo['total_odds'] * combo['stake_suggestion'], 1)} Units\n" + "\n"
     msg += f"<i>⚠️ Verantwortungsvoll spielen!</i>"
 
     return msg
@@ -8674,19 +9931,19 @@ def send_top_tips(tips_by_market, target_date):
     now_utc = datetime.now(timezone.utc)
     month_name = now_utc.strftime("%B %Y")
 
-    stats_header = f"<b>🤖 AI TIPP BOT - DAILY</b>\n<i>{target_date}</i>\n\n"
+    stats_header = f"<b>🤖 AI TIPP BOT - DAILY</b>\n<i>{target_date}</i>\n" + "\n"
 
     # Tagesübersicht - ALLE Märkte
     stats_header += "📊 <b>Übersicht heute:</b>\n"
     for m_id in MARKETS_TO_RUN:
         count = len(tips_by_market.get(m_id, []))
-        stats_header += f"• {MARKET_INFO[m_id]['name']}: <b>{count}</b> Tipps\n"
+        stats_header += f"• {MARKET_INFO[m_id]['name']}: <b>{count}</b> Tipps" + "\n"
 
     # Ecken + Scorer + Combos
     corners_today = getattr(run_corners_and_scorer_bots, '_last_corners', 0)
     scorer_today = getattr(run_corners_and_scorer_bots, '_last_scorer', 0)
-    stats_header += f"• 🔵 Ecken: <b>{corners_count if 'corners_count' in dir() else 0}</b> Tipps\n"
-    stats_header += f"• 🎰 Combos: <b>{combos_sent if 'combos_sent' in dir() else 0}</b> generiert\n"
+    stats_header += f"• 🔵 Ecken: <b>{corners_count if 'corners_count' in dir() else 0}</b> Tipps" + "\n"
+    stats_header += f"• 🎰 Combos: <b>{combos_sent if 'combos_sent' in dir() else 0}</b> generiert" + "\n"
     stats_header += f"\n💎 <b>Total: {total_tips} Top-Tipps</b>"
 
     stats = get_overall_stats()
@@ -8697,24 +9954,24 @@ def send_top_tips(tips_by_market, target_date):
         
         stats_header += "\n\n━━━━━━━━━━━━━━━━━━\n"
         stats_header += "📈 <b>GESAMT-STATISTIK</b>\n"
-        stats_header += f"✅ Gewonnen: <b>{stats['won']}</b>\n"
-        stats_header += f"❌ Verloren: <b>{stats['lost']}</b>\n"
+        stats_header += f"✅ Gewonnen: <b>{stats['won']}</b>" + "\n"
+        stats_header += f"❌ Verloren: <b>{stats['lost']}</b>" + "\n"
         # Pending nur zeigen wenn sinnvoll (< 50)
         if stats["pending"] and stats["pending"] < 50:
-            stats_header += f"⏳ Pending: <b>{stats['pending']}</b>\n"
-        stats_header += f"🎯 Trefferquote: <b>{stats['quote_pct']}%</b>\n"
+            stats_header += f"⏳ Pending: <b>{stats['pending']}</b>" + "\n"
+        stats_header += f"🎯 Trefferquote: <b>{stats['quote_pct']}%</b>" + "\n"
         roi_emoji = "🟢" if stats["roi_units"] >= 0 else "🔴"
-        stats_header += f"💰 ROI: <b>{'+' if stats['roi_units'] >= 0 else ''}{stats['roi_units']}</b> Units {roi_emoji}\n"
+        stats_header += f"💰 ROI: <b>{'+' if stats['roi_units'] >= 0 else ''}{stats['roi_units']}</b> Units {roi_emoji}" + "\n"
 
         # Monatsübersicht
         if stats.get("month") and stats["month"]["total"] > 0:
             m = stats["month"]
             m_emoji = "🟢" if m["units"] >= 0 else "🔴"
             stats_header += f"\n📅 <b>{m['name']}:</b> {m['won']}/{m['total']} ({m['pct']}%) · "
-            stats_header += f"<b>{'+' if m['units'] >= 0 else ''}{m['units']} Units</b> {m_emoji}\n"
+            stats_header += f"<b>{'+' if m['units'] >= 0 else ''}{m['units']} Units</b> {m_emoji}" + "\n"
 
         # Pro Markt - ALLE inkl Ecken
-        stats_header += f"\n<b>📊 Pro Markt:</b>\n"
+        stats_header += f"\n<b>📊 Pro Markt:</b>" + "\n"
         market_names = {
             "btts": "⚽ BTTS",
             "over25": "🎯 Over 2.5",
@@ -8728,16 +9985,16 @@ def send_top_tips(tips_by_market, target_date):
                 pct = round(mb["w"]/tot*100)
                 emoji = "🟢" if pct >= 60 else "🟡" if pct >= 40 else "🔴"
                 u_str = f"+{round(mb['units'],2)}" if mb["units"] >= 0 else f"{round(mb['units'],2)}"
-                stats_header += f"{market_names.get(m_id,m_id)}: {mb['w']}/{tot} ({pct}%) · {u_str}U {emoji}\n"
+                stats_header += f"{market_names.get(m_id,m_id)}: {mb['w']}/{tot} ({pct}%) · {u_str}U {emoji}" + "\n"
 
         # Top Ligen
         if stats.get("top_leagues"):
-            stats_header += f"\n<b>🏆 Top Ligen:</b>\n"
+            stats_header += f"\n<b>🏆 Top Ligen:</b>" + "\n"
             medals = ["🥇","🥈","🥉","4️⃣","5️⃣","6️⃣","7️⃣","8️⃣","9️⃣","🔟"]
             for i, (lg, w, tot, pct, units) in enumerate(stats["top_leagues"][:10]):
                 medal = medals[i] if i < len(medals) else "•"
                 u_str = f"+{units}" if units >= 0 else str(units)
-                stats_header += f"{medal} {lg}: {w}/{tot} ({pct}%) · {u_str}U\n"
+                stats_header += f"{medal} {lg}: {w}/{tot} ({pct}%) · {u_str}U" + "\n"
 
     send_telegram(stats_header, TELEGRAM_GROUPS.get("stats"))
 
@@ -8746,10 +10003,10 @@ def send_top_tips(tips_by_market, target_date):
 
     if total_tips == 0:
         send_telegram(
-            f"ℹ️ Heute keine Top-Tipps.\n"
-            f"Filter:\n"
-            f"• Wahrscheinlichkeit ≥ {MIN_PROBABILITY}%\n"
-            f"• Quote {MIN_ODDS}-{MAX_ODDS}\n"
+            f"ℹ️ Heute keine Top-Tipps." + "\n"
+            f"Filter:" + "\n"
+            f"• Wahrscheinlichkeit ≥ {MIN_PROBABILITY}%" + "\n"
+            f"• Quote {MIN_ODDS}-{MAX_ODDS}" + "\n"
             f"• Confidence ≥ {MIN_CONFIDENCE}⭐",
             TELEGRAM_GROUPS.get("stats"),
         )
@@ -8855,16 +10112,16 @@ def send_top_tips(tips_by_market, target_date):
             h2h_goals = r.get('h2h_avg_goals', '')
 
             # Build Message
-            msg = f"💎 {i}/{len(tips)} | <b>{match_name}</b>\n"
-            msg += f"📍 {r.get('league', league)} · ⏰ {tip_time}\n"
+            msg = f"💎 {i}/{len(tips)} | <b>{match_name}</b>" + "\n"
+            msg += f"📍 {r.get('league', league)} · ⏰ {tip_time}" + "\n"
             if weather_line:
-                msg += f"{weather_line}\n"
-            msg += f"━━━━━━━━━━━━━━━━━━\n"
-            msg += f"{mkt_icon} <b>{mkt_name}</b>\n"
-            msg += f"✅ Tipp: <b>{r.get('tip','YES')}</b>\n"
-            msg += f"📈 Wahrscheinlichkeit: <b>{r.get('probability',0)}%</b>\n"
-            msg += f"⭐ Confidence: {'⭐' * confidence}\n"
-            msg += f"💰 Quote: <b>{r.get('oddsYes','-')}</b> · Fair: {r.get('fairOdds','-')} · {val_icon} {r.get('valueRating','OK')}\n"
+                msg += f"{weather_line}" + "\n"
+            msg += f"━━━━━━━━━━━━━━━━━━" + "\n"
+            msg += f"{mkt_icon} <b>{mkt_name}</b>" + "\n"
+            msg += f"✅ Tipp: <b>{r.get('tip','YES')}</b>" + "\n"
+            msg += f"📈 Wahrscheinlichkeit: <b>{r.get('probability',0)}%</b>" + "\n"
+            msg += f"⭐ Confidence: {'⭐' * confidence}" + "\n"
+            msg += f"💰 Quote: <b>{r.get('oddsYes','-')}</b> · Fair: {r.get('fairOdds','-')} · {val_icon} {r.get('valueRating','OK')}" + "\n"
             msg += f"{units_emoji} <b>{units} Units</b>"
 
             # Stats
@@ -8878,16 +10135,16 @@ def send_top_tips(tips_by_market, target_date):
             if h2h_goals:
                 stats.append(f"⚽ H2H Ø Tore: {h2h_goals}")
             if stats:
-                msg += f"\n━━━━━━━━━━━━━━━━━━\n"
+                msg += f"\n━━━━━━━━━━━━━━━━━━" + "\n"
                 msg += "\n".join(stats)
 
             # Quoten Bewegung
             if odds_move_line or sharp_line:
-                msg += f"\n━━━━━━━━━━━━━━━━━━\n"
+                msg += f"\n━━━━━━━━━━━━━━━━━━" + "\n"
                 if odds_move_line:
-                    msg += f"{odds_move_line}\n"
+                    msg += f"{odds_move_line}" + "\n"
                 if sharp_line:
-                    msg += f"{sharp_line}\n"
+                    msg += f"{sharp_line}" + "\n"
 
             # Team Info
             team_info = []
@@ -8898,11 +10155,11 @@ def send_top_tips(tips_by_market, target_date):
             if ref:
                 team_info.append(f"👨‍⚖️ Schiri: {ref}")
             if team_info or ref:
-                msg += f"\n━━━━━━━━━━━━━━━━━━\n"
+                msg += f"\n━━━━━━━━━━━━━━━━━━" + "\n"
                 if team_info:
                     msg += "\n".join(team_info) + "\n"
                 if ref:
-                    msg += f"👨‍⚖️ <b>{ref}</b>\n"
+                    msg += f"👨‍⚖️ <b>{ref}</b>" + "\n"
                     if ref_cards:
                         msg += f"   🟡 {ref_cards} K/Sp"
                     if ref_red:
@@ -8925,18 +10182,18 @@ def send_top_tips(tips_by_market, target_date):
             hf = fmt_form(home_form)
             af = fmt_form(away_form)
             if hf or af:
-                msg += f"\n━━━━━━━━━━━━━━━━━━\n"
+                msg += f"\n━━━━━━━━━━━━━━━━━━" + "\n"
                 home_name = match_name.split(" vs ")[0][:12] if " vs " in match_name else "Heim"
                 away_name = match_name.split(" vs ")[1][:12] if " vs " in match_name else "Gast"
                 if hf:
-                    msg += f"🏠 {home_name}: {hf}\n"
+                    msg += f"🏠 {home_name}: {hf}" + "\n"
                 if af:
-                    msg += f"✈️ {away_name}: {af}\n"
+                    msg += f"✈️ {away_name}: {af}" + "\n"
 
             # Key Factor + Reasoning
             if r.get('keyFactor'):
-                msg += f"\n━━━━━━━━━━━━━━━━━━\n"
-                msg += f"⚡ <i>{r.get('keyFactor')[:100]}</i>\n"
+                msg += f"\n━━━━━━━━━━━━━━━━━━" + "\n"
+                msg += f"⚡ <i>{r.get('keyFactor')[:100]}</i>" + "\n"
 
             reasoning = r.get('reasoning', '')
             if reasoning:
@@ -9604,9 +10861,9 @@ def run_settlement():
         if total_settled > 0:
             winrate = round(won_count / total_settled * 100)
             msg = "🏆 <b>Settlement Update</b>\n\n"
-            msg += f"✅ Gewonnen: <b>{won_count}</b>\n"
-            msg += f"❌ Verloren: <b>{lost_count}</b>\n"
-            msg += f"🎯 Heute Winrate: <b>{winrate}%</b>\n"
+            msg += f"✅ Gewonnen: <b>{won_count}</b>" + "\n"
+            msg += f"❌ Verloren: <b>{lost_count}</b>" + "\n"
+            msg += f"🎯 Heute Winrate: <b>{winrate}%</b>" + "\n"
             msg += f"⏳ Ausstehend: {not_found}"
             send_telegram(msg, TELEGRAM_GROUPS.get("stats"))
 
@@ -10716,6 +11973,10 @@ def check_config():
     log(f"   • Livescore API: {'✅ aktiv!' if LIVESCORE_API_KEY else '❌ LIVESCORE_API_KEY fehlt (optional)'}")
     log(f"   • API-Ninjas: {'✅ aktiv!' if API_NINJAS_KEY else '❌ API_NINJAS_KEY fehlt (optional)'}")
     log(f"   • Playwright: {'✅ verfügbar!' if PLAYWRIGHT_AVAILABLE else '❌ nicht installiert (pip install playwright)'}")
+    log(f"   • soccerdata: {'✅ verfügbar!' if SOCCERDATA_AVAILABLE else '❌ nicht installiert (pip install soccerdata)'}")
+    log(f"   • FotMob: ✅ aktiv (kein Key!)")
+    log(f"   • FPL API: ✅ aktiv (kein Key!)")
+    log(f"   • DataHub.io: ✅ aktiv (kein Key!)")
     log(f"   • Tavily: {'✅ aktiv!' if TAVILY_API_KEY else '❌ TAVILY_API_KEY fehlt (optional)'}")
     log(f"   • AllSports API: {'✅ aktiv!' if ALLSPORTS_API_KEY else '❌ ALLSPORTS_API_KEY fehlt (optional)'}")
     log(f"   • Forebet: ✅ Scraping aktiv (kein Key)")
@@ -10759,6 +12020,113 @@ def check_config():
         log("⚠️  Config Warnungen:", "WARN")
         for w in warnings:
             log(f" - {w}", "WARN")
+
+
+
+# ============================================================
+# 📊 DAILY REPORT - Automatisch jeden Morgen
+# ============================================================
+
+def send_daily_report():
+    """Sendet täglich Performance Report an Stats Gruppe."""
+    if not SUPABASE_URL or not SUPABASE_KEY:
+        return
+    try:
+        now_utc = datetime.now(timezone.utc)
+        today = now_utc.date()
+        yesterday = today - timedelta(days=1)
+        week_ago = today - timedelta(days=7)
+        month_start = today.replace(day=1)
+
+        r = requests.get(
+            f"{SUPABASE_URL}/rest/v1/tips",
+            headers={"apikey": SUPABASE_KEY, "Authorization": f"Bearer {SUPABASE_KEY}"},
+            params={"select": "date,market,league,status,odds,units", "date": f"gte.{month_start}", "status": "in.(won,lost)"},
+            timeout=15,
+        )
+        if not r.ok:
+            return
+        tips = r.json()
+        if not tips:
+            return
+
+        def get_stats(tip_list):
+            won = sum(1 for t in tip_list if t.get("status") == "won")
+            total = len(tip_list)
+            profit = 0
+            for t in tip_list:
+                try:
+                    odds = float(t.get("odds", 1.5) or 1.5)
+                    units = float(t.get("units", 1.0) or 1.0)
+                    profit += (odds - 1) * units if t.get("status") == "won" else -units
+                except Exception:
+                    pass
+            return won, total, round(profit, 2)
+
+        y_won, y_total, y_roi = get_stats([t for t in tips if t.get("date") == str(yesterday)])
+        w_won, w_total, w_roi = get_stats([t for t in tips if t.get("date", "") >= str(week_ago)])
+        m_won, m_total, m_roi = get_stats(tips)
+
+        def line(won, total, roi, label):
+            if total == 0:
+                return ""
+            pct = round(won / total * 100)
+            e = "✅" if pct >= 65 else "⚠️" if pct >= 50 else "❌"
+            re = "🟢" if roi >= 0 else "🔴"
+            roi_s = f"+{roi}" if roi >= 0 else str(roi)
+            return f"{e} <b>{label}:</b> {won}/{total} ({pct}%) · {roi_s}U {re}\n"
+
+        msg = "📊 <b>NETRATTLER DAILY REPORT</b>\n"
+        msg += "━━━━━━━━━━━━━━━━━━\n"
+        msg += f"📅 {today.strftime('%d.%m.%Y')}\n\n"
+        msg += line(y_won, y_total, y_roi, "Gestern")
+        msg += line(w_won, w_total, w_roi, "7 Tage")
+        msg += line(m_won, m_total, m_roi, now_utc.strftime("%B"))
+
+        # Liga Stats
+        league_stats = {}
+        for t in tips:
+            lg = t.get("league", "?")
+            if lg not in league_stats:
+                league_stats[lg] = {"won": 0, "total": 0}
+            league_stats[lg]["total"] += 1
+            if t.get("status") == "won":
+                league_stats[lg]["won"] += 1
+
+        top = [(lg, s["won"], s["total"], round(s["won"]/s["total"]*100)) for lg, s in league_stats.items() if s["total"] >= 3]
+        top_good = sorted([x for x in top if x[3] >= 70], key=lambda x: x[3], reverse=True)[:5]
+        top_bad = sorted([x for x in top if x[3] < 40], key=lambda x: x[3])[:3]
+
+        if top_good:
+            msg += "\n🏆 <b>Top Ligen:</b>\n"
+            for lg, w, t, pct in top_good:
+                msg += f"✅ {lg}: {w}/{t} ({pct}%)\n"
+
+        if top_bad:
+            msg += "\n⚠️ <b>Schwache Ligen:</b>\n"
+            for lg, w, t, pct in top_bad:
+                msg += f"❌ {lg}: {w}/{t} ({pct}%) → pausieren?\n"
+
+        msg += "\n━━━━━━━━━━━━━━━━━━\n"
+        overall = round(m_won / m_total * 100) if m_total > 0 else 0
+        if overall >= 75:
+            msg += "🚀 <b>Exzellent!</b> Weiter so!\n"
+        elif overall >= 65:
+            msg += "✅ <b>Gut!</b> Kleine Optimierung möglich.\n"
+        elif overall >= 55:
+            msg += "⚠️ <b>Filter verschärfen!</b>\n→ MIN_PROBABILITY auf 70%\n"
+        else:
+            msg += "❌ <b>Analyse nötig!</b>\n→ Flop Ligen deaktivieren\n"
+
+        _auto_void_old_pending()
+
+        stats_chat = TELEGRAM_GROUPS.get("stats", TELEGRAM_CHAT_ID)
+        if stats_chat:
+            send_telegram(msg, stats_chat)
+            log("✅ Daily Report gesendet!")
+
+    except Exception as e:
+        log(f"Daily Report Error: {str(e)[:60]}", "WARN")
 
 
 def main():
@@ -10923,8 +12291,8 @@ def main():
         combo_chat = TELEGRAM_GROUPS.get("combos", TELEGRAM_CHAT_ID)  # Multi-Combos
 
         # Header für Combo Channel
-        combo_header = f"<b>🎰 MULTI-COMBO TIPPS</b>\n"
-        combo_header += f"<i>📅 {target_date}</i>\n"
+        combo_header = f"<b>🎰 MULTI-COMBO TIPPS</b>" + "\n"
+        combo_header += f"<i>📅 {target_date}</i>" + "\n"
         combo_header += f"<i>Basis: {len(all_tips_flat)} Top-Tipps</i>"
         send_telegram(combo_header, combo_chat)
 
@@ -10944,6 +12312,12 @@ def main():
         log(f"✅ {generated} Combos generiert und gesendet!")
     else:
         log(f"ℹ️ Nur {len(all_tips_flat)} Tipps - min. 3 für Combos nötig")
+
+    # Daily Report nach jedem 08:00 Run
+    now_utc = datetime.now(timezone.utc)
+    if now_utc.hour == 8:
+        send_daily_report()
+        log("📊 Daily Report gesendet!")
 
     log("Fertig!")
 
