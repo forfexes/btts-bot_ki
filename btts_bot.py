@@ -10324,7 +10324,7 @@ def send_top_tips(tips_by_market, target_date):
 
             # Build Message
             msg = f"💎 {i}/{len(tips)} | <b>{match_name}</b>" + "\n"
-            msg += f"📍 {r.get('league', league)} · ⏰ {tip_time}" + "\n"
+            msg += f"📍 {r.get('league', r.get('league_name', ''))} · ⏰ {tip_time}" + "\n"
             if weather_line:
                 msg += f"{weather_line}" + "\n"
             msg += f"━━━━━━━━━━━━━━━━━━" + "\n"
