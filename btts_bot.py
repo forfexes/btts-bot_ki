@@ -6090,6 +6090,8 @@ def get_futbolme_stats(home_team, away_team, league_name):
 # ============================================================
 SOCCERDATA_AVAILABLE = False
 try:
+    import logging as _logging
+    _logging.getLogger("soccerdata").setLevel(_logging.ERROR)
     import soccerdata as sd
     SOCCERDATA_AVAILABLE = True
 except ImportError:
@@ -7965,7 +7967,7 @@ def call_groq(prompt):
         return None, "Groq übersprungen (Rate Limit erreicht)"
 
     if len(prompt) > 30000:
-        prompt = prompt[:30000] + "\n\nAntworte mit JSON-Array."
+        prompt = prompt[:30000] + "\n\nANTWORTE NUR AUF DEUTSCH! Reasoning und keyFactor IMMER auf Deutsch. Antworte mit JSON-Array."
 
     last_error = None
     rate_limit_hits = 0
@@ -10254,9 +10256,20 @@ def send_top_tips(tips_by_market, target_date):
             mkt_icon = market_icons2.get(market_id, "🎯")
             mkt_name = market_names2.get(market_id, market_id.upper())
 
-            tip_time = r.get('time', '').strip()
-            if not tip_time or tip_time in ['TBD', 'N/A', '-', '']:
+            tip_time_raw = r.get('time', r.get('time_local', '')).strip()
+            if not tip_time_raw or tip_time_raw in ['TBD', 'N/A', '-', '']:
                 tip_time = "Heute"
+            else:
+                try:
+                    from datetime import datetime as _dt2, timezone as _tz2, timedelta as _td2
+                    if 'T' in tip_time_raw and ('Z' in tip_time_raw or '+' in tip_time_raw):
+                        _t2 = _dt2.fromisoformat(tip_time_raw.replace('Z', '+00:00'))
+                        _local2 = _t2.astimezone(_tz2(_td2(hours=2)))
+                        tip_time = _local2.strftime('%H:%M')
+                    else:
+                        tip_time = tip_time_raw
+                except Exception:
+                    tip_time = tip_time_raw
 
             try:
                 odds_val = float(str(r.get('oddsYes', '1.5')).replace(',', '.'))
