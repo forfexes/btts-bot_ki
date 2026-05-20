@@ -1,0 +1,108 @@
+version: 2.1
+
+jobs:
+  run-tips:
+    docker:
+      - image: cimg/python:3.11
+    resource_class: small
+    steps:
+      - checkout
+      - run:
+          name: Install dependencies
+          command: |
+            pip install requests python-dotenv playwright soccerdata
+            playwright install chromium
+      - run:
+          name: Run Tips Bot
+          command: python btts_bot.py
+          environment:
+            RUN_MODE: tips
+            GEMINI_API_KEYS: << pipeline.parameters.GEMINI_API_KEYS >>
+          no_output_timeout: 60m
+
+  run-settlement:
+    docker:
+      - image: cimg/python:3.11
+    resource_class: small
+    steps:
+      - checkout
+      - run:
+          name: Install dependencies
+          command: pip install requests python-dotenv
+      - run:
+          name: Run Settlement
+          command: python btts_bot.py
+          environment:
+            RUN_MODE: settlement
+          no_output_timeout: 15m
+
+workflows:
+  tips-morning:
+    triggers:
+      - schedule:
+          cron: "0 8 * * *"
+          filters:
+            branches:
+              only: main
+    jobs:
+      - run-tips
+
+  tips-afternoon:
+    triggers:
+      - schedule:
+          cron: "0 13 * * *"
+          filters:
+            branches:
+              only: main
+    jobs:
+      - run-tips
+
+  tips-evening:
+    triggers:
+      - schedule:
+          cron: "0 17 * * *"
+          filters:
+            branches:
+              only: main
+    jobs:
+      - run-tips
+
+  tips-night:
+    triggers:
+      - schedule:
+          cron: "0 22 * * *"
+          filters:
+            branches:
+              only: main
+    jobs:
+      - run-tips
+
+  settlement-afternoon:
+    triggers:
+      - schedule:
+          cron: "0 15 * * *"
+          filters:
+            branches:
+              only: main
+    jobs:
+      - run-settlement
+
+  settlement-night:
+    triggers:
+      - schedule:
+          cron: "45 23 * * *"
+          filters:
+            branches:
+              only: main
+    jobs:
+      - run-settlement
+
+  settlement-morning:
+    triggers:
+      - schedule:
+          cron: "30 5 * * *"
+          filters:
+            branches:
+              only: main
+    jobs:
+      - run-settlement
