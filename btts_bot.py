@@ -112,8 +112,8 @@ AUTO_LEAGUE_MIN_ROI = float(env("AUTO_LEAGUE_MIN_ROI", "-2.0"))
 AUTO_LEAGUE_LOOKBACK_DAYS = int(env("AUTO_LEAGUE_LOOKBACK_DAYS", "120"))
 
 MAX_LEAGUES_PER_RUN = int(env("MAX_LEAGUES_PER_RUN", "25"))  # 25 pro Run!
-AI_SLEEP_SECONDS = float(env("AI_SLEEP_SECONDS", "2.0"))
-GROQ_SLEEP_SECONDS = float(env("GROQ_SLEEP_SECONDS", "4.0"))
+AI_SLEEP_SECONDS = float(env("AI_SLEEP_SECONDS", "1.0"))
+GROQ_SLEEP_SECONDS = float(env("GROQ_SLEEP_SECONDS", "2.0"))
 USE_GROQ_FALLBACK = env("USE_GROQ_FALLBACK", "true").lower() in ["1", "true", "yes", "on"]
 
 ALWAYS_ON_LEAGUES = [
@@ -1221,7 +1221,7 @@ def get_forebet_prediction(home_team, away_team, league_name, target_date):
         if r.status_code in [403, 429, 503]:
             if PLAYWRIGHT_AVAILABLE:
                 log(f"   🎭 Forebet → Playwright...")
-                html = scrape_with_playwright(url, timeout=20000)
+                html = scrape_with_playwright(url, timeout=8000)
                 if html:
                     log(f"   ✅ Forebet via Playwright!")
                 else:
@@ -1360,7 +1360,7 @@ def get_scoutingstats_prediction(home_team, away_team, target_date):
         if r.status_code in [403, 404, 429]:
             if PLAYWRIGHT_AVAILABLE:
                 log(f"   🎭 ScoutingStats → Playwright...")
-                html = scrape_with_playwright(url, timeout=15000)
+                html = scrape_with_playwright(url, timeout=8000)
                 if html:
                     log(f"   ✅ ScoutingStats via Playwright!")
                 else:
@@ -1407,7 +1407,7 @@ def _scrape_scoutingstats(home_team, away_team, target_date):
         if r.status_code in [403, 429, 503]:
             if PLAYWRIGHT_AVAILABLE:
                 log(f"   🎭 ScoutingStats → Playwright...")
-                html = scrape_with_playwright(url, timeout=20000)
+                html = scrape_with_playwright(url, timeout=8000)
                 if html:
                     log(f"   ✅ ScoutingStats via Playwright!")
                     # Parse HTML
@@ -4073,7 +4073,7 @@ except ImportError:
 
 PLAYWRIGHT_CACHE = {}
 
-def scrape_with_playwright(url, wait_for=None, timeout=15000):
+def scrape_with_playwright(url, wait_for=None, timeout=8000):
     """
     Scrapt eine Seite mit echtem Chromium Browser.
     Umgeht 403 Blocks von SofaScore, Transfermarkt etc.
@@ -4102,7 +4102,7 @@ def scrape_with_playwright(url, wait_for=None, timeout=15000):
                 locale="de-DE",
             )
             page = context.new_page()
-            page.goto(url, timeout=timeout, wait_until="networkidle")
+            page.goto(url, timeout=timeout, wait_until="domcontentloaded")
 
             if wait_for:
                 page.wait_for_selector(wait_for, timeout=5000)
@@ -5561,7 +5561,7 @@ def smart_request(url, timeout=15, use_playwright_if_blocked=True, headers=None)
         r = requests.get(url, headers=default_headers, timeout=timeout)
         if r.status_code in [403, 429, 503, 406, 444] and use_playwright_if_blocked:
             log(f"   🎭 {url[:40]}... → Playwright (Status {r.status_code})")
-            html = scrape_with_playwright(url, timeout=20000)
+            html = scrape_with_playwright(url, timeout=8000)
             if html:
                 log(f"   ✅ Playwright erfolgreich!")
                 return type('Response', (), {
@@ -5573,7 +5573,7 @@ def smart_request(url, timeout=15, use_playwright_if_blocked=True, headers=None)
     except requests.exceptions.ConnectionError:
         if use_playwright_if_blocked and PLAYWRIGHT_AVAILABLE:
             log(f"   🎭 ConnectionError → Playwright für {url[:40]}")
-            html = scrape_with_playwright(url, timeout=20000)
+            html = scrape_with_playwright(url, timeout=8000)
             if html:
                 return type('Response', (), {
                     'ok': True, 'status_code': 200,
@@ -6832,7 +6832,7 @@ def get_worldfootball_referee(home_team, away_team, league_name, target_date):
 
         html = r.text if r.ok else None
         if not html and PLAYWRIGHT_AVAILABLE:
-            html = scrape_with_playwright(url, timeout=15000)
+            html = scrape_with_playwright(url, timeout=8000)
 
         if not html:
             return None
@@ -6891,7 +6891,7 @@ def safe_scrape(url, timeout=10, parse_func=None):
     # 2. Playwright Fallback
     if not html and PLAYWRIGHT_AVAILABLE:
         log(f"   🎭 Playwright: {url[:50]}...")
-        html = scrape_with_playwright(url, timeout=20000)
+        html = scrape_with_playwright(url, timeout=8000)
         if html:
             log(f"   ✅ Playwright OK!")
     
