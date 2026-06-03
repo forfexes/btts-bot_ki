@@ -9426,9 +9426,8 @@ def is_future_game(time_str, target_date):
 
         game_utc = (game_local - timedelta(hours=offset)).replace(tzinfo=timezone.utc)
 
-        # Spiel muss noch mindestens 5 Min in der Zukunft liegen
-        # 90 Min Puffer = Spiele die bereits laufen auch ausschließen
-        return game_utc > now_utc + timedelta(minutes=5)
+        # Spiel darf noch nicht angefangen haben (max 10 Min Toleranz nach Kickoff)
+        return game_utc > now_utc - timedelta(minutes=10)
 
     except Exception:
         return True
@@ -10635,6 +10634,103 @@ def _auto_void_old_pending():
         log(f"Auto-void Error: {str(e)[:50]}", "WARN")
 
 
+
+def _get_market_stats_from_supabase(market_id):
+    """Holt Won/Lost/ROI für einen spezifischen Markt aus Supabase."""
+    if not SUPABASE_URL or not SUPABASE_KEY:
+        return None
+    try:
+        r = requests.get(
+            f"{SUPABASE_URL}/rest/v1/tips",
+            headers={"apikey": SUPABASE_KEY, "Authorization": f"Bearer {SUPABASE_KEY}"},
+            params={"market": f"eq.{market_id}", "status": "in.(won,lost)", "select": "status,odds,units"},
+            timeout=10,
+        )
+        if not r.ok:
+            return None
+        tips = r.json()
+        won = [t for t in tips if t.get("status") == "won"]
+        lost = [t for t in tips if t.get("status") == "lost"]
+        total = len(won) + len(lost)
+        if total == 0:
+            return None
+        # ROI berechnen
+        roi = 0.0
+        for t in won:
+            try:
+                roi += float(str(t.get("odds","1.5")).replace(",",".")) * float(t.get("units",1) or 1) - float(t.get("units",1) or 1)
+            except: roi += 1.0
+        for t in lost:
+            try: roi -= float(t.get("units",1) or 1)
+            except: roi -= 1.0
+        return {
+            "won": len(won), "lost": len(lost), "total": total,
+            "pct": round(len(won)/total*100),
+            "roi": round(roi, 2),
+        }
+    except Exception:
+        return None
+
+
+def _send_daily_auswertung_to_all_groups(stats):
+    """
+    Sendet marktspezifische Auswertung in jede Gruppe separat.
+    BTTS Gruppe → BTTS Stats, Over25 Gruppe → Over25 Stats, etc.
+    """
+    from datetime import datetime, timezone
+    now = datetime.now(timezone.utc)
+    nl = "\n"
+
+    # WM/Saisonpause Hinweis
+    if now.month == 6 and now.day < 11:
+        days_left = 11 - now.day
+        pause_text = f"🏆 <b>WM 2026</b> startet in {days_left} Tagen!{nl}⚽ Ab 11. Juni täglich Tipps!"
+    elif now.month in [6, 7]:
+        pause_text = "🌍 WM 2026 läuft - täglich Tipps!"
+    else:
+        pause_text = "Heute spielfreier Tag - morgen wieder Tipps!"
+
+    # Markt → Gruppe + Titel Mapping
+    market_groups = {
+        "btts":    (TELEGRAM_GROUPS.get("btts"),    "⚽ BTTS",          "⚽"),
+        "over25":  (TELEGRAM_GROUPS.get("over25"),  "🎯 Over 2.5",      "🎯"),
+        "combo":   (TELEGRAM_GROUPS.get("combo"),   "🔥 BTTS + Over 2.5","🔥"),
+        "combos":  (TELEGRAM_GROUPS.get("combos"),  "🎰 Combos",        "🎰"),
+        "btts_ht": (TELEGRAM_GROUPS.get("btts_ht"), "🕐 BTTS Halbzeit", "🕐"),
+        "corners": (TELEGRAM_GROUPS.get("hz_live"), "🔵 Corner Sniper", "🔵"),
+        "scorer":  (TELEGRAM_GROUPS.get("late_goals"),"⚽ Goal Hunter",  "🎯"),
+    }
+
+    sent_to = set()
+    for market_id, (chat_id, title, emoji) in market_groups.items():
+        if not chat_id or chat_id in sent_to:
+            continue
+
+        # Markt-spezifische Stats
+        ms = _get_market_stats_from_supabase(market_id)
+
+        msg = f"{emoji} <b>{title}</b>{nl}"
+        msg += f"━━━━━━━━━━━━━━━━━━{nl}"
+
+        if ms and ms["total"] >= 3:
+            wr_emoji = "🔥" if ms["pct"] >= 70 else "✅" if ms["pct"] >= 60 else "⚠️"
+            roi_emoji = "🟢" if ms["roi"] >= 0 else "🔴"
+            roi_str = f"+{ms['roi']}" if ms["roi"] >= 0 else str(ms["roi"])
+            msg += f"{wr_emoji} <b>Winrate: {ms['pct']}%</b> ({ms['won']}W / {ms['lost']}L){nl}"
+            msg += f"{roi_emoji} ROI: <b>{roi_str} Units</b>{nl}"
+            msg += f"📊 {ms['total']} ausgewertete Tipps{nl}"
+        else:
+            msg += f"📊 Daten werden gesammelt...{nl}"
+
+        msg += f"━━━━━━━━━━━━━━━━━━{nl}"
+        msg += f"<i>{pause_text}</i>"
+
+        send_telegram(msg, chat_id)
+        sent_to.add(chat_id)
+
+    log(f"✅ Gruppen-Auswertung gesendet ({len(sent_to)} Gruppen)")
+
+
 def send_top_tips(tips_by_market, target_date):
     icons = {
         "YES": "✅",
@@ -10736,15 +10832,9 @@ def send_top_tips(tips_by_market, target_date):
     # Auto-void alte Pending Tipps (älter als 3 Tage)
     _auto_void_old_pending()
 
+    # Wenn keine Tipps → Auswertung in ALLE Gruppen senden
     if total_tips == 0:
-        send_telegram(
-            f"ℹ️ Heute keine Top-Tipps." + "\n"
-            f"Filter:" + "\n"
-            f"• Wahrscheinlichkeit ≥ {MIN_PROBABILITY}%" + "\n"
-            f"• Quote {MIN_ODDS}-{MAX_ODDS}" + "\n"
-            f"• Confidence ≥ {MIN_CONFIDENCE}⭐",
-            TELEGRAM_GROUPS.get("stats"),
-        )
+        _send_daily_auswertung_to_all_groups(stats)
         return
 
     saved = 0
