@@ -18,7 +18,7 @@ jobs:
           python-version: '3.11'
       - name: Install dependencies
         run: |
-          pip install requests python-dotenv playwright soccerdata
+          pip install requests python-dotenv playwright statsbombpy pandas beautifulsoup4 lxml
           playwright install chromium
       - name: Run Tips Bot 🤖
         env:
@@ -48,16 +48,16 @@ jobs:
           TELEGRAM_GROUP_STATS: ${{ secrets.TELEGRAM_GROUP_STATS }}
           TELEGRAM_GROUP_HZ_LIVE: ${{ secrets.TELEGRAM_GROUP_HZ_LIVE }}
           TELEGRAM_GROUP_LATE_GOALS: ${{ secrets.TELEGRAM_GROUP_LATE_GOALS }}
+          TELEGRAM_GROUP_ADVANCED_PROPS: ${{ secrets.TELEGRAM_GROUP_ADVANCED_PROPS }}
           SUPABASE_URL: ${{ secrets.SUPABASE_URL }}
           SUPABASE_KEY: ${{ secrets.SUPABASE_KEY }}
           MAX_LEAGUES_PER_RUN: "141"
-          AI_SLEEP_SECONDS: "2.0"
+          AI_SLEEP_SECONDS: "1.0"
           MIN_PROBABILITY: "67"
           MIN_CONFIDENCE: "3"
           MIN_VALUE_RATING: "OK"
           APIFOOTBALL_MAX_CALLS: "150"
           LEAGUE_ROTATION_ENABLED: "true"
           ENABLE_CORNERS_SCORER: "true"
+          ENABLE_ADVANCED_PROPS: "true"
         run: python btts_bot.py
-      - if: always()
-        run: echo "✅ Done"
