@@ -82,13 +82,102 @@ TELEGRAM_CHAT_ID = env("TELEGRAM_CHAT_ID")
 TELEGRAM_GROUPS = {
     "btts": env("TELEGRAM_GROUP_BTTS", TELEGRAM_CHAT_ID),
     "over25": env("TELEGRAM_GROUP_OVER25", TELEGRAM_CHAT_ID),
-    "combo": env("TELEGRAM_GROUP_COMBO", TELEGRAM_CHAT_ID),       # BTTS+2.5 Einzeltipps
-    "combos": env("TELEGRAM_GROUP_COMBOS", TELEGRAM_CHAT_ID),     # Multi-Combos 3-8
+    "combo": env("TELEGRAM_GROUP_COMBO", TELEGRAM_CHAT_ID),
+    "combos": env("TELEGRAM_GROUP_COMBOS", TELEGRAM_CHAT_ID),
     "btts_ht": env("TELEGRAM_GROUP_BTTS_HT", TELEGRAM_CHAT_ID),
     "stats": env("TELEGRAM_GROUP_STATS", TELEGRAM_CHAT_ID),
     "hz_live": env("TELEGRAM_GROUP_HZ_LIVE", TELEGRAM_CHAT_ID),
     "late_goals": env("TELEGRAM_GROUP_LATE_GOALS", TELEGRAM_CHAT_ID),
+    "advanced_props": env("TELEGRAM_GROUP_ADVANCED_PROPS", env("TELEGRAM_GROUP_COMBOS", TELEGRAM_CHAT_ID)),
 }
+
+
+# ============================================================
+# 🆕 DYNAMISCHE SAISON-LOGIK (Juni 2026)
+# Sommer-Ligen (MLS, Brasilien, Argentinien etc.) = Saison 2026
+# Europäische Winter-Ligen = Saison 2025
+# ============================================================
+
+CALENDAR_YEAR_LEAGUE_IDS = {
+    # Amerika/MLS
+    253,   # MLS
+    254,   # USL Championship
+    # Südamerika
+    71,    # Brasileirao Serie A
+    72,    # Brasileirao Serie B
+    128,   # Liga Argentinien
+    129,   # Argentina Primera B
+    268,   # Uruguay Primera
+    265,   # Chile Primera
+    239,   # Colombia Primera
+    240,   # Ecuador Serie A
+    281,   # Peru Primera
+    243,   # Venezuela Primera
+    242,   # Paraguay Division
+    321,   # Bolivia Division
+    266,   # Costa Rica Primera
+    267,   # Guatemala Liga
+    # Copa Süd/CONCACAF
+    13,    # Copa Libertadores
+    14,    # Copa Sudamericana
+    26,    # CONCACAF Champions
+    262,   # Liga MX
+    263,   # Liga MX Expansion
+    # Asien/Pazifik
+    98,    # J1 League Japan
+    99,    # J2 League Japan
+    100,   # J3 League Japan
+    292,   # K League 1
+    293,   # K League 2
+    169,   # China Super League
+    170,   # China League 1
+    323,   # India Super League
+    296,   # Thailand League 1
+    297,   # Malaysia Super League
+    299,   # Indonesia Liga 1
+    340,   # Vietnam V-League
+    188,   # A-League Australia
+    187,   # A-League Women
+    189,   # New Zealand NZFC
+    # Mittlerer Osten/Afrika
+    307,   # Saudi Pro League
+    306,   # UAE Pro League
+    98,    # Qatar Stars League
+    200,   # Morocco Botola
+    233,   # Egypt Premier
+    288,   # South Africa PSL
+    300,   # Nigeria Premier
+    302,   # Kenya Premier
+    # Internationale Turniere 2026
+    1,     # WM 2026
+    5,     # UEFA Nations League
+    9,     # Copa America
+    6,     # Afrika Cup
+    10,    # Freundschaftsspiele
+}
+
+def get_dynamic_season(league_id=None, league_name=None):
+    """
+    Bestimmt automatisch die richtige Saison (2026 vs 2025).
+    Sommer-Ligen (Südamerika, MLS, Asien, Australien) → 2026
+    Europäische Winter-Ligen → 2025
+    """
+    if league_id and int(league_id) in CALENDAR_YEAR_LEAGUE_IDS:
+        return 2026
+
+    # Fallback via Liga-Name
+    SUMMER_LEAGUES = [
+        "MLS", "Brasileirao", "Liga Argentinien", "J1 League", "J2 League",
+        "A-League", "Uruguay Primera", "Chile Primera", "Colombia Primera",
+        "Ecuador", "Peru Primera", "Venezuela", "K League", "China Super",
+        "India Super", "Vietnam", "Thailand", "Malaysia", "Indonesia",
+    ]
+    if league_name:
+        for sl in SUMMER_LEAGUES:
+            if sl.lower() in league_name.lower():
+                return 2026
+
+    return 2025
 
 SUPABASE_URL = env("SUPABASE_URL")
 SUPABASE_KEY = env("SUPABASE_KEY")
@@ -5260,103 +5349,490 @@ def get_open_meteo_weather(league_name, target_date):
         return None
 
 
-# ============================================================
-# 📊 STATSBOMB OPEN DATA - Event Daten für ML
-# ============================================================
-STATSBOMB_CACHE = {}
 
-STATSBOMB_COMPETITIONS = {
-    "La Liga": (11, 90),        # LaLiga 2015/16
-    "Premier League": (2, 27),  # WSL
-    "Champions League": (16, 1),
-    "Frauen WM": (72, 30),
+# ============================================================
+# 📊 STATSBOMB OPEN DATA - Player Props (100% GRATIS!)
+# pip install statsbombpy
+# Echte Event-Daten: SOT, Fouls, Offsides, Headers pro Spiel
+# ============================================================
+
+STATSBOMB_PLAYER_CACHE = {}
+STATSBOMB_AVAILABLE = False
+try:
+    import warnings as _sw
+    _sw.filterwarnings('ignore')
+    from statsbombpy import sb as _sb
+    import pandas as _pd
+    STATSBOMB_AVAILABLE = True
+    log("   📊 StatsBombPy verfügbar!")
+except ImportError:
+    pass
+
+# Mapping: Liga → StatsBomb IDs (competition_id, season_id)
+STATSBOMB_LEAGUE_MAP = {
+    "Bundesliga": (9, 281),          # 2023/24
+    "La Liga": (11, 90),             # 2020/21 (aktuellste verfügbare)
+    "Premier League": (2, 27),       # 2015/16 (historisch)
+    "Ligue 1": (7, 235),             # 2022/23
+    "Champions League": (16, 4),     # 2018/19
+    "WM 2026": (43, 106),            # WM 2022 als Referenz
+    "Copa America": (223, 282),      # 2024
+    "UEFA Nations League": (5, 107), # AFCON als Referenz
+    "MLS": (44, 107),                # 2023
+    "India Super League": (1238, 108),
 }
 
-def fetch_statsbomb_matches(league_name):
+def get_statsbomb_player_stats(league_name: str) -> dict:
     """
-    StatsBomb Open Data - GitHub Raw, kein Key nötig!
-    Beste kostenlose Event-Daten weltweit für ML!
+    Holt aggregierte Spieler-Stats von StatsBomb Open Data.
+    Returns: {player_name: {sot_per90, fouls_per90, offsides_per90, aerials_per90}}
     """
-    cache_key = f"sb_{league_name}"
-    if cache_key in STATSBOMB_CACHE:
-        return STATSBOMB_CACHE[cache_key]
+    if not STATSBOMB_AVAILABLE:
+        return {}
 
-    comp = STATSBOMB_COMPETITIONS.get(league_name)
+    if league_name in STATSBOMB_PLAYER_CACHE:
+        return STATSBOMB_PLAYER_CACHE[league_name]
+
+    comp = STATSBOMB_LEAGUE_MAP.get(league_name)
     if not comp:
+        return {}
+
+    comp_id, season_id = comp
+
+    try:
+        import warnings as _w
+        _w.filterwarnings('ignore')
+
+        matches = _sb.matches(competition_id=comp_id, season_id=season_id)
+        if matches is None or len(matches) == 0:
+            return {}
+
+        # Letzte 20 Spiele für aktuelle Form
+        recent = matches.tail(20)
+        all_events = []
+
+        for _, match in recent.iterrows():
+            try:
+                events = _sb.events(match_id=match['match_id'])
+                events['match_id'] = match['match_id']
+                all_events.append(events)
+            except Exception:
+                continue
+
+        if not all_events:
+            return {}
+
+        import pandas as _pd2
+        df = _pd2.concat(all_events, ignore_index=True)
+        num_matches = len(recent)
+
+        player_stats = {}
+
+        # SOT (Shots on Target)
+        sot = df[(df['type'] == 'Shot') & 
+                 (df['shot_outcome'].isin(['Goal', 'Saved', 'Saved To Post']))]
+        sot_counts = sot.groupby('player').size()
+
+        # Fouls Committed
+        fouls = df[df['type'] == 'Foul Committed']
+        foul_counts = fouls.groupby('player').size()
+
+        # Offsides
+        offsides = df[df['type'] == 'Offside']
+        offside_counts = offsides.groupby('player').size()
+
+        # Headers / Aerial Duels
+        aerials = df[(df['type'] == 'Duel') & 
+                     (df.get('duel_type', _pd2.Series()).isin(['Aerial Lost', 'Aerial Won'])
+                      if 'duel_type' in df.columns else _pd2.Series(False, index=df.index))]
+        aerial_counts = aerials.groupby('player').size() if len(aerials) > 0 else _pd2.Series()
+
+        # Team für jeden Spieler
+        player_teams = df.groupby('player')['team'].last()
+
+        # Alles zusammenführen
+        all_players = set(sot_counts.index) | set(foul_counts.index) | set(offside_counts.index)
+
+        for player in all_players:
+            sot_per90 = round(sot_counts.get(player, 0) / num_matches, 2)
+            fouls_per90 = round(foul_counts.get(player, 0) / num_matches, 2)
+            offsides_per90 = round(offside_counts.get(player, 0) / num_matches, 2)
+            aerials_per90 = round(aerial_counts.get(player, 0) / num_matches, 2) if len(aerial_counts) > 0 else 0
+
+            # Nur interessante Spieler
+            if sot_per90 < 0.3 and fouls_per90 < 0.5 and offsides_per90 < 0.2:
+                continue
+
+            player_stats[player] = {
+                "team": str(player_teams.get(player, "")),
+                "sot_per90": sot_per90,
+                "fouls_per90": fouls_per90,
+                "offsides_per90": offsides_per90,
+                "aerials_per90": aerials_per90,
+                "games": num_matches,
+                "source": "statsbomb",
+            }
+
+        STATSBOMB_PLAYER_CACHE[league_name] = player_stats
+        if player_stats:
+            log(f"   📊 StatsBomb: {len(player_stats)} Spieler für {league_name}")
+        return player_stats
+
+    except Exception as e:
+        log(f"StatsBomb Error: {str(e)[:60]}", "WARN")
+        return {}
+
+
+def get_player_props_for_match(home_team: str, away_team: str, league_name: str) -> list:
+    """
+    Gibt Player Props Tipps für ein Spiel zurück.
+    Kombiniert StatsBomb + Understat Daten.
+    Returns: [{player, tip, probability, fair_odds, stat_value}]
+    """
+    import math
+
+    stats = get_statsbomb_player_stats(league_name)
+    if not stats:
         return []
 
-    competition_id, season_id = comp
+    home_norm = normalize_team_name(home_team)
+    away_norm = normalize_team_name(away_team)
+    props = []
+
+    for player, s in stats.items():
+        team_norm = normalize_team_name(s.get("team", ""))
+
+        # Spieler spielt heute?
+        is_playing = (
+            team_norm[:8] in home_norm or home_norm[:8] in team_norm or
+            team_norm[:8] in away_norm or away_norm[:8] in team_norm
+        )
+        if not is_playing:
+            continue
+
+        # SOT Prop: 1+ Schuss aufs Tor
+        sot = s.get("sot_per90", 0)
+        if sot >= 0.8:
+            prob = round((1 - math.exp(-sot)) * 100)
+            if prob >= 55:
+                props.append({
+                    "player": player,
+                    "team": s["team"],
+                    "tip": f"1+ Schüsse aufs Tor",
+                    "market_type": "sot",
+                    "stat_value": sot,
+                    "probability": prob,
+                    "fair_odds": round(1 / (prob / 100), 2),
+                })
+
+        # SOT Prop: 2+ Schüsse aufs Tor
+        if sot >= 1.5:
+            # P(X>=2) mit Poisson
+            p0 = math.exp(-sot)
+            p1 = sot * math.exp(-sot)
+            prob2 = round((1 - p0 - p1) * 100)
+            if prob2 >= 45:
+                props.append({
+                    "player": player,
+                    "team": s["team"],
+                    "tip": f"2+ Schüsse aufs Tor",
+                    "market_type": "sot2",
+                    "stat_value": sot,
+                    "probability": prob2,
+                    "fair_odds": round(1 / (prob2 / 100), 2),
+                })
+
+        # Fouls Prop: 2+ Fouls begangen
+        fouls = s.get("fouls_per90", 0)
+        if fouls >= 1.5:
+            p0 = math.exp(-fouls)
+            p1 = fouls * math.exp(-fouls)
+            prob_f = round((1 - p0 - p1) * 100)
+            if prob_f >= 45:
+                props.append({
+                    "player": player,
+                    "team": s["team"],
+                    "tip": f"2+ Fouls begangen",
+                    "market_type": "fouls",
+                    "stat_value": fouls,
+                    "probability": prob_f,
+                    "fair_odds": round(1 / (prob_f / 100), 2),
+                })
+
+        # Offside Prop: 1+ Abseits
+        offsides = s.get("offsides_per90", 0)
+        if offsides >= 0.8:
+            prob_o = round((1 - math.exp(-offsides)) * 100)
+            if prob_o >= 50:
+                props.append({
+                    "player": player,
+                    "team": s["team"],
+                    "tip": f"1+ Abseits",
+                    "market_type": "offside",
+                    "stat_value": offsides,
+                    "probability": prob_o,
+                    "fair_odds": round(1 / (prob_o / 100), 2),
+                })
+
+    # Sortiere nach Wahrscheinlichkeit
+    props.sort(key=lambda x: x["probability"], reverse=True)
+    return props[:8]  # Top 8 Props pro Spiel
+
+
+def format_props_message(match_name: str, league: str, time: str, props: list) -> str:
+    """Formatiert Player Props für Telegram"""
+    if not props:
+        return ""
+
+    nl = "\n"
+    msg = f"🔑 <b>PLAYER PROPS</b>\n"
+    msg += f"━━━━━━━━━━━━━━━━━━\n"
+    msg += f"<b>{match_name}</b>\n"
+    msg += f"📍 {league} · ⏰ {time}\n\n"
+
+    for prop in props[:5]:
+        prob = prop["probability"]
+        fair = prop["fair_odds"]
+        stars = "⭐⭐⭐" if prob >= 70 else "⭐⭐" if prob >= 60 else "⭐"
+        msg += f"👤 <b>{prop['player']}</b> ({prop['team']})\n"
+        msg += f"   🎯 {prop['tip']}\n"
+        msg += f"   📈 {prob}% · Fair: {fair} · {stars}\n\n"
+
+    msg += f"━━━━━━━━━━━━━━━━━━\n"
+    msg += f"<i>📊 Daten: StatsBomb Open Data</i>"
+    return msg
+
+
+
+
+# ============================================================
+# 🌍 MARTJ42 - 49.000+ Internationale Ergebnisse (GitHub, gratis!)
+# WM 2026, Nations League, Friendlies + historische BTTS Raten
+# ============================================================
+
+MARTJ42_CACHE = {}
+MARTJ42_DATA = None
+
+def load_martj42_data():
+    """Lädt alle 49.000+ Länderspiele einmalig von GitHub."""
+    global MARTJ42_DATA
+    if MARTJ42_DATA is not None:
+        return MARTJ42_DATA
 
     try:
         r = requests.get(
-            f"https://raw.githubusercontent.com/statsbomb/open-data/master/data/matches/{competition_id}/{season_id}.json",
+            "https://raw.githubusercontent.com/martj42/international_results/master/results.csv",
             headers={"User-Agent": "Mozilla/5.0"},
             timeout=15,
         )
-
         if not r.ok:
             return []
 
-        matches = r.json()
-        STATSBOMB_CACHE[cache_key] = matches
-        log(f"   📊 StatsBomb: {len(matches)} Matches für {league_name}")
-        return matches
+        lines = r.text.strip().split("\n")
+        MARTJ42_DATA = []
+        for line in lines[1:]:
+            parts = line.split(",")
+            if len(parts) < 5:
+                continue
+            try:
+                date = parts[0].strip()
+                home = parts[1].strip()
+                away = parts[2].strip()
+                hs = parts[3].strip()
+                as_ = parts[4].strip()
+                tournament = parts[5].strip() if len(parts) > 5 else ""
+                hg = int(hs) if hs.isdigit() else -1
+                ag = int(as_) if as_.isdigit() else -1
+                MARTJ42_DATA.append({
+                    "date": date, "home": home, "away": away,
+                    "home_score": hg, "away_score": ag,
+                    "tournament": tournament,
+                    "btts": hg > 0 and ag > 0 if hg >= 0 else None,
+                    "over25": (hg + ag) > 2 if hg >= 0 else None,
+                    "total": hg + ag if hg >= 0 else -1,
+                })
+            except Exception:
+                continue
 
-    except Exception:
+        log(f"   🌍 martj42: {len(MARTJ42_DATA):,} Länderspiele geladen")
+        return MARTJ42_DATA
+
+    except Exception as e:
+        log(f"martj42 Error: {str(e)[:50]}", "WARN")
         return []
 
 
-def get_statsbomb_team_stats(team_name, league_name):
+def get_international_fixtures_today(target_date) -> list:
     """
-    Holt Team-Statistiken aus StatsBomb Open Data.
-    Returns: {'avg_xg': 1.8, 'avg_shots': 14, 'avg_xga': 1.2, 'btts_rate': 65}
+    Holt heutige internationale Spiele aus martj42 Daten.
+    Ideal für WM 2026, UEFA Nations League, Freundschaftsspiele!
     """
-    cache_key = f"sb_team_{team_name}_{league_name}"
-    if cache_key in STATSBOMB_CACHE:
-        return STATSBOMB_CACHE[cache_key]
+    cache_key = f"martj42_fix_{target_date}"
+    if cache_key in MARTJ42_CACHE:
+        return MARTJ42_CACHE[cache_key]
 
-    matches = fetch_statsbomb_matches(league_name)
-    if not matches:
-        return None
+    data = load_martj42_data()
+    if not data:
+        return []
 
+    target_str = str(target_date)
+    now_utc = datetime.now(timezone.utc)
+    fixtures = []
+
+    for match in data:
+        if match["date"] != target_str:
+            continue
+        if match["home_score"] >= 0:  # Bereits gespielt
+            continue
+
+        fixtures.append({
+            "home": match["home"],
+            "away": match["away"],
+            "time_local": "TBD",
+            "time_utc": f"{target_str}T18:00:00Z",
+            "source": "martj42",
+            "match_id": f"m42_{hash(match['home']+match['away'])}",
+            "tournament": match["tournament"],
+        })
+
+    MARTJ42_CACHE[cache_key] = fixtures
+    if fixtures:
+        log(f"   🌍 martj42: {len(fixtures)} internationale Spiele heute")
+    return fixtures
+
+
+def get_international_btts_rate(team_name: str, last_n: int = 20) -> dict:
+    """
+    Berechnet historische BTTS/Over2.5 Rate für ein Nationalteam.
+    Nutzt 49.000+ historische Länderspiele!
+    """
+    cache_key = f"martj42_btts_{team_name}"
+    if cache_key in MARTJ42_CACHE:
+        return MARTJ42_CACHE[cache_key]
+
+    data = load_martj42_data()
+    if not data:
+        return {}
+
+    team_norm = normalize_team_name(team_name)
     team_matches = []
-    for m in matches:
-        home = m.get("home_team", {}).get("home_team_name", "")
-        away = m.get("away_team", {}).get("away_team_name", "")
-        if normalize_team_name(team_name)[:6] in normalize_team_name(home) or            normalize_team_name(team_name)[:6] in normalize_team_name(away):
-            team_matches.append(m)
 
-    if not team_matches:
-        return None
+    # Suche alle Spiele dieses Teams (neueste zuerst)
+    for match in reversed(data):
+        home_n = normalize_team_name(match["home"])
+        away_n = normalize_team_name(match["away"])
+        if team_norm[:8] in home_n or home_n[:8] in team_norm or \
+           team_norm[:8] in away_n or away_n[:8] in team_norm:
+            if match["btts"] is not None:
+                team_matches.append(match)
+        if len(team_matches) >= last_n:
+            break
 
-    total_goals_for = 0
-    total_goals_against = 0
-    btts_count = 0
+    if len(team_matches) < 3:
+        return {}
 
-    for m in team_matches:
-        home = m.get("home_team", {}).get("home_team_name", "")
-        hg = m.get("home_score", 0) or 0
-        ag = m.get("away_score", 0) or 0
-        is_home = normalize_team_name(team_name)[:6] in normalize_team_name(home)
+    btts_count = sum(1 for m in team_matches if m["btts"])
+    over25_count = sum(1 for m in team_matches if m.get("over25"))
+    avg_goals = sum(m["total"] for m in team_matches if m["total"] >= 0) / len(team_matches)
 
-        gf = hg if is_home else ag
-        ga = ag if is_home else hg
-        total_goals_for += gf
-        total_goals_against += ga
-        if hg > 0 and ag > 0:
-            btts_count += 1
-
-    n = len(team_matches)
     result = {
-        "avg_goals_for": round(total_goals_for / n, 2),
-        "avg_goals_against": round(total_goals_against / n, 2),
-        "btts_rate": round(btts_count / n * 100, 1),
-        "games": n,
-        "source": "statsbomb",
+        "btts_rate": round(btts_count / len(team_matches) * 100, 1),
+        "over25_rate": round(over25_count / len(team_matches) * 100, 1),
+        "avg_goals": round(avg_goals, 2),
+        "games": len(team_matches),
+        "source": "martj42",
     }
 
-    STATSBOMB_CACHE[cache_key] = result
+    MARTJ42_CACHE[cache_key] = result
     return result
+
+
+# ============================================================
+# 📊 FOOTBALLCSV - Ligaergebnisse GitHub (Backup für BTTS History)
+# ============================================================
+
+FOOTBALLCSV_CACHE = {}
+
+FOOTBALLCSV_REPOS = {
+    "Premier League": ("footballcsv/england", "eng.1", "2020s", "2024-25"),
+    "Bundesliga": ("footballcsv/deutschland", "de.1", "2020s", "2024-25"),
+    "La Liga": ("footballcsv/espana", "es.1", "2020s", "2024-25"),
+    "Bundesliga Österreich": ("footballcsv/austria", "at.1", "2020s", "2024-25"),
+}
+
+def get_footballcsv_btts_rate(league_name: str, team_name: str) -> dict:
+    """
+    Holt historische BTTS-Rate aus footballcsv GitHub Repos.
+    Kostenlos, kein Key, direkt von GitHub.
+    """
+    repo_info = FOOTBALLCSV_REPOS.get(league_name)
+    if not repo_info:
+        return {}
+
+    repo, code, decade, season = repo_info
+    cache_key = f"fcsv_{league_name}_{team_name}"
+    if cache_key in FOOTBALLCSV_CACHE:
+        return FOOTBALLCSV_CACHE[cache_key]
+
+    url = f"https://raw.githubusercontent.com/{repo}/master/{decade}/{season}/{code}.csv"
+
+    try:
+        r = requests.get(url, headers={"User-Agent": "Mozilla/5.0"}, timeout=10)
+        if not r.ok:
+            return {}
+
+        lines = r.text.strip().split("\n")
+        if len(lines) < 2:
+            return {}
+
+        team_norm = normalize_team_name(team_name)
+        btts = 0
+        over25 = 0
+        total = 0
+
+        for line in lines[1:]:
+            parts = line.split(",")
+            if len(parts) < 5:
+                continue
+            try:
+                home = normalize_team_name(parts[2] if len(parts) > 4 else "")
+                away = normalize_team_name(parts[4] if len(parts) > 4 else "")
+                score = parts[3] if len(parts) > 3 else ""
+
+                if team_norm[:6] not in home and home[:6] not in team_norm and \
+                   team_norm[:6] not in away and away[:6] not in team_norm:
+                    continue
+
+                # Score parsen "2-1" oder "2:1"
+                import re as _re
+                m = _re.search(r"(\d+)[:\-](\d+)", score)
+                if not m:
+                    continue
+
+                hg, ag = int(m.group(1)), int(m.group(2))
+                total += 1
+                if hg > 0 and ag > 0:
+                    btts += 1
+                if hg + ag > 2:
+                    over25 += 1
+            except Exception:
+                continue
+
+        if total < 3:
+            return {}
+
+        result = {
+            "btts_rate": round(btts / total * 100, 1),
+            "over25_rate": round(over25 / total * 100, 1),
+            "games": total,
+            "source": "footballcsv",
+        }
+        FOOTBALLCSV_CACHE[cache_key] = result
+        return result
+
+    except Exception as e:
+        log(f"footballcsv Error: {str(e)[:50]}", "WARN")
+        return {}
 
 
 # ============================================================
@@ -7044,7 +7520,7 @@ def fetch_api_football(league_name, target_date):
         return []
 
     try:
-        season = target_date.year if target_date.month > 6 else target_date.year - 1
+        season = get_dynamic_season(league_id, league_name)
 
         # 🆕 Round-Robin Key-Auswahl, tote Keys überspringen
         n = len(API_FOOTBALL_KEYS)
@@ -8554,6 +9030,17 @@ def build_context(odds_data, fixtures, league, target_date=None):
             if dh_home:
                 line += f"\n   📊 BTTS Rate: {dh_home['btts_rate']}% | Over2.5: {dh_home['over25_rate']}%"
 
+            # 🌍 INTERNATIONALE BTTS STATS (martj42)
+            for intl_team in [f["home"], f["away"]]:
+                m42_stats = get_international_btts_rate(intl_team, last_n=20)
+                if m42_stats and m42_stats.get("games", 0) >= 5:
+                    line += (
+                        f"\n   🌍 {intl_team} [martj42 {m42_stats['games']}Sp]: "
+                        f"BTTS {m42_stats['btts_rate']}% | "
+                        f"Over2.5 {m42_stats['over25_rate']}% | "
+                        f"Ø {m42_stats['avg_goals']} Tore"
+                    )
+
             # 🆕 REFEREE STATS
             ref_data = get_referee_stats(f["home"], f["away"], league, target_date)
             if ref_data and ref_data.get("name"):
@@ -8867,8 +9354,19 @@ def validate_tips(tips, real_fixtures, real_odds):
         except Exception:
             continue
 
+    # 🆕 FIX: Wenn keine Fixtures/Odds → Tips trotzdem behalten!
+    # Passiert bei MLS, Brasilien, Asien wo Odds API oft keine Daten hat
     if not real_matches:
-        return []
+        log("   ⚠️ Keine Fixture-Daten → Tips direkt übernehmen")
+        validated = []
+        for tip in tips:
+            match = tip.get("match", "")
+            if " vs " not in match:
+                continue
+            parts = match.split(" vs ", 1)
+            if len(parts) == 2 and len(parts[0]) > 2 and len(parts[1]) > 2:
+                validated.append(tip)
+        return validated
 
     validated = []
 
@@ -9066,13 +9564,18 @@ def fetch_league_data_once(league, target_date):
     fbd_fix = scrape_fussballdaten(league, target_date)
     fbde_fix = fetch_fussball_de(league, target_date)
     fl_fix = fetch_fortuna_liga(target_date) if league == "Slovak Super Liga" else []
+    m42_fix = get_international_fixtures_today(target_date) if league in [
+        "WM 2026", "UEFA Nations League", "Copa America", "Afrika Cup",
+        "Freundschaftsspiele International", "WM 2026 Qualifikation Europa",
+        "WM 2026 Qualifikation Südamerika", "WM 2026 Qualifikation CONCACAF",
+    ] else []
     pw_sofa = pw_get_sofascore_fixtures(league, target_date)
     pw_wfdb = pw_get_worldfootballdb(league, target_date)
     fm_fix = fetch_fotmob_fixtures(league, target_date)
     src_fix = fetch_sportsrc_fixtures(league, target_date)       # 🔥 SportSRC
     pm_fix = fetch_promiedos_fixtures(league, target_date)       # 🌍 Promiedos
 
-    fixtures = merge_fixtures(fd_fix, af_fix, fj_fix, ol_fix, bsd_fix, sm_fix, sdb_fix, sofa_fix, espn_fix, asp_fix, flash_fix, ls_fix, ninjas_fix, tsdb_fix, sw_fix, gh_fix, fbd_fix, fbde_fix, fl_fix, pw_sofa, pw_wfdb, fm_fix, src_fix, pm_fix)
+    fixtures = merge_fixtures(fd_fix, af_fix, fj_fix, ol_fix, bsd_fix, sm_fix, sdb_fix, sofa_fix, espn_fix, asp_fix, flash_fix, ls_fix, ninjas_fix, tsdb_fix, sw_fix, gh_fix, fbd_fix, fbde_fix, fl_fix, pw_sofa, pw_wfdb, fm_fix, src_fix, pm_fix, m42_fix)
 
     log(
         f"   Quellen: Odds={len(odds)}, FD={len(fd_fix)}, "
@@ -10737,49 +11240,18 @@ def should_run_league(league, league_stats):
 
 def get_active_leagues():
     """
-    Gibt die Ligen zurück die jetzt relevant sind.
-    Basiert auf aktueller UTC-Zeit + Liga-Zeitfenster.
+    Gibt ALLE Ligen zurück (global, 24/7).
+    Keine Zeit-Filterung mehr - der Bot checkt alle Ligen weltweit.
     """
-    from datetime import datetime, timezone as _tz
-    now_utc = datetime.now(_tz.utc)
-    hour = now_utc.hour
-
     if ACTIVE_LEAGUES_OVERRIDE:
         log(f"🎯 Override: {len(ACTIVE_LEAGUES_OVERRIDE)} Ligen")
         return ACTIVE_LEAGUES_OVERRIDE, {}
 
-    # Zeit-basierte Filterung
-    time_filtered = []
-    for league in LEAGUES_TO_RUN:
-        window = LEAGUES_TIME_MAP.get(league, "all")
-        tw = {
-            "morning":   (1, 11),
-            "afternoon": (10, 17),
-            "evening":   (15, 23),
-            "night":     (22, 6),
-            "all":       (0, 24),
-        }.get(window, (0, 24))
-        
-        start_h, end_h = tw
-        if start_h <= end_h:
-            in_window = start_h <= hour < end_h
-        else:  # Über Mitternacht
-            in_window = hour >= start_h or hour < end_h
-        
-        # Außerhalb Zeitfenster: trotzdem einbeziehen wenn Spiele vorhanden sein könnten
-        # ±3 Stunden Puffer
-        if not in_window:
-            if start_h <= end_h:
-                in_window = (start_h - 3) <= hour < (end_h + 3)
-            
-        if in_window:
-            time_filtered.append(league)
-
-    log(f"⏰ {hour:02d}:00 UTC → {len(time_filtered)}/{len(LEAGUES_TO_RUN)} Ligen im Zeitfenster")
+    log(f"🌍 Global Mode: alle {len(LEAGUES_TO_RUN)} Ligen aktiv (24/7)")
 
     if not AUTO_LEAGUE_SWITCH:
         log("Auto Liga Switch: AUS")
-        return time_filtered, {}
+        return LEAGUES_TO_RUN, {}
 
     log("Auto Liga Switch: AN")
     log(
@@ -10800,12 +11272,11 @@ def get_active_leagues():
 
         if run:
             active.append(league)
-            log(f" ✅ {league}: {reason}")
         else:
             disabled.append((league, reason))
             log(f" ⛔ {league}: {reason}", "SKIP")
 
-    log(f"Auto Liga Switch Ergebnis: {len(active)} aktiv, {len(disabled)} deaktiviert")
+    log(f"Auto Liga Switch: {len(active)} aktiv, {len(disabled)} pausiert")
 
     return active, league_stats
 
@@ -11609,28 +12080,47 @@ def analyze_scorer_tips(fixture, league, scorers):
     """
     Analysiert Anytime Scorer Wahrscheinlichkeit.
     Gibt Top-Kandidaten zurück wenn >= 45% Wahrscheinlichkeit.
+    🆕 FIX: Funktioniert auch ohne Team-IDs (via Team-Name Matching)
     """
     import math
 
+    home_team = fixture.get("home", "").lower()
+    away_team = fixture.get("away", "").lower()
     home_id = fixture.get("home_id")
     away_id = fixture.get("away_id")
 
-    if not home_id or not away_id:
+    if not home_team or not away_team:
         return []
 
     tips = []
 
     for scorer in scorers:
         team_id = scorer.get("team_id")
-        if team_id not in [home_id, away_id]:
+        team_name = scorer.get("team", "").lower()
+
+        # 🆕 Matching via ID ODER Team-Name
+        is_playing = False
+
+        if team_id and home_id and away_id:
+            # API-Football: ID-basiertes Matching
+            is_playing = team_id in [home_id, away_id]
+        elif team_name:
+            # Understat/FPL: Name-basiertes Matching
+            home_norm = normalize_team_name(home_team)
+            away_norm = normalize_team_name(away_team)
+            team_norm = normalize_team_name(team_name)
+            is_playing = (
+                team_norm[:8] in home_norm or home_norm[:8] in team_norm or
+                team_norm[:8] in away_norm or away_norm[:8] in team_norm
+            )
+
+        if not is_playing:
             continue
 
         gpg = scorer.get("goals_per_game", 0)
-        if gpg < 0.3:  # Mindestens 0.3 Tore/Spiel
+        if gpg < 0.3:
             continue
 
-        # Anytime Scorer Wahrscheinlichkeit
-        # P(mindestens 1 Tor) = 1 - e^(-λ)
         prob = round((1 - math.exp(-gpg)) * 100)
 
         if prob < 45:
@@ -11651,9 +12141,8 @@ def analyze_scorer_tips(fixture, league, scorers):
             "market": "scorer",
         })
 
-    # Sortiere nach Wahrscheinlichkeit
     tips.sort(key=lambda x: x["probability"], reverse=True)
-    return tips[:3]  # Top 3 pro Spiel
+    return tips[:3]
 
 
 def format_corners_message(tip):
@@ -12176,6 +12665,244 @@ def get_team_rest_days(team_id, league_id, season, target_date):
 # MAIN
 # ============================================================
 
+# ============================================================
+# 🔑 ADVANCED PLAYER PROPS MODULE
+# FBref Scraper für SOT, Fouls, Offsides, Header
+# ============================================================
+
+class AdvancedPropsManager:
+    """
+    Analysiert tiefe Spieler-Statistiken von FBref.
+    Bereitet Daten für SOT, Fouls, Abseits und Header-Props auf.
+    """
+
+    FBREF_LEAGUE_URLS = {
+        "Premier League": "https://fbref.com/en/comps/9/Premier-League-Stats",
+        "Bundesliga": "https://fbref.com/en/comps/20/Bundesliga-Stats",
+        "La Liga": "https://fbref.com/en/comps/12/La-Liga-Stats",
+        "Serie A": "https://fbref.com/en/comps/11/Serie-A-Stats",
+        "Ligue 1": "https://fbref.com/en/comps/13/Ligue-1-Stats",
+        "Champions League": "https://fbref.com/en/comps/8/Champions-League-Stats",
+        "Europa League": "https://fbref.com/en/comps/19/Europa-League-Stats",
+        "Eredivisie": "https://fbref.com/en/comps/23/Eredivisie-Stats",
+    }
+
+    MARKET_INFO_PROPS = {
+        "advanced_props": {
+            "name": "🔑 Player Props",
+            "instr": "Analysiere Advanced Player Props: SOT, Fouls, Abseits, Kopfball-Duelle.",
+        }
+    }
+
+    def __init__(self, foul_threshold=1.8, sot_threshold=1.5):
+        self.foul_threshold = foul_threshold
+        self.sot_threshold = sot_threshold
+        self._cache = {}
+
+    def scrape_fbref_advanced_stats(self, league_name: str) -> dict:
+        """
+        Scrapt FBref für fortgeschrittene Player Props.
+        Returns: {player_name: {team, shots_per90, sot_per90, fouls_committed, fouls_drawn, offsides, aerials_won}}
+        """
+        if league_name in self._cache:
+            return self._cache[league_name]
+
+        league_url = self.FBREF_LEAGUE_URLS.get(league_name)
+        if not league_url:
+            return {}
+
+        try:
+            import random as _r
+            headers = {
+                "User-Agent": _r.choice([
+                    "Mozilla/5.0 (Windows NT 10.0; Win64; x64) Chrome/125.0.0.0 Safari/537.36",
+                    "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) Chrome/124.0.0.0 Safari/537.36",
+                ]),
+                "Accept": "text/html",
+                "Referer": "https://fbref.com/",
+            }
+            r = requests.get(league_url, headers=headers, timeout=15)
+
+            if not r.ok:
+                log(f"   AdvancedProps: FBref nicht erreichbar ({r.status_code})", "WARN")
+                return {}
+
+            html = r.text.replace("<!--", "").replace("-->", "")
+            player_db = {}
+
+            import re as _re
+
+            # Shooting stats
+            shooting_rows = _re.findall(
+                r'data-stat="player"[^>]*>\s*<a[^>]*>([^<]+)</a>.*?'
+                r'data-stat="team"[^>]*>([^<]*)<.*?'
+                r'data-stat="shots_per90"[^>]*>([\d.]*)<.*?'
+                r'data-stat="shots_on_target_per90"[^>]*>([\d.]*)<',
+                html, _re.DOTALL
+            )
+            for name, team, shots, sot in shooting_rows:
+                try:
+                    player_db[name.strip()] = {
+                        "team": team.strip(),
+                        "shots_per90": float(shots or 0),
+                        "sot_per90": float(sot or 0),
+                        "fouls_committed": 0.0,
+                        "fouls_drawn": 0.0,
+                        "offsides": 0.0,
+                        "aerials_won": 0.0,
+                    }
+                except Exception:
+                    continue
+
+            # Misc stats (fouls, offsides, aerials)
+            misc_rows = _re.findall(
+                r'data-stat="player"[^>]*>\s*<a[^>]*>([^<]+)</a>.*?'
+                r'data-stat="fouls"[^>]*>([\d.]*)<.*?'
+                r'data-stat="fouls_drawn"[^>]*>([\d.]*)<.*?'
+                r'data-stat="offsides"[^>]*>([\d.]*)<.*?'
+                r'data-stat="aerial_won"[^>]*>([\d.]*)<',
+                html, _re.DOTALL
+            )
+            for name, fouls, fouls_drawn, offsides, aerials in misc_rows:
+                name = name.strip()
+                if name not in player_db:
+                    player_db[name] = {
+                        "team": "", "shots_per90": 0.0, "sot_per90": 0.0,
+                        "fouls_committed": 0.0, "fouls_drawn": 0.0,
+                        "offsides": 0.0, "aerials_won": 0.0,
+                    }
+                try:
+                    player_db[name]["fouls_committed"] = float(fouls or 0)
+                    player_db[name]["fouls_drawn"] = float(fouls_drawn or 0)
+                    player_db[name]["offsides"] = float(offsides or 0)
+                    player_db[name]["aerials_won"] = float(aerials or 0)
+                except Exception:
+                    continue
+
+            self._cache[league_name] = player_db
+            if player_db:
+                log(f"   🔑 AdvancedProps: {len(player_db)} Spieler für {league_name}")
+            return player_db
+
+        except Exception as e:
+            log(f"   AdvancedProps Error: {str(e)[:60]}", "WARN")
+            return {}
+
+    def generate_ai_prompt_extension(self, match_name: str, home_lineup: list, away_lineup: list, player_db: dict) -> str:
+        """Baut JSON-Block für Gemini/Groq Prompt."""
+        import json as _json
+        relevant = []
+        for player in (home_lineup + away_lineup):
+            if player in player_db:
+                relevant.append({"player": player, "stats": player_db[player]})
+
+        if not relevant:
+            return ""
+
+        prompt = f"\n\n[MARKT: ADVANCED PLAYER PROPS - {match_name}]\n"
+        prompt += "Spieler-Statistiken pro 90 Minuten der voraussichtlichen Startelf:\n"
+        prompt += _json.dumps(relevant, indent=2, ensure_ascii=False)
+        prompt += (
+            "\n\nAufgabe: Erstelle risikooptimierte Bet-Builder Kombis (2-3 Auswahlen).\n"
+            "Optionen: X+ Schüsse aufs Tor (SoT), X+ Fouls begangen, X+ Fouls erlitten, X+ Abseits.\n"
+            "Nur Tipps ab >67% Wahrscheinlichkeit. Antworte NUR AUF DEUTSCH!\n"
+            "Gib JSON-Array zurück: [{match, player, tip, probability, confidence, reasoning}]"
+        )
+        return prompt
+
+    def run_advanced_props(self, fixtures: list, league_name: str, target_date) -> list:
+        """
+        Hauptfunktion: Analysiert Advanced Props für alle Spiele einer Liga.
+        """
+        player_db = self.scrape_fbref_advanced_stats(league_name)
+        if not player_db:
+            return []
+
+        results = []
+        for fixture in fixtures[:5]:  # Max 5 Spiele pro Liga
+            try:
+                home = fixture.get("home", "")
+                away = fixture.get("away", "")
+                match_name = f"{home} vs {away}"
+
+                # Lineup aus SofaScore holen
+                match_id = fixture.get("match_id", "")
+                lineup_data = get_sofascore_lineups(match_id, home, away) if match_id else None
+
+                home_lineup = []
+                away_lineup = []
+                if lineup_data and lineup_data.get("lineup_available"):
+                    home_lineup = [p["name"] for p in lineup_data.get("home_lineup", [])]
+                    away_lineup = [p["name"] for p in lineup_data.get("away_lineup", [])]
+
+                prompt_ext = self.generate_ai_prompt_extension(match_name, home_lineup, away_lineup, player_db)
+                if not prompt_ext:
+                    continue
+
+                # AI Call
+                prompt = (
+                    f"Liga: {league_name} | Datum: {target_date}\n"
+                    f"{prompt_ext}\n"
+                    "Antworte mit JSON-Array oder []"
+                )
+                tips, source = call_gemini(prompt, use_tools=False)
+                if tips:
+                    for tip in tips:
+                        tip["market"] = "advanced_props"
+                        tip["league"] = league_name
+                        tip["match"] = match_name
+                        tip["time"] = fixture.get("time_local", "TBD")
+                    results.extend(tips)
+                    log(f"   🔑 Props: {len(tips)} Tipps für {match_name}")
+
+            except Exception as e:
+                log(f"   Props Error: {str(e)[:50]}", "WARN")
+                continue
+
+        return results
+
+
+# Globale Instanz
+_advanced_props_manager = AdvancedPropsManager()
+
+
+def run_advanced_props_bot(active_leagues: list, fixtures_cache: dict, target_date) -> None:
+    """Läuft nach dem Haupt-Bot und sendet Player Props Tipps."""
+    props_chat = TELEGRAM_GROUPS.get("advanced_props", TELEGRAM_CHAT_ID)
+    if not props_chat:
+        return
+
+    total = 0
+    for league in active_leagues:
+        fixtures = fixtures_cache.get(league, [])
+        if not fixtures:
+            continue
+        if league not in AdvancedPropsManager.FBREF_LEAGUE_URLS:
+            continue
+
+        tips = _advanced_props_manager.run_advanced_props(fixtures, league, target_date)
+        for tip in tips:
+            prob = int(tip.get("probability", 0))
+            if prob < 67:
+                continue
+            conf = int(tip.get("confidence", 0))
+            nl = "\n"
+            msg = f"🔑 <b>PLAYER PROP TIP</b>{nl}"
+            msg += f"━━━━━━━━━━━━━━━━━━{nl}"
+            msg += f"<b>{tip.get('match','')}</b>{nl}"
+            msg += f"📍 {league} · ⏰ {tip.get('time','TBD')}{nl}{nl}"
+            msg += f"👤 Tipp: <b>{tip.get('tip','')}</b>{nl}"
+            msg += f"📈 Wahrscheinlichkeit: <b>{prob}%</b>{nl}"
+            msg += f"⭐ {'⭐'*conf}{nl}"
+            msg += f"━━━━━━━━━━━━━━━━━━{nl}"
+            msg += f"<i>{tip.get('reasoning','')[:120]}</i>"
+            send_telegram(msg, props_chat)
+            total += 1
+
+    if total > 0:
+        log(f"✅ Advanced Props: {total} Tipps gesendet!")
+
+
 def check_config():
     warnings = []
 
@@ -12499,7 +13226,15 @@ def main():
             target_date=target_date,
             active_leagues=active_leagues,
             odds_data_cache={},
-            fixtures_cache=_fixtures_cache,  # Echte Fixtures!
+            fixtures_cache=_fixtures_cache,
+        )
+
+    # 🔑 ADVANCED PROPS BOT
+    if env("ENABLE_ADVANCED_PROPS", "true").lower() in ["1", "true", "yes"]:
+        run_advanced_props_bot(
+            active_leagues=active_leagues,
+            fixtures_cache=_fixtures_cache,
+            target_date=target_date,
         )
 
     # 🆕 MULTI-COMBO SYSTEM (3,4,5,6,7,8 Tipps)
