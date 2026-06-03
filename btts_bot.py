@@ -9080,10 +9080,15 @@ def build_context(odds_data, fixtures, league, target_date=None):
             if reddit:
                 line += f"\n   🤖 Reddit: {reddit[0]['title'][:80]}"
 
-            # 📊 STATSBOMB Stats
-            sb_home = get_statsbomb_team_stats(f["home"], league)
-            if sb_home:
-                line += f"\n   📊 StatsBomb: BTTS {sb_home['btts_rate']}% | xG {sb_home['avg_goals_for']}"
+            # 📊 STATSBOMB Player Props
+            sb_stats = get_statsbomb_player_stats(league)
+            if sb_stats:
+                # Props für dieses Spiel
+                props = get_player_props_for_match(f["home"], f["away"], league)
+                if props:
+                    top3 = props[:3]
+                    props_str = " | ".join([f"{p['player'].split()[-1]} {p['tip']} ({p['probability']}%)" for p in top3])
+                    line += f"\n   🔑 Props: {props_str}"
 
             # 🎭 TRANSFERMARKT via Playwright
             if PLAYWRIGHT_AVAILABLE:
@@ -12276,16 +12281,19 @@ def run_corners_and_scorer_bots(target_date, active_leagues, odds_data_cache, fi
         if group_hz:
             for fixture in fixtures:
                 try:
-                    # Duplikat Check
                     home_norm = normalize_team_name(fixture.get("home", ""))
                     away_norm = normalize_team_name(fixture.get("away", ""))
-                    # Verwende längeren Key für bessere Erkennung
                     match_key = f"{home_norm[:12]}_{away_norm[:12]}"
-                    # Auch umgekehrte Reihenfolge prüfen
                     match_key_rev = f"{away_norm[:12]}_{home_norm[:12]}"
                     if match_key in seen_corner_matches or match_key_rev in seen_corner_matches:
                         continue
                     seen_corner_matches.add(match_key)
+
+                    # 🆕 Duplikat zwischen Runs prüfen!
+                    match_name = f"{fixture.get('home','')} vs {fixture.get('away','')}"
+                    if is_duplicate_tip(match_name, "corners", target_date):
+                        log(f"   ⏭️ Ecken Duplikat: {match_name}")
+                        continue
 
                     tip = analyze_corners_tip_simple(fixture, league)
                     if tip:
@@ -12313,13 +12321,18 @@ def run_corners_and_scorer_bots(target_date, active_leagues, odds_data_cache, fi
 
                 if scorers:
                     for fixture in fixtures:
-                        # Duplikat Check für Scorer
                         home_norm = normalize_team_name(fixture.get("home", ""))
                         away_norm = normalize_team_name(fixture.get("away", ""))
                         match_key = f"sc_{home_norm[:8]}_{away_norm[:8]}"
                         if match_key in seen_corner_matches:
                             continue
                         seen_corner_matches.add(match_key)
+
+                        # 🆕 Duplikat zwischen Runs prüfen!
+                        match_name = f"{fixture.get('home','')} vs {fixture.get('away','')}"
+                        if is_duplicate_tip(match_name, "scorer", target_date):
+                            log(f"   ⏭️ Scorer Duplikat: {match_name}")
+                            continue
 
                         tips = analyze_scorer_tips(fixture, league, scorers)
                         for tip in tips:
@@ -12334,11 +12347,13 @@ def run_corners_and_scorer_bots(target_date, active_leagues, odds_data_cache, fi
         send_telegram(f"🔵 <b>ECKEN TIPPS</b>\n<i>📅 {target_date}</i>", group_hz)
         for tip in corners_tips:
             send_telegram(format_corners_message(tip), group_hz)
+            mark_tip_sent(tip.get("match",""), "corners", target_date)
 
     if scorer_tips and group_late:
         send_telegram(f"⚽ <b>SCORER TIPPS</b>\n<i>📅 {target_date}</i>", group_late)
         for tip in scorer_tips:
             send_telegram(format_scorer_message(tip), group_late)
+            mark_tip_sent(tip.get("match",""), "scorer", target_date)
 
     log(f"🔵⚽ Fertig: {corners_count} Ecken Tips, {scorer_count} Scorer Tips")
 
@@ -13143,8 +13158,7 @@ def main():
                 _fixtures_cache[league] = fixtures  # Speichern für Corners/Scorer
 
             if not odds and not fixtures:
-                log("   - Keine Spiele heute")
-                continue
+                continue  # Kein Log-Spam für leere Ligen
 
             # ✅ Qualitäts-Check: TheSportsDB allein = überspringen!
             if fixtures:
@@ -13160,10 +13174,11 @@ def main():
                         and f.get("away","").lower() == away
                         and f.get("source","") != source
                     ]
-                    # TheSportsDB allein → nicht vertrauen
+                    # TheSportsDB allein → nur für bekannte Ligen erlauben
+                    # (nicht filtern wenn keine anderen Quellen verfügbar!)
                     if source == "thesportsdb" and not other_sources:
-                        log(f"   ⚠️ Überspringe {fix['home']} vs {fix['away']} (nur TheSportsDB)")
-                        continue
+                        # Trotzdem behalten - TheSportsDB ist oft die einzige Quelle!
+                        pass  # Nicht filtern
                     if fix not in confirmed:
                         confirmed.append(fix)
                 if len(confirmed) < len(fixtures):
@@ -13174,6 +13189,7 @@ def main():
                 log("   - Keine bestätigten Spiele")
                 continue
 
+            log(f"   📅 {len(fixtures)} Spiele | 💰 {len(odds)} mit Quoten")
             for market in MARKETS_TO_RUN:
                 log(f"   → Markt: {MARKET_INFO[market]['name']}")
 
@@ -13195,7 +13211,7 @@ def main():
                         log(f"   💎 {len(top)} TOP!", "TOP")
                         tips_by_market[market].extend(top)
                 else:
-                    log(f"   - {source}")
+                    log(f"   ⚠️ {source} → kein Ergebnis")
 
                 time.sleep(AI_SLEEP_SECONDS)
 
