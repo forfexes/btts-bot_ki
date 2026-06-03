@@ -9476,21 +9476,30 @@ def calculate_value_rating(odds_yes, fair_odds, probability):
 
 def filter_top_tips(tips, target_date, market):
     filtered = []
+    rejected = {"time": 0, "tip": 0, "prob": 0, "conf": 0, "value": 0, "odds": 0}
 
     max_odds_for_market = 4.5 if market == "btts_ht" else MAX_ODDS
     min_odds_for_market = 1.6 if market == "btts_ht" else MIN_ODDS
 
     for r in tips:
         if not is_future_game(r.get("time", ""), target_date):
+            rejected["time"] += 1
             continue
 
         if r.get("tip") != "YES":
+            rejected["tip"] += 1
             continue
 
-        if int(r.get("probability", 0)) < MIN_PROBABILITY:
+        prob = int(r.get("probability", 0))
+        if prob < MIN_PROBABILITY:
+            rejected["prob"] += 1
+            log(f"   🔽 Gefiltert: {r.get('match','')} prob={prob}% < {MIN_PROBABILITY}%")
             continue
 
-        if int(r.get("confidence", 0)) < MIN_CONFIDENCE:
+        conf = int(r.get("confidence", 0))
+        if conf < MIN_CONFIDENCE:
+            rejected["conf"] += 1
+            log(f"   🔽 Gefiltert: {r.get('match','')} conf={conf} < {MIN_CONFIDENCE}")
             continue
 
         # 🆕 Echte Quoten aus Odds API überschreiben AI-Quoten!
@@ -9519,6 +9528,8 @@ def filter_top_tips(tips, target_date, market):
         odds = parse_odds(r.get("oddsYes", 0))
 
         if odds < min_odds_for_market or odds > max_odds_for_market:
+            rejected["odds"] += 1
+            log(f"   🔽 Gefiltert: {r.get('match','')} odds={odds} (Range: {min_odds_for_market}-{max_odds_for_market})")
             continue
 
         filtered.append(r)
@@ -9534,6 +9545,9 @@ def filter_top_tips(tips, target_date, market):
 
         seen.add(key)
         unique.append(t)
+
+    if any(v > 0 for v in rejected.values()):
+        log(f"   📊 Filter: Zeit={rejected['time']} Tip={rejected['tip']} Prob={rejected['prob']} Conf={rejected['conf']} Value={rejected['value']} Odds={rejected['odds']}")
 
     unique.sort(
         key=lambda r: (
