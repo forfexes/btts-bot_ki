@@ -13063,12 +13063,23 @@ _advanced_props_manager = AdvancedPropsManager()
 
 
 def run_advanced_props_bot(active_leagues: list, fixtures_cache: dict, target_date) -> None:
-    """Läuft nach dem Haupt-Bot und sendet Player Props Tipps."""
-    props_chat = TELEGRAM_GROUPS.get("advanced_props", TELEGRAM_CHAT_ID)
+    """
+    Pre-Match Bet Builder Props Bot — Nate Betting Style.
+    Sammelt Spieler-Kandidaten (Shots, Fouls, Bookings) aus allen Ligen via FBref.
+    Generiert 3-5 Cross-Match Bet Builder Kombis (4-6 Legs).
+    Sendet an TELEGRAM_GROUP_STATS vor Kickoff.
+    NICHT live — läuft morgens mit dem Haupt-Bot.
+    """
+    props_chat = TELEGRAM_GROUPS.get("stats", TELEGRAM_CHAT_ID)
     if not props_chat:
         return
 
-    total = 0
+    log("🔑 Advanced Props Bot startet — sammle Kandidaten...")
+
+    manager = _advanced_props_manager
+    candidates = []
+
+    # ── Schritt 1: Kandidaten über alle Ligen sammeln ──
     for league in active_leagues:
         fixtures = fixtures_cache.get(league, [])
         if not fixtures:
@@ -13076,28 +13087,145 @@ def run_advanced_props_bot(active_leagues: list, fixtures_cache: dict, target_da
         if league not in AdvancedPropsManager.FBREF_LEAGUE_URLS:
             continue
 
-        tips = _advanced_props_manager.run_advanced_props(fixtures, league, target_date)
-        for tip in tips:
-            prob = int(tip.get("probability", 0))
-            if prob < 67:
-                continue
-            conf = int(tip.get("confidence", 0))
-            nl = "\n"
-            msg = f"🔑 <b>PLAYER PROP TIP</b>{nl}"
-            msg += f"━━━━━━━━━━━━━━━━━━{nl}"
-            msg += f"<b>{tip.get('match','')}</b>{nl}"
-            msg += f"📍 {league} · ⏰ {tip.get('time','TBD')}{nl}{nl}"
-            msg += f"👤 Tipp: <b>{tip.get('tip','')}</b>{nl}"
-            msg += f"📈 Wahrscheinlichkeit: <b>{prob}%</b>{nl}"
-            msg += f"⭐ {'⭐'*conf}{nl}"
-            msg += f"━━━━━━━━━━━━━━━━━━{nl}"
-            msg += f"<i>{tip.get('reasoning','')[:120]}</i>"
-            send_telegram(msg, props_chat)
-            total += 1
+        player_db = manager.scrape_fbref_advanced_stats(league)
+        if not player_db:
+            continue
 
-    if total > 0:
-        log(f"✅ Advanced Props: {total} Tipps gesendet!")
+        for fixture in fixtures[:4]:
+            home = fixture.get("home", "")
+            away = fixture.get("away", "")
+            match_id = fixture.get("match_id", "")
+            match_name = f"{home} vs {away}"
+            kickoff = fixture.get("time_local", "TBD")
 
+            # Lineup holen (optional)
+            lineup = get_sofascore_lineups(match_id, home, away) if match_id else None
+            home_xi = [p["name"] for p in (lineup or {}).get("home_lineup", [])]
+            away_xi = [p["name"] for p in (lineup or {}).get("away_lineup", [])]
+            all_players = home_xi + away_xi
+
+            for player, stats in player_db.items():
+                in_lineup = not all_players or any(
+                    player.lower() in p.lower() or p.lower() in player.lower()
+                    for p in all_players
+                )
+                if not in_lineup:
+                    continue
+
+                apps = max(stats.get("appearances", 1) or 1, 1)
+                fc  = round(stats.get("fouls_committed", 0) / apps, 2)
+                fw  = round(stats.get("fouls_drawn", 0)    / apps, 2)
+                sot = stats.get("sot_per90", 0)
+                sh  = stats.get("shots_per90", 0)
+
+                markets = []
+                if fc >= 2.0:   markets.append(("2+ Fouls Committed", fc,  "foul"))
+                elif fc >= 1.0: markets.append(("1+ Foul Committed",  fc,  "foul"))
+                if fw >= 2.0:   markets.append(("2+ Fouls Won",        fw,  "foul_won"))
+                elif fw >= 1.0: markets.append(("1+ Foul Won",         fw,  "foul_won"))
+                if sot >= 2.0:  markets.append(("2+ Shots on Target",  sot, "shots"))
+                elif sot >= 1.0: markets.append(("1+ Shot on Target",  sot, "shots"))
+                if sh >= 3.0:   markets.append(("3+ Shots",            sh,  "shots"))
+
+                for market, stat_val, mtype in markets:
+                    candidates.append({
+                        "player":      player,
+                        "team":        stats.get("team", ""),
+                        "match":       match_name,
+                        "league":      league,
+                        "kickoff":     kickoff,
+                        "market":      market,
+                        "market_type": mtype,
+                        "stat_per90":  stat_val,
+                    })
+
+    if len(candidates) < 4:
+        log(f"🔑 Zu wenig Kandidaten ({len(candidates)}) für Bet Builder Kombis")
+        return
+
+    log(f"🔑 {len(candidates)} Kandidaten — Claude generiert Kombis...")
+
+    # ── Schritt 2: Claude generiert Cross-Match Kombis ──
+    import json as _json
+    top = sorted(candidates, key=lambda x: x["stat_per90"], reverse=True)[:25]
+    cand_str = _json.dumps([{
+        "player":  c["player"],
+        "team":    c["team"],
+        "match":   c["match"],
+        "kickoff": c["kickoff"],
+        "market":  c["market"],
+        "stat":    f"{c['stat_per90']}/90min",
+    } for c in top], ensure_ascii=False, indent=1)
+
+    prompt = f"""Du bist ein Fußball Bet Builder Analyst (Nate Betting Style).
+
+Heute ({target_date}) diese Spieler-Kandidaten mit bestätigten FBref Stats:
+{cand_str}
+
+Erstelle 3-5 Bet Builder Kombinationen mit je 4-6 Legs.
+Mische verschiedene Spiele und Märkte: Fouls Committed + Fouls Won + Shots + Bookings.
+Paare aggressive Spieler (Fouls Committed) mit technischen Spielern (Fouls Won).
+Geschätzte Odds: 3 Legs ~10/1 · 4 Legs ~20/1 · 5 Legs ~40/1 · 6 Legs ~80/1
+
+Antworte NUR mit validem JSON (kein Markdown, kein Text):
+{{"combos":[{{"type":"Fouls Builder","legs":[{{"player":"Name","team":"Team","match":"A vs B","market":"2+ Fouls Committed"}}],"estimated_odds":"20/1","reason":"Kurze Begründung auf Deutsch"}}]}}"""
+
+    results, source = call_gemini(prompt, use_tools=False)
+    if not results:
+        results, source = call_groq(prompt)
+
+    # JSON parsen
+    combos = []
+    try:
+        import re as _re2
+        text = _json.dumps(results) if isinstance(results, (list, dict)) else str(results)
+        m = _re2.search(r'\{.*\}', text, _re2.DOTALL)
+        if m:
+            combos = _json.loads(m.group(0)).get("combos", [])
+    except Exception as e:
+        log(f"🔑 Props JSON Error: {e}", "WARN")
+        return
+
+    if not combos:
+        log("🔑 Keine Kombis generiert")
+        return
+
+    # ── Schritt 3: Senden im Nate Betting Format ──
+    nl = "\n"
+    header = (
+        f"🔑 <b>BET BUILDER PROPS — {target_date}</b>{nl}"
+        f"<i>Shots · Fouls · Bookings · Nate Betting Style</i>{nl}"
+        f"━━━━━━━━━━━━━━━━━━━━{nl}"
+        f"<i>📊 {len(candidates)} Kandidaten · {len(combos)} Kombis · {source}</i>"
+    )
+    send_telegram(header, props_chat)
+
+    for i, combo in enumerate(combos, 1):
+        legs = combo.get("legs", [])
+        if not legs:
+            continue
+
+        by_match = {}
+        for leg in legs:
+            match = leg.get("match", "?")
+            by_match.setdefault(match, []).append(leg)
+
+        msg = f"<b>KOMBI {i} — {combo.get('estimated_odds','?')}</b>{nl}"
+        msg += f"━━━━━━━━━━━━━━━━━━━━{nl}"
+        for match, match_legs in by_match.items():
+            msg += f"⚽ <b>{match}</b>{nl}"
+            for leg in match_legs:
+                msg += f"  ▸ {leg.get('player','')} ({leg.get('team','')}){nl}"
+                msg += f"    <b>{leg.get('market','')}</b>{nl}"
+            msg += nl
+        if combo.get("reason"):
+            msg += f"💡 <i>{combo['reason'][:120]}</i>{nl}"
+        msg += "━━━━━━━━━━━━━━━━━━━━"
+
+        send_telegram(msg, props_chat)
+        log(f"   🔑 Kombi {i}: {combo.get('estimated_odds','?')} · {len(legs)} Legs")
+
+    log(f"✅ Advanced Props: {len(combos)} Kombis gesendet → STATS Gruppe")
 
 def check_config():
     warnings = []
