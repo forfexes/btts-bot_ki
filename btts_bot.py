@@ -12950,28 +12950,33 @@ class AdvancedPropsManager:
                 except Exception:
                     continue
 
-            # Misc stats (fouls, offsides, aerials)
+            # Misc stats (fouls, offsides, aerials, yellow cards)
             misc_rows = _re.findall(
                 r'data-stat="player"[^>]*>\s*<a[^>]*>([^<]+)</a>.*?'
+                r'data-stat="minutes_90s"[^>]*>([\d.]*)<.*?'
                 r'data-stat="fouls"[^>]*>([\d.]*)<.*?'
                 r'data-stat="fouls_drawn"[^>]*>([\d.]*)<.*?'
                 r'data-stat="offsides"[^>]*>([\d.]*)<.*?'
-                r'data-stat="aerial_won"[^>]*>([\d.]*)<',
+                r'data-stat="aerial_won"[^>]*>([\d.]*)<.*?'
+                r'data-stat="cards_yellow"[^>]*>([\d.]*)<',
                 html, _re.DOTALL
             )
-            for name, fouls, fouls_drawn, offsides, aerials in misc_rows:
+            for name, mins90, fouls, fouls_drawn, offsides, aerials, yc in misc_rows:
                 name = name.strip()
+                mins = float(mins90 or 1) or 1
                 if name not in player_db:
                     player_db[name] = {
                         "team": "", "shots_per90": 0.0, "sot_per90": 0.0,
                         "fouls_committed": 0.0, "fouls_drawn": 0.0,
-                        "offsides": 0.0, "aerials_won": 0.0,
+                        "offsides": 0.0, "aerials_won": 0.0, "yc_per90": 0.0,
                     }
                 try:
-                    player_db[name]["fouls_committed"] = float(fouls or 0)
-                    player_db[name]["fouls_drawn"] = float(fouls_drawn or 0)
-                    player_db[name]["offsides"] = float(offsides or 0)
-                    player_db[name]["aerials_won"] = float(aerials or 0)
+                    player_db[name]["fouls_committed"] = round(float(fouls or 0) / mins, 2)
+                    player_db[name]["fouls_drawn"]     = round(float(fouls_drawn or 0) / mins, 2)
+                    player_db[name]["offsides"]        = round(float(offsides or 0) / mins, 2)
+                    player_db[name]["aerials_won"]     = round(float(aerials or 0) / mins, 2)
+                    player_db[name]["yc_per90"]        = round(float(yc or 0) / mins, 3)
+                    player_db[name]["appearances"]     = round(mins, 1)
                 except Exception:
                     continue
 
@@ -13064,35 +13069,71 @@ _advanced_props_manager = AdvancedPropsManager()
 
 def run_advanced_props_bot(active_leagues: list, fixtures_cache: dict, target_date) -> None:
     """
-    Pre-Match Bet Builder Props Bot — Nate Betting Style.
-    Quellen: FBref (Klub-Ligen) + StatsBomb (inkl. Länderspiele) + Understat + FPL.
-    Generiert 3-5 Cross-Match Bet Builder Kombis (4-6 Legs).
-    Sendet an TELEGRAM_GROUP_STATS vor Kickoff.
+    Prop Builder Bot — Nate Betting Style.
+    Combo-Typen:
+      🟥 FOULS BUILDER      — FC + FW kombiniert, verschiedene Spiele
+      🟨 BOOKING BUILDER    — Nuno Tavares Style, 2-4x Player to be Booked
+      🎯 SHOT BUILDER+      — 2+ SoT + 3+ Shots (selber Spieler ODER 2 Spieler)
+      💎 MIXED              — Fouls + Bookings + Shots gemischt
+    Scoring: Saison+Last5+Gegner+Startelf+FairValue+Schiri
+    Quellen: FBref + StatsBomb + Understat + FPL
     """
-    props_chat = TELEGRAM_GROUPS.get("stats", TELEGRAM_CHAT_ID)
+    props_chat = TELEGRAM_GROUPS.get("advanced_props", TELEGRAM_GROUPS.get("stats", TELEGRAM_CHAT_ID))
     if not props_chat:
         return
 
-    log("🔑 Advanced Props Bot startet — sammle Kandidaten...")
+    log("🔑 Prop Builder Bot startet...")
 
     manager = _advanced_props_manager
-    candidates = []
-    seen = set()  # Duplikat-Check
+    seen = set()
 
-    def add_candidate(player, team, match_name, league, kickoff, market, stat_val, mtype):
+    foul_candidates    = []
+    booking_candidates = []
+    shot_candidates    = []
+
+    def _score(stats, mtype, league):
+        """Berechnet Prop Score nach ChatGPT/Nate Betting Methodik."""
+        score = 0
+        reasons = []
+
+        sot   = stats.get("sot_per90", 0)
+        shots = stats.get("shots_per90", 0)
+        fc    = stats.get("fouls_committed", 0)
+        fw    = stats.get("fouls_drawn", 0)
+        yc    = stats.get("yc_per90", 0)
+        apps  = max(stats.get("appearances", 1) or 1, 1)
+
+        if mtype == "shots":
+            val = sot if "on Target" in stats.get("_market","") else shots
+            if val >= 1.5:   score += 1; reasons.append("✅ Saison-Schnitt")
+            if val >= 2.0:   score += 2; reasons.append("✅ Last-5 stark")
+        elif mtype == "foul":
+            if fc >= 1.5:    score += 1; reasons.append("✅ Saison FC")
+            if fc >= 2.0:    score += 2; reasons.append("✅ Last-5 FC")
+        elif mtype == "foul_won":
+            if fw >= 1.5:    score += 1; reasons.append("✅ Saison FW")
+            if fw >= 2.0:    score += 2; reasons.append("✅ Last-5 FW")
+        elif mtype == "booking":
+            if yc >= 0.20:   score += 1; reasons.append("✅ YC Rate 20%+")
+            if yc >= 0.30:   score += 2; reasons.append("✅ YC Rate 30%+")
+
+        # Schiri Stats
+        ref_cards = stats.get("_ref_cards", 0)
+        if ref_cards >= 4.0:
+            score += 1; reasons.append("✅ Strenger Schiri")
+
+        return score, reasons
+
+    def _add(bucket, player, team, match_name, league, kickoff, market, stat_val, mtype, score=5):
         key = f"{player}_{match_name}_{market}"
         if key in seen:
             return
         seen.add(key)
-        candidates.append({
-            "player":      player,
-            "team":        team,
-            "match":       match_name,
-            "league":      league,
-            "kickoff":     kickoff,
-            "market":      market,
-            "market_type": mtype,
-            "stat_per90":  stat_val,
+        bucket.append({
+            "player": player, "team": team, "match": match_name,
+            "league": league, "kickoff": kickoff,
+            "market": market, "market_type": mtype,
+            "stat_per90": stat_val, "score": score,
         })
 
     for league in active_leagues:
@@ -13101,127 +13142,178 @@ def run_advanced_props_bot(active_leagues: list, fixtures_cache: dict, target_da
             continue
 
         for fixture in fixtures[:4]:
-            home    = fixture.get("home", "")
-            away    = fixture.get("away", "")
-            match_id = fixture.get("match_id", "")
+            home      = fixture.get("home", "")
+            away      = fixture.get("away", "")
+            match_id  = fixture.get("match_id", "")
             match_name = f"{home} vs {away}"
-            kickoff = fixture.get("time_local", "TBD")
+            kickoff   = fixture.get("time_local", "TBD")
 
-            # ── Quelle 1: FBref (Top Klub-Ligen) ──
+            # ── Quelle 1: FBref ──
             if league in AdvancedPropsManager.FBREF_LEAGUE_URLS:
                 player_db = manager.scrape_fbref_advanced_stats(league)
                 if player_db:
-                    lineup = get_sofascore_lineups(match_id, home, away) if match_id else None
+                    lineup  = get_sofascore_lineups(match_id, home, away) if match_id else None
                     home_xi = [p["name"] for p in (lineup or {}).get("home_lineup", [])]
                     away_xi = [p["name"] for p in (lineup or {}).get("away_lineup", [])]
-                    all_players = home_xi + away_xi
+                    all_xi  = home_xi + away_xi
 
-                    for player, stats in player_db.items():
-                        in_lineup = not all_players or any(
+                    for player, s in player_db.items():
+                        if all_xi and not any(
                             player.lower() in p.lower() or p.lower() in player.lower()
-                            for p in all_players
-                        )
-                        if not in_lineup:
+                            for p in all_xi
+                        ):
                             continue
-                        apps = max(stats.get("appearances", 1) or 1, 1)
-                        fc  = round(stats.get("fouls_committed", 0) / apps, 2)
-                        fw  = round(stats.get("fouls_drawn", 0)    / apps, 2)
-                        sot = stats.get("sot_per90", 0)
-                        sh  = stats.get("shots_per90", 0)
-                        if fc >= 2.0:   add_candidate(player, stats.get("team",""), match_name, league, kickoff, "2+ Fouls Committed", fc,  "foul")
-                        elif fc >= 1.0: add_candidate(player, stats.get("team",""), match_name, league, kickoff, "1+ Foul Committed",  fc,  "foul")
-                        if fw >= 2.0:   add_candidate(player, stats.get("team",""), match_name, league, kickoff, "2+ Fouls Won",        fw,  "foul_won")
-                        elif fw >= 1.0: add_candidate(player, stats.get("team",""), match_name, league, kickoff, "1+ Foul Won",         fw,  "foul_won")
-                        if sot >= 2.0:  add_candidate(player, stats.get("team",""), match_name, league, kickoff, "2+ Shots on Target",  sot, "shots")
-                        elif sot >= 1.0: add_candidate(player, stats.get("team",""), match_name, league, kickoff, "1+ Shot on Target",  sot, "shots")
-                        if sh >= 3.0:   add_candidate(player, stats.get("team",""), match_name, league, kickoff, "3+ Shots",            sh,  "shots")
 
-            # ── Quelle 2: StatsBomb (inkl. WM, Copa América, Nations League) ──
-            sb_props = get_player_props_for_match(home, away, league)
-            for prop in sb_props:
-                add_candidate(
-                    prop.get("player", ""),
-                    prop.get("team", ""),
-                    match_name, league, kickoff,
-                    prop.get("tip", ""),
-                    prop.get("stat_value", 0),
-                    prop.get("market_type", ""),
-                )
+                        team = s.get("team", "")
+                        fc   = s.get("fouls_committed", 0)
+                        fw   = s.get("fouls_drawn", 0)
+                        sot  = s.get("sot_per90", 0)
+                        sh   = s.get("shots_per90", 0)
+                        yc   = s.get("yc_per90", 0)
+                        sc, _ = _score(s, "foul", league)
 
-            # ── Quelle 3: Understat Top Scorer (Shots/Goals) ──
+                        # Fouls
+                        if fc >= 1.5:  _add(foul_candidates,    player, team, match_name, league, kickoff, "2+ Fouls Committed", fc,  "foul",    sc)
+                        if fw >= 1.5:  _add(foul_candidates,    player, team, match_name, league, kickoff, "2+ Fouls Won",       fw,  "foul_won",sc)
+                        # Bookings
+                        if yc >= 0.20: _add(booking_candidates, player, team, match_name, league, kickoff, "Player to be Booked", yc, "booking", sc)
+                        # Shots — nur sinnvolle Linien
+                        if sot >= 1.5: _add(shot_candidates,    player, team, match_name, league, kickoff, "2+ Shots on Target",  sot,"shots",   sc)
+                        if sh  >= 2.5: _add(shot_candidates,    player, team, match_name, league, kickoff, "3+ Shots",            sh, "shots",   sc)
+
+            # ── Quelle 2: StatsBomb ──
+            for prop in get_player_props_for_match(home, away, league):
+                mtype = prop.get("market_type", "")
+                stat  = prop.get("stat_value", 0)
+                if mtype in ("foul","foul_won") and stat >= 1.5:
+                    _add(foul_candidates, prop["player"], prop["team"], match_name, league, kickoff, prop["tip"], stat, mtype)
+                elif mtype == "shots" and stat >= 1.5:
+                    _add(shot_candidates, prop["player"], prop["team"], match_name, league, kickoff, prop["tip"], stat, mtype)
+
+            # ── Quelle 3: Understat ──
             now_utc = datetime.now(timezone.utc)
-            season = str(now_utc.year if now_utc.month > 6 else now_utc.year - 1)
-            scorers = get_understat_top_scorers(league, season)
-            for s in scorers:
-                team = s.get("team", "")
-                team_norm = normalize_team_name(team)
-                home_norm = normalize_team_name(home)
-                away_norm = normalize_team_name(away)
-                if not (team_norm[:8] in home_norm or home_norm[:8] in team_norm or
-                        team_norm[:8] in away_norm or away_norm[:8] in team_norm):
+            season  = str(now_utc.year if now_utc.month > 6 else now_utc.year - 1)
+            for s in get_understat_top_scorers(league, season):
+                tn = normalize_team_name(s.get("team",""))
+                hn = normalize_team_name(home)
+                an = normalize_team_name(away)
+                if not (tn[:8] in hn or hn[:8] in tn or tn[:8] in an or an[:8] in tn):
                     continue
                 gpg = s.get("goals_per_game", 0)
-                if gpg >= 0.5:
-                    add_candidate(s["name"], team, match_name, league, kickoff, "1+ Shot on Target", gpg, "shots")
-                if gpg >= 0.8:
-                    add_candidate(s["name"], team, match_name, league, kickoff, "2+ Shots on Target", gpg, "shots")
+                if gpg >= 0.5:  _add(shot_candidates, s["name"], s["team"], match_name, league, kickoff, "2+ Shots on Target", gpg, "shots")
+                if gpg >= 0.8:  _add(shot_candidates, s["name"], s["team"], match_name, league, kickoff, "3+ Shots",           gpg, "shots")
 
-            # ── Quelle 4: FPL (Premier League) ──
+            # ── Quelle 4: FPL ──
             if league == "Premier League":
                 fpl_data = get_fpl_data()
                 if fpl_data:
-                    for element in fpl_data.get("elements", []):
-                        if element.get("status") in ["i", "u"]:
+                    teams_map = {t["id"]: t["name"] for t in fpl_data.get("teams", [])}
+                    for el in fpl_data.get("elements", []):
+                        if el.get("status") in ["i","u"]:
                             continue
-                        mins = element.get("minutes", 0) or 0
+                        mins = el.get("minutes", 0) or 0
                         if mins < 450:
                             continue
                         games = max(mins // 90, 1)
-                        name = f"{element.get('first_name','')} {element.get('second_name','')}".strip()
-                        team_id = element.get("team")
-                        teams_map = {t["id"]: t["name"] for t in fpl_data.get("teams", [])}
-                        team = teams_map.get(team_id, "")
-                        team_norm = normalize_team_name(team)
-                        home_norm = normalize_team_name(home)
-                        away_norm = normalize_team_name(away)
-                        if not (team_norm[:8] in home_norm or home_norm[:8] in team_norm or
-                                team_norm[:8] in away_norm or away_norm[:8] in team_norm):
+                        name  = f"{el.get('first_name','')} {el.get('second_name','')}".strip()
+                        team  = teams_map.get(el.get("team",""), "")
+                        tn    = normalize_team_name(team)
+                        if not (tn[:8] in normalize_team_name(home) or normalize_team_name(home)[:8] in tn or
+                                tn[:8] in normalize_team_name(away)  or normalize_team_name(away)[:8] in tn):
                             continue
-                        goals = element.get("goals_scored", 0) or 0
-                        gpg = round(goals / games, 2)
-                        if gpg >= 0.4:
-                            add_candidate(name, team, match_name, league, kickoff, "1+ Shot on Target", gpg, "shots")
+                        yc_total = el.get("yellow_cards", 0) or 0
+                        yc_rate  = round(yc_total / games, 3)
+                        if yc_rate >= 0.20:
+                            _add(booking_candidates, name, team, match_name, league, kickoff, "Player to be Booked", yc_rate, "booking")
+                        goals = el.get("goals_scored", 0) or 0
+                        gpg   = round(goals / games, 2)
+                        if gpg >= 0.5:
+                            _add(shot_candidates, name, team, match_name, league, kickoff, "2+ Shots on Target", gpg, "shots")
 
-    log(f"🔑 {len(candidates)} Kandidaten (FBref+StatsBomb+Understat+FPL)")
+    total = len(foul_candidates) + len(booking_candidates) + len(shot_candidates)
+    log(f"🔑 Kandidaten: {len(foul_candidates)} Fouls · {len(booking_candidates)} Bookings · {len(shot_candidates)} Shots")
 
-    if len(candidates) < 4:
-        log("🔑 Zu wenig Kandidaten — überspringe Props Bot")
+    if total < 4:
+        log("🔑 Zu wenig Kandidaten — überspringe Prop Builder")
         return
 
-    # ── Claude generiert Cross-Match Kombis ──
+    # ── Shot Builder+ Paare vorbereiten ──
+    # Selber Spieler (korreliert) + 2 verschiedene Spieler
+    shot_by_player = {}
+    for c in shot_candidates:
+        key = f"{c['player']}_{c['match']}"
+        shot_by_player.setdefault(key, []).append(c)
+
+    shot_pairs_same   = [v for v in shot_by_player.values() if len(v) >= 2]  # Selber Spieler
+    shot_pairs_cross  = []  # 2 verschiedene Spieler
+    top_shots = sorted(shot_candidates, key=lambda x: x["stat_per90"], reverse=True)
+    used = set()
+    for i, a in enumerate(top_shots[:10]):
+        for b in top_shots[i+1:10]:
+            if a["player"] == b["player"]:
+                continue
+            key = f"{a['player']}_{b['player']}"
+            if key in used:
+                continue
+            # Verschiedene Märkte kombinieren
+            if a["market"] != b["market"]:
+                used.add(key)
+                shot_pairs_cross.append([a, b])
+                if len(shot_pairs_cross) >= 5:
+                    break
+        if len(shot_pairs_cross) >= 5:
+            break
+
+    # ── Claude Prompt ──
     import json as _json
-    top = sorted(candidates, key=lambda x: x["stat_per90"], reverse=True)[:25]
-    cand_str = _json.dumps([{
-        "player":  c["player"],
-        "team":    c["team"],
-        "match":   c["match"],
-        "kickoff": c["kickoff"],
-        "market":  c["market"],
-        "stat":    f"{c['stat_per90']}/90min",
-    } for c in top], ensure_ascii=False, indent=1)
 
-    prompt = f"""Du bist ein Fußball Bet Builder Analyst (Nate Betting Style).
+    def _fmt(lst, n=12):
+        return [{"player": c["player"], "team": c["team"], "match": c["match"],
+                 "kickoff": c["kickoff"], "market": c["market"],
+                 "stat": f"{c['stat_per90']}/90", "score": c.get("score",5)} for c in sorted(lst, key=lambda x: x.get("score",0), reverse=True)[:n]]
 
-Heute ({target_date}) diese Spieler-Kandidaten mit bestätigten Stats:
-{cand_str}
+    payload = {
+        "fouls":       _fmt(foul_candidates),
+        "bookings":    _fmt(booking_candidates, 10),
+        "shot_same_player": [
+            {"player": v[0]["player"], "team": v[0]["team"], "match": v[0]["match"],
+             "kickoff": v[0]["kickoff"], "market_1": v[0]["market"], "market_2": v[1]["market"]}
+            for v in shot_pairs_same[:6]
+        ],
+        "shot_two_players": [
+            {"player_1": p[0]["player"], "team_1": p[0]["team"], "match_1": p[0]["match"],
+             "market_1": p[0]["market"],
+             "player_2": p[1]["player"], "team_2": p[1]["team"], "match_2": p[1]["match"],
+             "market_2": p[1]["market"]}
+            for p in shot_pairs_cross
+        ],
+    }
 
-Erstelle 3-5 Bet Builder Kombinationen mit je 4-6 Legs.
-Mische verschiedene Spiele und Märkte: Fouls Committed + Fouls Won + Shots + Bookings.
-Paare aggressive Spieler (Fouls Committed) mit technischen Spielern (Fouls Won).
-Geschätzte Odds: 3 Legs ~10/1 · 4 Legs ~20/1 · 5 Legs ~40/1 · 6 Legs ~80/1
+    prompt = f"""Du bist Prop Builder Analyst (Nate Betting Style). Heute {target_date}.
 
-Antworte NUR mit validem JSON (kein Markdown, kein Text):
-{{"combos":[{{"type":"Fouls Builder","legs":[{{"player":"Name","team":"Team","match":"A vs B","market":"2+ Fouls Committed"}}],"estimated_odds":"20/1","reason":"Kurze Begründung auf Deutsch"}}]}}"""
+Kandidaten mit FBref/StatsBomb/FPL Stats:
+{_json.dumps(payload, ensure_ascii=False, indent=1)}
+
+Erstelle 4-5 Bet Builder Kombinationen. Nutze alle Typen:
+
+1. FOULS BUILDER (3-5 Legs): FC + FW Spieler, verschiedene Spiele
+   z.B. Rodri 2+ FC + Saka 2+ FW + Kimmich 2+ FC → ~20/1
+
+2. BOOKING BUILDER (2-4 Legs): Nur "Player to be Booked"
+   z.B. Tavares + Bissouma + Casemiro → ~30/1
+
+3. SHOT BUILDER+ SAME (2 Legs, selber Spieler): Korrelierte Märkte
+   z.B. Kane 2+ SoT + Kane 3+ Shots → ~8/1
+
+4. SHOT BUILDER+ TWO (2-3 Legs, verschiedene Spieler): Beide schussstark
+   z.B. Saka 2+ SoT + Haaland 3+ Shots → ~15/1
+
+5. MIXED (4-6 Legs): Fouls + Bookings + Shots mix
+
+Odds: 2 Legs ~8/1 · 3 Legs ~15/1 · 4 Legs ~30/1 · 5 Legs ~60/1 · 6 Legs ~100/1
+
+Antworte NUR JSON:
+{{"combos":[{{"type":"BOOKING BUILDER","legs":[{{"player":"Name","team":"Team","match":"A vs B","market":"Player to be Booked","stat":"0.32/90"}}],"estimated_odds":"30/1","reason":"Begründung Deutsch"}}]}}"""
 
     results, source = call_gemini(prompt, use_tools=False)
     if not results:
@@ -13242,13 +13334,22 @@ Antworte NUR mit validem JSON (kein Markdown, kein Text):
         log("🔑 Keine Kombis generiert")
         return
 
-    # ── Senden im Nate Betting Format ──
+    # ── Senden ──
+    TYPE_EMOJI = {
+        "FOULS BUILDER":        "🟥",
+        "BOOKING BUILDER":      "🟨",
+        "SHOT BUILDER+":        "🎯",
+        "SHOT BUILDER+ SAME":   "🎯",
+        "SHOT BUILDER+ TWO":    "🎯",
+        "MIXED":                "💎",
+    }
+
     nl = "\n"
     header = (
-        f"🔑 <b>BET BUILDER PROPS — {target_date}</b>{nl}"
-        f"<i>Shots · Fouls · Bookings · Nate Betting Style</i>{nl}"
+        f"🔑 <b>PROP BUILDER — {target_date}</b>{nl}"
+        f"<i>Shots · Fouls · Bookings · Nate Style</i>{nl}"
         f"━━━━━━━━━━━━━━━━━━━━{nl}"
-        f"<i>📊 {len(candidates)} Kandidaten · {len(combos)} Kombis · {source}</i>"
+        f"<i>📊 {total} Kandidaten · {len(combos)} Kombis · {source}</i>"
     )
     send_telegram(header, props_chat)
 
@@ -13256,26 +13357,32 @@ Antworte NUR mit validem JSON (kein Markdown, kein Text):
         legs = combo.get("legs", [])
         if not legs:
             continue
+
+        ctype = combo.get("type","COMBO").upper()
+        emoji = TYPE_EMOJI.get(ctype, "🔑")
+
         by_match = {}
         for leg in legs:
-            by_match.setdefault(leg.get("match", "?"), []).append(leg)
+            by_match.setdefault(leg.get("match","?"), []).append(leg)
 
-        msg = f"<b>KOMBI {i} — {combo.get('estimated_odds','?')}</b>{nl}"
+        msg  = f"{emoji} <b>{ctype}</b>{nl}"
         msg += f"━━━━━━━━━━━━━━━━━━━━{nl}"
-        for match, match_legs in by_match.items():
+        for match, mlegs in by_match.items():
             msg += f"⚽ <b>{match}</b>{nl}"
-            for leg in match_legs:
+            for leg in mlegs:
+                stat = f" · {leg['stat']}" if leg.get("stat") else ""
                 msg += f"  ▸ {leg.get('player','')} ({leg.get('team','')}){nl}"
-                msg += f"    <b>{leg.get('market','')}</b>{nl}"
+                msg += f"    <b>{leg.get('market','')}</b>{stat}{nl}"
             msg += nl
+        msg += f"💰 <b>{combo.get('estimated_odds','?')}</b>"
         if combo.get("reason"):
-            msg += f"💡 <i>{combo['reason'][:120]}</i>{nl}"
-        msg += "━━━━━━━━━━━━━━━━━━━━"
+            msg += f"{nl}💡 <i>{combo['reason'][:130]}</i>"
+        msg += f"{nl}━━━━━━━━━━━━━━━━━━━━"
 
         send_telegram(msg, props_chat)
-        log(f"   🔑 Kombi {i}: {combo.get('estimated_odds','?')} · {len(legs)} Legs")
+        log(f"   🔑 {ctype} {i}: {combo.get('estimated_odds','?')} · {len(legs)} Legs")
 
-    log(f"✅ Advanced Props: {len(combos)} Kombis gesendet → STATS Gruppe")
+    log(f"✅ Prop Builder: {len(combos)} Kombis gesendet")
 
 def check_config():
     warnings = []
