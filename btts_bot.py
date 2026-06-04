@@ -10350,6 +10350,7 @@ def save_to_supabase(tip):
             "result_home", "result_away",
             "result_ht_home", "result_ht_away",
             "settled_at",
+            "odds_taken", "odds_closing", "clv",
         ]
         
         clean_tip = {k: v for k, v in tip.items() 
@@ -11234,6 +11235,7 @@ def send_top_tips(tips_by_market, target_date):
                 "telegram_msg_id": msg_id,
                 "units": tip_units,
                 "status": "pending",
+                "odds_taken": odds_val,
                 # ML Features
                 "weekday": tip_weekday,
                 "hour": tip_hour,
@@ -13561,6 +13563,140 @@ def send_daily_report():
         log(f"Daily Report Error: {str(e)[:60]}", "WARN")
 
 
+
+def run_clv_update() -> None:
+    """
+    Closing Line Value Update.
+    Holt Closing Odds von Pinnacle/Odds API für heutige Tipps,
+    berechnet CLV und speichert in Supabase.
+    CLV = (odds_taken / odds_closing - 1) * 100
+    Positiv = Edge, Negativ = kein Edge
+    """
+    if not SUPABASE_URL or not SUPABASE_KEY:
+        return
+    if not ODDS_API_KEYS:
+        log("CLV: Keine Odds API Keys", "WARN")
+        return
+
+    log("📊 CLV Update startet...")
+
+    today = datetime.now(timezone.utc).date()
+
+    # Hole alle heutigen Tipps mit odds_taken aber ohne odds_closing
+    try:
+        r = requests.get(
+            f"{SUPABASE_URL}/rest/v1/tips",
+            headers={"apikey": SUPABASE_KEY, "Authorization": f"Bearer {SUPABASE_KEY}"},
+            params={
+                "date": f"eq.{today}",
+                "odds_closing": "is.null",
+                "select": "id,match,league,market,odds_taken,time",
+                "limit": "100",
+            },
+            timeout=15,
+        )
+        if not r.ok:
+            return
+        tips = r.json()
+    except Exception as e:
+        log(f"CLV: Supabase Error {e}", "WARN")
+        return
+
+    if not tips:
+        log("CLV: Keine offenen Tipps für Update")
+        return
+
+    log(f"CLV: {len(tips)} Tipps gefunden")
+    updated = 0
+
+    for tip in tips:
+        try:
+            match = tip.get("match", "")
+            league = tip.get("league", "")
+            market = tip.get("market", "btts")
+            odds_taken = float(tip.get("odds_taken") or 0)
+
+            if not match or " vs " not in match or not odds_taken:
+                continue
+
+            parts = match.split(" vs ", 1)
+            home_team = parts[0].strip()
+            away_team = parts[1].strip()
+
+            # Closing Odds von Pinnacle via Odds API holen
+            sport_key = LEAGUE_KEYS.get(league)
+            if not sport_key:
+                continue
+
+            closing_odds = None
+            for api_key in ODDS_API_KEYS[:2]:
+                try:
+                    resp = requests.get(
+                        f"https://api.the-odds-api.com/v4/sports/{sport_key}/odds/",
+                        params={
+                            "apiKey": api_key,
+                            "bookmakers": "pinnacle",
+                            "markets": "btts,totals",
+                            "oddsFormat": "decimal",
+                        },
+                        timeout=12,
+                    )
+                    if not resp.ok:
+                        continue
+                    for game in resp.json():
+                        gh = game.get("home_team", "")
+                        ga = game.get("away_team", "")
+                        if not (teams_match(home_team, gh) and teams_match(away_team, ga)):
+                            continue
+                        for bm in game.get("bookmakers", []):
+                            if "pinnacle" not in bm.get("key","").lower():
+                                continue
+                            for mkt in bm.get("markets", []):
+                                if market == "btts" and mkt.get("key") == "btts":
+                                    for o in mkt.get("outcomes", []):
+                                        if o.get("name") == "Yes":
+                                            closing_odds = float(o.get("price", 0))
+                                elif market == "over25" and mkt.get("key") == "totals":
+                                    for o in mkt.get("outcomes", []):
+                                        if o.get("name") == "Over" and abs(o.get("point",0) - 2.5) < 0.1:
+                                            closing_odds = float(o.get("price", 0))
+                    if closing_odds:
+                        break
+                except Exception:
+                    continue
+
+            if not closing_odds:
+                continue
+
+            # CLV berechnen
+            clv = round((odds_taken / closing_odds - 1) * 100, 2)
+
+            # Supabase updaten
+            requests.patch(
+                f"{SUPABASE_URL}/rest/v1/tips",
+                headers={
+                    "apikey": SUPABASE_KEY,
+                    "Authorization": f"Bearer {SUPABASE_KEY}",
+                    "Content-Type": "application/json",
+                    "Prefer": "return=minimal",
+                },
+                params={"id": f"eq.{tip['id']}"},
+                json={"odds_closing": closing_odds, "clv": clv},
+                timeout=10,
+            )
+            updated += 1
+            clv_emoji = "🟢" if clv > 0 else "🔴"
+            log(f"   CLV: {match} → taken={odds_taken} closing={closing_odds} CLV={clv:+.1f}% {clv_emoji}")
+
+        except Exception as e:
+            log(f"CLV Error {tip.get('match','')}: {e}", "WARN")
+            continue
+
+    # CLV nur in Supabase — kein Telegram
+
+    log(f"✅ CLV Update: {updated}/{len(tips)} Tipps aktualisiert")
+
+
 def main():
     log("=" * 60)
     log("AI TIPP BOT - ALL-IN-ONE EDITION")
@@ -13581,6 +13717,7 @@ def main():
     if run_mode in ["settlement", "both"]:
         log("🏆 Settlement Mode - prüfe vergangene Tipps...")
         run_settlement()
+        run_clv_update()  # CLV nach Settlement updaten
         if run_mode == "settlement":
             log("Settlement fertig!")
             return
