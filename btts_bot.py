@@ -13065,10 +13065,9 @@ _advanced_props_manager = AdvancedPropsManager()
 def run_advanced_props_bot(active_leagues: list, fixtures_cache: dict, target_date) -> None:
     """
     Pre-Match Bet Builder Props Bot — Nate Betting Style.
-    Sammelt Spieler-Kandidaten (Shots, Fouls, Bookings) aus allen Ligen via FBref.
+    Quellen: FBref (Klub-Ligen) + StatsBomb (inkl. Länderspiele) + Understat + FPL.
     Generiert 3-5 Cross-Match Bet Builder Kombis (4-6 Legs).
     Sendet an TELEGRAM_GROUP_STATS vor Kickoff.
-    NICHT live — läuft morgens mit dem Haupt-Bot.
     """
     props_chat = TELEGRAM_GROUPS.get("stats", TELEGRAM_CHAT_ID)
     if not props_chat:
@@ -13078,74 +13077,128 @@ def run_advanced_props_bot(active_leagues: list, fixtures_cache: dict, target_da
 
     manager = _advanced_props_manager
     candidates = []
+    seen = set()  # Duplikat-Check
 
-    # ── Schritt 1: Kandidaten über alle Ligen sammeln ──
+    def add_candidate(player, team, match_name, league, kickoff, market, stat_val, mtype):
+        key = f"{player}_{match_name}_{market}"
+        if key in seen:
+            return
+        seen.add(key)
+        candidates.append({
+            "player":      player,
+            "team":        team,
+            "match":       match_name,
+            "league":      league,
+            "kickoff":     kickoff,
+            "market":      market,
+            "market_type": mtype,
+            "stat_per90":  stat_val,
+        })
+
     for league in active_leagues:
         fixtures = fixtures_cache.get(league, [])
         if not fixtures:
             continue
-        if league not in AdvancedPropsManager.FBREF_LEAGUE_URLS:
-            continue
-
-        player_db = manager.scrape_fbref_advanced_stats(league)
-        if not player_db:
-            continue
 
         for fixture in fixtures[:4]:
-            home = fixture.get("home", "")
-            away = fixture.get("away", "")
+            home    = fixture.get("home", "")
+            away    = fixture.get("away", "")
             match_id = fixture.get("match_id", "")
             match_name = f"{home} vs {away}"
             kickoff = fixture.get("time_local", "TBD")
 
-            # Lineup holen (optional)
-            lineup = get_sofascore_lineups(match_id, home, away) if match_id else None
-            home_xi = [p["name"] for p in (lineup or {}).get("home_lineup", [])]
-            away_xi = [p["name"] for p in (lineup or {}).get("away_lineup", [])]
-            all_players = home_xi + away_xi
+            # ── Quelle 1: FBref (Top Klub-Ligen) ──
+            if league in AdvancedPropsManager.FBREF_LEAGUE_URLS:
+                player_db = manager.scrape_fbref_advanced_stats(league)
+                if player_db:
+                    lineup = get_sofascore_lineups(match_id, home, away) if match_id else None
+                    home_xi = [p["name"] for p in (lineup or {}).get("home_lineup", [])]
+                    away_xi = [p["name"] for p in (lineup or {}).get("away_lineup", [])]
+                    all_players = home_xi + away_xi
 
-            for player, stats in player_db.items():
-                in_lineup = not all_players or any(
-                    player.lower() in p.lower() or p.lower() in player.lower()
-                    for p in all_players
+                    for player, stats in player_db.items():
+                        in_lineup = not all_players or any(
+                            player.lower() in p.lower() or p.lower() in player.lower()
+                            for p in all_players
+                        )
+                        if not in_lineup:
+                            continue
+                        apps = max(stats.get("appearances", 1) or 1, 1)
+                        fc  = round(stats.get("fouls_committed", 0) / apps, 2)
+                        fw  = round(stats.get("fouls_drawn", 0)    / apps, 2)
+                        sot = stats.get("sot_per90", 0)
+                        sh  = stats.get("shots_per90", 0)
+                        if fc >= 2.0:   add_candidate(player, stats.get("team",""), match_name, league, kickoff, "2+ Fouls Committed", fc,  "foul")
+                        elif fc >= 1.0: add_candidate(player, stats.get("team",""), match_name, league, kickoff, "1+ Foul Committed",  fc,  "foul")
+                        if fw >= 2.0:   add_candidate(player, stats.get("team",""), match_name, league, kickoff, "2+ Fouls Won",        fw,  "foul_won")
+                        elif fw >= 1.0: add_candidate(player, stats.get("team",""), match_name, league, kickoff, "1+ Foul Won",         fw,  "foul_won")
+                        if sot >= 2.0:  add_candidate(player, stats.get("team",""), match_name, league, kickoff, "2+ Shots on Target",  sot, "shots")
+                        elif sot >= 1.0: add_candidate(player, stats.get("team",""), match_name, league, kickoff, "1+ Shot on Target",  sot, "shots")
+                        if sh >= 3.0:   add_candidate(player, stats.get("team",""), match_name, league, kickoff, "3+ Shots",            sh,  "shots")
+
+            # ── Quelle 2: StatsBomb (inkl. WM, Copa América, Nations League) ──
+            sb_props = get_player_props_for_match(home, away, league)
+            for prop in sb_props:
+                add_candidate(
+                    prop.get("player", ""),
+                    prop.get("team", ""),
+                    match_name, league, kickoff,
+                    prop.get("tip", ""),
+                    prop.get("stat_value", 0),
+                    prop.get("market_type", ""),
                 )
-                if not in_lineup:
+
+            # ── Quelle 3: Understat Top Scorer (Shots/Goals) ──
+            now_utc = datetime.now(timezone.utc)
+            season = str(now_utc.year if now_utc.month > 6 else now_utc.year - 1)
+            scorers = get_understat_top_scorers(league, season)
+            for s in scorers:
+                team = s.get("team", "")
+                team_norm = normalize_team_name(team)
+                home_norm = normalize_team_name(home)
+                away_norm = normalize_team_name(away)
+                if not (team_norm[:8] in home_norm or home_norm[:8] in team_norm or
+                        team_norm[:8] in away_norm or away_norm[:8] in team_norm):
                     continue
+                gpg = s.get("goals_per_game", 0)
+                if gpg >= 0.5:
+                    add_candidate(s["name"], team, match_name, league, kickoff, "1+ Shot on Target", gpg, "shots")
+                if gpg >= 0.8:
+                    add_candidate(s["name"], team, match_name, league, kickoff, "2+ Shots on Target", gpg, "shots")
 
-                apps = max(stats.get("appearances", 1) or 1, 1)
-                fc  = round(stats.get("fouls_committed", 0) / apps, 2)
-                fw  = round(stats.get("fouls_drawn", 0)    / apps, 2)
-                sot = stats.get("sot_per90", 0)
-                sh  = stats.get("shots_per90", 0)
+            # ── Quelle 4: FPL (Premier League) ──
+            if league == "Premier League":
+                fpl_data = get_fpl_data()
+                if fpl_data:
+                    for element in fpl_data.get("elements", []):
+                        if element.get("status") in ["i", "u"]:
+                            continue
+                        mins = element.get("minutes", 0) or 0
+                        if mins < 450:
+                            continue
+                        games = max(mins // 90, 1)
+                        name = f"{element.get('first_name','')} {element.get('second_name','')}".strip()
+                        team_id = element.get("team")
+                        teams_map = {t["id"]: t["name"] for t in fpl_data.get("teams", [])}
+                        team = teams_map.get(team_id, "")
+                        team_norm = normalize_team_name(team)
+                        home_norm = normalize_team_name(home)
+                        away_norm = normalize_team_name(away)
+                        if not (team_norm[:8] in home_norm or home_norm[:8] in team_norm or
+                                team_norm[:8] in away_norm or away_norm[:8] in team_norm):
+                            continue
+                        goals = element.get("goals_scored", 0) or 0
+                        gpg = round(goals / games, 2)
+                        if gpg >= 0.4:
+                            add_candidate(name, team, match_name, league, kickoff, "1+ Shot on Target", gpg, "shots")
 
-                markets = []
-                if fc >= 2.0:   markets.append(("2+ Fouls Committed", fc,  "foul"))
-                elif fc >= 1.0: markets.append(("1+ Foul Committed",  fc,  "foul"))
-                if fw >= 2.0:   markets.append(("2+ Fouls Won",        fw,  "foul_won"))
-                elif fw >= 1.0: markets.append(("1+ Foul Won",         fw,  "foul_won"))
-                if sot >= 2.0:  markets.append(("2+ Shots on Target",  sot, "shots"))
-                elif sot >= 1.0: markets.append(("1+ Shot on Target",  sot, "shots"))
-                if sh >= 3.0:   markets.append(("3+ Shots",            sh,  "shots"))
-
-                for market, stat_val, mtype in markets:
-                    candidates.append({
-                        "player":      player,
-                        "team":        stats.get("team", ""),
-                        "match":       match_name,
-                        "league":      league,
-                        "kickoff":     kickoff,
-                        "market":      market,
-                        "market_type": mtype,
-                        "stat_per90":  stat_val,
-                    })
+    log(f"🔑 {len(candidates)} Kandidaten (FBref+StatsBomb+Understat+FPL)")
 
     if len(candidates) < 4:
-        log(f"🔑 Zu wenig Kandidaten ({len(candidates)}) für Bet Builder Kombis")
+        log("🔑 Zu wenig Kandidaten — überspringe Props Bot")
         return
 
-    log(f"🔑 {len(candidates)} Kandidaten — Claude generiert Kombis...")
-
-    # ── Schritt 2: Claude generiert Cross-Match Kombis ──
+    # ── Claude generiert Cross-Match Kombis ──
     import json as _json
     top = sorted(candidates, key=lambda x: x["stat_per90"], reverse=True)[:25]
     cand_str = _json.dumps([{
@@ -13159,7 +13212,7 @@ def run_advanced_props_bot(active_leagues: list, fixtures_cache: dict, target_da
 
     prompt = f"""Du bist ein Fußball Bet Builder Analyst (Nate Betting Style).
 
-Heute ({target_date}) diese Spieler-Kandidaten mit bestätigten FBref Stats:
+Heute ({target_date}) diese Spieler-Kandidaten mit bestätigten Stats:
 {cand_str}
 
 Erstelle 3-5 Bet Builder Kombinationen mit je 4-6 Legs.
@@ -13174,7 +13227,6 @@ Antworte NUR mit validem JSON (kein Markdown, kein Text):
     if not results:
         results, source = call_groq(prompt)
 
-    # JSON parsen
     combos = []
     try:
         import re as _re2
@@ -13190,7 +13242,7 @@ Antworte NUR mit validem JSON (kein Markdown, kein Text):
         log("🔑 Keine Kombis generiert")
         return
 
-    # ── Schritt 3: Senden im Nate Betting Format ──
+    # ── Senden im Nate Betting Format ──
     nl = "\n"
     header = (
         f"🔑 <b>BET BUILDER PROPS — {target_date}</b>{nl}"
@@ -13204,11 +13256,9 @@ Antworte NUR mit validem JSON (kein Markdown, kein Text):
         legs = combo.get("legs", [])
         if not legs:
             continue
-
         by_match = {}
         for leg in legs:
-            match = leg.get("match", "?")
-            by_match.setdefault(match, []).append(leg)
+            by_match.setdefault(leg.get("match", "?"), []).append(leg)
 
         msg = f"<b>KOMBI {i} — {combo.get('estimated_odds','?')}</b>{nl}"
         msg += f"━━━━━━━━━━━━━━━━━━━━{nl}"
