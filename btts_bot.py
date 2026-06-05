@@ -4204,12 +4204,24 @@ except ImportError:
     pass
 
 PLAYWRIGHT_CACHE = {}
-_PW_SESSION_CACHE = {}  # URL → HTML Cache für diese Session (verhindert doppelte Calls)
+_PW_SESSION_CACHE = {}  # URL → HTML Cache für diese Session
+_PW_LOCK = None  # Threading Lock (wird bei erstem Aufruf erstellt)
 
 def scrape_with_playwright(url, wait_for=None, timeout=8000):
+    global _PW_LOCK
+    import threading as _th
+    if _PW_LOCK is None:
+        _PW_LOCK = _th.Lock()
+    
     # Session-Cache: gleiche URL nicht nochmal laden
     if url in _PW_SESSION_CACHE:
         return _PW_SESSION_CACHE[url]
+    
+    # Lock: nur 1 Playwright-Instanz gleichzeitig
+    with _PW_LOCK:
+        # Double-check nach Lock
+        if url in _PW_SESSION_CACHE:
+            return _PW_SESSION_CACHE[url]
 
     """
     Scrapt eine Seite mit echtem Chromium Browser.
@@ -13833,7 +13845,9 @@ def main():
 
     tips_by_market = {m: [] for m in MARKETS_TO_RUN}
     total_analyzed = 0
-    _analyzed_count = [0]  # Mutable für Thread-Zugriff
+    _analyzed_count = [0]  # Thread-safe Counter
+    import threading as _main_th
+    _counter_lock = _main_th.Lock()
     _total_analyzed_lock = None  # wird in analyze_league als nonlocal genutzt
 
     # MAX_LEAGUES_PER_RUN wird ignoriert wenn Bulk-Fetch läuft
@@ -14003,7 +14017,8 @@ def main():
                     if top:
                         with _lock:
                             tips_by_market[market].extend(top)
-                            _analyzed_count[0] += len(results)
+                            with _counter_lock:
+                                _analyzed_count[0] += len(results)
                             log(f"   💎 [{league}] {len(top)} TOP {MARKET_INFO[market]['name']}")
 
                 time.sleep(AI_SLEEP_SECONDS)
