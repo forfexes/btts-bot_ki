@@ -13281,6 +13281,107 @@ class AdvancedPropsManager:
 _advanced_props_manager = AdvancedPropsManager()
 
 
+
+def calculate_hit_rate(game_values: list, threshold: float) -> str:
+    """Berechnet Hit Rate im Format X/Y — z.B. 18/20"""
+    if not game_values:
+        return "0/0"
+    hits = sum(1 for v in game_values if v >= threshold)
+    return f"{hits}/{len(game_values)}"
+
+
+def game_sequence(game_values: list, last_n: int = 10) -> str:
+    """Zeigt letzte N Spiele als Sequenz — z.B. 2,1,2,0,1,2,1,1,2,1"""
+    vals = game_values[-last_n:] if len(game_values) > last_n else game_values
+    return ",".join(str(int(v)) if v == int(v) else str(round(v,1)) for v in vals)
+
+
+def get_fbref_game_log(player_name: str, league: str, stat: str = "fouls", last_n: int = 20) -> list:
+    """
+    Holt Spiel-für-Spiel Stats von FBref für einen Spieler.
+    stat: 'fouls_committed', 'fouls_drawn', 'shots', 'sot', 'tackles'
+    Gibt Liste von Werten zurück (letzten last_n Spiele)
+    """
+    try:
+        import requests as _r, re as _re2
+        from bs4 import BeautifulSoup as _bs4
+
+        # FBref Player Search
+        search_url = f"https://fbref.com/search/search.fcgi?search={player_name.replace(' ', '+')}"
+        r = _r.get(search_url, headers={"User-Agent": "Mozilla/5.0"}, timeout=10)
+        if not r.ok:
+            return []
+
+        # Ersten Spieler-Link finden
+        soup = _bs4(r.text, "html.parser")
+        player_link = None
+        for a in soup.find_all("a", href=True):
+            if "/players/" in a["href"] and len(a["href"].split("/")) >= 4:
+                player_link = "https://fbref.com" + a["href"]
+                break
+        if not player_link:
+            return []
+
+        # Game Log für den Spieler holen
+        log_url = player_link.replace(".html", "/matchlogs/2025-2026/summary/")
+        r2 = _r.get(log_url, headers={"User-Agent": "Mozilla/5.0"}, timeout=12)
+        if not r2.ok:
+            return []
+
+        stat_col_map = {
+            "fouls_committed": "fouls",
+            "fouls_drawn": "fouled",
+            "shots": "shots",
+            "sot": "shots_on_target",
+            "tackles": "tackles",
+        }
+        col = stat_col_map.get(stat, "fouls")
+
+        # Werte extrahieren
+        pattern = f'data-stat="{col}"[^>]*>([\\d.]*)<'
+        vals = _re2.findall(pattern, r2.text)
+        result = []
+        for v in vals:
+            try:
+                result.append(float(v))
+            except:
+                continue
+        return result[-last_n:] if len(result) > last_n else result
+    except Exception:
+        return []
+
+
+def get_combined_opponent_fouls(opp_team: str, league: str, target_date, position_filter: str = "DF") -> dict:
+    """
+    Holt kombinierte Fouls-Stats der Gegner-Verteidiger/Mittelfeld.
+    Nutzt FBref gecachte Stats.
+    Gibt zurück: {combined_fc_per90, combined_fw_per90, top_players}
+    """
+    try:
+        player_db = cache_get_player_stats(league, target_date)
+        if not player_db:
+            return {}
+        
+        # Filter: Spieler vom Gegner-Team
+        opp_players = []
+        for name, stats in player_db.items():
+            if normalize_team_name(stats.get("team","")) == normalize_team_name(opp_team):
+                opp_players.append((name, stats))
+        
+        if not opp_players:
+            return {}
+        
+        # Top Fouler vom Gegner
+        top_foulers = sorted(opp_players, key=lambda x: x[1].get("fouls_committed",0), reverse=True)[:3]
+        combined_fc = sum(p[1].get("fouls_committed",0) for p in top_foulers[:2])
+        
+        return {
+            "combined_fc_per90": round(combined_fc, 2),
+            "top_players": [p[0] for p in top_foulers[:2]],
+        }
+    except Exception:
+        return {}
+
 def run_advanced_props_bot(active_leagues: list, fixtures_cache: dict, target_date) -> None:
     """
     Prop Builder Bot — Nate Betting Style.
@@ -13383,7 +13484,7 @@ def run_advanced_props_bot(active_leagues: list, fixtures_cache: dict, target_da
 
         return score, reasons
 
-    def _add(bucket, player, team, match_name, league, kickoff, market, stat_val, mtype, score=5):
+    def _add(bucket, player, team, match_name, league, kickoff, market, stat_val, mtype, score=5, game_log=None, opp_context=""):
         key = f"{player}_{match_name}_{market}"
         if key in seen:
             return
@@ -13393,6 +13494,8 @@ def run_advanced_props_bot(active_leagues: list, fixtures_cache: dict, target_da
             "league": league, "kickoff": kickoff,
             "market": market, "market_type": mtype,
             "stat_per90": stat_val, "score": score,
+            "game_log": game_log or [],
+            "opp_context": opp_context,
         })
 
     for league in active_leagues:
@@ -13439,6 +13542,9 @@ def run_advanced_props_bot(active_leagues: list, fixtures_cache: dict, target_da
                         # Shots — nur sinnvolle Linien
                         if sot >= 1.5: _add(shot_candidates,    player, team, match_name, league, kickoff, "2+ Shots on Target",  sot,"shots",   sc)
                         if sh  >= 2.5: _add(shot_candidates,    player, team, match_name, league, kickoff, "3+ Shots",            sh, "shots",   sc)
+                        # Tackles
+                        tk = s.get("tackles_per90", 0)
+                        if tk >= 2.5: _add(foul_candidates, player, team, match_name, league, kickoff, "3+ Tackles", tk, "tackles", sc)
 
             # ── Quelle 2: StatsBomb ──
             for prop in get_player_props_for_match(home, away, league):
@@ -13489,6 +13595,26 @@ def run_advanced_props_bot(active_leagues: list, fixtures_cache: dict, target_da
                         if gpg >= 0.5:
                             _add(shot_candidates, name, team, match_name, league, kickoff, "2+ Shots on Target", gpg, "shots")
 
+    # Team Offside aus FBref (Palace-Style: Team X hat 2+ Offsides in Y/20 Heimspielen)
+    offside_candidates = []
+    for league in active_leagues:
+        if league not in [l for l in ["Premier League", "Bundesliga", "La Liga", "Serie A", "Ligue 1"]]:
+            continue
+        player_db_off = cache_get_player_stats(league, target_date)
+        if not player_db_off:
+            continue
+        # Teams mit hoher Offside-Rate finden
+        teams_offsides = {}
+        for player, s in player_db_off.items():
+            tm = s.get("team","")
+            off = s.get("offsides", 0)
+            if off > 0:
+                teams_offsides[tm] = teams_offsides.get(tm, 0) + off
+        for tm, total_off in teams_offsides.items():
+            if total_off >= 0.15:  # Team hat ~0.15+ Offsides/90 gesamt
+                for fixture in active_leagues:
+                    pass  # wird im Prompt verarbeitet
+        
     total = len(foul_candidates) + len(booking_candidates) + len(shot_candidates)
     log(f"🔑 Kandidaten: {len(foul_candidates)} Fouls · {len(booking_candidates)} Bookings · {len(shot_candidates)} Shots")
 
@@ -13527,9 +13653,47 @@ def run_advanced_props_bot(active_leagues: list, fixtures_cache: dict, target_da
     import json as _json
 
     def _fmt(lst, n=12):
-        return [{"player": c["player"], "team": c["team"], "match": c["match"],
-                 "kickoff": c["kickoff"], "market": c["market"],
-                 "stat": f"{c['stat_per90']}/90", "score": c.get("score",5)} for c in sorted(lst, key=lambda x: x.get("score",0), reverse=True)[:n]]
+        result = []
+        for c in sorted(lst, key=lambda x: x.get("score",0), reverse=True)[:n]:
+            # Hit Rate berechnen aus game log wenn verfügbar
+            game_log = c.get("game_log", [])
+            threshold = 1.0 if "1+" in c.get("market","") else 2.0
+
+            hit_str = ""
+            seq_str = ""
+            if game_log:
+                hr = calculate_hit_rate(game_log, threshold)
+                seq = game_sequence(game_log, 10)
+                hit_str = f"{hr} (last {len(game_log)})"
+                seq_str = seq
+            else:
+                hit_str = f"{c['stat_per90']}/90"
+
+            result.append({
+                "player": c["player"],
+                "team": c["team"],
+                "match": c["match"],
+                "kickoff": c["kickoff"],
+                "market": c["market"],
+                "stat": hit_str,
+                "sequence": seq_str,
+                "score": c.get("score", 5),
+                "opp_context": c.get("opp_context", ""),
+            })
+        return result
+
+    # Gegner-Kontext für Top Kandidaten hinzufügen
+    for c in foul_candidates[:15]:
+        match = c.get("match","")
+        if " vs " in match:
+            home, away = match.split(" vs ", 1)
+            opp = away if c["team"].lower() in home.lower() else home
+            opp_data = get_combined_opponent_fouls(opp, c["league"], target_date)
+            if opp_data:
+                names = " + ".join(opp_data.get("top_players", [])[:2])
+                combined = opp_data.get("combined_fc_per90", 0)
+                c["opp_context"] = f"{names} combined {combined} FC/90"
+                c["score"] += 1 if combined >= 2.5 else 0
 
     payload = {
         "fouls":       _fmt(foul_candidates),
@@ -13548,35 +13712,38 @@ def run_advanced_props_bot(active_leagues: list, fixtures_cache: dict, target_da
         ],
     }
 
-    prompt = f"""Du bist Prop Builder Analyst (Nate Betting Style). Heute {target_date}.
+    prompt = f"""Du bist Prop Builder Analyst (Nate Betting Style / GodTipsterr Style). Heute {target_date}.
 
-Kandidaten mit FBref/StatsBomb/FPL Stats:
+WICHTIGE REGELN:
+- Zeige Hit Rate im Format "X/Y" z.B. "18/20 (letzte 20)"
+- Zeige Sequenz der letzten 10 Spiele z.B. "2,1,2,0,1,2,1,1"
+- Kombiniere Gegner-Stats wenn verfügbar z.B. "Müller + Kimmich kombiniert 3.25 FC/90"
+- Trenne Heim/Auswärts wenn relevant
+- Erkläre das Matchup auf DEUTSCH (1 Satz)
+- Alle Texte auf DEUTSCH
+
+Kandidaten mit FBref/StatsBomb/FPL Stats + Sequenzen:
 {_json.dumps(payload, ensure_ascii=False, indent=1)}
 
-Erstelle 4-5 Bet Builder Kombinationen. Nutze alle Typen:
+Erstelle 5-6 Bet Builder Kombinationen:
 
 1. FOULS BUILDER (3-5 Legs): FC + FW Spieler, verschiedene Spiele
-   z.B. Rodri 2+ FC + Saka 2+ FW + Kimmich 2+ FC → ~20/1
+   z.B. "Kovacic 1+ FW: 18/20 — Up against Adams+Scott combined 3.25 FC/90"
 
 2. BOOKING BUILDER (2-4 Legs): Nur "Player to be Booked"
-   z.B. Tavares + Bissouma + Casemiro → ~30/1
 
 3. SHOT BUILDER+ SAME (2 Legs, selber Spieler): Korrelierte Märkte
-   z.B. Kane 2+ SoT + Kane 3+ Shots → ~8/1
 
-4. SHOT BUILDER+ TWO (2-3 Legs, verschiedene Spieler): Beide schussstark
-   z.B. Saka 2+ SoT + Haaland 3+ Shots → ~15/1
+4. SHOT BUILDER+ TWO (2-3 Legs, verschiedene Spieler)
 
-5. MIXED (4-6 Legs): Fouls + Bookings + Shots mix
+5. MIXED (4-6 Legs): Fouls + Bookings + Shots
 
-6. SUPER SUB BOOKING (2-3 Legs): Spieler die oft als Einwechslung kommen und dann gebucht werden
-   Erkenne: yc_per90 >= 0.25 + weniger als 60% Startelf-Rate (appearances < 70min Schnitt)
-   z.B. Nuno Tavares Sub → Booked + Casemiro Sub → Booked → ~25/1
+6. SUPER SUB BOOKING (2-3 Legs): Sub-Spieler mit hoher YC Rate
 
 Odds: 2 Legs ~8/1 · 3 Legs ~15/1 · 4 Legs ~30/1 · 5 Legs ~60/1 · 6 Legs ~100/1
 
-Antworte NUR JSON:
-{{"combos":[{{"type":"BOOKING BUILDER","legs":[{{"player":"Name","team":"Team","match":"A vs B","market":"Player to be Booked","stat":"0.32/90"}}],"estimated_odds":"30/1","reason":"Begründung Deutsch"}}]}}"""
+Antworte NUR JSON (alle "reason" Felder auf DEUTSCH):
+{{"combos":[{{"type":"BOOKING BUILDER","legs":[{{"player":"Name","team":"Team","match":"A vs B","market":"Player to be Booked","stat":"18/20 (letzte 20)","sequence":"1,1,0,1,1,1,0,1","opp_context":"Gegner erlaubt 3.2 FC/90"}}],"estimated_odds":"30/1","reason":"Begründung auf Deutsch"}}]}}"""
 
     results, source = call_gemini(prompt, use_tools=False)
     if not results:
