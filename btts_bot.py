@@ -12597,12 +12597,41 @@ def run_corners_and_scorer_bots(target_date, active_leagues, odds_data_cache, fi
         for tip in corners_tips:
             send_telegram(format_corners_message(tip), group_hz)
             mark_tip_sent(tip.get("match",""), "corners", target_date)
+            # In Supabase speichern damit is_duplicate_tip() zwischen Runs funktioniert
+            save_to_supabase({
+                "tip_id": f"corners_{target_date}_{abs(hash(tip.get('match','')))}",
+                "date": str(target_date),
+                "market": "corners",
+                "match": tip.get("match", ""),
+                "league": tip.get("league", ""),
+                "time": tip.get("time", "TBD"),
+                "tip": tip.get("tip", ""),
+                "probability": tip.get("probability", 0),
+                "confidence": 3,
+                "odds": str(tip.get("fair_odds", 0)),
+                "fair_odds": str(tip.get("fair_odds", 0)),
+                "status": "pending",
+            })
 
     if scorer_tips and group_late:
         send_telegram(f"⚽ <b>SCORER TIPPS</b>\n<i>📅 {target_date}</i>", group_late)
         for tip in scorer_tips:
             send_telegram(format_scorer_message(tip), group_late)
             mark_tip_sent(tip.get("match",""), "scorer", target_date)
+            save_to_supabase({
+                "tip_id": f"scorer_{target_date}_{abs(hash(tip.get('match','') + tip.get('player','')))}",
+                "date": str(target_date),
+                "market": "scorer",
+                "match": tip.get("match", ""),
+                "league": tip.get("league", ""),
+                "time": tip.get("time", "TBD"),
+                "tip": tip.get("player", "") + " Anytime Scorer",
+                "probability": tip.get("probability", 0),
+                "confidence": 3,
+                "odds": str(tip.get("fair_odds", 0)),
+                "fair_odds": str(tip.get("fair_odds", 0)),
+                "status": "pending",
+            })
 
     log(f"🔵⚽ Fertig: {corners_count} Ecken Tips, {scorer_count} Scorer Tips")
 
