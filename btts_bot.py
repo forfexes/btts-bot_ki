@@ -1829,8 +1829,23 @@ def fetch_sofascore_all_today(target_date):
         )
         
         if r.status_code in [403, 429, 503]:
-            log(f"   ℹ️  SofaScore All blockiert ({r.status_code})", "INFO")
-            return {}
+            log(f"   🎭 SofaScore blockiert ({r.status_code}) → Playwright...")
+            if PLAYWRIGHT_AVAILABLE:
+                html = scrape_with_playwright(url, timeout=15000)
+                if html:
+                    import json as _pj, re as _pre
+                    m = _pre.search(r'"events"\s*:\s*(\[.*?\])\s*[,}]', html, _pre.DOTALL)
+                    if m:
+                        try:
+                            events_raw = _pj.loads(m.group(1))
+                            data = {"events": events_raw}
+                            log(f"   ✅ SofaScore via Playwright: {len(events_raw)} Events")
+                            r = type('R', (), {'ok': True, 'status_code': 200, 'json': lambda self=None: data})()
+                        except Exception:
+                            pass
+            if r.status_code in [403, 429, 503]:
+                log("   ℹ️  SofaScore nicht erreichbar → Fallback aktiv", "INFO")
+                return {}
         
         if not r.ok:
             return {}
@@ -9598,7 +9613,7 @@ def fetch_league_data_once(league, target_date):
     bsd_fix = fetch_bsd_fixtures(league, target_date)
     sm_fix = fetch_sportmonks_fixtures(league, target_date)
     sdb_fix = get_sportdb_fixtures(league, target_date)
-    sofa_fix = []  # SofaScore blockiert GitHub IPs → deaktiviert
+    sofa_fix = fetch_sofascore_fixtures(league, target_date)  # Mit Playwright Fallback
     espn_fix = fetch_espn_fixtures(league, target_date)        # ESPN
     asp_fix = fetch_allsports_fixtures(league, target_date)    # AllSports
     flash_fix = fetch_flashscore_fixtures(league, target_date)
@@ -13450,7 +13465,7 @@ def check_config():
     log(f"   • ScoutingStats: ✅ Scraping aktiv (kein Key)")
     log(f"")
     log(f"🔄 League Rotation:")
-    log(f"   • Status: {'✅ AKTIV' if LEAGUE_ROTATION_ENABLED else '❌ AUS'}")
+    log(f"   • Status: {'⚠️ AKTIV (läuft erst ab 20 Tipps/Liga)' if LEAGUE_ROTATION_ENABLED else '❌ AUS'}")
     log(f"   • Min Tipps: {LEAGUE_ROTATION_MIN_SAMPLES}")
     log(f"   • Rausnehmen: <{LEAGUE_ROTATION_MIN_QUOTE*100:.0f}%")
     log(f"   • Reinmachen: >{LEAGUE_ROTATION_MAX_QUOTE*100:.0f}%")
@@ -13813,11 +13828,11 @@ def main():
     tips_by_market = {m: [] for m in MARKETS_TO_RUN}
     total_analyzed = 0
 
+    # MAX_LEAGUES_PER_RUN wird ignoriert wenn Bulk-Fetch läuft
+    # Grund: Bulk holt nur Ligen mit echten Spielen → kein Limit nötig
     if MAX_LEAGUES_PER_RUN > 0:
-        active_leagues = active_leagues[:MAX_LEAGUES_PER_RUN]
-        log(f"MAX_LEAGUES_PER_RUN aktiv: {len(active_leagues)} Ligen")
-    else:
-        log(f"Alle {len(active_leagues)} Ligen werden analysiert")
+        log(f"ℹ️ MAX_LEAGUES_PER_RUN={MAX_LEAGUES_PER_RUN} gesetzt aber wird nach Bulk-Fetch ignoriert")
+    log(f"Alle {len(active_leagues)} Ligen werden geprüft (nur aktive bekommen Analyse)")
 
     _fixtures_cache = {}  # Cache für Corners/Scorer Bot
 
@@ -13865,53 +13880,101 @@ def main():
                 bulk_fixtures[league_name] = []
             bulk_fixtures[league_name].append(fix)
 
-    # Quelle 3: FotMob (schnell, viele Ligen)
-    fotmob_today = {}
+    # Quelle 3: ESPN + AllSports bulk (schnell, kein Key nötig)
+    for league in active_leagues[:50]:  # Top 50 für Geschwindigkeit
+        for fetch_fn in [fetch_espn_fixtures, fetch_allsports_fixtures, fetch_thesportsdb_fixtures]:
+            fixes = fetch_fn(league, target_date)
+            if fixes:
+                if league not in bulk_fixtures:
+                    bulk_fixtures[league] = []
+                existing = {f"{f['home']}_{f['away']}" for f in bulk_fixtures.get(league, [])}
+                for fix in fixes:
+                    key = f"{fix['home']}_{fix['away']}"
+                    if key not in existing:
+                        bulk_fixtures[league].append(fix)
+                        existing.add(key)
+    
+    # FotMob für Ligen die noch leer sind
+    empty_leagues = [lg for lg in active_leagues if lg not in bulk_fixtures or not bulk_fixtures[lg]]
+    for league in empty_leagues[:30]:
+        fixes = fetch_fotmob_fixtures(league, target_date)
+        if fixes:
+            bulk_fixtures[league] = fixes
+
+    # Flashscore + Livescore + BeSoccer + Soccerway + SportSRC als weitere Fallbacks
+    empty_leagues = [lg for lg in active_leagues if lg not in bulk_fixtures or not bulk_fixtures[lg]]
+    for league in empty_leagues[:40]:
+        for fetch_fn in [
+            lambda lg: fetch_flashscore_fixtures(lg, target_date),
+            lambda lg: fetch_livescore_fixtures(lg, target_date),
+            lambda lg: fetch_sportsrc_fixtures(lg, target_date),
+            lambda lg: scrape_soccerway(lg, target_date),
+        ]:
+            try:
+                fixes = fetch_fn(league)
+                if fixes:
+                    bulk_fixtures[league] = fixes
+                    break
+            except Exception:
+                continue
+
+    # GitHub OpenFootball — immer erreichbar, nie geblockt
     for league in active_leagues:
-        from_fotmob = fetch_fotmob_fixtures(league, target_date)
-        if from_fotmob:
-            fotmob_today[league] = from_fotmob
-    if fotmob_today:
-        total_fm = sum(len(v) for v in fotmob_today.values())
-        log(f"   ⚽ FotMob: {total_fm} Spiele in {len(fotmob_today)} Ligen")
-        for league, fixtures in fotmob_today.items():
-            if league not in bulk_fixtures:
-                bulk_fixtures[league] = []
-            # Merge ohne Duplikate
-            existing = {f"{f['home']}_{f['away']}" for f in bulk_fixtures.get(league, [])}
-            for fix in fixtures:
-                key = f"{fix['home']}_{fix['away']}"
-                if key not in existing:
-                    bulk_fixtures[league].append(fix)
-                    existing.add(key)
+        if league not in bulk_fixtures or not bulk_fixtures[league]:
+            fixes = fetch_github_football_data(league, target_date)
+            if fixes:
+                bulk_fixtures[league] = fixes
+
+    # OpenLigaDB für deutsche Ligen
+    for league in ["Bundesliga", "2. Bundesliga", "3. Liga Deutschland"]:
+        if league not in bulk_fixtures or not bulk_fixtures[league]:
+            fixes = fetch_openligadb(league, target_date)
+            if fixes:
+                bulk_fixtures[league] = fixes
+
+    total_bulk = sum(len(v) for v in bulk_fixtures.values())
+    active_with_games = len([lg for lg in bulk_fixtures if bulk_fixtures[lg]])
+    log(f"   📊 Alle Quellen: {total_bulk} Spiele in {active_with_games} Ligen")
 
     # Ligen MIT Spielen heute
     active_today = {lg: fixes for lg, fixes in bulk_fixtures.items() if fixes}
     log(f"✅ Bulk Done: {len(active_today)} Ligen haben heute Spiele (von {len(active_leagues)} aktiv)")
+
+    # ── Fallback: wenn Bulk komplett leer → per-Liga fetchen ──
+    use_bulk = len(active_today) > 0
+    if not use_bulk:
+        log("⚠️ Bulk leer (SofaScore/FotMob geblockt) → Fallback auf per-Liga Fetch")
     log("")
 
     # ══════════════════════════════════════════════════════
     # SCHRITT 2: NUR LIGEN MIT SPIELEN ANALYSIEREN
     # ══════════════════════════════════════════════════════
-    # Für Ligen in active_today: normales fetch_league_data_once für Odds
-    # Für Ligen NICHT in active_today: komplett überspringen
-    # ══════════════════════════════════════════════════════
 
     for league in active_leagues:
-        # Überspringe Ligen ohne heutige Spiele
-        if league not in active_today:
+        # Mit Bulk: überspringe Ligen ohne Spiele
+        # Ohne Bulk (Fallback): alle Ligen versuchen
+        if use_bulk and league not in active_today:
             continue
 
         log(f"╔══ Liga: {league} ══╗")
 
         try:
-            # Odds holen (Odds API) + existierende Bulk-Fixtures verwenden
+            # Odds holen
             odds = fetch_odds_api(league, target_date)
             bulk_fixes = active_today.get(league, [])
 
-            # Per-Liga Quellen nur für Ligen wo wir Spiele haben
-            af_fix = fetch_api_football(league, target_date)
-            fixtures = merge_fixtures(bulk_fixes, af_fix)
+            # Alle Quellen kombinieren
+            af_fix   = fetch_api_football(league, target_date)
+            fj_fix   = fetch_football_json(league, target_date)
+            ol_fix   = fetch_openligadb(league, target_date)
+            espn_fix = fetch_espn_fixtures(league, target_date)
+            tsdb_fix = fetch_thesportsdb_fixtures(league, target_date)
+            flash_fix = fetch_flashscore_fixtures(league, target_date)
+            ls_fix   = fetch_livescore_fixtures(league, target_date)
+            src_fix  = fetch_sportsrc_fixtures(league, target_date)
+            asp_fix  = fetch_allsports_fixtures(league, target_date)
+
+            fixtures = merge_fixtures(bulk_fixes, af_fix, fj_fix, ol_fix, espn_fix, tsdb_fix, flash_fix, ls_fix, src_fix, asp_fix)
 
             if fixtures:
                 _fixtures_cache[league] = fixtures
