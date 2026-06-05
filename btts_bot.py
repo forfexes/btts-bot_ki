@@ -182,6 +182,109 @@ def get_dynamic_season(league_id=None, league_name=None):
 SUPABASE_URL = env("SUPABASE_URL")
 SUPABASE_KEY = env("SUPABASE_KEY")
 
+
+# ============================================================
+# 🗄️ SUPABASE DAILY CACHE — Fixtures, Stats, Odds
+# Spart API Calls: Run 1 scrapt, Run 2+3 lesen aus Supabase
+# ============================================================
+
+def cache_get(cache_key: str, target_date) -> dict | None:
+    """Holt gecachte Daten aus Supabase daily_cache Tabelle."""
+    if not SUPABASE_URL or not SUPABASE_KEY:
+        return None
+    try:
+        r = requests.get(
+            f"{SUPABASE_URL}/rest/v1/daily_cache",
+            headers={"apikey": SUPABASE_KEY, "Authorization": f"Bearer {SUPABASE_KEY}"},
+            params={
+                "cache_date": f"eq.{target_date}",
+                "cache_key": f"eq.{cache_key}",
+                "select": "data",
+                "limit": "1",
+            },
+            timeout=8,
+        )
+        if r.ok and r.json():
+            return r.json()[0].get("data")
+    except Exception:
+        pass
+    return None
+
+
+def cache_set(cache_key: str, target_date, data: dict) -> bool:
+    """Speichert Daten in Supabase daily_cache (upsert)."""
+    if not SUPABASE_URL or not SUPABASE_KEY:
+        return False
+    try:
+        import json as _cj
+        r = requests.post(
+            f"{SUPABASE_URL}/rest/v1/daily_cache",
+            headers={
+                "apikey": SUPABASE_KEY,
+                "Authorization": f"Bearer {SUPABASE_KEY}",
+                "Content-Type": "application/json",
+                "Prefer": "resolution=merge-duplicates,return=minimal",
+            },
+            json={
+                "cache_date": str(target_date),
+                "cache_key": cache_key,
+                "data": data,
+            },
+            timeout=10,
+        )
+        return r.ok
+    except Exception:
+        return False
+
+
+def cache_get_fixtures(target_date) -> dict | None:
+    """Holt gecachte Fixtures für heute (alle Ligen)."""
+    cached = cache_get("fixtures_all", target_date)
+    if cached:
+        log(f"   🗄️ Fixtures aus Supabase Cache geladen ({sum(len(v) for v in cached.values())} Spiele)")
+    return cached
+
+
+def cache_set_fixtures(target_date, fixtures_by_league: dict) -> bool:
+    """Speichert alle heutigen Fixtures in Supabase."""
+    if not fixtures_by_league:
+        return False
+    # Nur nicht-leere Ligen speichern
+    to_save = {lg: fixes for lg, fixes in fixtures_by_league.items() if fixes}
+    if not to_save:
+        return False
+    result = cache_set("fixtures_all", target_date, to_save)
+    if result:
+        total = sum(len(v) for v in to_save.values())
+        log(f"   🗄️ {total} Spiele in {len(to_save)} Ligen in Supabase gecacht")
+    return result
+
+
+def cache_get_player_stats(league_name: str, target_date) -> dict | None:
+    """Holt gecachte FBref Player Stats."""
+    return cache_get(f"fbref_{league_name.replace(' ', '_')}", target_date)
+
+
+def cache_set_player_stats(league_name: str, target_date, stats: dict) -> bool:
+    """Speichert FBref Player Stats in Supabase."""
+    if not stats:
+        return False
+    return cache_set(f"fbref_{league_name.replace(' ', '_')}", target_date, stats)
+
+
+def cache_get_odds(league_name: str, target_date) -> list | None:
+    """Holt gecachte Odds API Daten."""
+    cached = cache_get(f"odds_{league_name.replace(' ', '_')}", target_date)
+    return cached.get("odds") if cached else None
+
+
+def cache_set_odds(league_name: str, target_date, odds: list) -> bool:
+    """Speichert Odds in Supabase."""
+    if not odds:
+        return False
+    return cache_set(f"odds_{league_name.replace(' ', '_')}", target_date, {"odds": odds})
+
+
 MIN_PROBABILITY = int(env("MIN_PROBABILITY", "67"))  # 🆕 Hybrid: 67% (zwischen 65-69)
 MIN_ODDS = float(env("MIN_ODDS", "1.65"))
 MAX_ODDS = float(env("MAX_ODDS", "3.0"))
@@ -13893,10 +13996,21 @@ def main():
     # ══════════════════════════════════════════════════════
     log("🌍 Bulk-Fixture-Fetch startet...")
 
-    bulk_fixtures = {}  # {liga_name: [fixtures]}
+    # Supabase Cache prüfen — schon heute gefetcht?
+    bulk_fixtures = {}
+    cached_fixtures = cache_get_fixtures(target_date)
+    if cached_fixtures:
+        bulk_fixtures = {lg: fixes for lg, fixes in cached_fixtures.items()}
+        log(f"🗄️ Fixtures aus Cache: {sum(len(v) for v in bulk_fixtures.values())} Spiele in {len(bulk_fixtures)} Ligen — kein neues Fetching nötig")
+        # Trotzdem weitermachen mit active_today Berechnung
+    else:
+        log("🌐 Kein Cache → Fixtures werden neu geladen...")
 
-    # Quelle 1: SofaScore ALL TODAY (1 Call für alle Ligen weltweit!)
-    sofa_all = fetch_sofascore_all_today(target_date)
+    if not cached_fixtures:  # Nur fetchen wenn kein Cache
+     pass  # placeholder
+    # Quelle 1: SofaScore
+    if not cached_fixtures:
+        sofa_all = fetch_sofascore_all_today(target_date)
     if sofa_all:
         log(f"   ⚡ SofaScore: {sum(len(v) for v in sofa_all.values())} Spiele in {len(sofa_all)} Ligen")
         # SofaScore Slugs auf unsere Liga-Namen mappen
@@ -13986,6 +14100,10 @@ def main():
     total_bulk = sum(len(v) for v in bulk_fixtures.values())
     active_with_games = len([lg for lg in bulk_fixtures if bulk_fixtures[lg]])
     log(f"   📊 Alle Quellen: {total_bulk} Spiele in {active_with_games} Ligen")
+    
+    # In Supabase speichern für nächste Runs
+    if total_bulk > 0 and not cached_fixtures:
+        cache_set_fixtures(target_date, bulk_fixtures)
 
     # Ligen MIT Spielen heute
     active_today = {lg: fixes for lg, fixes in bulk_fixtures.items() if fixes}
@@ -14025,7 +14143,11 @@ def main():
                 with _lock:
                     _fixtures_cache[league] = fixtures
 
-            odds = fetch_odds_api(league, target_date)
+            odds = cache_get_odds(league, target_date)
+            if odds is None:
+                odds = fetch_odds_api(league, target_date)
+                if odds:
+                    cache_set_odds(league, target_date, odds)
 
             if not odds and not fixtures:
                 return
