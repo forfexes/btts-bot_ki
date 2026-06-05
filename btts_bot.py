@@ -1893,7 +1893,7 @@ def fetch_sofascore_fixtures(league_name, target_date):
         # Versuche mehrere SofaScore Endpoints
         urls_to_try = [
             f"https://api.sofascore.com/api/v1/sport/football/scheduled-events/{date_str}",
-            f"https://www.sofascore.com/api/v1/sport/football/scheduled-events/{date_str}",
+            f"https://api.sofascore.com/api/v1/sport/football/scheduled-events/{date_str}",
         ]
         
         url = urls_to_try[0]
@@ -2014,6 +2014,178 @@ def fetch_sofascore_fixtures(league_name, target_date):
         log(f"SofaScore Error: {str(e)[:60]}", "WARN")
         return []
 
+
+
+def fetch_espn_all_today(target_date) -> dict:
+    """
+    ESPN All Soccer Scoreboard — holt ALLE Fussball Spiele weltweit an einem Tag.
+    Kein Key nötig, funktioniert von GitHub Actions.
+    Endpoint: site.api.espn.com/apis/site/v2/sports/soccer/all/scoreboard
+    """
+    try:
+        date_str = str(target_date).replace("-", "")
+        url = f"https://site.api.espn.com/apis/site/v2/sports/soccer/all/scoreboard?dates={date_str}&limit=500"
+        r = requests.get(url, headers={
+            "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36",
+            "Accept": "application/json",
+            "Referer": "https://www.espn.com/",
+        }, timeout=20)
+        
+        if not r.ok:
+            log(f"   ⚠️ ESPN All: HTTP {r.status_code}")
+            return {}
+        
+        data = r.json()
+        events = data.get("events", [])
+        
+        if not events:
+            return {}
+        
+        result = {}
+        for ev in events:
+            try:
+                competition = ev.get("competitions", [{}])[0]
+                competitors = competition.get("competitors", [])
+                if len(competitors) < 2:
+                    continue
+                
+                home = next((c["team"]["displayName"] for c in competitors if c.get("homeAway") == "home"), "")
+                away = next((c["team"]["displayName"] for c in competitors if c.get("homeAway") == "away"), "")
+                
+                if not home or not away:
+                    continue
+                
+                # Liga aus ESPN
+                league_raw = ev.get("league", {}).get("name", "")
+                if not league_raw:
+                    league_raw = ev.get("season", {}).get("slug", "Unknown")
+                
+                # Zeit
+                start_time = ev.get("date", "")
+                kickoff = "TBD"
+                if start_time:
+                    try:
+                        from datetime import timezone as _tz_e
+                        dt = datetime.fromisoformat(start_time.replace("Z", "+00:00"))
+                        kickoff = dt.astimezone(_tz_e.utc).strftime("%H:%M")
+                    except Exception:
+                        pass
+                
+                fixture = {
+                    "home": home,
+                    "away": away,
+                    "time": kickoff,
+                    "time_local": kickoff,
+                    "source": "espn_bulk",
+                    "match_id": str(ev.get("id", "")),
+                    "league": league_raw,
+                }
+                
+                # Liga mappen
+                mapped_league = None
+                for our_league in LEAGUES_TO_RUN:
+                    if any(word.lower() in league_raw.lower() for word in our_league.split()[:2] if len(word) > 3):
+                        mapped_league = our_league
+                        break
+                
+                league_key = mapped_league or league_raw
+                if league_key not in result:
+                    result[league_key] = []
+                result[league_key].append(fixture)
+                
+            except Exception:
+                continue
+        
+        log(f"   ✅ ESPN All: {sum(len(v) for v in result.values())} Spiele in {len(result)} Ligen")
+        return result
+        
+    except Exception as e:
+        log(f"   ⚠️ ESPN All Fehler: {e}")
+        return {}
+
+
+def fetch_fotmob_all_today(target_date) -> dict:
+    """
+    FotMob All Matches Today — alle Spiele eines Tages.
+    Sehr gute Daten inkl. xG, weniger aggressiv geblockt als SofaScore.
+    """
+    try:
+        date_str = str(target_date).replace("-", "")
+        url = f"https://www.fotmob.com/api/matches?date={date_str}"
+        r = requests.get(url, headers={
+            "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) Chrome/121.0.0.0",
+            "Accept": "application/json",
+            "Referer": "https://www.fotmob.com/",
+            "Accept-Language": "en-US,en;q=0.9",
+        }, timeout=20)
+        
+        if not r.ok:
+            log(f"   ⚠️ FotMob All: HTTP {r.status_code}")
+            return {}
+        
+        data = r.json()
+        leagues_data = data.get("leagues", [])
+        
+        if not leagues_data:
+            return {}
+        
+        result = {}
+        for league_data in leagues_data:
+            league_raw = league_data.get("name", "")
+            matches = league_data.get("matches", [])
+            
+            if not matches:
+                continue
+            
+            # Liga mappen
+            mapped_league = None
+            for our_league in LEAGUES_TO_RUN:
+                words = [w for w in our_league.split() if len(w) > 3][:2]
+                if any(w.lower() in league_raw.lower() for w in words):
+                    mapped_league = our_league
+                    break
+            
+            league_key = mapped_league or league_raw
+            
+            for match in matches:
+                try:
+                    home = match.get("home", {}).get("name", "")
+                    away = match.get("away", {}).get("name", "")
+                    if not home or not away:
+                        continue
+                    
+                    status = match.get("status", {})
+                    kickoff = status.get("utcTime", "")
+                    if kickoff:
+                        try:
+                            dt = datetime.fromisoformat(kickoff.replace("Z", "+00:00"))
+                            kickoff = dt.strftime("%H:%M")
+                        except Exception:
+                            kickoff = "TBD"
+                    
+                    fixture = {
+                        "home": home,
+                        "away": away,
+                        "time": kickoff,
+                        "time_local": kickoff,
+                        "source": "fotmob_bulk",
+                        "match_id": str(match.get("id", "")),
+                        "xg_home": match.get("xg", {}).get("home", 0),
+                        "xg_away": match.get("xg", {}).get("away", 0),
+                    }
+                    
+                    if league_key not in result:
+                        result[league_key] = []
+                    result[league_key].append(fixture)
+                except Exception:
+                    continue
+        
+        log(f"   ✅ FotMob All: {sum(len(v) for v in result.values())} Spiele in {len(result)} Ligen")
+        return result
+        
+    except Exception as e:
+        log(f"   ⚠️ FotMob All Fehler: {e}")
+        return {}
 
 def fetch_sofascore_all_today(target_date):
     """
@@ -13528,7 +13700,7 @@ def run_advanced_props_bot(active_leagues: list, fixtures_cache: dict, target_da
     now_utc = datetime.now(timezone.utc)
     has_lineups = False
     # Prüfe ob für heute Spiele Lineups verfügbar sind
-    lineup_check_url = f"https://www.sofascore.com/api/v1/sport/football/scheduled-events/{target_date}"
+    lineup_check_url = f"https://api.sofascore.com/api/v1/sport/football/scheduled-events/{target_date}"
     try:
         r_lu = requests.get(lineup_check_url, 
             headers={"User-Agent": "Mozilla/5.0"}, timeout=8)
@@ -14361,7 +14533,33 @@ def main():
     else:
         log("🌐 Kein Cache → Fixtures werden neu geladen...")
 
-    # Quelle 1: SofaScore
+    # ── QUELLE 1: ESPN (primary, GitHub Actions freundlich) ──
+    espn_all = {}
+    if not cached_fixtures:
+        espn_all = fetch_espn_all_today(target_date)
+    if espn_all:
+        log(f"   📺 ESPN Bulk: {sum(len(v) for v in espn_all.values())} Spiele")
+        for league_name, fixtures in espn_all.items():
+            if league_name not in bulk_fixtures:
+                bulk_fixtures[league_name] = []
+            bulk_fixtures[league_name].extend(fixtures)
+
+    # ── QUELLE 2: FotMob (fallback, sehr gute Daten) ──
+    fotmob_all = {}
+    if not cached_fixtures and sum(len(v) for v in bulk_fixtures.values()) < 50:
+        fotmob_all = fetch_fotmob_all_today(target_date)
+    if fotmob_all:
+        for league_name, fixtures in fotmob_all.items():
+            if league_name not in bulk_fixtures:
+                bulk_fixtures[league_name] = []
+            existing = {f"{f['home']}_{f['away']}" for f in bulk_fixtures[league_name]}
+            for fix in fixtures:
+                key = f"{fix['home']}_{fix['away']}"
+                if key not in existing:
+                    bulk_fixtures[league_name].append(fix)
+                    existing.add(key)
+
+    # ── QUELLE 3: SofaScore (optional, wird oft geblockt) ──
     sofa_all = {}
     if not cached_fixtures:
         sofa_all = fetch_sofascore_all_today(target_date)
