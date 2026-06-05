@@ -85,6 +85,7 @@ TELEGRAM_GROUPS = {
     "combo": env("TELEGRAM_GROUP_COMBO", TELEGRAM_CHAT_ID),
     "combos": env("TELEGRAM_GROUP_COMBOS", TELEGRAM_CHAT_ID),
     "btts_ht": env("TELEGRAM_GROUP_BTTS_HT", TELEGRAM_CHAT_ID),
+    "over15_ht": env("TELEGRAM_GROUP_BTTS_HT", TELEGRAM_CHAT_ID),  # Gleiche Gruppe wie BTTS HT
     "stats": env("TELEGRAM_GROUP_STATS", TELEGRAM_CHAT_ID),
     "hz_live": env("TELEGRAM_GROUP_HZ_LIVE", TELEGRAM_CHAT_ID),
     "late_goals": env("TELEGRAM_GROUP_LATE_GOALS", TELEGRAM_CHAT_ID),
@@ -292,7 +293,7 @@ MIN_CONFIDENCE = int(env("MIN_CONFIDENCE", "3"))
 # 🆕 Nur HIGH + OK Value (LOW fliegt raus)
 MIN_VALUE_RATING = env("MIN_VALUE_RATING", "OK")  # HIGH, OK, oder LOW
 
-MARKETS_TO_RUN = ["btts", "over25", "combo", "btts_ht"]
+MARKETS_TO_RUN = ["btts", "over25", "combo", "btts_ht", "over15_ht"]
 
 # ============================================================
 # AUTO LIGA SWITCH
@@ -648,6 +649,121 @@ LEAGUES_TO_RUN = [
     "Pacific Games Football",
     "Island Games",
     "COSAFA Women Cup",
+    # ── Tschechien Regional (aktiv während Europa-Pause) ──
+    "Czech 3. CFL Group A",
+    "Czech 3. CFL Group B",
+    "Czech 3. MSFL",
+    "Czech 4. Liga Group A",
+    "Czech 4. Liga Group B",
+    "Czech 4. Liga Group C",
+    "Czech 4. Liga Group D",
+    "Czech 4. Liga Group E",
+    "Czech 4. Liga Group F",
+    "Czech Jihocesky KP",
+    "Czech Jihomoravsky KP",
+    "Czech Karlovarsky KP",
+    "Czech Kralovehradecky KP",
+    "Czech Liberecky KP",
+    "Czech Moravskoslezsky KP",
+    "Czech Olomoucky KP",
+    "Czech Pardubicky KP",
+    "Czech Plzensky KP",
+    "Czech Prazsky Prebor",
+    "Czech Stredocesky KP",
+    "Czech Ustecky KP",
+    "Czech Vysocina KP",
+    # ── China (aktiv während Europa-Pause) ──
+    "China League Two",
+    "China League Three",
+    "China FA Cup",
+    # ── Australien (früh morgens aktiv) ──
+    "Australia NPL Queensland",
+    "Australia NPL Victoria",
+    "Australia NPL NSW",
+    "Australia NPL South Australia",
+    "Australia NPL Western Australia",
+    "Australia NPL Capital Territory",
+    "Australia NPL Northern NSW",
+    "Australia NPL Tasmania",
+    "Australia FFA Cup",
+    "Australia Capital Football",
+    "Australia Queensland NPL2",
+    "Australia Victoria NPL2",
+    # ── Weitere aktive Ligen während Pausen ──
+    "Slovakia 2. Liga",
+    "Slovakia 3. Liga",
+    "Poland I Liga",
+    "Poland II Liga",
+    "Romania Liga II",
+    "Romania Liga III",
+    "Hungary NB II",
+    "Bulgaria First League",
+    "Bulgaria Second League",
+    "Serbia First League",
+    "Croatia 2. HNL",
+    "Slovenia 2. SNL",
+    "Bosnia 2. Liga",
+    "Greece Football League",
+    "Greece Gamma Ethniki",
+    "Cyprus First Division",
+    "Cyprus Second Division",
+    "Israel National League",
+    "Finland Ykkönen",
+    "Sweden Division 1",
+    "Norway Division 1",
+    "Denmark 2. Division",
+    "Iceland 2. Deild",
+    "Latvia First League",
+    "Lithuania A Lyga 2",
+    "Estonia Meistriliiga",
+    "Belarus First League",
+    "Ukraine First League",
+    "Russia First League",
+    "Russia Second League",
+
+    # ── Europa Youth/Cups ──
+    "Euro U19 Qualification League A",
+    "Euro U19 Qualification League B",
+    "Europe Baltic Cup",
+    "Europe Premier League Crimea",
+    # ── Finnland ──
+    "Finland Ykkosliiga",
+    "Finland Ykkönen",
+    # ── Island ──
+    "Iceland Division 1",
+    "Iceland Division 2",
+    # ── Norwegen Regional ──
+    "Norway Division 3 Group 1",
+    "Norway Division 3 Group 6",
+    # ── Paraguay ──
+    "Paraguay Division Intermedia",
+    # ── Polen Play-Offs ──
+    "Poland Division 2 Promotion Play-Offs",
+    "Poland Division 2 Relegation Play-Offs",
+    # ── Rumänien ──
+    "Romania Liga 3 Promotion Play-Offs",
+    # ── Russland FNL2 ──
+    "Russia FNL2 Division A Silver",
+    "Russia FNL2 Division B Group 1",
+    "Russia FNL2 Division B Group 2",
+    "Russia FNL2 Division B Group 3",
+    # ── Serbien Regional ──
+    "Serbia Srpska Liga Belgrade",
+    "Serbia Srpska Liga Vojvodina",
+    "Serbia Srpska Liga East",
+    "Serbia Srpska Liga West",
+    # ── Japan Frauen ──
+    "Japan L1 League Women",
+    "Japan L2 League Women",
+    # ── Afrika Frauen + Cups ──
+    "Cameroon Liga Women",
+    "Nigeria FA Cup",
+    "South Africa Premier Play-Offs",
+    # ── Myanmar Youth ──
+    "Myanmar U20 League",
+    # ── Südkorea alle ──
+    "K3 League",
+    "K4 League",
 ]
 
 # Zeitfenster pro Liga (UTC Stunden)
@@ -921,6 +1037,10 @@ MARKET_INFO = {
     "btts_ht": {
         "name": "🕐 BTTS HT",
         "instr": "Analysiere BTTS in der 1. Halbzeit (Beide Teams treffen bis zur Pause). Wichtig: xG HT, Pressing der Teams, frühe Tore Statistik.",
+    },
+    "over15_ht": {
+        "name": "⚡ Over 1.5 HT",
+        "instr": "Analysiere Over 1.5 Tore in der 1. Halbzeit. Prüfe: xG erste Hälfte, Tore in HZ1 der letzten 10 Spiele, pressing-intensive Teams, frühe Führungstreffer Tendenz. Mindest-Wahrscheinlichkeit 67%.",
     },
 }
 
@@ -4307,11 +4427,13 @@ except ImportError:
     pass
 
 PLAYWRIGHT_CACHE = {}
-_PW_SESSION_CACHE = {}  # URL → HTML Cache für diese Session
-_PW_LOCK = None  # Threading Lock (wird bei erstem Aufruf erstellt)
+_PW_SESSION_CACHE = {}   # URL → HTML Cache für diese Session
+_PW_LOCK = None          # Threading Lock
+_PW_FETCHING = {}        # URL → Event (verhindert gleichzeitige Fetches)
+_PREDICTION_CACHE = {}   # match_key → {forebet, predictz, betimate, wdw} für ganzen Run
 
 def scrape_with_playwright(url, wait_for=None, timeout=8000):
-    global _PW_LOCK
+    global _PW_LOCK, _PW_FETCHING
     import threading as _th
     if _PW_LOCK is None:
         _PW_LOCK = _th.Lock()
@@ -4320,11 +4442,12 @@ def scrape_with_playwright(url, wait_for=None, timeout=8000):
     if url in _PW_SESSION_CACHE:
         return _PW_SESSION_CACHE[url]
     
-    # Lock: nur 1 Playwright-Instanz gleichzeitig
+    # Warte wenn gleiche URL gerade geladen wird
     with _PW_LOCK:
-        # Double-check nach Lock
         if url in _PW_SESSION_CACHE:
             return _PW_SESSION_CACHE[url]
+        # Markiere als "wird geladen"
+        _PW_FETCHING[url] = True
 
     """
     Scrapt eine Seite mit echtem Chromium Browser.
@@ -4364,6 +4487,7 @@ def scrape_with_playwright(url, wait_for=None, timeout=8000):
 
             PLAYWRIGHT_CACHE[cache_key] = html
             _PW_SESSION_CACHE[url] = html  # Session-Cache
+            _PW_FETCHING.pop(url, None)
             return html
 
     except Exception as e:
@@ -9641,8 +9765,8 @@ def filter_top_tips(tips, target_date, market):
     filtered = []
     rejected = {"time": 0, "tip": 0, "prob": 0, "conf": 0, "value": 0, "odds": 0}
 
-    max_odds_for_market = 4.5 if market == "btts_ht" else MAX_ODDS
-    min_odds_for_market = 1.6 if market == "btts_ht" else MIN_ODDS
+    max_odds_for_market = 4.5 if market in ("btts_ht", "over15_ht") else MAX_ODDS
+    min_odds_for_market = 1.6 if market in ("btts_ht", "over15_ht") else MIN_ODDS
 
     for r in tips:
         if not is_future_game(r.get("time", ""), target_date):
@@ -10918,12 +11042,13 @@ def _send_daily_auswertung_to_all_groups(stats=None):
         pause_text = "<i>Heute spielfreier Tag — morgen wieder Tipps!</i>"
 
     market_groups = [
-        ("btts",    TELEGRAM_GROUPS.get("btts"),    "⚽ BTTS"),
-        ("over25",  TELEGRAM_GROUPS.get("over25"),  "🎯 Over 2.5"),
-        ("combo",   TELEGRAM_GROUPS.get("combo"),   "🔥 BTTS + Over 2.5"),
-        ("btts_ht", TELEGRAM_GROUPS.get("btts_ht"), "🕐 BTTS Halbzeit"),
-        ("corners", TELEGRAM_GROUPS.get("hz_live"), "🔵 Corner Sniper"),
-        ("scorer",  TELEGRAM_GROUPS.get("late_goals"), "⚽ Goal Hunter"),
+        ("btts",      TELEGRAM_GROUPS.get("btts"),       "⚽ BTTS"),
+        ("over25",    TELEGRAM_GROUPS.get("over25"),     "🎯 Over 2.5"),
+        ("combo",     TELEGRAM_GROUPS.get("combo"),      "🔥 BTTS + Over 2.5"),
+        ("btts_ht",   TELEGRAM_GROUPS.get("btts_ht"),    "🕐 BTTS Halbzeit"),
+        ("over15_ht", TELEGRAM_GROUPS.get("over15_ht"),  "⚡ Over 1.5 HT"),
+        ("corners",   TELEGRAM_GROUPS.get("hz_live"),    "🔵 Corner Sniper"),
+        ("scorer",    TELEGRAM_GROUPS.get("late_goals"), "⚽ Goal Hunter"),
     ]
 
     medals = ["🥇","🥈","🥉"]
@@ -11072,8 +11197,7 @@ def send_top_tips(tips_by_market, target_date):
                 u_str = f"+{units}" if units >= 0 else str(units)
                 stats_header += f"{medal} {lg}: {w}/{tot} ({pct}%) · {u_str}U" + "\n"
 
-    if total_tips > 0:
-        send_telegram(stats_header, TELEGRAM_GROUPS.get("stats"))
+    pass  # Stats Header nur in eigene Gruppen, nicht Prop Builder
 
     # Auto-void alte Pending Tipps (älter als 3 Tage)
     _auto_void_old_pending()
@@ -14425,6 +14549,9 @@ def main():
     log("")
     log("════════════════════════════════════════")
     total_analyzed = _analyzed_count[0]
+    # Fallback: zähle direkt aus tips_by_market
+    if total_analyzed == 0:
+        total_analyzed = sum(len(v) for v in tips_by_market.values())
     log(f"Analysierte Tipps: {total_analyzed}")
     log(f"Top-Tipps: {total_top}")
 
