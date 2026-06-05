@@ -13161,6 +13161,18 @@ class AdvancedPropsManager:
                 r'data-stat="cards_yellow"[^>]*>([\d.]*)<',
                 html, _re.DOTALL
             )
+            # Misc + Defence stats (fouls, aerials, YC + tackles)
+            defence_rows = _re.findall(
+                r'data-stat="player"[^>]*>\s*<a[^>]*>([^<]+)</a>.*?'
+                r'data-stat="minutes_90s"[^>]*>([\d.]*)<.*?'
+                r'data-stat="tackles"[^>]*>([\d.]*)<',
+                html, _re.DOTALL
+            )
+            tackle_map = {}
+            for name, mins90, tackles in defence_rows:
+                mins = float(mins90 or 1) or 1
+                tackle_map[name.strip()] = round(float(tackles or 0) / mins, 2)
+
             for name, mins90, fouls, fouls_drawn, offsides, aerials, yc in misc_rows:
                 name = name.strip()
                 mins = float(mins90 or 1) or 1
@@ -13169,6 +13181,7 @@ class AdvancedPropsManager:
                         "team": "", "shots_per90": 0.0, "sot_per90": 0.0,
                         "fouls_committed": 0.0, "fouls_drawn": 0.0,
                         "offsides": 0.0, "aerials_won": 0.0, "yc_per90": 0.0,
+                        "tackles_per90": 0.0,
                     }
                 try:
                     player_db[name]["fouls_committed"] = round(float(fouls or 0) / mins, 2)
@@ -13177,6 +13190,7 @@ class AdvancedPropsManager:
                     player_db[name]["aerials_won"]     = round(float(aerials or 0) / mins, 2)
                     player_db[name]["yc_per90"]        = round(float(yc or 0) / mins, 3)
                     player_db[name]["appearances"]     = round(mins, 1)
+                    player_db[name]["tackles_per90"]   = tackle_map.get(name, 0.0)
                 except Exception:
                     continue
 
@@ -13284,6 +13298,30 @@ def run_advanced_props_bot(active_leagues: list, fixtures_cache: dict, target_da
 
     log("🔑 Prop Builder Bot startet...")
 
+    # Lineup-Wait: Props erst senden wenn Aufstellungen bekannt
+    # Aufstellungen kommen ~45-60 Min vor Kickoff
+    now_utc = datetime.now(timezone.utc)
+    has_lineups = False
+    # Prüfe ob für heute Spiele Lineups verfügbar sind
+    lineup_check_url = f"https://www.sofascore.com/api/v1/sport/football/scheduled-events/{target_date}"
+    try:
+        r_lu = requests.get(lineup_check_url, 
+            headers={"User-Agent": "Mozilla/5.0"}, timeout=8)
+        if r_lu.ok:
+            events = r_lu.json().get("events", [])
+            # Prüfe ob irgendein Spiel confirmed lineups hat
+            for ev in events[:20]:
+                if ev.get("hasLineups", False):
+                    has_lineups = True
+                    break
+    except Exception:
+        pass
+    
+    if not has_lineups:
+        log("🔑 Keine bestätigten Aufstellungen → Props Bot wartet...")
+        # Trotzdem ausführen aber mit Warnung
+        log("🔑 Sende trotzdem (keine Lineup-Daten verfügbar)")
+
     manager = _advanced_props_manager
     seen = set()
 
@@ -13321,6 +13359,27 @@ def run_advanced_props_bot(active_leagues: list, fixtures_cache: dict, target_da
         ref_cards = stats.get("_ref_cards", 0)
         if ref_cards >= 4.0:
             score += 1; reasons.append("✅ Strenger Schiri")
+
+        # Gegner-Kontext Scoring
+        opp_allows_fouls = stats.get("_opp_fouls_allowed", 0)
+        opp_allows_shots = stats.get("_opp_shots_allowed", 0)
+        opp_possession   = stats.get("_opp_possession", 50)
+
+        if mtype in ("foul","foul_won") and opp_allows_fouls > 0:
+            if opp_allows_fouls >= 12:
+                score += 2; reasons.append("✅ Gegner erlaubt viele Fouls")
+            elif opp_allows_fouls >= 10:
+                score += 1; reasons.append("✅ Gegner über Liga-Schnitt Fouls")
+
+        if mtype == "shots" and opp_allows_shots > 0:
+            if opp_allows_shots >= 14:
+                score += 2; reasons.append("✅ Gegner lässt viele Schüsse zu")
+            elif opp_allows_shots >= 12:
+                score += 1; reasons.append("✅ Gegner über Liga-Schnitt Schüsse")
+
+        # Ballbesitz-Team killt Stürmer-Stats
+        if mtype == "shots" and opp_possession >= 65:
+            score -= 2; reasons.append("⚠️ Gegner Ballbesitz-Team → weniger Schüsse")
 
         return score, reasons
 
@@ -13510,6 +13569,10 @@ Erstelle 4-5 Bet Builder Kombinationen. Nutze alle Typen:
 
 5. MIXED (4-6 Legs): Fouls + Bookings + Shots mix
 
+6. SUPER SUB BOOKING (2-3 Legs): Spieler die oft als Einwechslung kommen und dann gebucht werden
+   Erkenne: yc_per90 >= 0.25 + weniger als 60% Startelf-Rate (appearances < 70min Schnitt)
+   z.B. Nuno Tavares Sub → Booked + Casemiro Sub → Booked → ~25/1
+
 Odds: 2 Legs ~8/1 · 3 Legs ~15/1 · 4 Legs ~30/1 · 5 Legs ~60/1 · 6 Legs ~100/1
 
 Antworte NUR JSON:
@@ -13542,6 +13605,7 @@ Antworte NUR JSON:
         "SHOT BUILDER+ SAME":   "🎯",
         "SHOT BUILDER+ TWO":    "🎯",
         "MIXED":                "💎",
+        "SUPER SUB BOOKING":    "⚡",
     }
 
     nl = "\n"
@@ -14006,9 +14070,8 @@ def main():
     else:
         log("🌐 Kein Cache → Fixtures werden neu geladen...")
 
-    if not cached_fixtures:  # Nur fetchen wenn kein Cache
-     pass  # placeholder
     # Quelle 1: SofaScore
+    sofa_all = {}
     if not cached_fixtures:
         sofa_all = fetch_sofascore_all_today(target_date)
     if sofa_all:
@@ -14230,9 +14293,29 @@ def main():
     for market_id, tips in tips_by_market.items():
         for tip in tips:
             tip["market"] = market_id
-            # Nur Tipps ≥70% in Kombis für höhere Qualität
             if int(tip.get("probability", 0)) >= 70:
                 all_tips_flat.append(tip)
+
+    # Ecken + Scorer auch in Multi-Combos einbinden
+    for ct in (corners_tips if "corners_tips" in dir() else []):
+        if int(ct.get("probability", 0)) >= 70:
+            all_tips_flat.append({
+                "match": ct.get("match",""), "league": ct.get("league",""),
+                "time": ct.get("time","TBD"), "tip": ct.get("tip",""),
+                "probability": ct.get("probability",0),
+                "oddsYes": ct.get("fair_odds",1.8),
+                "market": "corners", "units": 1,
+            })
+    for st in (scorer_tips if "scorer_tips" in dir() else []):
+        if int(st.get("probability", 0)) >= 70:
+            all_tips_flat.append({
+                "match": st.get("match",""), "league": st.get("league",""),
+                "time": st.get("time","TBD"),
+                "tip": f"{st.get('player','')} Anytime Scorer",
+                "probability": st.get("probability",0),
+                "oddsYes": st.get("fair_odds",2.5),
+                "market": "scorer", "units": 1,
+            })
 
     if len(all_tips_flat) >= 3:
         log("")
