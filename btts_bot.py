@@ -506,6 +506,24 @@ LEAGUES_TO_RUN = [
     "San Marino Campionato",
     "Swiss Challenge League",
     "Austrian Regional Liga",
+    # ── Österreich komplett ──
+    "Austria Regionalliga Mitte",
+    "Austria Regionalliga Ost",
+    "Austria Regionalliga Salzburg",
+    "Austria Regionalliga Tirol",
+    "Austria Regionalliga West",
+    "Austria Landesliga Wien",
+    "Austria Landesliga Niederösterreich",
+    "Austria Landesliga Burgenland",
+    "Austria Landesliga Steiermark",
+    "Austria Landesliga Kärnten",
+    "Austria Landesliga Tirol",
+    "Austria Landesliga Vorarlberg",
+    "Austria Landesliga Salzburg",
+    "Austria Landesliga Oberösterreich",
+    "ÖFB Cup",
+    "Austria Frauen Bundesliga",
+
     "German Regionalliga Bayern",
     "German Regionalliga Nord",
     "German Regionalliga Nordost",
@@ -843,6 +861,166 @@ FOOTBALL_DATA_CODES = {
 }
 
 API_FOOTBALL_LEAGUES = {
+    # ══ UEFA Cups ══
+    "Champions League": 2, "Europa League": 3, "Conference League": 848,
+    "UEFA Nations League": 5, "UEFA Youth League": 14,
+    # ══ Deutschland ══
+    "Bundesliga": 78, "2. Bundesliga": 79, "3. Liga Deutschland": 82,
+    "DFB Pokal": 81, "Bundesliga Reserve": 80,
+    "German Regionalliga Bayern": 83, "German Regionalliga Nord": 84,
+    "German Regionalliga Nordost": 85, "German Regionalliga West": 86,
+    "German Regionalliga Südwest": 87,
+    # ══ England ══
+    "Premier League": 39, "Championship": 40, "EFL League 1": 41,
+    "EFL League 2": 42, "National League": 43, "FA Cup": 45,
+    "EFL Cup": 48, "Premier League 2": 46, "Premier League U18": 47,
+    # ══ Spanien ══
+    "La Liga": 140, "La Liga 2": 141, "Copa del Rey": 143,
+    "LaLiga Youth": 142,
+    # ══ Italien ══
+    "Serie A": 135, "Serie B": 136, "Serie C": 137,
+    "Coppa Italia": 139, "Serie A Primavera": 138,
+    # ══ Frankreich ══
+    "Ligue 1": 61, "Ligue 2": 62, "Ligue National": 63,
+    "Coupe de France": 66,
+    # ══ Niederlande ══
+    "Eredivisie": 88, "Eerste Divisie": 89,
+    # ══ Portugal ══
+    "Primeira Liga": 94, "Segunda Liga": 95, "Taca de Portugal": 96,
+    # ══ Belgien ══
+    "Pro League Belgien": 144, "Belgium Challenger": 296,
+    # ══ Türkei ══
+    "Süper Lig": 203, "Turkish 1. Lig": 200, "Turkish 2. Lig": 201,
+    # ══ Österreich ══
+    "Bundesliga Österreich": 218, "Austria 2. Liga": 293,
+    "Austrian Regional Liga": 219,
+    # ══ Schweiz ══
+    "Super League Schweiz": 207, "Swiss Challenge League": 265,
+    # ══ Schottland ══
+    "Scottish Premiership": 179, "Scottish Championship": 181,
+    "Scottish League One": 182, "Scottish League Two": 183,
+    # ══ Dänemark ══
+    "Danish Superliga": 119, "Danish 1. Division": 120,
+    "Danish 2. Division": 121,
+    # ══ Norwegen ══
+    "Norway Eliteserien": 103, "Norwegian 1. Division": 104,
+    "Norway Division 1": 104, "Norway Division 3 Group 1": 1055,
+    # ══ Schweden ══
+    "Sweden Allsvenskan": 113, "Swedish Superettan": 114,
+    "Swedish Division 1": 115,
+    # ══ Finnland ══
+    "Finland Veikkausliiga": 244, "Finland Ykkosliiga": 245,
+    "Finland Ykkönen": 245,
+    # ══ Island ══
+    "Iceland Premier": 271, "Iceland 1. Deild": 272,
+    "Iceland Division 1": 272, "Iceland Division 2": 1118,
+    # ══ Griechenland ══
+    "Greece Super League": 197, "Greece Football League": 198,
+    "Greece Gamma Ethniki": 199,
+    # ══ Kroatien ══
+    "Croatia HNL": 210, "Croatia 2. HNL": 211,
+    # ══ Serbien ══
+    "Serbia SuperLiga": 286, "Serbia First League": 287,
+    "Serbia Srpska Liga Belgrade": 1350, "Serbia Srpska Liga Vojvodina": 1351,
+    "Serbia Srpska Liga East": 1352, "Serbia Srpska Liga West": 1353,
+    # ══ Rumänien ══
+    "Romania Liga I": 283, "Romania Liga II": 284, "Romania Liga III": 285,
+    "Romania Liga 3 Promotion Play-Offs": 285,
+    # ══ Tschechien ══
+    "Czech First League": 345, "Czech 2. Liga": 346,
+    "Czech 3. CFL Group A": 347, "Czech 3. CFL Group B": 347,
+    "Czech 3. MSFL": 349,
+    # ══ Polen ══
+    "Poland Ekstraklasa": 106, "Poland I Liga": 107, "Poland II Liga": 108,
+    "Poland Division 2 Promotion Play-Offs": 107,
+    # ══ Slowakei ══
+    "Slovak Super Liga": 332, "Slovakia 2. Liga": 333,
+    # ══ Ungarn ══
+    "Hungarian NB I": 325, "Hungary NB II": 326,
+    # ══ Bulgarien ══
+    "Bulgarian First": 348, "Bulgaria Second League": 349,
+    # ══ Israel ══
+    "Israeli Premier": 288, "Israeli Liga Leumit": 289,
+    # ══ Ukraine ══
+    "Ukrainian Premier": 333,
+    # ══ Russland ══
+    "Russian Premier": 235, "Russia First League": 236,
+    "Russia Second League": 237, "Russia FNL2 Division A Silver": 238,
+    "Russia FNL2 Division B Group 1": 239,
+    # ══ Belarus ══
+    "Belarus Premier": 116,
+    # ══ Baltikum ══
+    "Latvian Higher League": 180, "Lithuanian A Lyga": 186,
+    "Estonian Premium": 117,
+    # ══ Kasachstan ══
+    "Kazakh Premier": 121, "Kazakhstan Premier League": 121,
+    # ══ Kaukasus ══
+    "Georgia Erovnuli Liga": 189, "Armenia Premier League": 191,
+    "Azerbaijan Premier League": 195,
+    # ══ Balkan ══
+    "Slovenia Prva Liga": 212, "Bosnia Premier League": 213,
+    "North Macedonia First League": 215, "Kosovo Superliga": 219,
+    "Montenegro First League": 217, "Albania Superliga": 220,
+    # ══ Kleine EU ══
+    "Cyprus First Division": 278, "Malta Premier League": 303,
+    "Luxembourg BGL Ligue": 316, "Faroe Islands Premier League": 270,
+    "Northern Ireland Premiership": 183,
+    "Republic of Ireland Premier Division": 357,
+    "Wales Premier League": 361,
+    # ══ MLS / Nordamerika ══
+    "MLS": 253, "USL Championship": 255, "Canada Premier League": 256,
+    "USL League One": 257, "CONCACAF Champions": 37,
+    "CONCACAF Nations League": 38, "Gold Cup": 40,
+    "Costa Rica Primera": 321, "Guatemala Liga": 327,
+    "Honduras Liga": 329, "Liga MX": 262, "Liga MX Expansion": 263,
+    "Panama LPF": 330,
+    # ══ Südamerika ══
+    "Brasileirao Serie A": 71, "Brasileirao Serie B": 72,
+    "Brazil Serie C": 75, "Brazil Serie D": 76,
+    "Liga Argentinien": 128, "Argentina Primera B": 130,
+    "Copa Argentina": 131, "Campeonato Paulista": 73,
+    "Campeonato Carioca": 74, "Copa Libertadores": 13,
+    "Copa Sudamericana": 11, "Recopa Sudamericana": 12,
+    "Chile Primera": 265, "Chile Primera B": 266,
+    "Colombia Primera": 239, "Colombia Primera B": 240,
+    "Ecuador Serie A": 256, "Peru Primera": 281,
+    "Venezuela Primera": 293, "Bolivia Division Profesional": 236,
+    "Paraguay Division": 260, "Paraguay Division Intermedia": 261,
+    "Uruguay Primera": 268,
+    # ══ Saudi / Naher Osten ══
+    "Saudi Pro League": 307, "Saudi Division 1": 308,
+    "Qatar Stars League": 304, "UAE Pro League": 299,
+    "UAE Division 1": 300, "Kuwait Premier League": 285,
+    "Bahrain Premier League": 276, "Jordan Pro League": 286,
+    "Iraq Premier League": 290, "Oman Professional League": 303,
+    # ══ Afrika ══
+    "Egypt Premier": 233, "Morocco Botola": 200, "Morocco Botola 2": 201,
+    "Tunisia Ligue 1": 202, "Algeria Ligue 1": 197, "Algeria Ligue 2": 198,
+    "Nigeria Premier": 206, "Ghana Premier League": 208,
+    "South Africa PSL": 288, "Kenya Premier": 357,
+    "CAF Champions League": 20, "CAF Confederation Cup": 21,
+    # ══ Asien ══
+    "J1 League Japan": 98, "J2 League Japan": 99, "J3 League Japan": 100,
+    "K League 1": 292, "K League 2": 293, "K3 League": 294,
+    "China Super League": 169, "China League 1": 170,
+    "India Super League": 323, "India I-League": 324,
+    "Vietnam V-League": 340, "Thailand League 1": 296,
+    "Malaysia Super League": 302, "Indonesia Liga 1": 310,
+    "Singapore Premier League": 306,
+    "Iran Pro League": 290, "ACL Elite": 17,
+    "A-League Australia": 188, "Australia NPL NSW": 513,
+    "Australia NPL Victoria": 514, "Australia NPL Queensland": 515,
+    "New Zealand NZFC": 270,
+    # ══ International ══
+    "WM 2026": 1, "WM 2026 Qualifikation Europa": 32,
+    "WM 2026 Qualifikation Südamerika": 9,
+    "WM 2026 Qualifikation Asien": 30,
+    "WM 2026 Qualifikation Afrika": 29,
+    "WM 2026 Qualifikation CONCACAF": 31,
+    "Copa America": 7, "Afrika Cup": 6,
+    "Freundschaftsspiele International": 10,
+    "Euro U19 Qualification League A": 39,
+    "Europe Baltic Cup": 192,
     "Champions League": 2,
     "Europa League": 3,
     "Conference League": 848,
@@ -898,6 +1076,222 @@ API_FOOTBALL_LEAGUES = {
     "Israeli Premier": 288,
     "Ukrainian Premier": 333,
     "Russian Premier": 235,
+
+    # ═══ EUROPA KOMPLETT ═══
+    # Deutschland
+    "German Regionalliga Bayern": 90,
+    "German Regionalliga Nord": 91,
+    "German Regionalliga Nordost": 92,
+    "German Regionalliga West": 93,
+    "German Regionalliga Südwest": 94,
+    # Österreich
+    "Austrian Regional Liga": 221,
+    "Austria Regionalliga Mitte": 222,
+    "Austria Regionalliga Ost": 223,
+    "Austria Regionalliga Salzburg": 224,
+    "Austria Regionalliga Tirol": 225,
+    "Austria Regionalliga West": 226,
+    "ÖFB Cup": 552,
+    # Schweiz
+    "Swiss Challenge League": 265,
+    # UK
+    "National League": 43,
+    "Northern Ireland Premiership": 415,
+    "Republic of Ireland Premier Division": 357,
+    "Republic of Ireland First Division": 358,
+    "Wales Premier League": 410,
+    # Skandinavien
+    "Finland Ykkosliiga": 244,
+    "Finland Ykkönen": 245,
+    "Iceland Division 1": 272,
+    "Iceland Division 2": 1118,
+    "Norway Division 1": 104,
+    "Norway Division 3 Group 1": 1055,
+    "Sweden Division 1": 115,
+    # Osteuropa
+    "Czech 3. CFL Group A": 347,
+    "Czech 3. CFL Group B": 347,
+    "Czech 3. MSFL": 349,
+    "Slovakia 2. Liga": 333,
+    "Hungary NB II": 329,
+    "Poland I Liga": 107,
+    "Poland II Liga": 108,
+    "Romania Liga II": 284,
+    "Romania Liga III": 285,
+    "Bulgaria Second League": 349,
+    "Serbia First League": 287,
+    "Croatia 2. HNL": 211,
+    "Slovenia Prva Liga": 336,
+    "Slovenia 2. SNL": 337,
+    "Bosnia Premier League": 308,
+    "Bosnia 2. Liga": 309,
+    "North Macedonia First League": 385,
+    "Albania Superliga": 387,
+    "Kosovo Superliga": 541,
+    "Montenegro First League": 556,
+    "Moldova National Division": 519,
+    "Armenia Premier League": 382,
+    "Azerbaijan Premier League": 373,
+    "Georgia Erovnuli Liga": 526,
+    "Cyprus First Division": 337,
+    "Malta Premier League": 482,
+    "Luxembourg BGL Ligue": 444,
+    "Gibraltar National League": 555,
+    "Faroe Islands Premier League": 546,
+    "Latvia Higher League": 347,
+    "Lithuania A Lyga": 369,
+    "Estonia Meistriliiga": 330,
+    "Belarus Premier League": 370,
+    "Belarus First League": 371,
+    "Ukraine First League": 334,
+    "Russia First League": 236,
+    "Russia Second League": 237,
+    "Russia FNL2 Division A Silver": 237,
+    "Kazakh Premier": 360,
+    "Uzbekistan Super League": 437,
+    # ═══ AFRIKA KOMPLETT ═══
+    "Egypt Premier": 233,
+    "Morocco Botola": 200,
+    "Morocco Botola 2": 547,
+    "Tunisia Ligue 1": 201,
+    "Algeria Ligue 1": 207,
+    "Algeria Ligue 2": 208,
+    "South Africa PSL": 288,
+    "Ghana Premier League": 342,
+    "Nigeria Premier": 332,
+    "Kenya Premier": 374,
+    "Tanzania Premier League": 523,
+    "Uganda Premier League": 500,
+    "Zimbabwe Premier Soccer League": 543,
+    "Zambia Super League": 542,
+    "Senegal Ligue 1": 517,
+    "Ivory Coast Ligue 1": 399,
+    "Cameroon Elite One": 385,
+    "Ethiopia Premier League": 525,
+    "Rwanda Premier League": 515,
+    "Angola Girabola": 471,
+    "Mozambique Mocambola": 472,
+    "Libya Premier League": 470,
+    "CAF Champions League": 12,
+    "CAF Confederation Cup": 13,
+    # ═══ ASIEN KOMPLETT ═══
+    "J1 League Japan": 98,
+    "J2 League Japan": 99,
+    "J3 League Japan": 100,
+    "K League 1": 292,
+    "K League 2": 293,
+    "K3 League": 294,
+    "China Super League": 169,
+    "China League 1": 170,
+    "Saudi Pro League": 307,
+    "Qatar Stars League": 267,
+    "UAE Pro League": 435,
+    "Kuwait Premier League": 479,
+    "Bahrain Premier League": 462,
+    "Oman Professional League": 503,
+    "Iraq Premier League": 400,
+    "Jordan Pro League": 459,
+    "Iran Pro League": 290,
+    "Kazakhstan Premier League": 360,
+    "Uzbekistan Super League": 437,
+    "India Super League": 323,
+    "India I-League": 324,
+    "Vietnam V-League": 340,
+    "Thailand League 1": 296,
+    "Malaysia Super League": 274,
+    "Indonesia Liga 1": 274,
+    "Singapore Premier League": 441,
+    "Myanmar National League": 531,
+    "Philippines United Football League": 551,
+    "Hong Kong Premier League": 471,
+    "AFC Champions League": 17,
+    "ACL Elite": 17,
+    # ═══ AMERICAS KOMPLETT ═══
+    "MLS": 253,
+    "USL Championship": 254,
+    "Canada Premier League": 256,
+    "USL League One": 255,
+    "Brasileirao Serie A": 71,
+    "Brasileirao Serie B": 72,
+    "Brazil Serie C": 75,
+    "Brazil Serie D": 76,
+    "Liga Argentinien": 128,
+    "Argentina Primera B": 131,
+    "Uruguay Primera": 268,
+    "Chile Primera": 265,
+    "Colombia Primera": 239,
+    "Colombia Primera B": 240,
+    "Ecuador Serie A": 258,
+    "Peru Primera": 280,
+    "Venezuela Primera": 273,
+    "Paraguay Division": 241,
+    "Bolivia Division Profesional": 232,
+    "Costa Rica Primera": 314,
+    "Guatemala Liga": 343,
+    "Honduras Liga": 345,
+    "Mexico Liga MX": 262,
+    "Mexico Expansion": 278,
+    "Copa Libertadores": 11,
+    "Copa Sudamericana": 13,
+    "CONCACAF Champions": 16,
+    # ═══ OZEANIEN ═══
+    "A-League Australia": 188,
+    "A-League Women": 189,
+    "New Zealand NZFC": 415,
+    # ═══ INTERNATIONALE CUPS ═══
+    "WM 2026": 1,
+    "UEFA Nations League": 5,
+    "Copa America": 9,
+    "Gold Cup": 10,
+    "Afrika Cup": 6,
+    "Arab Cup": 7,
+    # ── Tschechien ──
+    "Czech 3. CFL Group A": 347,
+    "Czech 3. CFL Group B": 347,
+    "Czech 3. MSFL": 349,
+    "Czech 4. Liga Group A": 350,
+    "Czech 4. Liga Group B": 350,
+    # ── Island ──
+    "Iceland Division 1": 272,
+    "Iceland Division 2": 1118,
+    # ── Norwegen ──
+    "Norway Division 1": 104,
+    "Norway Division 3 Group 1": 1055,
+    # ── Polen ──
+    "Poland I Liga": 107,
+    "Poland II Liga": 108,
+    # ── Rumänien ──
+    "Romania Liga II": 284,
+    "Romania Liga III": 285,
+    # ── Finnland ──
+    "Finland Ykkosliiga": 245,
+    "Finland Ykkönen": 245,
+    # ── Serbien ──
+    "Serbia First League": 287,
+    # ── Kroatien ──
+    "Croatia 2. HNL": 211,
+    # ── Bulgarien ──
+    "Bulgaria Second League": 349,
+    # ── Schweiz ──
+    "Swiss Challenge League": 265,
+    # ── Australien ──
+    "A-League Australia": 188,
+    "Australia NPL NSW": 513,
+    "Australia NPL Victoria": 514,
+    "Australia NPL Queensland": 515,
+    # ── Russland ──
+    "Russia First League": 236,
+    "Russia FNL2 Division A Silver": 237,
+    # ── Korea ──
+    "K League 2": 293,
+    "K3 League": 294,
+    # ── Lateinamerika ──
+    "Brazil Serie C": 75,
+    "Brazil Serie D": 76,
+    "Chile Primera B": 265,
+    "Colombia Primera B": 240,
+    "Paraguay Division Intermedia": 241,
+    "Uruguay Primera": 268,
     "Belarus Premier": 338,
     "Latvian Higher League": 366,
     "Lithuanian A Lyga": 365,
@@ -10017,6 +10411,212 @@ def filter_top_tips(tips, target_date, market):
 
     return unique
 
+
+
+
+# ============================================================
+# 🏛️ VERBANDS-WEBSITE SCRAPER
+# Direkte Quellen ohne API - wenig Bot-Protection
+# ============================================================
+
+FEDERATION_URLS = {
+    # Europa
+    "Czech":       "https://www.fotbal.cz/api/v1/matches?date={date}",
+    "Germany":     "https://www.dfb.de/en/fixtures-results/?date={date}",
+    "Austria":     "https://www.oefb.at/oefb2/api/results?date={date}",
+    "Österreich":  "https://www.oefb.at/oefb2/api/results?date={date}",
+    "Oesterreich": "https://www.oefb.at/oefb2/api/results?date={date}",
+    "Switzerland": "https://www.football.ch/api/matches?date={date}",
+    "Sweden":      "https://www.svff.se/api/matches?date={date}",
+    "Norway":      "https://www.fotball.no/api/matches?date={date}",
+    "Denmark":     "https://www.dbu.dk/api/matches?date={date}",
+    "Finland":     "https://www.palloliitto.fi/api/matches?date={date}",
+    "Iceland":     "https://www.ksi.is/mot/leikir/?dags={date}",
+    "Poland":      "https://www.pzpn.pl/api/matches?date={date}",
+    "Slovakia":    "https://www.futbalsfz.sk/api/matches?date={date}",
+    "Romania":     "https://www.frf.ro/api/matches?date={date}",
+    "Bulgaria":    "https://www.bfunion.bg/api/matches?date={date}",
+    "Croatia":     "https://hns-cff.hr/api/matches?date={date}",
+    "Serbia":      "https://www.fss.rs/api/matches?date={date}",
+    "Slovenia":    "https://www.nzs.si/api/matches?date={date}",
+    # Afrika
+    "Egypt":       "https://www.efaworldwide.com/api/matches?date={date}",
+    "South Africa":"https://www.safa.net/api/matches?date={date}",
+    "Nigeria":     "https://www.thenff.com/api/matches?date={date}",
+    "Ghana":       "https://www.gfa.com.gh/api/matches?date={date}",
+    # Asien
+    "Japan":       "https://www.jfa.jp/api/matches?date={date}",
+    "Korea":       "https://www.kfa.or.kr/api/matches?date={date}",
+    "Australia":   "https://www.footballaustralia.com.au/api/matches?date={date}",
+}
+
+def fetch_federation_website(league_name: str, target_date) -> list:
+    """
+    Scrapet Verbands-Websites für Fixtures.
+    Funktioniert als letzter Fallback wenn APIs nichts liefern.
+    """
+    # Bestimme welcher Verband
+    country = None
+    for c in FEDERATION_URLS.keys():
+        if c.lower() in league_name.lower():
+            country = c
+            break
+    
+    if not country:
+        # Mapping aus Liga-Name
+        country_map = {
+            "czech": "Czech", "tschech": "Czech",
+            "german": "Germany", "bundesliga": "Germany", "dfb": "Germany",
+            "austri": "Austria", "österreich": "Austria", "oefb": "Austria",
+            "regionalliga": "Austria", "landesliga": "Austria", "öfb": "Austria",
+            "swiss": "Switzerland", "schweiz": "Switzerland",
+            "sweden": "Sweden", "allsvenskan": "Sweden",
+            "norway": "Norway", "eliteserien": "Norway",
+            "denmark": "Denmark", "superliga": "Denmark",
+            "finland": "Finland", "veikkaus": "Finland",
+            "iceland": "Iceland", "úrvalsdeild": "Iceland",
+            "poland": "Poland", "ekstraklasa": "Poland",
+            "slovak": "Slovakia", "slowak": "Slovakia",
+            "roman": "Romania",
+            "bulgar": "Bulgaria",
+            "croat": "Croatia",
+            "serbia": "Serbia",
+            "sloven": "Slovenia",
+            "egypt": "Egypt",
+            "south africa": "South Africa",
+            "nigeria": "Nigeria",
+            "ghana": "Ghana",
+            "japan": "Japan",
+            "korea": "Korea",
+            "k league": "Korea",
+            "austral": "Australia", "a-league": "Australia",
+        }
+        for keyword, c_name in country_map.items():
+            if keyword in league_name.lower():
+                country = c_name
+                break
+    
+    if not country or country not in FEDERATION_URLS:
+        return []
+    
+    try:
+        url = FEDERATION_URLS[country].format(date=str(target_date))
+        r = requests.get(url, headers={
+            "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) Chrome/121.0.0.0",
+            "Accept": "application/json, text/html, */*",
+        }, timeout=10)
+        
+        if not r.ok:
+            return []
+        
+        # JSON versuchen
+        try:
+            data = r.json()
+            matches = data.get("matches", data.get("data", data.get("events", [])))
+            fixtures = []
+            for m in matches:
+                home = (m.get("homeTeam", {}) or {}).get("name", "") or m.get("home", "")
+                away = (m.get("awayTeam", {}) or {}).get("name", "") or m.get("away", "")
+                if home and away:
+                    fixtures.append({
+                        "home": home, "away": away,
+                        "time": m.get("time", m.get("kickoff", "TBD")),
+                        "time_local": m.get("time", "TBD"),
+                        "source": f"fed_{country.lower()}",
+                    })
+            return fixtures
+        except Exception:
+            return []
+            
+    except Exception:
+        return []
+
+def fetch_facr_fixtures(league_name: str, target_date) -> list:
+    """
+    FAČR (Tschechischer Fußballverband) Website Scraper.
+    Deckt CZ 3–6 Liga ab, wenig Bot-Protection.
+    https://www.fotbal.cz/souteze/
+    """
+    if "czech" not in league_name.lower() and "tschech" not in league_name.lower():
+        return []
+    
+    try:
+        date_str = str(target_date)
+        url = f"https://www.fotbal.cz/api/v1/matches?date={date_str}&sport=1"
+        r = requests.get(url, headers={
+            "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) Chrome/121.0.0.0",
+            "Accept": "application/json",
+            "Referer": "https://www.fotbal.cz/",
+        }, timeout=12)
+        
+        if not r.ok:
+            return []
+        
+        data = r.json()
+        matches = data.get("matches", data.get("data", []))
+        
+        fixtures = []
+        for m in matches:
+            home = m.get("homeTeam", {}).get("name", "") or m.get("home", "")
+            away = m.get("awayTeam", {}).get("name", "") or m.get("away", "")
+            if not home or not away:
+                continue
+            fixtures.append({
+                "home": home, "away": away,
+                "time": m.get("time", "TBD"),
+                "time_local": m.get("time", "TBD"),
+                "source": "facr",
+            })
+        
+        return fixtures
+    except Exception:
+        return []
+
+
+def fetch_transfermarkt_fixtures(league_name: str, target_date) -> list:
+    """
+    Transfermarkt als Fallback für Teams/Fixtures in kleineren Ligen.
+    Gut für CZ, SK, HU, RO Ligen.
+    """
+    TM_LEAGUE_MAP = {
+        "Czech First League": "CZ1", "Czech 2. Liga": "CZ2",
+        "Slovak Super Liga": "SK1", "Hungarian NB I": "UNL",
+        "Romania Liga I": "RO1", "Bulgaria First": "BU1",
+        "Croatia HNL": "KR1", "Slovenia Prva Liga": "SL1",
+    }
+    
+    tm_id = TM_LEAGUE_MAP.get(league_name)
+    if not tm_id:
+        return []
+    
+    try:
+        url = f"https://www.transfermarkt.com/{tm_id}/spieltag/wettbewerb/{tm_id}"
+        r = requests.get(url, headers={
+            "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) Chrome/121.0.0.0",
+            "Accept-Language": "de-DE,de;q=0.9",
+        }, timeout=12)
+        
+        if not r.ok:
+            return []
+        
+        from bs4 import BeautifulSoup as _bs
+        soup = _bs(r.text, "html.parser")
+        fixtures = []
+        
+        for row in soup.select("tr.odd, tr.even"):
+            teams = row.select("td.hauptlink a")
+            if len(teams) >= 2:
+                fixtures.append({
+                    "home": teams[0].text.strip(),
+                    "away": teams[1].text.strip(),
+                    "time": "TBD",
+                    "time_local": "TBD",
+                    "source": "transfermarkt",
+                })
+        
+        return fixtures[:10]
+    except Exception:
+        return []
 
 def fetch_league_data_once(league, target_date):
     """
