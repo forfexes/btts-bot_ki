@@ -194,13 +194,13 @@ MARKETS_TO_RUN = ["btts", "over25", "combo", "btts_ht"]
 # ============================================================
 # AUTO LIGA SWITCH
 # ============================================================
-AUTO_LEAGUE_SWITCH = env("AUTO_LEAGUE_SWITCH", "true").lower() in ["1", "true", "yes", "on"]
+AUTO_LEAGUE_SWITCH = env("AUTO_LEAGUE_SWITCH", "false").lower() in ["1", "true", "yes", "on"]  # Aus bis CLV läuft
 AUTO_LEAGUE_MIN_TIPS = int(env("AUTO_LEAGUE_MIN_TIPS", "10"))
 AUTO_LEAGUE_MIN_WINRATE = float(env("AUTO_LEAGUE_MIN_WINRATE", "48"))
 AUTO_LEAGUE_MIN_ROI = float(env("AUTO_LEAGUE_MIN_ROI", "-2.0"))
 AUTO_LEAGUE_LOOKBACK_DAYS = int(env("AUTO_LEAGUE_LOOKBACK_DAYS", "120"))
 
-MAX_LEAGUES_PER_RUN = int(env("MAX_LEAGUES_PER_RUN", "25"))  # 25 pro Run!
+MAX_LEAGUES_PER_RUN = int(env("MAX_LEAGUES_PER_RUN", "0"))  # 0 = alle Ligen  # 25 pro Run!
 AI_SLEEP_SECONDS = float(env("AI_SLEEP_SECONDS", "1.0"))
 GROQ_SLEEP_SECONDS = float(env("GROQ_SLEEP_SECONDS", "2.0"))
 USE_GROQ_FALLBACK = env("USE_GROQ_FALLBACK", "true").lower() in ["1", "true", "yes", "on"]
@@ -375,153 +375,181 @@ LEAGUES_TO_RUN = [
     "Copa America",
     "Afrika Cup",
     "Freundschaftsspiele International",
+
+    # ── Europa (fehlend) ──
+    "Faroe Islands Premier League",
+    "Gibraltar National League",
+    "Kosovo Superliga",
+    "Luxembourg BGL Ligue",
+    "Malta Premier League",
+    "Moldova National Division",
+    "Montenegro First League",
+    "North Macedonia First League",
+    "Northern Ireland Premiership",
+    "Republic of Ireland Premier Division",
+    "Republic of Ireland First Division",
+    "Wales Premier League",
+    "Albania Superliga",
+    "Armenia Premier League",
+    "Azerbaijan Premier League",
+    "Georgia Erovnuli Liga",
+    "Cyprus First Division",
+    "Czech 2. Liga",
+    "Slovakia Super Liga",
+    "Slovenia Prva Liga",
+    "Bosnia Premier League",
+    "Andorra Primera Divisió",
+    "San Marino Campionato",
+    "Swiss Challenge League",
+    "Austrian Regional Liga",
+    "German Regionalliga Bayern",
+    "German Regionalliga Nord",
+    "German Regionalliga Nordost",
+    "German Regionalliga West",
+    "German Regionalliga Südwest",
+    # ── Afrika (fehlend) ──
+    "Algeria Ligue 2",
+    "Angola Girabola",
+    "Botswana Premier League",
+    "Burkina Faso Premier League",
+    "Cameroon Elite One",
+    "Congo DR Linafoot",
+    "Ethiopia Premier League",
+    "Gabon Championnat National",
+    "Ghana Premier League",
+    "Guinea Ligue Professionnelle",
+    "Ivory Coast Ligue 1",
+    "Libya Premier League",
+    "Malawi Super League",
+    "Mali Premiere Division",
+    "Mauritania Ligue 1",
+    "Morocco Botola 2",
+    "Mozambique Mocambola",
+    "Namibia Premier League",
+    "Rwanda Premier League",
+    "Senegal Ligue 1",
+    "Sierra Leone Premier League",
+    "Tanzania Premier League",
+    "Togo Championnat National",
+    "Uganda Premier League",
+    "Zambia Super League",
+    "Zimbabwe Premier Soccer League",
+    "Zanzibar Premier League",
+    "Gambia GFA League",
+    "Benin Ligue 1",
+    "CAF Champions League",
+    "CAF Confederation Cup",
+    "COSAFA Cup",
+    "CECAFA Cup",
+    # ── Asien (fehlend) ──
+    "Afghanistan Premier League",
+    "Bahrain Premier League",
+    "Bangladesh Premier League",
+    "Bhutan National League",
+    "Cambodia League",
+    "Chinese Taipei League",
+    "Hong Kong Premier League",
+    "India I-League 2",
+    "Indonesia Liga 2",
+    "Iraq Premier League",
+    "Jordan Pro League",
+    "Kazakhstan Premier League",
+    "Kuwait Premier League",
+    "Kyrgyzstan Top League",
+    "Laos League",
+    "Lebanon Premier League",
+    "Lebanon Division 2",
+    "Macau League",
+    "Maldives Dhivehi Premier League",
+    "Mongolia National Premier League",
+    "Myanmar National League",
+    "Nepal Super League",
+    "Oman Professional League",
+    "Pakistan Premier League",
+    "Palestine Premier League",
+    "Philippines United Football League",
+    "Qatar Stars League",
+    "Saudi Division 1",
+    "Singapore Premier League",
+    "Sri Lanka Football League",
+    "Syria Premier League",
+    "Tajikistan League",
+    "Thailand Division 1",
+    "Timor-Leste Premier League",
+    "Turkmenistan Liga",
+    "UAE Division 1",
+    "Uzbekistan Super League",
+    "Uzbekistan Division 1",
+    "Vietnam V-League 2",
+    "Yemen League",
+    "Yemen Super Cup",
+    "J-League Play-Offs",
+    "K League 3",
+    "K League 4",
+    "ACL Elite",
+    "ASEAN Club Championship",
+    "SAFF Championship",
+    "West Asian Football Federation",
+    # ── Südamerika (fehlend) ──
+    "Bolivia Division Profesional",
+    "Brazil Serie C",
+    "Brazil Serie D",
+    "Chile Primera B",
+    "Colombia Primera B",
+    "Ecuador Liga Pro 2",
+    "Paraguay Division Intermedia",
+    "Peru Liga 2",
+    "Venezuela Segunda Division",
+    "CONMEBOL Pre-Olympic",
+    "South American Youth Championship",
+    "Recopa Sudamericana",
+    "Copa Argentina",
+    "Campeonato Paulista",
+    "Campeonato Carioca",
+    "Campeonato Mineiro",
+    "Campeonato Gaucho",
+    "Argentinian Regional Liga",
+    # ── Nordamerika/Karibik (fehlend) ──
+    "Canada Premier League",
+    "USL League One",
+    "USL League Two",
+    "NISA National League",
+    "Costa Rica Segunda",
+    "El Salvador Primera Division",
+    "Nicaragua Primera Division",
+    "Panama LPF",
+    "Trinidad and Tobago Pro League",
+    "Jamaica Premier League",
+    "Haiti Ligue Haïtienne",
+    "Dominican Republic LDF",
+    "Cuba National Series",
+    # ── Ozeanien (fehlend) ──
+    "New Zealand Southern League",
+    "New Zealand National League",
+    "Fiji Battle of the Giants",
+    "Papua New Guinea National Soccer League",
+    "Solomon Islands S-League",
+    "Vanuatu Premier League",
+    "OFC Champions League",
+    # ── Youth/Reserve (fehlend) ──
+    "Champions League Youth",
+    "Bundesliga Reserve",
+    "Premier League 2",
+    "LaLiga Youth",
+    "Serie A Primavera",
+    "Ligue 1 Reserve",
+    # ── Internationale Cups (fehlend) ──
+    "Arab Cup",
+    "Gold Cup",
+    "CONCACAF Nations League",
+    "Pacific Games Football",
+    "Island Games",
+    "COSAFA Women Cup",
 ]
 
 # Zeitfenster pro Liga (UTC Stunden)
-LEAGUES_TIME_MAP = {
-    "Champions League": "evening",
-    "Europa League": "evening",
-    "Conference League": "evening",
-    "Bundesliga": "evening",
-    "2. Bundesliga": "evening",
-    "3. Liga Deutschland": "evening",
-    "Premier League": "evening",
-    "Championship": "evening",
-    "EFL League 1": "evening",
-    "EFL League 2": "evening",
-    "National League": "evening",
-    "La Liga": "evening",
-    "La Liga 2": "evening",
-    "Serie A": "evening",
-    "Serie B": "evening",
-    "Serie C": "evening",
-    "Ligue 1": "evening",
-    "Ligue 2": "evening",
-    "Eredivisie": "evening",
-    "Eerste Divisie": "evening",
-    "Primeira Liga": "evening",
-    "Pro League Belgien": "evening",
-    "Belgium Challenger": "evening",
-    "Süper Lig": "evening",
-    "Turkish 1. Lig": "evening",
-    "Bundesliga Österreich": "evening",
-    "Austria 2. Liga": "evening",
-    "Super League Schweiz": "evening",
-    "Swiss Challenge": "evening",
-    "Scottish Premiership": "evening",
-    "Scottish Championship": "evening",
-    "Scottish League One": "evening",
-    "Danish Superliga": "evening",
-    "Danish 1. Division": "evening",
-    "Norway Eliteserien": "evening",
-    "Norwegian 1. Division": "evening",
-    "Sweden Allsvenskan": "evening",
-    "Swedish Superettan": "evening",
-    "Finland Veikkausliiga": "evening",
-    "Iceland Premier": "evening",
-    "Iceland 1. Deild": "evening",
-    "Greece Super League": "evening",
-    "Croatia HNL": "evening",
-    "Serbia SuperLiga": "evening",
-    "Romania Liga I": "evening",
-    "Czech First League": "evening",
-    "Czech 2. Liga": "evening",
-    "Poland Ekstraklasa": "evening",
-    "Slovak Super Liga": "evening",
-    "Hungarian NB I": "evening",
-    "Bulgarian First": "evening",
-    "Israeli Liga Leumit": "evening",
-    "Israeli Premier": "evening",
-    "Ukrainian Premier": "evening",
-    "Russian Premier": "evening",
-    "Belarus Premier": "evening",
-    "Latvian Higher League": "evening",
-    "Lithuanian A Lyga": "evening",
-    "Estonian Premium": "evening",
-    "Kazakh Premier": "evening",
-    "UEFA Youth League": "evening",
-    "Bundesliga U19": "afternoon",
-    "Bundesliga U17": "afternoon",
-    "Premier League U21": "afternoon",
-    "Premier League U18": "afternoon",
-    "La Liga U19": "afternoon",
-    "Serie A U19": "afternoon",
-    "Ligue 1 U19": "afternoon",
-    "Eredivisie U21": "afternoon",
-    "MLS": "night",
-    "USL Championship": "night",
-    "Brasileirao Serie A": "night",
-    "Brasileirao Serie B": "night",
-    "Liga Argentinien": "night",
-    "Argentina Primera B": "night",
-    "Liga MX": "night",
-    "Liga MX Expansion": "night",
-    "Uruguay Primera": "night",
-    "Chile Primera": "night",
-    "Colombia Primera": "night",
-    "Ecuador Serie A": "night",
-    "Peru Primera": "night",
-    "Venezuela Primera": "night",
-    "Paraguay Division": "night",
-    "Bolivia Division": "night",
-    "Costa Rica Primera": "night",
-    "Guatemala Liga": "night",
-    "Honduras Liga": "night",
-    "Copa Libertadores": "night",
-    "Copa Sudamericana": "night",
-    "CONCACAF Champions": "night",
-    "Saudi Pro League": "afternoon",
-    "Qatar Stars League": "afternoon",
-    "UAE Pro League": "afternoon",
-    "Egypt Premier": "afternoon",
-    "Morocco Botola": "afternoon",
-    "Tunisia Ligue 1": "afternoon",
-    "South Africa PSL": "afternoon",
-    "Algeria Ligue 1": "afternoon",
-    "Nigeria Premier": "afternoon",
-    "Kenya Premier": "afternoon",
-    "Iran Pro League": "afternoon",
-    "Jordan Pro League": "afternoon",
-    "Kuwait Premier": "afternoon",
-    "Bahrain Premier": "afternoon",
-    "J1 League Japan": "morning",
-    "J2 League Japan": "morning",
-    "J3 League Japan": "morning",
-    "K League 1": "morning",
-    "K League 2": "morning",
-    "China Super League": "morning",
-    "China League 1": "morning",
-    "India Super League": "morning",
-    "India I-League": "morning",
-    "Vietnam V-League": "morning",
-    "Thailand League 1": "morning",
-    "Malaysia Super League": "morning",
-    "Indonesia Liga 1": "morning",
-    "Philippines United": "morning",
-    "Singapore Premier": "morning",
-    "Myanmar National": "morning",
-    "Taiwan Football Prem": "morning",
-    "Hong Kong Premier": "morning",
-    "A-League Australia": "morning",
-    "A-League Women": "morning",
-    "New Zealand NZFC": "morning",
-    "AFC Champions League": "morning",
-    "AFC Cup": "morning",
-    "Kazakhstan Premier": "morning",
-    "Uzbekistan Super": "morning",
-    "Tajikistan League": "morning",
-    # 🌍 WM 2026 + Länderspiele
-    "WM 2026": "evening",
-    "WM 2026 Qualifikation Europa": "evening",
-    "WM 2026 Qualifikation Südamerika": "night",
-    "WM 2026 Qualifikation Asien": "morning",
-    "WM 2026 Qualifikation Afrika": "evening",
-    "WM 2026 Qualifikation CONCACAF": "night",
-    "UEFA Nations League": "evening",
-    "Copa America": "night",
-    "Afrika Cup": "evening",
-    "Freundschaftsspiele International": "evening",
-}
+# LEAGUES_TIME_MAP entfernt — Bot läuft global 24/7
+
 
 
 LEAGUE_KEYS = {
@@ -10552,17 +10580,20 @@ def generate_multi_combo_bets(all_tips, num_tips=3):
 
     # Combo Label basierend auf Anzahl
     labels = {
-        3: ("🥉 COMBO 3", "Einsteiger-Kombi"),
-        4: ("🥈 COMBO 4", "Solide Kombi"),
-        5: ("🥇 COMBO 5", "Standard-Kombi"),
-        6: ("💎 COMBO 6", "Value-Kombi"),
-        7: ("🔥 COMBO 7", "High-Risk Kombi"),
-        8: ("🚀 COMBO 8", "Jackpot-Kombi"),
+        3:  ("🥉 COMBO 3",  "Einsteiger-Kombi"),
+        4:  ("🥈 COMBO 4",  "Solide Kombi"),
+        5:  ("🥇 COMBO 5",  "Standard-Kombi"),
+        6:  ("💎 COMBO 6",  "Value-Kombi"),
+        7:  ("🔥 COMBO 7",  "High-Risk Kombi"),
+        8:  ("🚀 COMBO 8",  "Jackpot-Kombi"),
+        9:  ("⚡ COMBO 9",  "Mega-Kombi"),
+        10: ("🎯 COMBO 10", "Ultra-Kombi"),
+        11: ("👑 COMBO 11", "Monster-Kombi"),
     }
     label, desc = labels.get(num_tips, (f"🎲 COMBO {num_tips}", "Multi-Kombi"))
 
     # Stake Suggestion (weniger bei mehr Tipps)
-    stakes = {3: 5, 4: 4, 5: 3, 6: 2, 7: 2, 8: 1}
+    stakes = {3: 8, 4: 6, 5: 4, 6: 3, 7: 2, 8: 2, 9: 1, 10: 1, 11: 0.5}
     stake = stakes.get(num_tips, 1)
 
     return {
@@ -10905,14 +10936,16 @@ def send_top_tips(tips_by_market, target_date):
                 u_str = f"+{units}" if units >= 0 else str(units)
                 stats_header += f"{medal} {lg}: {w}/{tot} ({pct}%) · {u_str}U" + "\n"
 
-    send_telegram(stats_header, TELEGRAM_GROUPS.get("stats"))
+    if total_tips > 0:
+        send_telegram(stats_header, TELEGRAM_GROUPS.get("stats"))
 
     # Auto-void alte Pending Tipps (älter als 3 Tage)
     _auto_void_old_pending()
 
     # Wenn keine Tipps → Auswertung in ALLE Gruppen senden
     if total_tips == 0:
-        _send_daily_auswertung_to_all_groups(stats)
+        if datetime.now(timezone.utc).hour == 8:
+            _send_daily_auswertung_to_all_groups(stats)
         return
 
     saved = 0
@@ -13563,7 +13596,6 @@ def send_daily_report():
         log(f"Daily Report Error: {str(e)[:60]}", "WARN")
 
 
-
 def run_clv_update() -> None:
     """
     Closing Line Value Update.
@@ -13692,7 +13724,42 @@ def run_clv_update() -> None:
             log(f"CLV Error {tip.get('match','')}: {e}", "WARN")
             continue
 
-    # CLV nur in Supabase — kein Telegram
+    if updated > 0:
+        # CLV Summary in Stats Gruppe
+        try:
+            r2 = requests.get(
+                f"{SUPABASE_URL}/rest/v1/tips",
+                headers={"apikey": SUPABASE_KEY, "Authorization": f"Bearer {SUPABASE_KEY}"},
+                params={
+                    "date": f"eq.{today}",
+                    "clv": "not.is.null",
+                    "select": "clv,market",
+                },
+                timeout=10,
+            )
+            if r2.ok:
+                clv_tips = r2.json()
+                if clv_tips:
+                    avg_clv = round(sum(t.get("clv",0) for t in clv_tips) / len(clv_tips), 2)
+                    pos = sum(1 for t in clv_tips if t.get("clv",0) > 0)
+                    neg = len(clv_tips) - pos
+                    clv_emoji = "🟢" if avg_clv > 0 else "🔴"
+                    nl = "\n"
+                    msg = f"📊 <b>CLV UPDATE — {today}</b>\n"
+                    msg += f"━━━━━━━━━━━━━━━━━━\n"
+                    msg += f"{clv_emoji} Ø CLV: <b>{avg_clv:+.1f}%</b>\n"
+                    msg += f"🟢 Positiv: {pos} · 🔴 Negativ: {neg}\n"
+                    msg += f"📋 Tipps: {len(clv_tips)}\n"
+                    msg += f"━━━━━━━━━━━━━━━━━━\n"
+                    if avg_clv > 3:
+                        msg += "<i>✅ Echter Edge vorhanden!</i>"
+                    elif avg_clv > 0:
+                        msg += "<i>⚠️ Leichter Edge — weiter beobachten</i>"
+                    else:
+                        msg += "<i>❌ Kein Edge — Strategie überdenken</i>"
+                    send_telegram(msg, TELEGRAM_GROUPS.get("stats", TELEGRAM_CHAT_ID))
+        except Exception:
+            pass
 
     log(f"✅ CLV Update: {updated}/{len(tips)} Tipps aktualisiert")
 
@@ -13717,7 +13784,7 @@ def main():
     if run_mode in ["settlement", "both"]:
         log("🏆 Settlement Mode - prüfe vergangene Tipps...")
         run_settlement()
-        run_clv_update()  # CLV nach Settlement updaten
+        run_clv_update()
         if run_mode == "settlement":
             log("Settlement fertig!")
             return
@@ -13748,20 +13815,109 @@ def main():
 
     if MAX_LEAGUES_PER_RUN > 0:
         active_leagues = active_leagues[:MAX_LEAGUES_PER_RUN]
-        log(f"MAX_LEAGUES_PER_RUN aktiv: Es werden nur {len(active_leagues)} Ligen analysiert.")
+        log(f"MAX_LEAGUES_PER_RUN aktiv: {len(active_leagues)} Ligen")
+    else:
+        log(f"Alle {len(active_leagues)} Ligen werden analysiert")
 
     _fixtures_cache = {}  # Cache für Corners/Scorer Bot
 
+    # ══════════════════════════════════════════════════════
+    # SCHRITT 1: ALLE SPIELE BULK HOLEN (wenige Calls)
+    # SofaScore all_today + martj42 + TheSportsDB = alle Ligen auf einmal
+    # ══════════════════════════════════════════════════════
+    log("🌍 Bulk-Fixture-Fetch startet...")
+
+    bulk_fixtures = {}  # {liga_name: [fixtures]}
+
+    # Quelle 1: SofaScore ALL TODAY (1 Call für alle Ligen weltweit!)
+    sofa_all = fetch_sofascore_all_today(target_date)
+    if sofa_all:
+        log(f"   ⚡ SofaScore: {sum(len(v) for v in sofa_all.values())} Spiele in {len(sofa_all)} Ligen")
+        # SofaScore Slugs auf unsere Liga-Namen mappen
+        slug_to_league = {v.lower(): k for k, v in SOFASCORE_SLUG_MAP.items()}
+        for slug, fixtures in sofa_all.items():
+            league_name = slug_to_league.get(slug.lower())
+            if not league_name:
+                # Fuzzy match
+                for our_league in active_leagues:
+                    our_slug = SOFASCORE_SLUG_MAP.get(our_league, "").lower()
+                    if our_slug and (our_slug in slug or slug in our_slug):
+                        league_name = our_league
+                        break
+            if league_name and fixtures:
+                if league_name not in bulk_fixtures:
+                    bulk_fixtures[league_name] = []
+                bulk_fixtures[league_name].extend(fixtures)
+
+    # Quelle 2: martj42 (internationale Spiele)
+    intl_fixtures = get_international_fixtures_today(target_date)
+    if intl_fixtures:
+        log(f"   🌍 martj42: {len(intl_fixtures)} internationale Spiele")
+        for fix in intl_fixtures:
+            tournament = fix.get("tournament", "Freundschaftsspiele International")
+            # Ordne dem richtigen Liga-Namen zu
+            league_name = "Freundschaftsspiele International"
+            for our_league in ["WM 2026", "UEFA Nations League", "Copa America", "Afrika Cup"]:
+                if our_league.lower() in tournament.lower():
+                    league_name = our_league
+                    break
+            if league_name not in bulk_fixtures:
+                bulk_fixtures[league_name] = []
+            bulk_fixtures[league_name].append(fix)
+
+    # Quelle 3: FotMob (schnell, viele Ligen)
+    fotmob_today = {}
     for league in active_leagues:
+        from_fotmob = fetch_fotmob_fixtures(league, target_date)
+        if from_fotmob:
+            fotmob_today[league] = from_fotmob
+    if fotmob_today:
+        total_fm = sum(len(v) for v in fotmob_today.values())
+        log(f"   ⚽ FotMob: {total_fm} Spiele in {len(fotmob_today)} Ligen")
+        for league, fixtures in fotmob_today.items():
+            if league not in bulk_fixtures:
+                bulk_fixtures[league] = []
+            # Merge ohne Duplikate
+            existing = {f"{f['home']}_{f['away']}" for f in bulk_fixtures.get(league, [])}
+            for fix in fixtures:
+                key = f"{fix['home']}_{fix['away']}"
+                if key not in existing:
+                    bulk_fixtures[league].append(fix)
+                    existing.add(key)
+
+    # Ligen MIT Spielen heute
+    active_today = {lg: fixes for lg, fixes in bulk_fixtures.items() if fixes}
+    log(f"✅ Bulk Done: {len(active_today)} Ligen haben heute Spiele (von {len(active_leagues)} aktiv)")
+    log("")
+
+    # ══════════════════════════════════════════════════════
+    # SCHRITT 2: NUR LIGEN MIT SPIELEN ANALYSIEREN
+    # ══════════════════════════════════════════════════════
+    # Für Ligen in active_today: normales fetch_league_data_once für Odds
+    # Für Ligen NICHT in active_today: komplett überspringen
+    # ══════════════════════════════════════════════════════
+
+    for league in active_leagues:
+        # Überspringe Ligen ohne heutige Spiele
+        if league not in active_today:
+            continue
+
         log(f"╔══ Liga: {league} ══╗")
 
         try:
-            odds, fixtures = fetch_league_data_once(league, target_date)
+            # Odds holen (Odds API) + existierende Bulk-Fixtures verwenden
+            odds = fetch_odds_api(league, target_date)
+            bulk_fixes = active_today.get(league, [])
+
+            # Per-Liga Quellen nur für Ligen wo wir Spiele haben
+            af_fix = fetch_api_football(league, target_date)
+            fixtures = merge_fixtures(bulk_fixes, af_fix)
+
             if fixtures:
-                _fixtures_cache[league] = fixtures  # Speichern für Corners/Scorer
+                _fixtures_cache[league] = fixtures
 
             if not odds and not fixtures:
-                continue  # Kein Log-Spam für leere Ligen
+                continue
 
             # ✅ Qualitäts-Check: TheSportsDB allein = überspringen!
             if fixtures:
@@ -13861,7 +14017,9 @@ def main():
     for market_id, tips in tips_by_market.items():
         for tip in tips:
             tip["market"] = market_id
-            all_tips_flat.append(tip)
+            # Nur Tipps ≥70% in Kombis für höhere Qualität
+            if int(tip.get("probability", 0)) >= 70:
+                all_tips_flat.append(tip)
 
     if len(all_tips_flat) >= 3:
         log("")
@@ -13876,7 +14034,7 @@ def main():
 
         # Alle Combo-Größen generieren (3 bis 8)
         generated = 0
-        for n in [3, 4, 5, 6, 7, 8]:
+        for n in [3, 4, 5, 6, 7, 8, 9, 10, 11]:
             combo = generate_multi_combo_bets(all_tips_flat, num_tips=n)
             if combo:
                 log(f"   {combo['label']}: Quote {combo['total_odds']}")
