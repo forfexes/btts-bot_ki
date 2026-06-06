@@ -523,6 +523,120 @@ LEAGUES_TO_RUN = [
     "Austria Landesliga Oberösterreich",
     "ÖFB Cup",
     "Austria Frauen Bundesliga",
+    # ── Deutschland Regional komplett ──
+    "Germany Oberliga Bayern",
+    "Germany Oberliga Baden-Württemberg",
+    "Germany Oberliga Hessen",
+    "Germany Oberliga Niedersachsen",
+    "Germany Oberliga Nordost Nord",
+    "Germany Oberliga Nordost Süd",
+    "Germany Oberliga Rheinland-Pfalz/Saar",
+    "Germany Oberliga Westfalen",
+    "Germany Oberliga NOFV Nord",
+    "Germany Oberliga NOFV Süd",
+    "Germany Verbandsliga Bayern",
+    "Germany Bayernliga Nord",
+    "Germany Bayernliga Süd",
+    "DFB Pokal",
+    "Germany Frauen Bundesliga",
+    "Germany 2. Frauen Bundesliga",
+    # ── Schweiz komplett ──
+    "Switzerland Promotion League",
+    "Switzerland 1. Liga Classic",
+    "Switzerland 1. Liga",
+    "Switzerland Frauen Super League",
+    "Switzerland Cup",
+    # ── Frankreich Regional ──
+    "France National",
+    "France National 2",
+    "France National 3",
+    "France Coupe de France",
+    "France Frauen Division 1",
+    # ── Spanien Regional ──
+    "Spain Primera Federación",
+    "Spain Segunda Federación",
+    "Spain Tercera Federación",
+    "Copa del Rey",
+    "Spain Frauen Primera División",
+    # ── Italien Regional ──
+    "Italy Serie D",
+    "Italy Coppa Italia",
+    "Italy Frauen Serie A",
+    # ── England Regional ──
+    "England National League North",
+    "England National League South",
+    "England FA Cup",
+    "England EFL Trophy",
+    "England Premier League Women",
+    "England Championship Women",
+    # ── Niederlande ──
+    "Netherlands Keuken Kampioen Divisie",
+    "Netherlands Eerste Divisie",
+    "Netherlands 3. Divisie",
+    "Netherlands KNVB Beker",
+    # ── Belgien ──
+    "Belgium First Amateur",
+    "Belgium Cup",
+    # ── Portugal ──
+    "Portugal Liga 3",
+    "Portugal Campeonato de Portugal",
+    "Portugal Taça de Portugal",
+    # ── Griechenland ──
+    "Greece Super League 2",
+    "Greece Football League",
+    "Greece Cup",
+    # ── Türkei ──
+    "Turkey 2. Lig",
+    "Turkey 3. Lig",
+    "Turkey Cup",
+    # ── Russland ──
+    "Russia FNL2 Division B Group 4",
+    "Russia FNL2 Division B Group 5",
+    "Russia FNL2 Division B Group 6",
+    "Russia FNL2 Division B Group 7",
+    "Russia FNL2 Division B Group 8",
+    "Russia Cup",
+    # ── Ukraine ──
+    "Ukraine First League",
+    "Ukraine Second League",
+    # ── Polen ──
+    "Poland III Liga Group 1",
+    "Poland III Liga Group 2",
+    "Poland III Liga Group 3",
+    "Poland III Liga Group 4",
+    "Poland Cup",
+    # ── Tschechien ──
+    "Czech Cup",
+    # ── Rumänien ──
+    "Romania Liga 4",
+    "Romania Cup",
+    # ── Ungarn ──
+    "Hungary NB III",
+    "Hungary Cup",
+    # ── Skandinavien ──
+    "Sweden Division 2 Norra",
+    "Sweden Division 2 Södra",
+    "Norway Division 2 Group 1",
+    "Norway Division 2 Group 2",
+    "Denmark 3. Division",
+    "Finland Kolmonen",
+    "Finland Cup",
+    "Iceland Cup",
+    # ── Baltikum ──
+    "Latvia First League",
+    "Lithuania Division 1",
+    "Estonia Esiliiga",
+    # ── Südosteuropa ──
+    "Romania Liga IV",
+    "Bulgaria Third League",
+    "Serbia Srpska Liga South",
+    "Croatia Cup",
+    "Bosnia Cup",
+    "Albania First Division",
+    "North Macedonia Cup",
+    "Kosovo First League",
+    "Moldova Second Division",
+
 
     "German Regionalliga Bayern",
     "German Regionalliga Nord",
@@ -1092,6 +1206,205 @@ API_FOOTBALL_LEAGUES = {
     "Austria Regionalliga Tirol": 225,
     "Austria Regionalliga West": 226,
     "ÖFB Cup": 552,
+    # ── Deutschland Regional ──
+    "Germany Oberliga Baden-Württemberg": 96,
+    "Germany Oberliga Hessen": 97,
+    "Germany Oberliga Niedersachsen": 98,
+    "Germany Oberliga Nordost Nord": 99,
+    "Germany Oberliga Nordost Süd": 100,
+    "Germany Oberliga Rheinland-Pfalz/Saar": 101,
+    "Germany Oberliga Westfalen": 102,
+    "Germany Oberliga NOFV Nord": 103,
+    "Germany Oberliga NOFV Süd": 104,
+    "Germany 2. Frauen Bundesliga": 846,
+    # ── Frankreich ──
+    "France Frauen Division 1": 846,
+    # ── Spanien ──
+    "Spain Tercera Federación": 544,
+    # ── Russland ──
+    "Russia FNL2 Division B Group 4": 237,
+    "Russia FNL2 Division B Group 5": 237,
+    "Russia FNL2 Division B Group 6": 237,
+    "Russia FNL2 Division B Group 7": 237,
+    "Russia FNL2 Division B Group 8": 237,
+    "Russia Cup": 560,
+    # ── Ukraine ──
+    "Ukraine Second League": 335,
+    # ── Polen ──
+    "Poland III Liga Group 1": 109,
+    "Poland III Liga Group 2": 109,
+    "Poland III Liga Group 3": 109,
+    "Poland III Liga Group 4": 109,
+    # ── Tschechien ──
+    "Czech Cup": 553,
+    # ── Rumänien ──
+    "Romania Liga 4": 286,
+    "Romania Cup": 561,
+    "Romania Liga IV": 286,
+    # ── Bulgarien ──
+    "Bulgaria Third League": 350,
+    # ── Serbien ──
+    "Serbia Srpska Liga South": 288,
+    "Serbia Srpska Liga West": 289,
+    # ── Albanien ──
+    "Albania First Division": 388,
+    # ── Kosovo ──
+    "Kosovo First League": 542,
+    # ── Moldova ──
+    "Moldova Second Division": 520,
+    # ── Estland ──
+    "Estonia Esiliiga": 331,
+    # ── Lettland ──
+    "Latvia First League": 347,
+    # ── Litauen ──
+    "Lithuania Division 1": 370,
+    # ── Schweden ──
+    "Sweden Division 2 Norra": 116,
+    "Sweden Division 2 Södra": 117,
+    # ── Norwegen ──
+    "Norway Division 2 Group 1": 105,
+    "Norway Division 2 Group 2": 105,
+    # ── Dänemark ──
+    "Denmark 3. Division": 121,
+    # ── Finnland ──
+    "Finland Kolmonen": 246,
+    # ── Island ──
+    "Iceland Cup": 1120,
+    # ── Niederlande ──
+    "Netherlands Eerste Divisie": 89,
+    # ── Belgien ──
+    "Belgium First Amateur": 297,
+    # ── Griechenland ──
+    "Greece Football League": 199,
+    "Greece Gamma Ethniki": 549,
+    # ── Ungarn ──
+    "Hungary NB III": 326,
+    # ── Kroatien ──
+    "Croatia Cup": 538,
+    # ── Bosnien ──
+    "Bosnia Cup": 562,
+    # ── England ──
+    "England Premier League Women": 848,
+    "England Championship Women": 849,
+    "England EFL Trophy": 47,
+    # ── Australien ──
+    "Australia NPL NSW": 513,
+    "Australia NPL Victoria": 514,
+    "Australia NPL Queensland": 515,
+    "Australia NPL South Australia": 516,
+    "Australia NPL Western Australia": 517,
+    "Australia FFA Cup": 185,
+    # ── Asien weitere ──
+    "China League Two": 171,
+    "China FA Cup": 549,
+    "India I-League 2": 325,
+    "Indonesia Liga 2": 275,
+    "Vietnam V-League 2": 341,
+    "Thailand Division 1": 297,
+    "Uzbekistan Division 1": 438,
+    "Lebanon Division 2": 460,
+    "Saudi Division 1": 308,
+    "UAE Division 1": 436,
+    # ── Afrika weitere ──
+    "Botswana Premier League": 469,
+    "Burkina Faso Premier League": 470,
+    "Guinea Ligue Professionnelle": 473,
+    "Ivory Coast Ligue 1": 399,
+    "Malawi Super League": 474,
+    "Mali Premiere Division": 475,
+    "Mauritania Ligue 1": 476,
+    "Namibia Premier League": 477,
+    "Rwanda Premier League": 515,
+    "Sierra Leone Premier League": 518,
+    "Togo Championnat National": 524,
+    # ── Americas weitere ──
+    "Campeonato Paulista": 73,
+    "Campeonato Carioca": 74,
+    "Campeonato Mineiro": 476,
+    "Copa Argentina": 130,
+    "Ecuador Liga Pro 2": 259,
+    "Peru Liga 2": 281,
+    "Venezuela Segunda Division": 274,
+    "Paraguay Division Intermedia": 242,
+    "Bolivia Division Profesional": 232,
+    "Costa Rica Segunda": 315,
+    "El Salvador Primera Division": 318,
+    "Panama LPF": 344,
+    "Jamaica Premier League": 428,
+    "Trinidad and Tobago Pro League": 346,
+    "Haiti Ligue Haïtienne": 351,
+    "Nicaragua Primera Division": 352,
+    "Dominican Republic LDF": 353,
+    "Canada Premier League": 256,
+    "USL League One": 255,
+    "USL League Two": 257,
+    # ── Internationale Cups weitere ──
+    "COSAFA Cup": 721,
+    "CECAFA Cup": 722,
+    "Pacific Games Football": 723,
+    "Gold Cup": 10,
+    "Euro U19 Qualification League A": 849,
+    "Euro U19 Qualification League B": 849,
+    "Europe Baltic Cup": 850,
+    "CONCACAF Nations League": 875,
+
+    # Deutschland Regional
+    "DFB Pokal": 529,
+    "Germany Frauen Bundesliga": 845,
+    "Germany Oberliga Bayern": 95,
+    "Germany Bayernliga Nord": 95,
+    "Germany Bayernliga Süd": 95,
+    # Schweiz
+    "Switzerland Promotion League": 266,
+    "Switzerland 1. Liga Classic": 267,
+    "Switzerland Cup": 554,
+    # Frankreich
+    "France National": 63,
+    "France National 2": 64,
+    "France National 3": 65,
+    "France Coupe de France": 558,
+    # Spanien
+    "Spain Primera Federación": 142,
+    "Spain Segunda Federación": 143,
+    "Copa del Rey": 556,
+    # Italien
+    "Italy Serie D": 138,
+    "Italy Coppa Italia": 557,
+    # England
+    "England National League North": 44,
+    "England National League South": 45,
+    "England FA Cup": 534,
+    # Niederlande
+    "Netherlands Keuken Kampioen Divisie": 89,
+    "Netherlands 3. Divisie": 90,
+    "Netherlands KNVB Beker": 545,
+    # Belgien
+    "Belgium Cup": 549,
+    # Portugal
+    "Portugal Liga 3": 95,
+    "Portugal Taça de Portugal": 555,
+    # Griechenland
+    "Greece Super League 2": 198,
+    "Greece Cup": 536,
+    # Türkei
+    "Turkey 2. Lig": 203,
+    "Turkey 3. Lig": 204,
+    "Turkey Cup": 559,
+    # Polen
+    "Poland Cup": 1065,
+    # Ungarn
+    "Hungary NB III": 326,
+    "Hungary Cup": 537,
+    # Skandinavien
+    "Sweden Division 2 Norra": 116,
+    "Sweden Division 2 Södra": 117,
+    "Norway Division 2 Group 1": 105,
+    "Denmark 3. Division": 121,
+    "Finland Cup": 540,
+    # Baltikum
+    "Estonia Esiliiga": 331,
+    "Lithuania Division 1": 370,
+
     # Schweiz
     "Swiss Challenge League": 265,
     # UK
