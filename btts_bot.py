@@ -9627,7 +9627,7 @@ def call_groq(prompt):
         return None, "Groq übersprungen (Rate Limit erreicht)"
 
     if len(prompt) > 30000:
-        prompt = prompt[:30000] + "\n\nANTWORTE NUR AUF DEUTSCH! Reasoning und keyFactor IMMER auf Deutsch. Antworte mit JSON-Array."
+        prompt = prompt[:30000] + "\n\n🇩🇪 PFLICHT: Antworte AUSSCHLIESSLICH auf DEUTSCH! Jeder Text, reasoning, keyFactor, comment = DEUTSCH. Kein Englisch erlaubt. Antworte mit JSON-Array."
 
     last_error = None
     rate_limit_hits = 0
@@ -10513,7 +10513,7 @@ KRITISCH:
 4. Berücksichtige xG-Daten.
 5. Wenn Liste leer: gib [] zurück.
 
-Antworte nur mit JSON-Array:
+Antworte NUR auf DEUTSCH mit JSON-Array (kein Englisch):
 {json_format}
 
 {tip_help}
@@ -14645,9 +14645,7 @@ def run_advanced_props_bot(active_leagues: list, fixtures_cache: dict, target_da
         pass
     
     if not has_lineups:
-        log("🔑 Keine bestätigten Aufstellungen → Props Bot wartet...")
-        # Trotzdem ausführen aber mit Warnung
-        log("🔑 Sende trotzdem (keine Lineup-Daten verfügbar)")
+        log("🔑 Aufstellungen noch nicht bestätigt — analysiere trotzdem (Pre-Lineup Mode)")
 
     manager = _advanced_props_manager
     seen = set()
