@@ -1,63 +1,140 @@
-name: BTTS Tips Bot 🤖
+name: NETRATTLER AI Tipp Bot
+
 on:
   schedule:
-    - cron: '0 8 * * *'
-    - cron: '0 13 * * *'
+    # Morning Run — 07:00 UTC (09:00 MEZ)
+    - cron: "0 7 * * *"
+    # Midday Run — 11:00 UTC (13:00 MEZ)
+    - cron: "0 11 * * *"
+    # Evening Run — 17:00 UTC (19:00 MEZ)
+    - cron: "0 17 * * *"
+    # Night Run — 21:00 UTC (23:00 MEZ)
+    - cron: "0 21 * * *"
   workflow_dispatch:
-concurrency:
-  group: btts-tips
-  cancel-in-progress: false
+    inputs:
+      mode:
+        description: "Run Mode"
+        required: false
+        default: "tips"
+        type: choice
+        options:
+          - tips
+          - settlement
+          - both
+
 jobs:
-  run-tips:
+  run-bot:
     runs-on: ubuntu-latest
-    timeout-minutes: 55
+    timeout-minutes: 30
+
     steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-python@v5
+      - name: Checkout Repository
+        uses: actions/checkout@v4
+
+      - name: Setup Python 3.11
+        uses: actions/setup-python@v5
         with:
-          python-version: '3.11'
-      - name: Install dependencies
+          python-version: "3.11"
+          cache: "pip"
+
+      - name: Install Dependencies
         run: |
-          pip install requests python-dotenv playwright statsbombpy pandas beautifulsoup4 lxml
+          pip install --upgrade pip
+          pip install \
+            requests \
+            python-dotenv \
+            playwright \
+            statsbombpy \
+            pandas \
+            beautifulsoup4 \
+            lxml \
+            google-generativeai \
+            groq \
+            openai \
+            anthropic \
+            supabase
           playwright install chromium
+
       - name: Run Tips Bot 🤖
         env:
-          RUN_MODE: "tips"
-          GEMINI_API_KEYS: ${{ secrets.GEMINI_API_KEYS }}
-          GROQ_API_KEYS: ${{ secrets.GROQ_API_KEYS }}
-          OPENROUTER_API_KEYS: ${{ secrets.OPENROUTER_API_KEYS }}
-          MISTRAL_API_KEYS: ${{ secrets.MISTRAL_API_KEYS }}
-          COHERE_API_KEY: ${{ secrets.COHERE_API_KEY }}
-          HUGGINGFACE_API_KEY: ${{ secrets.HUGGINGFACE_API_KEY }}
-          TAVILY_API_KEY: ${{ secrets.TAVILY_API_KEY }}
-          ODDS_API_KEYS: ${{ secrets.ODDS_API_KEYS }}
-          FOOTBALL_DATA_API_KEYS: ${{ secrets.FOOTBALL_DATA_API_KEYS }}
-          API_FOOTBALL_KEYS: ${{ secrets.API_FOOTBALL_KEYS }}
-          SPORTMONKS_API_KEY: ${{ secrets.SPORTMONKS_API_KEY }}
-          SPORTDB_API_KEY: ${{ secrets.SPORTDB_API_KEY }}
-          ALLSPORTS_API_KEY: ${{ secrets.ALLSPORTS_API_KEY }}
-          FOOTYSTATS_API_KEY: ${{ secrets.FOOTYSTATS_API_KEY }}
-          OPENWEATHER_API_KEY: ${{ secrets.OPENWEATHER_API_KEY }}
-          TELEGRAM_TOKEN: ${{ secrets.TELEGRAM_TOKEN }}
-          TELEGRAM_CHAT_ID: ${{ secrets.TELEGRAM_CHAT_ID }}
-          TELEGRAM_GROUP_BTTS: ${{ secrets.TELEGRAM_GROUP_BTTS }}
-          TELEGRAM_GROUP_OVER25: ${{ secrets.TELEGRAM_GROUP_OVER25 }}
-          TELEGRAM_GROUP_COMBO: ${{ secrets.TELEGRAM_GROUP_COMBO }}
-          TELEGRAM_GROUP_COMBOS: ${{ secrets.TELEGRAM_GROUP_COMBOS }}
-          TELEGRAM_GROUP_BTTS_HT: ${{ secrets.TELEGRAM_GROUP_BTTS_HT }}
-          TELEGRAM_GROUP_STATS: ${{ secrets.TELEGRAM_GROUP_STATS }}
-          TELEGRAM_GROUP_HZ_LIVE: ${{ secrets.TELEGRAM_GROUP_HZ_LIVE }}
-          TELEGRAM_GROUP_LATE_GOALS: ${{ secrets.TELEGRAM_GROUP_LATE_GOALS }}
-          TELEGRAM_GROUP_ADVANCED_PROPS: ${{ secrets.TELEGRAM_GROUP_ADVANCED_PROPS }}
-          SUPABASE_URL: ${{ secrets.SUPABASE_URL }}
-          SUPABASE_KEY: ${{ secrets.SUPABASE_KEY }}
-          MAX_LEAGUES_PER_RUN: "141"
-          AI_SLEEP_SECONDS: "1.0"
-          MIN_PROBABILITY: "67"
-          MIN_CONFIDENCE: "3"
-          MIN_VALUE_RATING: "OK"
-          APIFOOTBALL_MAX_CALLS: "150"
-          LEAGUE_ROTATION_ENABLED: "true"
-          ENABLE_CORNERS_SCORER: "true"
-          ENABLE_ADVANCED_PROPS: "true"
+          # ── KI APIs ──
+          GEMINI_API_KEYS:            ${{ secrets.GEMINI_API_KEYS }}
+          GROQ_API_KEYS:              ${{ secrets.GROQ_API_KEYS }}
+          OPENROUTER_API_KEYS:        ${{ secrets.OPENROUTER_API_KEYS }}
+          MISTRAL_API_KEYS:           ${{ secrets.MISTRAL_API_KEYS }}
+          COHERE_API_KEY:             ${{ secrets.COHERE_API_KEY }}
+          HUGGINGFACE_API_KEY:        ${{ secrets.HUGGINGFACE_API_KEY }}
+          TAVILY_API_KEY:             ${{ secrets.TAVILY_API_KEY }}
+          # ── Daten APIs ──
+          ODDS_API_KEYS:              ${{ secrets.ODDS_API_KEYS }}
+          FOOTBALL_DATA_API_KEYS:     ${{ secrets.FOOTBALL_DATA_API_KEYS }}
+          API_FOOTBALL_KEYS:          ${{ secrets.API_FOOTBALL_KEYS }}
+          SPORTMONKS_API_KEY:         ${{ secrets.SPORTMONKS_API_KEY }}
+          SPORTDB_API_KEY:            ${{ secrets.SPORTDB_API_KEY }}
+          ALLSPORTS_API_KEY:          ${{ secrets.ALLSPORTS_API_KEY }}
+          FOOTYSTATS_API_KEY:         ${{ secrets.FOOTYSTATS_API_KEY }}
+          OPENWEATHER_API_KEY:        ${{ secrets.OPENWEATHER_API_KEY }}
+          # ── Telegram ──
+          TELEGRAM_TOKEN:             ${{ secrets.TELEGRAM_TOKEN }}
+          TELEGRAM_CHAT_ID:           ${{ secrets.TELEGRAM_CHAT_ID }}
+          TELEGRAM_GROUP_BTTS:        ${{ secrets.TELEGRAM_GROUP_BTTS }}
+          TELEGRAM_GROUP_OVER25:      ${{ secrets.TELEGRAM_GROUP_OVER25 }}
+          TELEGRAM_GROUP_COMBO:       ${{ secrets.TELEGRAM_GROUP_COMBO }}
+          TELEGRAM_GROUP_COMBOS:      ${{ secrets.TELEGRAM_GROUP_COMBOS }}
+          TELEGRAM_GROUP_BTTS_HT:     ${{ secrets.TELEGRAM_GROUP_BTTS_HT }}
+          TELEGRAM_GROUP_HZ_LIVE:     ${{ secrets.TELEGRAM_GROUP_HZ_LIVE }}
+          TELEGRAM_GROUP_LATE_GOALS:  ${{ secrets.TELEGRAM_GROUP_LATE_GOALS }}
+          TELEGRAM_GROUP_ADVANCED_PROPS: ${{ secrets.TELEGRAM_GROUP_STATS }}  # Prop Builder = STATS Gruppe
+          TELEGRAM_GROUP_STATS:       ${{ secrets.TELEGRAM_GROUP_STATS }}
+          # ── Supabase ──
+          SUPABASE_URL:               ${{ secrets.SUPABASE_URL }}
+          SUPABASE_KEY:               ${{ secrets.SUPABASE_KEY }}
+          # ── Bot Einstellungen ──
+          MAX_LEAGUES_PER_RUN:        "0"
+          AUTO_LEAGUE_SWITCH:         "false"
+          PARALLEL_WORKERS:           "10"
+          AI_SLEEP_SECONDS:           "0.1"
+          GROQ_SLEEP_SECONDS:         "0.5"
+          RUN_MODE:                   ${{ github.event.inputs.mode || 'tips' }}
+        run: python btts_bot.py
+
+  settlement:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    # Settlement läuft täglich um 03:00 UTC
+    if: github.event_name == 'schedule' && github.event.schedule == '0 3 * * *'
+
+    steps:
+      - name: Checkout Repository
+        uses: actions/checkout@v4
+
+      - name: Setup Python 3.11
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+          cache: "pip"
+
+      - name: Install Dependencies
+        run: |
+          pip install requests python-dotenv pandas beautifulsoup4
+
+      - name: Run Settlement 🏆
+        env:
+          GEMINI_API_KEYS:            ${{ secrets.GEMINI_API_KEYS }}
+          GROQ_API_KEYS:              ${{ secrets.GROQ_API_KEYS }}
+          ODDS_API_KEYS:              ${{ secrets.ODDS_API_KEYS }}
+          API_FOOTBALL_KEYS:          ${{ secrets.API_FOOTBALL_KEYS }}
+          TELEGRAM_TOKEN:             ${{ secrets.TELEGRAM_TOKEN }}
+          TELEGRAM_CHAT_ID:           ${{ secrets.TELEGRAM_CHAT_ID }}
+          TELEGRAM_GROUP_BTTS:        ${{ secrets.TELEGRAM_GROUP_BTTS }}
+          TELEGRAM_GROUP_OVER25:      ${{ secrets.TELEGRAM_GROUP_OVER25 }}
+          TELEGRAM_GROUP_COMBO:       ${{ secrets.TELEGRAM_GROUP_COMBO }}
+          TELEGRAM_GROUP_COMBOS:      ${{ secrets.TELEGRAM_GROUP_COMBOS }}
+          TELEGRAM_GROUP_BTTS_HT:     ${{ secrets.TELEGRAM_GROUP_BTTS_HT }}
+          TELEGRAM_GROUP_HZ_LIVE:     ${{ secrets.TELEGRAM_GROUP_HZ_LIVE }}
+          TELEGRAM_GROUP_LATE_GOALS:  ${{ secrets.TELEGRAM_GROUP_LATE_GOALS }}
+          TELEGRAM_GROUP_ADVANCED_PROPS: ${{ secrets.TELEGRAM_GROUP_STATS }}  # Prop Builder = STATS Gruppe
+          SUPABASE_URL:               ${{ secrets.SUPABASE_URL }}
+          SUPABASE_KEY:               ${{ secrets.SUPABASE_KEY }}
+          RUN_MODE:                   "settlement"
         run: python btts_bot.py
