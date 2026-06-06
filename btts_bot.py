@@ -13034,6 +13034,107 @@ def format_result_text(tip, result, status):
     return msg
 
 
+def run_combo_settlement(target_date=None):
+    """Bewertet Multi-Kombis — prüft ob alle Legs gewonnen haben."""
+    if not SUPABASE_URL or not SUPABASE_KEY:
+        return
+    
+    if not target_date:
+        target_date = (datetime.now(timezone.utc) - timedelta(days=1)).date()
+    
+    try:
+        r = requests.get(
+            f"{SUPABASE_URL}/rest/v1/tips",
+            headers={"apikey": SUPABASE_KEY, "Authorization": f"Bearer {SUPABASE_KEY}"},
+            params={
+                "market": "eq.combo_multi",
+                "date": f"eq.{target_date}",
+                "status": "eq.pending",
+                "select": "id,tip_id,match,odds,units,tip",
+            },
+            timeout=10,
+        )
+        if not r.ok or not r.json():
+            return
+        
+        combos = r.json()
+        combo_chat = TELEGRAM_GROUPS.get("combos", TELEGRAM_CHAT_ID)
+        nl = "\n"
+        
+        for combo in combos:
+            legs_matches = combo.get("match","").split(" | ")
+            
+            # Prüfe ob alle Leg-Matches gewonnen haben
+            all_won = True
+            any_lost = False
+            
+            for match in legs_matches:
+                if not match:
+                    continue
+                r2 = requests.get(
+                    f"{SUPABASE_URL}/rest/v1/tips",
+                    headers={"apikey": SUPABASE_KEY, "Authorization": f"Bearer {SUPABASE_KEY}"},
+                    params={
+                        "match": f"eq.{match}",
+                        "date": f"eq.{target_date}",
+                        "status": "neq.pending",
+                        "select": "status",
+                    },
+                    timeout=8,
+                )
+                if r2.ok and r2.json():
+                    status = r2.json()[0].get("status","")
+                    if status == "lost":
+                        any_lost = True
+                        all_won = False
+                    elif status != "won":
+                        all_won = False
+            
+            if any_lost:
+                final_status = "lost"
+                emoji = "❌"
+            elif all_won:
+                final_status = "won"
+                emoji = "✅"
+            else:
+                continue  # Noch nicht alle settled
+            
+            # Supabase updaten
+            requests.patch(
+                f"{SUPABASE_URL}/rest/v1/tips",
+                headers={
+                    "apikey": SUPABASE_KEY,
+                    "Authorization": f"Bearer {SUPABASE_KEY}",
+                    "Content-Type": "application/json",
+                    "Prefer": "return=minimal",
+                },
+                params={"tip_id": f"eq.{combo.get('tip_id','')}"},
+                json={"status": final_status},
+                timeout=8,
+            )
+            
+            # Telegram Nachricht
+            odds = combo.get("odds","?")
+            units = combo.get("units","1")
+            tip_info = combo.get("tip","")
+            
+            msg = f"{emoji} <b>{tip_info}</b>{nl}"
+            msg += f"━━━━━━━━━━━━━━━━━━{nl}"
+            if final_status == "won":
+                profit = round(float(odds) * float(units), 2)
+                msg += f"🎉 GEWONNEN! +{profit} Units{nl}"
+            else:
+                msg += f"💸 Verloren · -{units} Units{nl}"
+            msg += f"📊 Quote: {odds}{nl}"
+            msg += f"━━━━━━━━━━━━━━━━━━"
+            
+            send_telegram(msg, combo_chat)
+            log(f"   🎰 Kombi Settlement: {final_status} @ {odds}")
+            
+    except Exception as e:
+        log(f"Combo Settlement Error: {e}", "WARN")
+
+
 def run_settlement():
     """
     Hauptfunktion für Check/Settlement Bot.
@@ -15039,6 +15140,232 @@ Antworte NUR JSON (alle "reason" Felder auf DEUTSCH):
 
     log(f"✅ Prop Builder: {len(combos)} Kombis gesendet")
 
+
+# ============================================================
+# 📊 CONFIDENCE SCORING — Copilot Gewichtung
+# BTTS: Stats 35% + xG 25% + Value 25% + Context 10% + Liga 5%
+# ============================================================
+
+def calculate_confidence_score(
+    btts_rate: float = 0,      # 0-1
+    xg_home: float = 0,
+    xg_away: float = 0,
+    odds_value: float = 0,     # positiv = value
+    injury_impact: float = 0,  # 0-1 (0=keine Verletzungen)
+    league_stability: float = 0.5,  # 0-1
+    market: str = "btts"
+) -> tuple:
+    """
+    Berechnet Confidence Score nach Copilot/ChatGPT Empfehlung.
+    Gibt (score 0-100, stars 1-5) zurück.
+    """
+    if market == "btts":
+        weights = {"stats": 0.35, "xg": 0.25, "value": 0.25, "context": 0.10, "liga": 0.05}
+    elif market in ("btts_ht", "over15_ht"):
+        weights = {"stats": 0.40, "xg": 0.30, "value": 0.20, "context": 0.07, "liga": 0.03}
+    elif market == "corners":
+        weights = {"stats": 0.45, "xg": 0.20, "value": 0.20, "context": 0.10, "liga": 0.05}
+    else:
+        weights = {"stats": 0.35, "xg": 0.25, "value": 0.25, "context": 0.10, "liga": 0.05}
+
+    # Stats Score (BTTS Rate)
+    stats_score = min(btts_rate * 100, 100)
+
+    # xG Score (Balance zwischen Home und Away)
+    xg_balance = min((xg_home + xg_away) / 3.0, 1.0)  # 3.0 xG total = max
+    xg_score = xg_balance * 100
+
+    # Value Score (positive odds value)
+    value_score = min(max(odds_value * 100 + 50, 0), 100)
+
+    # Context Score (keine Verletzungen = hoch)
+    context_score = (1 - injury_impact) * 100
+
+    # Liga Stability
+    liga_score = league_stability * 100
+
+    # Weighted Total
+    total = (
+        weights["stats"]   * stats_score +
+        weights["xg"]      * xg_score +
+        weights["value"]   * value_score +
+        weights["context"] * context_score +
+        weights["liga"]    * liga_score
+    )
+
+    total = round(total, 1)
+
+    # Sterne
+    if total >= 80:   stars = 5
+    elif total >= 70: stars = 4
+    elif total >= 60: stars = 3
+    elif total >= 50: stars = 2
+    else:             stars = 1
+
+    return total, stars
+
+
+# ============================================================
+# 🏆 CLUBELO API — Team Stärke (komplett kostenlos)
+# http://clubelo.com/API
+# ============================================================
+
+_CLUBELO_CACHE = {}
+
+def get_clubelo_rating(team_name: str) -> float:
+    """
+    Holt Club Elo Rating für ein Team.
+    Kostenlos, keine API Key nötig.
+    Gibt Elo-Rating zurück (1000-2000, Durchschnitt ~1500)
+    """
+    if team_name in _CLUBELO_CACHE:
+        return _CLUBELO_CACHE[team_name]
+    try:
+        # Team Name normalisieren für ClubElo
+        clean = team_name.replace(" ", "%20").replace("ü","ue").replace("ö","oe").replace("ä","ae")
+        url = f"http://api.clubelo.com/{clean}"
+        r = requests.get(url, timeout=8)
+        if r.ok and r.text:
+            lines = r.text.strip().split("\n")
+            if len(lines) >= 2:
+                parts = lines[-1].split(",")
+                if len(parts) >= 4:
+                    elo = float(parts[3])
+                    _CLUBELO_CACHE[team_name] = elo
+                    return elo
+    except Exception:
+        pass
+    return 1500.0  # Default Durchschnitt
+
+
+def get_clubelo_btts_factor(home: str, away: str) -> float:
+    """
+    Berechnet BTTS Wahrscheinlichkeit basierend auf ClubElo.
+    Teams mit ähnlichem Elo → mehr BTTS wahrscheinlich.
+    Gibt Faktor 0-1 zurück.
+    """
+    try:
+        home_elo = get_clubelo_rating(home)
+        away_elo = get_clubelo_rating(away)
+        diff = abs(home_elo - away_elo)
+        # Je ähnlicher die Teams, desto höher BTTS Wahrscheinlichkeit
+        if diff < 50:    return 0.85  # Sehr ausgeglichen → BTTS hoch
+        elif diff < 150: return 0.70
+        elif diff < 300: return 0.55
+        else:            return 0.40  # Großer Unterschied → Klarer Favorit, weniger BTTS
+    except Exception:
+        return 0.60
+
+
+# ============================================================
+# 📈 FOOTYSTATS — BTTS%, Over%, Corners, HT Stats
+# ============================================================
+
+def get_footystats_team_stats(team_name: str, league_name: str, target_date) -> dict:
+    """
+    FootyStats API für BTTS%, Over 2.5%, Corners, HT Stats.
+    Braucht FOOTYSTATS_API_KEY (kostenlos bis 100 calls/Tag).
+    """
+    if not FOOTYSTATS_API_KEY:
+        return {}
+    
+    # Cache prüfen
+    cache_key_fs = f"footystats_{team_name}_{league_name}"
+    cached = cache_get(cache_key_fs, target_date)
+    if cached:
+        return cached
+    
+    try:
+        r = requests.get(
+            "https://api.footystats.org/team",
+            params={
+                "key": FOOTYSTATS_API_KEY,
+                "team_name": team_name,
+            },
+            timeout=12,
+        )
+        if not r.ok:
+            return {}
+        
+        data = r.json().get("data", [{}])
+        if not data:
+            return {}
+        
+        team = data[0]
+        stats = {
+            "btts_pct":          team.get("stats", {}).get("seasonBTTSPercentage_overall", 0),
+            "btts_pct_home":     team.get("stats", {}).get("seasonBTTSPercentage_home", 0),
+            "btts_pct_away":     team.get("stats", {}).get("seasonBTTSPercentage_away", 0),
+            "over25_pct":        team.get("stats", {}).get("seasonOver25Percentage_overall", 0),
+            "corners_for":       team.get("stats", {}).get("cornersPerGame_for", 0),
+            "corners_against":   team.get("stats", {}).get("cornersPerGame_against", 0),
+            "goals_scored_avg":  team.get("stats", {}).get("seasonScoredAVG_overall", 0),
+            "goals_conceded_avg":team.get("stats", {}).get("seasonConcededAVG_overall", 0),
+            "ht_goals_scored":   team.get("stats", {}).get("seasonHTGoalsScoredAVG_overall", 0),
+            "ht_goals_conceded": team.get("stats", {}).get("seasonHTGoalsConcededAVG_overall", 0),
+        }
+        
+        # In Supabase cachen
+        cache_set(cache_key_fs, target_date, stats)
+        return stats
+        
+    except Exception:
+        return {}
+
+
+# ============================================================
+# 👨‍⚖️ WELTFUSSBALL SCHIEDSRICHTER STATS
+# ============================================================
+
+_REFEREE_CACHE = {}
+
+def get_referee_stats(referee_name: str) -> dict:
+    """
+    Holt Schiedsrichter Stats von weltfussball.de.
+    Gibt {cards_per_game, fouls_per_game, penalties_per_game} zurück.
+    """
+    if not referee_name:
+        return {}
+    if referee_name in _REFEREE_CACHE:
+        return _REFEREE_CACHE[referee_name]
+    
+    try:
+        clean = referee_name.lower().replace(" ", "-")
+        url = f"https://www.weltfussball.de/schiedsrichter/{clean}/"
+        r = requests.get(url, headers={
+            "User-Agent": "Mozilla/5.0 Chrome/121.0.0.0",
+        }, timeout=10)
+        
+        if not r.ok:
+            return {}
+        
+        from bs4 import BeautifulSoup as _bs
+        soup = _bs(r.text, "html.parser")
+        
+        # Karten Stats aus Tabelle
+        stats = {}
+        tables = soup.find_all("table", class_="standard_tabelle")
+        for tbl in tables:
+            rows = tbl.find_all("tr")
+            for row in rows:
+                cells = row.find_all("td")
+                if len(cells) >= 5:
+                    try:
+                        games = int(cells[1].text.strip() or 0)
+                        yellow = int(cells[2].text.strip() or 0)
+                        if games > 0:
+                            stats["cards_per_game"] = round(yellow / games, 2)
+                            stats["games"] = games
+                            break
+                    except Exception:
+                        continue
+        
+        _REFEREE_CACHE[referee_name] = stats
+        return stats
+        
+    except Exception:
+        return {}
+
 def check_config():
     warnings = []
 
@@ -15404,6 +15731,7 @@ def main():
     if run_mode in ["settlement", "both"]:
         log("🏆 Settlement Mode - prüfe vergangene Tipps...")
         run_settlement()
+        run_combo_settlement()
         run_clv_update()
         if run_mode == "settlement":
             log("Settlement fertig!")
@@ -15600,7 +15928,7 @@ def main():
     # ══════════════════════════════════════════════════════
     import threading
 
-    PARALLEL_WORKERS = int(env("PARALLEL_WORKERS", "5"))
+    PARALLEL_WORKERS = int(env("PARALLEL_WORKERS", "10"))  # Erhöht für schnellere Runs
     _lock = threading.Lock()
 
     def analyze_league(league):
@@ -15658,6 +15986,12 @@ def main():
                     fixtures = valid_fixtures
             
             log(f"   [{league}] {len(fixtures)} Spiele | {len(odds)} Quoten")
+
+            # Playwright-Quellen (Forebet etc.) nur wenn Odds vorhanden
+            # Spart ~70% der Laufzeit bei Ligen ohne Quoten
+            if not odds:
+                log(f"   [{league}] Keine Odds → überspringe Enrichment")
+                return
 
             for market in MARKETS_TO_RUN:
                 results, source = analyze_market_with_data(
