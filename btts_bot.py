@@ -2788,12 +2788,26 @@ def fetch_espn_all_today(target_date) -> dict:
                     "league": league_raw,
                 }
                 
-                # Liga mappen
+                # Liga mappen — exakt aus ESPN Daten
+                # Nutze ESPN league slug/country direkt statt fuzzy matching
+                league_slug = ev.get("league", {}).get("slug", "")
+                league_country = ev.get("league", {}).get("name", "")
+                
                 mapped_league = None
+                # Exakter Match zuerst
                 for our_league in LEAGUES_TO_RUN:
-                    if any(word.lower() in league_raw.lower() for word in our_league.split()[:2] if len(word) > 3):
+                    raw_lower = league_raw.lower()
+                    our_lower = our_league.lower()
+                    # Nur matchen wenn mindestens 2 Wörter übereinstimmen
+                    raw_words = set(w for w in raw_lower.split() if len(w) > 3)
+                    our_words = set(w for w in our_lower.split() if len(w) > 3)
+                    if len(raw_words & our_words) >= 2:
                         mapped_league = our_league
                         break
+                
+                # Fallback: nur wenn ESPN league name klar erkennbar
+                if not mapped_league and len(league_raw) > 3:
+                    mapped_league = league_raw  # Original ESPN Name behalten
                 
                 league_key = mapped_league or league_raw
                 if league_key not in result:
@@ -2844,11 +2858,14 @@ def fetch_fotmob_all_today(target_date) -> dict:
             if not matches:
                 continue
             
-            # Liga mappen
+            # Liga mappen — mindestens 2 Wörter müssen übereinstimmen
             mapped_league = None
+            raw_lower = league_raw.lower()
+            raw_words = set(w for w in raw_lower.split() if len(w) > 3)
+            
             for our_league in LEAGUES_TO_RUN:
-                words = [w for w in our_league.split() if len(w) > 3][:2]
-                if any(w.lower() in league_raw.lower() for w in words):
+                our_words = set(w for w in our_league.lower().split() if len(w) > 3)
+                if len(raw_words & our_words) >= 2:
                     mapped_league = our_league
                     break
             
@@ -15617,6 +15634,31 @@ def main():
             if not odds and not fixtures:
                 return
 
+            # Sanity Check: Teams müssen zur Liga passen
+            # z.B. bolivianische Teams nicht in Bundesliga
+            COUNTRY_HINTS = {
+                "bundesliga": ["germany", "german", "fc ", "sv ", "vfb", "vfl", "bsc", "tsg", "rb "],
+                "premier league": ["united", "city", "fc ", "afc", "town"],
+                "la liga": ["fc barcelona", "madrid", "atletico", "sevilla", "valencia"],
+                "serie a": ["juventus", "milan", "inter", "roma", "napoli", "lazio"],
+                "ligue 1": ["psg", "paris", "lyon", "marseille", "monaco"],
+                "3. liga deutschland": ["germany", "fc ", "sv ", "vfb", "sc "],
+            }
+            
+            league_lower = league.lower()
+            hint_key = next((k for k in COUNTRY_HINTS if k in league_lower), None)
+            if hint_key and fixtures:
+                hints = COUNTRY_HINTS[hint_key]
+                valid_fixtures = []
+                for fix in fixtures:
+                    home_lower = fix.get("home","").lower()
+                    away_lower = fix.get("away","").lower()
+                    if any(h in home_lower or h in away_lower for h in hints):
+                        valid_fixtures.append(fix)
+                if valid_fixtures and len(valid_fixtures) < len(fixtures):
+                    log(f"   🔍 Sanity: {len(fixtures)-len(valid_fixtures)} falsche Matches entfernt")
+                    fixtures = valid_fixtures
+            
             log(f"   [{league}] {len(fixtures)} Spiele | {len(odds)} Quoten")
 
             for market in MARKETS_TO_RUN:
