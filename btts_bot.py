@@ -2788,28 +2788,55 @@ def fetch_espn_all_today(target_date) -> dict:
                     "league": league_raw,
                 }
                 
-                # Liga mappen — exakt aus ESPN Daten
-                # Nutze ESPN league slug/country direkt statt fuzzy matching
-                league_slug = ev.get("league", {}).get("slug", "")
-                league_country = ev.get("league", {}).get("name", "")
+                # ESPN Slug → Liga-Name Mapping
+                # ESPN gibt Slugs wie "2026-brasileiro-serie-b" → mappe auf "Brasileirao Serie B"
+                ESPN_SLUG_MAP = {
+                    "2026-brasileiro-serie-b": "Brasileirao Serie B",
+                    "2026-brasileiro-serie-a": "Brasileirao Serie A",
+                    "2026-brasileiro-serie-c": "Brazil Serie C",
+                    "2026-bolivian-liga-profesional": "Bolivia Division Profesional",
+                    "2026-international-friendly": "Freundschaftsspiele International",
+                    "2026-womens-international-friendly": "Freundschaftsspiele International",
+                    "2026-argentine-primera-division": "Liga Argentinien",
+                    "2026-primera-nacional": "Argentina Primera B",
+                    "2026-torneo-federal-a": "Argentina Primera B",
+                    "2026-uruguayan-primera-division": "Uruguay Primera",
+                    "2026-chilean-primera-division": "Chile Primera",
+                    "2026-colombian-primera-a": "Colombia Primera",
+                    "2026-ecuadorian-liga-pro": "Ecuador Serie A",
+                    "2026-peruvian-primera-division": "Peru Primera",
+                    "2026-venezuelan-primera": "Venezuela Primera",
+                    "2026-paraguayan-primera-division": "Paraguay Division",
+                    "2026-mls": "MLS",
+                    "2026-usl-championship": "USL Championship",
+                    "2026-canadian-premier-league": "Canada Premier League",
+                    "2026-liga-mx": "Liga Argentinien",
+                    "group-stage": "WM 2026",
+                    "round-of-32": "Copa Libertadores",
+                    "regular-season": "MLS",
+                    "apertura-final": "Liga Argentinien",
+                    "torneo-intermedio": "Liga Argentinien",
+                    "promotion-semifinals": "Argentina Primera B",
+                }
                 
-                mapped_league = None
-                # Exakter Match zuerst
-                for our_league in LEAGUES_TO_RUN:
-                    raw_lower = league_raw.lower()
-                    our_lower = our_league.lower()
-                    # Nur matchen wenn mindestens 2 Wörter übereinstimmen
-                    raw_words = set(w for w in raw_lower.split() if len(w) > 3)
-                    our_words = set(w for w in our_lower.split() if len(w) > 3)
-                    if len(raw_words & our_words) >= 2:
-                        mapped_league = our_league
-                        break
+                # Direkte Slug-Map prüfen
+                league_slug = ev.get("league", {}).get("slug", "").lower()
+                mapped_league = ESPN_SLUG_MAP.get(league_slug) or ESPN_SLUG_MAP.get(league_raw.lower())
                 
-                # Fallback: nur wenn ESPN league name klar erkennbar
-                if not mapped_league and len(league_raw) > 3:
-                    mapped_league = league_raw  # Original ESPN Name behalten
+                if not mapped_league:
+                    # Fuzzy: ESPN Slug enthält oft Liga-Keywords
+                    slug_clean = league_slug.replace("-", " ").replace("2026", "").strip()
+                    for our_league in LEAGUES_TO_RUN:
+                        our_words = set(w for w in our_league.lower().split() if len(w) > 4)
+                        slug_words = set(w for w in slug_clean.split() if len(w) > 4)
+                        if len(our_words & slug_words) >= 1 and our_words & slug_words:
+                            mapped_league = our_league
+                            break
                 
-                league_key = mapped_league or league_raw
+                if not mapped_league:
+                    mapped_league = league_raw  # Fallback
+                
+                league_key = mapped_league
                 if league_key not in result:
                     result[league_key] = []
                 result[league_key].append(fixture)
@@ -8800,7 +8827,7 @@ APIFOOTBALL_ENABLE_PREDICTIONS = env("APIFOOTBALL_PREDICTIONS", "true").lower() 
 # ============================================================
 # 🆕 LEAGUE ROTATION SYSTEM - Auto Ligen ein/ausschalten
 # ============================================================
-LEAGUE_ROTATION_ENABLED = env("LEAGUE_ROTATION_ENABLED", "true").lower() in ["1", "true", "yes"]
+LEAGUE_ROTATION_ENABLED = env("LEAGUE_ROTATION_ENABLED", "false").lower() in ["1", "true", "yes"]  # Default AUS bis CLV Daten vorhanden
 LEAGUE_ROTATION_MIN_SAMPLES = int(env("LEAGUE_ROTATION_MIN_SAMPLES", "5"))  # Mindest 5 Tipps pro Liga
 LEAGUE_ROTATION_MIN_QUOTE = float(env("LEAGUE_ROTATION_MIN_QUOTE", "0.50"))  # <50% = rausnehmen
 LEAGUE_ROTATION_MAX_QUOTE = float(env("LEAGUE_ROTATION_MAX_QUOTE", "0.70"))  # >70% = reinmachen
@@ -14709,6 +14736,325 @@ def get_combined_opponent_fouls(opp_team: str, league: str, target_date, positio
     except Exception:
         return {}
 
+
+# ============================================================
+# 🎯 PROP BUILDER — NEUE DATENQUELLEN
+# Primary: PlayerStats.Football + ScoutingStats + Statz.ai
+# Fallback: FBref
+# ============================================================
+
+
+def scrape_statz_ai(player_name: str = "", league_name: str = "", target_date=None) -> list:
+    """
+    Statz.ai — KI Hit Rates für Shots, Tackles, Karten.
+    https://statz.ai/football
+    """
+    cache_key = f"statz_{league_name}_{target_date}"
+    cached = cache_get(cache_key, target_date) if target_date else None
+    if cached:
+        return cached.get("players", [])
+
+    try:
+        url = "https://statz.ai/football/player-props"
+        html = scrape_with_playwright(url, timeout=15000)
+        if not html:
+            return []
+
+        from bs4 import BeautifulSoup as _bs
+        import re as _re
+        soup = _bs(html, "html.parser")
+
+        players = []
+        for card in soup.select(".prop-card, .player-prop, tr.player"):
+            try:
+                name_el = card.select_one(".player-name, .name, td.player")
+                if not name_el:
+                    continue
+                name = name_el.text.strip()
+
+                market_el = card.select_one(".market, .prop")
+                market = market_el.text.strip() if market_el else ""
+
+                hit_el = card.select_one(".hit-rate, .rate, .percentage")
+                hit_str = hit_el.text.strip() if hit_el else ""
+                hit_match = _re.search(r"(\d+)%|(\d+)/(\d+)", hit_str)
+                hit_pct = float(hit_match.group(1)) if hit_match and hit_match.group(1) else 0
+
+                form_el = card.select_one(".form, .sequence, .recent")
+                form_str = form_el.text.strip() if form_el else ""
+
+                players.append({
+                    "player": name,
+                    "market": market,
+                    "hit_rate": hit_str,
+                    "hit_pct": hit_pct,
+                    "form": form_str,
+                    "source": "statz_ai",
+                })
+            except Exception:
+                continue
+
+        if target_date:
+            cache_set(cache_key, target_date, {"players": players})
+        log(f"   🤖 Statz.ai: {len(players)} Props geladen")
+        return players
+
+    except Exception as e:
+        log(f"   ⚠️ Statz.ai Error: {e}")
+        return []
+
+
+def scrape_playerprops_ai(league_name: str = "", target_date=None) -> list:
+    """
+    PlayerProps.ai — KI Projektionen für Shots, Tackles, Karten.
+    https://www.playerprops.ai/soccer
+    """
+    cache_key = f"playerprops_ai_{league_name}_{target_date}"
+    cached = cache_get(cache_key, target_date) if target_date else None
+    if cached:
+        return cached.get("players", [])
+
+    try:
+        LEAGUE_SLUGS_PP = {
+            "Premier League": "epl",
+            "Bundesliga": "bundesliga",
+            "La Liga": "la-liga",
+            "Serie A": "serie-a",
+            "Ligue 1": "ligue-1",
+            "Champions League": "ucl",
+            "WM 2026": "world-cup",
+            "MLS": "mls",
+        }
+        slug = LEAGUE_SLUGS_PP.get(league_name, "soccer")
+        url = f"https://www.playerprops.ai/soccer/{slug}"
+
+        html = scrape_with_playwright(url, timeout=15000)
+        if not html:
+            return []
+
+        from bs4 import BeautifulSoup as _bs
+        import re as _re
+        soup = _bs(html, "html.parser")
+
+        players = []
+        for card in soup.select(".prop, .player-card, .projection-card"):
+            try:
+                name_el = card.select_one(".player, .name")
+                if not name_el:
+                    continue
+                name = name_el.text.strip()
+
+                market_el = card.select_one(".market, .prop-type, .stat")
+                market = market_el.text.strip() if market_el else ""
+
+                proj_el = card.select_one(".projection, .line, .value")
+                projection = proj_el.text.strip() if proj_el else ""
+
+                hit_el = card.select_one(".hit-rate, .rate")
+                hit_str = hit_el.text.strip() if hit_el else ""
+                hit_match = _re.search(r"(\d+)%", hit_str)
+                hit_pct = float(hit_match.group(1)) if hit_match else 0
+
+                edge_el = card.select_one(".edge, .value-indicator")
+                edge = edge_el.text.strip() if edge_el else ""
+
+                players.append({
+                    "player": name,
+                    "market": market,
+                    "projection": projection,
+                    "hit_rate": hit_str,
+                    "hit_pct": hit_pct,
+                    "edge": edge,
+                    "source": "playerprops_ai",
+                })
+            except Exception:
+                continue
+
+        if target_date:
+            cache_set(cache_key, target_date, {"players": players})
+        log(f"   🎯 PlayerProps.ai: {len(players)} Projektionen für {league_name}")
+        return players
+
+    except Exception as e:
+        log(f"   ⚠️ PlayerProps.ai Error: {e}")
+        return []
+
+def scrape_playerstats_football(league_name: str, target_date) -> list:
+    """
+    PlayerStats.Football — Spieler mit konsistenten Stats.
+    Zeigt Hit Rates wie "Saka: 2+ SoT in 18/20 Spielen".
+    https://playerstats.football/
+    """
+    cache_key = f"playerstats_{league_name}_{target_date}"
+    cached = cache_get(cache_key, target_date)
+    if cached:
+        return cached.get("players", [])
+
+    try:
+        # League slug mapping
+        LEAGUE_SLUGS = {
+            "Premier League": "england-premier-league",
+            "Bundesliga": "germany-bundesliga",
+            "La Liga": "spain-primera-division",
+            "Serie A": "italy-serie-a",
+            "Ligue 1": "france-ligue-1",
+            "Champions League": "europe-champions-league",
+            "Europa League": "europe-europa-league",
+            "WM 2026": "world-world-cup",
+            "Eredivisie": "netherlands-eredivisie",
+            "Primeira Liga": "portugal-primeira-liga",
+        }
+        slug = LEAGUE_SLUGS.get(league_name)
+        if not slug:
+            return []
+
+        url = f"https://www.playerstats.football/league/{slug}/shots"
+        html = scrape_with_playwright(url, timeout=15000)
+        if not html:
+            return []
+
+        from bs4 import BeautifulSoup as _bs
+        import re as _re
+        soup = _bs(html, "html.parser")
+
+        players = []
+        for row in soup.select("tr.player-row, tr[data-player]"):
+            try:
+                name_el = row.select_one("td.player-name, td.name a")
+                if not name_el:
+                    continue
+                name = name_el.text.strip()
+
+                # Stats extrahieren
+                stats = {}
+                for td in row.select("td[data-stat]"):
+                    stat = td.get("data-stat", "")
+                    val = td.text.strip()
+                    try:
+                        stats[stat] = float(val)
+                    except Exception:
+                        stats[stat] = val
+
+                # Hit Rate aus Text
+                hit_text = row.select_one("td.hit-rate, td.streak")
+                hit_rate_str = hit_text.text.strip() if hit_text else ""
+                hit_match = _re.search(r"(\d+)/(\d+)", hit_rate_str)
+
+                player_data = {
+                    "player": name,
+                    "team": (row.select_one("td.team") or {}).get("text", "").strip() if row.select_one("td.team") else "",
+                    "shots_per90": stats.get("shots_per90", stats.get("shots", 0)),
+                    "sot_per90": stats.get("sot_per90", stats.get("shots_on_target", 0)),
+                    "fouls_per90": stats.get("fouls_per90", 0),
+                    "hit_rate": hit_rate_str,
+                    "hit_count": int(hit_match.group(1)) if hit_match else 0,
+                    "hit_total": int(hit_match.group(2)) if hit_match else 0,
+                    "source": "playerstats",
+                }
+                players.append(player_data)
+            except Exception:
+                continue
+
+        cache_set(cache_key, target_date, {"players": players})
+        log(f"   ⚽ PlayerStats: {len(players)} Spieler für {league_name}")
+        return players
+
+    except Exception as e:
+        log(f"   ⚠️ PlayerStats Error: {e}")
+        return []
+
+
+def scrape_scoutingstats_props(league_name: str, target_date) -> list:
+    """
+    ScoutingStats.ai — Historical hit rates across 100+ leagues.
+    Bereits im Bot als Scraper, erweitert für Props.
+    """
+    cache_key = f"scoutingstats_props_{league_name}_{target_date}"
+    cached = cache_get(cache_key, target_date)
+    if cached:
+        return cached.get("players", [])
+
+    try:
+        url = "https://www.scoutingstats.com/football/player-props"
+        html = scrape_with_playwright(url, timeout=12000)
+        if not html:
+            return []
+
+        from bs4 import BeautifulSoup as _bs
+        import re as _re
+        soup = _bs(html, "html.parser")
+
+        players = []
+        for card in soup.select(".prop-card, .player-card, tr.prop-row"):
+            try:
+                name = (card.select_one(".player-name, .name") or {})
+                if not name:
+                    continue
+                name = name.text.strip()
+
+                market = (card.select_one(".market, .prop-type") or {})
+                market = market.text.strip() if market else ""
+
+                hit_rate = (card.select_one(".hit-rate, .rate") or {})
+                hit_rate = hit_rate.text.strip() if hit_rate else ""
+
+                hit_match = _re.search(r"(\d+)%|(\d+)/(\d+)", hit_rate)
+
+                players.append({
+                    "player": name,
+                    "market": market,
+                    "hit_rate": hit_rate,
+                    "hit_pct": float(hit_match.group(1)) if hit_match and hit_match.group(1) else 0,
+                    "source": "scoutingstats",
+                })
+            except Exception:
+                continue
+
+        cache_set(cache_key, target_date, {"players": players})
+        return players
+
+    except Exception:
+        return []
+
+
+def get_wsf_player_prop_odds(player_name: str, market: str) -> dict:
+    """
+    WSF Odds — echte Player Prop Quoten weltweit.
+    https://www.wsfodds.com/
+    """
+    try:
+        url = f"https://www.wsfodds.com/football/player-props?q={player_name.replace(' ', '+')}"
+        html = scrape_with_playwright(url, timeout=10000)
+        if not html:
+            return {}
+
+        from bs4 import BeautifulSoup as _bs
+        soup = _bs(html, "html.parser")
+
+        for row in soup.select("tr.odds-row, .prop-row"):
+            try:
+                player_el = row.select_one(".player, .name")
+                if not player_el:
+                    continue
+                if player_name.lower() not in player_el.text.lower():
+                    continue
+
+                market_el = row.select_one(".market, .prop-type")
+                if market_el and market.lower() in market_el.text.lower():
+                    odds_el = row.select_one(".odds, .price")
+                    if odds_el:
+                        return {
+                            "player": player_name,
+                            "market": market,
+                            "odds": float(odds_el.text.strip()),
+                            "source": "wsf_odds",
+                        }
+            except Exception:
+                continue
+        return {}
+    except Exception:
+        return {}
+
 def run_advanced_props_bot(active_leagues: list, fixtures_cache: dict, target_date) -> None:
     """
     Prop Builder Bot — Nate Betting Style.
@@ -14835,7 +15181,55 @@ def run_advanced_props_bot(active_leagues: list, fixtures_cache: dict, target_da
             match_name = f"{home} vs {away}"
             kickoff   = fixture.get("time_local", "TBD")
 
-            # ── Quelle 1: FBref ──
+            # ── Quelle 1: PlayerStats.Football (PRIMARY) ──
+            ps_players = scrape_playerstats_football(league, target_date)
+            for ps in ps_players:
+                player = ps.get("player","")
+                team   = ps.get("team","")
+                sot    = ps.get("sot_per90", 0)
+                sh     = ps.get("shots_per90", 0)
+                hit    = ps.get("hit_count", 0)
+                total  = ps.get("hit_total", 1)
+                hit_pct = hit / max(total, 1)
+
+                if sot >= 1.5 or sh >= 2.5:
+                    score = 6 if hit_pct >= 0.80 else 5 if hit_pct >= 0.65 else 4
+                    market = "2+ Shots on Target" if sot >= 1.5 else "3+ Shots"
+                    _add(shot_candidates, player, team, match_name, league, kickoff,
+                         market, sot or sh, "shots", score,
+                         game_log=[sot]*total, opp_context=ps.get("hit_rate",""))
+
+            # ── Quelle 2: ScoutingStats Props ──
+            ss_props = scrape_scoutingstats_props(league, target_date)
+            for ss in ss_props:
+                if ss.get("hit_pct", 0) >= 65:
+                    mtype = "foul" if "foul" in ss.get("market","").lower() else "shots"
+                    _add(foul_candidates if mtype == "foul" else shot_candidates,
+                         ss["player"], "", match_name, league, kickoff,
+                         ss["market"], ss["hit_pct"]/100, mtype, 6,
+                         opp_context=ss.get("hit_rate",""))
+
+            # ── Quelle 3: Statz.ai ──
+            statz_props = scrape_statz_ai(league_name=league, target_date=target_date)
+            for sp in statz_props:
+                if sp.get("hit_pct", 0) >= 65:
+                    mtype = "booking" if "card" in sp.get("market","").lower() else                             "foul" if "foul" in sp.get("market","").lower() else "shots"
+                    bucket = booking_candidates if mtype == "booking" else                              foul_candidates if mtype == "foul" else shot_candidates
+                    _add(bucket, sp["player"], "", match_name, league, kickoff,
+                         sp["market"], sp["hit_pct"]/100, mtype, 7,
+                         opp_context=f"{sp['hit_rate']} {sp.get('form','')}")
+
+            # ── Quelle 4: PlayerProps.ai ──
+            pp_props = scrape_playerprops_ai(league_name=league, target_date=target_date)
+            for pp in pp_props:
+                if pp.get("hit_pct", 0) >= 65:
+                    mtype = "booking" if "card" in pp.get("market","").lower() else                             "foul" if "foul" in pp.get("market","").lower() else "shots"
+                    bucket = booking_candidates if mtype == "booking" else                              foul_candidates if mtype == "foul" else shot_candidates
+                    _add(bucket, pp["player"], "", match_name, league, kickoff,
+                         pp["market"], pp["hit_pct"]/100, mtype, 7,
+                         opp_context=pp.get("edge",""))
+
+            # ── Quelle 3: FBref (FALLBACK) ──
             if league in AdvancedPropsManager.FBREF_LEAGUE_URLS:
                 player_db = manager.scrape_fbref_advanced_stats(league)
                 if player_db:
@@ -15783,7 +16177,37 @@ def main():
     bulk_fixtures = {}
     cached_fixtures = cache_get_fixtures(target_date)
     if cached_fixtures:
-        bulk_fixtures = {lg: fixes for lg, fixes in cached_fixtures.items()}
+        # ESPN Slugs aus Cache auf echte Liga-Namen mappen
+        ESPN_SLUG_MAP_CACHE = {
+            "2026-brasileiro-serie-b": "Brasileirao Serie B",
+            "2026-brasileiro-serie-a": "Brasileirao Serie A",
+            "2026-brasileiro-serie-c": "Brazil Serie C",
+            "2026-bolivian-liga-profesional": "Bolivia Division Profesional",
+            "2026-international-friendly": "Freundschaftsspiele International",
+            "2026-womens-international-friendly": "Freundschaftsspiele International",
+            "2026-argentine-primera-division": "Liga Argentinien",
+            "2026-primera-nacional": "Argentina Primera B",
+            "2026-uruguayan-primera-division": "Uruguay Primera",
+            "2026-chilean-primera-division": "Chile Primera",
+            "2026-colombian-primera-a": "Colombia Primera",
+            "2026-ecuadorian-liga-pro": "Ecuador Serie A",
+            "2026-peruvian-primera-division": "Peru Primera",
+            "2026-venezuelan-primera": "Venezuela Primera",
+            "2026-mls": "MLS",
+            "2026-usl-championship": "USL Championship",
+            "2026-liga-mx": "Liga MX",
+            "group-stage": "Freundschaftsspiele International",
+            "round-of-32": "Copa Libertadores",
+            "regular-season": "MLS",
+            "apertura-final": "Liga Argentinien",
+            "torneo-intermedio": "Liga Argentinien",
+            "promotion-semifinals": "Argentina Primera B",
+        }
+        mapped_cache = {}
+        for k, v in cached_fixtures.items():
+            real_name = ESPN_SLUG_MAP_CACHE.get(k.lower(), k)
+            mapped_cache[real_name] = v
+        bulk_fixtures = mapped_cache
         log(f"🗄️ Fixtures aus Cache: {sum(len(v) for v in bulk_fixtures.values())} Spiele in {len(bulk_fixtures)} Ligen — kein neues Fetching nötig")
         # Trotzdem weitermachen mit active_today Berechnung
     else:
