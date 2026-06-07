@@ -16017,7 +16017,34 @@ def main():
             log(f"   ✗ [{league}] {e}", "ERROR")
 
     # Ligen in Batches aufteilen und parallel ausführen
-    leagues_to_analyze = [lg for lg in active_leagues if not use_bulk or lg in active_today]
+    # Leagues aus Cache auf active_leagues mappen
+    if use_bulk and active_today:
+        matched = set()
+        for cache_key in active_today.keys():
+            # Exakter Match
+            if cache_key in active_leagues:
+                matched.add(cache_key)
+                continue
+            # Fuzzy Match
+            for our_league in active_leagues:
+                ck_l = cache_key.lower()
+                ol_l = our_league.lower()
+                if ck_l == ol_l or ck_l in ol_l or ol_l in ck_l:
+                    matched.add(our_league)
+                    # Fixtures auch unter unserem Namen speichern
+                    if our_league not in active_today:
+                        active_today[our_league] = active_today[cache_key]
+                    break
+            else:
+                # Cache-Key direkt verwenden wenn kein Match
+                active_leagues.append(cache_key) if cache_key not in active_leagues else None
+                matched.add(cache_key)
+        
+        leagues_to_analyze = list(matched) if matched else list(active_today.keys())
+        log(f"🗄️ Cache gemappt: {len(leagues_to_analyze)} Ligen analysierbar")
+    else:
+        leagues_to_analyze = [lg for lg in active_leagues if not use_bulk or lg in active_today]
+    
     log(f"⚡ Starte parallele Analyse: {len(leagues_to_analyze)} Ligen × {PARALLEL_WORKERS} Threads")
 
     from concurrent.futures import ThreadPoolExecutor, as_completed
