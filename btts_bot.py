@@ -182,8 +182,8 @@ def get_dynamic_season(league_id=None, league_name=None):
 SUPABASE_URL = env("SUPABASE_URL")
 SUPABASE_KEY = env("SUPABASE_KEY")
 
-MIN_PROBABILITY = int(env("MIN_PROBABILITY", "60"))  # 🆕 Hybrid: 60% (zwischen 60-69)
-MIN_ODDS = float(env("MIN_ODDS", "1.40"))
+MIN_PROBABILITY = int(env("MIN_PROBABILITY", "67"))  # 🆕 Hybrid: 67% (zwischen 65-69)
+MIN_ODDS = float(env("MIN_ODDS", "1.65"))
 MAX_ODDS = float(env("MAX_ODDS", "3.0"))
 MIN_CONFIDENCE = int(env("MIN_CONFIDENCE", "3"))
 # 🆕 Nur HIGH + OK Value (LOW fliegt raus)
@@ -10780,6 +10780,10 @@ def is_valid_tip(tip, target_date):
         log(f"   ⚠️ Falsches Datum: {tip_date} (erwartet {today_str})")
         return False
 
+    # Tipps ohne echte Odds (martj42/FootyStats) → Zeit nicht prüfen
+    if tip.get("_no_real_odds"):
+        return True
+
     time_str = tip.get("time", "")
     if not is_future_game(time_str, target_date):
         log(f"   ⚠️ Spiel bereits vorbei: {tip.get('match','')} um {time_str}")
@@ -14140,12 +14144,14 @@ def main():
                         a_st = get_national_team_btts_stats(a)
                         if h_st and a_st:
                             bp = (h_st.get("btts_pct",0)+a_st.get("btts_pct",0))/2
-                            log(f"   🌍 {h} vs {a}: BTTS={bp:.0f}% Over={(h_st.get('over25_pct',0)+a_st.get('over25_pct',0))/2:.0f}%")
                             op = (h_st.get("over25_pct",0)+a_st.get("over25_pct",0))/2
+                            log(f"   🌍 {h} vs {a}: BTTS={bp:.0f}% Over={op:.0f}%")
                             mn = f"{h} vs {a}"
+                            # Zeit auf TBD damit is_future_game nicht filtert
+                            tip_time = fix.get("time","TBD") or "TBD"
                             if bp >= 62:
                                 tips_by_market["btts"].append({
-                                    "match":mn,"league":league,"time":fix.get("time","TBD"),
+                                    "match":mn,"league":league,"time":"TBD",
                                     "tip":"YES","probability":int(bp),"confidence":3,
                                     "oddsYes":round(100/bp,2),"fairOdds":round(100/bp,2),
                                     "valueRating":"OK","units":1.0,"market":"btts",
@@ -14155,7 +14161,7 @@ def main():
                                 total_analyzed += 1
                             if op >= 62:
                                 tips_by_market["over25"].append({
-                                    "match":mn,"league":league,"time":fix.get("time","TBD"),
+                                    "match":mn,"league":league,"time":"TBD",
                                     "tip":"YES","probability":int(op),"confidence":3,
                                     "oddsYes":round(100/op,2),"fairOdds":round(100/op,2),
                                     "valueRating":"OK","units":1.0,"market":"over25",
@@ -14163,6 +14169,7 @@ def main():
                                     "_no_real_odds":True,
                                 })
                                 total_analyzed += 1
+                            # Over 2.5
                 continue  # Keine Odds → Gemini überspringen
 
             # ✅ Qualitäts-Check: TheSportsDB allein = überspringen!
