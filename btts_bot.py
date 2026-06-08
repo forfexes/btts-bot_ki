@@ -1,3 +1,4 @@
+from typing import List, Dict, Optional, Tuple, Any
 """
 AI TIPP BOT - GITHUB SINGLE FILE EDITION
 =======================================
