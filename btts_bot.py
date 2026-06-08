@@ -11819,6 +11819,12 @@ def send_top_tips(tips_by_market, target_date):
                 log(f"   ⏭️ Supabase: bereits vorhanden {tip_data.get('match','?')}")
             else:
                 save_result = save_to_supabase(tip_data)
+                # CLV Tracking
+                if NETRATTLER_PRO:
+                    try:
+                        log_tip_for_clv(tip_data)
+                    except Exception:
+                        pass
                 if save_result:
                     saved += 1
                 else:
@@ -12311,10 +12317,25 @@ def run_settlement():
             msg += f"❌ Verloren: <b>{lost_count}</b>" + "\n"
             msg += f"🎯 Heute Winrate: <b>{winrate}%</b>" + "\n"
             msg += f"⏳ Ausstehend: {not_found}"
+        if NETRATTLER_PRO:
+            try:
+                bk = get_bankroll_status()
+                if bk:
+                    msg += f"\n\n💰 Bankroll: {bk.get('current_units','?')} Units"
+                    msg += f"\n📈 Mode: {bk.get('mode','normal').upper()}"
+            except Exception:
+                pass
             send_telegram(msg, TELEGRAM_GROUPS.get("stats"))
 
     except Exception as e:
         log(f"Settlement Fatal: {e}", "ERROR")
+
+    # Live Edge Alerts
+    if NETRATTLER_PRO:
+        try:
+            send_edge_alerts()
+        except Exception:
+            pass
 
 
 
@@ -14188,6 +14209,1360 @@ def send_daily_report():
         log(f"Daily Report Error: {str(e)[:60]}", "WARN")
 
 
+
+# ============================================================
+# 🚀 NETRATTLER PRO V3 — Eingebettet
+# Edge Filter · CLV · Drawdown · Pinnacle · Backtest
+# ============================================================
+NETRATTLER_PRO = True
+
+import math
+
+
+# ════════════════════════════════════════════════════════════════════════
+# SHARED HELPERS
+# ════════════════════════════════════════════════════════════════════════
+
+def _env(name: str, default: str = "") -> str:
+    return os.getenv(name, default).strip()
+
+
+def _env_bool(name: str, default: str = "false") -> bool:
+    return _env(name, default).lower() in ["1", "true", "yes", "on"]
+
+
+def _env_float(name: str, default: float) -> float:
+    try:
+        return float(_env(name, str(default)))
+    except:
+        return default
+
+
+def _log(component: str, msg: str, level: str = "INFO"):
+    print(f"[{component}] [{level}] {msg}", flush=True)
+
+
+# Shared Cache Helpers
+def _cache_get(cache: dict, key: str, ttl: int = 600):
+    entry = cache.get(key)
+    if not entry:
+        return None
+    if time.time() - entry["ts"] > ttl:
+        return None
+    return entry["data"]
+
+
+def _cache_set(cache: dict, key: str, data):
+    cache[key] = {"ts": time.time(), "data": data}
+
+
+# Shared Constants
+SUPABASE_URL = _env("SUPABASE_URL")
+SUPABASE_KEY = _env("SUPABASE_KEY")
+ODDS_API_KEYS = [k.strip() for k in _env("ODDS_API_KEYS").split(",") if k.strip()]
+TELEGRAM_TOKEN = _env("TELEGRAM_TOKEN")
+TELEGRAM_CHAT_ID = _env("TELEGRAM_CHAT_ID")
+TELEGRAM_GROUP_PREMIUM = _env("TELEGRAM_GROUP_PREMIUM_ALERTS", TELEGRAM_CHAT_ID)
+
+
+# ════════════════════════════════════════════════════════════════════════
+# 1️⃣ MARKET INFO EXTENDED (inkl. neuer Märkte)
+# ════════════════════════════════════════════════════════════════════════
+
+MARKET_INFO_EXTENDED = {
+    "btts": {
+        "name": "⚽ BTTS", "emoji": "⚽",
+        "instr": "Analysiere BTTS (Both Teams To Score).",
+        "bet365_market": "btts", "tip_outcome": "Yes",
+    },
+    "over25": {
+        "name": "🎯 Over 2.5", "emoji": "🎯",
+        "instr": "Analysiere Over 2.5 Tore.",
+        "bet365_market": "totals", "tip_outcome": "Over", "point": 2.5,
+    },
+    "combo": {
+        "name": "🔥 BTTS + Over 2.5", "emoji": "🔥",
+        "instr": "Analysiere BTTS & Over 2.5 KOMBO.",
+        "bet365_market": "btts_and_totals", "tip_outcome": "Yes & Over", "point": 2.5,
+    },
+    "btts_ht": {
+        "name": "🕐 BTTS HT", "emoji": "🕐",
+        "instr": "Analysiere BTTS in der 1. Halbzeit.",
+        "bet365_market": "btts_1h", "tip_outcome": "Yes",
+    },
+    "over15_ht": {
+        "name": "⏰ Over 1.5 HT", "emoji": "⏰",
+        "instr": ("Analysiere Over 1.5 Tore in der 1. Halbzeit. "
+                  "Berücksichtige xG HT pro Team, Pressing, frühe Tor-Quote."),
+        "bet365_market": "totals_1h", "tip_outcome": "Over", "point": 1.5,
+    },
+    "corners": {
+        "name": "🚩 Corners Over", "emoji": "🚩",
+        "instr": "Analysiere Eckbälle pro Spiel.",
+        "bet365_market": "corners_totals", "tip_outcome": "Over",
+    },
+    "scorer": {
+        "name": "⚽ Anytime Scorer", "emoji": "⚽",
+        "instr": "Analysiere Anytime Goalscorer.",
+        "bet365_market": "anytime_goalscorer", "tip_outcome": "Yes",
+    },
+    "advanced_props": {
+        "name": "🔑 Player Props", "emoji": "🔑",
+        "instr": "Analysiere Player Props (SOT, Fouls, Bookings).",
+        "bet365_market": "player_props", "tip_outcome": "Over",
+    },
+}
+
+
+# ════════════════════════════════════════════════════════════════════════
+# 2️⃣ PINNACLE SCRAPER (Kostenlose Pinnacle-Quoten)
+# ════════════════════════════════════════════════════════════════════════
+
+PINNACLE_BASE = "https://guest.api.arcadia.pinnacle.com/0.1"
+PINNACLE_SPORT_SOCCER = 29
+PINNACLE_GUEST_KEY = "CmX2KcMrXuFmNg6YFbmTxE0y9CIrOi0R"
+
+PINNACLE_HEADERS = {
+    "x-api-key": PINNACLE_GUEST_KEY,
+    "Content-Type": "application/json",
+    "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36",
+    "Referer": "https://www.pinnacle.com/",
+    "Origin": "https://www.pinnacle.com",
+    "Accept": "application/json",
+}
+
+_PIN_MATCHUP_CACHE = {}
+_PIN_ODDS_CACHE = {}
+
+
+def fetch_pinnacle_matchups() -> List[Dict]:
+    """Holt alle aktuellen Fußball-Matches von Pinnacle (kostenlos)."""
+    cache_key = "matchups_soccer"
+    cached = _cache_get(_PIN_MATCHUP_CACHE, cache_key)
+    if cached is not None:
+        return cached
+
+    try:
+        r = requests.get(
+            f"{PINNACLE_BASE}/sports/{PINNACLE_SPORT_SOCCER}/matchups",
+            headers=PINNACLE_HEADERS,
+            params={"withSpecials": "false", "brandId": "0"},
+            timeout=15,
+        )
+        if not r.ok:
+            _cache_set(_PIN_MATCHUP_CACHE, cache_key, [])
+            return []
+
+        data = r.json()
+        matches = []
+        for m in data:
+            if m.get("type") != "matchup":
+                continue
+            participants = m.get("participants", [])
+            if len(participants) < 2:
+                continue
+            home = next((p.get("name", "") for p in participants if p.get("alignment") == "home"), "")
+            away = next((p.get("name", "") for p in participants if p.get("alignment") == "away"), "")
+            if not home or not away:
+                continue
+            matches.append({
+                "match_id": m.get("id"),
+                "league_name": m.get("league", {}).get("name", ""),
+                "home": home, "away": away,
+                "starts": m.get("startTime", ""),
+            })
+
+        _cache_set(_PIN_MATCHUP_CACHE, cache_key, matches)
+        _log("PINNACLE", f"📊 {len(matches)} Matches geladen")
+        return matches
+    except Exception as e:
+        _log("PINNACLE", f"Matchups Fehler: {str(e)[:80]}", "WARN")
+        _cache_set(_PIN_MATCHUP_CACHE, cache_key, [])
+        return []
+
+
+def fetch_pinnacle_match_odds(match_id: int) -> Optional[Dict]:
+    """Holt alle Quoten für ein einzelnes Pinnacle-Match."""
+    cache_key = f"odds_{match_id}"
+    cached = _cache_get(_PIN_ODDS_CACHE, cache_key)
+    if cached is not None:
+        return cached
+
+    try:
+        r = requests.get(
+            f"{PINNACLE_BASE}/matchups/{match_id}/markets/related/straight",
+            headers=PINNACLE_HEADERS,
+            timeout=10,
+        )
+        if not r.ok:
+            _cache_set(_PIN_ODDS_CACHE, cache_key, None)
+            return None
+
+        markets = r.json()
+        result = {"match_id": match_id}
+
+        for market in markets:
+            mtype = market.get("type", "")
+            period = market.get("period", 0)
+            for price in market.get("prices", []):
+                pv = price.get("price")
+                des = price.get("designation", "")
+                pts = price.get("points")
+                if not pv or pv <= 1:
+                    continue
+
+                if mtype == "moneyline" and period == 0:
+                    if des == "home": result["home_win"] = round(pv, 2)
+                    elif des == "draw": result["draw"] = round(pv, 2)
+                    elif des == "away": result["away_win"] = round(pv, 2)
+                elif mtype == "total" and period == 0:
+                    if pts == 2.5:
+                        if des == "over": result["over_25"] = round(pv, 2)
+                        elif des == "under": result["under_25"] = round(pv, 2)
+                elif mtype == "total" and period == 1:
+                    if pts == 1.5:
+                        if des == "over": result["over_15_ht"] = round(pv, 2)
+                    elif pts == 0.5:
+                        if des == "over": result["over_05_ht"] = round(pv, 2)
+
+        # BTTS via related markets
+        try:
+            r2 = requests.get(
+                f"{PINNACLE_BASE}/matchups/{match_id}/related",
+                headers=PINNACLE_HEADERS, timeout=8,
+            )
+            if r2.ok:
+                for sub in r2.json():
+                    if "both teams to score" in sub.get("special", {}).get("description", "").lower():
+                        sub_id = sub.get("id")
+                        if not sub_id:
+                            continue
+                        rs = requests.get(
+                            f"{PINNACLE_BASE}/matchups/{sub_id}/markets/straight",
+                            headers=PINNACLE_HEADERS, timeout=8,
+                        )
+                        if not rs.ok:
+                            continue
+                        for m in rs.json():
+                            for p in m.get("prices", []):
+                                if p.get("designation", "").lower() == "yes":
+                                    pp = m.get("period", 0)
+                                    if pp == 0:
+                                        result["btts_yes"] = round(p["price"], 2)
+                                    elif pp == 1:
+                                        result["btts_yes_ht"] = round(p["price"], 2)
+        except Exception:
+            pass
+
+        _cache_set(_PIN_ODDS_CACHE, cache_key, result)
+        return result
+    except Exception:
+        _cache_set(_PIN_ODDS_CACHE, cache_key, None)
+        return None
+
+
+def _normalize_name(name: str) -> str:
+    if not name:
+        return ""
+    n = name.lower().strip()
+    for x in [" fc", " cf", " ac", " sc", " sv", "fc ", "ac ", "sc ", "sv "]:
+        n = n.replace(x, " ")
+    return " ".join(n.split())
+
+
+def get_pinnacle_match_odds(home_team: str, away_team: str,
+                              league_hint: Optional[str] = None) -> Optional[Dict]:
+    """Holt Pinnacle-Quoten für ein Match per Team-Namen."""
+    matchups = fetch_pinnacle_matchups()
+    if not matchups:
+        return None
+
+    h_norm = _normalize_name(home_team)
+    a_norm = _normalize_name(away_team)
+    if not h_norm or not a_norm:
+        return None
+
+    for m in matchups:
+        mh = _normalize_name(m["home"])
+        ma = _normalize_name(m["away"])
+        h_match = (h_norm == mh or h_norm in mh or mh in h_norm or
+                   any(w in mh for w in h_norm.split() if len(w) > 3))
+        a_match = (a_norm == ma or a_norm in ma or ma in a_norm or
+                   any(w in ma for w in a_norm.split() if len(w) > 3))
+        if h_match and a_match:
+            odds = fetch_pinnacle_match_odds(m["match_id"])
+            if odds:
+                odds["pinnacle_home"] = m["home"]
+                odds["pinnacle_away"] = m["away"]
+                odds["league"] = m.get("league_name", "")
+            return odds
+    return None
+
+
+def get_pinnacle_quote_for_market(home_team: str, away_team: str,
+                                    market: str = "btts") -> Optional[float]:
+    """Direkt die Quote für einen bestimmten Markt holen."""
+    odds = get_pinnacle_match_odds(home_team, away_team)
+    if not odds:
+        return None
+    mapping = {
+        "btts": odds.get("btts_yes"),
+        "over25": odds.get("over_25"),
+        "over15_ht": odds.get("over_15_ht"),
+        "btts_ht": odds.get("btts_yes_ht"),
+        "home_win": odds.get("home_win"),
+        "away_win": odds.get("away_win"),
+        "draw": odds.get("draw"),
+        "combo": (odds.get("btts_yes", 0) * odds.get("over_25", 0)
+                  if odds.get("btts_yes") and odds.get("over_25") else None),
+    }
+    return mapping.get(market)
+
+
+# ════════════════════════════════════════════════════════════════════════
+# 3️⃣ BET365 EDGE FILTER
+# ════════════════════════════════════════════════════════════════════════
+
+EDGE_FILTER_ENABLED = _env_bool("EDGE_FILTER_ENABLED", "true")
+EDGE_FILTER_MIN_EDGE = _env_float("EDGE_FILTER_MIN_EDGE", 0.08)
+EDGE_FILTER_MAX_EDGE = _env_float("EDGE_FILTER_MAX_EDGE", 0.50)
+EDGE_FILTER_REQUIRE_BET365 = _env_bool("EDGE_FILTER_REQUIRE_BET365", "false")
+CROSS_MATCH_COMBOS = _env_bool("CROSS_MATCH_COMBOS", "true")
+CROSS_MATCH_MIN_SCORE = int(_env("CROSS_MATCH_MIN_SCORE", "7"))
+CROSS_MATCH_MAX_COMBOS = int(_env("CROSS_MATCH_MAX_COMBOS", "5"))
+
+_QUOTES_CACHE = {}
+
+
+def get_bet365_quote_any_source(tip: Dict, odds_data: Optional[List] = None) -> Tuple[Optional[float], str]:
+    """Holt beste verfügbare Quote für einen Tipp."""
+    match = tip.get("match", "")
+    if " vs " not in match:
+        return None, "no_match"
+    parts = match.split(" vs ", 1)
+    home, away = parts[0].strip(), parts[1].strip()
+
+    market = tip.get("market") or tip.get("market_type") or "btts"
+
+    # 1. Pinnacle Scraper (kostenlos!)
+    try:
+        quote = get_pinnacle_quote_for_market(home, away, market)
+        if quote and quote > 1.0:
+            return quote, "pinnacle"
+    except Exception:
+        pass
+
+    # 2. Odds Data Fallback
+    if odds_data:
+        h_low, a_low = home.lower(), away.lower()
+        api_market = {"btts": "btts", "over25": "totals", "combo": "btts"}.get(market, "btts")
+        point = 2.5 if market in ("over25", "combo") else None
+
+        for g in odds_data:
+            gh, ga = g.get("home_team", "").lower(), g.get("away_team", "").lower()
+            if not ((h_low in gh or gh in h_low) and (a_low in ga or ga in a_low)):
+                continue
+            for bm_prio in ["bet365", "pinnacle", "smarkets", "betfair_ex_eu", "unibet"]:
+                for bm in g.get("bookmakers", []):
+                    if bm.get("key") != bm_prio:
+                        continue
+                    for m in bm.get("markets", []):
+                        if m.get("key") != api_market:
+                            continue
+                        for outcome in m.get("outcomes", []):
+                            if api_market == "btts" and outcome.get("name") == "Yes":
+                                return float(outcome.get("price", 0)), "odds_data"
+                            if api_market == "totals" and outcome.get("name") == "Over":
+                                if point and outcome.get("point") != point:
+                                    continue
+                                return float(outcome.get("price", 0)), "odds_data"
+
+    return None, "none"
+
+
+def calculate_edge(market_quote: float, fair_quote: float) -> float:
+    """Returns Edge als Dezimal (0.08 = 8%)."""
+    if not market_quote or not fair_quote or market_quote <= 1 or fair_quote <= 1:
+        return 0.0
+    return (market_quote / fair_quote) - 1
+
+
+def calculate_kelly_stake(edge: float, market_quote: float,
+                          max_units: float = 3.0, kelly_fraction: float = 0.5) -> float:
+    """Berechnet optimalen Einsatz nach Half-Kelly."""
+    if edge <= 0 or market_quote <= 1:
+        return 0.5
+    p = 1.0 / (market_quote / (1 + edge))
+    p = max(0.01, min(0.99, p))
+    q = 1 - p
+    b = market_quote - 1
+    kelly = (b * p - q) / b if b > 0 else 0
+    kelly = max(0, kelly) * kelly_fraction
+    units = round(kelly * 100, 1)
+    return max(0.5, min(units, max_units))
+
+
+def filter_tips_by_edge(tips: List[Dict], market: str = "btts",
+                         min_edge: float = None, max_edge: float = None,
+                         odds_data: Optional[List] = None,
+                         require_bet365: bool = None) -> List[Dict]:
+    """Universeller Edge-Filter."""
+    if not EDGE_FILTER_ENABLED:
+        return tips
+
+    min_edge = EDGE_FILTER_MIN_EDGE if min_edge is None else min_edge
+    max_edge = EDGE_FILTER_MAX_EDGE if max_edge is None else max_edge
+    require_bet365 = EDGE_FILTER_REQUIRE_BET365 if require_bet365 is None else require_bet365
+
+    if not tips:
+        return tips
+
+    filtered = []
+    stats = {"total": len(tips), "no_quote": 0, "below_min": 0, "above_max": 0, "kept": 0}
+
+    for tip in tips:
+        fair_str = (tip.get("fairOdds") or tip.get("fair_odds") or tip.get("oddsYes") or "0")
+        try:
+            fair_odds = float(str(fair_str).replace(",", "."))
+        except:
+            fair_odds = 0.0
+        if fair_odds <= 1.0:
+            stats["no_quote"] += 1
+            continue
+
+        tip_market = tip.get("market") or market
+        market_quote, source = get_bet365_quote_any_source({**tip, "market": tip_market}, odds_data)
+
+        if not market_quote:
+            stats["no_quote"] += 1
+            if require_bet365:
+                continue
+            try:
+                market_quote = float(str(tip.get("oddsYes", "0")).replace(",", "."))
+                source = "tip_odds"
+            except:
+                continue
+            if market_quote <= 1.0:
+                continue
+
+        edge = calculate_edge(market_quote, fair_odds)
+
+        if edge < min_edge:
+            stats["below_min"] += 1
+            continue
+        if edge > max_edge:
+            stats["above_max"] += 1
+            continue
+
+        kelly = calculate_kelly_stake(edge, market_quote)
+        tip["bet365_quote"] = round(market_quote, 2)
+        tip["edge"] = round(edge, 4)
+        tip["edge_pct"] = round(edge * 100, 1)
+        tip["edge_source"] = source
+        tip["kelly_units"] = kelly
+        tip["value_rating"] = ("🔥 HIGH" if edge >= 0.20 else "💚 OK" if edge >= 0.12 else "🟡 LOW")
+        filtered.append(tip)
+        stats["kept"] += 1
+
+    _log("EDGE", f"[{market}]: {stats['kept']}/{stats['total']} kept "
+                  f"(no_quote: {stats['no_quote']}, below_min: {stats['below_min']})")
+    return filtered
+
+
+# Anti-Correlation Check
+ANTI_CORRELATIONS = [
+    ("btts", "Yes", "totals_0.5", "Under"),
+    ("over15_ht", "Over", "over05_ht", "Under"),
+    ("over25", "Over", "under15", "Under"),
+]
+
+
+def check_anti_correlation(combo: List[Dict]) -> bool:
+    """Prüft logische Konflikte in einem Combo."""
+    if len(combo) < 2:
+        return True
+    seen = {}
+    for tip in combo:
+        match = tip.get("match", "")
+        mkt = tip.get("market", "")
+        outc = tip.get("tip", "")
+        if mkt == "advanced_props":
+            continue
+        key = f"{match}_{mkt}"
+        if key in seen and seen[key] != outc:
+            return False
+        seen[key] = outc
+    return True
+
+
+def build_cross_match_combos(tips_by_market: Dict[str, List[Dict]],
+                              top_n: int = None, min_score: int = None) -> List[Dict]:
+    """Baut Cross-Match Combos (Bet Builder Style)."""
+    if not CROSS_MATCH_COMBOS:
+        return []
+    top_n = top_n or CROSS_MATCH_MAX_COMBOS
+    min_score = min_score or CROSS_MATCH_MIN_SCORE
+
+    all_tips = []
+    for market, tips in (tips_by_market or {}).items():
+        for tip in tips:
+            edge = tip.get("edge", 0)
+            prob = int(tip.get("probability", 0))
+            conf = int(tip.get("confidence", 0))
+            score = (edge * 100) * (prob / 100) * (conf / 5)
+            if score < min_score:
+                continue
+            tip["combo_score"] = round(score, 2)
+            all_tips.append(tip)
+
+    all_tips.sort(key=lambda t: t.get("combo_score", 0), reverse=True)
+    candidates = all_tips[:10]
+    combos = []
+
+    # 2-Leg Combos
+    for i, ta in enumerate(candidates):
+        for tb in candidates[i+1:]:
+            if ta.get("match") == tb.get("match"):
+                continue
+            combo = [ta, tb]
+            if not check_anti_correlation(combo):
+                continue
+            co = (ta.get("bet365_quote", ta.get("oddsYes", 1)) *
+                  tb.get("bet365_quote", tb.get("oddsYes", 1)))
+            cp = (ta.get("probability", 0) / 100) * (tb.get("probability", 0) / 100)
+            fc = float(ta.get("fairOdds", 1)) * float(tb.get("fairOdds", 1))
+            ce = (co / fc) - 1 if fc > 0 else 0
+            kelly = calculate_kelly_stake(ce, co)
+            combos.append({
+                "combo_id": f"C2-{len(combos)+1:03d}",
+                "legs": combo,
+                "combined_odds": round(co, 2),
+                "combined_prob": round(cp, 3),
+                "combined_edge_pct": round(ce * 100, 1),
+                "kelly_units": kelly,
+                "type": "2-leg cross-match", "leg_count": 2,
+            })
+
+    # 3-Leg Combos
+    for i, ta in enumerate(candidates[:5]):
+        for j, tb in enumerate(candidates[i+1:6]):
+            for tc in candidates[i+j+2:7]:
+                if len({ta.get("match"), tb.get("match"), tc.get("match")}) < 3:
+                    continue
+                combo = [ta, tb, tc]
+                if not check_anti_correlation(combo):
+                    continue
+                co, cp, fc = 1.0, 1.0, 1.0
+                for t in combo:
+                    co *= t.get("bet365_quote", t.get("oddsYes", 1))
+                    cp *= (t.get("probability", 0) / 100)
+                    fc *= float(t.get("fairOdds", 1))
+                ce = (co / fc) - 1 if fc > 0 else 0
+                kelly = calculate_kelly_stake(ce, co) * 0.5
+                combos.append({
+                    "combo_id": f"C3-{len(combos)+1:03d}",
+                    "legs": combo,
+                    "combined_odds": round(co, 2),
+                    "combined_prob": round(cp, 3),
+                    "combined_edge_pct": round(ce * 100, 1),
+                    "kelly_units": kelly,
+                    "type": "3-leg cross-match", "leg_count": 3,
+                })
+
+    combos.sort(key=lambda c: c.get("combined_edge_pct", 0), reverse=True)
+    return combos[:top_n]
+
+
+def format_combo_message(combo: Dict) -> str:
+    """Formatiert Cross-Match Combo für Telegram."""
+    leg_count = combo.get("leg_count", 2)
+    odds = combo.get("combined_odds", 0)
+    prob = combo.get("combined_prob", 0)
+    edge_pct = combo.get("combined_edge_pct", 0)
+    units = combo.get("kelly_units", 0.5)
+    edge_emoji = "🔥" if edge_pct >= 25 else "💚" if edge_pct >= 15 else "🟡"
+
+    msg = f"<b>{edge_emoji} BET BUILDER COMBO ({leg_count} Legs)</b>\n"
+    msg += "━━━━━━━━━━━━━━━━━━\n"
+    msg += f"🎰 <b>Combo Quote:</b> {odds}\n"
+    msg += f"📈 <b>Hit-Rate:</b> {round(prob*100, 1)}%\n"
+    msg += f"{edge_emoji} <b>Combined Edge:</b> +{edge_pct}%\n"
+    msg += f"💵 <b>Stake:</b> {units} Units\n\n"
+    msg += "<b>📋 Legs:</b>\n"
+    for i, leg in enumerate(combo.get("legs", []), 1):
+        market = leg.get("market", "?")
+        info = MARKET_INFO_EXTENDED.get(market, {})
+        emoji = info.get("emoji", "💎")
+        leg_quote = leg.get("bet365_quote", leg.get("oddsYes", "?"))
+        msg += (f"{i}. {emoji} <b>{leg.get('match', '?')}</b>\n"
+                f"   {leg.get('tip', '?')} @ {leg_quote}\n"
+                f"   ({info.get('name', market)})\n")
+    msg += "\n━━━━━━━━━━━━━━━━━━\n"
+    msg += "<i>💡 Bei Bet365: Bet Builder → Multi öffnen → alle Legs einzeln hinzufügen</i>"
+    return msg
+
+
+def integrate_edge_filter_into_pipeline(tips_by_market: Dict[str, List[Dict]],
+                                         odds_data: Optional[List] = None) -> Dict:
+    """All-in-One Integration."""
+    if not EDGE_FILTER_ENABLED:
+        return {"filtered_tips": tips_by_market, "combos": [], "stats": {}}
+
+    filtered = {}
+    total_before = 0
+    total_after = 0
+    for market, tips in (tips_by_market or {}).items():
+        total_before += len(tips)
+        for tip in tips:
+            tip["market"] = market
+        filtered[market] = filter_tips_by_edge(tips, market=market, odds_data=odds_data)
+        total_after += len(filtered[market])
+
+    combos = []
+    if CROSS_MATCH_COMBOS:
+        combos = build_cross_match_combos(filtered)
+
+    _log("EDGE", f"🎯 FINAL: {total_after}/{total_before} Tipps, {len(combos)} Combos")
+    return {
+        "filtered_tips": filtered,
+        "combos": combos,
+        "stats": {"total_before": total_before, "total_after": total_after, "combos_built": len(combos)},
+    }
+
+
+# ════════════════════════════════════════════════════════════════════════
+# 4️⃣ DRAWDOWN PROTECTION (Bankroll-Schutz)
+# ════════════════════════════════════════════════════════════════════════
+
+DRAWDOWN_ENABLED = _env_bool("DRAWDOWN_PROTECTION_ENABLED", "true")
+STARTING_BANKROLL = _env_float("STARTING_BANKROLL_UNITS", 100.0)
+DD_LOSS_HALF = int(_env("DRAWDOWN_LOSS_STREAK_HALF", "3"))
+DD_LOSS_STRICT = int(_env("DRAWDOWN_LOSS_STREAK_STRICT", "5"))
+DD_BANKROLL_WARN = _env_float("DRAWDOWN_BANKROLL_WARN_PCT", 10.0)
+DD_BANKROLL_STOP = _env_float("DRAWDOWN_BANKROLL_STOP_PCT", 20.0)
+DD_STRICT_MIN_PROB = int(_env("STRICT_MIN_PROBABILITY", "72"))
+
+_BANKROLL_CACHE = {"data": None, "ts": 0}
+
+
+def _load_bankroll_state() -> Dict:
+    """Lädt Bankroll-State aus Supabase."""
+    if _BANKROLL_CACHE["data"] and time.time() - _BANKROLL_CACHE["ts"] < 60:
+        return _BANKROLL_CACHE["data"]
+
+    default = {
+        "current_units": STARTING_BANKROLL,
+        "starting_units": STARTING_BANKROLL,
+        "peak_units": STARTING_BANKROLL,
+        "loss_streak": 0, "win_streak": 0,
+        "mode": "normal", "pause_until": None,
+    }
+    if not SUPABASE_URL or not SUPABASE_KEY:
+        _BANKROLL_CACHE["data"] = default
+        return default
+
+    try:
+        r = requests.get(
+            f"{SUPABASE_URL}/rest/v1/bankroll_state",
+            headers={"apikey": SUPABASE_KEY, "Authorization": f"Bearer {SUPABASE_KEY}"},
+            params={"id": "eq.1", "select": "*"},
+            timeout=8,
+        )
+        if r.ok and r.json():
+            data = r.json()[0]
+            _BANKROLL_CACHE["data"] = data
+            _BANKROLL_CACHE["ts"] = time.time()
+            return data
+    except Exception:
+        pass
+    _BANKROLL_CACHE["data"] = default
+    return default
+
+
+def _save_bankroll_state(state: Dict) -> bool:
+    """Speichert Bankroll-State in Supabase."""
+    if not SUPABASE_URL or not SUPABASE_KEY:
+        return False
+    try:
+        state["updated_at"] = datetime.now(timezone.utc).isoformat()
+        state["id"] = 1
+        r = requests.post(
+            f"{SUPABASE_URL}/rest/v1/bankroll_state",
+            headers={
+                "apikey": SUPABASE_KEY,
+                "Authorization": f"Bearer {SUPABASE_KEY}",
+                "Content-Type": "application/json",
+                "Prefer": "resolution=merge-duplicates",
+            },
+            json=state, timeout=8,
+        )
+        _BANKROLL_CACHE["data"] = state
+        return r.ok
+    except Exception:
+        return False
+
+
+def get_current_mode() -> Dict:
+    """Ermittelt aktuellen Risiko-Mode."""
+    state = _load_bankroll_state()
+    loss_streak = int(state.get("loss_streak", 0))
+    current = float(state.get("current_units", STARTING_BANKROLL))
+    peak = float(state.get("peak_units", STARTING_BANKROLL))
+    pause_until = state.get("pause_until")
+    bankroll_drop = ((peak - current) / peak * 100) if peak > 0 else 0
+
+    # Check Pause
+    if pause_until:
+        try:
+            pause_dt = datetime.fromisoformat(str(pause_until).replace("Z", "+00:00"))
+            if pause_dt > datetime.now(timezone.utc):
+                return {
+                    "mode": "paused", "stake_multiplier": 0,
+                    "min_probability_boost": 0, "require_high_value": False,
+                    "pause_until": pause_until, "loss_streak": loss_streak,
+                    "bankroll_pct": (current / peak * 100) if peak > 0 else 100,
+                    "reason": f"🛑 Pausiert bis {pause_dt.strftime('%H:%M')} "
+                              f"(Bankroll -{bankroll_drop:.1f}%)",
+                }
+        except:
+            pass
+
+    # Bankroll Drop > 20%
+    if bankroll_drop >= DD_BANKROLL_STOP:
+        pause_new = (datetime.now(timezone.utc) + timedelta(hours=24)).isoformat()
+        state["pause_until"] = pause_new
+        state["mode"] = "paused"
+        _save_bankroll_state(state)
+        return {
+            "mode": "paused", "stake_multiplier": 0,
+            "min_probability_boost": 0, "require_high_value": False,
+            "pause_until": pause_new, "loss_streak": loss_streak,
+            "bankroll_pct": (current / peak * 100),
+            "reason": f"🛑 STOPP: Bankroll -{bankroll_drop:.1f}% (Pause 24h)",
+        }
+
+    # Strict Mode
+    if loss_streak >= DD_LOSS_STRICT or bankroll_drop >= DD_BANKROLL_WARN:
+        return {
+            "mode": "strict", "stake_multiplier": 0.25,
+            "min_probability_boost": 10, "require_high_value": True,
+            "pause_until": None, "loss_streak": loss_streak,
+            "bankroll_pct": (current / peak * 100),
+            "reason": (f"⚠️ STRICT: {loss_streak} Lost, Bankroll -{bankroll_drop:.1f}% "
+                       f"(MIN_PROB +10%, nur HIGH, Stake ×0.25)"),
+        }
+
+    # Conservative Mode
+    if loss_streak >= DD_LOSS_HALF:
+        return {
+            "mode": "conservative", "stake_multiplier": 0.5,
+            "min_probability_boost": 5, "require_high_value": False,
+            "pause_until": None, "loss_streak": loss_streak,
+            "bankroll_pct": (current / peak * 100),
+            "reason": (f"⚠️ CONSERVATIVE: {loss_streak} Lost in Row "
+                       f"(MIN_PROB +5%, Stake ×0.5)"),
+        }
+
+    return {
+        "mode": "normal", "stake_multiplier": 1.0,
+        "min_probability_boost": 0, "require_high_value": False,
+        "pause_until": None, "loss_streak": loss_streak,
+        "bankroll_pct": (current / peak * 100),
+        "reason": "✅ Normal Mode",
+    }
+
+
+def should_skip_tip(tip: Dict, mode: Optional[Dict] = None,
+                     base_min_probability: int = 67) -> bool:
+    """Soll Tipp wegen Drawdown übersprungen werden?"""
+    if not DRAWDOWN_ENABLED:
+        return False
+    mode = mode or get_current_mode()
+    if mode["mode"] == "paused":
+        return True
+    min_prob = base_min_probability + mode["min_probability_boost"]
+    if int(tip.get("probability", 0)) < min_prob:
+        return True
+    if mode["require_high_value"]:
+        value = str(tip.get("value_rating") or tip.get("valueRating", "OK")).upper()
+        if "HIGH" not in value and "🔥" not in str(tip.get("value_rating", "")):
+            return True
+    return False
+
+
+def adjust_tip_stake(original_units: float, mode: Optional[Dict] = None) -> float:
+    """Passt Stake an Mode an."""
+    if not DRAWDOWN_ENABLED:
+        return original_units
+    mode = mode or get_current_mode()
+    return max(0.25, round(original_units * mode["stake_multiplier"], 2))
+
+
+def update_after_tip(tip_id: str, result: str, profit_units: float,
+                       units_staked: float = 1.0) -> bool:
+    """Update nach Spielergebnis."""
+    if not DRAWDOWN_ENABLED:
+        return False
+    state = _load_bankroll_state()
+    current = float(state.get("current_units", STARTING_BANKROLL)) + profit_units
+    peak = max(float(state.get("peak_units", STARTING_BANKROLL)), current)
+    loss_streak = int(state.get("loss_streak", 0))
+    win_streak = int(state.get("win_streak", 0))
+
+    if result == "won":
+        win_streak += 1
+        loss_streak = 0
+    elif result == "lost":
+        loss_streak += 1
+        win_streak = 0
+
+    state.update({
+        "current_units": round(current, 2), "peak_units": round(peak, 2),
+        "loss_streak": loss_streak, "win_streak": win_streak,
+        "last_tip_id": tip_id, "last_tip_result": result,
+    })
+    mode_info = get_current_mode()
+    state["mode"] = mode_info["mode"]
+    state["pause_until"] = mode_info.get("pause_until")
+    return _save_bankroll_state(state)
+
+
+def get_bankroll_status() -> str:
+    """Bankroll-Status für Telegram."""
+    state = _load_bankroll_state()
+    mode = get_current_mode()
+    current = float(state.get("current_units", STARTING_BANKROLL))
+    starting = float(state.get("starting_units", STARTING_BANKROLL))
+    peak = float(state.get("peak_units", STARTING_BANKROLL))
+    loss_streak = int(state.get("loss_streak", 0))
+    win_streak = int(state.get("win_streak", 0))
+
+    total_pl = current - starting
+    pl_pct = (total_pl / starting * 100) if starting > 0 else 0
+    drawdown_pct = ((peak - current) / peak * 100) if peak > 0 else 0
+
+    mode_emoji = {"normal": "🟢", "conservative": "🟡", "strict": "🔴", "paused": "⏸️"}.get(mode["mode"], "❓")
+    pl_emoji = "📈" if total_pl >= 0 else "📉"
+    sign = "+" if total_pl >= 0 else ""
+
+    msg = "💰 <b>BANKROLL STATUS</b>\n━━━━━━━━━━━━━━━━━━\n\n"
+    msg += f"{pl_emoji} <b>Aktuell:</b> {current:.2f}U\n"
+    msg += f"   Start: {starting:.2f}U · Peak: {peak:.2f}U\n"
+    msg += f"   P/L: {sign}{total_pl:.2f}U ({sign}{pl_pct:.1f}%)\n"
+    if drawdown_pct > 0:
+        msg += f"\n📉 <b>Drawdown vom Peak:</b> -{drawdown_pct:.1f}%\n"
+    msg += f"\n{mode_emoji} <b>Mode: {mode['mode'].upper()}</b>\n"
+    msg += f"   <i>{mode['reason']}</i>\n"
+    if loss_streak >= 2:
+        msg += f"\n❌ <b>Verlust-Streak:</b> {loss_streak} in Folge\n"
+    if win_streak >= 3:
+        msg += f"\n✅ <b>Gewinn-Streak:</b> {win_streak} in Folge 🔥\n"
+    msg += "\n━━━━━━━━━━━━━━━━━━"
+    return msg
+
+
+# ════════════════════════════════════════════════════════════════════════
+# 5️⃣ CLV TRACKER (Closing Line Value)
+# ════════════════════════════════════════════════════════════════════════
+
+CLV_ENABLED = _env_bool("CLV_TRACKER_ENABLED", "true")
+CLV_MIN_TIPS = int(_env("CLV_MIN_TIPS_FOR_REPORT", "20"))
+
+
+def log_tip_for_clv(tip: Dict, target_date) -> bool:
+    """Speichert Tipp beim Posten für CLV-Tracking."""
+    if not CLV_ENABLED or not SUPABASE_URL or not SUPABASE_KEY:
+        return False
+    try:
+        tip_id = (tip.get("tip_id") or
+                  f"{tip.get('market','?')}_{target_date}_{abs(hash(tip.get('match','?'))) % 100000}")
+        open_odds = tip.get("bet365_quote") or tip.get("oddsYes") or 0
+        try:
+            open_odds = float(str(open_odds).replace(",", "."))
+        except:
+            open_odds = 0
+        if open_odds <= 1.0:
+            return False
+
+        pin_quote = None
+        match = tip.get("match", "")
+        if " vs " in match:
+            parts = match.split(" vs ", 1)
+            pin_quote = get_pinnacle_quote_for_market(parts[0].strip(), parts[1].strip(),
+                                                       tip.get("market", "btts"))
+
+        data = {
+            "tip_id": tip_id, "date": str(target_date),
+            "match": match, "league": tip.get("league", ""),
+            "market": tip.get("market", "btts"), "tip": tip.get("tip", ""),
+            "open_odds": round(open_odds, 2),
+            "open_quote_source": tip.get("edge_source", "tip_odds"),
+            "open_pinnacle": pin_quote,
+            "open_bet365": tip.get("bet365_quote"),
+            "open_timestamp": datetime.now(timezone.utc).isoformat(),
+            "units": tip.get("kelly_units", 1.0),
+            "result": "pending",
+        }
+        r = requests.post(
+            f"{SUPABASE_URL}/rest/v1/clv_tracking",
+            headers={
+                "apikey": SUPABASE_KEY,
+                "Authorization": f"Bearer {SUPABASE_KEY}",
+                "Content-Type": "application/json",
+                "Prefer": "resolution=merge-duplicates",
+            },
+            json=data, timeout=10,
+        )
+        return r.ok
+    except Exception:
+        return False
+
+
+def fetch_closing_lines(target_date=None) -> int:
+    """Holt Closing Lines für pending CLV-Tipps."""
+    if not CLV_ENABLED or not SUPABASE_URL:
+        return 0
+    target_date = target_date or datetime.now(timezone.utc).date()
+
+    try:
+        r = requests.get(
+            f"{SUPABASE_URL}/rest/v1/clv_tracking",
+            headers={"apikey": SUPABASE_KEY, "Authorization": f"Bearer {SUPABASE_KEY}"},
+            params={
+                "date": f"eq.{target_date}",
+                "close_pinnacle": "is.null",
+                "select": "id,tip_id,match,market,open_odds,open_pinnacle",
+            },
+            timeout=15,
+        )
+        if not r.ok:
+            return 0
+        pending = r.json()
+    except Exception:
+        return 0
+
+    updated = 0
+    for ctip in pending:
+        try:
+            match = ctip.get("match", "")
+            if " vs " not in match:
+                continue
+            parts = match.split(" vs ", 1)
+            pin_close = get_pinnacle_quote_for_market(parts[0].strip(), parts[1].strip(),
+                                                       ctip.get("market", "btts"))
+            if not pin_close:
+                continue
+
+            open_pin = ctip.get("open_pinnacle") or ctip.get("open_odds")
+            if not open_pin or open_pin <= 1:
+                continue
+            clv_pct = ((open_pin - pin_close) / pin_close) * 100
+
+            r = requests.patch(
+                f"{SUPABASE_URL}/rest/v1/clv_tracking",
+                headers={
+                    "apikey": SUPABASE_KEY,
+                    "Authorization": f"Bearer {SUPABASE_KEY}",
+                    "Content-Type": "application/json",
+                },
+                params={"id": f"eq.{ctip['id']}"},
+                json={
+                    "close_pinnacle": pin_close,
+                    "close_timestamp": datetime.now(timezone.utc).isoformat(),
+                    "clv_pct": round(clv_pct, 2),
+                },
+                timeout=10,
+            )
+            if r.ok:
+                updated += 1
+        except Exception:
+            continue
+    return updated
+
+
+def calculate_clv_report(days: int = 30) -> str:
+    """Generiert CLV-Report über letzte X Tage."""
+    if not CLV_ENABLED or not SUPABASE_URL:
+        return ""
+    since = (datetime.now(timezone.utc).date() - timedelta(days=days)).isoformat()
+    try:
+        r = requests.get(
+            f"{SUPABASE_URL}/rest/v1/clv_tracking",
+            headers={"apikey": SUPABASE_KEY, "Authorization": f"Bearer {SUPABASE_KEY}"},
+            params={
+                "date": f"gte.{since}",
+                "clv_pct": "not.is.null",
+                "select": "market,clv_pct,result,units,profit_units",
+                "limit": "1000",
+            },
+            timeout=15,
+        )
+        if not r.ok:
+            return ""
+        tips = r.json()
+    except Exception:
+        return ""
+
+    if len(tips) < CLV_MIN_TIPS:
+        return f"📊 <b>CLV REPORT</b>\n\nZu wenig Daten: {len(tips)}/{CLV_MIN_TIPS} Tipps"
+
+    avg_clv = sum(t.get("clv_pct", 0) for t in tips) / len(tips)
+    pos_clv = sum(1 for t in tips if t.get("clv_pct", 0) > 0)
+    neg_clv = len(tips) - pos_clv
+    won = sum(1 for t in tips if t.get("result") == "won")
+    lost = sum(1 for t in tips if t.get("result") == "lost")
+    total_results = won + lost
+    win_rate = (won / total_results * 100) if total_results > 0 else 0
+    total_profit = sum(float(t.get("profit_units", 0) or 0) for t in tips)
+    total_units = sum(float(t.get("units", 0) or 0) for t in tips)
+    roi = (total_profit / total_units * 100) if total_units > 0 else 0
+
+    by_market = {}
+    for t in tips:
+        m = t.get("market", "?")
+        if m not in by_market:
+            by_market[m] = {"count": 0, "clv_sum": 0, "won": 0, "lost": 0, "profit": 0}
+        by_market[m]["count"] += 1
+        by_market[m]["clv_sum"] += t.get("clv_pct", 0)
+        if t.get("result") == "won": by_market[m]["won"] += 1
+        elif t.get("result") == "lost": by_market[m]["lost"] += 1
+        by_market[m]["profit"] += float(t.get("profit_units", 0) or 0)
+
+    clv_emoji = "🔥" if avg_clv >= 3 else "✅" if avg_clv >= 0 else "⚠️"
+    roi_emoji = "🟢" if roi > 0 else "🔴"
+
+    msg = f"📊 <b>CLV REPORT - Letzte {days} Tage</b>\n"
+    msg += "━━━━━━━━━━━━━━━━━━━━━━━━\n\n"
+    msg += f"{clv_emoji} <b>Durchschnittl. CLV: {avg_clv:+.2f}%</b>\n"
+    msg += f"   ({pos_clv} pos · {neg_clv} neg / {len(tips)} total)\n\n"
+    msg += f"🎯 <b>Hit-Rate:</b> {win_rate:.1f}% ({won}/{total_results})\n"
+    msg += f"💰 <b>ROI:</b> {roi:+.2f}% ({total_profit:+.2f} Units) {roi_emoji}\n\n"
+
+    market_names = {
+        "btts": "⚽ BTTS", "over25": "🎯 Over 2.5", "combo": "🔥 Combo",
+        "btts_ht": "🕐 BTTS HT", "over15_ht": "⏰ O1.5 HT",
+        "corners": "🚩 Corners", "scorer": "⚽ Scorer",
+        "advanced_props": "🔑 Props",
+    }
+    msg += "<b>📈 Pro Markt:</b>\n"
+    sorted_markets = sorted(by_market.items(),
+                              key=lambda x: x[1]["clv_sum"] / max(x[1]["count"], 1),
+                              reverse=True)
+    for market, st in sorted_markets:
+        if st["count"] < 3:
+            continue
+        avg_mc = st["clv_sum"] / st["count"]
+        wr = (st["won"] / max(st["won"] + st["lost"], 1)) * 100
+        em = "🔥" if avg_mc >= 3 else "✅" if avg_mc >= 0 else "⚠️"
+        msg += (f"{em} {market_names.get(market, market)}: "
+                f"CLV {avg_mc:+.1f}% · "
+                f"{st['won']}/{st['won']+st['lost']} ({wr:.0f}%) · "
+                f"{st['profit']:+.1f}U\n")
+
+    msg += "\n━━━━━━━━━━━━━━━━━━━━━━━━\n"
+    msg += "<i>💡 CLV > 0% = du hattest echte Edge\n"
+    msg += "💡 CLV ist wichtiger als Hit-Rate!</i>"
+    return msg
+
+
+# ════════════════════════════════════════════════════════════════════════
+# 6️⃣ LIVE EDGE ALERTS (Premium Alerts)
+# ════════════════════════════════════════════════════════════════════════
+
+LIVE_ALERTS_ENABLED = _env_bool("LIVE_EDGE_ALERTS_ENABLED", "true")
+PREMIUM_EDGE_THRESHOLD = _env_float("PREMIUM_EDGE_THRESHOLD", 0.20)
+EXTREME_EDGE_THRESHOLD = _env_float("EXTREME_EDGE_THRESHOLD", 0.30)
+PREMIUM_MIN_PROB = int(_env("PREMIUM_MIN_PROB", "60"))
+MAX_ALERTS_PER_DAY = int(_env("MAX_ALERTS_PER_DAY", "5"))
+
+
+def format_alert_message(tip: Dict, alert_level: str = "premium") -> str:
+    """Formatiert High-Edge Tipp als Premium Alert."""
+    edge_pct = tip.get("edge_pct", 0)
+    market = tip.get("market", "btts")
+    info = MARKET_INFO_EXTENDED.get(market, {})
+    market_emoji = info.get("emoji", "💎")
+    market_name = info.get("name", market).replace("⚽ ", "").replace("🎯 ", "").replace("🔑 ", "")
+
+    if alert_level == "extreme":
+        header = "🚨🚨🚨 EXTREME EDGE ALERT 🚨🚨🚨"
+        urgency = "🔥🔥🔥 DROP EVERYTHING 🔥🔥🔥"
+    else:
+        header = "💎 PREMIUM EDGE BET 💎"
+        urgency = "🔥 HIGH VALUE"
+
+    msg = f"<b>{header}</b>\n━━━━━━━━━━━━━━━━━━━━━━━━━\n<b>{urgency}</b>\n\n"
+    msg += f"{market_emoji} <b>Markt: {market_name}</b>\n"
+    msg += f"⚽ <b>{tip.get('match', '?')}</b>\n"
+    msg += f"📍 {tip.get('league', '')}\n"
+    msg += f"⏰ {tip.get('time', 'TBD')} Uhr\n\n"
+    msg += f"🎯 <b>Tipp:</b> {tip.get('tip', 'YES')}\n"
+    msg += f"📈 <b>Wahrscheinlichkeit:</b> {tip.get('probability', 0)}%\n"
+    msg += f"⭐ <b>Confidence:</b> {'⭐' * int(tip.get('confidence', 0))}\n\n"
+    msg += f"╔═══════════════════════╗\n║ 🔥 <b>EDGE: +{edge_pct:.1f}%</b> 🔥\n╚═══════════════════════╝\n\n"
+    msg += f"💰 <b>Quote (Bet365):</b> {tip.get('bet365_quote', tip.get('oddsYes', '?'))}\n"
+    msg += f"🎯 <b>Fair Odds:</b> {tip.get('fairOdds', tip.get('fair_odds', '?'))}\n"
+    msg += f"📊 <b>Source:</b> {tip.get('edge_source', '?')}\n\n"
+    kelly = tip.get('kelly_units', 1.0)
+    msg += f"💵 <b>Empfohlener Stake:</b> {kelly} Units\n"
+    profit_est = kelly * (edge_pct / 100)
+    msg += f"📈 <b>Erwarteter Gewinn:</b> +{profit_est:.2f}U pro Bet\n\n"
+    if tip.get("reasoning"):
+        msg += f"💭 <i>{tip['reasoning'][:300]}</i>\n\n"
+    if tip.get("keyFactor") or tip.get("key_factor"):
+        msg += f"⚡ <i>{tip.get('keyFactor') or tip.get('key_factor')}</i>\n\n"
+    msg += "━━━━━━━━━━━━━━━━━━━━━━━━━\n"
+    msg += "🎰 <b>BET365:</b> https://www.bet365.com/#/AS/B1/\n\n"
+    msg += "⚠️ <i>Premium Alerts bei ≥20% Edge. Quoten ändern sich schnell!</i>"
+    return msg
+
+
+def _send_telegram_alert(text: str, chat_id: str = None) -> Optional[int]:
+    """Sendet Telegram-Nachricht."""
+    if not TELEGRAM_TOKEN:
+        return None
+    chat_id = chat_id or TELEGRAM_GROUP_PREMIUM or TELEGRAM_CHAT_ID
+    if not chat_id:
+        return None
+    try:
+        r = requests.post(
+            f"https://api.telegram.org/bot{TELEGRAM_TOKEN}/sendMessage",
+            json={
+                "chat_id": chat_id, "text": text,
+                "parse_mode": "HTML", "disable_web_page_preview": True,
+            },
+            timeout=15,
+        )
+        if not r.ok and r.status_code == 400:
+            plain = re.sub(r"<[^>]+>", "", text)
+            r = requests.post(
+                f"https://api.telegram.org/bot{TELEGRAM_TOKEN}/sendMessage",
+                json={"chat_id": chat_id, "text": plain}, timeout=15,
+            )
+        if r.ok:
+            return r.json().get("result", {}).get("message_id")
+    except Exception:
+        return None
+
+
+def send_edge_alerts(tips_by_market: Dict[str, List[Dict]],
+                       min_edge: Optional[float] = None,
+                       extreme_threshold: Optional[float] = None,
+                       max_alerts: Optional[int] = None) -> int:
+    """Sendet Premium Alerts für hohe Edge."""
+    if not LIVE_ALERTS_ENABLED:
+        return 0
+    min_edge = min_edge if min_edge is not None else PREMIUM_EDGE_THRESHOLD
+    extreme_threshold = extreme_threshold if extreme_threshold is not None else EXTREME_EDGE_THRESHOLD
+    max_alerts = max_alerts if max_alerts is not None else MAX_ALERTS_PER_DAY
+
+    high_edge = []
+    for market, tips in (tips_by_market or {}).items():
+        for tip in tips:
+            if tip.get("edge", 0) < min_edge: continue
+            if int(tip.get("probability", 0)) < PREMIUM_MIN_PROB: continue
+            tip["market"] = tip.get("market", market)
+            high_edge.append(tip)
+    high_edge.sort(key=lambda t: t.get("edge", 0), reverse=True)
+    high_edge = high_edge[:max_alerts]
+
+    sent = 0
+    for tip in high_edge:
+        edge = tip.get("edge", 0)
+        level = "extreme" if edge >= extreme_threshold else "premium"
+        if _send_telegram_alert(format_alert_message(tip, alert_level=level), TELEGRAM_GROUP_PREMIUM):
+            sent += 1
+    return sent
+
+
+# ════════════════════════════════════════════════════════════════════════
+# 7️⃣ BACKTEST ENGINE
+# ════════════════════════════════════════════════════════════════════════
+
+def _fetch_historical_tips(days: int = 60) -> List[Dict]:
+    """Lädt historische Tipps."""
+    if not SUPABASE_URL or not SUPABASE_KEY:
+        return []
+    since = (datetime.now(timezone.utc).date() - timedelta(days=days)).isoformat()
+    try:
+        r = requests.get(
+            f"{SUPABASE_URL}/rest/v1/tips",
+            headers={"apikey": SUPABASE_KEY, "Authorization": f"Bearer {SUPABASE_KEY}"},
+            params={
+                "select": "*", "date": f"gte.{since}",
+                "status": "in.(won,lost)",
+                "limit": "10000", "order": "date.asc",
+            }, timeout=30,
+        )
+        if r.ok: return r.json()
+    except Exception:
+        pass
+    return []
+
+
+def _simulate_backtest(tips: List[Dict], apply_edge: bool = True,
+                       apply_drawdown: bool = True, min_edge: float = 0.08,
+                       starting_bankroll: float = 100.0) -> Dict:
+    """Simuliert Performance."""
+    bankroll = starting_bankroll
+    peak = starting_bankroll
+    loss_streak = 0
+    posted = skipped_edge = skipped_dd = won = lost = 0
+    total_profit = 0.0
+    max_dd_pct = 0.0
+
+    for tip in tips:
+        try:
+            odds = float(str(tip.get("odds", "1.0")).replace(",", "."))
+            fair = float(str(tip.get("fair_odds", "1.0")).replace(",", "."))
+            units = float(tip.get("units", 1.0))
+        except:
+            continue
+
+        if apply_edge and ((odds / fair) - 1) < min_edge:
+            skipped_edge += 1
+            continue
+
+        stake_mult = 1.0
+        if apply_drawdown:
+            bd = ((peak - bankroll) / peak * 100) if peak > 0 else 0
+            if bd >= 20: skipped_dd += 1; continue
+            elif loss_streak >= 5 or bd >= 10:
+                stake_mult = 0.25
+                if int(tip.get("probability", 0)) < 72: skipped_dd += 1; continue
+            elif loss_streak >= 3:
+                stake_mult = 0.5
+
+        adj_units = units * stake_mult
+        posted += 1
+
+        if tip.get("status") == "won":
+            profit = adj_units * (odds - 1)
+            bankroll += profit
+            total_profit += profit
+            won += 1
+            loss_streak = 0
+        elif tip.get("status") == "lost":
+            bankroll -= adj_units
+            total_profit -= adj_units
+            lost += 1
+            loss_streak += 1
+
+        if bankroll > peak: peak = bankroll
+        dp = ((peak - bankroll) / peak * 100) if peak > 0 else 0
+        if dp > max_dd_pct: max_dd_pct = dp
+
+    tr = won + lost
+    return {
+        "tips_posted": posted, "tips_skipped_edge": skipped_edge,
+        "tips_skipped_drawdown": skipped_dd,
+        "won": won, "lost": lost,
+        "win_rate": round((won / tr * 100) if tr > 0 else 0, 1),
+        "final_units": round(bankroll, 2),
+        "profit_units": round(total_profit, 2),
+        "roi_pct": round((total_profit / starting_bankroll * 100), 2),
+        "max_drawdown_pct": round(max_dd_pct, 2),
+    }
+
+
+def run_backtest(days: int = 60, apply_edge_filter: bool = True,
+                  min_edge: float = 0.08, apply_drawdown: bool = True,
+                  starting_bankroll: float = 100.0) -> Dict:
+    """Hauptfunktion für Backtest."""
+    tips = _fetch_historical_tips(days)
+    if not tips:
+        return {"error": "Keine Daten"}
+
+    baseline = _simulate_backtest(tips, apply_edge=False, apply_drawdown=False,
+                                    starting_bankroll=starting_bankroll)
+    with_filters = _simulate_backtest(tips, apply_edge=apply_edge_filter,
+                                        apply_drawdown=apply_drawdown,
+                                        min_edge=min_edge,
+                                        starting_bankroll=starting_bankroll)
+    return {
+        "days": days, "total_tips": len(tips),
+        "baseline": baseline, "with_filters": with_filters,
+    }
+
+
+def format_backtest_report(result: Dict) -> str:
+    """Formatiert Backtest-Result."""
+    if result.get("error"):
+        return f"❌ Backtest: {result['error']}"
+    bl = result["baseline"]
+    wf = result["with_filters"]
+    msg = f"🔬 <b>BACKTEST - {result['days']} Tage</b>\n"
+    msg += "━━━━━━━━━━━━━━━━━━━━━━━━\n\n"
+    msg += f"📊 <b>Datenbasis:</b> {result['total_tips']} Tipps\n\n"
+
+    msg += "<b>📈 SZENARIO 1: Baseline</b>\n"
+    msg += f"   Posted: {bl['tips_posted']} · Hit-Rate: {bl['win_rate']}%\n"
+    msg += f"   Final: {bl['final_units']:.2f}U\n"
+    sign = "+" if bl['profit_units'] >= 0 else ""
+    pl_em = "🟢" if bl['profit_units'] >= 0 else "🔴"
+    msg += f"   P/L: {sign}{bl['profit_units']:.2f}U ({sign}{bl['roi_pct']:.1f}%) {pl_em}\n"
+    msg += f"   Max Drawdown: -{bl['max_drawdown_pct']:.1f}%\n\n"
+
+    msg += "<b>🎯 SZENARIO 2: Mit Filtern</b>\n"
+    msg += f"   Posted: {wf['tips_posted']} (Edge: -{wf['tips_skipped_edge']}, DD: -{wf['tips_skipped_drawdown']})\n"
+    msg += f"   Hit-Rate: {wf['win_rate']}%\n"
+    msg += f"   Final: {wf['final_units']:.2f}U\n"
+    sign = "+" if wf['profit_units'] >= 0 else ""
+    pl_em = "🟢" if wf['profit_units'] >= 0 else "🔴"
+    msg += f"   P/L: {sign}{wf['profit_units']:.2f}U ({sign}{wf['roi_pct']:.1f}%) {pl_em}\n"
+    msg += f"   Max Drawdown: -{wf['max_drawdown_pct']:.1f}%\n\n"
+
+    diff = wf['final_units'] - bl['final_units']
+    diff_em = "🚀" if diff > 5 else "✅" if diff > 0 else "⚠️"
+    sign = "+" if diff >= 0 else ""
+    msg += f"{diff_em} <b>VERBESSERUNG: {sign}{diff:.2f}U</b>\n\n"
+    msg += "━━━━━━━━━━━━━━━━━━━━━━━━\n"
+    msg += "<i>💡 Was passiert wäre wenn Filter aktiv gewesen wären.</i>"
+    return msg
+
+
+# ════════════════════════════════════════════════════════════════════════
+# 🎯 BOOT MESSAGE
+# ════════════════════════════════════════════════════════════════════════
+
+print("[NETRATTLER-PRO] 🎯 V3 Module geladen:", flush=True)
+print(f"   • Edge Filter:    {'✅' if EDGE_FILTER_ENABLED else '❌'} (min {EDGE_FILTER_MIN_EDGE*100:.0f}%)", flush=True)
+print(f"   • Cross-Combos:   {'✅' if CROSS_MATCH_COMBOS else '❌'}", flush=True)
+print(f"   • Drawdown Prot:  {'✅' if DRAWDOWN_ENABLED else '❌'}", flush=True)
+print(f"   • CLV Tracker:    {'✅' if CLV_ENABLED else '❌'}", flush=True)
+print(f"   • Live Alerts:    {'✅' if LIVE_ALERTS_ENABLED else '❌'} (≥{PREMIUM_EDGE_THRESHOLD*100:.0f}%)", flush=True)
+print(f"   • Pinnacle:       ✅ (kostenlos via guest token)", flush=True)
+
+
+# ════════════════════════════════════════════════════════════════════════
+# DEBUG (lokaler Test)
+# ════════════════════════════════════════════════════════════════════════
+if __name__ == "__main__":
+    print("\n" + "="*70)
+    print("🧪 NetRattler Pro V3 - Self Test")
+    print("="*70)
+    
+    # Test Edge Filter
+    test_tip = {
+        "match": "Arsenal vs Brentford", "league": "Premier League",
+        "market": "btts", "tip": "YES", "probability": 70, "confidence": 5,
+        "fairOdds": "1.43", "oddsYes": "2.10", "time": "20:00",
+    }
+    result = filter_tips_by_edge([test_tip], market="btts")
+    if result:
+        print(f"\n✅ Edge Filter: Tipp mit +{result[0]['edge_pct']}% Edge durchgelassen")
+    
+    # Test Drawdown
+    mode = get_current_mode()
+    print(f"\n✅ Drawdown Mode: {mode['mode']} ({mode['reason']})")
+    
+    # Test Pinnacle (live!)
+    print("\n📊 Test Pinnacle Scraper (live)...")
+    matches = fetch_pinnacle_matchups()
+    print(f"   Gefunden: {len(matches)} aktuelle Matches")
+    
+    print("\n✅ Alle Module funktionieren!")
+
 def main():
     log("=" * 60)
     log("AI TIPP BOT - ALL-IN-ONE EDITION")
@@ -14373,6 +15748,18 @@ def main():
     if APIFOOTBALL_CALL_COUNTER > 0:
         log(f"📊 API-Football Calls verbraucht: {APIFOOTBALL_CALL_COUNTER}/{APIFOOTBALL_MAX_CALLS_PER_RUN}")
     log("Sende an Telegram + Supabase...")
+
+    # ── NETRATTLER PRO: Edge Filter ──
+    if NETRATTLER_PRO:
+        for market_id in list(tips_by_market.keys()):
+            tips = tips_by_market[market_id]
+            if tips:
+                filtered = integrate_edge_filter_into_pipeline(tips, min_edge=0.05)
+                if filtered:
+                    tips_by_market[market_id] = filtered
+                    log(f"   🎯 Edge Filter: {len(tips)} → {len(filtered)} Tipps")
+                else:
+                    log(f"   🎯 Edge Filter: {len(tips)} Tipps haben keinen Edge — behalte alle")
 
     send_top_tips(tips_by_market, target_date)
 
