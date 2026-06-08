@@ -13695,7 +13695,7 @@ def run_advanced_props_bot(active_leagues: list, fixtures_cache: dict, target_da
     # FBref direkt wenn zu wenig Kandidaten
     if total < 4:
         log("🔑 Versuche FBref direkt für alle Fixtures...")
-        for league, fixtures in _fixtures_cache.items():
+        for league, fixtures in (fixtures_cache or {}).items():
             for fix in (fixtures or [])[:3]:
                 home, away = fix.get("home",""), fix.get("away","")
                 if not home or not away:
@@ -14119,15 +14119,14 @@ def main():
 
             if not odds and not fixtures:
                 continue  # Kein Log-Spam für leere Ligen
-            
+
             # Ohne Odds: martj42 für Länderspiele nutzen
             if not odds and fixtures:
                 intl_kw = ["international","wm 2026","nations league","copa america",
-                           "afrika cup","gold cup","freundschaft","friendly"]
+                           "afrika cup","gold cup","freundschaft","friendly",
+                           "freundschaftsspiele"]
                 if any(kw in league.lower() for kw in intl_kw):
-                    # OddsJet für Länderspiel-Quoten versuchen
-                    oj_odds = fetch_oddsjet_international(target_date)
-                    oj_map = {f"{o['home'].lower()}_{o['away'].lower()}": o for o in oj_odds}
+                    log(f"   🌍 [{league}] Länderspiel-Analyse via martj42...")
                     for fix in fixtures[:8]:
                         h, a = fix.get("home",""), fix.get("away","")
                         if not h or not a:
