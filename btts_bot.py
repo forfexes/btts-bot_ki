@@ -615,6 +615,20 @@ LEAGUES_TO_RUN = [
     "Australia FFA Cup",
     "New Zealand Southern League",
     "New Zealand National League",
+
+    # ── Bet365 Länderspiele ──
+    "Länderspiel",
+    "Weltmeisterschaft 2026",
+    "U21 Länderspiel",
+    "U19 Europameisterschaft Qualifikation",
+    "Länderspiel Jugend",
+    "Weltmeisterschaft Frauen Qualifikation",
+    "Länderspiel Frauen",
+    "ASEAN Championship Qualifikation",
+    # ── WM 2026 Gruppen ──
+    "WM 2026 Gruppe A", "WM 2026 Gruppe B", "WM 2026 Gruppe C",
+    "WM 2026 Gruppe D", "WM 2026 Gruppe E", "WM 2026 Gruppe F",
+    "WM 2026 Gruppe G", "WM 2026 Gruppe H", "WM 2026 Gruppe I",
 ]
 
 # Zeitfenster pro Liga (UTC Stunden)
@@ -819,6 +833,77 @@ LEAGUE_KEYS = {
     "Scottish Championship": "soccer_scotland_championship",
     "Swedish Superettan": "soccer_sweden_superettan",
     "Israeli Liga Leumit": "soccer_israel_liga_leumit",
+    # ── Internationale / Cups ──
+    "Freundschaftsspiele International": "soccer_international_friendlies",
+    "WM 2026": "soccer_fifa_world_cup",
+    "UEFA Nations League": "soccer_uefa_nations_league",
+    "Copa America": "soccer_conmebol_copa_america",
+    "Gold Cup": "soccer_concacaf_gold_cup",
+    "Afrika Cup": "soccer_africa_cup_of_nations",
+    "CONCACAF Nations League": "soccer_concacaf_nations_league",
+    "Copa Libertadores": "soccer_conmebol_copa_libertadores",
+    "Copa Sudamericana": "soccer_conmebol_copa_sudamericana",
+    "CAF Champions League": "soccer_africa_caf_champions_league",
+    "AFC Champions League": "soccer_afc_champions_league",
+    # ── Americas ──
+    "Brasileirao Serie B": "soccer_brazil_campeonato_b",
+    "Argentina Primera B": "soccer_argentina_primera_b",
+    "Colombia Primera": "soccer_colombia_primera_a",
+    "Ecuador Serie A": "soccer_ecuador_liga_pro",
+    "Chile Primera": "soccer_chile_campeonato",
+    "Peru Primera": "soccer_peru_primera_division",
+    "Uruguay Primera": "soccer_uruguay_primera_division",
+    "Bolivia Division": "soccer_bolivia_liga_profesional",
+    "Bolivia Division Profesional": "soccer_bolivia_liga_profesional",
+    "Paraguay Division": "soccer_paraguay_primera_division",
+    "Venezuela Primera": "soccer_venezuela_primera_division",
+    "Liga MX": "soccer_mexico_ligamx",
+    "Canada Premier League": "soccer_canada_premier_league",
+    "USL Championship": "soccer_usa_usl_championship",
+    # ── Asien ──
+    "J1 League Japan": "soccer_japan_j_league",
+    "K League 1": "soccer_south_korea_kleague1",
+    "K League 2": "soccer_south_korea_kleague2",
+    "China Super League": "soccer_china_superleague",
+    "Saudi Pro League": "soccer_saudi_arabia_premier_league",
+    "India Super League": "soccer_india_super_league",
+    # ── Afrika ──
+    "Egypt Premier": "soccer_egypt_premier_league",
+    "Morocco Botola": "soccer_morocco_botola_pro",
+    "South Africa PSL": "soccer_south_africa_premier_league",
+    "WM 2026 Qualifikation Europa": "soccer_uefa_nations_league",
+
+
+    # ── Bet365 Länderspiele ──
+    "Länderspiel": "soccer_international_friendlies",
+    "Weltmeisterschaft 2026": "soccer_fifa_world_cup",
+    "U21 Länderspiel": "soccer_international_friendlies",
+    "U19 Europameisterschaft Qualifikation": "soccer_international_friendlies",
+    "U19 Südostasienmeisterschaft": "soccer_international_friendlies",
+    "Länderspiel Jugend": "soccer_international_friendlies",
+    "Weltmeisterschaft Frauen Qualifikation": "soccer_womens_world_cup_qualifier",
+    "CONMEBOL Nations League Frauen": "soccer_international_friendlies",
+    "Länderspiel Frauen": "soccer_international_friendlies",
+    "U20 Länderspiel Frauen": "soccer_international_friendlies",
+    "ASEAN Championship Qualifikation": "soccer_international_friendlies",
+    "ASEAN Championship": "soccer_international_friendlies",
+    # ── Varianten die ESPN/FotMob nutzen ──
+    "International Friendly": "soccer_international_friendlies",
+    "International Friendlies": "soccer_international_friendlies",
+    "Friendly International": "soccer_international_friendlies",
+    "WM 2026 Gruppe A": "soccer_fifa_world_cup",
+    "WM 2026 Gruppe B": "soccer_fifa_world_cup",
+    "WM 2026 Gruppe C": "soccer_fifa_world_cup",
+    "WM 2026 Gruppe D": "soccer_fifa_world_cup",
+    "WM 2026 Gruppe E": "soccer_fifa_world_cup",
+    "WM 2026 Gruppe F": "soccer_fifa_world_cup",
+    "WM 2026 Gruppe G": "soccer_fifa_world_cup",
+    "WM 2026 Gruppe H": "soccer_fifa_world_cup",
+    "WM 2026 Gruppe I": "soccer_fifa_world_cup",
+    "WM 2026 Achtelfinale": "soccer_fifa_world_cup",
+    "WM 2026 Viertelfinale": "soccer_fifa_world_cup",
+    "WM 2026 Halbfinale": "soccer_fifa_world_cup",
+    "WM 2026 Finale": "soccer_fifa_world_cup",
 }
 
 FOOTBALL_DATA_CODES = {
@@ -11894,6 +11979,8 @@ def get_active_leagues():
     Gibt ALLE Ligen zurück (global, 24/7).
     Keine Zeit-Filterung mehr - der Bot checkt alle Ligen weltweit.
     """
+    if not LEAGUE_ROTATION_ENABLED:
+        return list(LEAGUES_TO_RUN), {}
     if ACTIVE_LEAGUES_OVERRIDE:
         log(f"🎯 Override: {len(ACTIVE_LEAGUES_OVERRIDE)} Ligen")
         return ACTIVE_LEAGUES_OVERRIDE, {}
@@ -12191,10 +12278,23 @@ def run_settlement():
                 msg_id = tip.get("telegram_msg_id")
                 chat_id = tip.get("telegram_chat_id")
 
+                result_text = format_result_text(tip, result, status)
+                log(f"   {'✅' if status == 'won' else '❌'} {tip.get('match', '?')} → {status.upper()}: {result.get('home_score')}-{result.get('away_score')}")
+
+                # 1. Original Nachricht editieren
                 if msg_id and chat_id:
-                    new_text = format_result_text(tip, result, status)
-                    edit_telegram_message(chat_id, msg_id, new_text)
-                    log(f"   {'✅' if status == 'won' else '❌'} {tip.get('match', '?')} → {status.upper()}: {result.get('home_score')}-{result.get('away_score')}")
+                    try:
+                        edit_telegram_message(chat_id, msg_id, result_text)
+                    except Exception:
+                        pass
+
+                # 2. Neue Nachricht in richtigen Kanal
+                _mch = {"btts": "btts", "over25": "over25", "combo": "combo",
+                        "btts_ht": "btts_ht", "over15_ht": "btts_ht",
+                        "corners": "hz_live", "scorer": "late_goals", "combo_multi": "combos"}
+                _ch = TELEGRAM_GROUPS.get(_mch.get(tip.get("market","btts"), "btts"))
+                if _ch:
+                    send_telegram(result_text, _ch)
 
             except Exception as e:
                 log(f"   Settlement Error für {tip.get('match', '?')}: {e}", "WARN")
@@ -13338,6 +13438,7 @@ class AdvancedPropsManager:
     """
 
     FBREF_LEAGUE_URLS = {
+        # Europa Top
         "Premier League": "https://fbref.com/en/comps/9/Premier-League-Stats",
         "Bundesliga": "https://fbref.com/en/comps/20/Bundesliga-Stats",
         "La Liga": "https://fbref.com/en/comps/12/La-Liga-Stats",
@@ -13345,7 +13446,33 @@ class AdvancedPropsManager:
         "Ligue 1": "https://fbref.com/en/comps/13/Ligue-1-Stats",
         "Champions League": "https://fbref.com/en/comps/8/Champions-League-Stats",
         "Europa League": "https://fbref.com/en/comps/19/Europa-League-Stats",
+        "Conference League": "https://fbref.com/en/comps/882/Conference-League-Stats",
         "Eredivisie": "https://fbref.com/en/comps/23/Eredivisie-Stats",
+        "Primeira Liga": "https://fbref.com/en/comps/32/Primeira-Liga-Stats",
+        "Pro League Belgien": "https://fbref.com/en/comps/37/Belgian-Pro-League-Stats",
+        "Scottish Premiership": "https://fbref.com/en/comps/40/Scottish-Premiership-Stats",
+        "Championship": "https://fbref.com/en/comps/10/Championship-Stats",
+        "Super League Schweiz": "https://fbref.com/en/comps/57/Super-League-Stats",
+        "Bundesliga Österreich": "https://fbref.com/en/comps/56/Austrian-Football-Bundesliga-Stats",
+        "Süper Lig": "https://fbref.com/en/comps/26/Super-Lig-Stats",
+        "Greece Super League": "https://fbref.com/en/comps/27/Super-League-1-Stats",
+        "Russia Premier League": "https://fbref.com/en/comps/30/Russian-Premier-League-Stats",
+        "Czech First League": "https://fbref.com/en/comps/66/Czech-First-League-Stats",
+        "Poland Ekstraklasa": "https://fbref.com/en/comps/36/Ekstraklasa-Stats",
+        # Americas
+        "MLS": "https://fbref.com/en/comps/22/Major-League-Soccer-Stats",
+        "Brasileirao Serie A": "https://fbref.com/en/comps/24/Serie-A-Stats",
+        "Liga Argentinien": "https://fbref.com/en/comps/21/Primera-Division-Stats",
+        "Copa Libertadores": "https://fbref.com/en/comps/14/Copa-Libertadores-Stats",
+        # International
+        "Freundschaftsspiele International": "https://fbref.com/en/national/stats/",
+        "Länderspiel": "https://fbref.com/en/national/stats/",
+        "WM 2026": "https://fbref.com/en/comps/1/World-Cup-Stats",
+        "WM 2026 Gruppe A": "https://fbref.com/en/comps/1/World-Cup-Stats",
+        # Asien
+        "J1 League Japan": "https://fbref.com/en/comps/25/J1-League-Stats",
+        "K League 1": "https://fbref.com/en/comps/55/K-League-1-Stats",
+        "China Super League": "https://fbref.com/en/comps/28/Chinese-Super-League-Stats",
     }
 
     MARKET_INFO_PROPS = {
@@ -13613,8 +13740,8 @@ def run_advanced_props_bot(active_leagues: list, fixtures_cache: dict, target_da
             match_name = f"{home} vs {away}"
             kickoff   = fixture.get("time_local", "TBD")
 
-            # ── Quelle 1: FBref ──
-            if league in AdvancedPropsManager.FBREF_LEAGUE_URLS:
+            # ── Quelle 1: FBref (alle Ligen versuchen) ──
+            if True:  # Immer versuchen
                 player_db = manager.scrape_fbref_advanced_stats(league)
                 if player_db:
                     lineup  = get_sofascore_lineups(match_id, home, away) if match_id else None
@@ -14136,6 +14263,9 @@ def main():
                            "freundschaftsspiele"]
                 if any(kw in league.lower() for kw in intl_kw):
                     log(f"   🌍 [{league}] Länderspiel-Analyse via martj42...")
+                    # Niedrigerer Threshold für Freundschaftsspiele
+                    is_friendly = any(k in league.lower() for k in ["freundschaft","friendly","international friendly"])
+                    btts_threshold = 55 if is_friendly else 62
                     for fix in fixtures[:8]:
                         h, a = fix.get("home",""), fix.get("away","")
                         if not h or not a:
@@ -14145,11 +14275,9 @@ def main():
                         if h_st and a_st:
                             bp = (h_st.get("btts_pct",0)+a_st.get("btts_pct",0))/2
                             op = (h_st.get("over25_pct",0)+a_st.get("over25_pct",0))/2
-                            log(f"   🌍 {h} vs {a}: BTTS={bp:.0f}% Over={op:.0f}%")
+                            log(f"   🌍 {h} vs {a}: BTTS={bp:.0f}% Over={op:.0f}% (min {btts_threshold}%)")
                             mn = f"{h} vs {a}"
-                            # Zeit auf TBD damit is_future_game nicht filtert
-                            tip_time = fix.get("time","TBD") or "TBD"
-                            if bp >= 62:
+                            if bp >= btts_threshold:
                                 tips_by_market["btts"].append({
                                     "match":mn,"league":league,"time":"TBD",
                                     "tip":"YES","probability":int(bp),"confidence":3,
