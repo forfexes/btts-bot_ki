@@ -85,11 +85,10 @@ TELEGRAM_GROUPS = {
     "combo": env("TELEGRAM_GROUP_COMBO", TELEGRAM_CHAT_ID),
     "combos": env("TELEGRAM_GROUP_COMBOS", TELEGRAM_CHAT_ID),
     "btts_ht": env("TELEGRAM_GROUP_BTTS_HT", TELEGRAM_CHAT_ID),
-    "over15_ht": env("TELEGRAM_GROUP_BTTS_HT", TELEGRAM_CHAT_ID),  # Gleiche Gruppe wie BTTS HT
     "stats": env("TELEGRAM_GROUP_STATS", TELEGRAM_CHAT_ID),
     "hz_live": env("TELEGRAM_GROUP_HZ_LIVE", TELEGRAM_CHAT_ID),
     "late_goals": env("TELEGRAM_GROUP_LATE_GOALS", TELEGRAM_CHAT_ID),
-    "advanced_props": env("TELEGRAM_GROUP_ADVANCED_PROPS", env("TELEGRAM_GROUP_STATS", TELEGRAM_CHAT_ID)),  # Fallback auf STATS Gruppe
+    "advanced_props": env("TELEGRAM_GROUP_ADVANCED_PROPS", env("TELEGRAM_GROUP_COMBOS", TELEGRAM_CHAT_ID)),
 }
 
 
@@ -183,109 +182,6 @@ def get_dynamic_season(league_id=None, league_name=None):
 SUPABASE_URL = env("SUPABASE_URL")
 SUPABASE_KEY = env("SUPABASE_KEY")
 
-
-# ============================================================
-# 🗄️ SUPABASE DAILY CACHE — Fixtures, Stats, Odds
-# Spart API Calls: Run 1 scrapt, Run 2+3 lesen aus Supabase
-# ============================================================
-
-def cache_get(cache_key: str, target_date) -> dict | None:
-    """Holt gecachte Daten aus Supabase daily_cache Tabelle."""
-    if not SUPABASE_URL or not SUPABASE_KEY:
-        return None
-    try:
-        r = requests.get(
-            f"{SUPABASE_URL}/rest/v1/daily_cache",
-            headers={"apikey": SUPABASE_KEY, "Authorization": f"Bearer {SUPABASE_KEY}"},
-            params={
-                "cache_date": f"eq.{target_date}",
-                "cache_key": f"eq.{cache_key}",
-                "select": "data",
-                "limit": "1",
-            },
-            timeout=8,
-        )
-        if r.ok and r.json():
-            return r.json()[0].get("data")
-    except Exception:
-        pass
-    return None
-
-
-def cache_set(cache_key: str, target_date, data: dict) -> bool:
-    """Speichert Daten in Supabase daily_cache (upsert)."""
-    if not SUPABASE_URL or not SUPABASE_KEY:
-        return False
-    try:
-        import json as _cj
-        r = requests.post(
-            f"{SUPABASE_URL}/rest/v1/daily_cache",
-            headers={
-                "apikey": SUPABASE_KEY,
-                "Authorization": f"Bearer {SUPABASE_KEY}",
-                "Content-Type": "application/json",
-                "Prefer": "resolution=merge-duplicates,return=minimal",
-            },
-            json={
-                "cache_date": str(target_date),
-                "cache_key": cache_key,
-                "data": data,
-            },
-            timeout=10,
-        )
-        return r.ok
-    except Exception:
-        return False
-
-
-def cache_get_fixtures(target_date) -> dict | None:
-    """Holt gecachte Fixtures für heute (alle Ligen)."""
-    cached = cache_get("fixtures_all", target_date)
-    if cached:
-        log(f"   🗄️ Fixtures aus Supabase Cache geladen ({sum(len(v) for v in cached.values())} Spiele)")
-    return cached
-
-
-def cache_set_fixtures(target_date, fixtures_by_league: dict) -> bool:
-    """Speichert alle heutigen Fixtures in Supabase."""
-    if not fixtures_by_league:
-        return False
-    # Nur nicht-leere Ligen speichern
-    to_save = {lg: fixes for lg, fixes in fixtures_by_league.items() if fixes}
-    if not to_save:
-        return False
-    result = cache_set("fixtures_all", target_date, to_save)
-    if result:
-        total = sum(len(v) for v in to_save.values())
-        log(f"   🗄️ {total} Spiele in {len(to_save)} Ligen in Supabase gecacht")
-    return result
-
-
-def cache_get_player_stats(league_name: str, target_date) -> dict | None:
-    """Holt gecachte FBref Player Stats."""
-    return cache_get(f"fbref_{league_name.replace(' ', '_')}", target_date)
-
-
-def cache_set_player_stats(league_name: str, target_date, stats: dict) -> bool:
-    """Speichert FBref Player Stats in Supabase."""
-    if not stats:
-        return False
-    return cache_set(f"fbref_{league_name.replace(' ', '_')}", target_date, stats)
-
-
-def cache_get_odds(league_name: str, target_date) -> list | None:
-    """Holt gecachte Odds API Daten."""
-    cached = cache_get(f"odds_{league_name.replace(' ', '_')}", target_date)
-    return cached.get("odds") if cached else None
-
-
-def cache_set_odds(league_name: str, target_date, odds: list) -> bool:
-    """Speichert Odds in Supabase."""
-    if not odds:
-        return False
-    return cache_set(f"odds_{league_name.replace(' ', '_')}", target_date, {"odds": odds})
-
-
 MIN_PROBABILITY = int(env("MIN_PROBABILITY", "67"))  # 🆕 Hybrid: 67% (zwischen 65-69)
 MIN_ODDS = float(env("MIN_ODDS", "1.65"))
 MAX_ODDS = float(env("MAX_ODDS", "3.0"))
@@ -293,20 +189,20 @@ MIN_CONFIDENCE = int(env("MIN_CONFIDENCE", "3"))
 # 🆕 Nur HIGH + OK Value (LOW fliegt raus)
 MIN_VALUE_RATING = env("MIN_VALUE_RATING", "OK")  # HIGH, OK, oder LOW
 
-MARKETS_TO_RUN = ["btts", "over25", "combo", "btts_ht", "over15_ht"]
+MARKETS_TO_RUN = ["btts", "over25", "combo", "btts_ht"]
 
 # ============================================================
 # AUTO LIGA SWITCH
 # ============================================================
-AUTO_LEAGUE_SWITCH = env("AUTO_LEAGUE_SWITCH", "false").lower() in ["1", "true", "yes", "on"]  # Aus bis CLV läuft
+AUTO_LEAGUE_SWITCH = env("AUTO_LEAGUE_SWITCH", "true").lower() in ["1", "true", "yes", "on"]
 AUTO_LEAGUE_MIN_TIPS = int(env("AUTO_LEAGUE_MIN_TIPS", "10"))
 AUTO_LEAGUE_MIN_WINRATE = float(env("AUTO_LEAGUE_MIN_WINRATE", "48"))
 AUTO_LEAGUE_MIN_ROI = float(env("AUTO_LEAGUE_MIN_ROI", "-2.0"))
 AUTO_LEAGUE_LOOKBACK_DAYS = int(env("AUTO_LEAGUE_LOOKBACK_DAYS", "120"))
 
-MAX_LEAGUES_PER_RUN = int(env("MAX_LEAGUES_PER_RUN", "0"))  # 0 = alle Ligen  # 25 pro Run!
-AI_SLEEP_SECONDS = float(env("AI_SLEEP_SECONDS", "0.1"))
-GROQ_SLEEP_SECONDS = float(env("GROQ_SLEEP_SECONDS", "0.5"))
+MAX_LEAGUES_PER_RUN = int(env("MAX_LEAGUES_PER_RUN", "25"))  # 25 pro Run!
+AI_SLEEP_SECONDS = float(env("AI_SLEEP_SECONDS", "1.0"))
+GROQ_SLEEP_SECONDS = float(env("GROQ_SLEEP_SECONDS", "2.0"))
 USE_GROQ_FALLBACK = env("USE_GROQ_FALLBACK", "true").lower() in ["1", "true", "yes", "on"]
 
 ALWAYS_ON_LEAGUES = [
@@ -479,428 +375,153 @@ LEAGUES_TO_RUN = [
     "Copa America",
     "Afrika Cup",
     "Freundschaftsspiele International",
-
-    # ── Europa (fehlend) ──
-    "Faroe Islands Premier League",
-    "Gibraltar National League",
-    "Kosovo Superliga",
-    "Luxembourg BGL Ligue",
-    "Malta Premier League",
-    "Moldova National Division",
-    "Montenegro First League",
-    "North Macedonia First League",
-    "Northern Ireland Premiership",
-    "Republic of Ireland Premier Division",
-    "Republic of Ireland First Division",
-    "Wales Premier League",
-    "Albania Superliga",
-    "Armenia Premier League",
-    "Azerbaijan Premier League",
-    "Georgia Erovnuli Liga",
-    "Cyprus First Division",
-    "Czech 2. Liga",
-    "Slovakia Super Liga",
-    "Slovenia Prva Liga",
-    "Bosnia Premier League",
-    "Andorra Primera Divisió",
-    "San Marino Campionato",
-    "Swiss Challenge League",
-    "Austrian Regional Liga",
-    # ── Österreich komplett ──
-    "Austria Regionalliga Mitte",
-    "Austria Regionalliga Ost",
-    "Austria Regionalliga Salzburg",
-    "Austria Regionalliga Tirol",
-    "Austria Regionalliga West",
-    "Austria Landesliga Wien",
-    "Austria Landesliga Niederösterreich",
-    "Austria Landesliga Burgenland",
-    "Austria Landesliga Steiermark",
-    "Austria Landesliga Kärnten",
-    "Austria Landesliga Tirol",
-    "Austria Landesliga Vorarlberg",
-    "Austria Landesliga Salzburg",
-    "Austria Landesliga Oberösterreich",
-    "ÖFB Cup",
-    "Austria Frauen Bundesliga",
-    # ── Deutschland Regional komplett ──
-    "Germany Oberliga Bayern",
-    "Germany Oberliga Baden-Württemberg",
-    "Germany Oberliga Hessen",
-    "Germany Oberliga Niedersachsen",
-    "Germany Oberliga Nordost Nord",
-    "Germany Oberliga Nordost Süd",
-    "Germany Oberliga Rheinland-Pfalz/Saar",
-    "Germany Oberliga Westfalen",
-    "Germany Oberliga NOFV Nord",
-    "Germany Oberliga NOFV Süd",
-    "Germany Verbandsliga Bayern",
-    "Germany Bayernliga Nord",
-    "Germany Bayernliga Süd",
-    "DFB Pokal",
-    "Germany Frauen Bundesliga",
-    "Germany 2. Frauen Bundesliga",
-    # ── Schweiz komplett ──
-    "Switzerland Promotion League",
-    "Switzerland 1. Liga Classic",
-    "Switzerland 1. Liga",
-    "Switzerland Frauen Super League",
-    "Switzerland Cup",
-    # ── Frankreich Regional ──
-    "France National",
-    "France National 2",
-    "France National 3",
-    "France Coupe de France",
-    "France Frauen Division 1",
-    # ── Spanien Regional ──
-    "Spain Primera Federación",
-    "Spain Segunda Federación",
-    "Spain Tercera Federación",
-    "Copa del Rey",
-    "Spain Frauen Primera División",
-    # ── Italien Regional ──
-    "Italy Serie D",
-    "Italy Coppa Italia",
-    "Italy Frauen Serie A",
-    # ── England Regional ──
-    "England National League North",
-    "England National League South",
-    "England FA Cup",
-    "England EFL Trophy",
-    "England Premier League Women",
-    "England Championship Women",
-    # ── Niederlande ──
-    "Netherlands Keuken Kampioen Divisie",
-    "Netherlands Eerste Divisie",
-    "Netherlands 3. Divisie",
-    "Netherlands KNVB Beker",
-    # ── Belgien ──
-    "Belgium First Amateur",
-    "Belgium Cup",
-    # ── Portugal ──
-    "Portugal Liga 3",
-    "Portugal Campeonato de Portugal",
-    "Portugal Taça de Portugal",
-    # ── Griechenland ──
-    "Greece Super League 2",
-    "Greece Football League",
-    "Greece Cup",
-    # ── Türkei ──
-    "Turkey 2. Lig",
-    "Turkey 3. Lig",
-    "Turkey Cup",
-    # ── Russland ──
-    "Russia FNL2 Division B Group 4",
-    "Russia FNL2 Division B Group 5",
-    "Russia FNL2 Division B Group 6",
-    "Russia FNL2 Division B Group 7",
-    "Russia FNL2 Division B Group 8",
-    "Russia Cup",
-    # ── Ukraine ──
-    "Ukraine First League",
-    "Ukraine Second League",
-    # ── Polen ──
-    "Poland III Liga Group 1",
-    "Poland III Liga Group 2",
-    "Poland III Liga Group 3",
-    "Poland III Liga Group 4",
-    "Poland Cup",
-    # ── Tschechien ──
-    "Czech Cup",
-    # ── Rumänien ──
-    "Romania Liga 4",
-    "Romania Cup",
-    # ── Ungarn ──
-    "Hungary NB III",
-    "Hungary Cup",
-    # ── Skandinavien ──
-    "Sweden Division 2 Norra",
-    "Sweden Division 2 Södra",
-    "Norway Division 2 Group 1",
-    "Norway Division 2 Group 2",
-    "Denmark 3. Division",
-    "Finland Kolmonen",
-    "Finland Cup",
-    "Iceland Cup",
-    # ── Baltikum ──
-    "Latvia First League",
-    "Lithuania Division 1",
-    "Estonia Esiliiga",
-    # ── Südosteuropa ──
-    "Romania Liga IV",
-    "Bulgaria Third League",
-    "Serbia Srpska Liga South",
-    "Croatia Cup",
-    "Bosnia Cup",
-    "Albania First Division",
-    "North Macedonia Cup",
-    "Kosovo First League",
-    "Moldova Second Division",
-
-
-    "German Regionalliga Bayern",
-    "German Regionalliga Nord",
-    "German Regionalliga Nordost",
-    "German Regionalliga West",
-    "German Regionalliga Südwest",
-    # ── Afrika (fehlend) ──
-    "Algeria Ligue 2",
-    "Angola Girabola",
-    "Botswana Premier League",
-    "Burkina Faso Premier League",
-    "Cameroon Elite One",
-    "Congo DR Linafoot",
-    "Ethiopia Premier League",
-    "Gabon Championnat National",
-    "Ghana Premier League",
-    "Guinea Ligue Professionnelle",
-    "Ivory Coast Ligue 1",
-    "Libya Premier League",
-    "Malawi Super League",
-    "Mali Premiere Division",
-    "Mauritania Ligue 1",
-    "Morocco Botola 2",
-    "Mozambique Mocambola",
-    "Namibia Premier League",
-    "Rwanda Premier League",
-    "Senegal Ligue 1",
-    "Sierra Leone Premier League",
-    "Tanzania Premier League",
-    "Togo Championnat National",
-    "Uganda Premier League",
-    "Zambia Super League",
-    "Zimbabwe Premier Soccer League",
-    "Zanzibar Premier League",
-    "Gambia GFA League",
-    "Benin Ligue 1",
-    "CAF Champions League",
-    "CAF Confederation Cup",
-    "COSAFA Cup",
-    "CECAFA Cup",
-    # ── Asien (fehlend) ──
-    "Afghanistan Premier League",
-    "Bahrain Premier League",
-    "Bangladesh Premier League",
-    "Bhutan National League",
-    "Cambodia League",
-    "Chinese Taipei League",
-    "Hong Kong Premier League",
-    "India I-League 2",
-    "Indonesia Liga 2",
-    "Iraq Premier League",
-    "Jordan Pro League",
-    "Kazakhstan Premier League",
-    "Kuwait Premier League",
-    "Kyrgyzstan Top League",
-    "Laos League",
-    "Lebanon Premier League",
-    "Lebanon Division 2",
-    "Macau League",
-    "Maldives Dhivehi Premier League",
-    "Mongolia National Premier League",
-    "Myanmar National League",
-    "Nepal Super League",
-    "Oman Professional League",
-    "Pakistan Premier League",
-    "Palestine Premier League",
-    "Philippines United Football League",
-    "Qatar Stars League",
-    "Saudi Division 1",
-    "Singapore Premier League",
-    "Sri Lanka Football League",
-    "Syria Premier League",
-    "Tajikistan League",
-    "Thailand Division 1",
-    "Timor-Leste Premier League",
-    "Turkmenistan Liga",
-    "UAE Division 1",
-    "Uzbekistan Super League",
-    "Uzbekistan Division 1",
-    "Vietnam V-League 2",
-    "Yemen League",
-    "Yemen Super Cup",
-    "J-League Play-Offs",
-    "K League 3",
-    "K League 4",
-    "ACL Elite",
-    "ASEAN Club Championship",
-    "SAFF Championship",
-    "West Asian Football Federation",
-    # ── Südamerika (fehlend) ──
-    "Bolivia Division Profesional",
-    "Brazil Serie C",
-    "Brazil Serie D",
-    "Chile Primera B",
-    "Colombia Primera B",
-    "Ecuador Liga Pro 2",
-    "Paraguay Division Intermedia",
-    "Peru Liga 2",
-    "Venezuela Segunda Division",
-    "CONMEBOL Pre-Olympic",
-    "South American Youth Championship",
-    "Recopa Sudamericana",
-    "Copa Argentina",
-    "Campeonato Paulista",
-    "Campeonato Carioca",
-    "Campeonato Mineiro",
-    "Campeonato Gaucho",
-    "Argentinian Regional Liga",
-    # ── Nordamerika/Karibik (fehlend) ──
-    "Canada Premier League",
-    "USL League One",
-    "USL League Two",
-    "NISA National League",
-    "Costa Rica Segunda",
-    "El Salvador Primera Division",
-    "Nicaragua Primera Division",
-    "Panama LPF",
-    "Trinidad and Tobago Pro League",
-    "Jamaica Premier League",
-    "Haiti Ligue Haïtienne",
-    "Dominican Republic LDF",
-    "Cuba National Series",
-    # ── Ozeanien (fehlend) ──
-    "New Zealand Southern League",
-    "New Zealand National League",
-    "Fiji Battle of the Giants",
-    "Papua New Guinea National Soccer League",
-    "Solomon Islands S-League",
-    "Vanuatu Premier League",
-    "OFC Champions League",
-    # ── Youth/Reserve (fehlend) ──
-    "Champions League Youth",
-    "Bundesliga Reserve",
-    "Premier League 2",
-    "LaLiga Youth",
-    "Serie A Primavera",
-    "Ligue 1 Reserve",
-    # ── Internationale Cups (fehlend) ──
-    "Arab Cup",
-    "Gold Cup",
-    "CONCACAF Nations League",
-    "Pacific Games Football",
-    "Island Games",
-    "COSAFA Women Cup",
-    # ── Tschechien Regional (aktiv während Europa-Pause) ──
-    "Czech 3. CFL Group A",
-    "Czech 3. CFL Group B",
-    "Czech 3. MSFL",
-    "Czech 4. Liga Group A",
-    "Czech 4. Liga Group B",
-    "Czech 4. Liga Group C",
-    "Czech 4. Liga Group D",
-    "Czech 4. Liga Group E",
-    "Czech 4. Liga Group F",
-    "Czech Jihocesky KP",
-    "Czech Jihomoravsky KP",
-    "Czech Karlovarsky KP",
-    "Czech Kralovehradecky KP",
-    "Czech Liberecky KP",
-    "Czech Moravskoslezsky KP",
-    "Czech Olomoucky KP",
-    "Czech Pardubicky KP",
-    "Czech Plzensky KP",
-    "Czech Prazsky Prebor",
-    "Czech Stredocesky KP",
-    "Czech Ustecky KP",
-    "Czech Vysocina KP",
-    # ── China (aktiv während Europa-Pause) ──
-    "China League Two",
-    "China League Three",
-    "China FA Cup",
-    # ── Australien (früh morgens aktiv) ──
-    "Australia NPL Queensland",
-    "Australia NPL Victoria",
-    "Australia NPL NSW",
-    "Australia NPL South Australia",
-    "Australia NPL Western Australia",
-    "Australia NPL Capital Territory",
-    "Australia NPL Northern NSW",
-    "Australia NPL Tasmania",
-    "Australia FFA Cup",
-    "Australia Capital Football",
-    "Australia Queensland NPL2",
-    "Australia Victoria NPL2",
-    # ── Weitere aktive Ligen während Pausen ──
-    "Slovakia 2. Liga",
-    "Slovakia 3. Liga",
-    "Poland I Liga",
-    "Poland II Liga",
-    "Romania Liga II",
-    "Romania Liga III",
-    "Hungary NB II",
-    "Bulgaria First League",
-    "Bulgaria Second League",
-    "Serbia First League",
-    "Croatia 2. HNL",
-    "Slovenia 2. SNL",
-    "Bosnia 2. Liga",
-    "Greece Football League",
-    "Greece Gamma Ethniki",
-    "Cyprus First Division",
-    "Cyprus Second Division",
-    "Israel National League",
-    "Finland Ykkönen",
-    "Sweden Division 1",
-    "Norway Division 1",
-    "Denmark 2. Division",
-    "Iceland 2. Deild",
-    "Latvia First League",
-    "Lithuania A Lyga 2",
-    "Estonia Meistriliiga",
-    "Belarus First League",
-    "Ukraine First League",
-    "Russia First League",
-    "Russia Second League",
-
-    # ── Europa Youth/Cups ──
-    "Euro U19 Qualification League A",
-    "Euro U19 Qualification League B",
-    "Europe Baltic Cup",
-    "Europe Premier League Crimea",
-    # ── Finnland ──
-    "Finland Ykkosliiga",
-    "Finland Ykkönen",
-    # ── Island ──
-    "Iceland Division 1",
-    "Iceland Division 2",
-    # ── Norwegen Regional ──
-    "Norway Division 3 Group 1",
-    "Norway Division 3 Group 6",
-    # ── Paraguay ──
-    "Paraguay Division Intermedia",
-    # ── Polen Play-Offs ──
-    "Poland Division 2 Promotion Play-Offs",
-    "Poland Division 2 Relegation Play-Offs",
-    # ── Rumänien ──
-    "Romania Liga 3 Promotion Play-Offs",
-    # ── Russland FNL2 ──
-    "Russia FNL2 Division A Silver",
-    "Russia FNL2 Division B Group 1",
-    "Russia FNL2 Division B Group 2",
-    "Russia FNL2 Division B Group 3",
-    # ── Serbien Regional ──
-    "Serbia Srpska Liga Belgrade",
-    "Serbia Srpska Liga Vojvodina",
-    "Serbia Srpska Liga East",
-    "Serbia Srpska Liga West",
-    # ── Japan Frauen ──
-    "Japan L1 League Women",
-    "Japan L2 League Women",
-    # ── Afrika Frauen + Cups ──
-    "Cameroon Liga Women",
-    "Nigeria FA Cup",
-    "South Africa Premier Play-Offs",
-    # ── Myanmar Youth ──
-    "Myanmar U20 League",
-    # ── Südkorea alle ──
-    "K3 League",
-    "K4 League",
 ]
 
 # Zeitfenster pro Liga (UTC Stunden)
-# LEAGUES_TIME_MAP entfernt — Bot läuft global 24/7
-
+LEAGUES_TIME_MAP = {
+    "Champions League": "evening",
+    "Europa League": "evening",
+    "Conference League": "evening",
+    "Bundesliga": "evening",
+    "2. Bundesliga": "evening",
+    "3. Liga Deutschland": "evening",
+    "Premier League": "evening",
+    "Championship": "evening",
+    "EFL League 1": "evening",
+    "EFL League 2": "evening",
+    "National League": "evening",
+    "La Liga": "evening",
+    "La Liga 2": "evening",
+    "Serie A": "evening",
+    "Serie B": "evening",
+    "Serie C": "evening",
+    "Ligue 1": "evening",
+    "Ligue 2": "evening",
+    "Eredivisie": "evening",
+    "Eerste Divisie": "evening",
+    "Primeira Liga": "evening",
+    "Pro League Belgien": "evening",
+    "Belgium Challenger": "evening",
+    "Süper Lig": "evening",
+    "Turkish 1. Lig": "evening",
+    "Bundesliga Österreich": "evening",
+    "Austria 2. Liga": "evening",
+    "Super League Schweiz": "evening",
+    "Swiss Challenge": "evening",
+    "Scottish Premiership": "evening",
+    "Scottish Championship": "evening",
+    "Scottish League One": "evening",
+    "Danish Superliga": "evening",
+    "Danish 1. Division": "evening",
+    "Norway Eliteserien": "evening",
+    "Norwegian 1. Division": "evening",
+    "Sweden Allsvenskan": "evening",
+    "Swedish Superettan": "evening",
+    "Finland Veikkausliiga": "evening",
+    "Iceland Premier": "evening",
+    "Iceland 1. Deild": "evening",
+    "Greece Super League": "evening",
+    "Croatia HNL": "evening",
+    "Serbia SuperLiga": "evening",
+    "Romania Liga I": "evening",
+    "Czech First League": "evening",
+    "Czech 2. Liga": "evening",
+    "Poland Ekstraklasa": "evening",
+    "Slovak Super Liga": "evening",
+    "Hungarian NB I": "evening",
+    "Bulgarian First": "evening",
+    "Israeli Liga Leumit": "evening",
+    "Israeli Premier": "evening",
+    "Ukrainian Premier": "evening",
+    "Russian Premier": "evening",
+    "Belarus Premier": "evening",
+    "Latvian Higher League": "evening",
+    "Lithuanian A Lyga": "evening",
+    "Estonian Premium": "evening",
+    "Kazakh Premier": "evening",
+    "UEFA Youth League": "evening",
+    "Bundesliga U19": "afternoon",
+    "Bundesliga U17": "afternoon",
+    "Premier League U21": "afternoon",
+    "Premier League U18": "afternoon",
+    "La Liga U19": "afternoon",
+    "Serie A U19": "afternoon",
+    "Ligue 1 U19": "afternoon",
+    "Eredivisie U21": "afternoon",
+    "MLS": "night",
+    "USL Championship": "night",
+    "Brasileirao Serie A": "night",
+    "Brasileirao Serie B": "night",
+    "Liga Argentinien": "night",
+    "Argentina Primera B": "night",
+    "Liga MX": "night",
+    "Liga MX Expansion": "night",
+    "Uruguay Primera": "night",
+    "Chile Primera": "night",
+    "Colombia Primera": "night",
+    "Ecuador Serie A": "night",
+    "Peru Primera": "night",
+    "Venezuela Primera": "night",
+    "Paraguay Division": "night",
+    "Bolivia Division": "night",
+    "Costa Rica Primera": "night",
+    "Guatemala Liga": "night",
+    "Honduras Liga": "night",
+    "Copa Libertadores": "night",
+    "Copa Sudamericana": "night",
+    "CONCACAF Champions": "night",
+    "Saudi Pro League": "afternoon",
+    "Qatar Stars League": "afternoon",
+    "UAE Pro League": "afternoon",
+    "Egypt Premier": "afternoon",
+    "Morocco Botola": "afternoon",
+    "Tunisia Ligue 1": "afternoon",
+    "South Africa PSL": "afternoon",
+    "Algeria Ligue 1": "afternoon",
+    "Nigeria Premier": "afternoon",
+    "Kenya Premier": "afternoon",
+    "Iran Pro League": "afternoon",
+    "Jordan Pro League": "afternoon",
+    "Kuwait Premier": "afternoon",
+    "Bahrain Premier": "afternoon",
+    "J1 League Japan": "morning",
+    "J2 League Japan": "morning",
+    "J3 League Japan": "morning",
+    "K League 1": "morning",
+    "K League 2": "morning",
+    "China Super League": "morning",
+    "China League 1": "morning",
+    "India Super League": "morning",
+    "India I-League": "morning",
+    "Vietnam V-League": "morning",
+    "Thailand League 1": "morning",
+    "Malaysia Super League": "morning",
+    "Indonesia Liga 1": "morning",
+    "Philippines United": "morning",
+    "Singapore Premier": "morning",
+    "Myanmar National": "morning",
+    "Taiwan Football Prem": "morning",
+    "Hong Kong Premier": "morning",
+    "A-League Australia": "morning",
+    "A-League Women": "morning",
+    "New Zealand NZFC": "morning",
+    "AFC Champions League": "morning",
+    "AFC Cup": "morning",
+    "Kazakhstan Premier": "morning",
+    "Uzbekistan Super": "morning",
+    "Tajikistan League": "morning",
+    # 🌍 WM 2026 + Länderspiele
+    "WM 2026": "evening",
+    "WM 2026 Qualifikation Europa": "evening",
+    "WM 2026 Qualifikation Südamerika": "night",
+    "WM 2026 Qualifikation Asien": "morning",
+    "WM 2026 Qualifikation Afrika": "evening",
+    "WM 2026 Qualifikation CONCACAF": "night",
+    "UEFA Nations League": "evening",
+    "Copa America": "night",
+    "Afrika Cup": "evening",
+    "Freundschaftsspiele International": "evening",
+}
 
 
 LEAGUE_KEYS = {
@@ -975,166 +596,6 @@ FOOTBALL_DATA_CODES = {
 }
 
 API_FOOTBALL_LEAGUES = {
-    # ══ UEFA Cups ══
-    "Champions League": 2, "Europa League": 3, "Conference League": 848,
-    "UEFA Nations League": 5, "UEFA Youth League": 14,
-    # ══ Deutschland ══
-    "Bundesliga": 78, "2. Bundesliga": 79, "3. Liga Deutschland": 82,
-    "DFB Pokal": 81, "Bundesliga Reserve": 80,
-    "German Regionalliga Bayern": 83, "German Regionalliga Nord": 84,
-    "German Regionalliga Nordost": 85, "German Regionalliga West": 86,
-    "German Regionalliga Südwest": 87,
-    # ══ England ══
-    "Premier League": 39, "Championship": 40, "EFL League 1": 41,
-    "EFL League 2": 42, "National League": 43, "FA Cup": 45,
-    "EFL Cup": 48, "Premier League 2": 46, "Premier League U18": 47,
-    # ══ Spanien ══
-    "La Liga": 140, "La Liga 2": 141, "Copa del Rey": 143,
-    "LaLiga Youth": 142,
-    # ══ Italien ══
-    "Serie A": 135, "Serie B": 136, "Serie C": 137,
-    "Coppa Italia": 139, "Serie A Primavera": 138,
-    # ══ Frankreich ══
-    "Ligue 1": 61, "Ligue 2": 62, "Ligue National": 63,
-    "Coupe de France": 66,
-    # ══ Niederlande ══
-    "Eredivisie": 88, "Eerste Divisie": 89,
-    # ══ Portugal ══
-    "Primeira Liga": 94, "Segunda Liga": 95, "Taca de Portugal": 96,
-    # ══ Belgien ══
-    "Pro League Belgien": 144, "Belgium Challenger": 296,
-    # ══ Türkei ══
-    "Süper Lig": 203, "Turkish 1. Lig": 200, "Turkish 2. Lig": 201,
-    # ══ Österreich ══
-    "Bundesliga Österreich": 218, "Austria 2. Liga": 293,
-    "Austrian Regional Liga": 219,
-    # ══ Schweiz ══
-    "Super League Schweiz": 207, "Swiss Challenge League": 265,
-    # ══ Schottland ══
-    "Scottish Premiership": 179, "Scottish Championship": 181,
-    "Scottish League One": 182, "Scottish League Two": 183,
-    # ══ Dänemark ══
-    "Danish Superliga": 119, "Danish 1. Division": 120,
-    "Danish 2. Division": 121,
-    # ══ Norwegen ══
-    "Norway Eliteserien": 103, "Norwegian 1. Division": 104,
-    "Norway Division 1": 104, "Norway Division 3 Group 1": 1055,
-    # ══ Schweden ══
-    "Sweden Allsvenskan": 113, "Swedish Superettan": 114,
-    "Swedish Division 1": 115,
-    # ══ Finnland ══
-    "Finland Veikkausliiga": 244, "Finland Ykkosliiga": 245,
-    "Finland Ykkönen": 245,
-    # ══ Island ══
-    "Iceland Premier": 271, "Iceland 1. Deild": 272,
-    "Iceland Division 1": 272, "Iceland Division 2": 1118,
-    # ══ Griechenland ══
-    "Greece Super League": 197, "Greece Football League": 198,
-    "Greece Gamma Ethniki": 199,
-    # ══ Kroatien ══
-    "Croatia HNL": 210, "Croatia 2. HNL": 211,
-    # ══ Serbien ══
-    "Serbia SuperLiga": 286, "Serbia First League": 287,
-    "Serbia Srpska Liga Belgrade": 1350, "Serbia Srpska Liga Vojvodina": 1351,
-    "Serbia Srpska Liga East": 1352, "Serbia Srpska Liga West": 1353,
-    # ══ Rumänien ══
-    "Romania Liga I": 283, "Romania Liga II": 284, "Romania Liga III": 285,
-    "Romania Liga 3 Promotion Play-Offs": 285,
-    # ══ Tschechien ══
-    "Czech First League": 345, "Czech 2. Liga": 346,
-    "Czech 3. CFL Group A": 347, "Czech 3. CFL Group B": 347,
-    "Czech 3. MSFL": 349,
-    # ══ Polen ══
-    "Poland Ekstraklasa": 106, "Poland I Liga": 107, "Poland II Liga": 108,
-    "Poland Division 2 Promotion Play-Offs": 107,
-    # ══ Slowakei ══
-    "Slovak Super Liga": 332, "Slovakia 2. Liga": 333,
-    # ══ Ungarn ══
-    "Hungarian NB I": 325, "Hungary NB II": 326,
-    # ══ Bulgarien ══
-    "Bulgarian First": 348, "Bulgaria Second League": 349,
-    # ══ Israel ══
-    "Israeli Premier": 288, "Israeli Liga Leumit": 289,
-    # ══ Ukraine ══
-    "Ukrainian Premier": 333,
-    # ══ Russland ══
-    "Russian Premier": 235, "Russia First League": 236,
-    "Russia Second League": 237, "Russia FNL2 Division A Silver": 238,
-    "Russia FNL2 Division B Group 1": 239,
-    # ══ Belarus ══
-    "Belarus Premier": 116,
-    # ══ Baltikum ══
-    "Latvian Higher League": 180, "Lithuanian A Lyga": 186,
-    "Estonian Premium": 117,
-    # ══ Kasachstan ══
-    "Kazakh Premier": 121, "Kazakhstan Premier League": 121,
-    # ══ Kaukasus ══
-    "Georgia Erovnuli Liga": 189, "Armenia Premier League": 191,
-    "Azerbaijan Premier League": 195,
-    # ══ Balkan ══
-    "Slovenia Prva Liga": 212, "Bosnia Premier League": 213,
-    "North Macedonia First League": 215, "Kosovo Superliga": 219,
-    "Montenegro First League": 217, "Albania Superliga": 220,
-    # ══ Kleine EU ══
-    "Cyprus First Division": 278, "Malta Premier League": 303,
-    "Luxembourg BGL Ligue": 316, "Faroe Islands Premier League": 270,
-    "Northern Ireland Premiership": 183,
-    "Republic of Ireland Premier Division": 357,
-    "Wales Premier League": 361,
-    # ══ MLS / Nordamerika ══
-    "MLS": 253, "USL Championship": 255, "Canada Premier League": 256,
-    "USL League One": 257, "CONCACAF Champions": 37,
-    "CONCACAF Nations League": 38, "Gold Cup": 40,
-    "Costa Rica Primera": 321, "Guatemala Liga": 327,
-    "Honduras Liga": 329, "Liga MX": 262, "Liga MX Expansion": 263,
-    "Panama LPF": 330,
-    # ══ Südamerika ══
-    "Brasileirao Serie A": 71, "Brasileirao Serie B": 72,
-    "Brazil Serie C": 75, "Brazil Serie D": 76,
-    "Liga Argentinien": 128, "Argentina Primera B": 130,
-    "Copa Argentina": 131, "Campeonato Paulista": 73,
-    "Campeonato Carioca": 74, "Copa Libertadores": 13,
-    "Copa Sudamericana": 11, "Recopa Sudamericana": 12,
-    "Chile Primera": 265, "Chile Primera B": 266,
-    "Colombia Primera": 239, "Colombia Primera B": 240,
-    "Ecuador Serie A": 256, "Peru Primera": 281,
-    "Venezuela Primera": 293, "Bolivia Division Profesional": 236,
-    "Paraguay Division": 260, "Paraguay Division Intermedia": 261,
-    "Uruguay Primera": 268,
-    # ══ Saudi / Naher Osten ══
-    "Saudi Pro League": 307, "Saudi Division 1": 308,
-    "Qatar Stars League": 304, "UAE Pro League": 299,
-    "UAE Division 1": 300, "Kuwait Premier League": 285,
-    "Bahrain Premier League": 276, "Jordan Pro League": 286,
-    "Iraq Premier League": 290, "Oman Professional League": 303,
-    # ══ Afrika ══
-    "Egypt Premier": 233, "Morocco Botola": 200, "Morocco Botola 2": 201,
-    "Tunisia Ligue 1": 202, "Algeria Ligue 1": 197, "Algeria Ligue 2": 198,
-    "Nigeria Premier": 206, "Ghana Premier League": 208,
-    "South Africa PSL": 288, "Kenya Premier": 357,
-    "CAF Champions League": 20, "CAF Confederation Cup": 21,
-    # ══ Asien ══
-    "J1 League Japan": 98, "J2 League Japan": 99, "J3 League Japan": 100,
-    "K League 1": 292, "K League 2": 293, "K3 League": 294,
-    "China Super League": 169, "China League 1": 170,
-    "India Super League": 323, "India I-League": 324,
-    "Vietnam V-League": 340, "Thailand League 1": 296,
-    "Malaysia Super League": 302, "Indonesia Liga 1": 310,
-    "Singapore Premier League": 306,
-    "Iran Pro League": 290, "ACL Elite": 17,
-    "A-League Australia": 188, "Australia NPL NSW": 513,
-    "Australia NPL Victoria": 514, "Australia NPL Queensland": 515,
-    "New Zealand NZFC": 270,
-    # ══ International ══
-    "WM 2026": 1, "WM 2026 Qualifikation Europa": 32,
-    "WM 2026 Qualifikation Südamerika": 9,
-    "WM 2026 Qualifikation Asien": 30,
-    "WM 2026 Qualifikation Afrika": 29,
-    "WM 2026 Qualifikation CONCACAF": 31,
-    "Copa America": 7, "Afrika Cup": 6,
-    "Freundschaftsspiele International": 10,
-    "Euro U19 Qualification League A": 39,
-    "Europe Baltic Cup": 192,
     "Champions League": 2,
     "Europa League": 3,
     "Conference League": 848,
@@ -1190,421 +651,6 @@ API_FOOTBALL_LEAGUES = {
     "Israeli Premier": 288,
     "Ukrainian Premier": 333,
     "Russian Premier": 235,
-
-    # ═══ EUROPA KOMPLETT ═══
-    # Deutschland
-    "German Regionalliga Bayern": 90,
-    "German Regionalliga Nord": 91,
-    "German Regionalliga Nordost": 92,
-    "German Regionalliga West": 93,
-    "German Regionalliga Südwest": 94,
-    # Österreich
-    "Austrian Regional Liga": 221,
-    "Austria Regionalliga Mitte": 222,
-    "Austria Regionalliga Ost": 223,
-    "Austria Regionalliga Salzburg": 224,
-    "Austria Regionalliga Tirol": 225,
-    "Austria Regionalliga West": 226,
-    "ÖFB Cup": 552,
-    # ── Deutschland Regional ──
-    "Germany Oberliga Baden-Württemberg": 96,
-    "Germany Oberliga Hessen": 97,
-    "Germany Oberliga Niedersachsen": 98,
-    "Germany Oberliga Nordost Nord": 99,
-    "Germany Oberliga Nordost Süd": 100,
-    "Germany Oberliga Rheinland-Pfalz/Saar": 101,
-    "Germany Oberliga Westfalen": 102,
-    "Germany Oberliga NOFV Nord": 103,
-    "Germany Oberliga NOFV Süd": 104,
-    "Germany 2. Frauen Bundesliga": 846,
-    # ── Frankreich ──
-    "France Frauen Division 1": 846,
-    # ── Spanien ──
-    "Spain Tercera Federación": 544,
-    # ── Russland ──
-    "Russia FNL2 Division B Group 4": 237,
-    "Russia FNL2 Division B Group 5": 237,
-    "Russia FNL2 Division B Group 6": 237,
-    "Russia FNL2 Division B Group 7": 237,
-    "Russia FNL2 Division B Group 8": 237,
-    "Russia Cup": 560,
-    # ── Ukraine ──
-    "Ukraine Second League": 335,
-    # ── Polen ──
-    "Poland III Liga Group 1": 109,
-    "Poland III Liga Group 2": 109,
-    "Poland III Liga Group 3": 109,
-    "Poland III Liga Group 4": 109,
-    # ── Tschechien ──
-    "Czech Cup": 553,
-    # ── Rumänien ──
-    "Romania Liga 4": 286,
-    "Romania Cup": 561,
-    "Romania Liga IV": 286,
-    # ── Bulgarien ──
-    "Bulgaria Third League": 350,
-    # ── Serbien ──
-    "Serbia Srpska Liga South": 288,
-    "Serbia Srpska Liga West": 289,
-    # ── Albanien ──
-    "Albania First Division": 388,
-    # ── Kosovo ──
-    "Kosovo First League": 542,
-    # ── Moldova ──
-    "Moldova Second Division": 520,
-    # ── Estland ──
-    "Estonia Esiliiga": 331,
-    # ── Lettland ──
-    "Latvia First League": 347,
-    # ── Litauen ──
-    "Lithuania Division 1": 370,
-    # ── Schweden ──
-    "Sweden Division 2 Norra": 116,
-    "Sweden Division 2 Södra": 117,
-    # ── Norwegen ──
-    "Norway Division 2 Group 1": 105,
-    "Norway Division 2 Group 2": 105,
-    # ── Dänemark ──
-    "Denmark 3. Division": 121,
-    # ── Finnland ──
-    "Finland Kolmonen": 246,
-    # ── Island ──
-    "Iceland Cup": 1120,
-    # ── Niederlande ──
-    "Netherlands Eerste Divisie": 89,
-    # ── Belgien ──
-    "Belgium First Amateur": 297,
-    # ── Griechenland ──
-    "Greece Football League": 199,
-    "Greece Gamma Ethniki": 549,
-    # ── Ungarn ──
-    "Hungary NB III": 326,
-    # ── Kroatien ──
-    "Croatia Cup": 538,
-    # ── Bosnien ──
-    "Bosnia Cup": 562,
-    # ── England ──
-    "England Premier League Women": 848,
-    "England Championship Women": 849,
-    "England EFL Trophy": 47,
-    # ── Australien ──
-    "Australia NPL NSW": 513,
-    "Australia NPL Victoria": 514,
-    "Australia NPL Queensland": 515,
-    "Australia NPL South Australia": 516,
-    "Australia NPL Western Australia": 517,
-    "Australia FFA Cup": 185,
-    # ── Asien weitere ──
-    "China League Two": 171,
-    "China FA Cup": 549,
-    "India I-League 2": 325,
-    "Indonesia Liga 2": 275,
-    "Vietnam V-League 2": 341,
-    "Thailand Division 1": 297,
-    "Uzbekistan Division 1": 438,
-    "Lebanon Division 2": 460,
-    "Saudi Division 1": 308,
-    "UAE Division 1": 436,
-    # ── Afrika weitere ──
-    "Botswana Premier League": 469,
-    "Burkina Faso Premier League": 470,
-    "Guinea Ligue Professionnelle": 473,
-    "Ivory Coast Ligue 1": 399,
-    "Malawi Super League": 474,
-    "Mali Premiere Division": 475,
-    "Mauritania Ligue 1": 476,
-    "Namibia Premier League": 477,
-    "Rwanda Premier League": 515,
-    "Sierra Leone Premier League": 518,
-    "Togo Championnat National": 524,
-    # ── Americas weitere ──
-    "Campeonato Paulista": 73,
-    "Campeonato Carioca": 74,
-    "Campeonato Mineiro": 476,
-    "Copa Argentina": 130,
-    "Ecuador Liga Pro 2": 259,
-    "Peru Liga 2": 281,
-    "Venezuela Segunda Division": 274,
-    "Paraguay Division Intermedia": 242,
-    "Bolivia Division Profesional": 232,
-    "Costa Rica Segunda": 315,
-    "El Salvador Primera Division": 318,
-    "Panama LPF": 344,
-    "Jamaica Premier League": 428,
-    "Trinidad and Tobago Pro League": 346,
-    "Haiti Ligue Haïtienne": 351,
-    "Nicaragua Primera Division": 352,
-    "Dominican Republic LDF": 353,
-    "Canada Premier League": 256,
-    "USL League One": 255,
-    "USL League Two": 257,
-    # ── Internationale Cups weitere ──
-    "COSAFA Cup": 721,
-    "CECAFA Cup": 722,
-    "Pacific Games Football": 723,
-    "Gold Cup": 10,
-    "Euro U19 Qualification League A": 849,
-    "Euro U19 Qualification League B": 849,
-    "Europe Baltic Cup": 850,
-    "CONCACAF Nations League": 875,
-
-    # Deutschland Regional
-    "DFB Pokal": 529,
-    "Germany Frauen Bundesliga": 845,
-    "Germany Oberliga Bayern": 95,
-    "Germany Bayernliga Nord": 95,
-    "Germany Bayernliga Süd": 95,
-    # Schweiz
-    "Switzerland Promotion League": 266,
-    "Switzerland 1. Liga Classic": 267,
-    "Switzerland Cup": 554,
-    # Frankreich
-    "France National": 63,
-    "France National 2": 64,
-    "France National 3": 65,
-    "France Coupe de France": 558,
-    # Spanien
-    "Spain Primera Federación": 142,
-    "Spain Segunda Federación": 143,
-    "Copa del Rey": 556,
-    # Italien
-    "Italy Serie D": 138,
-    "Italy Coppa Italia": 557,
-    # England
-    "England National League North": 44,
-    "England National League South": 45,
-    "England FA Cup": 534,
-    # Niederlande
-    "Netherlands Keuken Kampioen Divisie": 89,
-    "Netherlands 3. Divisie": 90,
-    "Netherlands KNVB Beker": 545,
-    # Belgien
-    "Belgium Cup": 549,
-    # Portugal
-    "Portugal Liga 3": 95,
-    "Portugal Taça de Portugal": 555,
-    # Griechenland
-    "Greece Super League 2": 198,
-    "Greece Cup": 536,
-    # Türkei
-    "Turkey 2. Lig": 203,
-    "Turkey 3. Lig": 204,
-    "Turkey Cup": 559,
-    # Polen
-    "Poland Cup": 1065,
-    # Ungarn
-    "Hungary NB III": 326,
-    "Hungary Cup": 537,
-    # Skandinavien
-    "Sweden Division 2 Norra": 116,
-    "Sweden Division 2 Södra": 117,
-    "Norway Division 2 Group 1": 105,
-    "Denmark 3. Division": 121,
-    "Finland Cup": 540,
-    # Baltikum
-    "Estonia Esiliiga": 331,
-    "Lithuania Division 1": 370,
-
-    # Schweiz
-    "Swiss Challenge League": 265,
-    # UK
-    "National League": 43,
-    "Northern Ireland Premiership": 415,
-    "Republic of Ireland Premier Division": 357,
-    "Republic of Ireland First Division": 358,
-    "Wales Premier League": 410,
-    # Skandinavien
-    "Finland Ykkosliiga": 244,
-    "Finland Ykkönen": 245,
-    "Iceland Division 1": 272,
-    "Iceland Division 2": 1118,
-    "Norway Division 1": 104,
-    "Norway Division 3 Group 1": 1055,
-    "Sweden Division 1": 115,
-    # Osteuropa
-    "Czech 3. CFL Group A": 347,
-    "Czech 3. CFL Group B": 347,
-    "Czech 3. MSFL": 349,
-    "Slovakia 2. Liga": 333,
-    "Hungary NB II": 329,
-    "Poland I Liga": 107,
-    "Poland II Liga": 108,
-    "Romania Liga II": 284,
-    "Romania Liga III": 285,
-    "Bulgaria Second League": 349,
-    "Serbia First League": 287,
-    "Croatia 2. HNL": 211,
-    "Slovenia Prva Liga": 336,
-    "Slovenia 2. SNL": 337,
-    "Bosnia Premier League": 308,
-    "Bosnia 2. Liga": 309,
-    "North Macedonia First League": 385,
-    "Albania Superliga": 387,
-    "Kosovo Superliga": 541,
-    "Montenegro First League": 556,
-    "Moldova National Division": 519,
-    "Armenia Premier League": 382,
-    "Azerbaijan Premier League": 373,
-    "Georgia Erovnuli Liga": 526,
-    "Cyprus First Division": 337,
-    "Malta Premier League": 482,
-    "Luxembourg BGL Ligue": 444,
-    "Gibraltar National League": 555,
-    "Faroe Islands Premier League": 546,
-    "Latvia Higher League": 347,
-    "Lithuania A Lyga": 369,
-    "Estonia Meistriliiga": 330,
-    "Belarus Premier League": 370,
-    "Belarus First League": 371,
-    "Ukraine First League": 334,
-    "Russia First League": 236,
-    "Russia Second League": 237,
-    "Russia FNL2 Division A Silver": 237,
-    "Kazakh Premier": 360,
-    "Uzbekistan Super League": 437,
-    # ═══ AFRIKA KOMPLETT ═══
-    "Egypt Premier": 233,
-    "Morocco Botola": 200,
-    "Morocco Botola 2": 547,
-    "Tunisia Ligue 1": 201,
-    "Algeria Ligue 1": 207,
-    "Algeria Ligue 2": 208,
-    "South Africa PSL": 288,
-    "Ghana Premier League": 342,
-    "Nigeria Premier": 332,
-    "Kenya Premier": 374,
-    "Tanzania Premier League": 523,
-    "Uganda Premier League": 500,
-    "Zimbabwe Premier Soccer League": 543,
-    "Zambia Super League": 542,
-    "Senegal Ligue 1": 517,
-    "Ivory Coast Ligue 1": 399,
-    "Cameroon Elite One": 385,
-    "Ethiopia Premier League": 525,
-    "Rwanda Premier League": 515,
-    "Angola Girabola": 471,
-    "Mozambique Mocambola": 472,
-    "Libya Premier League": 470,
-    "CAF Champions League": 12,
-    "CAF Confederation Cup": 13,
-    # ═══ ASIEN KOMPLETT ═══
-    "J1 League Japan": 98,
-    "J2 League Japan": 99,
-    "J3 League Japan": 100,
-    "K League 1": 292,
-    "K League 2": 293,
-    "K3 League": 294,
-    "China Super League": 169,
-    "China League 1": 170,
-    "Saudi Pro League": 307,
-    "Qatar Stars League": 267,
-    "UAE Pro League": 435,
-    "Kuwait Premier League": 479,
-    "Bahrain Premier League": 462,
-    "Oman Professional League": 503,
-    "Iraq Premier League": 400,
-    "Jordan Pro League": 459,
-    "Iran Pro League": 290,
-    "Kazakhstan Premier League": 360,
-    "Uzbekistan Super League": 437,
-    "India Super League": 323,
-    "India I-League": 324,
-    "Vietnam V-League": 340,
-    "Thailand League 1": 296,
-    "Malaysia Super League": 274,
-    "Indonesia Liga 1": 274,
-    "Singapore Premier League": 441,
-    "Myanmar National League": 531,
-    "Philippines United Football League": 551,
-    "Hong Kong Premier League": 471,
-    "AFC Champions League": 17,
-    "ACL Elite": 17,
-    # ═══ AMERICAS KOMPLETT ═══
-    "MLS": 253,
-    "USL Championship": 254,
-    "Canada Premier League": 256,
-    "USL League One": 255,
-    "Brasileirao Serie A": 71,
-    "Brasileirao Serie B": 72,
-    "Brazil Serie C": 75,
-    "Brazil Serie D": 76,
-    "Liga Argentinien": 128,
-    "Argentina Primera B": 131,
-    "Uruguay Primera": 268,
-    "Chile Primera": 265,
-    "Colombia Primera": 239,
-    "Colombia Primera B": 240,
-    "Ecuador Serie A": 258,
-    "Peru Primera": 280,
-    "Venezuela Primera": 273,
-    "Paraguay Division": 241,
-    "Bolivia Division Profesional": 232,
-    "Costa Rica Primera": 314,
-    "Guatemala Liga": 343,
-    "Honduras Liga": 345,
-    "Mexico Liga MX": 262,
-    "Mexico Expansion": 278,
-    "Copa Libertadores": 11,
-    "Copa Sudamericana": 13,
-    "CONCACAF Champions": 16,
-    # ═══ OZEANIEN ═══
-    "A-League Australia": 188,
-    "A-League Women": 189,
-    "New Zealand NZFC": 415,
-    # ═══ INTERNATIONALE CUPS ═══
-    "WM 2026": 1,
-    "UEFA Nations League": 5,
-    "Copa America": 9,
-    "Gold Cup": 10,
-    "Afrika Cup": 6,
-    "Arab Cup": 7,
-    # ── Tschechien ──
-    "Czech 3. CFL Group A": 347,
-    "Czech 3. CFL Group B": 347,
-    "Czech 3. MSFL": 349,
-    "Czech 4. Liga Group A": 350,
-    "Czech 4. Liga Group B": 350,
-    # ── Island ──
-    "Iceland Division 1": 272,
-    "Iceland Division 2": 1118,
-    # ── Norwegen ──
-    "Norway Division 1": 104,
-    "Norway Division 3 Group 1": 1055,
-    # ── Polen ──
-    "Poland I Liga": 107,
-    "Poland II Liga": 108,
-    # ── Rumänien ──
-    "Romania Liga II": 284,
-    "Romania Liga III": 285,
-    # ── Finnland ──
-    "Finland Ykkosliiga": 245,
-    "Finland Ykkönen": 245,
-    # ── Serbien ──
-    "Serbia First League": 287,
-    # ── Kroatien ──
-    "Croatia 2. HNL": 211,
-    # ── Bulgarien ──
-    "Bulgaria Second League": 349,
-    # ── Schweiz ──
-    "Swiss Challenge League": 265,
-    # ── Australien ──
-    "A-League Australia": 188,
-    "Australia NPL NSW": 513,
-    "Australia NPL Victoria": 514,
-    "Australia NPL Queensland": 515,
-    # ── Russland ──
-    "Russia First League": 236,
-    "Russia FNL2 Division A Silver": 237,
-    # ── Korea ──
-    "K League 2": 293,
-    "K3 League": 294,
-    # ── Lateinamerika ──
-    "Brazil Serie C": 75,
-    "Brazil Serie D": 76,
-    "Chile Primera B": 265,
-    "Colombia Primera B": 240,
-    "Paraguay Division Intermedia": 241,
-    "Uruguay Primera": 268,
     "Belarus Premier": 338,
     "Latvian Higher League": 366,
     "Lithuanian A Lyga": 365,
@@ -1744,10 +790,6 @@ MARKET_INFO = {
     "btts_ht": {
         "name": "🕐 BTTS HT",
         "instr": "Analysiere BTTS in der 1. Halbzeit (Beide Teams treffen bis zur Pause). Wichtig: xG HT, Pressing der Teams, frühe Tore Statistik.",
-    },
-    "over15_ht": {
-        "name": "⚡ Over 1.5 HT",
-        "instr": "Analysiere Over 1.5 Tore in der 1. Halbzeit. Prüfe: xG erste Hälfte, Tore in HZ1 der letzten 10 Spiele, pressing-intensive Teams, frühe Führungstreffer Tendenz. Mindest-Wahrscheinlichkeit 67%.",
     },
 }
 
@@ -2384,7 +1426,7 @@ def get_scoutingstats_prediction(home_team, away_team, target_date):
     if SCOUTINGSTATS_BLOCKED:
         return None
 
-    cache_key = f"scout_{target_date}"  # Pro Tag cachen
+    cache_key = f"{home_team}_{away_team}_{target_date}"
     if cache_key in SCOUTINGSTATS_CACHE:
         return SCOUTINGSTATS_CACHE[cache_key]
 
@@ -2600,7 +1642,7 @@ def fetch_sofascore_fixtures(league_name, target_date):
         # Versuche mehrere SofaScore Endpoints
         urls_to_try = [
             f"https://api.sofascore.com/api/v1/sport/football/scheduled-events/{date_str}",
-            f"https://api.sofascore.com/api/v1/sport/football/scheduled-events/{date_str}",
+            f"https://www.sofascore.com/api/v1/sport/football/scheduled-events/{date_str}",
         ]
         
         url = urls_to_try[0]
@@ -2722,222 +1764,6 @@ def fetch_sofascore_fixtures(league_name, target_date):
         return []
 
 
-
-def fetch_espn_all_today(target_date) -> dict:
-    """
-    ESPN All Soccer Scoreboard — holt ALLE Fussball Spiele weltweit an einem Tag.
-    Kein Key nötig, funktioniert von GitHub Actions.
-    Endpoint: site.api.espn.com/apis/site/v2/sports/soccer/all/scoreboard
-    """
-    try:
-        date_str = str(target_date).replace("-", "")
-        url = f"https://site.api.espn.com/apis/site/v2/sports/soccer/all/scoreboard?dates={date_str}&limit=500"
-        r = requests.get(url, headers={
-            "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36",
-            "Accept": "application/json",
-            "Referer": "https://www.espn.com/",
-        }, timeout=20)
-        
-        if not r.ok:
-            log(f"   ⚠️ ESPN All: HTTP {r.status_code}")
-            return {}
-        
-        data = r.json()
-        events = data.get("events", [])
-        
-        if not events:
-            return {}
-        
-        result = {}
-        for ev in events:
-            try:
-                competition = ev.get("competitions", [{}])[0]
-                competitors = competition.get("competitors", [])
-                if len(competitors) < 2:
-                    continue
-                
-                home = next((c["team"]["displayName"] for c in competitors if c.get("homeAway") == "home"), "")
-                away = next((c["team"]["displayName"] for c in competitors if c.get("homeAway") == "away"), "")
-                
-                if not home or not away:
-                    continue
-                
-                # Liga aus ESPN
-                league_raw = ev.get("league", {}).get("name", "")
-                if not league_raw:
-                    league_raw = ev.get("season", {}).get("slug", "Unknown")
-                
-                # Zeit
-                start_time = ev.get("date", "")
-                kickoff = "TBD"
-                if start_time:
-                    try:
-                        from datetime import timezone as _tz_e
-                        dt = datetime.fromisoformat(start_time.replace("Z", "+00:00"))
-                        kickoff = dt.astimezone(_tz_e.utc).strftime("%H:%M")
-                    except Exception:
-                        pass
-                
-                fixture = {
-                    "home": home,
-                    "away": away,
-                    "time": kickoff,
-                    "time_local": kickoff,
-                    "source": "espn_bulk",
-                    "match_id": str(ev.get("id", "")),
-                    "league": league_raw,
-                }
-                
-                # ESPN Slug → Liga-Name Mapping
-                # ESPN gibt Slugs wie "2026-brasileiro-serie-b" → mappe auf "Brasileirao Serie B"
-                ESPN_SLUG_MAP = {
-                    "2026-brasileiro-serie-b": "Brasileirao Serie B",
-                    "2026-brasileiro-serie-a": "Brasileirao Serie A",
-                    "2026-brasileiro-serie-c": "Brazil Serie C",
-                    "2026-bolivian-liga-profesional": "Bolivia Division Profesional",
-                    "2026-international-friendly": "Freundschaftsspiele International",
-                    "2026-womens-international-friendly": "Freundschaftsspiele International",
-                    "2026-argentine-primera-division": "Liga Argentinien",
-                    "2026-primera-nacional": "Argentina Primera B",
-                    "2026-torneo-federal-a": "Argentina Primera B",
-                    "2026-uruguayan-primera-division": "Uruguay Primera",
-                    "2026-chilean-primera-division": "Chile Primera",
-                    "2026-colombian-primera-a": "Colombia Primera",
-                    "2026-ecuadorian-liga-pro": "Ecuador Serie A",
-                    "2026-peruvian-primera-division": "Peru Primera",
-                    "2026-venezuelan-primera": "Venezuela Primera",
-                    "2026-paraguayan-primera-division": "Paraguay Division",
-                    "2026-mls": "MLS",
-                    "2026-usl-championship": "USL Championship",
-                    "2026-canadian-premier-league": "Canada Premier League",
-                    "2026-liga-mx": "Liga Argentinien",
-                    "group-stage": "WM 2026",
-                    "round-of-32": "Copa Libertadores",
-                    "regular-season": "MLS",
-                    "apertura-final": "Liga Argentinien",
-                    "torneo-intermedio": "Liga Argentinien",
-                    "promotion-semifinals": "Argentina Primera B",
-                }
-                
-                # Direkte Slug-Map prüfen
-                league_slug = ev.get("league", {}).get("slug", "").lower()
-                mapped_league = ESPN_SLUG_MAP.get(league_slug) or ESPN_SLUG_MAP.get(league_raw.lower())
-                
-                if not mapped_league:
-                    # Fuzzy: ESPN Slug enthält oft Liga-Keywords
-                    slug_clean = league_slug.replace("-", " ").replace("2026", "").strip()
-                    for our_league in LEAGUES_TO_RUN:
-                        our_words = set(w for w in our_league.lower().split() if len(w) > 4)
-                        slug_words = set(w for w in slug_clean.split() if len(w) > 4)
-                        if len(our_words & slug_words) >= 1 and our_words & slug_words:
-                            mapped_league = our_league
-                            break
-                
-                if not mapped_league:
-                    mapped_league = league_raw  # Fallback
-                
-                league_key = mapped_league
-                if league_key not in result:
-                    result[league_key] = []
-                result[league_key].append(fixture)
-                
-            except Exception:
-                continue
-        
-        log(f"   ✅ ESPN All: {sum(len(v) for v in result.values())} Spiele in {len(result)} Ligen")
-        return result
-        
-    except Exception as e:
-        log(f"   ⚠️ ESPN All Fehler: {e}")
-        return {}
-
-
-def fetch_fotmob_all_today(target_date) -> dict:
-    """
-    FotMob All Matches Today — alle Spiele eines Tages.
-    Sehr gute Daten inkl. xG, weniger aggressiv geblockt als SofaScore.
-    """
-    try:
-        date_str = str(target_date).replace("-", "")
-        url = f"https://www.fotmob.com/api/matches?date={date_str}"
-        r = requests.get(url, headers={
-            "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) Chrome/121.0.0.0",
-            "Accept": "application/json",
-            "Referer": "https://www.fotmob.com/",
-            "Accept-Language": "en-US,en;q=0.9",
-        }, timeout=20)
-        
-        if not r.ok:
-            log(f"   ⚠️ FotMob All: HTTP {r.status_code}")
-            return {}
-        
-        data = r.json()
-        leagues_data = data.get("leagues", [])
-        
-        if not leagues_data:
-            return {}
-        
-        result = {}
-        for league_data in leagues_data:
-            league_raw = league_data.get("name", "")
-            matches = league_data.get("matches", [])
-            
-            if not matches:
-                continue
-            
-            # Liga mappen — mindestens 2 Wörter müssen übereinstimmen
-            mapped_league = None
-            raw_lower = league_raw.lower()
-            raw_words = set(w for w in raw_lower.split() if len(w) > 3)
-            
-            for our_league in LEAGUES_TO_RUN:
-                our_words = set(w for w in our_league.lower().split() if len(w) > 3)
-                if len(raw_words & our_words) >= 2:
-                    mapped_league = our_league
-                    break
-            
-            league_key = mapped_league or league_raw
-            
-            for match in matches:
-                try:
-                    home = match.get("home", {}).get("name", "")
-                    away = match.get("away", {}).get("name", "")
-                    if not home or not away:
-                        continue
-                    
-                    status = match.get("status", {})
-                    kickoff = status.get("utcTime", "")
-                    if kickoff:
-                        try:
-                            dt = datetime.fromisoformat(kickoff.replace("Z", "+00:00"))
-                            kickoff = dt.strftime("%H:%M")
-                        except Exception:
-                            kickoff = "TBD"
-                    
-                    fixture = {
-                        "home": home,
-                        "away": away,
-                        "time": kickoff,
-                        "time_local": kickoff,
-                        "source": "fotmob_bulk",
-                        "match_id": str(match.get("id", "")),
-                        "xg_home": match.get("xg", {}).get("home", 0),
-                        "xg_away": match.get("xg", {}).get("away", 0),
-                    }
-                    
-                    if league_key not in result:
-                        result[league_key] = []
-                    result[league_key].append(fixture)
-                except Exception:
-                    continue
-        
-        log(f"   ✅ FotMob All: {sum(len(v) for v in result.values())} Spiele in {len(result)} Ligen")
-        return result
-        
-    except Exception as e:
-        log(f"   ⚠️ FotMob All Fehler: {e}")
-        return {}
-
 def fetch_sofascore_all_today(target_date):
     """
     Holt ALLE heutigen Spiele von SofaScore auf einmal.
@@ -2975,23 +1801,8 @@ def fetch_sofascore_all_today(target_date):
         )
         
         if r.status_code in [403, 429, 503]:
-            log(f"   🎭 SofaScore blockiert ({r.status_code}) → Playwright...")
-            if PLAYWRIGHT_AVAILABLE:
-                html = scrape_with_playwright(url, timeout=15000)
-                if html:
-                    import json as _pj, re as _pre
-                    m = _pre.search(r'"events"\s*:\s*(\[.*?\])\s*[,}]', html, _pre.DOTALL)
-                    if m:
-                        try:
-                            events_raw = _pj.loads(m.group(1))
-                            data = {"events": events_raw}
-                            log(f"   ✅ SofaScore via Playwright: {len(events_raw)} Events")
-                            r = type('R', (), {'ok': True, 'status_code': 200, 'json': lambda self=None: data})()
-                        except Exception:
-                            pass
-            if r.status_code in [403, 429, 503]:
-                log("   ℹ️  SofaScore nicht erreichbar → Fallback aktiv", "INFO")
-                return {}
+            log(f"   ℹ️  SofaScore All blockiert ({r.status_code})", "INFO")
+            return {}
         
         if not r.ok:
             return {}
@@ -5350,28 +4161,8 @@ except ImportError:
     pass
 
 PLAYWRIGHT_CACHE = {}
-_PW_SESSION_CACHE = {}   # URL → HTML Cache für diese Session
-_PW_LOCK = None          # Threading Lock
-_PW_FETCHING = {}        # URL → Event (verhindert gleichzeitige Fetches)
-_PREDICTION_CACHE = {}   # match_key → {forebet, predictz, betimate, wdw} für ganzen Run
 
 def scrape_with_playwright(url, wait_for=None, timeout=8000):
-    global _PW_LOCK, _PW_FETCHING
-    import threading as _th
-    if _PW_LOCK is None:
-        _PW_LOCK = _th.Lock()
-    
-    # Session-Cache: gleiche URL nicht nochmal laden
-    if url in _PW_SESSION_CACHE:
-        return _PW_SESSION_CACHE[url]
-    
-    # Warte wenn gleiche URL gerade geladen wird
-    with _PW_LOCK:
-        if url in _PW_SESSION_CACHE:
-            return _PW_SESSION_CACHE[url]
-        # Markiere als "wird geladen"
-        _PW_FETCHING[url] = True
-
     """
     Scrapt eine Seite mit echtem Chromium Browser.
     Umgeht 403 Blocks von SofaScore, Transfermarkt etc.
@@ -5409,8 +4200,6 @@ def scrape_with_playwright(url, wait_for=None, timeout=8000):
             browser.close()
 
             PLAYWRIGHT_CACHE[cache_key] = html
-            _PW_SESSION_CACHE[url] = html  # Session-Cache
-            _PW_FETCHING.pop(url, None)
             return html
 
     except Exception as e:
@@ -5851,7 +4640,7 @@ PREDICTZ_CACHE = {}
 
 def get_predictz_prediction(home_team, away_team, target_date):
     """Gratis Predictions von predictz.com"""
-    cache_key = f"pz_{target_date}"  # Pro Tag cachen, nicht pro Match
+    cache_key = f"pz_{home_team}_{away_team}"
     if cache_key in PREDICTZ_CACHE:
         return PREDICTZ_CACHE[cache_key]
     try:
@@ -5898,7 +4687,7 @@ BETIMATE_CACHE = {}
 
 def get_betimate_prediction(home_team, away_team, target_date):
     """BTTS + Over2.5 von betimate.com"""
-    cache_key = f"bm_{target_date}"  # Pro Tag cachen
+    cache_key = f"bm_{home_team}_{away_team}"
     if cache_key in BETIMATE_CACHE:
         return BETIMATE_CACHE[cache_key]
     try:
@@ -6021,7 +4810,7 @@ WDW_CACHE = {}
 
 def get_windrawwin_prediction(home_team, away_team, target_date):
     """Statistische Predictions von windrawwin.com"""
-    cache_key = f"wdw_{target_date}"  # Pro Tag cachen
+    cache_key = f"wdw_{home_team}_{away_team}"
     if cache_key in WDW_CACHE:
         return WDW_CACHE[cache_key]
     try:
@@ -6871,6 +5660,37 @@ def load_martj42_data():
     except Exception as e:
         log(f"martj42 Error: {str(e)[:50]}", "WARN")
         return []
+
+
+def get_national_team_btts_stats(team_name: str, last_n: int = 20) -> dict:
+    """BTTS/Over2.5 Stats für Nationalmannschaften aus martj42 Daten."""
+    global MARTJ42_DATA
+    if not MARTJ42_DATA:
+        return {}
+    team_lower = team_name.lower()
+    games = []
+    for g in MARTJ42_DATA:
+        h = str(g.get("home_team","")).lower()
+        a = str(g.get("away_team","")).lower()
+        if team_lower in h or h in team_lower or team_lower in a or a in team_lower:
+            try:
+                hs, as_ = int(g.get("home_score",-1)), int(g.get("away_score",-1))
+                if hs >= 0 and as_ >= 0:
+                    games.append({"btts":1 if hs>0 and as_>0 else 0,
+                                  "over25":1 if hs+as_>2 else 0,
+                                  "total":hs+as_,"date":g.get("date","")})
+            except Exception:
+                continue
+    if len(games) < 5:
+        return {}
+    games = sorted(games, key=lambda x: x["date"], reverse=True)[:last_n]
+    n = len(games)
+    return {
+        "btts_pct": round(sum(g["btts"] for g in games)/n*100,1),
+        "over25_pct": round(sum(g["over25"] for g in games)/n*100,1),
+        "avg_goals": round(sum(g["total"] for g in games)/n,2),
+        "games_analyzed": n,
+    }
 
 
 def get_international_fixtures_today(target_date) -> list:
@@ -8827,7 +7647,7 @@ APIFOOTBALL_ENABLE_PREDICTIONS = env("APIFOOTBALL_PREDICTIONS", "true").lower() 
 # ============================================================
 # 🆕 LEAGUE ROTATION SYSTEM - Auto Ligen ein/ausschalten
 # ============================================================
-LEAGUE_ROTATION_ENABLED = env("LEAGUE_ROTATION_ENABLED", "false").lower() in ["1", "true", "yes"]  # Default AUS bis CLV Daten vorhanden
+LEAGUE_ROTATION_ENABLED = env("LEAGUE_ROTATION_ENABLED", "false").lower() in ["1", "true", "yes"]
 LEAGUE_ROTATION_MIN_SAMPLES = int(env("LEAGUE_ROTATION_MIN_SAMPLES", "5"))  # Mindest 5 Tipps pro Liga
 LEAGUE_ROTATION_MIN_QUOTE = float(env("LEAGUE_ROTATION_MIN_QUOTE", "0.50"))  # <50% = rausnehmen
 LEAGUE_ROTATION_MAX_QUOTE = float(env("LEAGUE_ROTATION_MAX_QUOTE", "0.70"))  # >70% = reinmachen
@@ -9654,7 +8474,7 @@ def call_groq(prompt):
         return None, "Groq übersprungen (Rate Limit erreicht)"
 
     if len(prompt) > 30000:
-        prompt = prompt[:30000] + "\n\n🇩🇪 PFLICHT: Antworte AUSSCHLIESSLICH auf DEUTSCH! Jeder Text, reasoning, keyFactor, comment = DEUTSCH. Kein Englisch erlaubt. Antworte mit JSON-Array."
+        prompt = prompt[:30000] + "\n\nANTWORTE NUR AUF DEUTSCH! Reasoning und keyFactor IMMER auf Deutsch. Antworte mit JSON-Array."
 
     last_error = None
     rate_limit_hits = 0
@@ -10540,7 +9360,7 @@ KRITISCH:
 4. Berücksichtige xG-Daten.
 5. Wenn Liste leer: gib [] zurück.
 
-Antworte NUR auf DEUTSCH mit JSON-Array (kein Englisch):
+Antworte nur mit JSON-Array:
 {json_format}
 
 {tip_help}
@@ -10688,8 +9508,8 @@ def filter_top_tips(tips, target_date, market):
     filtered = []
     rejected = {"time": 0, "tip": 0, "prob": 0, "conf": 0, "value": 0, "odds": 0}
 
-    max_odds_for_market = 4.5 if market in ("btts_ht", "over15_ht") else MAX_ODDS
-    min_odds_for_market = 1.6 if market in ("btts_ht", "over15_ht") else MIN_ODDS
+    max_odds_for_market = 4.5 if market == "btts_ht" else MAX_ODDS
+    min_odds_for_market = 1.6 if market == "btts_ht" else MIN_ODDS
 
     for r in tips:
         if not is_future_game(r.get("time", ""), target_date):
@@ -10736,17 +9556,13 @@ def filter_top_tips(tips, target_date, market):
             continue
 
         odds = parse_odds(r.get("oddsYes", 0))
-
-        # Odds-Filter nur wenn echte Quoten vorhanden
-        # Wenn oddsYes = 0 oder sehr klein → KI hat keine Quote → Filter überspringen
-        if odds >= 1.20:  # Echte/geschätzte Quote vorhanden
+        if odds >= 1.20:
             if odds < min_odds_for_market or odds > max_odds_for_market:
                 rejected["odds"] += 1
-                log(f"   🔽 Gefiltert: {r.get('match','')} odds={odds} (Range: {min_odds_for_market}-{max_odds_for_market})")
+                log(f"   🔽 Gefiltert: {r.get('match','')} odds={odds}")
                 continue
         else:
-            # Keine Quote → Standard-Quote verwenden damit Tipp durch kommt
-            r["oddsYes"] = 1.75  # Default wenn keine Quote verfügbar
+            r["oddsYes"] = 1.75
             r["_no_real_odds"] = True
 
         filtered.append(r)
@@ -10777,208 +9593,158 @@ def filter_top_tips(tips, target_date, market):
 
 
 
-
 # ============================================================
-# 🏛️ VERBANDS-WEBSITE SCRAPER
-# Direkte Quellen ohne API - wenig Bot-Protection
+# 💰 ERWEITERTE ODDS QUELLEN
+# odds-api.io (Free Forever) + OddsPortal + OddsJet
 # ============================================================
 
-FEDERATION_URLS = {
-    # Europa
-    "Czech":       "https://www.fotbal.cz/api/v1/matches?date={date}",
-    "Germany":     "https://www.dfb.de/en/fixtures-results/?date={date}",
-    "Austria":     "https://www.oefb.at/oefb2/api/results?date={date}",
-    "Österreich":  "https://www.oefb.at/oefb2/api/results?date={date}",
-    "Oesterreich": "https://www.oefb.at/oefb2/api/results?date={date}",
-    "Switzerland": "https://www.football.ch/api/matches?date={date}",
-    "Sweden":      "https://www.svff.se/api/matches?date={date}",
-    "Norway":      "https://www.fotball.no/api/matches?date={date}",
-    "Denmark":     "https://www.dbu.dk/api/matches?date={date}",
-    "Finland":     "https://www.palloliitto.fi/api/matches?date={date}",
-    "Iceland":     "https://www.ksi.is/mot/leikir/?dags={date}",
-    "Poland":      "https://www.pzpn.pl/api/matches?date={date}",
-    "Slovakia":    "https://www.futbalsfz.sk/api/matches?date={date}",
-    "Romania":     "https://www.frf.ro/api/matches?date={date}",
-    "Bulgaria":    "https://www.bfunion.bg/api/matches?date={date}",
-    "Croatia":     "https://hns-cff.hr/api/matches?date={date}",
-    "Serbia":      "https://www.fss.rs/api/matches?date={date}",
-    "Slovenia":    "https://www.nzs.si/api/matches?date={date}",
-    # Afrika
-    "Egypt":       "https://www.efaworldwide.com/api/matches?date={date}",
-    "South Africa":"https://www.safa.net/api/matches?date={date}",
-    "Nigeria":     "https://www.thenff.com/api/matches?date={date}",
-    "Ghana":       "https://www.gfa.com.gh/api/matches?date={date}",
-    # Asien
-    "Japan":       "https://www.jfa.jp/api/matches?date={date}",
-    "Korea":       "https://www.kfa.or.kr/api/matches?date={date}",
-    "Australia":   "https://www.footballaustralia.com.au/api/matches?date={date}",
-}
-
-def fetch_federation_website(league_name: str, target_date) -> list:
+def fetch_oddsapi_io(league_name: str, target_date) -> list:
     """
-    Scrapet Verbands-Websites für Fixtures.
-    Funktioniert als letzter Fallback wenn APIs nichts liefern.
+    odds-api.io — Free Forever, keine Kreditkarte.
+    Alternative zu The Odds API mit breiter Abdeckung.
+    https://odds-api.io
     """
-    # Bestimme welcher Verband
-    country = None
-    for c in FEDERATION_URLS.keys():
-        if c.lower() in league_name.lower():
-            country = c
-            break
-    
-    if not country:
-        # Mapping aus Liga-Name
-        country_map = {
-            "czech": "Czech", "tschech": "Czech",
-            "german": "Germany", "bundesliga": "Germany", "dfb": "Germany",
-            "austri": "Austria", "österreich": "Austria", "oefb": "Austria",
-            "regionalliga": "Austria", "landesliga": "Austria", "öfb": "Austria",
-            "swiss": "Switzerland", "schweiz": "Switzerland",
-            "sweden": "Sweden", "allsvenskan": "Sweden",
-            "norway": "Norway", "eliteserien": "Norway",
-            "denmark": "Denmark", "superliga": "Denmark",
-            "finland": "Finland", "veikkaus": "Finland",
-            "iceland": "Iceland", "úrvalsdeild": "Iceland",
-            "poland": "Poland", "ekstraklasa": "Poland",
-            "slovak": "Slovakia", "slowak": "Slovakia",
-            "roman": "Romania",
-            "bulgar": "Bulgaria",
-            "croat": "Croatia",
-            "serbia": "Serbia",
-            "sloven": "Slovenia",
-            "egypt": "Egypt",
-            "south africa": "South Africa",
-            "nigeria": "Nigeria",
-            "ghana": "Ghana",
-            "japan": "Japan",
-            "korea": "Korea",
-            "k league": "Korea",
-            "austral": "Australia", "a-league": "Australia",
-        }
-        for keyword, c_name in country_map.items():
-            if keyword in league_name.lower():
-                country = c_name
-                break
-    
-    if not country or country not in FEDERATION_URLS:
-        return []
-    
-    try:
-        url = FEDERATION_URLS[country].format(date=str(target_date))
-        r = requests.get(url, headers={
-            "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) Chrome/121.0.0.0",
-            "Accept": "application/json, text/html, */*",
-        }, timeout=10)
-        
-        if not r.ok:
-            return []
-        
-        # JSON versuchen
-        try:
-            data = r.json()
-            matches = data.get("matches", data.get("data", data.get("events", [])))
-            fixtures = []
-            for m in matches:
-                home = (m.get("homeTeam", {}) or {}).get("name", "") or m.get("home", "")
-                away = (m.get("awayTeam", {}) or {}).get("name", "") or m.get("away", "")
-                if home and away:
-                    fixtures.append({
-                        "home": home, "away": away,
-                        "time": m.get("time", m.get("kickoff", "TBD")),
-                        "time_local": m.get("time", "TBD"),
-                        "source": f"fed_{country.lower()}",
-                    })
-            return fixtures
-        except Exception:
-            return []
-            
-    except Exception:
+    ODDSAPI_IO_KEY = env("ODDSAPI_IO_KEY", "")
+    if not ODDSAPI_IO_KEY:
         return []
 
-def fetch_facr_fixtures(league_name: str, target_date) -> list:
-    """
-    FAČR (Tschechischer Fußballverband) Website Scraper.
-    Deckt CZ 3–6 Liga ab, wenig Bot-Protection.
-    https://www.fotbal.cz/souteze/
-    """
-    if "czech" not in league_name.lower() and "tschech" not in league_name.lower():
-        return []
-    
-    try:
-        date_str = str(target_date)
-        url = f"https://www.fotbal.cz/api/v1/matches?date={date_str}&sport=1"
-        r = requests.get(url, headers={
-            "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) Chrome/121.0.0.0",
-            "Accept": "application/json",
-            "Referer": "https://www.fotbal.cz/",
-        }, timeout=12)
-        
-        if not r.ok:
-            return []
-        
-        data = r.json()
-        matches = data.get("matches", data.get("data", []))
-        
-        fixtures = []
-        for m in matches:
-            home = m.get("homeTeam", {}).get("name", "") or m.get("home", "")
-            away = m.get("awayTeam", {}).get("name", "") or m.get("away", "")
-            if not home or not away:
-                continue
-            fixtures.append({
-                "home": home, "away": away,
-                "time": m.get("time", "TBD"),
-                "time_local": m.get("time", "TBD"),
-                "source": "facr",
-            })
-        
-        return fixtures
-    except Exception:
-        return []
-
-
-def fetch_transfermarkt_fixtures(league_name: str, target_date) -> list:
-    """
-    Transfermarkt als Fallback für Teams/Fixtures in kleineren Ligen.
-    Gut für CZ, SK, HU, RO Ligen.
-    """
-    TM_LEAGUE_MAP = {
-        "Czech First League": "CZ1", "Czech 2. Liga": "CZ2",
-        "Slovak Super Liga": "SK1", "Hungarian NB I": "UNL",
-        "Romania Liga I": "RO1", "Bulgaria First": "BU1",
-        "Croatia HNL": "KR1", "Slovenia Prva Liga": "SL1",
+    SPORT_KEYS = {
+        "MLS": "soccer_usa_mls",
+        "Copa Libertadores": "soccer_conmebol_copa_libertadores",
+        "Copa Sudamericana": "soccer_conmebol_copa_sudamericana",
+        "Brasileirao Serie A": "soccer_brazil_campeonato",
+        "Brasileirao Serie B": "soccer_brazil_campeonato_b",
+        "Liga Argentinien": "soccer_argentina_primera_division",
+        "Bolivia Division Profesional": "soccer_bolivia_liga_profesional",
+        "Uruguay Primera": "soccer_uruguay_primera_division",
+        "Chile Primera": "soccer_chile_campeonato",
+        "Colombia Primera": "soccer_colombia_primera_a",
+        "J1 League Japan": "soccer_japan_j_league",
+        "K League 1": "soccer_south_korea_kleague1",
+        "WM 2026": "soccer_fifa_world_cup",
+        "Freundschaftsspiele International": "soccer_international_friendlies",
     }
-    
-    tm_id = TM_LEAGUE_MAP.get(league_name)
-    if not tm_id:
+
+    sport_key = SPORT_KEYS.get(league_name)
+    if not sport_key:
         return []
-    
+
     try:
-        url = f"https://www.transfermarkt.com/{tm_id}/spieltag/wettbewerb/{tm_id}"
-        r = requests.get(url, headers={
-            "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) Chrome/121.0.0.0",
-            "Accept-Language": "de-DE,de;q=0.9",
-        }, timeout=12)
-        
+        r = requests.get(
+            f"https://api.odds-api.io/v4/sports/{sport_key}/odds/",
+            params={
+                "apiKey": ODDSAPI_IO_KEY,
+                "regions": "eu",
+                "markets": "btts,totals,h2h",
+                "oddsFormat": "decimal",
+                "dateFormat": "iso",
+            },
+            timeout=10,
+        )
         if not r.ok:
             return []
-        
+
+        return r.json()
+    except Exception:
+        return []
+
+
+def fetch_oddsportal_odds(home: str, away: str, league: str) -> dict:
+    """
+    OddsPortal — scraping via Playwright.
+    Weltweite Quoten aus 40+ Buchmachern.
+    """
+    cache_key = f"oddsportal_{home}_{away}"
+    if cache_key in _PW_SESSION_CACHE:
+        return _PW_SESSION_CACHE.get(cache_key, {})
+
+    try:
+        search_term = f"{home} {away}".replace(" ", "+")
+        url = f"https://www.oddsportal.com/search/{search_term}/"
+        html = scrape_with_playwright(url, timeout=12000)
+        if not html:
+            return {}
+
         from bs4 import BeautifulSoup as _bs
-        soup = _bs(r.text, "html.parser")
-        fixtures = []
-        
-        for row in soup.select("tr.odd, tr.even"):
-            teams = row.select("td.hauptlink a")
-            if len(teams) >= 2:
-                fixtures.append({
-                    "home": teams[0].text.strip(),
-                    "away": teams[1].text.strip(),
-                    "time": "TBD",
-                    "time_local": "TBD",
-                    "source": "transfermarkt",
-                })
-        
-        return fixtures[:10]
+        import re as _re
+        soup = _bs(html, "html.parser")
+
+        # Finde Spiel-Link
+        for a in soup.select("a.searchResult"):
+            href = a.get("href", "")
+            if home.lower()[:4] in href.lower() or away.lower()[:4] in href.lower():
+                match_url = "https://www.oddsportal.com" + href
+                match_html = scrape_with_playwright(match_url, timeout=12000)
+                if not match_html:
+                    break
+
+                match_soup = _bs(match_html, "html.parser")
+
+                # Pinnacle Quoten suchen
+                result = {}
+                for row in match_soup.select("tr.odds-row"):
+                    bookie = row.select_one(".bookmaker-name")
+                    if bookie and "pinnacle" in bookie.text.lower():
+                        odds_cells = row.select("td.odds-nowrap")
+                        if len(odds_cells) >= 2:
+                            try:
+                                result["btts_yes"] = float(odds_cells[0].text.strip())
+                                result["btts_no"] = float(odds_cells[1].text.strip())
+                                _PW_SESSION_CACHE[cache_key] = result
+                                return result
+                            except Exception:
+                                pass
+                break
+
+        return {}
+    except Exception:
+        return {}
+
+
+def fetch_oddsjet_international(target_date) -> list:
+    """
+    OddsJet — hat weltweite Quoten inkl. Länderspiele.
+    https://www.oddsjet.com/
+    """
+    cache_key = f"oddsjet_{target_date}"
+    cached = cache_get(cache_key, target_date)
+    if cached:
+        return cached.get("odds", [])
+
+    try:
+        url = f"https://www.oddsjet.com/football/?date={target_date}"
+        html = scrape_with_playwright(url, timeout=15000)
+        if not html:
+            return []
+
+        from bs4 import BeautifulSoup as _bs
+        soup = _bs(html, "html.parser")
+
+        odds_list = []
+        for match_div in soup.select(".match-row, .event-row, tr.match"):
+            try:
+                teams = match_div.select(".team, .participant")
+                if len(teams) < 2:
+                    continue
+                home = teams[0].text.strip()
+                away = teams[1].text.strip()
+
+                # BTTS Odds
+                btts_cells = match_div.select(".btts-odds, .gg-odds")
+                if btts_cells:
+                    odds_list.append({
+                        "home": home,
+                        "away": away,
+                        "btts_yes": float(btts_cells[0].text.strip().replace(",",".")),
+                        "source": "oddsjet",
+                    })
+            except Exception:
+                continue
+
+        if odds_list:
+            cache_set(cache_key, target_date, {"odds": odds_list})
+        return odds_list
+
     except Exception:
         return []
 
@@ -10994,7 +9760,7 @@ def fetch_league_data_once(league, target_date):
     bsd_fix = fetch_bsd_fixtures(league, target_date)
     sm_fix = fetch_sportmonks_fixtures(league, target_date)
     sdb_fix = get_sportdb_fixtures(league, target_date)
-    sofa_fix = fetch_sofascore_fixtures(league, target_date)  # Mit Playwright Fallback
+    sofa_fix = []  # SofaScore blockiert GitHub IPs → deaktiviert
     espn_fix = fetch_espn_fixtures(league, target_date)        # ESPN
     asp_fix = fetch_allsports_fixtures(league, target_date)    # AllSports
     flash_fix = fetch_flashscore_fixtures(league, target_date)
@@ -11774,7 +10540,6 @@ def save_to_supabase(tip):
             "result_home", "result_away",
             "result_ht_home", "result_ht_away",
             "settled_at",
-            "odds_taken", "odds_closing", "clv",
         ]
         
         clean_tip = {k: v for k, v in tip.items() 
@@ -11976,20 +10741,17 @@ def generate_multi_combo_bets(all_tips, num_tips=3):
 
     # Combo Label basierend auf Anzahl
     labels = {
-        3:  ("🥉 COMBO 3",  "Einsteiger-Kombi"),
-        4:  ("🥈 COMBO 4",  "Solide Kombi"),
-        5:  ("🥇 COMBO 5",  "Standard-Kombi"),
-        6:  ("💎 COMBO 6",  "Value-Kombi"),
-        7:  ("🔥 COMBO 7",  "High-Risk Kombi"),
-        8:  ("🚀 COMBO 8",  "Jackpot-Kombi"),
-        9:  ("⚡ COMBO 9",  "Mega-Kombi"),
-        10: ("🎯 COMBO 10", "Ultra-Kombi"),
-        11: ("👑 COMBO 11", "Monster-Kombi"),
+        3: ("🥉 COMBO 3", "Einsteiger-Kombi"),
+        4: ("🥈 COMBO 4", "Solide Kombi"),
+        5: ("🥇 COMBO 5", "Standard-Kombi"),
+        6: ("💎 COMBO 6", "Value-Kombi"),
+        7: ("🔥 COMBO 7", "High-Risk Kombi"),
+        8: ("🚀 COMBO 8", "Jackpot-Kombi"),
     }
     label, desc = labels.get(num_tips, (f"🎲 COMBO {num_tips}", "Multi-Kombi"))
 
     # Stake Suggestion (weniger bei mehr Tipps)
-    stakes = {3: 8, 4: 6, 5: 4, 6: 3, 7: 2, 8: 2, 9: 1, 10: 1, 11: 0.5}
+    stakes = {3: 5, 4: 4, 5: 3, 6: 2, 7: 2, 8: 1}
     stake = stakes.get(num_tips, 1)
 
     return {
@@ -12178,13 +10940,12 @@ def _send_daily_auswertung_to_all_groups(stats=None):
         pause_text = "<i>Heute spielfreier Tag — morgen wieder Tipps!</i>"
 
     market_groups = [
-        ("btts",      TELEGRAM_GROUPS.get("btts"),       "⚽ BTTS"),
-        ("over25",    TELEGRAM_GROUPS.get("over25"),     "🎯 Over 2.5"),
-        ("combo",     TELEGRAM_GROUPS.get("combo"),      "🔥 BTTS + Over 2.5"),
-        ("btts_ht",   TELEGRAM_GROUPS.get("btts_ht"),    "🕐 BTTS Halbzeit"),
-        ("over15_ht", TELEGRAM_GROUPS.get("over15_ht"),  "⚡ Over 1.5 HT"),
-        ("corners",   TELEGRAM_GROUPS.get("hz_live"),    "🔵 Corner Sniper"),
-        ("scorer",    TELEGRAM_GROUPS.get("late_goals"), "⚽ Goal Hunter"),
+        ("btts",    TELEGRAM_GROUPS.get("btts"),    "⚽ BTTS"),
+        ("over25",  TELEGRAM_GROUPS.get("over25"),  "🎯 Over 2.5"),
+        ("combo",   TELEGRAM_GROUPS.get("combo"),   "🔥 BTTS + Over 2.5"),
+        ("btts_ht", TELEGRAM_GROUPS.get("btts_ht"), "🕐 BTTS Halbzeit"),
+        ("corners", TELEGRAM_GROUPS.get("hz_live"), "🔵 Corner Sniper"),
+        ("scorer",  TELEGRAM_GROUPS.get("late_goals"), "⚽ Goal Hunter"),
     ]
 
     medals = ["🥇","🥈","🥉"]
@@ -12333,15 +11094,14 @@ def send_top_tips(tips_by_market, target_date):
                 u_str = f"+{units}" if units >= 0 else str(units)
                 stats_header += f"{medal} {lg}: {w}/{tot} ({pct}%) · {u_str}U" + "\n"
 
-    pass  # Stats Header nur in eigene Gruppen, nicht Prop Builder
+    send_telegram(stats_header, TELEGRAM_GROUPS.get("stats"))
 
     # Auto-void alte Pending Tipps (älter als 3 Tage)
     _auto_void_old_pending()
 
     # Wenn keine Tipps → Auswertung in ALLE Gruppen senden
     if total_tips == 0:
-        if datetime.now(timezone.utc).hour == 8:
-            _send_daily_auswertung_to_all_groups(stats)
+        _send_daily_auswertung_to_all_groups(stats)
         return
 
     saved = 0
@@ -12664,7 +11424,6 @@ def send_top_tips(tips_by_market, target_date):
                 "telegram_msg_id": msg_id,
                 "units": tip_units,
                 "status": "pending",
-                "odds_taken": odds_val,
                 # ML Features
                 "weekday": tip_weekday,
                 "hour": tip_hour,
@@ -13068,107 +11827,6 @@ def format_result_text(tip, result, status):
     return msg
 
 
-def run_combo_settlement(target_date=None):
-    """Bewertet Multi-Kombis — prüft ob alle Legs gewonnen haben."""
-    if not SUPABASE_URL or not SUPABASE_KEY:
-        return
-    
-    if not target_date:
-        target_date = (datetime.now(timezone.utc) - timedelta(days=1)).date()
-    
-    try:
-        r = requests.get(
-            f"{SUPABASE_URL}/rest/v1/tips",
-            headers={"apikey": SUPABASE_KEY, "Authorization": f"Bearer {SUPABASE_KEY}"},
-            params={
-                "market": "eq.combo_multi",
-                "date": f"eq.{target_date}",
-                "status": "eq.pending",
-                "select": "id,tip_id,match,odds,units,tip",
-            },
-            timeout=10,
-        )
-        if not r.ok or not r.json():
-            return
-        
-        combos = r.json()
-        combo_chat = TELEGRAM_GROUPS.get("combos", TELEGRAM_CHAT_ID)
-        nl = "\n"
-        
-        for combo in combos:
-            legs_matches = combo.get("match","").split(" | ")
-            
-            # Prüfe ob alle Leg-Matches gewonnen haben
-            all_won = True
-            any_lost = False
-            
-            for match in legs_matches:
-                if not match:
-                    continue
-                r2 = requests.get(
-                    f"{SUPABASE_URL}/rest/v1/tips",
-                    headers={"apikey": SUPABASE_KEY, "Authorization": f"Bearer {SUPABASE_KEY}"},
-                    params={
-                        "match": f"eq.{match}",
-                        "date": f"eq.{target_date}",
-                        "status": "neq.pending",
-                        "select": "status",
-                    },
-                    timeout=8,
-                )
-                if r2.ok and r2.json():
-                    status = r2.json()[0].get("status","")
-                    if status == "lost":
-                        any_lost = True
-                        all_won = False
-                    elif status != "won":
-                        all_won = False
-            
-            if any_lost:
-                final_status = "lost"
-                emoji = "❌"
-            elif all_won:
-                final_status = "won"
-                emoji = "✅"
-            else:
-                continue  # Noch nicht alle settled
-            
-            # Supabase updaten
-            requests.patch(
-                f"{SUPABASE_URL}/rest/v1/tips",
-                headers={
-                    "apikey": SUPABASE_KEY,
-                    "Authorization": f"Bearer {SUPABASE_KEY}",
-                    "Content-Type": "application/json",
-                    "Prefer": "return=minimal",
-                },
-                params={"tip_id": f"eq.{combo.get('tip_id','')}"},
-                json={"status": final_status},
-                timeout=8,
-            )
-            
-            # Telegram Nachricht
-            odds = combo.get("odds","?")
-            units = combo.get("units","1")
-            tip_info = combo.get("tip","")
-            
-            msg = f"{emoji} <b>{tip_info}</b>{nl}"
-            msg += f"━━━━━━━━━━━━━━━━━━{nl}"
-            if final_status == "won":
-                profit = round(float(odds) * float(units), 2)
-                msg += f"🎉 GEWONNEN! +{profit} Units{nl}"
-            else:
-                msg += f"💸 Verloren · -{units} Units{nl}"
-            msg += f"📊 Quote: {odds}{nl}"
-            msg += f"━━━━━━━━━━━━━━━━━━"
-            
-            send_telegram(msg, combo_chat)
-            log(f"   🎰 Kombi Settlement: {final_status} @ {odds}")
-            
-    except Exception as e:
-        log(f"Combo Settlement Error: {e}", "WARN")
-
-
 def run_settlement():
     """
     Hauptfunktion für Check/Settlement Bot.
@@ -13258,34 +11916,10 @@ def run_settlement():
                 msg_id = tip.get("telegram_msg_id")
                 chat_id = tip.get("telegram_chat_id")
 
-                # Ergebnis-Nachricht formatieren
-                result_text = format_result_text(tip, result, status)
-                log(f"   {'✅' if status == 'won' else '❌'} {tip.get('match', '?')} → {status.upper()}: {result.get('home_score')}-{result.get('away_score')}")
-
-                # 1. Original Nachricht editieren (falls noch möglich, max 48h)
                 if msg_id and chat_id:
-                    edit_telegram_message(chat_id, msg_id, result_text)
-
-                # 2. IMMER neue Nachricht in richtigen Kanal senden
-                market = tip.get("market", "btts")
-                target_chat = None
-                if market == "btts":
-                    target_chat = TELEGRAM_GROUPS.get("btts")
-                elif market == "over25":
-                    target_chat = TELEGRAM_GROUPS.get("over25")
-                elif market == "combo":
-                    target_chat = TELEGRAM_GROUPS.get("combo")
-                elif market in ("btts_ht", "over15_ht"):
-                    target_chat = TELEGRAM_GROUPS.get("btts_ht")
-                elif market == "corners":
-                    target_chat = TELEGRAM_GROUPS.get("hz_live")
-                elif market == "scorer":
-                    target_chat = TELEGRAM_GROUPS.get("late_goals")
-                elif market == "combo_multi":
-                    target_chat = TELEGRAM_GROUPS.get("combos")
-
-                if target_chat:
-                    send_telegram(result_text, target_chat)
+                    new_text = format_result_text(tip, result, status)
+                    edit_telegram_message(chat_id, msg_id, new_text)
+                    log(f"   {'✅' if status == 'won' else '❌'} {tip.get('match', '?')} → {status.upper()}: {result.get('home_score')}-{result.get('away_score')}")
 
             except Exception as e:
                 log(f"   Settlement Error für {tip.get('match', '?')}: {e}", "WARN")
@@ -13297,24 +11931,12 @@ def run_settlement():
 
         if total_settled > 0:
             winrate = round(won_count / total_settled * 100)
-            profit_total = round(sum(
-                (float(str(t.get("odds","1.5")).replace(",",".")) - 1) * float(t.get("units",1) or 1)
-                for t in pending_tips if t.get("status") == "won"
-            ) - sum(
-                float(t.get("units",1) or 1)
-                for t in pending_tips if t.get("status") == "lost"
-            ), 2)
-            nl = "\n"
-            msg = f"🏆 <b>SETTLEMENT</b>{nl}"
-            msg += f"━━━━━━━━━━━━━━━━━━{nl}"
-            msg += f"✅ Gewonnen: <b>{won_count}</b>{nl}"
-            msg += f"❌ Verloren: <b>{lost_count}</b>{nl}"
-            msg += f"🎯 Winrate: <b>{winrate}%</b>{nl}"
-            profit_emoji = "🟢" if profit_total >= 0 else "🔴"
-            msg += f"{profit_emoji} Profit: <b>{'+' if profit_total >= 0 else ''}{profit_total} Units</b>{nl}"
-            msg += f"⏳ Ausstehend: {not_found}{nl}"
-            msg += "━━━━━━━━━━━━━━━━━━"
-            send_telegram(msg, TELEGRAM_GROUPS.get("btts", TELEGRAM_CHAT_ID))
+            msg = "🏆 <b>Settlement Update</b>\n\n"
+            msg += f"✅ Gewonnen: <b>{won_count}</b>" + "\n"
+            msg += f"❌ Verloren: <b>{lost_count}</b>" + "\n"
+            msg += f"🎯 Heute Winrate: <b>{winrate}%</b>" + "\n"
+            msg += f"⏳ Ausstehend: {not_found}"
+            send_telegram(msg, TELEGRAM_GROUPS.get("stats"))
 
     except Exception as e:
         log(f"Settlement Fatal: {e}", "ERROR")
@@ -14097,41 +12719,12 @@ def run_corners_and_scorer_bots(target_date, active_leagues, odds_data_cache, fi
         for tip in corners_tips:
             send_telegram(format_corners_message(tip), group_hz)
             mark_tip_sent(tip.get("match",""), "corners", target_date)
-            # In Supabase speichern damit is_duplicate_tip() zwischen Runs funktioniert
-            save_to_supabase({
-                "tip_id": f"corners_{target_date}_{abs(hash(tip.get('match','')))}",
-                "date": str(target_date),
-                "market": "corners",
-                "match": tip.get("match", ""),
-                "league": tip.get("league", ""),
-                "time": tip.get("time", "TBD"),
-                "tip": tip.get("tip", ""),
-                "probability": tip.get("probability", 0),
-                "confidence": 3,
-                "odds": str(tip.get("fair_odds", 0)),
-                "fair_odds": str(tip.get("fair_odds", 0)),
-                "status": "pending",
-            })
 
     if scorer_tips and group_late:
         send_telegram(f"⚽ <b>SCORER TIPPS</b>\n<i>📅 {target_date}</i>", group_late)
         for tip in scorer_tips:
             send_telegram(format_scorer_message(tip), group_late)
             mark_tip_sent(tip.get("match",""), "scorer", target_date)
-            save_to_supabase({
-                "tip_id": f"scorer_{target_date}_{abs(hash(tip.get('match','') + tip.get('player','')))}",
-                "date": str(target_date),
-                "market": "scorer",
-                "match": tip.get("match", ""),
-                "league": tip.get("league", ""),
-                "time": tip.get("time", "TBD"),
-                "tip": tip.get("player", "") + " Anytime Scorer",
-                "probability": tip.get("probability", 0),
-                "confidence": 3,
-                "odds": str(tip.get("fair_odds", 0)),
-                "fair_odds": str(tip.get("fair_odds", 0)),
-                "status": "pending",
-            })
 
     log(f"🔵⚽ Fertig: {corners_count} Ecken Tips, {scorer_count} Scorer Tips")
 
@@ -14558,18 +13151,6 @@ class AdvancedPropsManager:
                 r'data-stat="cards_yellow"[^>]*>([\d.]*)<',
                 html, _re.DOTALL
             )
-            # Misc + Defence stats (fouls, aerials, YC + tackles)
-            defence_rows = _re.findall(
-                r'data-stat="player"[^>]*>\s*<a[^>]*>([^<]+)</a>.*?'
-                r'data-stat="minutes_90s"[^>]*>([\d.]*)<.*?'
-                r'data-stat="tackles"[^>]*>([\d.]*)<',
-                html, _re.DOTALL
-            )
-            tackle_map = {}
-            for name, mins90, tackles in defence_rows:
-                mins = float(mins90 or 1) or 1
-                tackle_map[name.strip()] = round(float(tackles or 0) / mins, 2)
-
             for name, mins90, fouls, fouls_drawn, offsides, aerials, yc in misc_rows:
                 name = name.strip()
                 mins = float(mins90 or 1) or 1
@@ -14578,7 +13159,6 @@ class AdvancedPropsManager:
                         "team": "", "shots_per90": 0.0, "sot_per90": 0.0,
                         "fouls_committed": 0.0, "fouls_drawn": 0.0,
                         "offsides": 0.0, "aerials_won": 0.0, "yc_per90": 0.0,
-                        "tackles_per90": 0.0,
                     }
                 try:
                     player_db[name]["fouls_committed"] = round(float(fouls or 0) / mins, 2)
@@ -14587,7 +13167,6 @@ class AdvancedPropsManager:
                     player_db[name]["aerials_won"]     = round(float(aerials or 0) / mins, 2)
                     player_db[name]["yc_per90"]        = round(float(yc or 0) / mins, 3)
                     player_db[name]["appearances"]     = round(mins, 1)
-                    player_db[name]["tackles_per90"]   = tackle_map.get(name, 0.0)
                 except Exception:
                     continue
 
@@ -14678,424 +13257,6 @@ class AdvancedPropsManager:
 _advanced_props_manager = AdvancedPropsManager()
 
 
-
-def calculate_hit_rate(game_values: list, threshold: float) -> str:
-    """Berechnet Hit Rate im Format X/Y — z.B. 18/20"""
-    if not game_values:
-        return "0/0"
-    hits = sum(1 for v in game_values if v >= threshold)
-    return f"{hits}/{len(game_values)}"
-
-
-def game_sequence(game_values: list, last_n: int = 10) -> str:
-    """Zeigt letzte N Spiele als Sequenz — z.B. 2,1,2,0,1,2,1,1,2,1"""
-    vals = game_values[-last_n:] if len(game_values) > last_n else game_values
-    return ",".join(str(int(v)) if v == int(v) else str(round(v,1)) for v in vals)
-
-
-def get_fbref_game_log(player_name: str, league: str, stat: str = "fouls", last_n: int = 20) -> list:
-    """
-    Holt Spiel-für-Spiel Stats von FBref für einen Spieler.
-    stat: 'fouls_committed', 'fouls_drawn', 'shots', 'sot', 'tackles'
-    Gibt Liste von Werten zurück (letzten last_n Spiele)
-    """
-    try:
-        import requests as _r, re as _re2
-        from bs4 import BeautifulSoup as _bs4
-
-        # FBref Player Search
-        search_url = f"https://fbref.com/search/search.fcgi?search={player_name.replace(' ', '+')}"
-        r = _r.get(search_url, headers={"User-Agent": "Mozilla/5.0"}, timeout=10)
-        if not r.ok:
-            return []
-
-        # Ersten Spieler-Link finden
-        soup = _bs4(r.text, "html.parser")
-        player_link = None
-        for a in soup.find_all("a", href=True):
-            if "/players/" in a["href"] and len(a["href"].split("/")) >= 4:
-                player_link = "https://fbref.com" + a["href"]
-                break
-        if not player_link:
-            return []
-
-        # Game Log für den Spieler holen
-        log_url = player_link.replace(".html", "/matchlogs/2025-2026/summary/")
-        r2 = _r.get(log_url, headers={"User-Agent": "Mozilla/5.0"}, timeout=12)
-        if not r2.ok:
-            return []
-
-        stat_col_map = {
-            "fouls_committed": "fouls",
-            "fouls_drawn": "fouled",
-            "shots": "shots",
-            "sot": "shots_on_target",
-            "tackles": "tackles",
-        }
-        col = stat_col_map.get(stat, "fouls")
-
-        # Werte extrahieren
-        pattern = f'data-stat="{col}"[^>]*>([\\d.]*)<'
-        vals = _re2.findall(pattern, r2.text)
-        result = []
-        for v in vals:
-            try:
-                result.append(float(v))
-            except:
-                continue
-        return result[-last_n:] if len(result) > last_n else result
-    except Exception:
-        return []
-
-
-def get_combined_opponent_fouls(opp_team: str, league: str, target_date, position_filter: str = "DF") -> dict:
-    """
-    Holt kombinierte Fouls-Stats der Gegner-Verteidiger/Mittelfeld.
-    Nutzt FBref gecachte Stats.
-    Gibt zurück: {combined_fc_per90, combined_fw_per90, top_players}
-    """
-    try:
-        player_db = cache_get_player_stats(league, target_date)
-        if not player_db:
-            return {}
-        
-        # Filter: Spieler vom Gegner-Team
-        opp_players = []
-        for name, stats in player_db.items():
-            if normalize_team_name(stats.get("team","")) == normalize_team_name(opp_team):
-                opp_players.append((name, stats))
-        
-        if not opp_players:
-            return {}
-        
-        # Top Fouler vom Gegner
-        top_foulers = sorted(opp_players, key=lambda x: x[1].get("fouls_committed",0), reverse=True)[:3]
-        combined_fc = sum(p[1].get("fouls_committed",0) for p in top_foulers[:2])
-        
-        return {
-            "combined_fc_per90": round(combined_fc, 2),
-            "top_players": [p[0] for p in top_foulers[:2]],
-        }
-    except Exception:
-        return {}
-
-
-# ============================================================
-# 🎯 PROP BUILDER — NEUE DATENQUELLEN
-# Primary: PlayerStats.Football + ScoutingStats + Statz.ai
-# Fallback: FBref
-# ============================================================
-
-
-def scrape_statz_ai(player_name: str = "", league_name: str = "", target_date=None) -> list:
-    """
-    Statz.ai — KI Hit Rates für Shots, Tackles, Karten.
-    https://statz.ai/football
-    """
-    cache_key = f"statz_{league_name}_{target_date}"
-    cached = cache_get(cache_key, target_date) if target_date else None
-    if cached:
-        return cached.get("players", [])
-
-    try:
-        url = "https://statz.ai/football/player-props"
-        html = scrape_with_playwright(url, timeout=15000)
-        if not html:
-            return []
-
-        from bs4 import BeautifulSoup as _bs
-        import re as _re
-        soup = _bs(html, "html.parser")
-
-        players = []
-        for card in soup.select(".prop-card, .player-prop, tr.player"):
-            try:
-                name_el = card.select_one(".player-name, .name, td.player")
-                if not name_el:
-                    continue
-                name = name_el.text.strip()
-
-                market_el = card.select_one(".market, .prop")
-                market = market_el.text.strip() if market_el else ""
-
-                hit_el = card.select_one(".hit-rate, .rate, .percentage")
-                hit_str = hit_el.text.strip() if hit_el else ""
-                hit_match = _re.search(r"(\d+)%|(\d+)/(\d+)", hit_str)
-                hit_pct = float(hit_match.group(1)) if hit_match and hit_match.group(1) else 0
-
-                form_el = card.select_one(".form, .sequence, .recent")
-                form_str = form_el.text.strip() if form_el else ""
-
-                players.append({
-                    "player": name,
-                    "market": market,
-                    "hit_rate": hit_str,
-                    "hit_pct": hit_pct,
-                    "form": form_str,
-                    "source": "statz_ai",
-                })
-            except Exception:
-                continue
-
-        if target_date:
-            cache_set(cache_key, target_date, {"players": players})
-        log(f"   🤖 Statz.ai: {len(players)} Props geladen")
-        return players
-
-    except Exception:
-        return []  # Silent fail - Statz.ai optional
-
-
-def scrape_playerprops_ai(league_name: str = "", target_date=None) -> list:
-    """
-    PlayerProps.ai — KI Projektionen für Shots, Tackles, Karten.
-    https://www.playerprops.ai/soccer
-    """
-    cache_key = f"playerprops_ai_{league_name}_{target_date}"
-    cached = cache_get(cache_key, target_date) if target_date else None
-    if cached:
-        return cached.get("players", [])
-
-    try:
-        LEAGUE_SLUGS_PP = {
-            "Premier League": "epl",
-            "Bundesliga": "bundesliga",
-            "La Liga": "la-liga",
-            "Serie A": "serie-a",
-            "Ligue 1": "ligue-1",
-            "Champions League": "ucl",
-            "WM 2026": "world-cup",
-            "MLS": "mls",
-        }
-        slug = LEAGUE_SLUGS_PP.get(league_name, "soccer")
-        url = f"https://www.playerprops.ai/soccer/{slug}"
-
-        html = scrape_with_playwright(url, timeout=15000)
-        if not html:
-            return []
-
-        from bs4 import BeautifulSoup as _bs
-        import re as _re
-        soup = _bs(html, "html.parser")
-
-        players = []
-        for card in soup.select(".prop, .player-card, .projection-card"):
-            try:
-                name_el = card.select_one(".player, .name")
-                if not name_el:
-                    continue
-                name = name_el.text.strip()
-
-                market_el = card.select_one(".market, .prop-type, .stat")
-                market = market_el.text.strip() if market_el else ""
-
-                proj_el = card.select_one(".projection, .line, .value")
-                projection = proj_el.text.strip() if proj_el else ""
-
-                hit_el = card.select_one(".hit-rate, .rate")
-                hit_str = hit_el.text.strip() if hit_el else ""
-                hit_match = _re.search(r"(\d+)%", hit_str)
-                hit_pct = float(hit_match.group(1)) if hit_match else 0
-
-                edge_el = card.select_one(".edge, .value-indicator")
-                edge = edge_el.text.strip() if edge_el else ""
-
-                players.append({
-                    "player": name,
-                    "market": market,
-                    "projection": projection,
-                    "hit_rate": hit_str,
-                    "hit_pct": hit_pct,
-                    "edge": edge,
-                    "source": "playerprops_ai",
-                })
-            except Exception:
-                continue
-
-        if target_date:
-            cache_set(cache_key, target_date, {"players": players})
-        log(f"   🎯 PlayerProps.ai: {len(players)} Projektionen für {league_name}")
-        return players
-
-    except Exception:
-        return []  # Silent fail - PlayerProps.ai optional
-
-def scrape_playerstats_football(league_name: str, target_date) -> list:
-    """
-    PlayerStats.Football — Spieler mit konsistenten Stats.
-    Zeigt Hit Rates wie "Saka: 2+ SoT in 18/20 Spielen".
-    https://playerstats.football/
-    """
-    cache_key = f"playerstats_{league_name}_{target_date}"
-    cached = cache_get(cache_key, target_date)
-    if cached:
-        return cached.get("players", [])
-
-    try:
-        # League slug mapping
-        LEAGUE_SLUGS = {
-            "Premier League": "england-premier-league",
-            "Bundesliga": "germany-bundesliga",
-            "La Liga": "spain-primera-division",
-            "Serie A": "italy-serie-a",
-            "Ligue 1": "france-ligue-1",
-            "Champions League": "europe-champions-league",
-            "Europa League": "europe-europa-league",
-            "WM 2026": "world-world-cup",
-            "Eredivisie": "netherlands-eredivisie",
-            "Primeira Liga": "portugal-primeira-liga",
-        }
-        slug = LEAGUE_SLUGS.get(league_name)
-        if not slug:
-            return []
-
-        url = f"https://www.playerstats.football/league/{slug}/shots"
-        html = scrape_with_playwright(url, timeout=15000)
-        if not html:
-            return []
-
-        from bs4 import BeautifulSoup as _bs
-        import re as _re
-        soup = _bs(html, "html.parser")
-
-        players = []
-        for row in soup.select("tr.player-row, tr[data-player]"):
-            try:
-                name_el = row.select_one("td.player-name, td.name a")
-                if not name_el:
-                    continue
-                name = name_el.text.strip()
-
-                # Stats extrahieren
-                stats = {}
-                for td in row.select("td[data-stat]"):
-                    stat = td.get("data-stat", "")
-                    val = td.text.strip()
-                    try:
-                        stats[stat] = float(val)
-                    except Exception:
-                        stats[stat] = val
-
-                # Hit Rate aus Text
-                hit_text = row.select_one("td.hit-rate, td.streak")
-                hit_rate_str = hit_text.text.strip() if hit_text else ""
-                hit_match = _re.search(r"(\d+)/(\d+)", hit_rate_str)
-
-                player_data = {
-                    "player": name,
-                    "team": (row.select_one("td.team") or {}).get("text", "").strip() if row.select_one("td.team") else "",
-                    "shots_per90": stats.get("shots_per90", stats.get("shots", 0)),
-                    "sot_per90": stats.get("sot_per90", stats.get("shots_on_target", 0)),
-                    "fouls_per90": stats.get("fouls_per90", 0),
-                    "hit_rate": hit_rate_str,
-                    "hit_count": int(hit_match.group(1)) if hit_match else 0,
-                    "hit_total": int(hit_match.group(2)) if hit_match else 0,
-                    "source": "playerstats",
-                }
-                players.append(player_data)
-            except Exception:
-                continue
-
-        cache_set(cache_key, target_date, {"players": players})
-        log(f"   ⚽ PlayerStats: {len(players)} Spieler für {league_name}")
-        return players
-
-    except Exception as e:
-        log(f"   ⚠️ PlayerStats Error: {e}")
-        return []
-
-
-def scrape_scoutingstats_props(league_name: str, target_date) -> list:
-    """
-    ScoutingStats.ai — Historical hit rates across 100+ leagues.
-    Bereits im Bot als Scraper, erweitert für Props.
-    """
-    cache_key = f"scoutingstats_props_{league_name}_{target_date}"
-    cached = cache_get(cache_key, target_date)
-    if cached:
-        return cached.get("players", [])
-
-    try:
-        url = "https://www.scoutingstats.com/football/player-props"
-        html = scrape_with_playwright(url, timeout=12000)
-        if not html:
-            return []
-
-        from bs4 import BeautifulSoup as _bs
-        import re as _re
-        soup = _bs(html, "html.parser")
-
-        players = []
-        for card in soup.select(".prop-card, .player-card, tr.prop-row"):
-            try:
-                name = (card.select_one(".player-name, .name") or {})
-                if not name:
-                    continue
-                name = name.text.strip()
-
-                market = (card.select_one(".market, .prop-type") or {})
-                market = market.text.strip() if market else ""
-
-                hit_rate = (card.select_one(".hit-rate, .rate") or {})
-                hit_rate = hit_rate.text.strip() if hit_rate else ""
-
-                hit_match = _re.search(r"(\d+)%|(\d+)/(\d+)", hit_rate)
-
-                players.append({
-                    "player": name,
-                    "market": market,
-                    "hit_rate": hit_rate,
-                    "hit_pct": float(hit_match.group(1)) if hit_match and hit_match.group(1) else 0,
-                    "source": "scoutingstats",
-                })
-            except Exception:
-                continue
-
-        cache_set(cache_key, target_date, {"players": players})
-        return players
-
-    except Exception:
-        return []
-
-
-def get_wsf_player_prop_odds(player_name: str, market: str) -> dict:
-    """
-    WSF Odds — echte Player Prop Quoten weltweit.
-    https://www.wsfodds.com/
-    """
-    try:
-        url = f"https://www.wsfodds.com/football/player-props?q={player_name.replace(' ', '+')}"
-        html = scrape_with_playwright(url, timeout=10000)
-        if not html:
-            return {}
-
-        from bs4 import BeautifulSoup as _bs
-        soup = _bs(html, "html.parser")
-
-        for row in soup.select("tr.odds-row, .prop-row"):
-            try:
-                player_el = row.select_one(".player, .name")
-                if not player_el:
-                    continue
-                if player_name.lower() not in player_el.text.lower():
-                    continue
-
-                market_el = row.select_one(".market, .prop-type")
-                if market_el and market.lower() in market_el.text.lower():
-                    odds_el = row.select_one(".odds, .price")
-                    if odds_el:
-                        return {
-                            "player": player_name,
-                            "market": market,
-                            "odds": float(odds_el.text.strip()),
-                            "source": "wsf_odds",
-                        }
-            except Exception:
-                continue
-        return {}
-    except Exception:
-        return {}
-
 def run_advanced_props_bot(active_leagues: list, fixtures_cache: dict, target_date) -> None:
     """
     Prop Builder Bot — Nate Betting Style.
@@ -15112,28 +13273,6 @@ def run_advanced_props_bot(active_leagues: list, fixtures_cache: dict, target_da
         return
 
     log("🔑 Prop Builder Bot startet...")
-
-    # Lineup-Wait: Props erst senden wenn Aufstellungen bekannt
-    # Aufstellungen kommen ~45-60 Min vor Kickoff
-    now_utc = datetime.now(timezone.utc)
-    has_lineups = False
-    # Prüfe ob für heute Spiele Lineups verfügbar sind
-    lineup_check_url = f"https://api.sofascore.com/api/v1/sport/football/scheduled-events/{target_date}"
-    try:
-        r_lu = requests.get(lineup_check_url, 
-            headers={"User-Agent": "Mozilla/5.0"}, timeout=8)
-        if r_lu.ok:
-            events = r_lu.json().get("events", [])
-            # Prüfe ob irgendein Spiel confirmed lineups hat
-            for ev in events[:20]:
-                if ev.get("hasLineups", False):
-                    has_lineups = True
-                    break
-    except Exception:
-        pass
-    
-    if not has_lineups:
-        log("🔑 Aufstellungen noch nicht bestätigt — analysiere trotzdem (Pre-Lineup Mode)")
 
     manager = _advanced_props_manager
     seen = set()
@@ -15173,30 +13312,9 @@ def run_advanced_props_bot(active_leagues: list, fixtures_cache: dict, target_da
         if ref_cards >= 4.0:
             score += 1; reasons.append("✅ Strenger Schiri")
 
-        # Gegner-Kontext Scoring
-        opp_allows_fouls = stats.get("_opp_fouls_allowed", 0)
-        opp_allows_shots = stats.get("_opp_shots_allowed", 0)
-        opp_possession   = stats.get("_opp_possession", 50)
-
-        if mtype in ("foul","foul_won") and opp_allows_fouls > 0:
-            if opp_allows_fouls >= 12:
-                score += 2; reasons.append("✅ Gegner erlaubt viele Fouls")
-            elif opp_allows_fouls >= 10:
-                score += 1; reasons.append("✅ Gegner über Liga-Schnitt Fouls")
-
-        if mtype == "shots" and opp_allows_shots > 0:
-            if opp_allows_shots >= 14:
-                score += 2; reasons.append("✅ Gegner lässt viele Schüsse zu")
-            elif opp_allows_shots >= 12:
-                score += 1; reasons.append("✅ Gegner über Liga-Schnitt Schüsse")
-
-        # Ballbesitz-Team killt Stürmer-Stats
-        if mtype == "shots" and opp_possession >= 65:
-            score -= 2; reasons.append("⚠️ Gegner Ballbesitz-Team → weniger Schüsse")
-
         return score, reasons
 
-    def _add(bucket, player, team, match_name, league, kickoff, market, stat_val, mtype, score=5, game_log=None, opp_context=""):
+    def _add(bucket, player, team, match_name, league, kickoff, market, stat_val, mtype, score=5):
         key = f"{player}_{match_name}_{market}"
         if key in seen:
             return
@@ -15206,8 +13324,6 @@ def run_advanced_props_bot(active_leagues: list, fixtures_cache: dict, target_da
             "league": league, "kickoff": kickoff,
             "market": market, "market_type": mtype,
             "stat_per90": stat_val, "score": score,
-            "game_log": game_log or [],
-            "opp_context": opp_context,
         })
 
     for league in active_leagues:
@@ -15222,55 +13338,7 @@ def run_advanced_props_bot(active_leagues: list, fixtures_cache: dict, target_da
             match_name = f"{home} vs {away}"
             kickoff   = fixture.get("time_local", "TBD")
 
-            # ── Quelle 1: PlayerStats.Football (PRIMARY) ──
-            ps_players = scrape_playerstats_football(league, target_date)
-            for ps in ps_players:
-                player = ps.get("player","")
-                team   = ps.get("team","")
-                sot    = ps.get("sot_per90", 0)
-                sh     = ps.get("shots_per90", 0)
-                hit    = ps.get("hit_count", 0)
-                total  = ps.get("hit_total", 1)
-                hit_pct = hit / max(total, 1)
-
-                if sot >= 1.5 or sh >= 2.5:
-                    score = 6 if hit_pct >= 0.80 else 5 if hit_pct >= 0.65 else 4
-                    market = "2+ Shots on Target" if sot >= 1.5 else "3+ Shots"
-                    _add(shot_candidates, player, team, match_name, league, kickoff,
-                         market, sot or sh, "shots", score,
-                         game_log=[sot]*total, opp_context=ps.get("hit_rate",""))
-
-            # ── Quelle 2: ScoutingStats Props ──
-            ss_props = scrape_scoutingstats_props(league, target_date)
-            for ss in ss_props:
-                if ss.get("hit_pct", 0) >= 65:
-                    mtype = "foul" if "foul" in ss.get("market","").lower() else "shots"
-                    _add(foul_candidates if mtype == "foul" else shot_candidates,
-                         ss["player"], "", match_name, league, kickoff,
-                         ss["market"], ss["hit_pct"]/100, mtype, 6,
-                         opp_context=ss.get("hit_rate",""))
-
-            # ── Quelle 3: Statz.ai (1x pro Liga, gecacht) ──
-            statz_props = scrape_statz_ai(league_name=league, target_date=target_date) if fixture == fixtures[:4][0] else []
-            for sp in statz_props:
-                if sp.get("hit_pct", 0) >= 65:
-                    mtype = "booking" if "card" in sp.get("market","").lower() else                             "foul" if "foul" in sp.get("market","").lower() else "shots"
-                    bucket = booking_candidates if mtype == "booking" else                              foul_candidates if mtype == "foul" else shot_candidates
-                    _add(bucket, sp["player"], "", match_name, league, kickoff,
-                         sp["market"], sp["hit_pct"]/100, mtype, 7,
-                         opp_context=f"{sp['hit_rate']} {sp.get('form','')}")
-
-            # ── Quelle 4: PlayerProps.ai (1x pro Liga, gecacht) ──
-            pp_props = scrape_playerprops_ai(league_name=league, target_date=target_date) if fixture == fixtures[:4][0] else []
-            for pp in pp_props:
-                if pp.get("hit_pct", 0) >= 65:
-                    mtype = "booking" if "card" in pp.get("market","").lower() else                             "foul" if "foul" in pp.get("market","").lower() else "shots"
-                    bucket = booking_candidates if mtype == "booking" else                              foul_candidates if mtype == "foul" else shot_candidates
-                    _add(bucket, pp["player"], "", match_name, league, kickoff,
-                         pp["market"], pp["hit_pct"]/100, mtype, 7,
-                         opp_context=pp.get("edge",""))
-
-            # ── Quelle 3: FBref (FALLBACK) ──
+            # ── Quelle 1: FBref ──
             if league in AdvancedPropsManager.FBREF_LEAGUE_URLS:
                 player_db = manager.scrape_fbref_advanced_stats(league)
                 if player_db:
@@ -15302,9 +13370,6 @@ def run_advanced_props_bot(active_leagues: list, fixtures_cache: dict, target_da
                         # Shots — nur sinnvolle Linien
                         if sot >= 1.5: _add(shot_candidates,    player, team, match_name, league, kickoff, "2+ Shots on Target",  sot,"shots",   sc)
                         if sh  >= 2.5: _add(shot_candidates,    player, team, match_name, league, kickoff, "3+ Shots",            sh, "shots",   sc)
-                        # Tackles
-                        tk = s.get("tackles_per90", 0)
-                        if tk >= 2.5: _add(foul_candidates, player, team, match_name, league, kickoff, "3+ Tackles", tk, "tackles", sc)
 
             # ── Quelle 2: StatsBomb ──
             for prop in get_player_props_for_match(home, away, league):
@@ -15355,26 +13420,6 @@ def run_advanced_props_bot(active_leagues: list, fixtures_cache: dict, target_da
                         if gpg >= 0.5:
                             _add(shot_candidates, name, team, match_name, league, kickoff, "2+ Shots on Target", gpg, "shots")
 
-    # Team Offside aus FBref (Palace-Style: Team X hat 2+ Offsides in Y/20 Heimspielen)
-    offside_candidates = []
-    for league in active_leagues:
-        if league not in [l for l in ["Premier League", "Bundesliga", "La Liga", "Serie A", "Ligue 1"]]:
-            continue
-        player_db_off = cache_get_player_stats(league, target_date)
-        if not player_db_off:
-            continue
-        # Teams mit hoher Offside-Rate finden
-        teams_offsides = {}
-        for player, s in player_db_off.items():
-            tm = s.get("team","")
-            off = s.get("offsides", 0)
-            if off > 0:
-                teams_offsides[tm] = teams_offsides.get(tm, 0) + off
-        for tm, total_off in teams_offsides.items():
-            if total_off >= 0.15:  # Team hat ~0.15+ Offsides/90 gesamt
-                for fixture in active_leagues:
-                    pass  # wird im Prompt verarbeitet
-        
     total = len(foul_candidates) + len(booking_candidates) + len(shot_candidates)
     log(f"🔑 Kandidaten: {len(foul_candidates)} Fouls · {len(booking_candidates)} Bookings · {len(shot_candidates)} Shots")
 
@@ -15413,47 +13458,9 @@ def run_advanced_props_bot(active_leagues: list, fixtures_cache: dict, target_da
     import json as _json
 
     def _fmt(lst, n=12):
-        result = []
-        for c in sorted(lst, key=lambda x: x.get("score",0), reverse=True)[:n]:
-            # Hit Rate berechnen aus game log wenn verfügbar
-            game_log = c.get("game_log", [])
-            threshold = 1.0 if "1+" in c.get("market","") else 2.0
-
-            hit_str = ""
-            seq_str = ""
-            if game_log:
-                hr = calculate_hit_rate(game_log, threshold)
-                seq = game_sequence(game_log, 10)
-                hit_str = f"{hr} (last {len(game_log)})"
-                seq_str = seq
-            else:
-                hit_str = f"{c['stat_per90']}/90"
-
-            result.append({
-                "player": c["player"],
-                "team": c["team"],
-                "match": c["match"],
-                "kickoff": c["kickoff"],
-                "market": c["market"],
-                "stat": hit_str,
-                "sequence": seq_str,
-                "score": c.get("score", 5),
-                "opp_context": c.get("opp_context", ""),
-            })
-        return result
-
-    # Gegner-Kontext für Top Kandidaten hinzufügen
-    for c in foul_candidates[:15]:
-        match = c.get("match","")
-        if " vs " in match:
-            home, away = match.split(" vs ", 1)
-            opp = away if c["team"].lower() in home.lower() else home
-            opp_data = get_combined_opponent_fouls(opp, c["league"], target_date)
-            if opp_data:
-                names = " + ".join(opp_data.get("top_players", [])[:2])
-                combined = opp_data.get("combined_fc_per90", 0)
-                c["opp_context"] = f"{names} combined {combined} FC/90"
-                c["score"] += 1 if combined >= 2.5 else 0
+        return [{"player": c["player"], "team": c["team"], "match": c["match"],
+                 "kickoff": c["kickoff"], "market": c["market"],
+                 "stat": f"{c['stat_per90']}/90", "score": c.get("score",5)} for c in sorted(lst, key=lambda x: x.get("score",0), reverse=True)[:n]]
 
     payload = {
         "fouls":       _fmt(foul_candidates),
@@ -15472,38 +13479,31 @@ def run_advanced_props_bot(active_leagues: list, fixtures_cache: dict, target_da
         ],
     }
 
-    prompt = f"""Du bist Prop Builder Analyst (Nate Betting Style / GodTipsterr Style). Heute {target_date}.
+    prompt = f"""Du bist Prop Builder Analyst (Nate Betting Style). Heute {target_date}.
 
-WICHTIGE REGELN:
-- Zeige Hit Rate im Format "X/Y" z.B. "18/20 (letzte 20)"
-- Zeige Sequenz der letzten 10 Spiele z.B. "2,1,2,0,1,2,1,1"
-- Kombiniere Gegner-Stats wenn verfügbar z.B. "Müller + Kimmich kombiniert 3.25 FC/90"
-- Trenne Heim/Auswärts wenn relevant
-- Erkläre das Matchup auf DEUTSCH (1 Satz)
-- Alle Texte auf DEUTSCH
-
-Kandidaten mit FBref/StatsBomb/FPL Stats + Sequenzen:
+Kandidaten mit FBref/StatsBomb/FPL Stats:
 {_json.dumps(payload, ensure_ascii=False, indent=1)}
 
-Erstelle 5-6 Bet Builder Kombinationen:
+Erstelle 4-5 Bet Builder Kombinationen. Nutze alle Typen:
 
 1. FOULS BUILDER (3-5 Legs): FC + FW Spieler, verschiedene Spiele
-   z.B. "Kovacic 1+ FW: 18/20 — Up against Adams+Scott combined 3.25 FC/90"
+   z.B. Rodri 2+ FC + Saka 2+ FW + Kimmich 2+ FC → ~20/1
 
 2. BOOKING BUILDER (2-4 Legs): Nur "Player to be Booked"
+   z.B. Tavares + Bissouma + Casemiro → ~30/1
 
 3. SHOT BUILDER+ SAME (2 Legs, selber Spieler): Korrelierte Märkte
+   z.B. Kane 2+ SoT + Kane 3+ Shots → ~8/1
 
-4. SHOT BUILDER+ TWO (2-3 Legs, verschiedene Spieler)
+4. SHOT BUILDER+ TWO (2-3 Legs, verschiedene Spieler): Beide schussstark
+   z.B. Saka 2+ SoT + Haaland 3+ Shots → ~15/1
 
-5. MIXED (4-6 Legs): Fouls + Bookings + Shots
-
-6. SUPER SUB BOOKING (2-3 Legs): Sub-Spieler mit hoher YC Rate
+5. MIXED (4-6 Legs): Fouls + Bookings + Shots mix
 
 Odds: 2 Legs ~8/1 · 3 Legs ~15/1 · 4 Legs ~30/1 · 5 Legs ~60/1 · 6 Legs ~100/1
 
-Antworte NUR JSON (alle "reason" Felder auf DEUTSCH):
-{{"combos":[{{"type":"BOOKING BUILDER","legs":[{{"player":"Name","team":"Team","match":"A vs B","market":"Player to be Booked","stat":"18/20 (letzte 20)","sequence":"1,1,0,1,1,1,0,1","opp_context":"Gegner erlaubt 3.2 FC/90"}}],"estimated_odds":"30/1","reason":"Begründung auf Deutsch"}}]}}"""
+Antworte NUR JSON:
+{{"combos":[{{"type":"BOOKING BUILDER","legs":[{{"player":"Name","team":"Team","match":"A vs B","market":"Player to be Booked","stat":"0.32/90"}}],"estimated_odds":"30/1","reason":"Begründung Deutsch"}}]}}"""
 
     results, source = call_gemini(prompt, use_tools=False)
     if not results:
@@ -15532,7 +13532,6 @@ Antworte NUR JSON (alle "reason" Felder auf DEUTSCH):
         "SHOT BUILDER+ SAME":   "🎯",
         "SHOT BUILDER+ TWO":    "🎯",
         "MIXED":                "💎",
-        "SUPER SUB BOOKING":    "⚡",
     }
 
     nl = "\n"
@@ -15575,232 +13574,6 @@ Antworte NUR JSON (alle "reason" Felder auf DEUTSCH):
 
     log(f"✅ Prop Builder: {len(combos)} Kombis gesendet")
 
-
-# ============================================================
-# 📊 CONFIDENCE SCORING — Copilot Gewichtung
-# BTTS: Stats 35% + xG 25% + Value 25% + Context 10% + Liga 5%
-# ============================================================
-
-def calculate_confidence_score(
-    btts_rate: float = 0,      # 0-1
-    xg_home: float = 0,
-    xg_away: float = 0,
-    odds_value: float = 0,     # positiv = value
-    injury_impact: float = 0,  # 0-1 (0=keine Verletzungen)
-    league_stability: float = 0.5,  # 0-1
-    market: str = "btts"
-) -> tuple:
-    """
-    Berechnet Confidence Score nach Copilot/ChatGPT Empfehlung.
-    Gibt (score 0-100, stars 1-5) zurück.
-    """
-    if market == "btts":
-        weights = {"stats": 0.35, "xg": 0.25, "value": 0.25, "context": 0.10, "liga": 0.05}
-    elif market in ("btts_ht", "over15_ht"):
-        weights = {"stats": 0.40, "xg": 0.30, "value": 0.20, "context": 0.07, "liga": 0.03}
-    elif market == "corners":
-        weights = {"stats": 0.45, "xg": 0.20, "value": 0.20, "context": 0.10, "liga": 0.05}
-    else:
-        weights = {"stats": 0.35, "xg": 0.25, "value": 0.25, "context": 0.10, "liga": 0.05}
-
-    # Stats Score (BTTS Rate)
-    stats_score = min(btts_rate * 100, 100)
-
-    # xG Score (Balance zwischen Home und Away)
-    xg_balance = min((xg_home + xg_away) / 3.0, 1.0)  # 3.0 xG total = max
-    xg_score = xg_balance * 100
-
-    # Value Score (positive odds value)
-    value_score = min(max(odds_value * 100 + 50, 0), 100)
-
-    # Context Score (keine Verletzungen = hoch)
-    context_score = (1 - injury_impact) * 100
-
-    # Liga Stability
-    liga_score = league_stability * 100
-
-    # Weighted Total
-    total = (
-        weights["stats"]   * stats_score +
-        weights["xg"]      * xg_score +
-        weights["value"]   * value_score +
-        weights["context"] * context_score +
-        weights["liga"]    * liga_score
-    )
-
-    total = round(total, 1)
-
-    # Sterne
-    if total >= 80:   stars = 5
-    elif total >= 70: stars = 4
-    elif total >= 60: stars = 3
-    elif total >= 50: stars = 2
-    else:             stars = 1
-
-    return total, stars
-
-
-# ============================================================
-# 🏆 CLUBELO API — Team Stärke (komplett kostenlos)
-# http://clubelo.com/API
-# ============================================================
-
-_CLUBELO_CACHE = {}
-
-def get_clubelo_rating(team_name: str) -> float:
-    """
-    Holt Club Elo Rating für ein Team.
-    Kostenlos, keine API Key nötig.
-    Gibt Elo-Rating zurück (1000-2000, Durchschnitt ~1500)
-    """
-    if team_name in _CLUBELO_CACHE:
-        return _CLUBELO_CACHE[team_name]
-    try:
-        # Team Name normalisieren für ClubElo
-        clean = team_name.replace(" ", "%20").replace("ü","ue").replace("ö","oe").replace("ä","ae")
-        url = f"http://api.clubelo.com/{clean}"
-        r = requests.get(url, timeout=8)
-        if r.ok and r.text:
-            lines = r.text.strip().split("\n")
-            if len(lines) >= 2:
-                parts = lines[-1].split(",")
-                if len(parts) >= 4:
-                    elo = float(parts[3])
-                    _CLUBELO_CACHE[team_name] = elo
-                    return elo
-    except Exception:
-        pass
-    return 1500.0  # Default Durchschnitt
-
-
-def get_clubelo_btts_factor(home: str, away: str) -> float:
-    """
-    Berechnet BTTS Wahrscheinlichkeit basierend auf ClubElo.
-    Teams mit ähnlichem Elo → mehr BTTS wahrscheinlich.
-    Gibt Faktor 0-1 zurück.
-    """
-    try:
-        home_elo = get_clubelo_rating(home)
-        away_elo = get_clubelo_rating(away)
-        diff = abs(home_elo - away_elo)
-        # Je ähnlicher die Teams, desto höher BTTS Wahrscheinlichkeit
-        if diff < 50:    return 0.85  # Sehr ausgeglichen → BTTS hoch
-        elif diff < 150: return 0.70
-        elif diff < 300: return 0.55
-        else:            return 0.40  # Großer Unterschied → Klarer Favorit, weniger BTTS
-    except Exception:
-        return 0.60
-
-
-# ============================================================
-# 📈 FOOTYSTATS — BTTS%, Over%, Corners, HT Stats
-# ============================================================
-
-def get_footystats_team_stats(team_name: str, league_name: str, target_date) -> dict:
-    """
-    FootyStats API für BTTS%, Over 2.5%, Corners, HT Stats.
-    Braucht FOOTYSTATS_API_KEY (kostenlos bis 100 calls/Tag).
-    """
-    if not FOOTYSTATS_API_KEY:
-        return {}
-    
-    # Cache prüfen
-    cache_key_fs = f"footystats_{team_name}_{league_name}"
-    cached = cache_get(cache_key_fs, target_date)
-    if cached:
-        return cached
-    
-    try:
-        r = requests.get(
-            "https://api.footystats.org/team",
-            params={
-                "key": FOOTYSTATS_API_KEY,
-                "team_name": team_name,
-            },
-            timeout=12,
-        )
-        if not r.ok:
-            return {}
-        
-        data = r.json().get("data", [{}])
-        if not data:
-            return {}
-        
-        team = data[0]
-        stats = {
-            "btts_pct":          team.get("stats", {}).get("seasonBTTSPercentage_overall", 0),
-            "btts_pct_home":     team.get("stats", {}).get("seasonBTTSPercentage_home", 0),
-            "btts_pct_away":     team.get("stats", {}).get("seasonBTTSPercentage_away", 0),
-            "over25_pct":        team.get("stats", {}).get("seasonOver25Percentage_overall", 0),
-            "corners_for":       team.get("stats", {}).get("cornersPerGame_for", 0),
-            "corners_against":   team.get("stats", {}).get("cornersPerGame_against", 0),
-            "goals_scored_avg":  team.get("stats", {}).get("seasonScoredAVG_overall", 0),
-            "goals_conceded_avg":team.get("stats", {}).get("seasonConcededAVG_overall", 0),
-            "ht_goals_scored":   team.get("stats", {}).get("seasonHTGoalsScoredAVG_overall", 0),
-            "ht_goals_conceded": team.get("stats", {}).get("seasonHTGoalsConcededAVG_overall", 0),
-        }
-        
-        # In Supabase cachen
-        cache_set(cache_key_fs, target_date, stats)
-        return stats
-        
-    except Exception:
-        return {}
-
-
-# ============================================================
-# 👨‍⚖️ WELTFUSSBALL SCHIEDSRICHTER STATS
-# ============================================================
-
-_REFEREE_CACHE = {}
-
-def get_referee_stats(referee_name: str) -> dict:
-    """
-    Holt Schiedsrichter Stats von weltfussball.de.
-    Gibt {cards_per_game, fouls_per_game, penalties_per_game} zurück.
-    """
-    if not referee_name:
-        return {}
-    if referee_name in _REFEREE_CACHE:
-        return _REFEREE_CACHE[referee_name]
-    
-    try:
-        clean = referee_name.lower().replace(" ", "-")
-        url = f"https://www.weltfussball.de/schiedsrichter/{clean}/"
-        r = requests.get(url, headers={
-            "User-Agent": "Mozilla/5.0 Chrome/121.0.0.0",
-        }, timeout=10)
-        
-        if not r.ok:
-            return {}
-        
-        from bs4 import BeautifulSoup as _bs
-        soup = _bs(r.text, "html.parser")
-        
-        # Karten Stats aus Tabelle
-        stats = {}
-        tables = soup.find_all("table", class_="standard_tabelle")
-        for tbl in tables:
-            rows = tbl.find_all("tr")
-            for row in rows:
-                cells = row.find_all("td")
-                if len(cells) >= 5:
-                    try:
-                        games = int(cells[1].text.strip() or 0)
-                        yellow = int(cells[2].text.strip() or 0)
-                        if games > 0:
-                            stats["cards_per_game"] = round(yellow / games, 2)
-                            stats["games"] = games
-                            break
-                    except Exception:
-                        continue
-        
-        _REFEREE_CACHE[referee_name] = stats
-        return stats
-        
-    except Exception:
-        return {}
-
 def check_config():
     warnings = []
 
@@ -15832,7 +13605,7 @@ def check_config():
     log(f"   • ScoutingStats: ✅ Scraping aktiv (kein Key)")
     log(f"")
     log(f"🔄 League Rotation:")
-    log(f"   • Status: {'⚠️ AKTIV (läuft erst ab 20 Tipps/Liga)' if LEAGUE_ROTATION_ENABLED else '❌ AUS'}")
+    log(f"   • Status: {'✅ AKTIV' if LEAGUE_ROTATION_ENABLED else '❌ AUS'}")
     log(f"   • Min Tipps: {LEAGUE_ROTATION_MIN_SAMPLES}")
     log(f"   • Rausnehmen: <{LEAGUE_ROTATION_MIN_QUOTE*100:.0f}%")
     log(f"   • Reinmachen: >{LEAGUE_ROTATION_MAX_QUOTE*100:.0f}%")
@@ -15978,174 +13751,6 @@ def send_daily_report():
         log(f"Daily Report Error: {str(e)[:60]}", "WARN")
 
 
-def run_clv_update() -> None:
-    """
-    Closing Line Value Update.
-    Holt Closing Odds von Pinnacle/Odds API für heutige Tipps,
-    berechnet CLV und speichert in Supabase.
-    CLV = (odds_taken / odds_closing - 1) * 100
-    Positiv = Edge, Negativ = kein Edge
-    """
-    if not SUPABASE_URL or not SUPABASE_KEY:
-        return
-    if not ODDS_API_KEYS:
-        log("CLV: Keine Odds API Keys", "WARN")
-        return
-
-    log("📊 CLV Update startet...")
-
-    today = datetime.now(timezone.utc).date()
-
-    # Hole alle heutigen Tipps mit odds_taken aber ohne odds_closing
-    try:
-        r = requests.get(
-            f"{SUPABASE_URL}/rest/v1/tips",
-            headers={"apikey": SUPABASE_KEY, "Authorization": f"Bearer {SUPABASE_KEY}"},
-            params={
-                "date": f"eq.{today}",
-                "odds_closing": "is.null",
-                "select": "id,match,league,market,odds_taken,time",
-                "limit": "100",
-            },
-            timeout=15,
-        )
-        if not r.ok:
-            return
-        tips = r.json()
-    except Exception as e:
-        log(f"CLV: Supabase Error {e}", "WARN")
-        return
-
-    if not tips:
-        log("CLV: Keine offenen Tipps für Update")
-        return
-
-    log(f"CLV: {len(tips)} Tipps gefunden")
-    updated = 0
-
-    for tip in tips:
-        try:
-            match = tip.get("match", "")
-            league = tip.get("league", "")
-            market = tip.get("market", "btts")
-            odds_taken = float(tip.get("odds_taken") or 0)
-
-            if not match or " vs " not in match or not odds_taken:
-                continue
-
-            parts = match.split(" vs ", 1)
-            home_team = parts[0].strip()
-            away_team = parts[1].strip()
-
-            # Closing Odds von Pinnacle via Odds API holen
-            sport_key = LEAGUE_KEYS.get(league)
-            if not sport_key:
-                continue
-
-            closing_odds = None
-            for api_key in ODDS_API_KEYS[:2]:
-                try:
-                    resp = requests.get(
-                        f"https://api.the-odds-api.com/v4/sports/{sport_key}/odds/",
-                        params={
-                            "apiKey": api_key,
-                            "bookmakers": "pinnacle",
-                            "markets": "btts,totals",
-                            "oddsFormat": "decimal",
-                        },
-                        timeout=12,
-                    )
-                    if not resp.ok:
-                        continue
-                    for game in resp.json():
-                        gh = game.get("home_team", "")
-                        ga = game.get("away_team", "")
-                        if not (teams_match(home_team, gh) and teams_match(away_team, ga)):
-                            continue
-                        for bm in game.get("bookmakers", []):
-                            if "pinnacle" not in bm.get("key","").lower():
-                                continue
-                            for mkt in bm.get("markets", []):
-                                if market == "btts" and mkt.get("key") == "btts":
-                                    for o in mkt.get("outcomes", []):
-                                        if o.get("name") == "Yes":
-                                            closing_odds = float(o.get("price", 0))
-                                elif market == "over25" and mkt.get("key") == "totals":
-                                    for o in mkt.get("outcomes", []):
-                                        if o.get("name") == "Over" and abs(o.get("point",0) - 2.5) < 0.1:
-                                            closing_odds = float(o.get("price", 0))
-                    if closing_odds:
-                        break
-                except Exception:
-                    continue
-
-            if not closing_odds:
-                continue
-
-            # CLV berechnen
-            clv = round((odds_taken / closing_odds - 1) * 100, 2)
-
-            # Supabase updaten
-            requests.patch(
-                f"{SUPABASE_URL}/rest/v1/tips",
-                headers={
-                    "apikey": SUPABASE_KEY,
-                    "Authorization": f"Bearer {SUPABASE_KEY}",
-                    "Content-Type": "application/json",
-                    "Prefer": "return=minimal",
-                },
-                params={"id": f"eq.{tip['id']}"},
-                json={"odds_closing": closing_odds, "clv": clv},
-                timeout=10,
-            )
-            updated += 1
-            clv_emoji = "🟢" if clv > 0 else "🔴"
-            log(f"   CLV: {match} → taken={odds_taken} closing={closing_odds} CLV={clv:+.1f}% {clv_emoji}")
-
-        except Exception as e:
-            log(f"CLV Error {tip.get('match','')}: {e}", "WARN")
-            continue
-
-    if updated > 0:
-        # CLV Summary in Stats Gruppe
-        try:
-            r2 = requests.get(
-                f"{SUPABASE_URL}/rest/v1/tips",
-                headers={"apikey": SUPABASE_KEY, "Authorization": f"Bearer {SUPABASE_KEY}"},
-                params={
-                    "date": f"eq.{today}",
-                    "clv": "not.is.null",
-                    "select": "clv,market",
-                },
-                timeout=10,
-            )
-            if r2.ok:
-                clv_tips = r2.json()
-                if clv_tips:
-                    avg_clv = round(sum(t.get("clv",0) for t in clv_tips) / len(clv_tips), 2)
-                    pos = sum(1 for t in clv_tips if t.get("clv",0) > 0)
-                    neg = len(clv_tips) - pos
-                    clv_emoji = "🟢" if avg_clv > 0 else "🔴"
-                    nl = "\n"
-                    msg = f"📊 <b>CLV UPDATE — {today}</b>\n"
-                    msg += f"━━━━━━━━━━━━━━━━━━\n"
-                    msg += f"{clv_emoji} Ø CLV: <b>{avg_clv:+.1f}%</b>\n"
-                    msg += f"🟢 Positiv: {pos} · 🔴 Negativ: {neg}\n"
-                    msg += f"📋 Tipps: {len(clv_tips)}\n"
-                    msg += f"━━━━━━━━━━━━━━━━━━\n"
-                    if avg_clv > 3:
-                        msg += "<i>✅ Echter Edge vorhanden!</i>"
-                    elif avg_clv > 0:
-                        msg += "<i>⚠️ Leichter Edge — weiter beobachten</i>"
-                    else:
-                        msg += "<i>❌ Kein Edge — Strategie überdenken</i>"
-                    send_telegram(msg, TELEGRAM_GROUPS.get("stats", TELEGRAM_CHAT_ID))
-        except Exception:
-            pass
-
-    log(f"✅ CLV Update: {updated}/{len(tips)} Tipps aktualisiert")
-
-
 def main():
     log("=" * 60)
     log("AI TIPP BOT - ALL-IN-ONE EDITION")
@@ -16166,8 +13771,6 @@ def main():
     if run_mode in ["settlement", "both"]:
         log("🏆 Settlement Mode - prüfe vergangene Tipps...")
         run_settlement()
-        run_combo_settlement()
-        run_clv_update()
         if run_mode == "settlement":
             log("Settlement fertig!")
             return
@@ -16195,270 +13798,97 @@ def main():
 
     tips_by_market = {m: [] for m in MARKETS_TO_RUN}
     total_analyzed = 0
-    _analyzed_count = [0]  # Thread-safe Counter
-    import threading as _main_th
-    _counter_lock = _main_th.Lock()
-    _total_analyzed_lock = None  # wird in analyze_league als nonlocal genutzt
 
-    # MAX_LEAGUES_PER_RUN wird ignoriert wenn Bulk-Fetch läuft
-    # Grund: Bulk holt nur Ligen mit echten Spielen → kein Limit nötig
     if MAX_LEAGUES_PER_RUN > 0:
-        log(f"ℹ️ MAX_LEAGUES_PER_RUN={MAX_LEAGUES_PER_RUN} gesetzt aber wird nach Bulk-Fetch ignoriert")
-    log(f"Alle {len(active_leagues)} Ligen werden geprüft (nur aktive bekommen Analyse)")
+        active_leagues = active_leagues[:MAX_LEAGUES_PER_RUN]
+        log(f"MAX_LEAGUES_PER_RUN aktiv: Es werden nur {len(active_leagues)} Ligen analysiert.")
 
     _fixtures_cache = {}  # Cache für Corners/Scorer Bot
 
-    # ══════════════════════════════════════════════════════
-    # SCHRITT 1: ALLE SPIELE BULK HOLEN (wenige Calls)
-    # SofaScore all_today + martj42 + TheSportsDB = alle Ligen auf einmal
-    # ══════════════════════════════════════════════════════
-    log("🌍 Bulk-Fixture-Fetch startet...")
-
-    # Supabase Cache prüfen — schon heute gefetcht?
-    bulk_fixtures = {}
-    cached_fixtures = cache_get_fixtures(target_date)
-    if cached_fixtures:
-        # ESPN Slugs aus Cache auf echte Liga-Namen mappen
-        ESPN_SLUG_MAP_CACHE = {
-            "2026-brasileiro-serie-b": "Brasileirao Serie B",
-            "2026-brasileiro-serie-a": "Brasileirao Serie A",
-            "2026-brasileiro-serie-c": "Brazil Serie C",
-            "2026-bolivian-liga-profesional": "Bolivia Division Profesional",
-            "2026-international-friendly": "Freundschaftsspiele International",
-            "2026-womens-international-friendly": "Freundschaftsspiele International",
-            "2026-argentine-primera-division": "Liga Argentinien",
-            "2026-primera-nacional": "Argentina Primera B",
-            "2026-uruguayan-primera-division": "Uruguay Primera",
-            "2026-chilean-primera-division": "Chile Primera",
-            "2026-colombian-primera-a": "Colombia Primera",
-            "2026-ecuadorian-liga-pro": "Ecuador Serie A",
-            "2026-peruvian-primera-division": "Peru Primera",
-            "2026-venezuelan-primera": "Venezuela Primera",
-            "2026-mls": "MLS",
-            "2026-usl-championship": "USL Championship",
-            "2026-liga-mx": "Liga MX",
-            "group-stage": "Freundschaftsspiele International",
-            "round-of-32": "Copa Libertadores",
-            "regular-season": "MLS",
-            "apertura-final": "Liga Argentinien",
-            "torneo-intermedio": "Liga Argentinien",
-            "promotion-semifinals": "Argentina Primera B",
-        }
-        mapped_cache = {}
-        for k, v in cached_fixtures.items():
-            real_name = ESPN_SLUG_MAP_CACHE.get(k.lower(), k)
-            mapped_cache[real_name] = v
-        bulk_fixtures = mapped_cache
-        log(f"🗄️ Fixtures aus Cache: {sum(len(v) for v in bulk_fixtures.values())} Spiele in {len(bulk_fixtures)} Ligen — kein neues Fetching nötig")
-        # Trotzdem weitermachen mit active_today Berechnung
-    else:
-        log("🌐 Kein Cache → Fixtures werden neu geladen...")
-
-    # ── QUELLE 1: ESPN (primary, GitHub Actions freundlich) ──
-    espn_all = {}
-    if not cached_fixtures:
-        espn_all = fetch_espn_all_today(target_date)
-    if espn_all:
-        log(f"   📺 ESPN Bulk: {sum(len(v) for v in espn_all.values())} Spiele")
-        for league_name, fixtures in espn_all.items():
-            if league_name not in bulk_fixtures:
-                bulk_fixtures[league_name] = []
-            bulk_fixtures[league_name].extend(fixtures)
-
-    # ── QUELLE 2: FotMob (fallback, sehr gute Daten) ──
-    fotmob_all = {}
-    if not cached_fixtures and sum(len(v) for v in bulk_fixtures.values()) < 50:
-        fotmob_all = fetch_fotmob_all_today(target_date)
-    if fotmob_all:
-        for league_name, fixtures in fotmob_all.items():
-            if league_name not in bulk_fixtures:
-                bulk_fixtures[league_name] = []
-            existing = {f"{f['home']}_{f['away']}" for f in bulk_fixtures[league_name]}
-            for fix in fixtures:
-                key = f"{fix['home']}_{fix['away']}"
-                if key not in existing:
-                    bulk_fixtures[league_name].append(fix)
-                    existing.add(key)
-
-    # ── QUELLE 3: SofaScore (optional, wird oft geblockt) ──
-    sofa_all = {}
-    if not cached_fixtures:
-        sofa_all = fetch_sofascore_all_today(target_date)
-    if sofa_all:
-        log(f"   ⚡ SofaScore: {sum(len(v) for v in sofa_all.values())} Spiele in {len(sofa_all)} Ligen")
-        # SofaScore Slugs auf unsere Liga-Namen mappen
-        slug_to_league = {v.lower(): k for k, v in SOFASCORE_SLUG_MAP.items()}
-        for slug, fixtures in sofa_all.items():
-            league_name = slug_to_league.get(slug.lower())
-            if not league_name:
-                # Fuzzy match
-                for our_league in active_leagues:
-                    our_slug = SOFASCORE_SLUG_MAP.get(our_league, "").lower()
-                    if our_slug and (our_slug in slug or slug in our_slug):
-                        league_name = our_league
-                        break
-            if league_name and fixtures:
-                if league_name not in bulk_fixtures:
-                    bulk_fixtures[league_name] = []
-                bulk_fixtures[league_name].extend(fixtures)
-
-    # Quelle 2: martj42 (internationale Spiele)
-    intl_fixtures = get_international_fixtures_today(target_date)
-    if intl_fixtures:
-        log(f"   🌍 martj42: {len(intl_fixtures)} internationale Spiele")
-        for fix in intl_fixtures:
-            tournament = fix.get("tournament", "Freundschaftsspiele International")
-            # Ordne dem richtigen Liga-Namen zu
-            league_name = "Freundschaftsspiele International"
-            for our_league in ["WM 2026", "UEFA Nations League", "Copa America", "Afrika Cup"]:
-                if our_league.lower() in tournament.lower():
-                    league_name = our_league
-                    break
-            if league_name not in bulk_fixtures:
-                bulk_fixtures[league_name] = []
-            bulk_fixtures[league_name].append(fix)
-
-    # Quelle 3: ESPN + AllSports bulk (schnell, kein Key nötig)
-    for league in active_leagues[:50]:  # Top 50 für Geschwindigkeit
-        for fetch_fn in [fetch_espn_fixtures, fetch_allsports_fixtures, fetch_thesportsdb_fixtures]:
-            fixes = fetch_fn(league, target_date)
-            if fixes:
-                if league not in bulk_fixtures:
-                    bulk_fixtures[league] = []
-                existing = {f"{f['home']}_{f['away']}" for f in bulk_fixtures.get(league, [])}
-                for fix in fixes:
-                    key = f"{fix['home']}_{fix['away']}"
-                    if key not in existing:
-                        bulk_fixtures[league].append(fix)
-                        existing.add(key)
-    
-    # FotMob für Ligen die noch leer sind
-    empty_leagues = [lg for lg in active_leagues if lg not in bulk_fixtures or not bulk_fixtures[lg]]
-    for league in empty_leagues[:30]:
-        fixes = fetch_fotmob_fixtures(league, target_date)
-        if fixes:
-            bulk_fixtures[league] = fixes
-
-    # Flashscore + Livescore + BeSoccer + Soccerway + SportSRC als weitere Fallbacks
-    empty_leagues = [lg for lg in active_leagues if lg not in bulk_fixtures or not bulk_fixtures[lg]]
-    for league in empty_leagues[:40]:
-        for fetch_fn in [
-            lambda lg: fetch_flashscore_fixtures(lg, target_date),
-            lambda lg: fetch_livescore_fixtures(lg, target_date),
-            lambda lg: fetch_sportsrc_fixtures(lg, target_date),
-            lambda lg: scrape_soccerway(lg, target_date),
-        ]:
-            try:
-                fixes = fetch_fn(league)
-                if fixes:
-                    bulk_fixtures[league] = fixes
-                    break
-            except Exception:
-                continue
-
-    # GitHub OpenFootball — immer erreichbar, nie geblockt
     for league in active_leagues:
-        if league not in bulk_fixtures or not bulk_fixtures[league]:
-            fixes = fetch_github_football_data(league, target_date)
-            if fixes:
-                bulk_fixtures[league] = fixes
+        log(f"╔══ Liga: {league} ══╗")
 
-    # OpenLigaDB für deutsche Ligen
-    for league in ["Bundesliga", "2. Bundesliga", "3. Liga Deutschland"]:
-        if league not in bulk_fixtures or not bulk_fixtures[league]:
-            fixes = fetch_openligadb(league, target_date)
-            if fixes:
-                bulk_fixtures[league] = fixes
-
-    total_bulk = sum(len(v) for v in bulk_fixtures.values())
-    active_with_games = len([lg for lg in bulk_fixtures if bulk_fixtures[lg]])
-    log(f"   📊 Alle Quellen: {total_bulk} Spiele in {active_with_games} Ligen")
-    
-    # In Supabase speichern für nächste Runs
-    if total_bulk > 0 and not cached_fixtures:
-        cache_set_fixtures(target_date, bulk_fixtures)
-
-    # Ligen MIT Spielen heute
-    active_today = {lg: fixes for lg, fixes in bulk_fixtures.items() if fixes}
-    log(f"✅ Bulk Done: {len(active_today)} Ligen haben heute Spiele (von {len(active_leagues)} aktiv)")
-
-    # ── Fallback: wenn Bulk komplett leer → per-Liga fetchen ──
-    use_bulk = len(active_today) > 0
-    if not use_bulk:
-        log("⚠️ Bulk leer → Fallback auf per-Liga Fetch (mit Threading)")
-    log("")
-
-    # ══════════════════════════════════════════════════════
-    # SCHRITT 2: PARALLEL ANALYSE — 5 Ligen gleichzeitig
-    # ══════════════════════════════════════════════════════
-    import threading
-
-    PARALLEL_WORKERS = int(env("PARALLEL_WORKERS", "10"))  # Erhöht für schnellere Runs
-    _lock = threading.Lock()
-
-    def analyze_league(league):
-        """Analysiert eine Liga in einem eigenen Thread."""
         try:
-            if use_bulk and league not in active_today:
-                return
-
-            # Fixtures holen
-            bulk_fixes = active_today.get(league, [])
-            af_fix   = fetch_api_football(league, target_date)
-            fj_fix   = fetch_football_json(league, target_date)
-            ol_fix   = fetch_openligadb(league, target_date)
-            espn_fix = fetch_espn_fixtures(league, target_date)
-            tsdb_fix = fetch_thesportsdb_fixtures(league, target_date)
-
-            fixtures = merge_fixtures(bulk_fixes, af_fix, fj_fix, ol_fix, espn_fix, tsdb_fix)
-
+            odds, fixtures = fetch_league_data_once(league, target_date)
             if fixtures:
-                with _lock:
-                    _fixtures_cache[league] = fixtures
-
-            odds = cache_get_odds(league, target_date)
-            if odds is None:
-                odds = fetch_odds_api(league, target_date)
-                if odds:
-                    cache_set_odds(league, target_date, odds)
+                _fixtures_cache[league] = fixtures  # Speichern für Corners/Scorer
 
             if not odds and not fixtures:
-                return
-
-            # Sanity Check: Teams müssen zur Liga passen
-            # z.B. bolivianische Teams nicht in Bundesliga
-            COUNTRY_HINTS = {
-                "bundesliga": ["germany", "german", "fc ", "sv ", "vfb", "vfl", "bsc", "tsg", "rb "],
-                "premier league": ["united", "city", "fc ", "afc", "town"],
-                "la liga": ["fc barcelona", "madrid", "atletico", "sevilla", "valencia"],
-                "serie a": ["juventus", "milan", "inter", "roma", "napoli", "lazio"],
-                "ligue 1": ["psg", "paris", "lyon", "marseille", "monaco"],
-                "3. liga deutschland": ["germany", "fc ", "sv ", "vfb", "sc "],
-            }
+                continue  # Kein Log-Spam für leere Ligen
             
-            league_lower = league.lower()
-            hint_key = next((k for k in COUNTRY_HINTS if k in league_lower), None)
-            if hint_key and fixtures:
-                hints = COUNTRY_HINTS[hint_key]
-                valid_fixtures = []
+            # Ohne Odds: martj42 für Länderspiele nutzen
+            if not odds and fixtures:
+                intl_kw = ["international","wm 2026","nations league","copa america",
+                           "afrika cup","gold cup","freundschaft","friendly"]
+                if any(kw in league.lower() for kw in intl_kw):
+                    # OddsJet für Länderspiel-Quoten versuchen
+                    oj_odds = fetch_oddsjet_international(target_date)
+                    oj_map = {f"{o['home'].lower()}_{o['away'].lower()}": o for o in oj_odds}
+                    for fix in fixtures[:8]:
+                        h, a = fix.get("home",""), fix.get("away","")
+                        if not h or not a:
+                            continue
+                        h_st = get_national_team_btts_stats(h)
+                        a_st = get_national_team_btts_stats(a)
+                        if h_st and a_st:
+                            bp = (h_st.get("btts_pct",0)+a_st.get("btts_pct",0))/2
+                            op = (h_st.get("over25_pct",0)+a_st.get("over25_pct",0))/2
+                            mn = f"{h} vs {a}"
+                            if bp >= 67:
+                                tips_by_market["btts"].append({
+                                    "match":mn,"league":league,"time":fix.get("time","TBD"),
+                                    "tip":"YES","probability":int(bp),"confidence":3,
+                                    "oddsYes":round(100/bp,2),"fairOdds":round(100/bp,2),
+                                    "valueRating":"OK","units":1.0,"market":"btts",
+                                    "reasoning":f"martj42: {h} {h_st.get('btts_pct',0):.0f}% | {a} {a_st.get('btts_pct',0):.0f}%",
+                                    "_no_real_odds":True,
+                                })
+                                total_analyzed += 1
+                            if op >= 67:
+                                tips_by_market["over25"].append({
+                                    "match":mn,"league":league,"time":fix.get("time","TBD"),
+                                    "tip":"YES","probability":int(op),"confidence":3,
+                                    "oddsYes":round(100/op,2),"fairOdds":round(100/op,2),
+                                    "valueRating":"OK","units":1.0,"market":"over25",
+                                    "reasoning":f"martj42 Over2.5: ⌀{(h_st.get('avg_goals',0)+a_st.get('avg_goals',0))/2:.1f} Tore",
+                                    "_no_real_odds":True,
+                                })
+                                total_analyzed += 1
+                continue  # Keine Odds → Gemini überspringen
+
+            # ✅ Qualitäts-Check: TheSportsDB allein = überspringen!
+            if fixtures:
+                confirmed = []
                 for fix in fixtures:
-                    home_lower = fix.get("home","").lower()
-                    away_lower = fix.get("away","").lower()
-                    if any(h in home_lower or h in away_lower for h in hints):
-                        valid_fixtures.append(fix)
-                if valid_fixtures and len(valid_fixtures) < len(fixtures):
-                    log(f"   🔍 Sanity: {len(fixtures)-len(valid_fixtures)} falsche Matches entfernt")
-                    fixtures = valid_fixtures
-            
-            log(f"   [{league}] {len(fixtures)} Spiele | {len(odds)} Quoten")
+                    source = fix.get("source", "")
+                    home = fix.get("home", "").lower()
+                    away = fix.get("away", "").lower()
+                    # Zähle Bestätigungen von anderen Quellen
+                    other_sources = [
+                        f for f in fixtures
+                        if f.get("home","").lower() == home
+                        and f.get("away","").lower() == away
+                        and f.get("source","") != source
+                    ]
+                    # TheSportsDB allein → nur für bekannte Ligen erlauben
+                    # (nicht filtern wenn keine anderen Quellen verfügbar!)
+                    if source == "thesportsdb" and not other_sources:
+                        # Trotzdem behalten - TheSportsDB ist oft die einzige Quelle!
+                        pass  # Nicht filtern
+                    if fix not in confirmed:
+                        confirmed.append(fix)
+                if len(confirmed) < len(fixtures):
+                    log(f"   🔍 Filter: {len(fixtures)} → {len(confirmed)} Spiele")
+                fixtures = confirmed
 
-            # Playwright-Quellen (Forebet etc.) nur wenn Odds vorhanden
-            # Spart ~70% der Laufzeit bei Ligen ohne Quoten
-            if not odds:
-                log(f"   [{league}] Keine Odds → überspringe Enrichment")
-                return
+            if not fixtures and not odds:
+                log("   - Keine bestätigten Spiele")
+                continue
 
+            log(f"   📅 {len(fixtures)} Spiele | 💰 {len(odds)} mit Quoten")
             for market in MARKETS_TO_RUN:
+                log(f"   → Markt: {MARKET_INFO[market]['name']}")
+
                 results, source = analyze_market_with_data(
                     market=market,
                     league=league,
@@ -16468,67 +13898,27 @@ def main():
                 )
 
                 if results:
+                    log(f"   ✓ {len(results)} via {source}")
+                    total_analyzed += len(results)
+
                     top = filter_top_tips(results, target_date, market)
+
                     if top:
-                        with _lock:
-                            tips_by_market[market].extend(top)
-                            with _counter_lock:
-                                _analyzed_count[0] += len(results)
-                            log(f"   💎 [{league}] {len(top)} TOP {MARKET_INFO[market]['name']}")
+                        log(f"   💎 {len(top)} TOP!", "TOP")
+                        tips_by_market[market].extend(top)
+                else:
+                    log(f"   ⚠️ {source} → kein Ergebnis")
 
                 time.sleep(AI_SLEEP_SECONDS)
 
         except Exception as e:
-            log(f"   ✗ [{league}] {e}", "ERROR")
-
-    # Ligen in Batches aufteilen und parallel ausführen
-    # Leagues aus Cache auf active_leagues mappen
-    if use_bulk and active_today:
-        matched = set()
-        for cache_key in active_today.keys():
-            # Exakter Match
-            if cache_key in active_leagues:
-                matched.add(cache_key)
-                continue
-            # Fuzzy Match
-            for our_league in active_leagues:
-                ck_l = cache_key.lower()
-                ol_l = our_league.lower()
-                if ck_l == ol_l or ck_l in ol_l or ol_l in ck_l:
-                    matched.add(our_league)
-                    # Fixtures auch unter unserem Namen speichern
-                    if our_league not in active_today:
-                        active_today[our_league] = active_today[cache_key]
-                    break
-            else:
-                # Cache-Key direkt verwenden wenn kein Match
-                active_leagues.append(cache_key) if cache_key not in active_leagues else None
-                matched.add(cache_key)
-        
-        leagues_to_analyze = list(matched) if matched else list(active_today.keys())
-        log(f"🗄️ Cache gemappt: {len(leagues_to_analyze)} Ligen analysierbar")
-    else:
-        leagues_to_analyze = [lg for lg in active_leagues if not use_bulk or lg in active_today]
-    
-    log(f"⚡ Starte parallele Analyse: {len(leagues_to_analyze)} Ligen × {PARALLEL_WORKERS} Threads")
-
-    from concurrent.futures import ThreadPoolExecutor, as_completed
-    with ThreadPoolExecutor(max_workers=PARALLEL_WORKERS) as executor:
-        futures = {executor.submit(analyze_league, league): league for league in leagues_to_analyze}
-        completed = 0
-        for future in as_completed(futures):
-            completed += 1
-            if completed % 10 == 0:
-                log(f"   ⏳ {completed}/{len(leagues_to_analyze)} Ligen analysiert...")
+            log(f"   ✗ {e}", "ERROR")
+            continue
 
     total_top = sum(len(t) for t in tips_by_market.values())
 
     log("")
     log("════════════════════════════════════════")
-    total_analyzed = _analyzed_count[0]
-    # Fallback: zähle direkt aus tips_by_market
-    if total_analyzed == 0:
-        total_analyzed = sum(len(v) for v in tips_by_market.values())
     log(f"Analysierte Tipps: {total_analyzed}")
     log(f"Top-Tipps: {total_top}")
 
@@ -16564,29 +13954,7 @@ def main():
     for market_id, tips in tips_by_market.items():
         for tip in tips:
             tip["market"] = market_id
-            if int(tip.get("probability", 0)) >= 70:
-                all_tips_flat.append(tip)
-
-    # Ecken + Scorer auch in Multi-Combos einbinden
-    for ct in (corners_tips if "corners_tips" in dir() else []):
-        if int(ct.get("probability", 0)) >= 70:
-            all_tips_flat.append({
-                "match": ct.get("match",""), "league": ct.get("league",""),
-                "time": ct.get("time","TBD"), "tip": ct.get("tip",""),
-                "probability": ct.get("probability",0),
-                "oddsYes": ct.get("fair_odds",1.8),
-                "market": "corners", "units": 1,
-            })
-    for st in (scorer_tips if "scorer_tips" in dir() else []):
-        if int(st.get("probability", 0)) >= 70:
-            all_tips_flat.append({
-                "match": st.get("match",""), "league": st.get("league",""),
-                "time": st.get("time","TBD"),
-                "tip": f"{st.get('player','')} Anytime Scorer",
-                "probability": st.get("probability",0),
-                "oddsYes": st.get("fair_odds",2.5),
-                "market": "scorer", "units": 1,
-            })
+            all_tips_flat.append(tip)
 
     if len(all_tips_flat) >= 3:
         log("")
@@ -16601,7 +13969,7 @@ def main():
 
         # Alle Combo-Größen generieren (3 bis 8)
         generated = 0
-        for n in [3, 4, 5, 6, 7, 8, 9, 10, 11]:
+        for n in [3, 4, 5, 6, 7, 8]:
             combo = generate_multi_combo_bets(all_tips_flat, num_tips=n)
             if combo:
                 log(f"   {combo['label']}: Quote {combo['total_odds']}")
