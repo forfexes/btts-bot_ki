@@ -5933,6 +5933,8 @@ def get_wsf_player_prop_odds(*args, **kwargs) -> dict:
 def get_national_team_btts_stats(team_name: str, last_n: int = 20) -> dict:
     """BTTS/Over2.5 Stats für Nationalmannschaften aus martj42 Daten."""
     global MARTJ42_DATA
+    if MARTJ42_DATA is None:
+        load_martj42_data()  # Automatisch laden wenn nötig
     if not MARTJ42_DATA:
         return {}
     team_lower = team_name.lower()
@@ -14100,6 +14102,9 @@ def main():
     )
     log("")
 
+    # Martj42 vorab laden für Länderspiel-Analyse
+    load_martj42_data()
+
     tips_by_market = {m: [] for m in MARKETS_TO_RUN}
     total_analyzed = 0
 
@@ -14135,9 +14140,10 @@ def main():
                         a_st = get_national_team_btts_stats(a)
                         if h_st and a_st:
                             bp = (h_st.get("btts_pct",0)+a_st.get("btts_pct",0))/2
+                            log(f"   🌍 {h} vs {a}: BTTS={bp:.0f}% Over={(h_st.get('over25_pct',0)+a_st.get('over25_pct',0))/2:.0f}%")
                             op = (h_st.get("over25_pct",0)+a_st.get("over25_pct",0))/2
                             mn = f"{h} vs {a}"
-                            if bp >= 67:
+                            if bp >= 62:
                                 tips_by_market["btts"].append({
                                     "match":mn,"league":league,"time":fix.get("time","TBD"),
                                     "tip":"YES","probability":int(bp),"confidence":3,
@@ -14147,7 +14153,7 @@ def main():
                                     "_no_real_odds":True,
                                 })
                                 total_analyzed += 1
-                            if op >= 67:
+                            if op >= 62:
                                 tips_by_market["over25"].append({
                                     "match":mn,"league":league,"time":fix.get("time","TBD"),
                                     "tip":"YES","probability":int(op),"confidence":3,
