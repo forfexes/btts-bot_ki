@@ -182,8 +182,8 @@ def get_dynamic_season(league_id=None, league_name=None):
 SUPABASE_URL = env("SUPABASE_URL")
 SUPABASE_KEY = env("SUPABASE_KEY")
 
-MIN_PROBABILITY = int(env("MIN_PROBABILITY", "67"))  # 🆕 Hybrid: 67% (zwischen 65-69)
-MIN_ODDS = float(env("MIN_ODDS", "1.65"))
+MIN_PROBABILITY = int(env("MIN_PROBABILITY", "60"))  # 🆕 Hybrid: 60% (zwischen 60-69)
+MIN_ODDS = float(env("MIN_ODDS", "1.40"))
 MAX_ODDS = float(env("MAX_ODDS", "3.0"))
 MIN_CONFIDENCE = int(env("MIN_CONFIDENCE", "3"))
 # 🆕 Nur HIGH + OK Value (LOW fliegt raus)
