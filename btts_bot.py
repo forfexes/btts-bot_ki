@@ -14216,6 +14216,7 @@ def send_daily_report():
 # Edge Filter · CLV · Drawdown · Pinnacle · Backtest
 # ============================================================
 NETRATTLER_PRO = True
+_PINNACLE_MATCHUPS = []  # Wird in main() gefüllt
 
 import math
 
@@ -15609,8 +15610,17 @@ def main():
     )
     log("")
 
-    # Martj42 vorab laden für Länderspiel-Analyse
+    # Martj42 vorab laden
     load_martj42_data()
+
+    # ── Pinnacle global laden (323 Matches!) ──
+    log("📊 Pinnacle Matchups laden...")
+    try:
+        _PINNACLE_MATCHUPS = fetch_pinnacle_matchups()
+        log(f"   ✅ Pinnacle: {len(_PINNACLE_MATCHUPS)} Matches geladen")
+    except Exception as e:
+        _PINNACLE_MATCHUPS = []
+        log(f"   ⚠️ Pinnacle: {e}")
 
     tips_by_market = {m: [] for m in MARKETS_TO_RUN}
     total_analyzed = 0
