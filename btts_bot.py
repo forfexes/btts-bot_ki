@@ -15685,7 +15685,7 @@ def main():
                             "league_id": _fix.get("league",{}).get("id",0),
                         })
                 total_af = sum(len(v) for v in _AF_BULK_FIXTURES.values())
-                log(f"   ✅ API-Football: {total_af} Spiele in {len(_af_bulk_fixtures)} Ligen")
+                log(f"   ✅ API-Football Bulk: {total_af} Spiele in {len(_AF_BULK_FIXTURES)} Ligen (1 API-Call)")
             else:
                 log(f"   ⚠️ API-Football Bulk: HTTP {_af_r.status_code}")
         except Exception as _e:
