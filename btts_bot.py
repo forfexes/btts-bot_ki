@@ -2786,8 +2786,8 @@ def fetch_espn_fixtures(league_name, target_date):
             data = _fetch_espn_via_playwright(url, date_str)
             if not data:
                 # API-Football als letzter Fallback
-                if league_name in _af_bulk_fixtures:
-                    return _af_bulk_fixtures[league_name]
+                if league_name in _AF_BULK_FIXTURES:
+                    return _AF_BULK_FIXTURES.get(league_name, [])
                 return []
         else:
             data = r.json()
@@ -14257,6 +14257,7 @@ def send_daily_report():
 # ============================================================
 NETRATTLER_PRO = True
 _PINNACLE_MATCHUPS = []  # Wird in main() gefüllt
+_AF_BULK_FIXTURES = {}   # API-Football Bulk Cache - global
 
 import math
 
@@ -15654,7 +15655,7 @@ def main():
     load_martj42_data()
 
     # ── API-Football Bulk: ALLE heutigen Spiele in 1 Call ──
-    _af_bulk_fixtures = {}
+    global _AF_BULK_FIXTURES
     if API_FOOTBALL_KEY:
         try:
             import requests as _rq
@@ -15673,17 +15674,17 @@ def main():
                     _ln = _fix.get("league",{}).get("name","")
                     _cn = _fix.get("league",{}).get("country","")
                     _key = f"{_ln} ({_cn})"
-                    if _key not in _af_bulk_fixtures:
-                        _af_bulk_fixtures[_key] = []
+                    if _key not in _AF_BULK_FIXTURES:
+                        _AF_BULK_FIXTURES[_key] = []
                     _h = _fix.get("teams",{}).get("home",{}).get("name","")
                     _a = _fix.get("teams",{}).get("away",{}).get("name","")
                     _t = _fix.get("fixture",{}).get("date","")[:16].replace("T"," ")
                     if _h and _a:
-                        _af_bulk_fixtures[_key].append({
+                        _AF_BULK_FIXTURES[_key].append({
                             "home": _h, "away": _a, "time": _t, "source": "api-football",
                             "league_id": _fix.get("league",{}).get("id",0),
                         })
-                total_af = sum(len(v) for v in _af_bulk_fixtures.values())
+                total_af = sum(len(v) for v in _AF_BULK_FIXTURES.values())
                 log(f"   ✅ API-Football: {total_af} Spiele in {len(_af_bulk_fixtures)} Ligen")
             else:
                 log(f"   ⚠️ API-Football Bulk: HTTP {_af_r.status_code}")
