@@ -2723,10 +2723,36 @@ ESPN_LEAGUE_IDS = {
     "Freundschaftsspiele International": ("soccer", "fifa.friendly"),
 }
 
+def _fetch_espn_via_playwright(url, date_str):
+    """ESPN via Playwright wenn requests 403 gibt."""
+    try:
+        from playwright.sync_api import sync_playwright
+        with sync_playwright() as pw:
+            browser = pw.chromium.launch(headless=True, args=["--no-sandbox"])
+            ctx = browser.new_context(
+                user_agent="Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 Chrome/120.0.0.0 Safari/537.36"
+            )
+            page = ctx.new_page()
+            full_url = f"{url}?dates={date_str}"
+            page.goto(full_url, timeout=20000, wait_until="networkidle")
+            import json as _json
+            content = page.content()
+            # JSON aus HTML extrahieren
+            start = content.find("{")
+            end = content.rfind("}") + 1
+            if start >= 0 and end > start:
+                data = _json.loads(content[start:end])
+                browser.close()
+                return data
+            browser.close()
+    except Exception as e:
+        log(f"Playwright ESPN Fehler: {str(e)[:60]}", "WARN")
+    return None
+
+
 def fetch_espn_fixtures(league_name, target_date):
     """
-    Holt Spielpläne von ESPN inoffizieller API.
-    Gut für US Ligen und Top-Ligen.
+    Holt Spielpläne von ESPN — requests zuerst, Playwright als Fallback bei 403.
     """
     league_info = ESPN_LEAGUE_IDS.get(league_name)
     if not league_info:
@@ -2739,18 +2765,32 @@ def fetch_espn_fixtures(league_name, target_date):
         return ESPN_CACHE[cache_key]
 
     try:
-        date_str = str(target_date).replace("-", "")  # YYYYMMDD
+        date_str = str(target_date).replace("-", "")
         url = f"https://site.api.espn.com/apis/site/v2/sports/{sport}/{league_id}/scoreboard"
 
         r = requests.get(
             url,
             params={"dates": date_str},
-            headers={"User-Agent": "Mozilla/5.0"},
+            headers={
+                "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 Chrome/120 Safari/537.36",
+                "Accept": "application/json",
+                "Accept-Language": "en-US,en;q=0.9",
+                "Referer": "https://www.espn.com/",
+            },
             timeout=12,
         )
 
         if not r.ok:
-            return []
+            # Playwright Fallback
+            log(f"   ESPN {r.status_code} → Playwright Fallback für {league_name}")
+            data = _fetch_espn_via_playwright(url, date_str)
+            if not data:
+                # API-Football als letzter Fallback
+                if league_name in _af_bulk_fixtures:
+                    return _af_bulk_fixtures[league_name]
+                return []
+        else:
+            data = r.json()
 
         data = r.json()
         events = data.get("events", [])
@@ -15612,6 +15652,43 @@ def main():
 
     # Martj42 vorab laden
     load_martj42_data()
+
+    # ── API-Football Bulk: ALLE heutigen Spiele in 1 Call ──
+    _af_bulk_fixtures = {}
+    if API_FOOTBALL_KEY:
+        try:
+            import requests as _rq
+            log("📡 API-Football: Lade alle heutigen Spiele...")
+            _af_r = _rq.get(
+                "https://v3.football.api-sports.io/fixtures",
+                headers={"x-rapidapi-key": API_FOOTBALL_KEY,
+                         "x-rapidapi-host": "v3.football.api-sports.io"},
+                params={"date": target_date.strftime("%Y-%m-%d"), "timezone": "UTC"},
+                timeout=15
+            )
+            if _af_r.ok:
+                _af_data = _af_r.json()
+                _af_all = _af_data.get("response", [])
+                for _fix in _af_all:
+                    _ln = _fix.get("league",{}).get("name","")
+                    _cn = _fix.get("league",{}).get("country","")
+                    _key = f"{_ln} ({_cn})"
+                    if _key not in _af_bulk_fixtures:
+                        _af_bulk_fixtures[_key] = []
+                    _h = _fix.get("teams",{}).get("home",{}).get("name","")
+                    _a = _fix.get("teams",{}).get("away",{}).get("name","")
+                    _t = _fix.get("fixture",{}).get("date","")[:16].replace("T"," ")
+                    if _h and _a:
+                        _af_bulk_fixtures[_key].append({
+                            "home": _h, "away": _a, "time": _t, "source": "api-football",
+                            "league_id": _fix.get("league",{}).get("id",0),
+                        })
+                total_af = sum(len(v) for v in _af_bulk_fixtures.values())
+                log(f"   ✅ API-Football: {total_af} Spiele in {len(_af_bulk_fixtures)} Ligen")
+            else:
+                log(f"   ⚠️ API-Football Bulk: HTTP {_af_r.status_code}")
+        except Exception as _e:
+            log(f"   ⚠️ API-Football Bulk Fehler: {_e}")
 
     # ── Pinnacle global laden (323 Matches!) ──
     log("📊 Pinnacle Matchups laden...")
