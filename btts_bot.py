@@ -15936,15 +15936,16 @@ def main():
 
     # ── NETRATTLER PRO: Edge Filter ──
     if NETRATTLER_PRO:
-        for market_id in list(tips_by_market.keys()):
-            tips = tips_by_market[market_id]
-            if tips:
-                filtered = integrate_edge_filter_into_pipeline(tips, min_edge=0.05)
-                if filtered:
-                    tips_by_market[market_id] = filtered
-                    log(f"   🎯 Edge Filter: {len(tips)} → {len(filtered)} Tipps")
-                else:
-                    log(f"   🎯 Edge Filter: {len(tips)} Tipps haben keinen Edge — behalte alle")
+        try:
+            _ef = integrate_edge_filter_into_pipeline(tips_by_market)
+            _ft = _ef.get("filtered_tips") if isinstance(_ef, dict) else None
+            if _ft and any(len(v) for v in _ft.values()):
+                tips_by_market = _ft
+                log(f"   🎯 Edge Filter angewendet")
+            else:
+                log(f"   🎯 Edge Filter: keine Quoten — behalte alle Tipps")
+        except Exception as _efe:
+            log(f"   🎯 Edge Filter übersprungen: {str(_efe)[:60]}")
 
     send_top_tips(tips_by_market, target_date)
 
