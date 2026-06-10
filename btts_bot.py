@@ -15691,7 +15691,12 @@ def main():
         except Exception as _e:
             log(f"   ⚠️ API-Football Bulk Fehler: {_e}")
 
-    # ── Pinnacle global laden (323 Matches!) ──
+    # ── Variablen initialisieren ──
+    tips_by_market = {m: [] for m in MARKETS_TO_RUN}
+    total_analyzed = 0
+    _fixtures_cache = {}
+
+    # ── Pinnacle global laden ──
     log("📊 Pinnacle Matchups laden...")
     try:
         _PINNACLE_MATCHUPS = fetch_pinnacle_matchups()
@@ -15700,14 +15705,9 @@ def main():
         _PINNACLE_MATCHUPS = []
         log(f"   ⚠️ Pinnacle: {e}")
 
-    tips_by_market = {m: [] for m in MARKETS_TO_RUN}
-    total_analyzed = 0
-
     if MAX_LEAGUES_PER_RUN > 0:
         active_leagues = active_leagues[:MAX_LEAGUES_PER_RUN]
         log(f"MAX_LEAGUES_PER_RUN aktiv: Es werden nur {len(active_leagues)} Ligen analysiert.")
-
-    _fixtures_cache = {}  # Cache für Corners/Scorer Bot
 
     for league in active_leagues:
         log(f"╔══ Liga: {league} ══╗")
