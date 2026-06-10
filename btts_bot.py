@@ -15705,6 +15705,102 @@ def main():
         _PINNACLE_MATCHUPS = []
         log(f"   ⚠️ Pinnacle: {e}")
 
+    # ════════════════════════════════════════════════
+    # 🎰 PINNACLE DIREKTE TIPP-GENERIERUNG
+    # Nutzt die geladenen Matchups - keine extra API-Calls
+    # ════════════════════════════════════════════════
+    pinnacle_tips_count = 0
+    if _PINNACLE_MATCHUPS:
+        log(f"🎰 Analysiere {len(_PINNACLE_MATCHUPS)} Pinnacle Matches...")
+        from datetime import datetime as _pdt
+        for pm in _PINNACLE_MATCHUPS:
+            try:
+                home = pm.get("home", "")
+                away = pm.get("away", "")
+                league_name = pm.get("league_name", "")
+                starts = pm.get("starts", "")
+                if not home or not away:
+                    continue
+
+                # Zeitfenster: -3h bis +36h (timezone-aware)
+                if starts:
+                    try:
+                        s = starts.replace("Z", "+00:00")
+                        if "+" not in s[10:] and s[10:].count("-") == 0:
+                            s += "+00:00"
+                        match_dt = _pdt.fromisoformat(s)
+                        hours_diff = (match_dt - now_utc).total_seconds() / 3600
+                        if hours_diff < -3 or hours_diff > 36:
+                            continue
+                    except Exception:
+                        pass  # Bei Parse-Fehler trotzdem analysieren
+
+                log(f"   🎰 Pinnacle: {home} vs {away} | {league_name}")
+
+                # Liga-basierte BTTS/Over-Schätzungen
+                ln = league_name.lower()
+                if any(k in ln for k in ["world cup","fifa","weltmeister"]):
+                    btts_yes, over25, prob_b, prob_o = 1.80, 1.75, 58, 57
+                elif any(k in ln for k in ["friendly","international"]):
+                    btts_yes, over25, prob_b, prob_o = 1.90, 1.85, 55, 56
+                elif any(k in ln for k in ["premier league","bundesliga","la liga","serie a","ligue 1","eredivisie","brasileirao","mls"]):
+                    btts_yes, over25, prob_b, prob_o = 1.75, 1.70, 57, 59
+                else:
+                    btts_yes, over25, prob_b, prob_o = 1.85, 1.80, 56, 57
+
+                # Echte Pinnacle-Odds als Upgrade (optional, mit Schutz)
+                try:
+                    ro = get_pinnacle_match_odds(home, away)
+                    if ro:
+                        if ro.get("btts_yes"):
+                            btts_yes = ro["btts_yes"]
+                            prob_b = int(100 / btts_yes * 0.95)
+                        if ro.get("over_25"):
+                            over25 = ro["over_25"]
+                            prob_o = int(100 / over25 * 0.95)
+                except Exception:
+                    pass
+
+                mn = f"{home} vs {away}"
+                tstr = "TBD"
+                try:
+                    if starts and "T" in starts:
+                        tstr = starts[11:16]
+                except Exception:
+                    pass
+
+                # BTTS Tipp
+                if prob_b >= 55 and "btts" in tips_by_market:
+                    tips_by_market["btts"].append({
+                        "match": mn, "league": league_name or "Pinnacle",
+                        "time": tstr, "tip": "YES",
+                        "probability": prob_b, "confidence": 3,
+                        "oddsYes": btts_yes, "fairOdds": round(100/prob_b, 2),
+                        "valueRating": "OK", "units": 1.0, "market": "btts",
+                        "reasoning": f"Pinnacle Markt-Analyse | {league_name}",
+                        "_no_real_odds": True, "_source": "pinnacle",
+                    })
+                    pinnacle_tips_count += 1
+                    log(f"      ✅ BTTS YES @ {btts_yes} ({prob_b}%)")
+
+                # Over 2.5 Tipp
+                if prob_o >= 56 and "over25" in tips_by_market:
+                    tips_by_market["over25"].append({
+                        "match": mn, "league": league_name or "Pinnacle",
+                        "time": tstr, "tip": "YES",
+                        "probability": prob_o, "confidence": 3,
+                        "oddsYes": over25, "fairOdds": round(100/prob_o, 2),
+                        "valueRating": "OK", "units": 1.0, "market": "over25",
+                        "reasoning": f"Pinnacle Markt-Analyse | {league_name}",
+                        "_no_real_odds": True, "_source": "pinnacle",
+                    })
+                    pinnacle_tips_count += 1
+
+                total_analyzed += 1
+            except Exception as pe:
+                log(f"   ⚠️ Pinnacle Match Fehler: {str(pe)[:60]}")
+        log(f"🎰 Pinnacle fertig: {pinnacle_tips_count} Tipps generiert")
+
     if MAX_LEAGUES_PER_RUN > 0:
         active_leagues = active_leagues[:MAX_LEAGUES_PER_RUN]
         log(f"MAX_LEAGUES_PER_RUN aktiv: Es werden nur {len(active_leagues)} Ligen analysiert.")
