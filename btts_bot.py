@@ -15710,6 +15710,27 @@ def main():
     # Nutzt die geladenen Matchups - keine extra API-Calls
     # ════════════════════════════════════════════════
     pinnacle_tips_count = 0
+    # ⏰ Gestaffeltes Zeitfenster (Schweizer Zeit):
+    #    Run vor 14:00 CH  → Spiele heute 12:00–20:00 CH (Nachmittag/Abend)
+    #    Run ab 14:00 CH   → Spiele heute 20:00 – morgen 12:00 CH (spät/Nacht/Morgen)
+    from datetime import timedelta as _td
+    try:
+        from zoneinfo import ZoneInfo as _ZI
+        _ch_tz = _ZI("Europe/Zurich")
+    except Exception:
+        _ch_tz = timezone(_td(hours=2))
+    _now_ch = now_utc.astimezone(_ch_tz)
+    _today_ch = _now_ch.replace(hour=0, minute=0, second=0, microsecond=0)
+    if _now_ch.hour < 14:
+        _win_start = _today_ch.replace(hour=12)
+        _win_end = _today_ch.replace(hour=20)
+        log(f"⏰ Fenster: heute 12:00–20:00 CH (Morgen-Run)")
+    else:
+        _win_start = _today_ch.replace(hour=20)
+        _win_end = (_today_ch + _td(days=1)).replace(hour=12)
+        log(f"⏰ Fenster: heute 20:00 – morgen 12:00 CH (Abend-Run)")
+    _win_start_utc = _win_start.astimezone(timezone.utc)
+    _win_end_utc = _win_end.astimezone(timezone.utc)
     if _PINNACLE_MATCHUPS:
         log(f"🎰 Analysiere {len(_PINNACLE_MATCHUPS)} Pinnacle Matches...")
         from datetime import datetime as _pdt
@@ -15721,19 +15742,23 @@ def main():
                 starts = pm.get("starts", "")
                 if not home or not away:
                     continue
+                # Specials skippen — Corners/Bookings sind keine echten Matches
+                if ("(Corners)" in home or "(Bookings)" in home
+                        or "Corners" in league_name or "Bookings" in league_name):
+                    continue
 
-                # Zeitfenster: -3h bis +36h (timezone-aware)
+                # Zeitfenster: gestaffelt nach CH-Zeit (siehe oben)
+                match_dt = None
                 if starts:
                     try:
                         s = starts.replace("Z", "+00:00")
                         if "+" not in s[10:] and s[10:].count("-") == 0:
                             s += "+00:00"
                         match_dt = _pdt.fromisoformat(s)
-                        hours_diff = (match_dt - now_utc).total_seconds() / 3600
-                        if hours_diff < -3 or hours_diff > 36:
+                        if match_dt < _win_start_utc or match_dt >= _win_end_utc:
                             continue
                     except Exception:
-                        pass  # Bei Parse-Fehler trotzdem analysieren
+                        continue  # Ohne Zeit kein gestaffelter Tipp
 
                 log(f"   🎰 Pinnacle: {home} vs {away} | {league_name}")
 
@@ -15764,8 +15789,13 @@ def main():
 
                 mn = f"{home} vs {away}"
                 tstr = "TBD"
+                _ko_sort = "9999"
                 try:
-                    if starts and "T" in starts:
+                    if match_dt:
+                        _ko_ch = match_dt.astimezone(_ch_tz)
+                        tstr = _ko_ch.strftime("%H:%M")
+                        _ko_sort = match_dt.isoformat()
+                    elif starts and "T" in starts:
                         tstr = starts[11:16]
                 except Exception:
                     pass
@@ -15779,7 +15809,7 @@ def main():
                         "oddsYes": btts_yes, "fairOdds": round(100/prob_b, 2),
                         "valueRating": "OK", "units": 1.0, "market": "btts",
                         "reasoning": f"Pinnacle Markt-Analyse | {league_name}",
-                        "_no_real_odds": True, "_source": "pinnacle",
+                        "_no_real_odds": True, "_source": "pinnacle", "_kickoff": _ko_sort,
                     })
                     pinnacle_tips_count += 1
                     log(f"      ✅ BTTS YES @ {btts_yes} ({prob_b}%)")
@@ -15793,7 +15823,7 @@ def main():
                         "oddsYes": over25, "fairOdds": round(100/prob_o, 2),
                         "valueRating": "OK", "units": 1.0, "market": "over25",
                         "reasoning": f"Pinnacle Markt-Analyse | {league_name}",
-                        "_no_real_odds": True, "_source": "pinnacle",
+                        "_no_real_odds": True, "_source": "pinnacle", "_kickoff": _ko_sort,
                     })
                     pinnacle_tips_count += 1
 
@@ -15810,7 +15840,7 @@ def main():
                             "oddsYes": combo_odds, "fairOdds": round(100/combo_prob, 2),
                             "valueRating": "OK", "units": 0.75, "market": "combo",
                             "reasoning": f"Pinnacle Combo-Analyse | {league_name}",
-                            "_no_real_odds": True, "_source": "pinnacle",
+                            "_no_real_odds": True, "_source": "pinnacle", "_kickoff": _ko_sort,
                         })
                         pinnacle_tips_count += 1
 
@@ -15846,7 +15876,7 @@ def main():
                             "oddsYes": ht_odds, "fairOdds": round(100/ht_prob, 2),
                             "valueRating": "OK", "units": 1.0, "market": "btts_ht",
                             "reasoning": f"Pinnacle HT-Analyse | {league_name}",
-                            "_no_real_odds": True, "_source": "pinnacle",
+                            "_no_real_odds": True, "_source": "pinnacle", "_kickoff": _ko_sort,
                         })
                         pinnacle_tips_count += 1
 
@@ -15859,7 +15889,17 @@ def main():
         active_leagues = active_leagues[:MAX_LEAGUES_PER_RUN]
         log(f"MAX_LEAGUES_PER_RUN aktiv: Es werden nur {len(active_leagues)} Ligen analysiert.")
 
-    for league in active_leagues:
+    # ⚡ SPEED: Liga-Schleife skippen wenn Pinnacle genug geliefert hat
+    # (ESPN/FotMob/etc. liefern aus GitHub Actions eh 0 — spart ~5 Min Actions-Minuten)
+    _skip_league_loop = False
+    try:
+        if pinnacle_tips_count >= 30 and env("FORCE_LEAGUE_LOOP", "false").lower() not in ["1", "true", "yes"]:
+            _skip_league_loop = True
+            log(f"⚡ Liga-Schleife übersprungen ({pinnacle_tips_count} Pinnacle-Tipps reichen) — spart ~5 Min")
+    except Exception:
+        pass
+
+    for league in ([] if _skip_league_loop else active_leagues):
         log(f"╔══ Liga: {league} ══╗")
 
         try:
@@ -15993,13 +16033,25 @@ def main():
         try:
             _ef = integrate_edge_filter_into_pipeline(tips_by_market)
             _ft = _ef.get("filtered_tips") if isinstance(_ef, dict) else None
-            if _ft and any(len(v) for v in _ft.values()):
-                tips_by_market = _ft
-                log(f"   🎯 Edge Filter angewendet")
-            else:
-                log(f"   🎯 Edge Filter: keine Quoten — behalte alle Tipps")
+            if _ft:
+                for _mk in list(tips_by_market.keys()):
+                    _orig = tips_by_market.get(_mk, [])
+                    _filt = _ft.get(_mk, [])
+                    # Wenn Filter alles verwirft (keine echten Quoten) → Original behalten
+                    if _filt:
+                        tips_by_market[_mk] = _filt
+                    else:
+                        log(f"   🎯 Edge Filter [{_mk}]: keine Quoten — behalte {len(_orig)} Tipps")
+                log(f"   🎯 Edge Filter angewendet (mit Pinnacle-Fallback)")
         except Exception as _efe:
             log(f"   🎯 Edge Filter übersprungen: {str(_efe)[:60]}")
+
+    # ⏰ Sortierung nach Anstosszeit (früheste zuerst)
+    for _mk in tips_by_market:
+        try:
+            tips_by_market[_mk].sort(key=lambda t: t.get("_kickoff", "9999"))
+        except Exception:
+            pass
 
     send_top_tips(tips_by_market, target_date)
 
@@ -16020,8 +16072,7 @@ def main():
                     _s += "+00:00"
                 from datetime import datetime as _idt
                 _md = _idt.fromisoformat(_s)
-                _hd = (_md - now_utc).total_seconds()/3600
-                if _hd < -3 or _hd > 36:
+                if _md < _win_start_utc or _md >= _win_end_utc:
                     continue
             except Exception:
                 pass
