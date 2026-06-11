@@ -1,6 +1,6 @@
 from typing import List, Dict, Optional, Tuple, Any
 """
-AI TIPP BOT - GITHUB SINGLE FIALE EDITION
+AI TIPP BOT - GITHUB SINGLE FILE EDITION
 =======================================
 
 WICHTIG:
@@ -15749,6 +15749,7 @@ def main():
                     btts_yes, over25, prob_b, prob_o = 1.85, 1.80, 56, 57
 
                 # Echte Pinnacle-Odds als Upgrade (optional, mit Schutz)
+                ro = None
                 try:
                     ro = get_pinnacle_match_odds(home, away)
                     if ro:
@@ -15795,6 +15796,59 @@ def main():
                         "_no_real_odds": True, "_source": "pinnacle",
                     })
                     pinnacle_tips_count += 1
+
+                # 🔥 Combo: BTTS + Over 2.5 (stark korreliert)
+                if prob_b >= 56 and prob_o >= 56 and "combo" in tips_by_market:
+                    # Korrelation: BTTS-Yes-Spiele sind meist auch Over 2.5
+                    combo_prob = min(prob_b, prob_o) - 5
+                    combo_odds = round(btts_yes * over25 * 0.80, 2)  # Korrelationsabschlag
+                    if combo_prob >= 50:
+                        tips_by_market["combo"].append({
+                            "match": mn, "league": league_name or "Pinnacle",
+                            "time": tstr, "tip": "BTTS + Over 2.5",
+                            "probability": combo_prob, "confidence": 3,
+                            "oddsYes": combo_odds, "fairOdds": round(100/combo_prob, 2),
+                            "valueRating": "OK", "units": 0.75, "market": "combo",
+                            "reasoning": f"Pinnacle Combo-Analyse | {league_name}",
+                            "_no_real_odds": True, "_source": "pinnacle",
+                        })
+                        pinnacle_tips_count += 1
+
+                # 🕐 HT-Tipps: Over 1.5 HT bei torreichen Ligen, sonst Over 0.5 HT
+                if "btts_ht" in tips_by_market:
+                    # Echte HT-Odds falls vorhanden
+                    ht_odds = 0
+                    ht_tip_name = ""
+                    ht_prob = 0
+                    try:
+                        if ro:
+                            if ro.get("over_15_ht"):
+                                ht_odds = ro["over_15_ht"]
+                                ht_tip_name = "Over 1.5 Tore HT"
+                                ht_prob = int(100 / ht_odds * 0.95)
+                            elif ro.get("over_05_ht"):
+                                ht_odds = ro["over_05_ht"]
+                                ht_tip_name = "Over 0.5 Tore HT"
+                                ht_prob = int(100 / ht_odds * 0.95)
+                    except Exception:
+                        pass
+                    # Fallback: Liga-Schätzung Over 0.5 HT (~73-78%)
+                    if not ht_odds:
+                        if prob_o >= 57:  # torreiche Liga
+                            ht_odds, ht_tip_name, ht_prob = 1.30, "Over 0.5 Tore HT", 76
+                        else:
+                            ht_odds, ht_tip_name, ht_prob = 1.33, "Over 0.5 Tore HT", 73
+                    if ht_prob >= 65:
+                        tips_by_market["btts_ht"].append({
+                            "match": mn, "league": league_name or "Pinnacle",
+                            "time": tstr, "tip": ht_tip_name,
+                            "probability": ht_prob, "confidence": 3,
+                            "oddsYes": ht_odds, "fairOdds": round(100/ht_prob, 2),
+                            "valueRating": "OK", "units": 1.0, "market": "btts_ht",
+                            "reasoning": f"Pinnacle HT-Analyse | {league_name}",
+                            "_no_real_odds": True, "_source": "pinnacle",
+                        })
+                        pinnacle_tips_count += 1
 
                 total_analyzed += 1
             except Exception as pe:
@@ -15948,6 +16002,39 @@ def main():
             log(f"   🎯 Edge Filter übersprungen: {str(_efe)[:60]}")
 
     send_top_tips(tips_by_market, target_date)
+
+    # 🎰 Pinnacle-Matches als Fixtures für Corners/Scorer/Props injizieren
+    if _PINNACLE_MATCHUPS:
+        _injected = 0
+        for pm in _PINNACLE_MATCHUPS:
+            _h, _a = pm.get("home",""), pm.get("away","")
+            _ln = pm.get("league_name","")
+            _st = pm.get("starts","")
+            # Skip Specials-Duplikate (Corners/Bookings als eigene "Matches")
+            if not _h or not _a or "(Corners)" in _h or "(Bookings)" in _h:
+                continue
+            # Zeitfenster wie oben
+            try:
+                _s = _st.replace("Z","+00:00")
+                if "+" not in _s[10:] and _s[10:].count("-")==0:
+                    _s += "+00:00"
+                from datetime import datetime as _idt
+                _md = _idt.fromisoformat(_s)
+                _hd = (_md - now_utc).total_seconds()/3600
+                if _hd < -3 or _hd > 36:
+                    continue
+            except Exception:
+                pass
+            _key = _ln or "Pinnacle"
+            if _key not in _fixtures_cache:
+                _fixtures_cache[_key] = []
+            _t = _st[11:16] if _st and "T" in _st else "TBD"
+            _fixtures_cache[_key].append({"home": _h, "away": _a, "time": _t, "source": "pinnacle"})
+            if _key not in active_leagues:
+                active_leagues.append(_key)
+            _injected += 1
+        if _injected:
+            log(f"🎰 {_injected} Pinnacle-Matches als Fixtures für Props/Corners injiziert")
 
     # 🔵⚽ Ecken + Scorer Bots
     if env("ENABLE_CORNERS_SCORER", "true").lower() in ["1", "true", "yes"]:
