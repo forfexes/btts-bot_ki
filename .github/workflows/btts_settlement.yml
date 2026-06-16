@@ -18,6 +18,8 @@ jobs:
       - name: Run Settlement
         env:
           RUN_MODE: "settlement"
+          ENABLE_SETTLEMENT: "true"
+          ENABLE_ADVANCED_PROPS: "false"
           GEMINI_API_KEYS: ${{ secrets.GEMINI_API_KEYS }}
           GROQ_API_KEYS: ${{ secrets.GROQ_API_KEYS }}
           OPENROUTER_API_KEYS: ${{ secrets.OPENROUTER_API_KEYS }}
@@ -38,12 +40,13 @@ jobs:
           TELEGRAM_GROUP_COMBO: ${{ secrets.TELEGRAM_GROUP_COMBO }}
           TELEGRAM_GROUP_COMBOS: ${{ secrets.TELEGRAM_GROUP_COMBOS }}
           TELEGRAM_GROUP_BTTS_HT: ${{ secrets.TELEGRAM_GROUP_BTTS_HT }}
+          TELEGRAM_GROUP_OVER15_HT: ${{ secrets.TELEGRAM_GROUP_OVER15_HT }}
           TELEGRAM_GROUP_STATS: ${{ secrets.TELEGRAM_GROUP_STATS }}
           TELEGRAM_GROUP_HZ_LIVE: ${{ secrets.TELEGRAM_GROUP_HZ_LIVE }}
           TELEGRAM_GROUP_LATE_GOALS: ${{ secrets.TELEGRAM_GROUP_LATE_GOALS }}
           SUPABASE_URL: ${{ secrets.SUPABASE_URL }}
           SUPABASE_KEY: ${{ secrets.SUPABASE_KEY }}
-          APIFOOTBALL_MAX_CALLS: "100"
+          APIFOOTBALL_MAX_CALLS: "50"
         run: python btts_bot.py
       - if: always()
         run: echo "Done"
