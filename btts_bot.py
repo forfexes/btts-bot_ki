@@ -86,6 +86,7 @@ TELEGRAM_GROUPS = {
     "combo": env("TELEGRAM_GROUP_COMBO", TELEGRAM_CHAT_ID),
     "combos": env("TELEGRAM_GROUP_COMBOS", TELEGRAM_CHAT_ID),
     "btts_ht": env("TELEGRAM_GROUP_BTTS_HT", TELEGRAM_CHAT_ID),
+    "over15_ht": env("TELEGRAM_GROUP_OVER15_HT", env("TELEGRAM_GROUP_BTTS_HT", TELEGRAM_CHAT_ID)),
     "stats": env("TELEGRAM_GROUP_STATS", TELEGRAM_CHAT_ID),
     "hz_live": env("TELEGRAM_GROUP_HZ_LIVE", TELEGRAM_CHAT_ID),
     "late_goals": env("TELEGRAM_GROUP_LATE_GOALS", TELEGRAM_CHAT_ID),
@@ -190,7 +191,7 @@ MIN_CONFIDENCE = int(env("MIN_CONFIDENCE", "3"))
 # 🆕 Nur HIGH + OK Value (LOW fliegt raus)
 MIN_VALUE_RATING = env("MIN_VALUE_RATING", "OK")  # HIGH, OK, oder LOW
 
-MARKETS_TO_RUN = ["btts", "over25", "combo", "btts_ht"]
+MARKETS_TO_RUN = ["btts", "over25", "combo", "btts_ht", "over15_ht"]
 
 # ============================================================
 # AUTO LIGA SWITCH
@@ -1116,6 +1117,10 @@ MARKET_INFO = {
     "btts_ht": {
         "name": "🕐 BTTS HT",
         "instr": "Analysiere BTTS in der 1. Halbzeit (Beide Teams treffen bis zur Pause). Wichtig: xG HT, Pressing der Teams, frühe Tore Statistik.",
+    },
+    "over15_ht": {
+        "name": "⏰ Over 1.5 HT",
+        "instr": "Analysiere Over 1.5 Tore in der 1. Halbzeit.",
     },
 }
 
@@ -10939,7 +10944,7 @@ def save_to_supabase(tip):
             "elo_home", "elo_away", "elo_diff",
             "result_home", "result_away",
             "result_ht_home", "result_ht_away",
-            "settled_at",
+            "settled_at", "message_text",
         ]
         
         clean_tip = {k: v for k, v in tip.items() 
@@ -10958,6 +10963,22 @@ def save_to_supabase(tip):
         )
 
         if not r.ok:
+            # Falls 'message_text' Spalte fehlt → ohne erneut versuchen
+            if "message_text" in clean_tip and ("message_text" in r.text or r.status_code == 400):
+                clean_tip.pop("message_text", None)
+                r = requests.post(
+                    f"{SUPABASE_URL}/rest/v1/tips",
+                    headers={
+                        "apikey": SUPABASE_KEY,
+                        "Authorization": f"Bearer {SUPABASE_KEY}",
+                        "Content-Type": "application/json",
+                        "Prefer": "return=representation",
+                    },
+                    json=clean_tip,
+                    timeout=10,
+                )
+                if r.ok:
+                    return True
             log(f"   Supabase Error: {r.status_code} - {r.text[:100]}", "WARN")
             return False
 
@@ -11010,6 +11031,7 @@ def get_overall_stats():
             "over25": {"w": 0, "l": 0, "units": 0.0},
             "combo": {"w": 0, "l": 0, "units": 0.0},
             "btts_ht": {"w": 0, "l": 0, "units": 0.0},
+            "over15_ht": {"w": 0, "l": 0, "units": 0.0},
         }
         for t in won + lost:
             m = t.get("market", "")
@@ -11166,31 +11188,28 @@ def generate_multi_combo_bets(all_tips, num_tips=3):
 
 
 def format_combo_telegram_message(combo):
-    """🆕 Formatiert Multi-Combo für Telegram"""
+    """Formatiert Multi-Combo für Telegram — kompakt, eine Zeile pro Leg"""
     if not combo:
         return ""
 
-    msg = f"<b>{combo['label']}</b>" + "\n"
+    total_odds = combo.get("total_odds", "?")
+    stake = combo.get("stake_suggestion", 0.5)
+    win = round(float(str(total_odds).replace(",",".")) * float(stake), 1) if str(total_odds).replace(".","").isdigit() else "?"
+    label = combo.get("label", "COMBO")
+
+    msg = f"<b>🎰 {label}</b>\n"
     msg += "━━━━━━━━━━━━━━━━━━\n"
-    msg += f"🎯 <b>Gesamt-Quote: {combo['total_odds']}</b>" + "\n"
-    msg += f"⚡ Ø Confidence: {combo['expected_confidence']}/5" + "\n"
-    msg += f"💰 Empfehlung: {combo['stake_suggestion']} Units" + "\n"
-    msg += f"📋 Anzahl Tipps: {combo['num_tips']}\n" + "\n"
-    msg += f"<b>🎫 TIPPS:</b>" + "\n"
+    msg += f"🎯 Gesamt-Quote: <b>{total_odds}</b>\n"
+    msg += f"💵 Einsatz: {stake} Units · Gewinn: ~{win} Units\n\n"
+    msg += "<b>📋 Legs:</b>\n"
 
-    for i, tip in enumerate(combo["tips"], 1):
-        conf_stars = "⭐" * int(tip.get("confidence", 0))
-        msg += f"\n{i}. <b>{tip.get('match', 'N/A')}</b>" + "\n"
-        msg += f"   📍 {tip.get('league', 'N/A')}" + "\n"
-        msg += f"   ⚽ {tip.get('market', 'BTTS').upper()}: <b>{tip.get('tip', 'YES')}</b>" + "\n"
-        msg += f"   💰 Quote: <b>{tip.get('odds', 0.0)}</b>" + "\n"
-        msg += f"   {conf_stars} {tip.get('confidence', 0)}/5" + "\n"
+    for i, tip in enumerate(combo.get("tips", []), 1):
+        market_emoji = {"btts": "⚽", "over25": "🎯", "combo": "🔥", "btts_ht": "🕐", "over15_ht": "⏰", "corners": "🔵"}.get(tip.get("market",""), "💎")
+        odds_val = tip.get("odds", tip.get("oddsYes", "?"))
+        msg += f"{i}. {market_emoji} <b>{tip.get('match','?')}</b> · {tip.get('tip','?')} @ {odds_val}\n"
 
-    msg += f"\n━━━━━━━━━━━━━━━━━━" + "\n"
-    msg += f"<b>💡 {combo['desc']}</b>" + "\n"
-    msg += f"• Einsatz: {combo['stake_suggestion']} Units" + "\n"
-    msg += f"• Möglicher Gewinn: ~{round(combo['total_odds'] * combo['stake_suggestion'], 1)} Units\n" + "\n"
-    msg += f"<i>⚠️ Verantwortungsvoll spielen!</i>"
+    msg += "\n━━━━━━━━━━━━━━━━━━\n"
+    msg += f"<i>💡 {combo.get('desc', 'Multi-Combo')}</i>"
 
     return msg
 
@@ -11418,6 +11437,8 @@ def send_top_tips(tips_by_market, target_date):
         "btts": "⚽",
         "over25": "🎯",
         "combo": "🔥",
+        "btts_ht": "🕐",
+        "over15_ht": "⏰",
         "1x2": "🏆",
     }
 
@@ -11475,6 +11496,7 @@ def send_top_tips(tips_by_market, target_date):
             "over25": "🎯 Over 2.5",
             "combo": "🔥 BTTS+Over 2.5",
             "btts_ht": "🕐 BTTS HT",
+            "over15_ht": "⏰ Over 1.5 HT",
         }
         for m_id in MARKETS_TO_RUN:
             mb = stats["by_market"].get(m_id, {"w":0,"l":0,"units":0.0})
@@ -11530,8 +11552,8 @@ def send_top_tips(tips_by_market, target_date):
                 continue
 
             # ✅ NEUES FORMAT - Variante 3
-            market_icons2 = {"btts": "⚽", "over25": "🎯", "combo": "🔥", "btts_ht": "🕐"}
-            market_names2 = {"btts": "BTTS", "over25": "OVER 2.5", "combo": "BTTS + OVER 2.5", "btts_ht": "BTTS HT"}
+            market_icons2 = {"btts": "⚽", "over25": "🎯", "combo": "🔥", "btts_ht": "🕐", "over15_ht": "⏰"}
+            market_names2 = {"btts": "BTTS", "over25": "OVER 2.5", "combo": "BTTS + OVER 2.5", "btts_ht": "BTTS HT", "over15_ht": "OVER 1.5 HT"}
             val_icon = val_icons.get(r.get('valueRating', 'OK'), '🟡')
             mkt_icon = market_icons2.get(market_id, "🎯")
             mkt_name = market_names2.get(market_id, market_id.upper())
@@ -11823,6 +11845,7 @@ def send_top_tips(tips_by_market, target_date):
                 "key_factor": r.get("keyFactor", "")[:200],
                 "telegram_chat_id": str(target_chat),
                 "telegram_msg_id": msg_id,
+                "message_text": msg[:3500],  # Für Ergebnis-Anhang beim Settlement
                 "units": tip_units,
                 "status": "pending",
                 # ML Features
@@ -12197,11 +12220,38 @@ def edit_telegram_message(chat_id, message_id, new_text):
         return False
 
 
+def format_result_appendix(tip, result, status):
+    """
+    Liefert NUR den Ergebnis-Block, der an die Original-Tipp-Nachricht
+    angehängt wird (kein Match-Name, keine Wiederholung - steht schon oben).
+    """
+    odds = tip.get("odds", "?")
+    units = tip.get("units", 1.0)
+
+    home_s = result.get("home_score", "?")
+    away_s = result.get("away_score", "?")
+    ht_home = result.get("ht_home", "?")
+    ht_away = result.get("ht_away", "?")
+
+    status_emoji = "✅ GEWONNEN" if status == "won" else "❌ VERLOREN"
+    profit = round(float(str(odds).replace(",", ".")) * float(units or 1) - float(units or 1), 2) if status == "won" else -float(units or 1)
+    profit_str = f"+{profit}" if profit >= 0 else str(profit)
+    profit_emoji = "🟢" if status == "won" else "🔴"
+
+    nl = "\n"
+    msg = f"━━━━━━━━━━━━━━━━━━{nl}"
+    msg += f"<b>{status_emoji}</b>{nl}"
+    msg += f"⚽ Endstand: <b>{home_s} : {away_s}</b>"
+    if ht_home != "?" and ht_away != "?":
+        msg += f" (HZ: {ht_home}:{ht_away})"
+    msg += nl
+    msg += f"{profit_emoji} Profit: <b>{profit_str} Units</b>"
+
+    return msg
+
+
 def format_result_text(tip, result, status):
-    """Zeigt Ergebnis nach Spiel mit ✅ oder ❌"""
-    """
-    Formatiert den Ergebnis-Text für Telegram Edit.
-    """
+    """Backwards-kompatibel: vollständiger Ergebnis-Text (für Kanäle ohne Original-Nachricht)."""
     match = tip.get("match", "?")
     market = tip.get("market", "btts")
     tip_val = tip.get("tip", "YES")
@@ -12321,52 +12371,98 @@ def run_settlement():
                     timeout=10,
                 )
 
-                # Telegram Message editieren
+                # Telegram Message editieren: Ergebnis an Original anhängen (KEINE neue Nachricht)
                 msg_id = tip.get("telegram_msg_id")
                 chat_id = tip.get("telegram_chat_id")
+                original_text = tip.get("message_text", "")
 
-                result_text = format_result_text(tip, result, status)
+                appendix = format_result_appendix(tip, result, status)
                 log(f"   {'✅' if status == 'won' else '❌'} {tip.get('match', '?')} → {status.upper()}: {result.get('home_score')}-{result.get('away_score')}")
 
-                # 1. Original Nachricht editieren
                 if msg_id and chat_id:
                     try:
-                        edit_telegram_message(chat_id, msg_id, result_text)
+                        if original_text:
+                            edit_telegram_message(chat_id, msg_id, original_text + "\n" + appendix)
+                        else:
+                            # Fallback: kein Original-Text gespeichert (alter Tipp) → vollen Text nutzen
+                            edit_telegram_message(chat_id, msg_id, format_result_text(tip, result, status))
                     except Exception:
                         pass
-
-                # 2. Neue Nachricht in richtigen Kanal
-                _mch = {"btts": "btts", "over25": "over25", "combo": "combo",
-                        "btts_ht": "btts_ht", "over15_ht": "btts_ht",
-                        "corners": "hz_live", "scorer": "late_goals", "combo_multi": "combos"}
-                _ch = TELEGRAM_GROUPS.get(_mch.get(tip.get("market","btts"), "btts"))
-                if _ch:
-                    send_telegram(result_text, _ch)
 
             except Exception as e:
                 log(f"   Settlement Error für {tip.get('match', '?')}: {e}", "WARN")
                 continue
 
-        # Summary
+        # ═══ DAILY SUMMARY ═══
         total_settled = won_count + lost_count
         log(f"Settlement fertig: ✅{won_count} gewonnen, ❌{lost_count} verloren, ⏳{not_found} noch nicht fertig")
 
         if total_settled > 0:
             winrate = round(won_count / total_settled * 100)
-            msg = "🏆 <b>Settlement Update</b>\n\n"
-            msg += f"✅ Gewonnen: <b>{won_count}</b>" + "\n"
-            msg += f"❌ Verloren: <b>{lost_count}</b>" + "\n"
-            msg += f"🎯 Heute Winrate: <b>{winrate}%</b>" + "\n"
-            msg += f"⏳ Ausstehend: {not_found}"
-        if NETRATTLER_PRO:
+
+            # Profit & ROI berechnen (aus allen gesettleten Tips)
+            total_profit = 0.0
+            total_staked = 0.0
+            market_stats = {}
+            for tip in pending_tips:
+                _status = tip.get("status")
+                if _status not in ["won", "lost"]:
+                    continue
+                _odds = float(str(tip.get("odds","1.0")).replace(",",".") or 1.0)
+                _units = float(tip.get("units") or 1.0)
+                _market = tip.get("market", "btts")
+                _profit = round(_odds * _units - _units, 2) if _status == "won" else -_units
+                total_profit += _profit
+                total_staked += _units
+                if _market not in market_stats:
+                    market_stats[_market] = {"w": 0, "l": 0, "profit": 0.0}
+                market_stats[_market]["w" if _status=="won" else "l"] += 1
+                market_stats[_market]["profit"] = round(market_stats[_market]["profit"] + _profit, 2)
+
+            roi = round(total_profit / total_staked * 100, 1) if total_staked > 0 else 0
+            profit_emoji = "🟢" if total_profit >= 0 else "🔴"
+            profit_str = f"+{round(total_profit,2)}" if total_profit >= 0 else str(round(total_profit,2))
+
+            # Markt-Icons
+            _micons = {"btts":"⚽","over25":"🎯","combo":"🔥","btts_ht":"🕐","over15_ht":"⏰","corners":"🔵","scorer":"⚽","combo_multi":"🎰"}
+
+            msg = "🏆 <b>AUSWERTUNG</b>\n"
+            msg += "━━━━━━━━━━━━━━━━━━\n"
+            msg += f"✅ Gewonnen: <b>{won_count}</b>  ❌ Verloren: <b>{lost_count}</b>\n"
+            msg += f"🎯 Winrate: <b>{winrate}%</b>\n"
+            msg += f"{profit_emoji} Profit: <b>{profit_str} Units</b>\n"
+            msg += f"📊 ROI: <b>{roi}%</b>\n"
+            msg += f"⏳ Ausstehend: {not_found}\n"
+
+            if market_stats:
+                msg += "━━━━━━━━━━━━━━━━━━\n"
+                msg += "<b>📋 Nach Markt:</b>\n"
+                for _mk, _ms in sorted(market_stats.items()):
+                    _icon = _micons.get(_mk, "💎")
+                    _wr = round(_ms["w"] / (_ms["w"]+_ms["l"]) * 100) if (_ms["w"]+_ms["l"]) > 0 else 0
+                    _pe = "🟢" if _ms["profit"] >= 0 else "🔴"
+                    _ps = f"+{_ms['profit']}" if _ms["profit"] >= 0 else str(_ms["profit"])
+                    msg += f"{_icon} {_mk.upper()}: {_ms['w']}W/{_ms['l']}L · {_wr}% · {_pe}{_ps}U\n"
+
             try:
                 bk = get_bankroll_status()
                 if bk:
-                    msg += f"\n\n💰 Bankroll: {bk.get('current_units','?')} Units"
-                    msg += f"\n📈 Mode: {bk.get('mode','normal').upper()}"
+                    msg += "━━━━━━━━━━━━━━━━━━\n"
+                    msg += f"💰 Bankroll: <b>{bk.get('current_units','?')} Units</b>\n"
+                    msg += f"📈 Mode: {bk.get('mode','normal').upper()}"
             except Exception:
                 pass
-            send_telegram(msg, TELEGRAM_GROUPS.get("stats"))
+
+            # An alle Kanäle senden
+            _sent_chats = set()
+            for _grp_key in ["btts", "over25", "combo", "btts_ht", "over15_ht", "combos", "stats"]:
+                _cid = TELEGRAM_GROUPS.get(_grp_key)
+                if _cid and _cid not in _sent_chats:
+                    try:
+                        send_telegram(msg, _cid)
+                        _sent_chats.add(_cid)
+                    except Exception:
+                        pass
 
     except Exception as e:
         log(f"Settlement Fatal: {e}", "ERROR")
@@ -12959,18 +13055,42 @@ def analyze_scorer_tips(fixture, league, scorers):
 
 
 def format_corners_message(tip):
-    """Formatiert Ecken-Tipp für Telegram"""
+    """Formatiert Ecken-Tipp für Telegram — volles Format mit Quote, Units, Wetter"""
     nl = "\n"
-    msg = f"🔵 <b>ECKEN TIP</b>{nl}"
-    msg += f"━━━━━━━━━━━━━━━━━━{nl}"
-    msg += f"<b>{tip['match']}</b>{nl}"
-    msg += f"📍 {tip['league']} | ⏰ {tip['time']}{nl}{nl}"
-    msg += f"🎯 Tipp: <b>{tip['tip']}</b>{nl}"
-    msg += f"📊 Erwartete Ecken: <b>{tip['expected_corners']}</b>{nl}"
-    msg += f"📈 Wahrscheinlichkeit: <b>{tip['probability']}%</b>{nl}"
-    msg += f"💰 Fair Odds: <b>{tip['fair_odds']}</b>{nl}"
-    msg += f"━━━━━━━━━━━━━━━━━━{nl}"
-    msg += f"<i>⚡ Schnell beim Bookie prüfen!</i>"
+    odds = tip.get("odds", tip.get("fair_odds", "?"))
+    units = tip.get("units", 1.0)
+    prob = tip.get("probability", 0)
+    conf_stars = "⭐" * int(tip.get("confidence", 3))
+    value = tip.get("valueRating", "OK")
+    value_emoji = "🟢" if value == "VALUE" else "🟡"
+    exp = tip.get("expected_corners", "?")
+    h2h_avg = tip.get("h2h_avg_corners", "")
+    home_avg = tip.get("home_avg_corners", "")
+    away_avg = tip.get("away_avg_corners", "")
+    weather = tip.get("weather")
+    wstr = ""
+    if weather:
+        try:
+            wstr = f"\n🌤️ {weather.get('temp','?')}°C · {weather.get('condition','')}"
+        except Exception:
+            pass
+
+    msg = f"🔵 <b>CORNER SNIPER</b>\n"
+    msg += f"📍 {tip.get('league','?')} · ⏰ {tip.get('time','?')}{wstr}\n"
+    msg += f"━━━━━━━━━━━━━━━━━━\n"
+    msg += f"💎 <b>{tip['match']}</b>\n"
+    msg += f"🎯 Tipp: <b>{tip['tip']}</b>\n"
+    msg += f"📈 Wahrscheinlichkeit: <b>{prob}%</b> · {conf_stars}\n"
+    msg += f"💰 Quote: {odds} · Fair: {tip.get('fair_odds','?')} · {value_emoji} {value}\n"
+    msg += f"💚 {units} Units\n"
+    msg += f"━━━━━━━━━━━━━━━━━━\n"
+    msg += f"📊 Erwartete Ecken: <b>{exp}</b>\n"
+    if home_avg and away_avg:
+        msg += f"📐 Ø Ecken: Heim {home_avg} · Gast {away_avg}\n"
+    if h2h_avg:
+        msg += f"🔄 H2H Ø Ecken: {h2h_avg} (letzte 5)\n"
+    msg += f"━━━━━━━━━━━━━━━━━━\n"
+    msg += f"<i>💭 Pinnacle Corners-Analyse</i>"
     return msg
 
 
@@ -13152,10 +13272,27 @@ def run_corners_and_scorer_bots(target_date, active_leagues, odds_data_cache, fi
 
     # Header + Tipps senden
     if corners_tips and group_hz:
-        send_telegram(f"🔵 <b>ECKEN TIPPS</b>\n<i>📅 {target_date}</i>", group_hz)
+        send_telegram(f"🔵 <b>CORNER SNIPER</b>\n<i>📅 {target_date}</i>", group_hz)
         for tip in corners_tips:
-            send_telegram(format_corners_message(tip), group_hz)
+            _cmsg = format_corners_message(tip)
+            _cmid = send_telegram(_cmsg, group_hz)
             mark_tip_sent(tip.get("match",""), "corners", target_date)
+            # Für Settlement speichern
+            try:
+                save_to_supabase({
+                    **tip,
+                    "tip_id": f"corners_{tip.get('match','?')}_{target_date}".replace(" ","_"),
+                    "date": str(target_date),
+                    "market": "corners",
+                    "status": "pending",
+                    "telegram_chat_id": str(group_hz),
+                    "telegram_msg_id": _cmid,
+                    "message_text": _cmsg[:3500],
+                    "probability": tip.get("probability", 0),
+                    "confidence": tip.get("confidence", 3),
+                })
+            except Exception:
+                pass
 
     if scorer_tips and group_late:
         send_telegram(f"⚽ <b>SCORER TIPPS</b>\n<i>📅 {target_date}</i>", group_late)
@@ -14376,6 +14513,240 @@ PINNACLE_HEADERS = {
 
 _PIN_MATCHUP_CACHE = {}
 _PIN_ODDS_CACHE = {}
+
+
+def _pin_american_to_decimal(a) -> float:
+    """American Odds → Dezimalquote."""
+    try:
+        a = float(a)
+        return round(1 + (a / 100.0 if a > 0 else 100.0 / abs(a)), 2)
+    except Exception:
+        return 0.0
+
+
+AF_TEAM_ID_CACHE = {}
+
+def _af_find_team_id(team_name, league_id):
+    """Sucht team_id über /teams?search= für H2H/Stats/Injuries."""
+    if not team_name or not league_id:
+        return None
+    cache_key = f"{team_name.lower()}_{league_id}"
+    if cache_key in AF_TEAM_ID_CACHE:
+        return AF_TEAM_ID_CACHE[cache_key]
+
+    response = _af_request("/teams", {"search": team_name})
+    tid = None
+    if response:
+        # Bestes Match: exakter Name-Treffer bevorzugen
+        for entry in response:
+            tname = (entry.get("team") or {}).get("name", "")
+            if tname.lower() == team_name.lower():
+                tid = (entry.get("team") or {}).get("id")
+                break
+        if tid is None and response:
+            tid = (response[0].get("team") or {}).get("id")
+
+    AF_TEAM_ID_CACHE[cache_key] = tid
+    return tid
+
+
+# Top-5-Ligen für Daten-Enrichment (API-Football Budget schonen)
+ENRICH_LEAGUES = {
+    "premier league": 39, "la liga": 140, "bundesliga": 78,
+    "serie a": 135, "ligue 1": 61,
+}
+
+
+def enrich_pinnacle_tip(tip_dict, home, away, league_name, season=2025):
+    """
+    Reichert einen Pinnacle-Tipp mit Wetter, H2H, xG, Verletzungen, Schiri an.
+    Wetter: für alle Ligen (kostenlos via Open-Meteo).
+    H2H/xG/Verletzungen: nur Top-5-Ligen (API-Football Budget).
+    """
+    ln = league_name.lower()
+
+    # 🌤️ Wetter (kostenlos, alle Ligen)
+    try:
+        weather = get_open_meteo_weather(league_name, datetime.now(timezone.utc).date())
+        if weather:
+            tip_dict["weather"] = weather
+    except Exception:
+        pass
+
+    # Nur Top-5-Ligen: H2H, xG, Verletzungen
+    league_id = None
+    for key, lid in ENRICH_LEAGUES.items():
+        if key in ln:
+            league_id = lid
+            break
+    if not league_id or APIFOOTBALL_QUOTA_EXHAUSTED:
+        return tip_dict
+
+    try:
+        home_id = _af_find_team_id(home, league_id)
+        away_id = _af_find_team_id(away, league_id)
+
+        if home_id and away_id:
+            # H2H
+            h2h = fetch_head_to_head(home_id, away_id, last=5)
+            if h2h:
+                tip_dict["h2h_btts"] = f"{int(h2h['btts_rate']/100*h2h['count'])}/{h2h['count']}"
+                tip_dict["h2h_avg_goals"] = h2h["avg_goals"]
+
+            # Team Stats (xG, BTTS-Rate, Form)
+            hs = fetch_team_statistics(home_id, league_id, season)
+            as_ = fetch_team_statistics(away_id, league_id, season)
+            if hs:
+                tip_dict["xg_home"] = hs.get("goals_for_avg")
+                tip_dict["btts_rate_home"] = hs.get("btts_rate_approx")
+                tip_dict["homeForm"] = hs.get("form")
+            if as_:
+                tip_dict["xg_away"] = as_.get("goals_for_avg")
+                tip_dict["btts_rate_away"] = as_.get("btts_rate_approx")
+                tip_dict["awayForm"] = as_.get("form")
+
+            # Verletzungen
+            inj_h = fetch_injuries(home_id, league_id, season)
+            inj_a = fetch_injuries(away_id, league_id, season)
+            if inj_h:
+                tip_dict["injuries_home"] = ", ".join(i["name"] for i in inj_h[:3])
+            if inj_a:
+                tip_dict["injuries_away"] = ", ".join(i["name"] for i in inj_a[:3])
+    except Exception:
+        pass
+
+    return tip_dict
+
+
+def fetch_pinnacle_player_props() -> List[Dict]:
+    """Player Props Specials von Pinnacle (echte Quoten, 2 API-Calls)."""
+    try:
+        r = requests.get(
+            f"{PINNACLE_BASE}/sports/{PINNACLE_SPORT_SOCCER}/matchups",
+            headers=PINNACLE_HEADERS,
+            params={"withSpecials": "true", "brandId": "0"},
+            timeout=20,
+        )
+        if not r.ok:
+            return []
+        data = r.json()
+
+        # Quoten in EINEM Call
+        r2 = requests.get(
+            f"{PINNACLE_BASE}/sports/{PINNACLE_SPORT_SOCCER}/markets/straight",
+            headers=PINNACLE_HEADERS,
+            params={"primaryOnly": "false", "withSpecials": "true"},
+            timeout=20,
+        )
+        prices_by_matchup = {}
+        if r2.ok:
+            for mk in r2.json():
+                mid = mk.get("matchupId")
+                for p in mk.get("prices", []):
+                    pid = p.get("participantId")
+                    if mid and pid:
+                        prices_by_matchup[(mid, pid)] = p.get("price")
+
+        props = []
+        for m in data:
+            if m.get("type") != "special":
+                continue
+            sp = m.get("special", {}) or {}
+            cat = (sp.get("category") or "").lower()
+            if "player" not in cat:
+                continue
+            desc = sp.get("description", "")
+            parent = m.get("parent") or {}
+            pparts = parent.get("participants", [])
+            ph = next((p.get("name","") for p in pparts if p.get("alignment")=="home"), "")
+            pa = next((p.get("name","") for p in pparts if p.get("alignment")=="away"), "")
+            league_name = (m.get("league") or {}).get("name", "")
+            starts = m.get("startTime", "")
+            for part in m.get("participants", []):
+                price = prices_by_matchup.get((m.get("id"), part.get("id")))
+                if price is None:
+                    continue
+                dec = _pin_american_to_decimal(price)
+                if dec <= 1.0:
+                    continue
+                props.append({
+                    "player_prop": desc,
+                    "selection": part.get("name", ""),
+                    "odds": dec,
+                    "prob": int(100 / dec * 0.95) if dec > 1 else 0,
+                    "match": f"{ph} vs {pa}" if ph else desc,
+                    "league": league_name,
+                    "starts": starts,
+                })
+        _log("PINNACLE", f"🔑 {len(props)} Player-Prop-Quoten geladen")
+        return props
+    except Exception as e:
+        _log("PINNACLE", f"Props Fehler: {str(e)[:80]}", "WARN")
+        return []
+
+
+def run_pinnacle_props_bot(win_start_utc=None, win_end_utc=None, ch_tz=None) -> int:
+    """Sendet die besten Pinnacle Player Props an den Props-Kanal."""
+    from datetime import datetime as _dt2
+    props = fetch_pinnacle_player_props()
+    if not props:
+        log("🔑 Pinnacle Props: keine Specials verfügbar")
+        return 0
+
+    picks = []
+    for p in props:
+        sel = p["selection"].lower()
+        # Nur Over-Seiten / Ja-Seiten mit solider Wahrscheinlichkeit
+        if "under" in sel or "no" == sel.strip():
+            continue
+        if not (1.35 <= p["odds"] <= 2.20):
+            continue
+        # Zeitfenster
+        if win_start_utc and p.get("starts"):
+            try:
+                s = p["starts"].replace("Z", "+00:00")
+                if "+" not in s[10:] and s[10:].count("-") == 0:
+                    s += "+00:00"
+                md = _dt2.fromisoformat(s)
+                if md < win_start_utc or md >= win_end_utc:
+                    continue
+                p["_ko"] = md
+            except Exception:
+                continue
+        picks.append(p)
+
+    if not picks:
+        log("🔑 Pinnacle Props: keine Picks im Fenster/Quotenband")
+        return 0
+
+    # Beste zuerst (höchste Wahrscheinlichkeit), max 10, dann nach Anstoss
+    picks.sort(key=lambda x: -x["prob"])
+    picks = picks[:10]
+    picks.sort(key=lambda x: x.get("_ko") or _dt2.max.replace(tzinfo=timezone.utc))
+
+    nl = "\n"
+    msg = "🔑 <b>PLAYER PROPS</b> (Pinnacle)\n━━━━━━━━━━━━━━━━━━\n\n"
+    for p in picks:
+        tstr = ""
+        try:
+            if p.get("_ko") and ch_tz:
+                tstr = p["_ko"].astimezone(ch_tz).strftime("%H:%M")
+        except Exception:
+            pass
+        stars = "⭐⭐⭐" if p["prob"] >= 68 else "⭐⭐" if p["prob"] >= 60 else "⭐"
+        msg += f"👤 <b>{p['player_prop']}</b>\n"
+        msg += f"   🎯 {p['selection']} @ {p['odds']}\n"
+        msg += f"   ⚽ {p['match']}" + (f" · ⏰ {tstr}" if tstr else "") + "\n"
+        msg += f"   📈 {p['prob']}% · {stars}\n\n"
+    msg += "━━━━━━━━━━━━━━━━━━\n<i>📊 Quoten: Pinnacle</i>"
+
+    try:
+        send_telegram(msg, chat_id=TELEGRAM_GROUPS.get("advanced_props"))
+        log(f"🔑 Pinnacle Props: {len(picks)} Picks gesendet!")
+        return len(picks)
+    except Exception as e:
+        log(f"🔑 Pinnacle Props Sende-Fehler: {str(e)[:60]}", "WARN")
+        return 0
 
 
 def fetch_pinnacle_matchups() -> List[Dict]:
@@ -15622,13 +15993,18 @@ def main():
 
     # 🏆 SETTLEMENT ZUERST - Ergebnisse von gestern/heute prüfen
     run_mode = env("RUN_MODE", "tips")  # "tips", "settlement", "both", "live"
-    
-    if run_mode in ["settlement", "both"]:
-        log("🏆 Settlement Mode - prüfe vergangene Tipps...")
-        run_settlement()
-        if run_mode == "settlement":
-            log("Settlement fertig!")
-            return
+
+    # Settlement läuft IMMER zuerst (ausser explizit deaktiviert), unabhängig von RUN_MODE
+    if env("ENABLE_SETTLEMENT", "true").lower() in ["1", "true", "yes"]:
+        log("🏆 Settlement - prüfe vergangene Tipps...")
+        try:
+            run_settlement()
+        except Exception as _se:
+            log(f"🏆 Settlement Fehler: {str(_se)[:80]}", "WARN")
+
+    if run_mode == "settlement":
+        log("Settlement fertig!")
+        return
 
     # Live Bot Mode
     if run_mode == "live":
@@ -15765,13 +16141,29 @@ def main():
                 # Liga-basierte BTTS/Over-Schätzungen
                 ln = league_name.lower()
                 if any(k in ln for k in ["world cup","fifa","weltmeister"]):
-                    btts_yes, over25, prob_b, prob_o = 1.80, 1.75, 58, 57
+                    btts_yes, over25, prob_b, prob_o = 1.80, 1.75, 68, 67
                 elif any(k in ln for k in ["friendly","international"]):
-                    btts_yes, over25, prob_b, prob_o = 1.90, 1.85, 55, 56
+                    btts_yes, over25, prob_b, prob_o = 1.90, 1.85, 67, 68
                 elif any(k in ln for k in ["premier league","bundesliga","la liga","serie a","ligue 1","eredivisie","brasileirao","mls"]):
-                    btts_yes, over25, prob_b, prob_o = 1.75, 1.70, 57, 59
+                    btts_yes, over25, prob_b, prob_o = 1.75, 1.70, 68, 69
                 else:
-                    btts_yes, over25, prob_b, prob_o = 1.85, 1.80, 56, 57
+                    btts_yes, over25, prob_b, prob_o = 1.85, 1.80, 67, 68
+
+                # 🌍 martj42: echte BTTS/Over-Raten für Nationalteams
+                _is_intl = any(k in ln for k in ["world cup", "fifa", "friendl", "international", "nations league", "weltmeister"])
+                if _is_intl:
+                    try:
+                        _sh = get_national_team_btts_stats(home)
+                        _sa = get_national_team_btts_stats(away)
+                        if _sh and _sa:
+                            _mb = (_sh["btts_pct"] + _sa["btts_pct"]) / 2
+                            _mo = (_sh["over25_pct"] + _sa["over25_pct"]) / 2
+                            # Mit Liga-Basis mischen (60% Team-Daten, 40% Basis)
+                            prob_b = int(0.6 * _mb + 0.4 * prob_b)
+                            prob_o = int(0.6 * _mo + 0.4 * prob_o)
+                            log(f"      🌍 martj42: {home} {_sh['btts_pct']}% / {away} {_sa['btts_pct']}% BTTS → {prob_b}%")
+                    except Exception:
+                        pass
 
                 # Echte Pinnacle-Odds als Upgrade (optional, mit Schutz)
                 ro = None
@@ -15801,8 +16193,8 @@ def main():
                     pass
 
                 # BTTS Tipp
-                if prob_b >= 55 and "btts" in tips_by_market:
-                    tips_by_market["btts"].append({
+                if prob_b >= MIN_PROBABILITY and "btts" in tips_by_market:
+                    tip_btts = {
                         "match": mn, "league": league_name or "Pinnacle",
                         "time": tstr, "tip": "YES",
                         "probability": prob_b, "confidence": 3,
@@ -15810,13 +16202,15 @@ def main():
                         "valueRating": "OK", "units": 1.0, "market": "btts",
                         "reasoning": f"Pinnacle Markt-Analyse | {league_name}",
                         "_no_real_odds": True, "_source": "pinnacle", "_kickoff": _ko_sort,
-                    })
+                    }
+                    enrich_pinnacle_tip(tip_btts, home, away, league_name)
+                    tips_by_market["btts"].append(tip_btts)
                     pinnacle_tips_count += 1
                     log(f"      ✅ BTTS YES @ {btts_yes} ({prob_b}%)")
 
                 # Over 2.5 Tipp
-                if prob_o >= 56 and "over25" in tips_by_market:
-                    tips_by_market["over25"].append({
+                if prob_o >= MIN_PROBABILITY and "over25" in tips_by_market:
+                    tip_over25 = {
                         "match": mn, "league": league_name or "Pinnacle",
                         "time": tstr, "tip": "YES",
                         "probability": prob_o, "confidence": 3,
@@ -15824,16 +16218,18 @@ def main():
                         "valueRating": "OK", "units": 1.0, "market": "over25",
                         "reasoning": f"Pinnacle Markt-Analyse | {league_name}",
                         "_no_real_odds": True, "_source": "pinnacle", "_kickoff": _ko_sort,
-                    })
+                    }
+                    enrich_pinnacle_tip(tip_over25, home, away, league_name)
+                    tips_by_market["over25"].append(tip_over25)
                     pinnacle_tips_count += 1
 
                 # 🔥 Combo: BTTS + Over 2.5 (stark korreliert)
-                if prob_b >= 56 and prob_o >= 56 and "combo" in tips_by_market:
+                if prob_b >= MIN_PROBABILITY and prob_o >= MIN_PROBABILITY and "combo" in tips_by_market:
                     # Korrelation: BTTS-Yes-Spiele sind meist auch Over 2.5
                     combo_prob = min(prob_b, prob_o) - 5
                     combo_odds = round(btts_yes * over25 * 0.80, 2)  # Korrelationsabschlag
-                    if combo_prob >= 50:
-                        tips_by_market["combo"].append({
+                    if combo_prob >= (MIN_PROBABILITY - 10):
+                        tip_combo = {
                             "match": mn, "league": league_name or "Pinnacle",
                             "time": tstr, "tip": "BTTS + Over 2.5",
                             "probability": combo_prob, "confidence": 3,
@@ -15841,43 +16237,68 @@ def main():
                             "valueRating": "OK", "units": 0.75, "market": "combo",
                             "reasoning": f"Pinnacle Combo-Analyse | {league_name}",
                             "_no_real_odds": True, "_source": "pinnacle", "_kickoff": _ko_sort,
-                        })
+                        }
+                        enrich_pinnacle_tip(tip_combo, home, away, league_name)
+                        tips_by_market["combo"].append(tip_combo)
                         pinnacle_tips_count += 1
 
-                # 🕐 HT-Tipps: Over 1.5 HT bei torreichen Ligen, sonst Over 0.5 HT
+                # 🕐 HT-Tipps: BTTS HT + Over 1.5 HT (zwei separate Tipps)
                 if "btts_ht" in tips_by_market:
-                    # Echte HT-Odds falls vorhanden
-                    ht_odds = 0
-                    ht_tip_name = ""
-                    ht_prob = 0
+                    # --- BTTS HT ---
+                    btts_ht_odds = 0
+                    btts_ht_prob = 0
                     try:
-                        if ro:
-                            if ro.get("over_15_ht"):
-                                ht_odds = ro["over_15_ht"]
-                                ht_tip_name = "Over 1.5 Tore HT"
-                                ht_prob = int(100 / ht_odds * 0.95)
-                            elif ro.get("over_05_ht"):
-                                ht_odds = ro["over_05_ht"]
-                                ht_tip_name = "Over 0.5 Tore HT"
-                                ht_prob = int(100 / ht_odds * 0.95)
+                        if ro and ro.get("btts_yes_ht"):
+                            btts_ht_odds = ro["btts_yes_ht"]
+                            btts_ht_prob = int(100 / btts_ht_odds * 0.95)
                     except Exception:
                         pass
-                    # Fallback: Liga-Schätzung Over 0.5 HT (~73-78%)
-                    if not ht_odds:
-                        if prob_o >= 57:  # torreiche Liga
-                            ht_odds, ht_tip_name, ht_prob = 1.30, "Over 0.5 Tore HT", 76
+                    if not btts_ht_odds:
+                        # Fallback: ~38-44% liegt BTTS HT typischerweise
+                        if prob_b >= MIN_PROBABILITY + 5:  # sehr torreiche Paarung
+                            btts_ht_odds, btts_ht_prob = 2.05, 68
                         else:
-                            ht_odds, ht_tip_name, ht_prob = 1.33, "Over 0.5 Tore HT", 73
-                    if ht_prob >= 65:
-                        tips_by_market["btts_ht"].append({
+                            btts_ht_odds, btts_ht_prob = 2.30, 67
+                    if btts_ht_prob >= MIN_PROBABILITY:
+                        tip_btts_ht = {
                             "match": mn, "league": league_name or "Pinnacle",
-                            "time": tstr, "tip": ht_tip_name,
-                            "probability": ht_prob, "confidence": 3,
-                            "oddsYes": ht_odds, "fairOdds": round(100/ht_prob, 2),
+                            "time": tstr, "tip": "BTTS HT (Beide Teams treffen 1.HZ)",
+                            "probability": btts_ht_prob, "confidence": 3,
+                            "oddsYes": btts_ht_odds, "fairOdds": round(100/btts_ht_prob, 2),
                             "valueRating": "OK", "units": 1.0, "market": "btts_ht",
                             "reasoning": f"Pinnacle HT-Analyse | {league_name}",
                             "_no_real_odds": True, "_source": "pinnacle", "_kickoff": _ko_sort,
-                        })
+                        }
+                        enrich_pinnacle_tip(tip_btts_ht, home, away, league_name)
+                        tips_by_market["btts_ht"].append(tip_btts_ht)
+                        pinnacle_tips_count += 1
+
+                    # --- Over 1.5 Tore HT ---
+                    o15_odds = 0
+                    o15_prob = 0
+                    try:
+                        if ro and ro.get("over_15_ht"):
+                            o15_odds = ro["over_15_ht"]
+                            o15_prob = int(100 / o15_odds * 0.95)
+                    except Exception:
+                        pass
+                    if not o15_odds:
+                        if prob_o >= MIN_PROBABILITY:  # torreiche Liga
+                            o15_odds, o15_prob = 2.10, 68
+                        else:
+                            o15_odds, o15_prob = 2.40, 67
+                    if o15_prob >= MIN_PROBABILITY and "over15_ht" in tips_by_market:
+                        tip_o15_ht = {
+                            "match": mn, "league": league_name or "Pinnacle",
+                            "time": tstr, "tip": "Over 1.5 Tore HT",
+                            "probability": o15_prob, "confidence": 3,
+                            "oddsYes": o15_odds, "fairOdds": round(100/o15_prob, 2),
+                            "valueRating": "OK", "units": 1.0, "market": "over15_ht",
+                            "reasoning": f"Pinnacle HT-Analyse | {league_name}",
+                            "_no_real_odds": True, "_source": "pinnacle", "_kickoff": _ko_sort,
+                        }
+                        enrich_pinnacle_tip(tip_o15_ht, home, away, league_name)
+                        tips_by_market["over15_ht"].append(tip_o15_ht)
                         pinnacle_tips_count += 1
 
                 total_analyzed += 1
@@ -16103,6 +16524,15 @@ def main():
             fixtures_cache=_fixtures_cache,
             target_date=target_date,
         )
+        # 🔑 Pinnacle Player Props (echte Quoten — funktioniert aus Actions!)
+        try:
+            run_pinnacle_props_bot(
+                win_start_utc=_win_start_utc,
+                win_end_utc=_win_end_utc,
+                ch_tz=_ch_tz,
+            )
+        except Exception as _ppe:
+            log(f"🔑 Pinnacle Props übersprungen: {str(_ppe)[:60]}", "WARN")
 
     # 🆕 MULTI-COMBO SYSTEM (3,4,5,6,7,8 Tipps)
     all_tips_flat = []
@@ -16130,8 +16560,28 @@ def main():
                 log(f"   {combo['label']}: Quote {combo['total_odds']}")
                 msg = format_combo_telegram_message(combo)
                 if msg:
-                    send_telegram(msg, combo_chat)
+                    _combo_mid = send_telegram(msg, combo_chat)
                     generated += 1
+                    # Für Settlement speichern
+                    try:
+                        save_to_supabase({
+                            "tip_id": f"combo_{combo.get('num_tips','?')}leg_{target_date}_{n}".replace(" ","_"),
+                            "date": str(target_date),
+                            "market": "combo_multi",
+                            "market_name": combo.get("label", "Multi-Combo"),
+                            "match": " / ".join(t.get("match","?") for t in combo.get("tips",[])[:3]),
+                            "tip": f"Multi-Combo {n} Legs",
+                            "odds": str(combo.get("total_odds","?")),
+                            "units": combo.get("stake_suggestion", 0.5),
+                            "probability": int(combo.get("expected_confidence", 3) / 5 * 100),
+                            "confidence": 3,
+                            "status": "pending",
+                            "telegram_chat_id": str(combo_chat),
+                            "telegram_msg_id": _combo_mid,
+                            "message_text": msg[:3500],
+                        })
+                    except Exception:
+                        pass
             else:
                 log(f"   ⚠️ Combo {n}: Zu wenig Tipps")
 
