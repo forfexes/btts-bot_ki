@@ -11204,9 +11204,11 @@ def format_combo_telegram_message(combo):
     msg += "<b>📋 Legs:</b>\n"
 
     for i, tip in enumerate(combo.get("tips", []), 1):
-        market_emoji = {"btts": "⚽", "over25": "🎯", "combo": "🔥", "btts_ht": "🕐", "over15_ht": "⏰", "corners": "🔵"}.get(tip.get("market",""), "💎")
+        _mk = tip.get("market", "")
+        market_emoji = {"btts": "⚽", "over25": "🎯", "combo": "🔥", "btts_ht": "🕐", "over15_ht": "⏰", "corners": "🔵"}.get(_mk, "💎")
+        market_label = {"btts": "BTTS", "over25": "Over 2.5", "combo": "BTTS+O2.5", "btts_ht": "BTTS HT", "over15_ht": "O1.5 HT", "corners": "Corners"}.get(_mk, _mk.upper())
         odds_val = tip.get("odds", tip.get("oddsYes", "?"))
-        msg += f"{i}. {market_emoji} <b>{tip.get('match','?')}</b> · {tip.get('tip','?')} @ {odds_val}\n"
+        msg += f"{i}. {market_emoji} <b>{tip.get('match','?')}</b> · {market_label} @ {odds_val}\n"
 
     msg += "\n━━━━━━━━━━━━━━━━━━\n"
     msg += f"<i>💡 {combo.get('desc', 'Multi-Combo')}</i>"
@@ -12397,8 +12399,8 @@ def run_settlement():
         total_settled = won_count + lost_count
         log(f"Settlement fertig: ✅{won_count} gewonnen, ❌{lost_count} verloren, ⏳{not_found} noch nicht fertig")
 
-        if total_settled > 0:
-            winrate = round(won_count / total_settled * 100)
+        if total_settled > 0 or not_found > 0:
+            winrate = round(won_count / total_settled * 100) if total_settled > 0 else 0
 
             # Profit & ROI berechnen (aus allen gesettleten Tips)
             total_profit = 0.0
@@ -12453,16 +12455,25 @@ def run_settlement():
             except Exception:
                 pass
 
-            # An alle Kanäle senden
+            # An ALLE Kanäle senden (jeder Kanal kriegt die Auswertung)
             _sent_chats = set()
-            for _grp_key in ["btts", "over25", "combo", "btts_ht", "over15_ht", "combos", "stats"]:
+            for _grp_key in ["btts", "over25", "combo", "btts_ht", "over15_ht",
+                             "combos", "stats", "hz_live", "late_goals",
+                             "advanced_props", "corner_sniper", "goal_hunter"]:
                 _cid = TELEGRAM_GROUPS.get(_grp_key)
-                if _cid and _cid not in _sent_chats:
+                if _cid and str(_cid) not in _sent_chats:
                     try:
                         send_telegram(msg, _cid)
-                        _sent_chats.add(_cid)
-                    except Exception:
-                        pass
+                        _sent_chats.add(str(_cid))
+                        log(f"   📊 Auswertung → {_grp_key}")
+                    except Exception as _se:
+                        log(f"   ⚠️ Auswertung {_grp_key}: {str(_se)[:40]}", "WARN")
+            # Fallback: immer mindestens an TELEGRAM_CHAT_ID
+            if not _sent_chats:
+                try:
+                    send_telegram(msg, TELEGRAM_CHAT_ID)
+                except Exception:
+                    pass
 
     except Exception as e:
         log(f"Settlement Fatal: {e}", "ERROR")
@@ -14685,22 +14696,70 @@ def fetch_pinnacle_player_props() -> List[Dict]:
         return []
 
 
+# Prop-Typen die Skip werden (tournament-weite Specials, nicht match-gebunden)
+_SKIP_PROP_KEYWORDS = [
+    "head to head", "most goals", "most assists", "top scorer", "golden boot",
+    "golden ball", "tournament", "group stage", "advance", "qualify",
+]
+
+# Leg-Kategorien für Bet Builder
+_LEG_CATEGORY = {
+    "score": ["to score", "anytime goalscorer", "first goalscorer", "last goalscorer", "score or assist"],
+    "assist": ["to assist", "score or assist"],
+    "booked": ["to be booked", "receive a card", "be carded"],
+    "shots": ["shots on target", "shots on goal"],
+    "fouls": ["fouls won", "to be fouled", "foul"],
+    "tackles": ["tackle", "tackles won"],
+    "corners": ["corners", "corner kicks"],
+    "saves": ["saves", "goalkeeper saves"],
+}
+
+def _get_leg_category(prop_name):
+    pn = prop_name.lower()
+    for cat, keywords in _LEG_CATEGORY.items():
+        if any(k in pn for k in keywords):
+            return cat
+    return "other"
+
+def _calc_combo_odds(legs):
+    """Berechnet kombinierte Quote mit Korrelationsabschlag."""
+    if not legs:
+        return 1.0
+    odds = 1.0
+    for l in legs:
+        odds *= l["odds"]
+    # Korrelationsabschlag: 15% für 2 Legs, 20% für 3+
+    disc = 0.85 if len(legs) == 2 else 0.80
+    return round(odds * disc, 2)
+
 def run_pinnacle_props_bot(win_start_utc=None, win_end_utc=None, ch_tz=None) -> int:
-    """Sendet die besten Pinnacle Player Props an den Props-Kanal."""
+    """Bet Builder Style: Pro Spiel 2-4 Legs kombiniert → Prop Hunter Kanal."""
     from datetime import datetime as _dt2
     props = fetch_pinnacle_player_props()
     if not props:
         log("🔑 Pinnacle Props: keine Specials verfügbar")
         return 0
 
-    picks = []
+    # Alle validen Props sammeln
+    valid = []
     for p in props:
         sel = p["selection"].lower()
-        # Nur Over-Seiten / Ja-Seiten mit solider Wahrscheinlichkeit
-        if "under" in sel or "no" == sel.strip():
+        prop_name = p.get("player_prop", "").lower()
+        match_name = p.get("match", "")
+
+        if "under" in sel or sel.strip() == "no":
             continue
-        if not (1.35 <= p["odds"] <= 2.20):
+        if any(kw in prop_name for kw in _SKIP_PROP_KEYWORDS):
             continue
+        if not match_name or "vs" not in match_name.lower():
+            continue
+        if match_name.lower() == prop_name:
+            continue
+        if not (1.20 <= p["odds"] <= 5.00):
+            continue
+        if p["prob"] < 55:  # Legs dürfen etwas lockerer sein — Combo filtert
+            continue
+
         # Zeitfenster
         if win_start_utc and p.get("starts"):
             try:
@@ -14713,40 +14772,123 @@ def run_pinnacle_props_bot(win_start_utc=None, win_end_utc=None, ch_tz=None) -> 
                 p["_ko"] = md
             except Exception:
                 continue
-        picks.append(p)
 
-    if not picks:
-        log("🔑 Pinnacle Props: keine Picks im Fenster/Quotenband")
+        p["_cat"] = _get_leg_category(prop_name)
+        valid.append(p)
+
+    if not valid:
+        log("🔑 Pinnacle Props: keine Props im Zeitfenster")
         return 0
 
-    # Beste zuerst (höchste Wahrscheinlichkeit), max 10, dann nach Anstoss
-    picks.sort(key=lambda x: -x["prob"])
-    picks = picks[:10]
-    picks.sort(key=lambda x: x.get("_ko") or _dt2.max.replace(tzinfo=timezone.utc))
+    # Props nach Spiel gruppieren
+    by_match = {}
+    for p in valid:
+        mn = p.get("match", "?")
+        by_match.setdefault(mn, []).append(p)
 
-    nl = "\n"
-    msg = "🔑 <b>PLAYER PROPS</b> (Pinnacle)\n━━━━━━━━━━━━━━━━━━\n\n"
-    for p in picks:
+    # Pro Spiel: beste 2-4 Legs auswählen (verschiedene Kategorien)
+    builders = []
+    for match_name, legs in by_match.items():
+        legs.sort(key=lambda x: -x["prob"])
+        selected = []
+        used_cats = set()
+        used_players = set()
+        for leg in legs:
+            cat = leg["_cat"]
+            player = leg["selection"].lower()
+            # Max 2 Legs pro Kategorie, kein Spieler doppelt
+            cat_count = sum(1 for s in selected if s["_cat"] == cat)
+            if cat_count >= 2:
+                continue
+            if player in used_players and cat not in ["booked", "fouls", "tackles"]:
+                continue
+            selected.append(leg)
+            used_cats.add(cat)
+            used_players.add(player)
+            if len(selected) >= 4:
+                break
+
+        if len(selected) < 2:
+            continue
+
+        combo_odds = _calc_combo_odds(selected)
+        # Nur Builders mit sinnvoller Quote senden
+        if combo_odds < 1.80:
+            continue
+
+        builders.append({
+            "match": match_name,
+            "legs": selected,
+            "odds": combo_odds,
+            "_ko": selected[0].get("_ko"),
+        })
+
+    if not builders:
+        log("🔑 Pinnacle Props: keine Bet Builder zusammengestellt")
+        return 0
+
+    # Sortierung nach Anstosszeit
+    builders.sort(key=lambda x: x.get("_ko") or _dt2.max.replace(tzinfo=timezone.utc))
+    builders = builders[:6]  # Max 6 Builder pro Run
+
+    # Nachrichten bauen — Bet365 Bet Builder Style
+    sent = 0
+    prop_chat = TELEGRAM_GROUPS.get("advanced_props")
+    if not prop_chat:
+        return 0
+
+    for b in builders:
         tstr = ""
         try:
-            if p.get("_ko") and ch_tz:
-                tstr = p["_ko"].astimezone(ch_tz).strftime("%H:%M")
+            if b.get("_ko") and ch_tz:
+                _ko_ch = b["_ko"].astimezone(ch_tz)
+                tstr = _ko_ch.strftime("%H:%M")
         except Exception:
             pass
-        stars = "⭐⭐⭐" if p["prob"] >= 68 else "⭐⭐" if p["prob"] >= 60 else "⭐"
-        msg += f"👤 <b>{p['player_prop']}</b>\n"
-        msg += f"   🎯 {p['selection']} @ {p['odds']}\n"
-        msg += f"   ⚽ {p['match']}" + (f" · ⏰ {tstr}" if tstr else "") + "\n"
-        msg += f"   📈 {p['prob']}% · {stars}\n\n"
-    msg += "━━━━━━━━━━━━━━━━━━\n<i>📊 Quoten: Pinnacle</i>"
 
-    try:
-        send_telegram(msg, chat_id=TELEGRAM_GROUPS.get("advanced_props"))
-        log(f"🔑 Pinnacle Props: {len(picks)} Picks gesendet!")
-        return len(picks)
-    except Exception as e:
-        log(f"🔑 Pinnacle Props Sende-Fehler: {str(e)[:60]}", "WARN")
-        return 0
+        msg = f"🏗️ <b>BET BUILDER</b>  {b['odds']}\n"
+        msg += "━━━━━━━━━━━━━━━━━━\n"
+        msg += f"⚽ <b>{b['match']}</b>"
+        if tstr:
+            msg += f" · ⏰ {tstr}"
+        msg += "\n\n"
+        for leg in b["legs"]:
+            cat_emoji = {
+                "score": "⚽", "assist": "🎯", "booked": "🟨",
+                "shots": "🥅", "fouls": "👊", "tackles": "🦵",
+                "corners": "🔵", "saves": "🧤", "other": "○"
+            }.get(leg["_cat"], "○")
+            msg += f"{cat_emoji} {leg['player_prop']}\n"
+
+        msg += f"\n💰 @ <b>{b['odds']}</b> · 0.5u ✅"
+
+        _mid = send_telegram(msg, chat_id=prop_chat)
+        sent += 1
+
+        # Supabase speichern für Settlement
+        try:
+            save_to_supabase({
+                "tip_id": f"builder_{b['match']}_{tstr}".replace(" ","_"),
+                "date": str(datetime.now(timezone.utc).date()),
+                "market": "bet_builder",
+                "market_name": "🏗️ Bet Builder",
+                "match": b["match"],
+                "tip": " + ".join(l["player_prop"] for l in b["legs"]),
+                "odds": str(b["odds"]),
+                "units": 0.5,
+                "probability": int(sum(l["prob"] for l in b["legs"]) / len(b["legs"])),
+                "confidence": 3,
+                "status": "pending",
+                "telegram_chat_id": str(prop_chat),
+                "telegram_msg_id": _mid,
+                "message_text": msg[:3500],
+            })
+        except Exception:
+            pass
+
+    log(f"🏗️ Bet Builder: {sent} Builder gesendet ({len(builders)} generiert)")
+    return sent
+
 
 
 def fetch_pinnacle_matchups() -> List[Dict]:
