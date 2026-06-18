@@ -2,14 +2,10 @@ name: NETRATTLER AI Tipp Bot
 
 on:
   schedule:
-    # Morning Run — 07:00 UTC (09:00 MEZ)
-    - cron: "0 7 * * *"
-    # Midday Run — 11:00 UTC (13:00 MEZ)
-    - cron: "0 11 * * *"
-    # Evening Run — 17:00 UTC (19:00 MEZ)
-    - cron: "0 17 * * *"
-    # Night Run — 21:00 UTC (23:00 MEZ)
-    - cron: "0 21 * * *"
+    - cron: "0 7 * * *"   # 09:00 CH
+    - cron: "0 11 * * *"  # 13:00 CH
+    - cron: "0 17 * * *"  # 19:00 CH
+    - cron: "0 21 * * *"  # 23:00 CH
   workflow_dispatch:
     inputs:
       mode:
@@ -25,7 +21,7 @@ on:
 jobs:
   run-bot:
     runs-on: ubuntu-latest
-    timeout-minutes: 30
+    timeout-minutes: 20
 
     steps:
       - name: Checkout Repository
@@ -43,9 +39,6 @@ jobs:
           pip install \
             requests \
             python-dotenv \
-            playwright \
-            statsbombpy \
-            pandas \
             beautifulsoup4 \
             lxml \
             google-generativeai \
@@ -53,7 +46,6 @@ jobs:
             openai \
             anthropic \
             supabase
-          playwright install chromium
 
       - name: Run Tips Bot 🤖
         env:
@@ -84,57 +76,16 @@ jobs:
           TELEGRAM_GROUP_BTTS_HT:     ${{ secrets.TELEGRAM_GROUP_BTTS_HT }}
           TELEGRAM_GROUP_HZ_LIVE:     ${{ secrets.TELEGRAM_GROUP_HZ_LIVE }}
           TELEGRAM_GROUP_LATE_GOALS:  ${{ secrets.TELEGRAM_GROUP_LATE_GOALS }}
-          TELEGRAM_GROUP_ADVANCED_PROPS: ${{ secrets.TELEGRAM_GROUP_STATS }}  # Prop Builder = STATS Gruppe
           TELEGRAM_GROUP_STATS:       ${{ secrets.TELEGRAM_GROUP_STATS }}
           # ── Supabase ──
           SUPABASE_URL:               ${{ secrets.SUPABASE_URL }}
           SUPABASE_KEY:               ${{ secrets.SUPABASE_KEY }}
           # ── Bot Einstellungen ──
+          RUN_MODE:                   ${{ github.event.inputs.mode || 'tips' }}
+          ENABLE_SETTLEMENT:          "false"
+          ENABLE_ADVANCED_PROPS:      "true"
           MAX_LEAGUES_PER_RUN:        "0"
-          AUTO_LEAGUE_SWITCH:         "false"
           PARALLEL_WORKERS:           "10"
           AI_SLEEP_SECONDS:           "0.1"
           GROQ_SLEEP_SECONDS:         "0.5"
-          RUN_MODE:                   ${{ github.event.inputs.mode || 'tips' }}
-        run: python btts_bot.py
-
-  settlement:
-    runs-on: ubuntu-latest
-    timeout-minutes: 15
-    # Settlement läuft täglich um 03:00 UTC
-    if: github.event_name == 'schedule' && github.event.schedule == '0 3 * * *'
-
-    steps:
-      - name: Checkout Repository
-        uses: actions/checkout@v4
-
-      - name: Setup Python 3.11
-        uses: actions/setup-python@v5
-        with:
-          python-version: "3.11"
-          cache: "pip"
-
-      - name: Install Dependencies
-        run: |
-          pip install requests python-dotenv pandas beautifulsoup4
-
-      - name: Run Settlement 🏆
-        env:
-          GEMINI_API_KEYS:            ${{ secrets.GEMINI_API_KEYS }}
-          GROQ_API_KEYS:              ${{ secrets.GROQ_API_KEYS }}
-          ODDS_API_KEYS:              ${{ secrets.ODDS_API_KEYS }}
-          API_FOOTBALL_KEYS:          ${{ secrets.API_FOOTBALL_KEYS }}
-          TELEGRAM_TOKEN:             ${{ secrets.TELEGRAM_TOKEN }}
-          TELEGRAM_CHAT_ID:           ${{ secrets.TELEGRAM_CHAT_ID }}
-          TELEGRAM_GROUP_BTTS:        ${{ secrets.TELEGRAM_GROUP_BTTS }}
-          TELEGRAM_GROUP_OVER25:      ${{ secrets.TELEGRAM_GROUP_OVER25 }}
-          TELEGRAM_GROUP_COMBO:       ${{ secrets.TELEGRAM_GROUP_COMBO }}
-          TELEGRAM_GROUP_COMBOS:      ${{ secrets.TELEGRAM_GROUP_COMBOS }}
-          TELEGRAM_GROUP_BTTS_HT:     ${{ secrets.TELEGRAM_GROUP_BTTS_HT }}
-          TELEGRAM_GROUP_HZ_LIVE:     ${{ secrets.TELEGRAM_GROUP_HZ_LIVE }}
-          TELEGRAM_GROUP_LATE_GOALS:  ${{ secrets.TELEGRAM_GROUP_LATE_GOALS }}
-          TELEGRAM_GROUP_ADVANCED_PROPS: ${{ secrets.TELEGRAM_GROUP_STATS }}  # Prop Builder = STATS Gruppe
-          SUPABASE_URL:               ${{ secrets.SUPABASE_URL }}
-          SUPABASE_KEY:               ${{ secrets.SUPABASE_KEY }}
-          RUN_MODE:                   "settlement"
         run: python btts_bot.py
