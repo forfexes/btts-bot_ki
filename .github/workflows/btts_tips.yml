@@ -39,6 +39,7 @@ jobs:
           pip install \
             requests \
             python-dotenv \
+            playwright \
             beautifulsoup4 \
             lxml \
             google-generativeai \
@@ -46,6 +47,7 @@ jobs:
             openai \
             anthropic \
             supabase
+          playwright install chromium --with-deps
 
       - name: Run Tips Bot 🤖
         env:
