@@ -12121,6 +12121,17 @@ def check_tip_result(tip, result):
     return "won" if won else "lost"
 
 
+_AF_FIXTURES_DAY_CACHE = {}  # {date_str: [fixtures]} — verhindert N Calls für N pending Tips am selben Tag
+
+def _af_fixtures_for_date(date_str):
+    """Holt alle FT-Fixtures für ein Datum, gecached pro Tag (1 Call statt N)."""
+    if date_str in _AF_FIXTURES_DAY_CACHE:
+        return _AF_FIXTURES_DAY_CACHE[date_str]
+    r = _af_request("/fixtures", {"date": date_str, "status": "FT"})
+    _AF_FIXTURES_DAY_CACHE[date_str] = r or []
+    return _AF_FIXTURES_DAY_CACHE[date_str]
+
+
 def get_match_result_from_sources(tip):
     """
     Versucht Spielergebnis von mehreren Quellen zu holen.
@@ -12160,42 +12171,18 @@ def get_match_result_from_sources(tip):
             tip_date = tip.get("date", str(datetime.now(timezone.utc).date()))
             from datetime import timedelta as _td2
 
-            # WM 2026 direkt (spart API-Calls, league_id=1 season=2026)
-            _is_wc = any(k in league.lower() for k in ["world cup","wm","mundial","fifa"])
-            r = None
-            if _is_wc:
-                r = _af_request("/fixtures", {
-                    "league": "1", "season": "2026",
-                    "date": tip_date, "status": "FT",
-                })
+            # API-Football /fixtures: "team" braucht eine numerische ID, KEIN Name!
+            # Daher: nur nach Datum + Status filtern, dann lokal nach Teamnamen matchen.
+            # Gecacht pro Tag: 1 API-Call deckt ALLE pending Tips desselben Tages ab
+            r = _af_fixtures_for_date(tip_date)
 
-            # Strategie 1: by Datum + Teamname
-            if not r:
-                r = _af_request("/fixtures", {
-                    "date": tip_date,
-                    "team": home_team[:25],
-                    "status": "FT",
-                })
-
-            # Strategie 2: ±1 Tag (Zeitzone-Puffer)
+            # Strategie 2: ±1 Tag (Zeitzone-Puffer), ebenfalls gecached
             if not r:
                 for _delta in [-1, 1]:
                     _d2 = str((datetime.strptime(tip_date, "%Y-%m-%d") + _td2(days=_delta)).date())
-                    r = _af_request("/fixtures", {
-                        "date": _d2,
-                        "team": home_team[:25],
-                        "status": "FT",
-                    })
+                    r = _af_fixtures_for_date(_d2)
                     if r:
                         break
-
-            # Strategie 3: Nur Teamname ohne Datum (letzte abgeschlossene Partie)
-            if not r:
-                r = _af_request("/fixtures", {
-                    "team": home_team[:25],
-                    "last": "1",
-                    "status": "FT",
-                })
 
             if r:
                 for fix in r:
@@ -14660,53 +14647,111 @@ def enrich_pinnacle_tip(tip_dict, home, away, league_name, season=2025):
     return tip_dict
 
 
-def fetch_pinnacle_player_props() -> List[Dict]:
-    """Player Props Specials von Pinnacle (echte Quoten, 2 API-Calls)."""
+def _pinnacle_get_json(url, params):
+    """GET mit JSON-Parse. Fällt auf Playwright zurück falls requests leer/blockiert ist."""
     try:
-        r = requests.get(
-            f"{PINNACLE_BASE}/sports/{PINNACLE_SPORT_SOCCER}/matchups",
-            headers=PINNACLE_HEADERS,
-            params={"withSpecials": "true", "brandId": "0"},
-            timeout=20,
-        )
-        if not r.ok:
-            return []
-        data = r.json()
+        r = requests.get(url, headers=PINNACLE_HEADERS, params=params, timeout=20)
+        if r.ok:
+            try:
+                data = r.json()
+                if data:  # nicht-leere Antwort
+                    return data, r.status_code
+            except Exception:
+                pass
+        status = r.status_code
+    except Exception as e:
+        status = f"EXC:{str(e)[:40]}"
 
-        # Quoten in EINEM Call
-        r2 = requests.get(
+    # Fallback: Playwright (umgeht Cloudflare/Bot-Block)
+    if PLAYWRIGHT_AVAILABLE:
+        try:
+            from urllib.parse import urlencode
+            full_url = f"{url}?{urlencode(params)}"
+            html = scrape_with_playwright(full_url, timeout=15000)
+            if html:
+                import re as _re
+                # JSON kann in <pre> oder roh im body stehen
+                m = _re.search(r'(\[.*\]|\{.*\})', html, _re.DOTALL)
+                if m:
+                    try:
+                        data = json.loads(m.group(1))
+                        log(f"   🔑 Pinnacle Props: Playwright-Fallback erfolgreich")
+                        return data, "playwright_ok"
+                    except Exception:
+                        pass
+        except Exception as e:
+            log(f"   🔑 Pinnacle Props: Playwright-Fallback Fehler {str(e)[:60]}", "WARN")
+
+    return None, status
+
+
+def fetch_pinnacle_player_props() -> List[Dict]:
+    """Player Props Specials von Pinnacle (echte Quoten)."""
+    try:
+        data, status = _pinnacle_get_json(
+            f"{PINNACLE_BASE}/sports/{PINNACLE_SPORT_SOCCER}/matchups",
+            {"withSpecials": "true", "brandId": "0"},
+        )
+        if not data:
+            log(f"   🔑 Pinnacle Props: matchups fehlgeschlagen ({status})", "WARN")
+            return []
+        log(f"   🔑 Pinnacle Props: {len(data)} Einträge total (inkl. normale Matches)")
+
+        # Specials zählen nach Typ/Kategorie für Diagnose
+        special_count = sum(1 for m in data if m.get("type") == "special")
+        log(f"   🔑 Pinnacle Props: {special_count} Specials gefunden")
+        if special_count > 0:
+            sample_cats = set()
+            for m in data:
+                if m.get("type") == "special":
+                    sp = m.get("special", {}) or {}
+                    sample_cats.add((sp.get("category") or sp.get("categoryName") or "?"))
+                if len(sample_cats) >= 8:
+                    break
+            log(f"   🔑 Pinnacle Props: Beispiel-Kategorien: {list(sample_cats)[:8]}")
+
+        # Quoten holen — mit Specials-Flag (gleicher Endpunkt wie funktionierende Matchups-Funktion)
+        r2_data, status2 = _pinnacle_get_json(
             f"{PINNACLE_BASE}/sports/{PINNACLE_SPORT_SOCCER}/markets/straight",
-            headers=PINNACLE_HEADERS,
-            params={"primaryOnly": "false", "withSpecials": "true"},
-            timeout=20,
+            {"primaryOnly": "false", "withSpecials": "true"},
         )
         prices_by_matchup = {}
-        if r2.ok:
-            for mk in r2.json():
+        if r2_data:
+            log(f"   🔑 Pinnacle Props: {len(r2_data)} Markt-Einträge für Quoten")
+            for mk in r2_data:
                 mid = mk.get("matchupId")
                 for p in mk.get("prices", []):
                     pid = p.get("participantId")
                     if mid and pid:
                         prices_by_matchup[(mid, pid)] = p.get("price")
+        else:
+            log(f"   🔑 Pinnacle Props: markets/straight fehlgeschlagen ({status2})", "WARN")
 
         props = []
+        skipped_no_price = 0
         for m in data:
             if m.get("type") != "special":
                 continue
             sp = m.get("special", {}) or {}
-            cat = (sp.get("category") or "").lower()
-            if "player" not in cat:
+            # Kategorie-Feld kann je nach API-Version anders heissen — alle Varianten prüfen
+            cat = (sp.get("category") or sp.get("categoryName") or sp.get("type") or "").lower()
+            desc = sp.get("description", "") or sp.get("name", "")
+            # Breitere Erkennung: "player" im Kategorienamen ODER im Beschreibungstext
+            is_player_prop = "player" in cat or any(
+                k in desc.lower() for k in ["to score", "to assist", "to be booked", "shots", "fouls", "tackles", "saves", "carded"]
+            )
+            if not is_player_prop:
                 continue
-            desc = sp.get("description", "")
             parent = m.get("parent") or {}
             pparts = parent.get("participants", [])
             ph = next((p.get("name","") for p in pparts if p.get("alignment")=="home"), "")
             pa = next((p.get("name","") for p in pparts if p.get("alignment")=="away"), "")
             league_name = (m.get("league") or {}).get("name", "")
-            starts = m.get("startTime", "")
+            starts = m.get("startTime", "") or parent.get("startTime", "")
             for part in m.get("participants", []):
                 price = prices_by_matchup.get((m.get("id"), part.get("id")))
                 if price is None:
+                    skipped_no_price += 1
                     continue
                 dec = _pin_american_to_decimal(price)
                 if dec <= 1.0:
@@ -14720,6 +14765,8 @@ def fetch_pinnacle_player_props() -> List[Dict]:
                     "league": league_name,
                     "starts": starts,
                 })
+        if skipped_no_price:
+            log(f"   🔑 Pinnacle Props: {skipped_no_price} Props ohne Preis übersprungen")
         _log("PINNACLE", f"🔑 {len(props)} Player-Prop-Quoten geladen")
         return props
     except Exception as e:
