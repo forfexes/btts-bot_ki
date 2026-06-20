@@ -12175,16 +12175,124 @@ def _af_fixtures_for_date(date_str):
     return _AF_FIXTURES_DAY_CACHE[date_str]
 
 
+_SOFA_EVENTS_DAY_CACHE = {}  # {date_str: [events]} — wie API-Football Tages-Cache, aber kostenlos & ID-los
+
+def _sofascore_events_for_date(date_str):
+    """
+    Holt ALLE Fussball-Events eines Tages von SofaScore (kostenlos, kein Key, kein Match-ID nötig).
+    Gecacht pro Tag: 1 Call deckt alle pending Tips desselben Tages ab.
+    Fällt bei Cloudflare-Block auf Playwright zurück.
+    """
+    if date_str in _SOFA_EVENTS_DAY_CACHE:
+        return _SOFA_EVENTS_DAY_CACHE[date_str]
+
+    url = f"https://api.sofascore.com/api/v1/sport/football/scheduled-events/{date_str}"
+    events = []
+    try:
+        r = requests.get(
+            url,
+            headers={
+                "User-Agent": "Mozilla/5.0 (iPhone; CPU iPhone OS 16_0 like Mac OS X) AppleWebKit/605.1.15",
+                "Accept": "application/json",
+                "Referer": "https://www.sofascore.com/",
+            },
+            timeout=15,
+        )
+        if r.ok:
+            data = r.json()
+            events = data.get("events", [])
+    except Exception:
+        pass
+
+    if not events and PLAYWRIGHT_AVAILABLE:
+        try:
+            html = scrape_with_playwright(url, timeout=15000)
+            if html:
+                import re as _re
+                m = _re.search(r'(\{.*\})', html, _re.DOTALL)
+                if m:
+                    data = json.loads(m.group(1))
+                    events = data.get("events", [])
+                    if events:
+                        log(f"   🔍 SofaScore via Playwright erfolgreich ({date_str})")
+        except Exception:
+            pass
+
+    _SOFA_EVENTS_DAY_CACHE[date_str] = events
+    return events
+
+
+def _sofascore_find_result(home_team, away_team, tip_date):
+    """Sucht Ergebnis per Teamname+Datum in SofaScore-Tagesliste, mit ±1-Tag-Fallback."""
+    from datetime import timedelta as _td3
+
+    events = _sofascore_events_for_date(tip_date)
+    if not events:
+        try:
+            for _delta in [-1, 1]:
+                _d2 = str((datetime.strptime(tip_date, "%Y-%m-%d") + _td3(days=_delta)).date())
+                events = _sofascore_events_for_date(_d2)
+                if events:
+                    break
+        except Exception:
+            pass
+
+    if not events:
+        return None
+
+    h_target = home_team.lower()
+    a_target = away_team.lower()
+
+    for ev in events:
+        status = ev.get("status", {}).get("type", "")
+        if status != "finished":
+            continue
+        h = (ev.get("homeTeam") or {}).get("name", "")
+        a = (ev.get("awayTeam") or {}).get("name", "")
+        h_match = h.lower()[:6] in h_target or h_target[:6] in h.lower()
+        a_match = a.lower()[:6] in a_target or a_target[:6] in a.lower()
+        if h_match and a_match:
+            home_g = (ev.get("homeScore") or {}).get("current", 0) or 0
+            away_g = (ev.get("awayScore") or {}).get("current", 0) or 0
+            ht_home = (ev.get("homeScore") or {}).get("period1", 0) or 0
+            ht_away = (ev.get("awayScore") or {}).get("period1", 0) or 0
+            return {
+                "home_score": home_g,
+                "away_score": away_g,
+                "ht_home": ht_home,
+                "ht_away": ht_away,
+                "btts": home_g > 0 and away_g > 0,
+                "over25": (home_g + away_g) > 2,
+                "btts_ht": ht_home > 0 and ht_away > 0,
+                "total_goals": home_g + away_g,
+                "status": "finished",
+            }
+    return None
+
+
 def get_match_result_from_sources(tip):
     """
     Versucht Spielergebnis von mehreren Quellen zu holen.
-    Priorität: SofaScore → ESPN → AllSports → API-Football
+    Priorität: SofaScore (Tages-Suche, kostenlos+Playwright-Fallback) → API-Football → ESPN/AllSports (per ID)
     """
     match_name = tip.get("match", "")
     league = tip.get("league", "")
     match_id = tip.get("telegram_msg_id", "")  # Wir brauchen die echte match_id
 
-    # Versuche SofaScore zuerst
+    # 🆕 SofaScore Tages-Suche zuerst — kostenlos, kein Key, kein vorab gespeichertes ID nötig
+    if match_name and " vs " in match_name:
+        try:
+            parts = match_name.split(" vs ")
+            home_team = parts[0].strip()
+            away_team = parts[1].strip() if len(parts) > 1 else ""
+            tip_date = tip.get("date", str(datetime.now(timezone.utc).date()))
+            result = _sofascore_find_result(home_team, away_team, tip_date)
+            if result:
+                return result
+        except Exception:
+            pass
+
+    # SofaScore per ID (falls vorhanden, z.B. aus alten Live-Bot-Daten)
     sofa_id = tip.get("sofa_match_id")
     if sofa_id:
         result = get_sofascore_match_result(sofa_id)
