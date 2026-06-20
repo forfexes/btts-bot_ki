@@ -7,15 +7,15 @@ on:
 jobs:
   cleanup:
     runs-on: ubuntu-latest
+
     permissions:
-      actions: write
+      actions: write   # ✅ GANZ WICHTIG
 
     steps:
       - name: Delete old runs
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
-          gh run list --limit 1000 --json databaseId -q '.[].databaseId' | tail -n +10 | while read id; do
+          gh run list --limit 1000 --json databaseId -q '.[].databaseId' | tail -n +6 | while read id; do
             gh run delete $id
           done
-``
