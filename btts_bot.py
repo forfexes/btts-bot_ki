@@ -90,7 +90,7 @@ TELEGRAM_GROUPS = {
     "stats": env("TELEGRAM_GROUP_STATS", TELEGRAM_CHAT_ID),
     "hz_live": env("TELEGRAM_GROUP_HZ_LIVE", TELEGRAM_CHAT_ID),
     "late_goals": env("TELEGRAM_GROUP_LATE_GOALS", TELEGRAM_CHAT_ID),
-    "advanced_props": env("TELEGRAM_GROUP_LATE_GOALS", TELEGRAM_CHAT_ID),
+    "advanced_props": env("TELEGRAM_GROUP_STATS", TELEGRAM_CHAT_ID),
 }
 
 
@@ -14871,6 +14871,7 @@ _LEG_CATEGORY = {
     "tackles": ["tackle", "tackles won"],
     "corners": ["corners", "corner kicks"],
     "saves": ["saves", "goalkeeper saves"],
+    "offsides": ["offside"],
 }
 
 def _get_leg_category(prop_name):
@@ -15019,15 +15020,68 @@ def run_pinnacle_props_bot(win_start_utc=None, win_end_utc=None, ch_tz=None) -> 
         log("🔑 Pinnacle Props: keine Props im Zeitfenster")
         return 0
 
+    # 🌍 WM-Diagnose: wie viele valide Props/Matches sind World Cup?
+    _wc_props = [p for p in valid if "world cup" in p.get("league", "").lower() or "fifa" in p.get("league", "").lower()]
+    _wc_matches = set(p.get("match", "?") for p in _wc_props)
+    log(f"   🌍 WM-Diagnose: {len(_wc_props)} valide Props aus {len(_wc_matches)} WM-Spielen")
+    if _wc_matches:
+        for _m in list(_wc_matches)[:5]:
+            _cats = set(p.get("player_prop", "")[:30] for p in _wc_props if p.get("match") == _m)
+            log(f"      🌍 {_m}: {len([p for p in _wc_props if p.get('match')==_m])} Props, Beispiele: {list(_cats)[:4]}")
+
     # Props nach Spiel gruppieren
     by_match = {}
     for p in valid:
         mn = p.get("match", "?")
         by_match.setdefault(mn, []).append(p)
 
+    # 🏆 Matchwinner-Leg: echte Pinnacle 1X2-Quote pro Spiel als zusätzliche Leg-Option
+    for match_name in list(by_match.keys()):
+        try:
+            parts = match_name.split(" vs ")
+            if len(parts) != 2:
+                continue
+            home, away = parts[0].strip(), parts[1].strip()
+            mw_odds = get_pinnacle_match_odds(home, away)
+            if not mw_odds:
+                continue
+            # Favoriten-Seite mit solider Quote wählen (Heim oder Auswärts, nicht Remis)
+            hw = mw_odds.get("home_win")
+            aw = mw_odds.get("away_win")
+            for side_name, side_odds, side_label in [
+                (home, hw, f"Result: {home}"),
+                (away, aw, f"Result: {away}"),
+            ]:
+                if not side_odds:
+                    continue
+                try:
+                    side_odds = float(side_odds)
+                except Exception:
+                    continue
+                if not (1.15 <= side_odds <= 3.50):
+                    continue
+                _mw_prob = int(100 / side_odds * 0.95)
+                if _mw_prob < 55:
+                    continue
+                by_match[match_name].append({
+                    "selection": side_name,
+                    "player_prop": side_label,
+                    "odds": side_odds,
+                    "prob": _mw_prob,
+                    "match": match_name,
+                    "league": mw_odds.get("league", ""),
+                    "_cat": "result",
+                    "_fbref_confirmed": False,
+                })
+        except Exception:
+            continue
+
     # Pro Spiel: beste 2-4 Legs auswählen (verschiedene Kategorien)
     builders = []
+    _rejected_too_few_legs = 0
+    _rejected_low_odds = 0
     for match_name, legs in by_match.items():
+        _is_wc_match = match_name in _wc_matches
         # FBref-bestätigte Props zuerst, dann nach Wahrscheinlichkeit
         legs.sort(key=lambda x: (not x.get("_fbref_confirmed", False), -x["prob"]))
         selected = []
@@ -15049,11 +15103,17 @@ def run_pinnacle_props_bot(win_start_utc=None, win_end_utc=None, ch_tz=None) -> 
                 break
 
         if len(selected) < 2:
+            _rejected_too_few_legs += 1
+            if _is_wc_match:
+                log(f"   🌍 WM-Reject (zu wenig Legs): {match_name} → nur {len(selected)} Legs aus {len(legs)} Props")
             continue
 
         combo_odds = _calc_combo_odds(selected)
         # Nur Builders mit sinnvoller Quote senden
         if combo_odds < 1.80:
+            _rejected_low_odds += 1
+            if _is_wc_match:
+                log(f"   🌍 WM-Reject (Quote zu tief): {match_name} → {combo_odds}")
             continue
 
         builders.append({
@@ -15062,6 +15122,9 @@ def run_pinnacle_props_bot(win_start_utc=None, win_end_utc=None, ch_tz=None) -> 
             "odds": combo_odds,
             "_ko": selected[0].get("_ko"),
         })
+
+    if _rejected_too_few_legs or _rejected_low_odds:
+        log(f"   🔑 Bet Builder Filter: {_rejected_too_few_legs} mit <2 Legs verworfen, {_rejected_low_odds} mit Quote<1.80 verworfen")
 
     if not builders:
         log("🔑 Pinnacle Props: keine Bet Builder zusammengestellt")
@@ -15096,7 +15159,8 @@ def run_pinnacle_props_bot(win_start_utc=None, win_end_utc=None, ch_tz=None) -> 
             cat_emoji = {
                 "score": "⚽", "assist": "🎯", "booked": "🟨",
                 "shots": "🥅", "fouls": "👊", "tackles": "🦵",
-                "corners": "🔵", "saves": "🧤", "other": "○"
+                "corners": "🔵", "saves": "🧤", "offsides": "🚩",
+                "result": "🏆", "other": "○"
             }.get(leg["_cat"], "○")
             _fbref_check = " 🔍" if leg.get("_fbref_confirmed") else ""
             msg += f"{cat_emoji} {leg['player_prop']}{_fbref_check}\n"
