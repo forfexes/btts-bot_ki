@@ -2500,7 +2500,7 @@ def fetch_allsports_fixtures(league_name, target_date):
 
     try:
         r = requests.get(
-            "https://allsportsapi.com/api/football/",
+            "https://apiv2.allsportsapi.com/football/",
             params={
                 "met": "Fixtures",
                 "APIkey": ALLSPORTS_API_KEY,
@@ -2561,7 +2561,7 @@ def get_allsports_result(match_id):
 
     try:
         r = requests.get(
-            "https://allsportsapi.com/api/football/",
+            "https://apiv2.allsportsapi.com/football/",
             params={
                 "met": "Fixtures",
                 "APIkey": ALLSPORTS_API_KEY,
@@ -10929,6 +10929,52 @@ def is_duplicate_tip(match, market, target_date):
     return False
 
 
+def _combo_signature(legs, prefix=""):
+    """
+    Erzeugt eine deterministische, kurze Signatur aus den Legs einer Kombi
+    (sortiert nach Match+Markt+Tipp) — identische Kombis ergeben immer
+    dieselbe Signatur, unabhängig vom Run-Zeitpunkt.
+    """
+    import hashlib
+    parts = sorted(
+        f"{l.get('match','?')}|{l.get('market', l.get('_cat',''))}|{l.get('tip', l.get('player_prop',''))}"
+        for l in legs
+    )
+    raw = prefix + "::" + "||".join(parts)
+    return hashlib.md5(raw.encode("utf-8")).hexdigest()[:12]
+
+
+def is_duplicate_combo(tip_id, target_date):
+    """
+    Prüft ob eine Kombi (Multi-Combo oder Bet Builder) mit dieser
+    deterministischen tip_id bereits heute gesendet wurde.
+    """
+    global _SENT_TIPS_CACHE
+    cache_key = f"combo_{tip_id}"
+    if cache_key in _SENT_TIPS_CACHE:
+        return True
+
+    if SUPABASE_URL and SUPABASE_KEY:
+        try:
+            r = requests.get(
+                f"{SUPABASE_URL}/rest/v1/tips",
+                headers={"apikey": SUPABASE_KEY, "Authorization": f"Bearer {SUPABASE_KEY}"},
+                params={
+                    "tip_id": f"eq.{tip_id}",
+                    "select": "id",
+                    "limit": "1",
+                },
+                timeout=5,
+            )
+            if r.ok and len(r.json()) > 0:
+                _SENT_TIPS_CACHE.add(cache_key)
+                return True
+        except Exception:
+            pass
+
+    return False
+
+
 def mark_tip_sent(match, market, target_date):
     """Markiert Tipp als gesendet im In-Memory Cache"""
     global _SENT_TIPS_CACHE
@@ -12293,7 +12339,7 @@ def _allsports_events_for_date(date_str):
     _status = None
     try:
         r = requests.get(
-            "https://allsportsapi.com/api/football/",
+            "https://apiv2.allsportsapi.com/football/",
             params={
                 "met": "Fixtures",
                 "APIkey": ALLSPORTS_API_KEY,
@@ -15366,6 +15412,14 @@ def run_pinnacle_props_bot(win_start_utc=None, win_end_utc=None, ch_tz=None) -> 
         except Exception:
             pass
 
+        # Deterministische Signatur — identischer Builder (gleiche Legs) wird nicht erneut gesendet
+        _bdate = str(datetime.now(timezone.utc).date())
+        _sig = _combo_signature(b["legs"], prefix=f"builder_{b['match']}")
+        _builder_tip_id = f"builder_{_bdate}_{_sig}".replace(" ", "_")
+        if is_duplicate_combo(_builder_tip_id, _bdate):
+            log(f"   ⏭️ Bet Builder Duplikat übersprungen: {b['match']}")
+            continue
+
         msg = f"🏗️ <b>BET BUILDER</b>  {b['odds']}\n"
         msg += "━━━━━━━━━━━━━━━━━━\n"
         msg += f"⚽ <b>{b['match']}</b>"
@@ -15387,12 +15441,11 @@ def run_pinnacle_props_bot(win_start_utc=None, win_end_utc=None, ch_tz=None) -> 
         _mid = send_telegram(msg, chat_id=prop_chat)
         sent += 1
 
-        # Supabase speichern für Settlement — eindeutige ID inkl. Run-Zeitstempel (verhindert 409 bei mehreren Runs/Tag)
-        _builder_run_ts = datetime.now(timezone.utc).strftime("%H%M%S")
+        # Supabase speichern für Settlement — deterministische ID (verhindert Duplikate über mehrere Runs)
         try:
             save_to_supabase({
-                "tip_id": f"builder_{b['match']}_{tstr}_{_builder_run_ts}".replace(" ","_"),
-                "date": str(datetime.now(timezone.utc).date()),
+                "tip_id": _builder_tip_id,
+                "date": _bdate,
                 "market": "bet_builder",
                 "market_name": "🏗️ Bet Builder",
                 "match": b["match"],
@@ -17223,15 +17276,21 @@ def main():
         for n in [3, 4, 5, 6, 7, 8, 9, 10, 11]:
             combo = generate_multi_combo_bets(all_tips_flat, num_tips=n)
             if combo:
+                # Deterministische Signatur — identische Kombi (gleiche Legs) wird nicht erneut gesendet
+                _sig = _combo_signature(combo.get("tips", []), prefix=f"combo{n}")
+                _combo_tip_id = f"combo_{n}leg_{target_date}_{_sig}".replace(" ", "_")
+                if is_duplicate_combo(_combo_tip_id, target_date):
+                    log(f"   ⏭️ Combo {n} Duplikat übersprungen (identische Legs bereits heute gesendet)")
+                    continue
+
                 log(f"   {combo['label']}: Quote {combo['total_odds']}")
                 msg = format_combo_telegram_message(combo)
                 if msg:
                     _combo_mid = send_telegram(msg, combo_chat)
                     generated += 1
-                    # Für Settlement speichern — eindeutige ID inkl. Run-Zeitstempel (verhindert 409 bei mehreren Runs/Tag)
                     try:
                         save_to_supabase({
-                            "tip_id": f"combo_{combo.get('num_tips','?')}leg_{target_date}_{_combo_run_ts}".replace(" ","_"),
+                            "tip_id": _combo_tip_id,
                             "date": str(target_date),
                             "market": "combo_multi",
                             "market_name": combo.get("label", "Multi-Combo"),
