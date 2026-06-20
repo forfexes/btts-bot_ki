@@ -185,11 +185,30 @@ SUPABASE_URL = env("SUPABASE_URL")
 SUPABASE_KEY = env("SUPABASE_KEY")
 
 MIN_PROBABILITY = int(env("MIN_PROBABILITY", "67"))  # 🆕 Hybrid: 67% (zwischen 65-69)
-MIN_ODDS = float(env("MIN_ODDS", "1.65"))
+MIN_ODDS = float(env("MIN_ODDS", "1.70"))
 MAX_ODDS = float(env("MAX_ODDS", "3.0"))
 MIN_CONFIDENCE = int(env("MIN_CONFIDENCE", "3"))
 # 🆕 Nur HIGH + OK Value (LOW fliegt raus)
 MIN_VALUE_RATING = env("MIN_VALUE_RATING", "OK")  # HIGH, OK, oder LOW
+
+MIN_ODDS_VALUE = MIN_ODDS  # Alias — globale Mindestquote für "nur Value Bets"
+
+
+def _is_value_bet(odds, prob_pct):
+    """True nur wenn Quote >= MIN_ODDS_VALUE UND echte Edge vorhanden (Value Bet).
+    Global verfügbar — wird von allen Tipp-generierenden Funktionen genutzt
+    (Pinnacle-Block, Corners, Props/Bet Builder)."""
+    try:
+        o = float(str(odds).replace(",", "."))
+        p = float(prob_pct) / 100
+    except Exception:
+        return False
+    if o < MIN_ODDS_VALUE:
+        return False
+    implied = 1 / o if o > 0 else 1
+    edge = (p - implied) * 100
+    return edge >= 3  # mind. 3% Edge über der Quoten-implizierten Wahrscheinlichkeit
+
 
 MARKETS_TO_RUN = ["btts", "over25", "combo", "btts_ht", "over15_ht"]
 
@@ -9051,18 +9070,29 @@ def load_fbref_league(league_name):
 
         # FBref blockt mit 403 oder 429 wenn zu viele Requests
         if r.status_code in [403, 429]:
-            # Nur 1x loggen, dann still bleiben
-            if not FBREF_BLOCKED:
-                log(f"   ℹ️  FBref nicht erreichbar ({r.status_code}) - überspringe (kein Problem, andere Quellen reichen)")
-            FBREF_BLOCKED = True
+            if PLAYWRIGHT_AVAILABLE:
+                log(f"   ℹ️  FBref {r.status_code} — versuche Playwright-Fallback...")
+                pw_html = scrape_with_playwright(url, timeout=15000)
+                if pw_html:
+                    log(f"   ✅ FBref via Playwright erfolgreich")
+                    html = pw_html
+                else:
+                    if not FBREF_BLOCKED:
+                        log(f"   ℹ️  FBref auch via Playwright nicht erreichbar - überspringe (andere Quellen reichen)")
+                    FBREF_BLOCKED = True
+                    FBREF_CACHE[league_name] = {}
+                    return {}
+            else:
+                if not FBREF_BLOCKED:
+                    log(f"   ℹ️  FBref nicht erreichbar ({r.status_code}) - überspringe (kein Problem, andere Quellen reichen)")
+                FBREF_BLOCKED = True
+                FBREF_CACHE[league_name] = {}
+                return {}
+        elif not r.ok:
             FBREF_CACHE[league_name] = {}
             return {}
-
-        if not r.ok:
-            FBREF_CACHE[league_name] = {}
-            return {}
-
-        html = r.text
+        else:
+            html = r.text
 
         # FBref versteckt einige Tables in HTML-Kommentaren - rauspulen
         html = html.replace("<!--", "").replace("-->", "")
@@ -11169,11 +11199,14 @@ def generate_multi_combo_bets(all_tips, num_tips=3):
         6: ("💎 COMBO 6", "Value-Kombi"),
         7: ("🔥 COMBO 7", "High-Risk Kombi"),
         8: ("🚀 COMBO 8", "Jackpot-Kombi"),
+        9: ("⚡ COMBO 9", "Mega-Kombi"),
+        10: ("🌟 COMBO 10", "Ultra-Kombi"),
+        11: ("👑 COMBO 11", "Maximal-Kombi"),
     }
     label, desc = labels.get(num_tips, (f"🎲 COMBO {num_tips}", "Multi-Kombi"))
 
     # Stake Suggestion (weniger bei mehr Tipps)
-    stakes = {3: 5, 4: 4, 5: 3, 6: 2, 7: 2, 8: 1}
+    stakes = {3: 5, 4: 4, 5: 3, 6: 2, 7: 2, 8: 1, 9: 0.75, 10: 0.5, 11: 0.5}
     stake = stakes.get(num_tips, 1)
 
     return {
@@ -12344,13 +12377,22 @@ def run_settlement():
 
         pending_tips = r.json()
         log(f"Settlement: {len(pending_tips)} pending Tips gefunden")
+        log(f"Settlement DEBUG: API_FOOTBALL_KEYS vorhanden: {bool(API_FOOTBALL_KEYS)} ({len(API_FOOTBALL_KEYS) if API_FOOTBALL_KEYS else 0} Keys)")
+        if pending_tips:
+            _sample = pending_tips[0]
+            log(f"Settlement DEBUG: Beispiel-Tipp date={_sample.get('date')!r} match={_sample.get('match')!r}")
 
         won_count = 0
         lost_count = 0
         not_found = 0
+        _debug_logged = False
 
         for tip in pending_tips:
             try:
+                if not _debug_logged:
+                    _mn = tip.get("match", "")
+                    log(f"Settlement DEBUG: match_name={_mn!r}, has_vs={' vs ' in _mn}, date={tip.get('date')!r}")
+                    _debug_logged = True
                 # Ergebnis holen
                 result = get_match_result_from_sources(tip)
 
@@ -13254,6 +13296,14 @@ def run_corners_and_scorer_bots(target_date, active_leagues, odds_data_cache, fi
 
                     tip = analyze_corners_tip_simple(fixture, league)
                     if tip:
+                        _c_odds = tip.get("odds", tip.get("fair_odds", 0))
+                        try:
+                            _c_odds_f = float(str(_c_odds).replace(",", "."))
+                        except Exception:
+                            _c_odds_f = 0
+                        if _c_odds_f < MIN_ODDS_VALUE:
+                            log(f"   ⏭️ Ecken unter 1.70 verworfen: {tip['match']} ({_c_odds_f})")
+                            continue
                         corners_tips.append(tip)
                         corners_count += 1
                         log(f"   🔵 Ecken: {tip['match']} → {tip['tip']} ({tip['probability']}%)")
@@ -13738,12 +13788,28 @@ class AdvancedPropsManager:
                 "Referer": "https://fbref.com/",
             }
             r = requests.get(league_url, headers=headers, timeout=15)
+            html = None
 
-            if not r.ok:
+            if r.ok:
+                html = r.text
+            elif r.status_code in (403, 429) and PLAYWRIGHT_AVAILABLE:
+                # Direkter Call geblockt → Playwright-Browser umgeht Cloudflare/Bot-Erkennung
+                log(f"   AdvancedProps: FBref {r.status_code} — versuche Playwright-Fallback...")
+                pw_html = scrape_with_playwright(league_url, timeout=15000)
+                if pw_html:
+                    html = pw_html
+                    log(f"   AdvancedProps: FBref via Playwright erfolgreich")
+                else:
+                    log(f"   AdvancedProps: FBref Playwright-Fallback ebenfalls fehlgeschlagen", "WARN")
+                    return {}
+            else:
                 log(f"   AdvancedProps: FBref nicht erreichbar ({r.status_code})", "WARN")
                 return {}
 
-            html = r.text.replace("<!--", "").replace("-->", "")
+            if not html:
+                return {}
+
+            html = html.replace("<!--", "").replace("-->", "")
             player_db = {}
 
             import re as _re
@@ -14810,8 +14876,69 @@ def _calc_combo_odds(legs):
     disc = 0.85 if len(legs) == 2 else 0.80
     return round(odds * disc, 2)
 
+def _fbref_prop_edge_check(player_name, league_name, prop_name, pinnacle_prob):
+    """
+    Kreuzvergleich: FBref-Statistik vs. Pinnacle-Quote.
+    Berechnet eine unabhängige Wahrscheinlichkeit aus echten Saison-Stats
+    und vergleicht sie mit der quoten-implizierten Pinnacle-Wahrscheinlichkeit.
+    Gibt (adjusted_prob, has_fbref_data, edge_confirmed) zurück.
+
+    Ohne FBref-Daten: Pinnacle-Wahrscheinlichkeit unverändert nutzen (has_fbref_data=False).
+    Mit FBref-Daten: Mittelwert aus beiden Quellen (60% FBref-Stats, 40% Pinnacle-Markt),
+    da FBref echte Spielerleistung misst, der Markt aber Verletzungen/Tagesform einpreist.
+    """
+    try:
+        stats = _advanced_props_manager.scrape_fbref_advanced_stats(league_name)
+    except Exception:
+        stats = {}
+
+    if not stats:
+        return pinnacle_prob, False, False
+
+    # Spieler fuzzy matchen (FBref nutzt oft Kurznamen)
+    player_stats = None
+    pn_lower = player_name.lower()
+    for name, s in stats.items():
+        if pn_lower in name.lower() or name.lower() in pn_lower:
+            player_stats = s
+            break
+    if not player_stats:
+        return pinnacle_prob, False, False
+
+    pn = prop_name.lower()
+    fbref_prob = None
+
+    # Marktspezifische FBref-Wahrscheinlichkeit ableiten (Poisson-ähnliche Heuristik)
+    if "score" in pn or "goalscorer" in pn:
+        # Keine direkte Tor-Rate in player_db — überspringen (Pinnacle bleibt führend)
+        return pinnacle_prob, True, False
+    elif "shot" in pn:
+        sot = player_stats.get("sot_per90", 0)
+        # P(mind. 1 SoT) via Poisson-Näherung
+        fbref_prob = round((1 - math.exp(-sot)) * 100) if sot > 0 else None
+    elif "booked" in pn or "card" in pn:
+        yc = player_stats.get("yc_per90", 0)
+        fbref_prob = round(yc * 100) if yc > 0 else None
+    elif "foul" in pn and "drawn" not in pn and "won" not in pn:
+        fc = player_stats.get("fouls_committed", 0)
+        fbref_prob = round((1 - math.exp(-fc)) * 100) if fc > 0 else None
+    elif "fouled" in pn or "foul" in pn and ("drawn" in pn or "won" in pn):
+        fw = player_stats.get("fouls_drawn", 0)
+        fbref_prob = round((1 - math.exp(-fw)) * 100) if fw > 0 else None
+
+    if fbref_prob is None:
+        return pinnacle_prob, True, False
+
+    fbref_prob = max(5, min(95, fbref_prob))
+    blended = round(0.6 * fbref_prob + 0.4 * pinnacle_prob)
+    # Edge bestätigt wenn beide Quellen sich einig sind (FBref >= Pinnacle - 10)
+    edge_confirmed = fbref_prob >= (pinnacle_prob - 10)
+    return blended, True, edge_confirmed
+
+
 def run_pinnacle_props_bot(win_start_utc=None, win_end_utc=None, ch_tz=None) -> int:
-    """Bet Builder Style: Pro Spiel 2-4 Legs kombiniert → Prop Hunter Kanal."""
+    """Bet Builder Style: Pro Spiel 2-4 Legs kombiniert → Prop Hunter Kanal.
+    Quellen: Pinnacle (echte Quoten) + FBref (unabhängige Stats) für Cross-Validation."""
     from datetime import datetime as _dt2
     props = fetch_pinnacle_player_props()
     if not props:
@@ -14820,6 +14947,8 @@ def run_pinnacle_props_bot(win_start_utc=None, win_end_utc=None, ch_tz=None) -> 
 
     # Alle validen Props sammeln
     valid = []
+    _fbref_checked = 0
+    _fbref_confirmed = 0
     for p in props:
         sel = p["selection"].lower()
         prop_name = p.get("player_prop", "").lower()
@@ -14833,10 +14962,24 @@ def run_pinnacle_props_bot(win_start_utc=None, win_end_utc=None, ch_tz=None) -> 
             continue
         if match_name.lower() == prop_name:
             continue
-        if not (1.20 <= p["odds"] <= 5.00):
+        if not (1.15 <= p["odds"] <= 5.00):
             continue
         if p["prob"] < 55:  # Legs dürfen etwas lockerer sein — Combo filtert
             continue
+
+        # 🔍 FBref Cross-Check: unabhängige Wahrscheinlichkeit gegen Pinnacle-Quote prüfen
+        try:
+            adj_prob, has_data, confirmed = _fbref_prop_edge_check(
+                p["selection"], p.get("league", ""), prop_name, p["prob"]
+            )
+            if has_data:
+                _fbref_checked += 1
+                p["prob"] = adj_prob
+                p["_fbref_confirmed"] = confirmed
+                if confirmed:
+                    _fbref_confirmed += 1
+        except Exception:
+            pass
 
         # Zeitfenster
         if win_start_utc and p.get("starts"):
@@ -14854,6 +14997,9 @@ def run_pinnacle_props_bot(win_start_utc=None, win_end_utc=None, ch_tz=None) -> 
         p["_cat"] = _get_leg_category(prop_name)
         valid.append(p)
 
+    if _fbref_checked > 0:
+        log(f"   🔍 FBref Cross-Check: {_fbref_checked} Props mit Stats abgeglichen, {_fbref_confirmed} bestätigt")
+
     if not valid:
         log("🔑 Pinnacle Props: keine Props im Zeitfenster")
         return 0
@@ -14867,7 +15013,8 @@ def run_pinnacle_props_bot(win_start_utc=None, win_end_utc=None, ch_tz=None) -> 
     # Pro Spiel: beste 2-4 Legs auswählen (verschiedene Kategorien)
     builders = []
     for match_name, legs in by_match.items():
-        legs.sort(key=lambda x: -x["prob"])
+        # FBref-bestätigte Props zuerst, dann nach Wahrscheinlichkeit
+        legs.sort(key=lambda x: (not x.get("_fbref_confirmed", False), -x["prob"]))
         selected = []
         used_cats = set()
         used_players = set()
@@ -14928,7 +15075,7 @@ def run_pinnacle_props_bot(win_start_utc=None, win_end_utc=None, ch_tz=None) -> 
         msg += "━━━━━━━━━━━━━━━━━━\n"
         msg += f"⚽ <b>{b['match']}</b>"
         if tstr:
-            msg += f" · ⏰ {tstr}"
+            msg += " · ⏰ " + tstr
         msg += "\n\n"
         for leg in b["legs"]:
             cat_emoji = {
@@ -14936,7 +15083,8 @@ def run_pinnacle_props_bot(win_start_utc=None, win_end_utc=None, ch_tz=None) -> 
                 "shots": "🥅", "fouls": "👊", "tackles": "🦵",
                 "corners": "🔵", "saves": "🧤", "other": "○"
             }.get(leg["_cat"], "○")
-            msg += f"{cat_emoji} {leg['player_prop']}\n"
+            _fbref_check = " 🔍" if leg.get("_fbref_confirmed") else ""
+            msg += f"{cat_emoji} {leg['player_prop']}{_fbref_check}\n"
 
         msg += f"\n💰 @ <b>{b['odds']}</b> · 0.5u ✅"
 
@@ -16305,10 +16453,6 @@ def main():
         _PINNACLE_MATCHUPS = []
         log(f"   ⚠️ Pinnacle: {e}")
 
-    # ════════════════════════════════════════════════
-    # 🎰 PINNACLE DIREKTE TIPP-GENERIERUNG
-    # Nutzt die geladenen Matchups - keine extra API-Calls
-    # ════════════════════════════════════════════════
     pinnacle_tips_count = 0
     # ⏰ Gestaffeltes Zeitfenster (Schweizer Zeit):
     #    Run vor 14:00 CH  → Spiele heute 12:00–20:00 CH (Nachmittag/Abend)
@@ -16416,14 +16560,14 @@ def main():
                 except Exception:
                     pass
 
-                # BTTS Tipp
-                if prob_b >= MIN_PROBABILITY and "btts" in tips_by_market:
+                # BTTS Tipp — nur Value Bets (Quote >=1.70 + echter Edge)
+                if prob_b >= MIN_PROBABILITY and "btts" in tips_by_market and _is_value_bet(btts_yes, prob_b):
                     tip_btts = {
                         "match": mn, "league": league_name or "Pinnacle",
                         "time": tstr, "tip": "YES",
                         "probability": prob_b, "confidence": 3,
                         "oddsYes": btts_yes, "fairOdds": round(100/prob_b, 2),
-                        "valueRating": "OK", "units": 1.0, "market": "btts",
+                        "valueRating": "VALUE", "units": 1.0, "market": "btts",
                         "reasoning": f"Pinnacle Markt-Analyse | {league_name}",
                         "_no_real_odds": True, "_source": "pinnacle", "_kickoff": _ko_sort,
                     }
@@ -16432,14 +16576,14 @@ def main():
                     pinnacle_tips_count += 1
                     log(f"      ✅ BTTS YES @ {btts_yes} ({prob_b}%)")
 
-                # Over 2.5 Tipp
-                if prob_o >= MIN_PROBABILITY and "over25" in tips_by_market:
+                # Over 2.5 Tipp — nur Value Bets
+                if prob_o >= MIN_PROBABILITY and "over25" in tips_by_market and _is_value_bet(over25, prob_o):
                     tip_over25 = {
                         "match": mn, "league": league_name or "Pinnacle",
                         "time": tstr, "tip": "YES",
                         "probability": prob_o, "confidence": 3,
                         "oddsYes": over25, "fairOdds": round(100/prob_o, 2),
-                        "valueRating": "OK", "units": 1.0, "market": "over25",
+                        "valueRating": "VALUE", "units": 1.0, "market": "over25",
                         "reasoning": f"Pinnacle Markt-Analyse | {league_name}",
                         "_no_real_odds": True, "_source": "pinnacle", "_kickoff": _ko_sort,
                     }
@@ -16452,13 +16596,13 @@ def main():
                     # Korrelation: BTTS-Yes-Spiele sind meist auch Over 2.5
                     combo_prob = min(prob_b, prob_o) - 5
                     combo_odds = round(btts_yes * over25 * 0.80, 2)  # Korrelationsabschlag
-                    if combo_prob >= (MIN_PROBABILITY - 10):
+                    if combo_prob >= (MIN_PROBABILITY - 10) and _is_value_bet(combo_odds, combo_prob):
                         tip_combo = {
                             "match": mn, "league": league_name or "Pinnacle",
                             "time": tstr, "tip": "BTTS + Over 2.5",
                             "probability": combo_prob, "confidence": 3,
                             "oddsYes": combo_odds, "fairOdds": round(100/combo_prob, 2),
-                            "valueRating": "OK", "units": 0.75, "market": "combo",
+                            "valueRating": "VALUE", "units": 0.75, "market": "combo",
                             "reasoning": f"Pinnacle Combo-Analyse | {league_name}",
                             "_no_real_odds": True, "_source": "pinnacle", "_kickoff": _ko_sort,
                         }
@@ -16483,13 +16627,13 @@ def main():
                             btts_ht_odds, btts_ht_prob = 2.05, 68
                         else:
                             btts_ht_odds, btts_ht_prob = 2.30, 67
-                    if btts_ht_prob >= MIN_PROBABILITY:
+                    if btts_ht_prob >= MIN_PROBABILITY and _is_value_bet(btts_ht_odds, btts_ht_prob):
                         tip_btts_ht = {
                             "match": mn, "league": league_name or "Pinnacle",
                             "time": tstr, "tip": "BTTS HT (Beide Teams treffen 1.HZ)",
                             "probability": btts_ht_prob, "confidence": 3,
                             "oddsYes": btts_ht_odds, "fairOdds": round(100/btts_ht_prob, 2),
-                            "valueRating": "OK", "units": 1.0, "market": "btts_ht",
+                            "valueRating": "VALUE", "units": 1.0, "market": "btts_ht",
                             "reasoning": f"Pinnacle HT-Analyse | {league_name}",
                             "_no_real_odds": True, "_source": "pinnacle", "_kickoff": _ko_sort,
                         }
@@ -16511,13 +16655,13 @@ def main():
                             o15_odds, o15_prob = 2.10, 68
                         else:
                             o15_odds, o15_prob = 2.40, 67
-                    if o15_prob >= MIN_PROBABILITY and "over15_ht" in tips_by_market:
+                    if o15_prob >= MIN_PROBABILITY and "over15_ht" in tips_by_market and _is_value_bet(o15_odds, o15_prob):
                         tip_o15_ht = {
                             "match": mn, "league": league_name or "Pinnacle",
                             "time": tstr, "tip": "Over 1.5 Tore HT",
                             "probability": o15_prob, "confidence": 3,
                             "oddsYes": o15_odds, "fairOdds": round(100/o15_prob, 2),
-                            "valueRating": "OK", "units": 1.0, "market": "over15_ht",
+                            "valueRating": "VALUE", "units": 1.0, "market": "over15_ht",
                             "reasoning": f"Pinnacle HT-Analyse | {league_name}",
                             "_no_real_odds": True, "_source": "pinnacle", "_kickoff": _ko_sort,
                         }
@@ -16767,7 +16911,7 @@ def main():
 
     if len(all_tips_flat) >= 3:
         log("")
-        log("🎰 Generiere Multi-Combos (3-8 Tipps)...")
+        log("🎰 Generiere Multi-Combos (3-11 Tipps)...")
         combo_chat = TELEGRAM_GROUPS.get("combos", TELEGRAM_CHAT_ID)  # Multi-Combos
 
         # Header für Combo Channel
@@ -16776,9 +16920,10 @@ def main():
         combo_header += f"<i>Basis: {len(all_tips_flat)} Top-Tipps</i>"
         send_telegram(combo_header, combo_chat)
 
-        # Alle Combo-Größen generieren (3 bis 8)
+        # Alle Combo-Größen generieren (3 bis 11)
+        _combo_run_ts = datetime.now(timezone.utc).strftime("%H%M%S")
         generated = 0
-        for n in [3, 4, 5, 6, 7, 8]:
+        for n in [3, 4, 5, 6, 7, 8, 9, 10, 11]:
             combo = generate_multi_combo_bets(all_tips_flat, num_tips=n)
             if combo:
                 log(f"   {combo['label']}: Quote {combo['total_odds']}")
@@ -16786,10 +16931,10 @@ def main():
                 if msg:
                     _combo_mid = send_telegram(msg, combo_chat)
                     generated += 1
-                    # Für Settlement speichern
+                    # Für Settlement speichern — eindeutige ID inkl. Run-Zeitstempel (verhindert 409 bei mehreren Runs/Tag)
                     try:
                         save_to_supabase({
-                            "tip_id": f"combo_{combo.get('num_tips','?')}leg_{target_date}_{n}".replace(" ","_"),
+                            "tip_id": f"combo_{combo.get('num_tips','?')}leg_{target_date}_{_combo_run_ts}".replace(" ","_"),
                             "date": str(target_date),
                             "market": "combo_multi",
                             "market_name": combo.get("label", "Multi-Combo"),
