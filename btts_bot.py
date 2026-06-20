@@ -8262,18 +8262,24 @@ def _af_request(endpoint, params, timeout=12):
                 return None
 
             if not r.ok:
+                log(f"   🔍 AF-DEBUG: HTTP {r.status_code} für {endpoint} params={params} body={r.text[:150]}", "WARN")
                 continue
 
             data = r.json()
             if data.get("errors"):
+                log(f"   🔍 AF-DEBUG: API-Errors für {endpoint}: {data.get('errors')}", "WARN")
                 continue
 
             # Erfolg! Beim nächsten Call den nächsten Key nehmen
             APIFOOTBALL_KEY_OFFSET = (idx + 1) % n
-            return data.get("response", [])
-        except Exception:
+            _resp = data.get("response", [])
+            log(f"   🔍 AF-DEBUG: {endpoint} → {len(_resp)} Ergebnisse (results={data.get('results','?')})")
+            return _resp
+        except Exception as _afe:
+            log(f"   🔍 AF-DEBUG: Exception bei {endpoint}: {str(_afe)[:120]}", "WARN")
             continue
 
+    log(f"   🔍 AF-DEBUG: Alle Keys für {endpoint} params={params} fehlgeschlagen, return None", "WARN")
     return None
 
 
@@ -11464,6 +11470,7 @@ def send_top_tips(tips_by_market, target_date):
 
     val_icons = {
         "HIGH": "🔥",
+        "VALUE": "🟢",
         "OK": "🟡",
         "LOW": "🔴",
     }
@@ -11611,7 +11618,10 @@ def send_top_tips(tips_by_market, target_date):
             try:
                 odds_val = float(str(r.get('oddsYes', '1.5')).replace(',', '.'))
                 prob_val = int(r.get('probability', 60))
-                units = calculate_kelly_units(prob_val, odds_val)
+                # Konservativerer Cap bei reiner Liga-Schätzung (kein echter Pinnacle-Quote-Confirm)
+                _no_real = r.get('_no_real_odds', True)
+                _max_u = 1.5 if _no_real else 3.0
+                units = calculate_kelly_units(prob_val, odds_val, max_units=_max_u)
                 units_emoji = "🔥" if units >= 2.5 else "💚" if units >= 1.5 else "🟡"
             except:
                 units = 1.0
@@ -12894,8 +12904,10 @@ def analyze_corners_tip_simple(fixture, league):
     """
     Vereinfachte Ecken-Analyse ohne API-Football IDs.
     Basiert auf Liga-Durchschnitt + Poisson.
+    Sucht über mehrere Linien (7.5-12.5) die mit realistischer Quote >=1.70.
     """
     import math
+    import random
 
     # Liga-basierte Durchschnittswerte
     LEAGUE_AVG_CORNERS = {
@@ -12906,30 +12918,32 @@ def analyze_corners_tip_simple(fixture, league):
     }
 
     avg = LEAGUE_AVG_CORNERS.get(league, 9.5)
-
-    # Zufällige Variation ±1.5
-    import random
     expected = avg + random.uniform(-1.5, 1.5)
-
-    # Poisson für Over 9.5
-    prob_over95 = 0
     lam = expected
-    for k in range(10):
-        prob_over95 += (math.exp(-lam) * lam**k) / math.factorial(k)
-    prob_over95 = round((1 - prob_over95) * 100)
 
-    # Poisson für Over 8.5
-    prob_over85 = 0
-    for k in range(9):
-        prob_over85 += (math.exp(-lam) * lam**k) / math.factorial(k)
-    prob_over85 = round((1 - prob_over85) * 100)
+    def poisson_over(line):
+        """P(X > line) für halbe Linien (z.B. 8.5 → Summe k=0..8 abziehen)."""
+        k_max = int(line)  # bei 8.5 → 8
+        cum = 0
+        for k in range(k_max + 1):
+            cum += (math.exp(-lam) * lam**k) / math.factorial(k)
+        return round((1 - cum) * 100)
 
-    if prob_over95 >= 65:
-        line, prob = 9.5, prob_over95
-    elif prob_over85 >= 65:
-        line, prob = 8.5, prob_over85
-    else:
+    # Mehrere Linien durchprobieren, höchste mit prob>=60% UND realistischer Buchmacher-Quote >=1.70 wählen
+    candidates = []
+    for line in [7.5, 8.5, 9.5, 10.5, 11.5]:
+        prob = poisson_over(line)
+        if prob < 60:
+            continue
+        # Simulierte Buchmacher-Quote inkl. Marge (~7%, realistischer als reine Fair Odds)
+        book_odds = round((100 / prob) * 1.07, 2) if prob > 0 else 0
+        candidates.append((line, prob, book_odds))
+
+    # Bevorzuge die höchste Linie, die Quote >=1.70 erreicht (beste Balance Sicherheit/Value)
+    valid = [c for c in candidates if c[2] >= MIN_ODDS_VALUE]
+    if not valid:
         return None
+    line, prob, book_odds = max(valid, key=lambda c: c[0])  # höchste qualifizierende Linie
 
     return {
         "match": f"{fixture['home']} vs {fixture['away']}",
@@ -12937,7 +12951,8 @@ def analyze_corners_tip_simple(fixture, league):
         "time": fixture.get("time_local", "TBD"),
         "tip": f"Over {line} Ecken",
         "probability": prob,
-        "fair_odds": round(1 / (prob / 100), 2),
+        "odds": book_odds,
+        "fair_odds": round(100 / prob, 2) if prob > 0 else 0,
         "expected_corners": round(expected, 1),
         "market": "corners",
     }
@@ -15091,10 +15106,11 @@ def run_pinnacle_props_bot(win_start_utc=None, win_end_utc=None, ch_tz=None) -> 
         _mid = send_telegram(msg, chat_id=prop_chat)
         sent += 1
 
-        # Supabase speichern für Settlement
+        # Supabase speichern für Settlement — eindeutige ID inkl. Run-Zeitstempel (verhindert 409 bei mehreren Runs/Tag)
+        _builder_run_ts = datetime.now(timezone.utc).strftime("%H%M%S")
         try:
             save_to_supabase({
-                "tip_id": f"builder_{b['match']}_{tstr}".replace(" ","_"),
+                "tip_id": f"builder_{b['match']}_{tstr}_{_builder_run_ts}".replace(" ","_"),
                 "date": str(datetime.now(timezone.utc).date()),
                 "market": "bet_builder",
                 "market_name": "🏗️ Bet Builder",
@@ -16567,9 +16583,9 @@ def main():
                         "time": tstr, "tip": "YES",
                         "probability": prob_b, "confidence": 3,
                         "oddsYes": btts_yes, "fairOdds": round(100/prob_b, 2),
-                        "valueRating": "VALUE", "units": 1.0, "market": "btts",
+                        "valueRating": ("VALUE" if ro else "OK"), "units": 1.0, "market": "btts",
                         "reasoning": f"Pinnacle Markt-Analyse | {league_name}",
-                        "_no_real_odds": True, "_source": "pinnacle", "_kickoff": _ko_sort,
+                        "_no_real_odds": not bool(ro), "_source": "pinnacle", "_kickoff": _ko_sort,
                     }
                     enrich_pinnacle_tip(tip_btts, home, away, league_name)
                     tips_by_market["btts"].append(tip_btts)
@@ -16583,9 +16599,9 @@ def main():
                         "time": tstr, "tip": "YES",
                         "probability": prob_o, "confidence": 3,
                         "oddsYes": over25, "fairOdds": round(100/prob_o, 2),
-                        "valueRating": "VALUE", "units": 1.0, "market": "over25",
+                        "valueRating": ("VALUE" if ro else "OK"), "units": 1.0, "market": "over25",
                         "reasoning": f"Pinnacle Markt-Analyse | {league_name}",
-                        "_no_real_odds": True, "_source": "pinnacle", "_kickoff": _ko_sort,
+                        "_no_real_odds": not bool(ro), "_source": "pinnacle", "_kickoff": _ko_sort,
                     }
                     enrich_pinnacle_tip(tip_over25, home, away, league_name)
                     tips_by_market["over25"].append(tip_over25)
@@ -16602,9 +16618,9 @@ def main():
                             "time": tstr, "tip": "BTTS + Over 2.5",
                             "probability": combo_prob, "confidence": 3,
                             "oddsYes": combo_odds, "fairOdds": round(100/combo_prob, 2),
-                            "valueRating": "VALUE", "units": 0.75, "market": "combo",
+                            "valueRating": ("VALUE" if ro else "OK"), "units": 0.75, "market": "combo",
                             "reasoning": f"Pinnacle Combo-Analyse | {league_name}",
-                            "_no_real_odds": True, "_source": "pinnacle", "_kickoff": _ko_sort,
+                            "_no_real_odds": not bool(ro), "_source": "pinnacle", "_kickoff": _ko_sort,
                         }
                         enrich_pinnacle_tip(tip_combo, home, away, league_name)
                         tips_by_market["combo"].append(tip_combo)
@@ -16633,9 +16649,9 @@ def main():
                             "time": tstr, "tip": "BTTS HT (Beide Teams treffen 1.HZ)",
                             "probability": btts_ht_prob, "confidence": 3,
                             "oddsYes": btts_ht_odds, "fairOdds": round(100/btts_ht_prob, 2),
-                            "valueRating": "VALUE", "units": 1.0, "market": "btts_ht",
+                            "valueRating": ("VALUE" if (ro and ro.get("btts_yes_ht")) else "OK"), "units": 1.0, "market": "btts_ht",
                             "reasoning": f"Pinnacle HT-Analyse | {league_name}",
-                            "_no_real_odds": True, "_source": "pinnacle", "_kickoff": _ko_sort,
+                            "_no_real_odds": not bool(ro), "_source": "pinnacle", "_kickoff": _ko_sort,
                         }
                         enrich_pinnacle_tip(tip_btts_ht, home, away, league_name)
                         tips_by_market["btts_ht"].append(tip_btts_ht)
@@ -16661,9 +16677,9 @@ def main():
                             "time": tstr, "tip": "Over 1.5 Tore HT",
                             "probability": o15_prob, "confidence": 3,
                             "oddsYes": o15_odds, "fairOdds": round(100/o15_prob, 2),
-                            "valueRating": "VALUE", "units": 1.0, "market": "over15_ht",
+                            "valueRating": ("VALUE" if (ro and ro.get("over_15_ht")) else "OK"), "units": 1.0, "market": "over15_ht",
                             "reasoning": f"Pinnacle HT-Analyse | {league_name}",
-                            "_no_real_odds": True, "_source": "pinnacle", "_kickoff": _ko_sort,
+                            "_no_real_odds": not bool(ro), "_source": "pinnacle", "_kickoff": _ko_sort,
                         }
                         enrich_pinnacle_tip(tip_o15_ht, home, away, league_name)
                         tips_by_market["over15_ht"].append(tip_o15_ht)
