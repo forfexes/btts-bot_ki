@@ -12188,6 +12188,7 @@ def _sofascore_events_for_date(date_str):
 
     url = f"https://api.sofascore.com/api/v1/sport/football/scheduled-events/{date_str}"
     events = []
+    _status = None
     try:
         r = requests.get(
             url,
@@ -12198,11 +12199,14 @@ def _sofascore_events_for_date(date_str):
             },
             timeout=15,
         )
+        _status = r.status_code
         if r.ok:
             data = r.json()
             events = data.get("events", [])
-    except Exception:
-        pass
+    except Exception as _se:
+        _status = f"EXC:{str(_se)[:60]}"
+
+    log(f"   🔍 SOFA-DEBUG: {date_str} → HTTP {_status}, {len(events)} Events (direkt)")
 
     if not events and PLAYWRIGHT_AVAILABLE:
         try:
@@ -12213,10 +12217,13 @@ def _sofascore_events_for_date(date_str):
                 if m:
                     data = json.loads(m.group(1))
                     events = data.get("events", [])
-                    if events:
-                        log(f"   🔍 SofaScore via Playwright erfolgreich ({date_str})")
-        except Exception:
-            pass
+            log(f"   🔍 SOFA-DEBUG: {date_str} → Playwright-Fallback: {len(events)} Events")
+        except Exception as _pe:
+            log(f"   🔍 SOFA-DEBUG: {date_str} → Playwright-Fallback Fehler: {str(_pe)[:80]}", "WARN")
+
+    finished_count = sum(1 for e in events if (e.get("status", {}) or {}).get("type") == "finished")
+    if events:
+        log(f"   🔍 SOFA-DEBUG: {date_str} → {len(events)} Events total, {finished_count} finished")
 
     _SOFA_EVENTS_DAY_CACHE[date_str] = events
     return events
