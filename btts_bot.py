@@ -12277,10 +12277,99 @@ def _sofascore_find_result(home_team, away_team, tip_date):
     return None
 
 
+_ALLSPORTS_DAY_CACHE = {}  # {date_str: [matches]} — globale Tagessuche, kein leagueId nötig
+
+def _allsports_events_for_date(date_str):
+    """
+    Holt ALLE Fussball-Fixtures eines Tages von AllSportsAPI, OHNE leagueId-Einschränkung.
+    Gecacht pro Tag, analog zu SofaScore/API-Football Tages-Cache.
+    """
+    if not ALLSPORTS_API_KEY:
+        return []
+    if date_str in _ALLSPORTS_DAY_CACHE:
+        return _ALLSPORTS_DAY_CACHE[date_str]
+
+    matches = []
+    _status = None
+    try:
+        r = requests.get(
+            "https://allsportsapi.com/api/football/",
+            params={
+                "met": "Fixtures",
+                "APIkey": ALLSPORTS_API_KEY,
+                "from": date_str,
+                "to": date_str,
+            },
+            timeout=20,
+        )
+        _status = r.status_code
+        if r.ok:
+            data = r.json()
+            matches = data.get("result", []) or []
+    except Exception as _ae:
+        _status = f"EXC:{str(_ae)[:60]}"
+
+    log(f"   🔍 ALLSPORTS-DEBUG: {date_str} → HTTP {_status}, {len(matches)} Fixtures")
+    _ALLSPORTS_DAY_CACHE[date_str] = matches
+    return matches
+
+
+def _allsports_find_result(home_team, away_team, tip_date):
+    """Sucht Ergebnis per Teamname+Datum in AllSports-Tagesliste, mit ±1-Tag-Fallback."""
+    from datetime import timedelta as _td4
+
+    matches = _allsports_events_for_date(tip_date)
+    if not matches:
+        try:
+            for _delta in [-1, 1]:
+                _d2 = str((datetime.strptime(tip_date, "%Y-%m-%d") + _td4(days=_delta)).date())
+                matches = _allsports_events_for_date(_d2)
+                if matches:
+                    break
+        except Exception:
+            pass
+
+    if not matches:
+        return None
+
+    h_target = home_team.lower()
+    a_target = away_team.lower()
+
+    for m in matches:
+        status = m.get("event_status", "")
+        if status != "Finished":
+            continue
+        h = m.get("event_home_team", "")
+        a = m.get("event_away_team", "")
+        h_match = h.lower()[:6] in h_target or h_target[:6] in h.lower()
+        a_match = a.lower()[:6] in a_target or a_target[:6] in a.lower()
+        if h_match and a_match:
+            try:
+                home_g = int(m.get("event_final_result", "0-0").split("-")[0].strip() or 0)
+                away_g = int(m.get("event_final_result", "0-0").split("-")[1].strip() or 0)
+                ht = m.get("event_halftime_result", "0-0") or "0-0"
+                ht_home = int(ht.split("-")[0].strip() or 0)
+                ht_away = int(ht.split("-")[1].strip() or 0)
+            except Exception:
+                continue
+            return {
+                "home_score": home_g,
+                "away_score": away_g,
+                "ht_home": ht_home,
+                "ht_away": ht_away,
+                "btts": home_g > 0 and away_g > 0,
+                "over25": (home_g + away_g) > 2,
+                "btts_ht": ht_home > 0 and ht_away > 0,
+                "total_goals": home_g + away_g,
+                "status": "finished",
+            }
+    return None
+
+
 def get_match_result_from_sources(tip):
     """
     Versucht Spielergebnis von mehreren Quellen zu holen.
-    Priorität: SofaScore (Tages-Suche, kostenlos+Playwright-Fallback) → API-Football → ESPN/AllSports (per ID)
+    Priorität: SofaScore (Tages-Suche) → AllSports (Tages-Suche) → API-Football → ESPN/SofaScore/AllSports (per ID)
     """
     match_name = tip.get("match", "")
     league = tip.get("league", "")
@@ -12294,6 +12383,19 @@ def get_match_result_from_sources(tip):
             away_team = parts[1].strip() if len(parts) > 1 else ""
             tip_date = tip.get("date", str(datetime.now(timezone.utc).date()))
             result = _sofascore_find_result(home_team, away_team, tip_date)
+            if result:
+                return result
+        except Exception:
+            pass
+
+    # 🆕 AllSports Tages-Suche — eigener API-Key bereits aktiv, kein vorab gespeichertes ID nötig
+    if ALLSPORTS_API_KEY and match_name and " vs " in match_name:
+        try:
+            parts = match_name.split(" vs ")
+            home_team = parts[0].strip()
+            away_team = parts[1].strip() if len(parts) > 1 else ""
+            tip_date = tip.get("date", str(datetime.now(timezone.utc).date()))
+            result = _allsports_find_result(home_team, away_team, tip_date)
             if result:
                 return result
         except Exception:
