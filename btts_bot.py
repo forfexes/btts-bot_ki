@@ -16798,6 +16798,25 @@ def main():
     log("📊 Pinnacle Matchups laden...")
     try:
         _PINNACLE_MATCHUPS = fetch_pinnacle_matchups()
+        _raw_count = len(_PINNACLE_MATCHUPS)
+        # 🆕 Dedup: Pinnacle liefert teils doppelte Einträge für dasselbe Spiel
+        # (z.B. durch verschiedene Markt-Gruppierungen) — vor der Analyse bereinigen,
+        # damit nicht zwei separate Tipps für denselben Match in einem Run entstehen.
+        _seen_matchup_keys = set()
+        _deduped_matchups = []
+        for _pm in _PINNACLE_MATCHUPS:
+            _key = (
+                normalize_team_name(_pm.get("home", "")),
+                normalize_team_name(_pm.get("away", "")),
+                (_pm.get("league_name") or _pm.get("league") or "").lower(),
+            )
+            if _key in _seen_matchup_keys:
+                continue
+            _seen_matchup_keys.add(_key)
+            _deduped_matchups.append(_pm)
+        _PINNACLE_MATCHUPS = _deduped_matchups
+        if _raw_count != len(_PINNACLE_MATCHUPS):
+            log(f"   🧹 Pinnacle Dedup: {_raw_count} → {len(_PINNACLE_MATCHUPS)} Matches ({_raw_count - len(_PINNACLE_MATCHUPS)} Duplikate entfernt)")
         log(f"   ✅ Pinnacle: {len(_PINNACLE_MATCHUPS)} Matches geladen")
     except Exception as e:
         _PINNACLE_MATCHUPS = []
@@ -16828,6 +16847,7 @@ def main():
     if _PINNACLE_MATCHUPS:
         log(f"🎰 Analysiere {len(_PINNACLE_MATCHUPS)} Pinnacle Matches...")
         from datetime import datetime as _pdt
+        _processed_this_run = set()  # 🆕 Sicherheitsnetz gegen Restduplikate innerhalb des Runs
         for pm in _PINNACLE_MATCHUPS:
             try:
                 home = pm.get("home", "")
@@ -16836,6 +16856,10 @@ def main():
                 starts = pm.get("starts", "")
                 if not home or not away:
                     continue
+                _run_key = (normalize_team_name(home), normalize_team_name(away), league_name.lower())
+                if _run_key in _processed_this_run:
+                    continue
+                _processed_this_run.add(_run_key)
                 # Specials skippen — Corners/Bookings sind keine echten Matches
                 if ("(Corners)" in home or "(Bookings)" in home
                         or "Corners" in league_name or "Bookings" in league_name):
