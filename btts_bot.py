@@ -6082,6 +6082,299 @@ def get_wsf_player_prop_odds(*args, **kwargs) -> dict:
     """WSF Odds — silent fail."""
     return {}
 
+
+# ============================================================
+# 📊 FOOTBALL-DATA.CO.UK — kostenlose CSV-Historie für Top-Vereinsligen
+# ============================================================
+# Bestätigte URL-Struktur: https://www.football-data.co.uk/mmz4281/{season}/{code}.csv
+# Spalten: HS/AS=Schüsse, HST/AST=Schüsse aufs Tor, HC/AC=Ecken, HY/AY=Gelb, HF/AF=Fouls
+
+FD_CO_UK_LEAGUE_CODES = {
+    "premier league": "E0", "championship": "E1", "league one": "E2", "league two": "E3",
+    "bundesliga": "D1", "2. bundesliga": "D2",
+    "serie a": "I1", "serie b": "I2",
+    "la liga": "SP1", "primera division": "SP1", "segunda division": "SP2",
+    "ligue 1": "F1", "ligue 2": "F2",
+    "eredivisie": "N1",
+    "primeira liga": "P1",
+    "scottish premiership": "SC0",
+    "super lig": "T1",
+    "super league greece": "G1",
+    "jupiler pro league": "B1",
+}
+
+FD_CO_UK_CACHE = {}
+
+def _fd_co_uk_season_str():
+    """Aktuelle Saison im football-data.co.uk Format, z.B. '2526' für 2025/26."""
+    now = datetime.now(timezone.utc)
+    start_year = now.year if now.month >= 7 else now.year - 1
+    return f"{str(start_year)[-2:]}{str(start_year + 1)[-2:]}"
+
+
+def _fd_co_uk_load_csv(league_name):
+    """Lädt + parsed die Saison-CSV für eine Liga, gecacht pro Liga."""
+    ln = league_name.lower()
+    code = None
+    for key, c in FD_CO_UK_LEAGUE_CODES.items():
+        if key in ln:
+            code = c
+            break
+    if not code:
+        return []
+
+    cache_key = code
+    if cache_key in FD_CO_UK_CACHE:
+        return FD_CO_UK_CACHE[cache_key]
+
+    season = _fd_co_uk_season_str()
+    rows = []
+    try:
+        r = requests.get(
+            f"https://www.football-data.co.uk/mmz4281/{season}/{code}.csv",
+            timeout=15,
+        )
+        if r.ok and r.text:
+            import csv as _csv
+            import io as _io
+            reader = _csv.DictReader(_io.StringIO(r.text))
+            for row in reader:
+                if row.get("HomeTeam") and row.get("FTHG"):
+                    rows.append(row)
+        log(f"   🔍 FDCOUK-DEBUG: {code} ({season}) → {len(rows)} Spiele geladen")
+    except Exception as _fce:
+        log(f"   🔍 FDCOUK-DEBUG: {code} → Fehler {str(_fce)[:60]}", "WARN")
+
+    FD_CO_UK_CACHE[cache_key] = rows
+    return rows
+
+
+def get_fd_co_uk_team_stats(team_name, league_name, last_n=10):
+    """
+    Echte Team-Statistik (BTTS-Rate, Over2.5-Rate, Ø Schüsse/Ecken/Karten) aus
+    football-data.co.uk-Historie der aktuellen Saison — kostenlos, keine Quote,
+    nur für die ~20 abgedeckten Top-Ligen relevant.
+    """
+    rows = _fd_co_uk_load_csv(league_name)
+    if not rows:
+        return {}
+
+    team_norm = normalize_team_name(team_name)
+    matches = []
+    for row in rows:
+        h = normalize_team_name(row.get("HomeTeam", ""))
+        a = normalize_team_name(row.get("AwayTeam", ""))
+        if team_norm[:6] in h or h[:6] in team_norm or team_norm[:6] in a or a[:6] in team_norm:
+            matches.append(row)
+
+    if len(matches) < 3:
+        return {}
+
+    matches = matches[-last_n:]
+    btts_count = 0
+    over25_count = 0
+    shots, sot, corners, cards = [], [], [], []
+
+    for row in matches:
+        try:
+            fthg = int(row.get("FTHG", 0) or 0)
+            ftag = int(row.get("FTAG", 0) or 0)
+            is_home = team_norm[:6] in normalize_team_name(row.get("HomeTeam", ""))
+
+            if fthg > 0 and ftag > 0:
+                btts_count += 1
+            if (fthg + ftag) > 2:
+                over25_count += 1
+
+            if is_home:
+                shots.append(int(row.get("HS", 0) or 0))
+                sot.append(int(row.get("HST", 0) or 0))
+                corners.append(int(row.get("HC", 0) or 0))
+                cards.append(int(row.get("HY", 0) or 0))
+            else:
+                shots.append(int(row.get("AS", 0) or 0))
+                sot.append(int(row.get("AST", 0) or 0))
+                corners.append(int(row.get("AC", 0) or 0))
+                cards.append(int(row.get("AY", 0) or 0))
+        except (ValueError, TypeError):
+            continue
+
+    n = len(matches)
+    if n == 0:
+        return {}
+
+    return {
+        "source": "football-data.co.uk",
+        "games": n,
+        "btts_pct": round(100 * btts_count / n, 1),
+        "over25_pct": round(100 * over25_count / n, 1),
+        "avg_shots": round(sum(shots) / len(shots), 1) if shots else None,
+        "avg_shots_on_target": round(sum(sot) / len(sot), 1) if sot else None,
+        "avg_corners": round(sum(corners) / len(corners), 1) if corners else None,
+        "avg_yellow_cards": round(sum(cards) / len(cards), 1) if cards else None,
+    }
+
+
+# ============================================================
+# 🧠 EIGENES VORHERSAGEMODELL: Elo-Ratings + Poisson
+# ============================================================
+# Baut Team-Stärken (Elo) aus football-data.co.uk Saison-Historie auf,
+# leitet daraus erwartete Tore ab (Poisson) → eigene BTTS/Over2.5/1X2-
+# Wahrscheinlichkeiten, unabhängig von Pinnacles Markt-Quote.
+# Nur für die von football-data.co.uk abgedeckten ~20 Top-Ligen.
+
+ELO_RATINGS_CACHE = {}  # {league_code: {team_norm: elo_rating}}
+ELO_K_FACTOR = 20
+ELO_HOME_ADVANTAGE = 60
+ELO_BASE_RATING = 1500
+
+
+def _build_elo_ratings(league_name):
+    """
+    Baut Elo-Ratings aus der kompletten football-data.co.uk Saison-Historie
+    (chronologisch durchgerechnet). Gecacht pro Liga-Code.
+    """
+    ln = league_name.lower()
+    code = None
+    for key, c in FD_CO_UK_LEAGUE_CODES.items():
+        if key in ln:
+            code = c
+            break
+    if not code:
+        return {}
+
+    if code in ELO_RATINGS_CACHE:
+        return ELO_RATINGS_CACHE[code]
+
+    rows = _fd_co_uk_load_csv(league_name)
+    if not rows:
+        ELO_RATINGS_CACHE[code] = {}
+        return {}
+
+    ratings = {}
+
+    def _get(team):
+        tn = normalize_team_name(team)
+        if tn not in ratings:
+            ratings[tn] = ELO_BASE_RATING
+        return tn
+
+    for row in rows:
+        try:
+            home = row.get("HomeTeam", "")
+            away = row.get("AwayTeam", "")
+            fthg = int(row.get("FTHG", 0) or 0)
+            ftag = int(row.get("FTAG", 0) or 0)
+            if not home or not away:
+                continue
+
+            h_key = _get(home)
+            a_key = _get(away)
+            h_elo = ratings[h_key] + ELO_HOME_ADVANTAGE
+            a_elo = ratings[a_key]
+
+            expected_h = 1 / (1 + 10 ** ((a_elo - h_elo) / 400))
+            if fthg > ftag:
+                actual_h = 1.0
+            elif fthg < ftag:
+                actual_h = 0.0
+            else:
+                actual_h = 0.5
+
+            # Tordifferenz-Gewichtung — höhere Siege bewegen Elo stärker
+            margin_mult = 1.0 + (abs(fthg - ftag) - 1) * 0.15 if abs(fthg - ftag) > 1 else 1.0
+            delta = ELO_K_FACTOR * margin_mult * (actual_h - expected_h)
+
+            ratings[h_key] += delta
+            ratings[a_key] -= delta
+        except (ValueError, TypeError):
+            continue
+
+    log(f"   🧠 ELO-DEBUG: {code} → {len(ratings)} Teams bewertet")
+    ELO_RATINGS_CACHE[code] = ratings
+    return ratings
+
+
+def _poisson_pmf(k, lam):
+    """Poisson-Wahrscheinlichkeit P(X=k) für Erwartungswert lam."""
+    import math
+    if lam <= 0:
+        return 1.0 if k == 0 else 0.0
+    return (lam ** k) * math.exp(-lam) / math.factorial(k)
+
+
+def get_elo_poisson_prediction(home_team, away_team, league_name):
+    """
+    Eigenes Vorhersagemodell: Elo-Differenz → erwartete Tore (Poisson) →
+    BTTS/Over2.5/1X2-Wahrscheinlichkeiten. Kein Bezug zu Pinnacle-Quoten.
+    Gibt {} zurück wenn die Liga nicht abgedeckt ist oder zu wenig Daten da sind.
+    """
+    ratings = _build_elo_ratings(league_name)
+    if not ratings or len(ratings) < 6:
+        return {}
+
+    h_key = normalize_team_name(home_team)
+    a_key = normalize_team_name(away_team)
+
+    # Fuzzy-Suche falls exakter Key fehlt
+    if h_key not in ratings:
+        h_key = next((k for k in ratings if h_key[:6] in k or k[:6] in h_key), None)
+    if a_key not in ratings:
+        a_key = next((k for k in ratings if a_key[:6] in k or k[:6] in a_key), None)
+    if not h_key or not a_key:
+        return {}
+
+    h_elo = ratings[h_key] + ELO_HOME_ADVANTAGE
+    a_elo = ratings[a_key]
+    elo_diff = h_elo - a_elo
+
+    # Liga-Ø Tore als Basis (Standard ~1.35 Heim- / ~1.15 Auswärtstore)
+    LEAGUE_AVG_HOME_GOALS = 1.40
+    LEAGUE_AVG_AWAY_GOALS = 1.15
+
+    # Elo-Differenz verschiebt die erwarteten Tore (empirisch kalibrierter Faktor)
+    shift = elo_diff / 400
+    exp_home_goals = max(0.3, LEAGUE_AVG_HOME_GOALS * (1.15 ** shift))
+    exp_away_goals = max(0.3, LEAGUE_AVG_AWAY_GOALS * (1.15 ** -shift))
+
+    # BTTS: P(Heim>=1) * P(Auswärts>=1)
+    p_home_0 = _poisson_pmf(0, exp_home_goals)
+    p_away_0 = _poisson_pmf(0, exp_away_goals)
+    btts_prob = (1 - p_home_0) * (1 - p_away_0)
+
+    # Over 2.5: 1 - P(Gesamttore <= 2) via Tordifferenz-Faltung
+    over25_prob = 0.0
+    for h in range(0, 8):
+        for a in range(0, 8):
+            if h + a > 2:
+                over25_prob += _poisson_pmf(h, exp_home_goals) * _poisson_pmf(a, exp_away_goals)
+
+    # 1X2 grob aus Elo-Erwartung (vereinfacht über Score-Matrix)
+    p_home_win = p_draw = p_away_win = 0.0
+    for h in range(0, 8):
+        for a in range(0, 8):
+            p = _poisson_pmf(h, exp_home_goals) * _poisson_pmf(a, exp_away_goals)
+            if h > a:
+                p_home_win += p
+            elif h == a:
+                p_draw += p
+            else:
+                p_away_win += p
+
+    return {
+        "source": "elo_poisson",
+        "elo_home": round(h_elo, 0),
+        "elo_away": round(a_elo, 0),
+        "exp_goals_home": round(exp_home_goals, 2),
+        "exp_goals_away": round(exp_away_goals, 2),
+        "btts_pct": round(btts_prob * 100, 1),
+        "over25_pct": round(over25_prob * 100, 1),
+        "home_win_pct": round(p_home_win * 100, 1),
+        "draw_pct": round(p_draw * 100, 1),
+        "away_win_pct": round(p_away_win * 100, 1),
+    }
+
+
 def get_national_team_btts_stats(team_name: str, last_n: int = 20) -> dict:
     """BTTS/Over2.5 Stats für Nationalmannschaften aus martj42 Daten."""
     global MARTJ42_DATA
@@ -6693,6 +6986,143 @@ def fetch_fotmob_fixtures(league_name, target_date):
     except Exception as e:
         log(f"FotMob Fixtures Error: {str(e)[:50]}", "WARN")
         return []
+
+
+# ============================================================
+# 📊 STAT-BASIERTE ANALYSE-TIPPS (KEINE QUOTEN, nur Empfehlungen)
+# ============================================================
+# Für Spiele/Märkte ohne echte Pinnacle-Quote (z.B. Karten, Tackles,
+# Offside bei WM-Spielen) — liefert Statistik-Begründung statt
+# erfundener Buchmacher-Zahlen. Klar als "Analyse" gekennzeichnet,
+# kein Einsatz/Stake, damit niemand es mit einer echten Quote verwechselt.
+
+FOTMOB_TEAM_ID_CACHE = {}
+FOTMOB_PLAYER_STATS_CACHE = {}
+
+def _fotmob_find_team_id(team_name):
+    """Sucht FotMob Team-ID via Suche-Endpoint (kein Key nötig)."""
+    cache_key = team_name.lower()
+    if cache_key in FOTMOB_TEAM_ID_CACHE:
+        return FOTMOB_TEAM_ID_CACHE[cache_key]
+
+    team_id = None
+    try:
+        r = requests.get(
+            "https://www.fotmob.com/api/searchapi/suggest",
+            params={"term": team_name, "lang": "en"},
+            headers={
+                "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) Chrome/121.0.0.0",
+                "Accept": "application/json",
+            },
+            timeout=10,
+        )
+        if r.ok:
+            data = r.json()
+            squads = data.get("squad", []) if isinstance(data, dict) else []
+            for group in squads:
+                for item in group.get("suggestions", []):
+                    if item.get("type") == "team":
+                        team_id = item.get("id")
+                        break
+                if team_id:
+                    break
+    except Exception as _fte:
+        log(f"   🔍 FOTMOB-TEAM-DEBUG: '{team_name}' → Fehler {str(_fte)[:60]}", "WARN")
+
+    FOTMOB_TEAM_ID_CACHE[cache_key] = team_id
+    return team_id
+
+
+def get_fotmob_player_season_stats(team_name):
+    """
+    Holt Kader-Saisonstats von FotMob (Tore, Karten, Schüsse p90 etc.)
+    für ein Team — kostenlos, kein Key. Best-Effort mit Debug-Logging,
+    da das exakte Antwortformat je nach Wettbewerb variieren kann.
+    """
+    cache_key = team_name.lower()
+    if cache_key in FOTMOB_PLAYER_STATS_CACHE:
+        return FOTMOB_PLAYER_STATS_CACHE[cache_key]
+
+    players = []
+    team_id = _fotmob_find_team_id(team_name)
+    if not team_id:
+        log(f"   🔍 FOTMOB-TEAM-DEBUG: keine Team-ID für '{team_name}' gefunden")
+        FOTMOB_PLAYER_STATS_CACHE[cache_key] = players
+        return players
+
+    try:
+        r = requests.get(
+            f"https://www.fotmob.com/api/teams",
+            params={"id": team_id, "tab": "squad"},
+            headers={
+                "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) Chrome/121.0.0.0",
+                "Accept": "application/json",
+                "Referer": "https://www.fotmob.com/",
+            },
+            timeout=12,
+        )
+        if r.ok:
+            data = r.json()
+            squad = data.get("squad", {}) or {}
+            members = squad.get("members", []) or []
+            for m in members:
+                stats = m.get("stats", {}) or {}
+                players.append({
+                    "name": m.get("name", ""),
+                    "position": m.get("role", {}).get("key", "") if isinstance(m.get("role"), dict) else "",
+                    "rating": stats.get("rating"),
+                    "goals": stats.get("goals"),
+                    "yellow_cards": stats.get("yellowCards") or stats.get("yellow_cards"),
+                })
+            log(f"   🔍 FOTMOB-PLAYER-DEBUG: {team_name} → {len(players)} Kaderspieler")
+    except Exception as _fpe:
+        log(f"   🔍 FOTMOB-PLAYER-DEBUG: {team_name} → Fehler {str(_fpe)[:60]}", "WARN")
+
+    FOTMOB_PLAYER_STATS_CACHE[cache_key] = players
+    return players
+
+
+def generate_stat_insight_tip(match_name, league, home_team, away_team, kickoff_str=""):
+    """
+    Erzeugt eine reine Statistik-Analyse (KEINE Quote, KEIN Einsatz) für
+    Spiele/Spieler ohne echte Pinnacle-Quote. Kombiniert FotMob-Kaderstats
+    mit FBref-Cross-Check (falls verfügbar). Gibt None zurück wenn keine
+    echten Daten gefunden wurden — erfindet nichts.
+    """
+    insights = []
+
+    for team_label, team_name in [(home_team, home_team), (away_team, away_team)]:
+        players = get_fotmob_player_season_stats(team_name)
+        if not players:
+            continue
+        # Top-Spieler nach Rating, mit echten Karten/Tore-Werten
+        rated = [p for p in players if p.get("rating") or p.get("goals") or p.get("yellow_cards")]
+        rated.sort(key=lambda p: float(p.get("rating") or 0), reverse=True)
+        for p in rated[:3]:
+            parts = []
+            if p.get("goals"):
+                parts.append(f"{p['goals']} Tore")
+            if p.get("yellow_cards"):
+                parts.append(f"{p['yellow_cards']} Gelbe Karten")
+            if p.get("rating"):
+                parts.append(f"Ø Rating {p['rating']}")
+            if parts:
+                insights.append(f"   • {p['name']} ({team_name}): {', '.join(parts)}")
+
+    if not insights:
+        return None  # Keine echten Daten — nichts erfinden, einfach nichts senden
+
+    msg = "📊 <b>ANALYSE</b> (Statistik, keine Buchmacher-Quote)\n"
+    msg += "━━━━━━━━━━━━━━━━━━\n"
+    msg += f"⚽ <b>{match_name}</b>"
+    if league:
+        msg += f"\n📍 {league}"
+    if kickoff_str:
+        msg += f" · ⏰ {kickoff_str}"
+    msg += "\n\n📈 Saisonwerte (FotMob):\n"
+    msg += "\n".join(insights)
+    msg += "\n\n⚠️ Reine Statistik-Einordnung, keine Wett-Empfehlung mit Quote."
+    return msg
 
 
 # ============================================================
@@ -9890,12 +10320,23 @@ def is_future_game(time_str, target_date):
 
         offset = 2 if march_last <= now_utc < oct_last else 1
 
-        game_local = datetime.combine(
-            target_date,
-            datetime.min.time().replace(hour=hour, minute=minute),
-        )
+        def _combine(d):
+            game_local = datetime.combine(
+                d, datetime.min.time().replace(hour=hour, minute=minute),
+            )
+            return (game_local - timedelta(hours=offset)).replace(tzinfo=timezone.utc)
 
-        game_utc = (game_local - timedelta(hours=offset)).replace(tzinfo=timezone.utc)
+        game_utc = _combine(target_date)
+
+        # 🆕 Fix: Unser Abend-Fenster geht über Mitternacht (20:00 heute – 12:00 morgen CH).
+        # Eine Kickoff-Zeit wie "00:00"-"13:00" kombiniert mit target_date (heute) liegt
+        # dann oft Stunden in der Vergangenheit, obwohl das Spiel morgen früh stattfindet.
+        # Falls die heutige Kombination weit (>6h) in der Vergangenheit liegt, mit morgen
+        # nachrechnen — das deckt den Mitternachts-Wraparound korrekt ab.
+        if game_utc < now_utc - timedelta(hours=6):
+            game_utc_tomorrow = _combine(target_date + timedelta(days=1))
+            if game_utc_tomorrow > now_utc - timedelta(minutes=10):
+                game_utc = game_utc_tomorrow
 
         # Spiel darf noch nicht angefangen haben (max 10 Min Toleranz nach Kickoff)
         return game_utc > now_utc - timedelta(minutes=10)
@@ -15529,6 +15970,39 @@ def _fbref_prop_edge_check(player_name, league_name, prop_name, pinnacle_prob):
     return blended, True, edge_confirmed
 
 
+_STAT_INSIGHT_SENT_TODAY = set()  # Dedup: ein Analyse-Post pro Match pro Tag
+
+def _send_stat_insight_fallback(match_name, legs):
+    """
+    Sendet eine reine Statistik-Analyse (keine Quote) wenn der Bet Builder
+    für ein WM-Spiel keine sinnvolle Kombi bauen konnte. Nutzt FotMob-Kaderstats.
+    """
+    _dedup_key = f"{match_name}_{datetime.now(timezone.utc).date()}"
+    if _dedup_key in _STAT_INSIGHT_SENT_TODAY:
+        return
+    if " vs " not in match_name:
+        return
+    home_team, away_team = match_name.split(" vs ", 1)
+    league = legs[0].get("league", "") if legs else ""
+    kickoff_str = ""
+    try:
+        _ko = legs[0].get("_ko") if legs else None
+        if _ko:
+            kickoff_str = _ko.strftime("%H:%M")
+    except Exception:
+        pass
+
+    msg = generate_stat_insight_tip(match_name, league, home_team, away_team, kickoff_str)
+    if not msg:
+        return  # keine echten Daten gefunden — nichts senden
+
+    stats_chat = TELEGRAM_GROUPS.get("advanced_props") or TELEGRAM_GROUPS.get("stats")
+    if stats_chat:
+        send_telegram(msg, chat_id=stats_chat)
+        _STAT_INSIGHT_SENT_TODAY.add(_dedup_key)
+        log(f"   📊 Stat-Analyse gesendet (statt Bet Builder): {match_name}")
+
+
 def run_pinnacle_props_bot(win_start_utc=None, win_end_utc=None, ch_tz=None) -> int:
     """Bet Builder Style: Pro Spiel 2-4 Legs kombiniert → Prop Hunter Kanal.
     Quellen: Pinnacle (echte Quoten) + FBref (unabhängige Stats) für Cross-Validation."""
@@ -15705,6 +16179,7 @@ def run_pinnacle_props_bot(win_start_utc=None, win_end_utc=None, ch_tz=None) -> 
             _rejected_too_few_legs += 1
             if _is_wc_match:
                 log(f"   🌍 WM-Reject (zu wenig Legs): {match_name} → nur {len(selected)} Legs aus {len(legs)} Props")
+                _send_stat_insight_fallback(match_name, legs)
             continue
 
         combo_odds = _calc_combo_odds(selected)
@@ -15713,6 +16188,7 @@ def run_pinnacle_props_bot(win_start_utc=None, win_end_utc=None, ch_tz=None) -> 
             _rejected_low_odds += 1
             if _is_wc_match:
                 log(f"   🌍 WM-Reject (Quote zu tief): {match_name} → {combo_odds}")
+                _send_stat_insight_fallback(match_name, legs)
             continue
 
         builders.append({
@@ -17251,6 +17727,33 @@ def main():
                             prob_b = int(0.6 * _mb + 0.4 * prob_b)
                             prob_o = int(0.6 * _mo + 0.4 * prob_o)
                             log(f"      🌍 martj42: {home} {_sh['btts_pct']}% / {away} {_sa['btts_pct']}% BTTS → {prob_b}%")
+                    except Exception:
+                        pass
+                else:
+                    # 🆕 football-data.co.uk: echte BTTS/Over-Raten für ~20 Top-Vereinsligen
+                    try:
+                        _fh = get_fd_co_uk_team_stats(home, league_name)
+                        _fa = get_fd_co_uk_team_stats(away, league_name)
+                        if _fh and _fa:
+                            _mb = (_fh["btts_pct"] + _fa["btts_pct"]) / 2
+                            _mo = (_fh["over25_pct"] + _fa["over25_pct"]) / 2
+                            prob_b = int(0.6 * _mb + 0.4 * prob_b)
+                            prob_o = int(0.6 * _mo + 0.4 * prob_o)
+                            log(f"      📊 FD-CoUk: {home} {_fh['btts_pct']}% / {away} {_fa['btts_pct']}% BTTS → {prob_b}% ({_fh['games']}/{_fa['games']} Spiele)")
+                    except Exception:
+                        pass
+
+                    # 🆕 Eigenes ML-Modell: Elo + Poisson — eigene Wahrscheinlichkeit,
+                    # unabhängig von Pinnacle, als zusätzliche Bestätigung/Korrektur
+                    try:
+                        _elo = get_elo_poisson_prediction(home, away, league_name)
+                        if _elo:
+                            # 70% bisherige Schätzung (inkl. FD-CoUk), 30% Elo-Modell
+                            prob_b = int(0.7 * prob_b + 0.3 * _elo["btts_pct"])
+                            prob_o = int(0.7 * prob_o + 0.3 * _elo["over25_pct"])
+                            log(f"      🧠 Elo-Modell: {home}({_elo['elo_home']:.0f}) vs {away}({_elo['elo_away']:.0f}) "
+                                f"→ erw. Tore {_elo['exp_goals_home']}-{_elo['exp_goals_away']}, BTTS {_elo['btts_pct']}%, "
+                                f"finale Wahrsch. {prob_b}%")
                     except Exception:
                         pass
 
