@@ -2444,6 +2444,8 @@ def calculate_elo_btts_probability(home_elo, away_elo):
 # 🆕 ALLSPORTSAPI - 500+ Ligen weltweit (100 Calls/Tag gratis)
 # ============================================================
 ALLSPORTS_API_KEY = env("ALLSPORTS_API_KEY", "")
+FOOTBALLDATA_IO_API_KEY = env("FOOTBALLDATA_IO_API_KEY", "")  # 🆕 footballdata.io (anderer Anbieter als football-data.org!)
+SOCCERFOOTBALLINFO_API_KEY = env("SOCCERFOOTBALLINFO_API_KEY", "")  # 🆕 soccerfootballinfo.com
 ALLSPORTS_CACHE = {}
 
 ALLSPORTS_LEAGUE_IDS = {
@@ -6092,7 +6094,8 @@ def get_national_team_btts_stats(team_name: str, last_n: int = 20) -> dict:
     for g in MARTJ42_DATA:
         h = str(g.get("home_team","")).lower()
         a = str(g.get("away_team","")).lower()
-        if team_lower in h or h in team_lower or team_lower in a or a in team_lower:
+        # Mindestlänge gegen falsche Kurz-Teilstring-Treffer (z.B. Vereinsnamen-Fragmente)
+        if len(team_lower) >= 4 and (team_lower in h or h in team_lower or team_lower in a or a in team_lower):
             try:
                 hs, as_ = int(g.get("home_score",-1)), int(g.get("away_score",-1))
                 if hs >= 0 and as_ >= 0:
@@ -12412,7 +12415,265 @@ def _allsports_find_result(home_team, away_team, tip_date):
     return None
 
 
-def get_match_result_from_sources(tip):
+_FOOTBALLDATA_DAY_CACHE = {}  # {date_str: [matches]} — globale Tagessuche, alle Competitions des Keys
+
+def _footballdata_events_for_date(date_str):
+    """
+    Holt ALLE Matches eines Tages von football-data.org (globaler /v4/matches Endpoint,
+    deckt alle Competitions ab, zu denen der Key Zugriff hat — kein Liga-Code nötig).
+    Gecacht pro Tag, nutzt bestehende Key-Rotation (_FD_KEY_OFFSET / _FD_DEAD_KEYS).
+    """
+    global _FD_KEY_OFFSET
+    if not FOOTBALL_DATA_API_KEYS:
+        return []
+    if date_str in _FOOTBALLDATA_DAY_CACHE:
+        return _FOOTBALLDATA_DAY_CACHE[date_str]
+
+    matches = []
+    n = len(FOOTBALL_DATA_API_KEYS)
+    _status = None
+    for offset in range(n):
+        idx = (_FD_KEY_OFFSET + offset) % n
+        if idx in _FD_DEAD_KEYS:
+            continue
+        key = FOOTBALL_DATA_API_KEYS[idx]
+        try:
+            r = requests.get(
+                "https://api.football-data.org/v4/matches",
+                params={"dateFrom": date_str, "dateTo": date_str},
+                headers={"X-Auth-Token": key},
+                timeout=15,
+            )
+            _status = r.status_code
+            if r.status_code == 429:
+                _FD_DEAD_KEYS.add(idx)
+                continue
+            if r.status_code == 403:
+                _FD_DEAD_KEYS.add(idx)
+                continue
+            if r.ok:
+                data = r.json()
+                matches = data.get("matches", []) or []
+                _FD_KEY_OFFSET = (idx + 1) % n
+                break
+        except Exception as _fde:
+            _status = f"EXC:{str(_fde)[:60]}"
+            continue
+
+    log(f"   🔍 FOOTBALLDATA-DEBUG: {date_str} → HTTP {_status}, {len(matches)} Matches")
+    _FOOTBALLDATA_DAY_CACHE[date_str] = matches
+    return matches
+
+
+def _footballdata_find_result(home_team, away_team, tip_date):
+    """Sucht Ergebnis per Teamname+Datum in football-data.org-Tagesliste, mit ±1-Tag-Fallback."""
+    from datetime import timedelta as _td5
+
+    matches = _footballdata_events_for_date(tip_date)
+    if not matches:
+        try:
+            for _delta in [-1, 1]:
+                _d2 = str((datetime.strptime(tip_date, "%Y-%m-%d") + _td5(days=_delta)).date())
+                matches = _footballdata_events_for_date(_d2)
+                if matches:
+                    break
+        except Exception:
+            pass
+
+    if not matches:
+        return None
+
+    h_target = home_team.lower()
+    a_target = away_team.lower()
+
+    for m in matches:
+        status = m.get("status", "")
+        if status != "FINISHED":
+            continue
+        h = (m.get("homeTeam") or {}).get("name", "") or ""
+        a = (m.get("awayTeam") or {}).get("name", "") or ""
+        h_match = len(h) >= 4 and (h.lower()[:6] in h_target or h_target[:6] in h.lower())
+        a_match = len(a) >= 4 and (a.lower()[:6] in a_target or a_target[:6] in a.lower())
+        if h_match and a_match:
+            score = m.get("score", {}) or {}
+            ft = score.get("fullTime", {}) or {}
+            ht = score.get("halfTime", {}) or {}
+            home_g = ft.get("home", 0) or 0
+            away_g = ft.get("away", 0) or 0
+            ht_home = ht.get("home", 0) or 0
+            ht_away = ht.get("away", 0) or 0
+            return {
+                "home_score": home_g,
+                "away_score": away_g,
+                "ht_home": ht_home,
+                "ht_away": ht_away,
+                "btts": home_g > 0 and away_g > 0,
+                "over25": (home_g + away_g) > 2,
+                "btts_ht": ht_home > 0 and ht_away > 0,
+                "total_goals": home_g + away_g,
+                "status": "finished",
+            }
+    return None
+
+
+_OPENLIGADB_DAY_CACHE = {}  # German-fokussiert, aber komplett kostenlos & ohne Key
+
+def _openligadb_find_result(home_team, away_team, tip_date, league_name=""):
+    """
+    OpenLigaDB: kostenlose, keyless API für deutsche Wettbewerbe (Bundesliga, 2./3. Liga, DFB-Pokal).
+    Nur sinnvoll wenn die Liga deutsch ist — sonst überspringen (kein globaler Endpoint vorhanden).
+    """
+    _ln = league_name.lower()
+    _league_map = {
+        "bundesliga": "bl1", "2. bundesliga": "bl2", "3. liga": "bl3",
+        "dfb-pokal": "dfb", "dfb pokal": "dfb",
+    }
+    _shortcut = None
+    for key, code in _league_map.items():
+        if key in _ln:
+            _shortcut = code
+            break
+    if not _shortcut:
+        return None
+
+    try:
+        season = str(datetime.strptime(tip_date, "%Y-%m-%d").year)
+    except Exception:
+        return None
+
+    cache_key = f"{_shortcut}_{season}"
+    if cache_key not in _OPENLIGADB_DAY_CACHE:
+        try:
+            r = requests.get(
+                f"https://api.openligadb.de/getmatchdata/{_shortcut}/{season}",
+                timeout=15,
+            )
+            _OPENLIGADB_DAY_CACHE[cache_key] = r.json() if r.ok else []
+            log(f"   🔍 OPENLIGADB-DEBUG: {_shortcut}/{season} → {len(_OPENLIGADB_DAY_CACHE[cache_key])} Matches")
+        except Exception:
+            _OPENLIGADB_DAY_CACHE[cache_key] = []
+
+    matches = _OPENLIGADB_DAY_CACHE.get(cache_key, [])
+    h_target = home_team.lower()
+    a_target = away_team.lower()
+
+    for m in matches:
+        if not m.get("matchIsFinished"):
+            continue
+        h = (m.get("team1") or {}).get("teamName", "") or ""
+        a = (m.get("team2") or {}).get("teamName", "") or ""
+        h_match = len(h) >= 4 and (h.lower()[:6] in h_target or h_target[:6] in h.lower())
+        a_match = len(a) >= 4 and (a.lower()[:6] in a_target or a_target[:6] in a.lower())
+        if h_match and a_match:
+            results = m.get("matchResults", []) or []
+            ft = next((r for r in results if r.get("resultName") == "Endergebnis"), None)
+            ht = next((r for r in results if r.get("resultName") == "Halbzeitergebnis"), None)
+            if not ft:
+                continue
+            home_g = ft.get("pointsTeam1", 0) or 0
+            away_g = ft.get("pointsTeam2", 0) or 0
+            ht_home = ht.get("pointsTeam1", 0) if ht else 0
+            ht_away = ht.get("pointsTeam2", 0) if ht else 0
+            return {
+                "home_score": home_g,
+                "away_score": away_g,
+                "ht_home": ht_home,
+                "ht_away": ht_away,
+                "btts": home_g > 0 and away_g > 0,
+                "over25": (home_g + away_g) > 2,
+                "btts_ht": ht_home > 0 and ht_away > 0,
+                "total_goals": home_g + away_g,
+                "status": "finished",
+            }
+    return None
+
+
+_FOOTBALLDATAIO_DAY_CACHE = {}  # {date_str: [matches]}
+
+def _footballdataio_events_for_date(date_str):
+    """
+    Holt alle Matches eines Tages von footballdata.io (anderer Anbieter als football-data.org!).
+    Bestätigter Endpoint: GET /matches/date/{date}, Auth: Bearer Token.
+    Gecacht pro Tag.
+    """
+    if not FOOTBALLDATA_IO_API_KEY:
+        return []
+    if date_str in _FOOTBALLDATAIO_DAY_CACHE:
+        return _FOOTBALLDATAIO_DAY_CACHE[date_str]
+
+    matches = []
+    _status = None
+    try:
+        r = requests.get(
+            f"https://footballdata.io/api/v1/matches/date/{date_str}",
+            headers={"Authorization": f"Bearer {FOOTBALLDATA_IO_API_KEY}"},
+            timeout=15,
+        )
+        _status = r.status_code
+        if r.ok:
+            data = r.json()
+            # Antwortformat noch nicht live verifiziert — robust gegen beide üblichen Strukturen
+            matches = data.get("data") or data.get("matches") or (data if isinstance(data, list) else [])
+    except Exception as _fie:
+        _status = f"EXC:{str(_fie)[:60]}"
+
+    log(f"   🔍 FOOTBALLDATAIO-DEBUG: {date_str} → HTTP {_status}, {len(matches)} Matches")
+    _FOOTBALLDATAIO_DAY_CACHE[date_str] = matches
+    return matches
+
+
+def _footballdataio_find_result(home_team, away_team, tip_date):
+    """Sucht Ergebnis per Teamname+Datum in footballdata.io-Tagesliste, mit ±1-Tag-Fallback."""
+    from datetime import timedelta as _td6
+
+    matches = _footballdataio_events_for_date(tip_date)
+    if not matches:
+        try:
+            for _delta in [-1, 1]:
+                _d2 = str((datetime.strptime(tip_date, "%Y-%m-%d") + _td6(days=_delta)).date())
+                matches = _footballdataio_events_for_date(_d2)
+                if matches:
+                    break
+        except Exception:
+            pass
+
+    if not matches:
+        return None
+
+    h_target = home_team.lower()
+    a_target = away_team.lower()
+
+    for m in matches:
+        # Status-Feldname noch nicht live verifiziert — mehrere übliche Varianten abdecken
+        status = (m.get("status") or m.get("matchStatus") or "").upper()
+        if status not in ("FINISHED", "FT", "COMPLETED"):
+            continue
+        home_obj = m.get("homeTeam") or m.get("home_team") or {}
+        away_obj = m.get("awayTeam") or m.get("away_team") or {}
+        h = home_obj.get("name", "") if isinstance(home_obj, dict) else str(home_obj)
+        a = away_obj.get("name", "") if isinstance(away_obj, dict) else str(away_obj)
+        h_match = len(h) >= 4 and (h.lower()[:6] in h_target or h_target[:6] in h.lower())
+        a_match = len(a) >= 4 and (a.lower()[:6] in a_target or a_target[:6] in a.lower())
+        if h_match and a_match:
+            score = m.get("score", {}) or {}
+            home_g = score.get("home") or score.get("homeScore") or 0
+            away_g = score.get("away") or score.get("awayScore") or 0
+            ht = m.get("halfTimeScore") or {}
+            ht_home = ht.get("home", 0) if isinstance(ht, dict) else 0
+            ht_away = ht.get("away", 0) if isinstance(ht, dict) else 0
+            return {
+                "home_score": home_g,
+                "away_score": away_g,
+                "ht_home": ht_home,
+                "ht_away": ht_away,
+                "btts": home_g > 0 and away_g > 0,
+                "over25": (home_g + away_g) > 2,
+                "btts_ht": ht_home > 0 and ht_away > 0,
+                "total_goals": home_g + away_g,
+                "status": "finished",
+            }
+    return None
+
     """
     Versucht Spielergebnis von mehreren Quellen zu holen.
     Priorität: SofaScore (Tages-Suche) → AllSports (Tages-Suche) → API-Football → ESPN/SofaScore/AllSports (per ID)
@@ -12442,6 +12703,45 @@ def get_match_result_from_sources(tip):
             away_team = parts[1].strip() if len(parts) > 1 else ""
             tip_date = tip.get("date", str(datetime.now(timezone.utc).date()))
             result = _allsports_find_result(home_team, away_team, tip_date)
+            if result:
+                return result
+        except Exception:
+            pass
+
+    # 🆕 Football-Data.org Tages-Suche — bereits validierte Keys, globaler Endpoint
+    if FOOTBALL_DATA_API_KEYS and match_name and " vs " in match_name:
+        try:
+            parts = match_name.split(" vs ")
+            home_team = parts[0].strip()
+            away_team = parts[1].strip() if len(parts) > 1 else ""
+            tip_date = tip.get("date", str(datetime.now(timezone.utc).date()))
+            result = _footballdata_find_result(home_team, away_team, tip_date)
+            if result:
+                return result
+        except Exception:
+            pass
+
+    # 🆕 OpenLigaDB — kostenlos, kein Key, nur deutsche Wettbewerbe (Bundesliga etc.)
+    if match_name and " vs " in match_name:
+        try:
+            parts = match_name.split(" vs ")
+            home_team = parts[0].strip()
+            away_team = parts[1].strip() if len(parts) > 1 else ""
+            tip_date = tip.get("date", str(datetime.now(timezone.utc).date()))
+            result = _openligadb_find_result(home_team, away_team, tip_date, league)
+            if result:
+                return result
+        except Exception:
+            pass
+
+    # 🆕 footballdata.io Tages-Suche — anderer Anbieter als football-data.org
+    if FOOTBALLDATA_IO_API_KEY and match_name and " vs " in match_name:
+        try:
+            parts = match_name.split(" vs ")
+            home_team = parts[0].strip()
+            away_team = parts[1].strip() if len(parts) > 1 else ""
+            tip_date = tip.get("date", str(datetime.now(timezone.utc).date()))
+            result = _footballdataio_find_result(home_team, away_team, tip_date)
             if result:
                 return result
         except Exception:
@@ -14610,6 +14910,8 @@ def check_config():
     log(f"   • DataHub.io: ✅ aktiv (kein Key!)")
     log(f"   • Tavily: {'✅ aktiv!' if TAVILY_API_KEY else '❌ TAVILY_API_KEY fehlt (optional)'}")
     log(f"   • AllSports API: {'✅ aktiv!' if ALLSPORTS_API_KEY else '❌ ALLSPORTS_API_KEY fehlt (optional)'}")
+    log(f"   • Footballdata.io: {'✅ aktiv!' if FOOTBALLDATA_IO_API_KEY else '❌ FOOTBALLDATA_IO_API_KEY fehlt (optional, Settlement-Fallback)'}")
+    log(f"   • OpenLigaDB: ✅ aktiv (kein Key, nur deutsche Ligen)")
     log(f"   • Forebet: ✅ Scraping aktiv (kein Key)")
     log(f"   • ScoutingStats: ✅ Scraping aktiv (kein Key)")
     log(f"")
@@ -15139,10 +15441,22 @@ _LEG_CATEGORY = {
 
 def _get_leg_category(prop_name):
     pn = prop_name.lower()
+    # 🆕 "Oder"-Substitute-Märkte erkennen (z.B. "Player A or Player B to be Booked")
+    # — höhere Trefferwahrscheinlichkeit, da zwei Spieler statt einem abgedeckt sind.
+    if " or " in pn and " to " in pn:
+        for cat, keywords in _LEG_CATEGORY.items():
+            if any(k in pn for k in keywords):
+                return cat  # gleiche Kategorie, _is_either wird separat markiert
     for cat, keywords in _LEG_CATEGORY.items():
         if any(k in pn for k in keywords):
             return cat
     return "other"
+
+
+def _is_either_market(prop_name):
+    """Erkennt Either-Or-Substitute-Märkte (mehrere Spieler in einer Quote kombiniert)."""
+    pn = prop_name.lower()
+    return " or " in pn and (" to " in pn or "either" in pn)
 
 def _calc_combo_odds(legs):
     """Berechnet kombinierte Quote mit Korrelationsabschlag."""
@@ -15274,6 +15588,7 @@ def run_pinnacle_props_bot(win_start_utc=None, win_end_utc=None, ch_tz=None) -> 
                 continue
 
         p["_cat"] = _get_leg_category(prop_name)
+        p["_is_either"] = _is_either_market(prop_name)
         valid.append(p)
 
     if _fbref_checked > 0:
@@ -15339,31 +15654,52 @@ def run_pinnacle_props_bot(win_start_utc=None, win_end_utc=None, ch_tz=None) -> 
         except Exception:
             continue
 
-    # Pro Spiel: beste 2-4 Legs auswählen (verschiedene Kategorien)
+    # Pro Spiel: beste 2-4 Legs auswählen (verschiedene Kategorien, Vielfalt erzwungen)
     builders = []
     _rejected_too_few_legs = 0
     _rejected_low_odds = 0
     for match_name, legs in by_match.items():
         _is_wc_match = match_name in _wc_matches
-        # FBref-bestätigte Props zuerst, dann nach Wahrscheinlichkeit
-        legs.sort(key=lambda x: (not x.get("_fbref_confirmed", False), -x["prob"]))
-        selected = []
-        used_cats = set()
-        used_players = set()
+
+        # Innerhalb jeder Kategorie sortieren: Either-Or-Märkte zuerst (höhere Trefferquote),
+        # dann FBref-bestätigt, dann nach Wahrscheinlichkeit
+        legs.sort(key=lambda x: (not x.get("_is_either", False), not x.get("_fbref_confirmed", False), -x["prob"]))
+
+        # Legs nach Kategorie gruppieren
+        by_cat = {}
         for leg in legs:
-            cat = leg["_cat"]
-            player = leg["selection"].lower()
-            # Max 2 Legs pro Kategorie, kein Spieler doppelt
-            cat_count = sum(1 for s in selected if s["_cat"] == cat)
-            if cat_count >= 2:
-                continue
-            if player in used_players and cat not in ["booked", "fouls", "tackles"]:
-                continue
-            selected.append(leg)
-            used_cats.add(cat)
-            used_players.add(player)
-            if len(selected) >= 4:
-                break
+            by_cat.setdefault(leg["_cat"], []).append(leg)
+
+        selected = []
+        used_players = set()
+
+        # 🆕 Runde 1: Round-Robin über alle vorhandenen Kategorien — erzwingt Vielfalt
+        # (verhindert, dass z.B. 4x "score" alle anderen Kategorien verdrängt)
+        cat_order = sorted(by_cat.keys(), key=lambda c: -len(by_cat[c]))  # größere Kategorien zuerst durchprobieren
+        cat_pointers = {c: 0 for c in cat_order}
+        while len(selected) < 4:
+            progressed = False
+            for cat in cat_order:
+                if len(selected) >= 4:
+                    break
+                pointer = cat_pointers[cat]
+                cat_legs = by_cat[cat]
+                while pointer < len(cat_legs):
+                    leg = cat_legs[pointer]
+                    pointer += 1
+                    player = leg["selection"].lower()
+                    cat_count = sum(1 for s in selected if s["_cat"] == cat)
+                    if cat_count >= 2:
+                        break  # diese Kategorie ist voll, nächste Kategorie
+                    if player in used_players and cat not in ["booked", "fouls", "tackles"]:
+                        continue  # nächster Leg in derselben Kategorie
+                    selected.append(leg)
+                    used_players.add(player)
+                    progressed = True
+                    break
+                cat_pointers[cat] = pointer
+            if not progressed:
+                break  # keine Kategorie hatte noch etwas zu bieten
 
         if len(selected) < 2:
             _rejected_too_few_legs += 1
@@ -15434,7 +15770,8 @@ def run_pinnacle_props_bot(win_start_utc=None, win_end_utc=None, ch_tz=None) -> 
                 "result": "🏆", "other": "○"
             }.get(leg["_cat"], "○")
             _fbref_check = " 🔍" if leg.get("_fbref_confirmed") else ""
-            msg += f"{cat_emoji} {leg['player_prop']}{_fbref_check}\n"
+            _either_check = " 🔀" if leg.get("_is_either") else ""
+            msg += f"{cat_emoji} {leg['player_prop']}{_fbref_check}{_either_check}\n"
 
         msg += f"\n💰 @ <b>{b['odds']}</b> · 0.5u ✅"
 
@@ -16844,6 +17181,11 @@ def main():
         log(f"⏰ Fenster: heute 20:00 – morgen 12:00 CH (Abend-Run)")
     _win_start_utc = _win_start.astimezone(timezone.utc)
     _win_end_utc = _win_end.astimezone(timezone.utc)
+    # 🆕 Fix: Untergrenze nie in der Vergangenheit — falls der Run spät im Fenster
+    # startet (oder lange läuft), werden bereits angepfiffene Spiele ausgeschlossen.
+    if now_utc > _win_start_utc:
+        log(f"   ⏰ Fenster-Untergrenze angepasst: {_win_start_utc.strftime('%H:%M')} → {now_utc.strftime('%H:%M')} UTC (Run startet spät im Fenster)")
+        _win_start_utc = now_utc
     if _PINNACLE_MATCHUPS:
         log(f"🎰 Analysiere {len(_PINNACLE_MATCHUPS)} Pinnacle Matches...")
         from datetime import datetime as _pdt
@@ -16892,7 +17234,12 @@ def main():
                     btts_yes, over25, prob_b, prob_o = 1.85, 1.80, 67, 68
 
                 # 🌍 martj42: echte BTTS/Over-Raten für Nationalteams
-                _is_intl = any(k in ln for k in ["world cup", "fifa", "friendl", "international", "nations league", "weltmeister"])
+                # Fix: "Club Friendlies" enthält "friendl", darf aber NICHT als Länderspiel zählen
+                # (sonst matched die lockere Fuzzy-Suche Vereinsnamen fälschlich gegen Länder-Daten)
+                _is_intl = (
+                    any(k in ln for k in ["world cup", "fifa", "international", "nations league", "weltmeister"])
+                    or ("friendl" in ln and "club" not in ln)
+                )
                 if _is_intl:
                     try:
                         _sh = get_national_team_btts_stats(home)
