@@ -2444,7 +2444,13 @@ def calculate_elo_btts_probability(home_elo, away_elo):
 # 🆕 ALLSPORTSAPI - 500+ Ligen weltweit (100 Calls/Tag gratis)
 # ============================================================
 ALLSPORTS_API_KEY = env("ALLSPORTS_API_KEY", "")
-FOOTBALLDATA_IO_API_KEY = env("FOOTBALLDATA_IO_API_KEY", "")  # 🆕 footballdata.io (anderer Anbieter als football-data.org!)
+FOOTBALLDATA_IO_API_KEY = env("FOOTBALLDATA_IO_API_KEY", "")
+THESTATSAPI_KEY = env("THESTATSAPI_KEY", "")  # 🆕 thestatsapi.com — Player Stats, Odds, xG, Lineups
+THESTATSAPI_KEYS = env_list("THESTATSAPI_KEYS")  # 🆕 Komma-getrennte Keys für Rotation
+if not THESTATSAPI_KEYS and THESTATSAPI_KEY:
+    THESTATSAPI_KEYS = [THESTATSAPI_KEY]
+elif THESTATSAPI_KEYS and not THESTATSAPI_KEY:
+    THESTATSAPI_KEY = THESTATSAPI_KEYS[0]
 SOCCERFOOTBALLINFO_API_KEY = env("SOCCERFOOTBALLINFO_API_KEY", "")  # 🆕 soccerfootballinfo.com
 ALLSPORTS_CACHE = {}
 
@@ -5747,134 +5753,137 @@ def get_open_meteo_weather(league_name, target_date):
 
 # ============================================================
 # 📊 STATSBOMB OPEN DATA - Player Props (100% GRATIS!)
-# pip install statsbombpy
-# Echte Event-Daten: SOT, Fouls, Offsides, Headers pro Spiel
+# pip install statsbombpy (optional, Fallback auf direkte HTTP-Abfrage)
 # ============================================================
 
 STATSBOMB_PLAYER_CACHE = {}
-STATSBOMB_AVAILABLE = False
-try:
-    import warnings as _sw
-    _sw.filterwarnings('ignore')
-    from statsbombpy import sb as _sb
-    import pandas as _pd
-    STATSBOMB_AVAILABLE = True
-    log("   📊 StatsBombPy verfügbar!")
-except ImportError:
-    pass
+STATSBOMB_AVAILABLE = True  # Immer verfügbar via HTTP
+_STATSBOMB_BASE = "https://raw.githubusercontent.com/statsbomb/open-data/master/data"
 
 # Mapping: Liga → StatsBomb IDs (competition_id, season_id)
 STATSBOMB_LEAGUE_MAP = {
-    "Bundesliga": (9, 281),          # 2023/24
-    "La Liga": (11, 90),             # 2020/21 (aktuellste verfügbare)
-    "Premier League": (2, 27),       # 2015/16 (historisch)
-    "Ligue 1": (7, 235),             # 2022/23
-    "Champions League": (16, 4),     # 2018/19
-    "WM 2026": (43, 106),            # WM 2022 als Referenz
-    "Copa America": (223, 282),      # 2024
-    "UEFA Nations League": (5, 107), # AFCON als Referenz
-    "MLS": (44, 107),                # 2023
-    "India Super League": (1238, 108),
+    "Bundesliga": (9, 281),
+    "La Liga": (11, 90),
+    "Ligue 1": (7, 235),
+    "MLS": (44, 107),
+    "WM 2026": (43, 106),
+    "FIFA World Cup": (43, 106),
+    "Copa America": (223, 282),
+    "UEFA Euro": (55, 282),
+    "African Cup of Nations": (1267, 107),
 }
+
 
 def get_statsbomb_player_stats(league_name: str) -> dict:
     """
-    Holt aggregierte Spieler-Stats von StatsBomb Open Data.
-    Returns: {player_name: {sot_per90, fouls_per90, offsides_per90, aerials_per90}}
+    Holt aggregierte Spieler-Stats direkt von StatsBomb Open Data GitHub.
+    Kein Python-Package nötig — reiner HTTP-Zugriff auf raw.githubusercontent.com.
+    Returns: {player_name: {sot_per90, fouls_per90, yellow_cards_per90, goals_per90, team}}
     """
-    if not STATSBOMB_AVAILABLE:
+    # Fuzzy-Match auf Liga-Namen
+    comp = None
+    ln = league_name.lower()
+    for key, val in STATSBOMB_LEAGUE_MAP.items():
+        if key.lower() in ln or ln in key.lower():
+            comp = val
+            break
+    if not comp:
         return {}
 
     if league_name in STATSBOMB_PLAYER_CACHE:
         return STATSBOMB_PLAYER_CACHE[league_name]
 
-    comp = STATSBOMB_LEAGUE_MAP.get(league_name)
-    if not comp:
-        return {}
-
     comp_id, season_id = comp
+    player_stats = {}
 
     try:
-        import warnings as _w
-        _w.filterwarnings('ignore')
-
-        matches = _sb.matches(competition_id=comp_id, season_id=season_id)
-        if matches is None or len(matches) == 0:
+        # 1. Match-Liste holen
+        r = requests.get(
+            f"{_STATSBOMB_BASE}/matches/{comp_id}/{season_id}.json",
+            timeout=12,
+        )
+        if not r.ok:
             return {}
 
-        # Letzte 20 Spiele für aktuelle Form
-        recent = matches.tail(20)
-        all_events = []
+        matches = r.json()
+        # Letzte 10 Spiele für aktuelle Form
+        recent = matches[-10:] if len(matches) > 10 else matches
 
-        for _, match in recent.iterrows():
+        shots_count = {}
+        fouls_count = {}
+        cards_count = {}
+        goals_count = {}
+        player_team = {}
+        games_played = {}
+
+        for match in recent:
+            match_id = match.get("match_id")
+            if not match_id:
+                continue
             try:
-                events = _sb.events(match_id=match['match_id'])
-                events['match_id'] = match['match_id']
-                all_events.append(events)
+                re = requests.get(
+                    f"{_STATSBOMB_BASE}/events/{match_id}.json",
+                    timeout=10,
+                )
+                if not re.ok:
+                    continue
+                events = re.json()
+
+                for ev in events:
+                    ev_type = (ev.get("type") or {}).get("name", "")
+                    player = (ev.get("player") or {}).get("name", "")
+                    team = (ev.get("team") or {}).get("name", "")
+                    if not player:
+                        continue
+
+                    player_team[player] = team
+                    games_played.setdefault(player, set()).add(match_id)
+
+                    if ev_type == "Shot":
+                        outcome = (ev.get("shot") or {}).get("outcome", {}).get("name", "")
+                        if outcome in ("Goal", "Saved", "Saved To Post", "Saved Off T"):
+                            shots_count[player] = shots_count.get(player, 0) + 1
+                        if outcome == "Goal":
+                            goals_count[player] = goals_count.get(player, 0) + 1
+                    elif ev_type == "Foul Committed":
+                        fouls_count[player] = fouls_count.get(player, 0) + 1
+                    elif ev_type == "Bad Behaviour":
+                        card = (ev.get("bad_behaviour") or {}).get("card", {}).get("name", "")
+                        if "Yellow" in card:
+                            cards_count[player] = cards_count.get(player, 0) + 1
+
             except Exception:
                 continue
 
-        if not all_events:
-            return {}
+        # Stats aggregieren
+        for player in set(list(shots_count) + list(fouls_count) + list(cards_count)):
+            games = len(games_played.get(player, {1}))
+            sot = round(shots_count.get(player, 0) / games, 2)
+            fouls = round(fouls_count.get(player, 0) / games, 2)
+            cards = round(cards_count.get(player, 0) / games, 3)
+            goals = round(goals_count.get(player, 0) / games, 2)
 
-        import pandas as _pd2
-        df = _pd2.concat(all_events, ignore_index=True)
-        num_matches = len(recent)
-
-        player_stats = {}
-
-        # SOT (Shots on Target)
-        sot = df[(df['type'] == 'Shot') & 
-                 (df['shot_outcome'].isin(['Goal', 'Saved', 'Saved To Post']))]
-        sot_counts = sot.groupby('player').size()
-
-        # Fouls Committed
-        fouls = df[df['type'] == 'Foul Committed']
-        foul_counts = fouls.groupby('player').size()
-
-        # Offsides
-        offsides = df[df['type'] == 'Offside']
-        offside_counts = offsides.groupby('player').size()
-
-        # Headers / Aerial Duels
-        aerials = df[(df['type'] == 'Duel') & 
-                     (df.get('duel_type', _pd2.Series()).isin(['Aerial Lost', 'Aerial Won'])
-                      if 'duel_type' in df.columns else _pd2.Series(False, index=df.index))]
-        aerial_counts = aerials.groupby('player').size() if len(aerials) > 0 else _pd2.Series()
-
-        # Team für jeden Spieler
-        player_teams = df.groupby('player')['team'].last()
-
-        # Alles zusammenführen
-        all_players = set(sot_counts.index) | set(foul_counts.index) | set(offside_counts.index)
-
-        for player in all_players:
-            sot_per90 = round(sot_counts.get(player, 0) / num_matches, 2)
-            fouls_per90 = round(foul_counts.get(player, 0) / num_matches, 2)
-            offsides_per90 = round(offside_counts.get(player, 0) / num_matches, 2)
-            aerials_per90 = round(aerial_counts.get(player, 0) / num_matches, 2) if len(aerial_counts) > 0 else 0
-
-            # Nur interessante Spieler
-            if sot_per90 < 0.3 and fouls_per90 < 0.5 and offsides_per90 < 0.2:
-                continue
+            if sot < 0.3 and fouls < 0.5 and cards < 0.1:
+                continue  # Uninteressant
 
             player_stats[player] = {
-                "team": str(player_teams.get(player, "")),
-                "sot_per90": sot_per90,
-                "fouls_per90": fouls_per90,
-                "offsides_per90": offsides_per90,
-                "aerials_per90": aerials_per90,
-                "games": num_matches,
-                "source": "statsbomb",
+                "team": player_team.get(player, ""),
+                "sot_per90": sot,
+                "fouls_per90": fouls,
+                "yellow_cards_per90": cards,
+                "goals_per90": goals,
+                "games": games,
+                "source": "statsbomb_http",
             }
 
         STATSBOMB_PLAYER_CACHE[league_name] = player_stats
         if player_stats:
-            log(f"   📊 StatsBomb: {len(player_stats)} Spieler für {league_name}")
+            log(f"   📊 StatsBomb HTTP: {len(player_stats)} Spieler für {league_name}")
         return player_stats
 
     except Exception as e:
-        log(f"StatsBomb Error: {str(e)[:60]}", "WARN")
+        log(f"StatsBomb HTTP Error: {str(e)[:60]}", "WARN")
+        STATSBOMB_PLAYER_CACHE[league_name] = {}
         return {}
 
 
@@ -7235,6 +7244,283 @@ def fetch_fotmob_fixtures(league_name, target_date):
 # Offside bei WM-Spielen) — liefert Statistik-Begründung statt
 # erfundener Buchmacher-Zahlen. Klar als "Analyse" gekennzeichnet,
 # kein Einsatz/Stake, damit niemand es mit einer echten Quote verwechselt.
+
+# ============================================================
+# 🚀 THESTATSAPI — Player Stats, xG, Lineups, Odds, Settlement
+# ============================================================
+# Base: https://api.thestatsapi.com/api/football/
+# Auth: Bearer {THESTATSAPI_KEY}
+# Liefert: 150+ Ligen, Player Stats (84K+ Spieler), xG, Lineups,
+#          Pinnacle/Bet365-Quoten, BTTS/Over/1X2/Corners Märkte
+
+_TSA_BASE = "https://api.thestatsapi.com/api/football"
+_TSA_CACHE = {}
+_TSA_COMP_MAP = {}
+_TSA_COMP_MAP_LOADED = False
+_TSA_KEY_OFFSET = 0
+_TSA_DEAD_KEYS = set()
+
+
+def _tsa_get(endpoint, params=None, timeout=12):
+    """GET für TheStatsAPI mit automatischer Key-Rotation über alle 5 Keys."""
+    global _TSA_KEY_OFFSET
+    if not THESTATSAPI_KEYS:
+        return None
+
+    n = len(THESTATSAPI_KEYS)
+    for offset in range(n):
+        idx = (_TSA_KEY_OFFSET + offset) % n
+        if idx in _TSA_DEAD_KEYS:
+            continue
+        key = THESTATSAPI_KEYS[idx]
+        try:
+            r = requests.get(
+                f"{_TSA_BASE}{endpoint}",
+                headers={"Authorization": f"Bearer {key}", "Content-Type": "application/json"},
+                params=params or {},
+                timeout=timeout,
+            )
+            if r.status_code == 429:
+                log(f"   🚀 TSA Key {idx+1}: Rate-Limit — nächster Key", "WARN")
+                _TSA_DEAD_KEYS.add(idx)
+                continue
+            if r.status_code in (401, 403):
+                log(f"   🚀 TSA Key {idx+1}: Ungültig ({r.status_code})", "WARN")
+                _TSA_DEAD_KEYS.add(idx)
+                continue
+            if r.ok:
+                _TSA_KEY_OFFSET = (idx + 1) % n  # nächster Key beim nächsten Call
+                return r.json()
+            log(f"   🚀 TSA {endpoint}: HTTP {r.status_code}", "WARN")
+            return None
+        except Exception as _e:
+            log(f"   🚀 TSA Error {endpoint}: {str(_e)[:60]}", "WARN")
+            continue
+
+    log("   🚀 TSA: Alle Keys erschöpft/ungültig", "WARN")
+    return None
+
+
+def _tsa_load_competitions():
+    """Lädt alle Competitions einmalig und baut Liga-Name→ID Map."""
+    global _TSA_COMP_MAP, _TSA_COMP_MAP_LOADED
+    if _TSA_COMP_MAP_LOADED:
+        return
+    _TSA_COMP_MAP_LOADED = True
+    data = _tsa_get("/competitions", {"per_page": 200})
+    if not data:
+        return
+    items = data.get("data") or data if isinstance(data, list) else []
+    for comp in items:
+        name = comp.get("name", "") or ""
+        cid = comp.get("id") or comp.get("competition_id")
+        if name and cid:
+            _TSA_COMP_MAP[name.lower()] = cid
+            # Kurzname auch mappen
+            short = comp.get("short_name") or comp.get("abbreviation") or ""
+            if short:
+                _TSA_COMP_MAP[short.lower()] = cid
+    log(f"   🚀 TSA: {len(_TSA_COMP_MAP)} Competitions geladen")
+
+
+def _tsa_find_comp_id(league_name):
+    """Findet Competition-ID für einen Liga-Namen (Fuzzy)."""
+    _tsa_load_competitions()
+    ln = league_name.lower()
+    # Exakter Match
+    if ln in _TSA_COMP_MAP:
+        return _TSA_COMP_MAP[ln]
+    # Fuzzy: jeder Key der im Liga-Namen enthalten ist
+    for key, cid in _TSA_COMP_MAP.items():
+        if key in ln or ln in key or key[:8] in ln:
+            return cid
+    return None
+
+
+def tsa_get_fixtures_for_date(target_date):
+    """
+    Holt alle Fixtures eines Tages von TheStatsAPI.
+    Gecacht pro Tag — ersetzt/ergänzt Pinnacle-Fixture-Liste.
+    """
+    date_str = str(target_date)
+    cache_key = f"tsa_fixtures_{date_str}"
+    if cache_key in _TSA_CACHE:
+        return _TSA_CACHE[cache_key]
+
+    data = _tsa_get("/matches", {"date": date_str, "per_page": 200})
+    fixtures = []
+    if data:
+        items = data.get("data") or (data if isinstance(data, list) else [])
+        for m in items:
+            home = (m.get("home_team") or {}).get("name", "")
+            away = (m.get("away_team") or {}).get("name", "")
+            if not home or not away:
+                continue
+            fixtures.append({
+                "match_id": m.get("id"),
+                "home": home,
+                "away": away,
+                "league": (m.get("competition") or {}).get("name", ""),
+                "time": (m.get("kickoff") or m.get("time") or "")[:5],
+                "date": date_str,
+                "status": m.get("status", ""),
+                "home_score": (m.get("score") or {}).get("home"),
+                "away_score": (m.get("score") or {}).get("away"),
+            })
+
+    log(f"   🚀 TSA Fixtures: {len(fixtures)} Spiele für {date_str}")
+    _TSA_CACHE[cache_key] = fixtures
+    return fixtures
+
+
+def tsa_get_match_stats(match_id):
+    """Holt Match-Stats (xG, Schüsse, Possession) für ein Spiel."""
+    if not match_id:
+        return None
+    cache_key = f"tsa_match_{match_id}"
+    if cache_key in _TSA_CACHE:
+        return _TSA_CACHE[cache_key]
+    data = _tsa_get(f"/matches/{match_id}/stats")
+    _TSA_CACHE[cache_key] = data
+    return data
+
+
+def tsa_get_lineups(match_id):
+    """Holt bestätigte Aufstellung für ein Spiel."""
+    if not match_id:
+        return None
+    cache_key = f"tsa_lineup_{match_id}"
+    if cache_key in _TSA_CACHE:
+        return _TSA_CACHE[cache_key]
+    data = _tsa_get(f"/matches/{match_id}/lineups")
+    _TSA_CACHE[cache_key] = data
+    return data
+
+
+def tsa_get_match_odds(match_id):
+    """
+    Holt Pre-Match Odds von Pinnacle/Bet365/Betfair für ein Spiel.
+    Märkte: 1X2, BTTS, Over/Under, Asian Handicap, Corners.
+    """
+    if not match_id:
+        return None
+    cache_key = f"tsa_odds_{match_id}"
+    if cache_key in _TSA_CACHE:
+        return _TSA_CACHE[cache_key]
+    data = _tsa_get(f"/odds/{match_id}")
+    _TSA_CACHE[cache_key] = data
+    return data
+
+
+def tsa_get_player_stats(league_name, season=None):
+    """
+    Holt Spieler-Saisonstats für eine Liga (Tore, Assists, Karten, Schüsse, xG).
+    Perfekt für Prop Builder + Goal Hunter.
+    """
+    comp_id = _tsa_find_comp_id(league_name)
+    if not comp_id:
+        return []
+
+    cache_key = f"tsa_players_{comp_id}_{season or 'current'}"
+    if cache_key in _TSA_CACHE:
+        return _TSA_CACHE[cache_key]
+
+    params = {"per_page": 100}
+    if season:
+        params["season"] = season
+
+    data = _tsa_get(f"/competitions/{comp_id}/players/stats", params)
+    players = []
+    if data:
+        items = data.get("data") or (data if isinstance(data, list) else [])
+        for p in items:
+            stats = p.get("stats") or p
+            players.append({
+                "name": p.get("name") or p.get("player_name", ""),
+                "team": (p.get("team") or {}).get("name", "") or p.get("team_name", ""),
+                "position": p.get("position", ""),
+                "goals": stats.get("goals", 0) or 0,
+                "assists": stats.get("assists", 0) or 0,
+                "appearances": stats.get("appearances") or stats.get("matches_played", 1) or 1,
+                "minutes": stats.get("minutes_played", 0) or 0,
+                "yellow_cards": stats.get("yellow_cards", 0) or 0,
+                "red_cards": stats.get("red_cards", 0) or 0,
+                "shots": stats.get("shots", 0) or 0,
+                "shots_on_target": stats.get("shots_on_target", 0) or 0,
+                "xg": stats.get("xg") or stats.get("expected_goals", 0) or 0,
+                "fouls_committed": stats.get("fouls_committed", 0) or 0,
+                "source": "thestatsapi",
+            })
+
+    log(f"   🚀 TSA Players: {len(players)} Spieler für {league_name}")
+    _TSA_CACHE[cache_key] = players
+    return players
+
+
+def tsa_get_top_scorers(league_name, season=None):
+    """
+    Holt Top-Torschützen einer Liga von TheStatsAPI.
+    Direkte Alternative zu API-Football get_top_scorers().
+    """
+    players = tsa_get_player_stats(league_name, season)
+    if not players:
+        return []
+
+    scorers = sorted(
+        [p for p in players if p["goals"] > 0],
+        key=lambda x: x["goals"] / max(x["appearances"], 1),
+        reverse=True
+    )[:20]
+
+    return [{
+        "name": p["name"],
+        "team": p["team"],
+        "goals_total": p["goals"],
+        "appearances": p["appearances"],
+        "goals_per_game": round(p["goals"] / max(p["appearances"], 1), 2),
+        "xg": p["xg"],
+        "source": "thestatsapi",
+    } for p in scorers]
+
+
+def tsa_find_match_result(home_team, away_team, tip_date):
+    """
+    Settlement-Fallback: Sucht Spielergebnis via TheStatsAPI Tages-Fixtures.
+    """
+    fixtures = tsa_get_fixtures_for_date(tip_date)
+    h_target = home_team.lower()
+    a_target = away_team.lower()
+
+    for m in fixtures:
+        if m.get("status", "").upper() not in ("FT", "FINISHED", "FULL_TIME", "AET", "PEN"):
+            continue
+        h = m.get("home", "").lower()
+        a = m.get("away", "").lower()
+        if (h[:6] in h_target or h_target[:6] in h) and (a[:6] in a_target or a_target[:6] in a):
+            home_g = m.get("home_score") or 0
+            away_g = m.get("away_score") or 0
+            # Detaillierte Stats nachladen wenn Match-ID vorhanden
+            match_id = m.get("match_id")
+            ht_home = ht_away = 0
+            if match_id:
+                stats = tsa_get_match_stats(match_id)
+                if stats:
+                    ht = (stats.get("half_time") or stats.get("score", {}).get("half_time") or {})
+                    ht_home = ht.get("home", 0) or 0
+                    ht_away = ht.get("away", 0) or 0
+            return {
+                "home_score": home_g,
+                "away_score": away_g,
+                "ht_home": ht_home,
+                "ht_away": ht_away,
+                "btts": home_g > 0 and away_g > 0,
+                "over25": (home_g + away_g) > 2,
+                "btts_ht": ht_home > 0 and ht_away > 0,
+                "total_goals": home_g + away_g,
+                "status": "finished",
+            }
+    return None
+
 
 FOTMOB_TEAM_ID_CACHE = {}
 FOTMOB_PLAYER_STATS_CACHE = {}
@@ -13446,6 +13732,19 @@ def _footballdataio_find_result(home_team, away_team, tip_date):
         except Exception:
             pass
 
+    # 🆕 TheStatsAPI Settlement (primär — zuverlässigste Quelle wenn Key vorhanden)
+    if THESTATSAPI_KEYS and match_name and " vs " in match_name:
+        try:
+            _parts = match_name.split(" vs ")
+            _home = _parts[0].strip()
+            _away = _parts[1].strip() if len(_parts) > 1 else ""
+            _date = tip.get("date", str(datetime.now(timezone.utc).date()))
+            _res = tsa_find_match_result(_home, _away, _date)
+            if _res:
+                return _res
+        except Exception:
+            pass
+
     # 🆕 AllSports Tages-Suche — eigener API-Key bereits aktiv, kein vorab gespeichertes ID nötig
     if ALLSPORTS_API_KEY and match_name and " vs " in match_name:
         try:
@@ -14372,9 +14671,104 @@ def analyze_corners_tip(fixture, league):
 
 SCORER_CACHE = {}
 
+_STATSBOMB_SCORER_CACHE = {}  # {league_name: [scorers]}
+
+def get_statsbomb_top_scorers(league_name: str) -> list:
+    """
+    Holt Top-Torschützen direkt von StatsBomb Open Data GitHub.
+    Kein Package nötig — reiner HTTP-Zugriff. Aggregiert Tore aus Event-Daten.
+    """
+    if league_name in _STATSBOMB_SCORER_CACHE:
+        return _STATSBOMB_SCORER_CACHE[league_name]
+
+    comp = None
+    ln = league_name.lower()
+    for key, val in STATSBOMB_LEAGUE_MAP.items():
+        if key.lower() in ln or ln in key.lower():
+            comp = val
+            break
+    if not comp:
+        _STATSBOMB_SCORER_CACHE[league_name] = []
+        return []
+
+    comp_id, season_id = comp
+    scorers = []
+
+    try:
+        r = requests.get(
+            f"{_STATSBOMB_BASE}/matches/{comp_id}/{season_id}.json",
+            timeout=12,
+        )
+        if not r.ok:
+            _STATSBOMB_SCORER_CACHE[league_name] = []
+            return []
+
+        matches = r.json()
+        recent = matches[-15:] if len(matches) > 15 else matches
+
+        goals_by_player = {}
+        games_by_player = {}
+        team_by_player = {}
+
+        for match in recent:
+            match_id = match.get("match_id")
+            if not match_id:
+                continue
+            try:
+                re = requests.get(
+                    f"{_STATSBOMB_BASE}/events/{match_id}.json",
+                    timeout=10,
+                )
+                if not re.ok:
+                    continue
+                events = re.json()
+                seen_players = set()
+                for ev in events:
+                    ev_type = (ev.get("type") or {}).get("name", "")
+                    player = (ev.get("player") or {}).get("name", "")
+                    team = (ev.get("team") or {}).get("name", "")
+                    if not player:
+                        continue
+                    # Spieler erscheint in diesem Spiel
+                    if player not in seen_players:
+                        seen_players.add(player)
+                        games_by_player[player] = games_by_player.get(player, 0) + 1
+                        team_by_player[player] = team
+                    # Tor?
+                    if ev_type == "Shot":
+                        outcome = (ev.get("shot") or {}).get("outcome", {}).get("name", "")
+                        if outcome == "Goal":
+                            goals_by_player[player] = goals_by_player.get(player, 0) + 1
+            except Exception:
+                continue
+
+        # Top-Scorer aufbauen
+        for player, goals in sorted(goals_by_player.items(), key=lambda x: x[1], reverse=True)[:20]:
+            apps = max(games_by_player.get(player, 1), 1)
+            gpg = round(goals / apps, 2)
+            if gpg < 0.2:
+                continue
+            scorers.append({
+                "name": player,
+                "team": team_by_player.get(player, ""),
+                "goals_total": goals,
+                "appearances": apps,
+                "goals_per_game": gpg,
+                "source": "statsbomb_http",
+            })
+
+        log(f"   ⚽ StatsBomb Scorer: {len(scorers)} Spieler für {league_name}")
+
+    except Exception as e:
+        log(f"StatsBomb Scorer Error: {str(e)[:60]}", "WARN")
+
+    _STATSBOMB_SCORER_CACHE[league_name] = scorers
+    return scorers
+
+
 def get_top_scorers(league_id, season):
     """
-    Holt Top-Torschützen einer Liga von API-Football.
+    Holt Top-Torschützen — API-Football (gesperrt) → StatsBomb-Fallback.
     """
     cache_key = f"scorers_{league_id}_{season}"
     if cache_key in SCORER_CACHE:
@@ -14390,16 +14784,14 @@ def get_top_scorers(league_id, season):
         return []
 
     scorers = []
-    for entry in response[:20]:  # Top 20
+    for entry in response[:20]:
         player = entry.get("player", {})
         stats = entry.get("statistics", [{}])[0]
         goals = stats.get("goals", {})
         games = stats.get("games", {})
-
         goals_total = goals.get("total", 0) or 0
         appearances = games.get("appearences", 0) or 1
         goals_per_game = round(goals_total / appearances, 2)
-
         scorers.append({
             "player_id": player.get("id"),
             "name": player.get("name", ""),
@@ -14673,16 +15065,25 @@ def run_corners_and_scorer_bots(target_date, active_leagues, odds_data_cache, fi
             try:
                 scorers = []
 
-                # Versuche API-Football zuerst
-                if league_id and not APIFOOTBALL_QUOTA_EXHAUSTED:
+                # 1. TheStatsAPI (neu, primäre Quelle — kein API-Football nötig)
+                if THESTATSAPI_KEYS and not scorers:
+                    scorers = tsa_get_top_scorers(league, season)
+
+                # 2. API-Football (gesperrt, bleibt als Basis)
+                if not scorers and league_id and not APIFOOTBALL_QUOTA_EXHAUSTED:
                     scorers = get_top_scorers(league_id, season)
 
-                # Fallback: Understat Top Scorer
+                # 3. Understat (oft geblockt auf GitHub Actions)
                 if not scorers:
                     scorers = get_understat_top_scorers(league, season)
-                # Fallback: Understat via Playwright
+
+                # 4. Understat via Playwright
                 if not scorers and PLAYWRIGHT_AVAILABLE:
                     scorers = pw_get_understat_scorers(league, season)
+
+                # 5. StatsBomb HTTP (kostenlos, direkt von GitHub)
+                if not scorers:
+                    scorers = get_statsbomb_top_scorers(league)
 
                 if scorers:
                     for fixture in fixtures:
@@ -15512,6 +15913,50 @@ def run_advanced_props_bot(active_leagues: list, fixtures_cache: dict, target_da
         total = len(foul_candidates) + len(booking_candidates) + len(shot_candidates)
         log(f"🔑 Kandidaten nach FBref: {len(foul_candidates)} Fouls · {len(booking_candidates)} Bookings · {len(shot_candidates)} Shots")
 
+    # 🆕 TheStatsAPI als weitere Kandidatenquelle
+    if total < 3 and THESTATSAPI_KEYS:
+        log("🔑 Versuche TheStatsAPI für Player Props...")
+        _seen_leagues = set()
+        for league, fixtures in (fixtures_cache or {}).items():
+            if league in _seen_leagues:
+                continue
+            _seen_leagues.add(league)
+            tsa_players = tsa_get_player_stats(league)
+            if not tsa_players:
+                continue
+            for fix in (fixtures or [])[:5]:
+                home, away = fix.get("home", ""), fix.get("away", "")
+                if not home or not away:
+                    continue
+                match_name = f"{home} vs {away}"
+                kickoff = fix.get("time", "TBD")
+                h_norm = normalize_team_name(home)
+                a_norm = normalize_team_name(away)
+                for p in tsa_players:
+                    t_norm = normalize_team_name(p.get("team", ""))
+                    if not (t_norm[:6] in h_norm or h_norm[:6] in t_norm or
+                            t_norm[:6] in a_norm or a_norm[:6] in t_norm):
+                        continue
+                    apps = max(p.get("appearances", 1), 1)
+                    shots_pg = (p.get("shots", 0) or 0) / apps
+                    sot_pg = (p.get("shots_on_target", 0) or 0) / apps
+                    fouls_pg = (p.get("fouls_committed", 0) or 0) / apps
+                    cards_pg = (p.get("yellow_cards", 0) or 0) / apps
+                    nm = p.get("name", "")
+                    tm = p.get("team", "")
+                    if sot_pg >= 1.0:
+                        _add(shot_candidates, nm, tm, match_name, league, kickoff,
+                             "2+ Shots on Target", sot_pg, "shots")
+                    if fouls_pg >= 1.5:
+                        _add(foul_candidates, nm, tm, match_name, league, kickoff,
+                             "2+ Fouls", fouls_pg, "foul")
+                    if cards_pg >= 0.20:
+                        _add(booking_candidates, nm, tm, match_name, league, kickoff,
+                             "Player to be Booked", cards_pg, "booking")
+
+        total = len(foul_candidates) + len(booking_candidates) + len(shot_candidates)
+        log(f"🔑 Kandidaten nach TSA: {len(foul_candidates)} Fouls · {len(booking_candidates)} Bookings · {len(shot_candidates)} Shots")
+
     if total < 3:
         log("🔑 Zu wenig Kandidaten — überspringe Prop Builder")
         return
@@ -15692,6 +16137,7 @@ def check_config():
     log(f"   • AllSports API: {'✅ aktiv!' if ALLSPORTS_API_KEY else '❌ ALLSPORTS_API_KEY fehlt (optional)'}")
     log(f"   • Footballdata.io: {'✅ aktiv!' if FOOTBALLDATA_IO_API_KEY else '❌ FOOTBALLDATA_IO_API_KEY fehlt (optional, Settlement-Fallback)'}")
     log(f"   • OpenLigaDB: ✅ aktiv (kein Key, nur deutsche Ligen)")
+    log(f"   • TheStatsAPI: {'✅ ' + str(len(THESTATSAPI_KEYS)) + ' Keys aktiv! (Player Stats, xG, Lineups, Odds, Settlement)' if THESTATSAPI_KEYS else '❌ THESTATSAPI_KEYS fehlt (optional aber empfohlen)'}")
     log(f"   • Forebet: ✅ Scraping aktiv (kein Key)")
     log(f"   • ScoutingStats: ✅ Scraping aktiv (kein Key)")
     log(f"")
