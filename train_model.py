@@ -42,7 +42,21 @@ OPENFOOTBALL_SOURCES = [
     ("nl.1", "Eredivisie"),
     ("pt.1", "Primeira Liga"),
 ]
-SEASONS = ["2020-21", "2021-22", "2022-23", "2023-24", "2024-25"]
+SEASONS = ["2019-20", "2020-21", "2021-22", "2022-23", "2023-24", "2024-25"]
+
+# Football-Data.co.uk — mehrere Saisons, mehr Features (Schüsse, Ecken, Karten)
+FD_CO_UK_LEAGUES = {
+    "E0": "Premier League", "E1": "Championship", "E2": "League One",
+    "D1": "Bundesliga", "D2": "2. Bundesliga",
+    "SP1": "La Liga", "SP2": "Segunda Division",
+    "I1": "Serie A", "I2": "Serie B",
+    "F1": "Ligue 1", "F2": "Ligue 2",
+    "N1": "Eredivisie", "P1": "Primeira Liga",
+    "B1": "Jupiler Pro League", "T1": "Super Lig",
+    "SC0": "Scottish Premiership", "G1": "Super League Greece",
+}
+FD_CO_UK_SEASONS = ["2021-22", "2022-23", "2023-24", "2024-25"]
+
 
 # ── Elo-Konfiguration ─────────────────────────────────────────────────────────
 ELO_BASE = 1500
@@ -55,8 +69,11 @@ ELO_HOME_ADV = 60
 # ═══════════════════════════════════════════════════════════════════════════════
 
 def load_all_matches():
-    """Lädt alle verfügbaren Spiele aus openfootball GitHub."""
+    """Lädt alle verfügbaren Spiele aus mehreren Quellen."""
     all_rows = []
+
+    # ── 1. openfootball (JSON, mehrere Saisons) ────────────────────────────
+    print("📥 Lade openfootball Daten...")
     for season in SEASONS:
         for code, league in OPENFOOTBALL_SOURCES:
             url = f"https://raw.githubusercontent.com/openfootball/football.json/master/{season}/{code}.json"
@@ -83,14 +100,145 @@ def load_all_matches():
                         "away_goals": int(ft[1]),
                         "ht_home": int(ht[0]) if len(ht) >= 2 else 0,
                         "ht_away": int(ht[1]) if len(ht) >= 2 else 0,
+                        "shots_home": None, "shots_away": None,
+                        "corners_home": None, "corners_away": None,
+                        "cards_home": None, "cards_away": None,
                     })
             except Exception as e:
-                print(f"  ⚠️  {season} {league}: {e}")
+                print(f"  ⚠️  openfootball {season} {league}: {e}")
 
+    print(f"   ✅ openfootball: {len(all_rows)} Spiele")
+
+    # ── 2. Football-Data.co.uk (CSV, mehr Features: Schüsse/Ecken/Karten) ──
+    print("📥 Lade Football-Data.co.uk CSV-Daten...")
+    fd_count = 0
+    for season_str, league_code in [(s, lc) for s in FD_CO_UK_SEASONS for lc in FD_CO_UK_LEAGUES]:
+        # Season-Format: "2021-22" → "2122"
+        parts = season_str.split("-")
+        fd_season = parts[0][-2:] + parts[1][-2:]
+        url = f"https://www.football-data.co.uk/mmz4281/{fd_season}/{league_code}.csv"
+        try:
+            r = requests.get(url, timeout=12)
+            if not r.ok or not r.text or len(r.text) < 100:
+                continue
+            import csv as _csv, io as _io
+            reader = _csv.DictReader(_io.StringIO(r.text))
+            for row in reader:
+                try:
+                    if not row.get("HomeTeam") or not row.get("FTHG"):
+                        continue
+                    all_rows.append({
+                        "date": row.get("Date", ""),
+                        "season": season_str,
+                        "league": FD_CO_UK_LEAGUES[league_code],
+                        "home": row.get("HomeTeam", "").strip(),
+                        "away": row.get("AwayTeam", "").strip(),
+                        "home_goals": int(row.get("FTHG", 0) or 0),
+                        "away_goals": int(row.get("FTAG", 0) or 0),
+                        "ht_home": int(row.get("HTHG", 0) or 0),
+                        "ht_away": int(row.get("HTAG", 0) or 0),
+                        "shots_home": int(row.get("HS", 0) or 0),
+                        "shots_away": int(row.get("AS", 0) or 0),
+                        "corners_home": int(row.get("HC", 0) or 0),
+                        "corners_away": int(row.get("AC", 0) or 0),
+                        "cards_home": int(row.get("HY", 0) or 0),
+                        "cards_away": int(row.get("AY", 0) or 0),
+                    })
+                    fd_count += 1
+                except (ValueError, TypeError):
+                    continue
+        except Exception as e:
+            print(f"  ⚠️  FD.co.uk {season_str} {league_code}: {str(e)[:50]}")
+
+    print(f"   ✅ Football-Data.co.uk: {fd_count} Spiele (mit Schüssen/Ecken/Karten)")
+
+    # ── 3. martj42 Länderspiele ────────────────────────────────────────────
+    print("📥 Lade martj42 Länderspiele...")
+    intl_count = 0
+    try:
+        r = requests.get(
+            "https://raw.githubusercontent.com/martj42/international_results/master/results.csv",
+            timeout=15,
+        )
+        if r.ok:
+            import csv as _csv, io as _io
+            reader = _csv.DictReader(_io.StringIO(r.text))
+            for row in reader:
+                try:
+                    date_str = row.get("date", "")
+                    if not date_str or date_str < "2010-01-01":
+                        continue  # nur ab 2010 (neuere Fussball-Ära)
+                    all_rows.append({
+                        "date": date_str,
+                        "season": date_str[:4],
+                        "league": "International",
+                        "home": row.get("home_team", "").strip(),
+                        "away": row.get("away_team", "").strip(),
+                        "home_goals": int(row.get("home_score", 0) or 0),
+                        "away_goals": int(row.get("away_score", 0) or 0),
+                        "ht_home": 0, "ht_away": 0,
+                        "shots_home": None, "shots_away": None,
+                        "corners_home": None, "corners_away": None,
+                        "cards_home": None, "cards_away": None,
+                    })
+                    intl_count += 1
+                except (ValueError, TypeError):
+                    continue
+    except Exception as e:
+        print(f"  ⚠️  martj42: {e}")
+    print(f"   ✅ martj42: {intl_count} Länderspiele (ab 2010)")
+
+    # ── 4. Supabase ml_tips (eigene Bot-Ergebnisse als Trainingsquelle) ────
+    if SUPABASE_URL and SUPABASE_KEY:
+        print("📥 Lade Supabase ml_tips (eigene Bot-Ergebnisse)...")
+        supabase_count = 0
+        try:
+            r = requests.get(
+                f"{SUPABASE_URL}/rest/v1/ml_tips",
+                headers={"apikey": SUPABASE_KEY, "Authorization": f"Bearer {SUPABASE_KEY}"},
+                params={"settled": "eq.true", "select": "*", "limit": "10000"},
+                timeout=15,
+            )
+            if r.ok:
+                for tip in r.json():
+                    try:
+                        if not tip.get("actual_score") or not tip.get("result"):
+                            continue
+                        score_parts = tip["actual_score"].split("-")
+                        if len(score_parts) != 2:
+                            continue
+                        all_rows.append({
+                            "date": tip.get("date", ""),
+                            "season": "bot",
+                            "league": tip.get("league", "Bot"),
+                            "home": tip.get("home_team", ""),
+                            "away": tip.get("away_team", ""),
+                            "home_goals": int(score_parts[0]),
+                            "away_goals": int(score_parts[1]),
+                            "ht_home": 0, "ht_away": 0,
+                            "shots_home": None, "shots_away": None,
+                            "corners_home": None, "corners_away": None,
+                            "cards_home": None, "cards_away": None,
+                        })
+                        supabase_count += 1
+                    except Exception:
+                        continue
+        except Exception as e:
+            print(f"  ⚠️  Supabase ml_tips: {e}")
+        print(f"   ✅ Supabase ml_tips: {supabase_count} eigene Spiele")
+
+    # Sortieren nach Datum
     df = pd.DataFrame(all_rows)
     df["date"] = pd.to_datetime(df["date"], errors="coerce")
-    df = df.dropna(subset=["date"]).sort_values("date").reset_index(drop=True)
-    print(f"✅ {len(df)} Spiele geladen aus {df['league'].nunique()} Ligen, {df['season'].nunique()} Saisons")
+    df = df.dropna(subset=["date", "home", "away"]).sort_values("date").reset_index(drop=True)
+
+    # Duplikate entfernen (same match from multiple sources)
+    df["_dedup_key"] = df["home"].str.lower().str[:8] + "_" + df["away"].str.lower().str[:8] + "_" + df["date"].dt.strftime("%Y-%m-%d")
+    df = df.drop_duplicates(subset=["_dedup_key"]).drop(columns=["_dedup_key"])
+    df = df.reset_index(drop=True)
+
+    print(f"\n✅ TOTAL: {len(df)} Spiele aus {df['league'].nunique()} Ligen, {df['date'].dt.year.nunique()} Jahre")
+    print(f"   Datum: {df['date'].min().date()} bis {df['date'].max().date()}")
     return df
 
 
@@ -241,6 +389,50 @@ def compute_form_features(df, n=10):
     df["exp_goals"] = df["avg_scored_home"] + df["avg_scored_away"]
     df["avg_conceded_combined"] = (df["avg_conceded_home"] + df["avg_conceded_away"]) / 2
 
+    # ── Rolling Schüsse/Ecken/Karten (aus football-data.co.uk) ────────────
+    # Nur wo Daten vorhanden (sonst 0 = neutral)
+    shot_avg_h, shot_avg_a = [], []
+    corner_avg_h, corner_avg_a = [], []
+    card_avg_h, card_avg_a = [], []
+    team_shots = {}
+    team_corners = {}
+    team_cards = {}
+
+    for _, row in df.iterrows():
+        home, away = row["home"], row["away"]
+
+        def _avg(store, team, default):
+            hist = store.get(team, [])[-10:]
+            return sum(hist) / len(hist) if hist else default
+
+        shot_avg_h.append(_avg(team_shots, home, 11.0))
+        shot_avg_a.append(_avg(team_shots, away, 10.0))
+        corner_avg_h.append(_avg(team_corners, home, 5.0))
+        corner_avg_a.append(_avg(team_corners, away, 4.5))
+        card_avg_h.append(_avg(team_cards, home, 1.5))
+        card_avg_a.append(_avg(team_cards, away, 1.5))
+
+        # Update mit echten Werten wenn vorhanden
+        if row.get("shots_home") is not None and row["shots_home"] > 0:
+            team_shots.setdefault(home, []).append(row["shots_home"])
+            team_shots.setdefault(away, []).append(row["shots_away"])
+        if row.get("corners_home") is not None and row["corners_home"] > 0:
+            team_corners.setdefault(home, []).append(row["corners_home"])
+            team_corners.setdefault(away, []).append(row["corners_away"])
+        if row.get("cards_home") is not None:
+            team_cards.setdefault(home, []).append(row["cards_home"])
+            team_cards.setdefault(away, []).append(row["cards_away"])
+
+    df["avg_shots_home"] = shot_avg_h
+    df["avg_shots_away"] = shot_avg_a
+    df["avg_corners_home"] = corner_avg_h
+    df["avg_corners_away"] = corner_avg_a
+    df["avg_cards_home"] = card_avg_h
+    df["avg_cards_away"] = card_avg_a
+    df["total_shots_exp"] = df["avg_shots_home"] + df["avg_shots_away"]
+    df["total_corners_exp"] = df["avg_corners_home"] + df["avg_corners_away"]
+    df["total_cards_exp"] = df["avg_cards_home"] + df["avg_cards_away"]
+
     # ── Form-Punkte (W=3/D=1/L=0 — aus bestehendem Feature-Engineering-Code) ──
     form_pts_home = []
     form_pts_away = []
@@ -343,6 +535,10 @@ FEATURE_COLS = [
     "streak_win_home", "streak_win_away",
     # H2H-History
     "h2h_btts_rate", "h2h_avg_goals", "h2h_matches_norm",
+    # Schüsse/Ecken/Karten (aus football-data.co.uk)
+    "avg_shots_home", "avg_shots_away", "total_shots_exp",
+    "avg_corners_home", "avg_corners_away", "total_corners_exp",
+    "avg_cards_home", "avg_cards_away", "total_cards_exp",
 ]
 
 
