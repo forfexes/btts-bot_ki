@@ -1,32 +1,51 @@
--- Nur falls ml_tips noch nicht existiert:
-CREATE TABLE IF NOT EXISTS ml_tips (
-    id              bigserial PRIMARY KEY,
-    match_id        text NOT NULL,
-    home_team       text,
-    away_team       text,
-    league          text,
-    date            text,
-    time            text,
-    market          text,
-    tip             text,
-    odds            float,
-    confidence      int,
-    probability     float,
-    value_rating    text,
-    features        jsonb,
-    created_at      timestamptz DEFAULT now(),
-    bot_version     text DEFAULT '3.0',
-    result          text,
-    settled         boolean DEFAULT false,
-    settled_at      timestamptz,
-    actual_score    text
-);
-
-CREATE INDEX IF NOT EXISTS ml_tips_match_id_idx ON ml_tips (match_id);
-CREATE INDEX IF NOT EXISTS ml_tips_settled_idx  ON ml_tips (settled, created_at);
-CREATE INDEX IF NOT EXISTS ml_tips_market_idx   ON ml_tips (market);
-
-ALTER TABLE ml_tips ENABLE ROW LEVEL SECURITY;
-
-DROP POLICY IF EXISTS "ml_tips_read" ON ml_tips;
-CREATE POLICY "ml_tips_read" ON ml_tips FOR SELECT USING (true);
+name: BTTS Settlement
+on:
+  schedule:
+    - cron: '0 15 * * *'
+    - cron: '45 23 * * *'
+    - cron: '30 5 * * *'
+  workflow_dispatch:
+jobs:
+  run-settlement:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+      - run: pip install requests python-dotenv playwright xgboost numpy pandas scikit-learn && playwright install chromium --with-deps
+      - name: Run Settlement
+        env:
+          RUN_MODE: "settlement"
+          ENABLE_SETTLEMENT: "true"
+          ENABLE_ADVANCED_PROPS: "false"
+          GEMINI_API_KEYS: ${{ secrets.GEMINI_API_KEYS }}
+          GROQ_API_KEYS: ${{ secrets.GROQ_API_KEYS }}
+          OPENROUTER_API_KEYS: ${{ secrets.OPENROUTER_API_KEYS }}
+          MISTRAL_API_KEYS: ${{ secrets.MISTRAL_API_KEYS }}
+          COHERE_API_KEY: ${{ secrets.COHERE_API_KEY }}
+          HUGGINGFACE_API_KEY: ${{ secrets.HUGGINGFACE_API_KEY }}
+          ODDS_API_KEYS: ${{ secrets.ODDS_API_KEYS }}
+          FOOTBALL_DATA_API_KEYS: ${{ secrets.FOOTBALL_DATA_API_KEYS }}
+          API_FOOTBALL_KEYS: ${{ secrets.API_FOOTBALL_KEYS }}
+          SPORTMONKS_API_KEY: ${{ secrets.SPORTMONKS_API_KEY }}
+          SPORTDB_API_KEY: ${{ secrets.SPORTDB_API_KEY }}
+          ALLSPORTS_API_KEY: ${{ secrets.ALLSPORTS_API_KEY }}
+          OPENWEATHER_API_KEY: ${{ secrets.OPENWEATHER_API_KEY }}
+          TELEGRAM_TOKEN: ${{ secrets.TELEGRAM_TOKEN }}
+          TELEGRAM_CHAT_ID: ${{ secrets.TELEGRAM_CHAT_ID }}
+          TELEGRAM_GROUP_BTTS: ${{ secrets.TELEGRAM_GROUP_BTTS }}
+          TELEGRAM_GROUP_OVER25: ${{ secrets.TELEGRAM_GROUP_OVER25 }}
+          TELEGRAM_GROUP_COMBO: ${{ secrets.TELEGRAM_GROUP_COMBO }}
+          TELEGRAM_GROUP_COMBOS: ${{ secrets.TELEGRAM_GROUP_COMBOS }}
+          TELEGRAM_GROUP_BTTS_HT: ${{ secrets.TELEGRAM_GROUP_BTTS_HT }}
+          TELEGRAM_GROUP_STATS: ${{ secrets.TELEGRAM_GROUP_STATS }}
+          TELEGRAM_GROUP_HZ_LIVE: ${{ secrets.TELEGRAM_GROUP_HZ_LIVE }}
+          TELEGRAM_GROUP_LATE_GOALS: ${{ secrets.TELEGRAM_GROUP_LATE_GOALS }}
+          SUPABASE_URL: ${{ secrets.SUPABASE_URL }}
+          SUPABASE_KEY: ${{ secrets.SUPABASE_KEY }}
+          APIFOOTBALL_MAX_CALLS: "50"
+        run: python btts_bot.py
+      - if: always()
+        run: echo "Done"
