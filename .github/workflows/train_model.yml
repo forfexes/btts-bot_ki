@@ -1,0 +1,38 @@
+name: NETRATTLER ML Training
+
+on:
+  schedule:
+    - cron: '0 4 * * 1'   # Jeden Montag 04:00 UTC (frische Daten nach Wochenende)
+  workflow_dispatch:        # Manuell startbar (z.B. nach Datenupdate)
+
+jobs:
+  train:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+
+      - name: Install ML Dependencies
+        run: |
+          pip install --upgrade pip
+          pip install \
+            requests \
+            numpy \
+            pandas \
+            xgboost \
+            scikit-learn
+
+      - name: Train XGBoost Models 🧠
+        env:
+          SUPABASE_URL: ${{ secrets.SUPABASE_URL }}
+          SUPABASE_KEY: ${{ secrets.SUPABASE_KEY }}
+        run: python train_model.py
+
+      - name: Done
+        if: always()
+        run: echo "ML Training abgeschlossen"
