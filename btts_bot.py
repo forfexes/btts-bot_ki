@@ -6223,6 +6223,246 @@ def get_fd_co_uk_team_stats(team_name, league_name, last_n=10):
 # Wahrscheinlichkeiten, unabhängig von Pinnacles Markt-Quote.
 # Nur für die von football-data.co.uk abgedeckten ~20 Top-Ligen.
 
+# ============================================================
+# 🤖 XGBOOST ML-INFERENCE (Modelle aus Supabase laden)
+# ============================================================
+
+_ML_MODELS = {}           # {model_name: calibrated_model}
+_ML_MODELS_LOADED = False # Flag, damit wir nur einmal laden
+_ML_FEATURE_COLS = [
+    # Elo-Ratings
+    "elo_home", "elo_away", "elo_diff",
+    # BTTS/Over-Raten (rolling)
+    "btts_rate_home", "btts_rate_away", "btts_rate_combined",
+    "o25_rate_home", "o25_rate_away", "o25_rate_combined",
+    # Tore erzielt/kassiert
+    "avg_scored_home", "avg_scored_away",
+    "avg_conceded_home", "avg_conceded_away",
+    "exp_goals", "avg_conceded_combined",
+    # Halbzeit-Features
+    "btts_ht_rate_home", "btts_ht_rate_away",
+    "o15ht_rate_home", "o15ht_rate_away",
+    # Form-Punkte
+    "form_pts_home", "form_pts_away", "form_pts_diff",
+    "streak_win_home", "streak_win_away",
+    # H2H
+    "h2h_btts_rate", "h2h_avg_goals", "h2h_matches_norm",
+]
+
+# Rolling Feature-State (wird pro Run befüllt)
+_ML_TEAM_HISTORY = {}  # {team_key: [list of match dicts]}
+_ML_TEAM_RESULTS = {}  # {team_key: ["W","D","L",...]} für Form-Punkte
+_ML_H2H_HISTORY = {}   # {(team1,team2) sorted: [list]} für H2H-Features
+
+
+
+def _ml_load_models():
+    """Lädt alle XGBoost-Modelle aus Supabase (1x pro Run)."""
+    global _ML_MODELS, _ML_MODELS_LOADED
+    if _ML_MODELS_LOADED:
+        return
+    _ML_MODELS_LOADED = True
+
+    if not SUPABASE_URL or not SUPABASE_KEY:
+        return
+
+    try:
+        import pickle, base64, io
+        r = requests.get(
+            f"{SUPABASE_URL}/rest/v1/ml_models",
+            headers={"apikey": SUPABASE_KEY, "Authorization": f"Bearer {SUPABASE_KEY}"},
+            params={"select": "model_name,model_data,meta"},
+            timeout=20,
+        )
+        if not r.ok:
+            log(f"   🤖 ML-Models: Supabase {r.status_code} — Fallback auf Elo/Poisson", "WARN")
+            return
+
+        rows = r.json()
+        for row in rows:
+            name = row.get("model_name", "")
+            data = row.get("model_data", "")
+            if not name or not data:
+                continue
+            try:
+                buf = io.BytesIO(base64.b64decode(data))
+                obj = pickle.load(buf)
+                _ML_MODELS[name] = obj["model"]
+            except Exception as _pe:
+                log(f"   🤖 ML: Fehler beim Laden von {name}: {str(_pe)[:60]}", "WARN")
+
+        if _ML_MODELS:
+            log(f"   🤖 ML-Modelle geladen: {list(_ML_MODELS.keys())}")
+        else:
+            log("   🤖 ML: Noch keine trainierten Modelle in Supabase — Fallback auf Elo/Poisson")
+    except Exception as _mle:
+        log(f"   🤖 ML-Load-Error: {str(_mle)[:80]}", "WARN")
+
+
+def _ml_get_team_form(team_name, n=10):
+    """Holt die rolling Form-Features für ein Team aus dem aktuellen Run-State."""
+    key = normalize_team_name(team_name)
+    hist = _ML_TEAM_HISTORY.get(key, [])
+    results = _ML_TEAM_RESULTS.get(key, [])
+
+    if not hist:
+        return {
+            "btts_rate": 0.50, "o25_rate": 0.50,
+            "btts_ht_rate": 0.20, "o15ht_rate": 0.45,
+            "avg_scored": 1.30, "avg_conceded": 1.20,
+            "form_pts": 0.33, "streak_win": 0.0,
+        }
+
+    last = hist[-n:]
+    last_r = results[-5:]
+
+    # Form-Punkte (W=3/D=1/L=0)
+    pts = sum(3 if r == "W" else 1 if r == "D" else 0 for r in last_r)
+    form_pts = pts / 15.0  # max 15 → normiert 0-1
+
+    # Gewinn-Streak
+    streak = 0
+    for r in reversed(results):
+        if r == "W":
+            streak += 1
+        else:
+            break
+    streak_win = min(streak / 5.0, 1.0)
+
+    return {
+        "btts_rate": sum(m["btts"] for m in last) / len(last),
+        "o25_rate": sum(m["over25"] for m in last) / len(last),
+        "btts_ht_rate": sum(m["btts_ht"] for m in last) / len(last),
+        "o15ht_rate": sum(m["over15_ht"] for m in last) / len(last),
+        "avg_scored": sum(m["scored"] for m in last) / len(last),
+        "avg_conceded": sum(m["conceded"] for m in last) / len(last),
+        "form_pts": form_pts,
+        "streak_win": streak_win,
+    }
+
+
+def _ml_update_team_history(home, away, home_goals, away_goals, ht_home=0, ht_away=0):
+    """Updated den Rolling-State nach einem bekannten Spiel."""
+    btts = int(home_goals > 0 and away_goals > 0)
+    over25 = int(home_goals + away_goals > 2)
+    btts_ht = int(ht_home > 0 and ht_away > 0)
+    o15ht = int(ht_home + ht_away > 1)
+
+    h_key = normalize_team_name(home)
+    a_key = normalize_team_name(away)
+
+    # Match-History (für Rolling-Raten)
+    _ML_TEAM_HISTORY.setdefault(h_key, []).append({
+        "btts": btts, "over25": over25, "btts_ht": btts_ht, "over15_ht": o15ht,
+        "scored": home_goals, "conceded": away_goals,
+    })
+    _ML_TEAM_HISTORY.setdefault(a_key, []).append({
+        "btts": btts, "over25": over25, "btts_ht": btts_ht, "over15_ht": o15ht,
+        "scored": away_goals, "conceded": home_goals,
+    })
+
+    # Form-Ergebnisse (W/D/L)
+    if home_goals > away_goals:
+        _ML_TEAM_RESULTS.setdefault(h_key, []).append("W")
+        _ML_TEAM_RESULTS.setdefault(a_key, []).append("L")
+    elif home_goals < away_goals:
+        _ML_TEAM_RESULTS.setdefault(h_key, []).append("L")
+        _ML_TEAM_RESULTS.setdefault(a_key, []).append("W")
+    else:
+        _ML_TEAM_RESULTS.setdefault(h_key, []).append("D")
+        _ML_TEAM_RESULTS.setdefault(a_key, []).append("D")
+
+    # H2H-History
+    h2h_key = tuple(sorted([h_key, a_key]))
+    _ML_H2H_HISTORY.setdefault(h2h_key, []).append({
+        "btts": btts,
+        "goals": home_goals + away_goals,
+    })
+
+
+def get_ml_prediction(home_team, away_team, league_name):
+    """
+    Haupt-ML-Vorhersagefunktion: baut Features + ruft XGBoost-Modell auf.
+    Gibt {} zurück wenn kein Modell geladen oder Liga nicht abgedeckt.
+    BTTS/Over2.5/BTTS-HT/Over1.5-HT Wahrscheinlichkeiten als Prozent.
+    """
+    _ml_load_models()
+
+    if not _ML_MODELS:
+        return {}
+
+    # Elo-Ratings aus dem bestehenden System holen
+    elo_ratings = _build_elo_ratings(league_name) if league_name else {}
+    h_key = normalize_team_name(home_team)
+    a_key = normalize_team_name(away_team)
+
+    if elo_ratings:
+        if h_key not in elo_ratings:
+            h_key = next((k for k in elo_ratings if h_key[:5] in k or k[:5] in h_key), None)
+        if a_key not in elo_ratings:
+            a_key = next((k for k in elo_ratings if a_key[:5] in k or k[:5] in a_key), None)
+
+    elo_h = elo_ratings.get(h_key, ELO_RATINGS_CACHE.get("_global", {}).get(h_key, 1500)) + 60
+    elo_a = elo_ratings.get(a_key, ELO_RATINGS_CACHE.get("_global", {}).get(a_key, 1500))
+
+    # Form-Features
+    fh = _ml_get_team_form(home_team)
+    fa = _ml_get_team_form(away_team)
+
+    # H2H-Features aus dem Rolling-State
+    _h2h_key = tuple(sorted([normalize_team_name(home_team), normalize_team_name(away_team)]))
+    _h2h_hist = _ML_H2H_HISTORY.get(_h2h_key, [])
+    h2h_btts = sum(m["btts"] for m in _h2h_hist) / len(_h2h_hist) if _h2h_hist else 0.5
+    h2h_goals = sum(m["goals"] for m in _h2h_hist) / len(_h2h_hist) if _h2h_hist else 2.5
+    h2h_norm = min(len(_h2h_hist) / 10.0, 1.0)
+
+    features = [
+        # Elo
+        elo_h, elo_a, elo_h - elo_a,
+        # BTTS/Over-Raten
+        fh["btts_rate"], fa["btts_rate"], (fh["btts_rate"] + fa["btts_rate"]) / 2,
+        fh["o25_rate"], fa["o25_rate"], (fh["o25_rate"] + fa["o25_rate"]) / 2,
+        # Tore
+        fh["avg_scored"], fa["avg_scored"],
+        fh["avg_conceded"], fa["avg_conceded"],
+        fh["avg_scored"] + fa["avg_scored"],
+        (fh["avg_conceded"] + fa["avg_conceded"]) / 2,
+        # HT
+        fh["btts_ht_rate"], fa["btts_ht_rate"],
+        fh["o15ht_rate"], fa["o15ht_rate"],
+        # Form-Punkte
+        fh["form_pts"], fa["form_pts"], fh["form_pts"] - fa["form_pts"],
+        fh["streak_win"], fa["streak_win"],
+        # H2H
+        h2h_btts, h2h_goals, h2h_norm,
+    ]
+
+    import numpy as np
+    X = np.array(features).reshape(1, -1)
+    result = {}
+
+    model_targets = [
+        ("btts_model", "btts_pct"),
+        ("over25_model", "over25_pct"),
+        ("btts_ht_model", "btts_ht_pct"),
+        ("over15_ht_model", "over15_ht_pct"),
+    ]
+
+    try:
+        for model_name, out_key in model_targets:
+            if model_name in _ML_MODELS:
+                prob = _ML_MODELS[model_name].predict_proba(X)[0][1]
+                result[out_key] = round(prob * 100, 1)
+        result["source"] = "xgboost"
+        result["elo_home"] = round(elo_h, 0)
+        result["elo_away"] = round(elo_a, 0)
+    except Exception as _pie:
+        log(f"   🤖 ML-Predict-Error: {str(_pie)[:60]}", "WARN")
+        return {}
+
+    return result
+
+
 ELO_RATINGS_CACHE = {}  # {league_code: {team_norm: elo_rating}}
 ELO_K_FACTOR = 20
 ELO_HOME_ADVANTAGE = 60
@@ -17743,17 +17983,24 @@ def main():
                     except Exception:
                         pass
 
-                    # 🆕 Eigenes ML-Modell: Elo + Poisson — eigene Wahrscheinlichkeit,
-                    # unabhängig von Pinnacle, als zusätzliche Bestätigung/Korrektur
+                    # 🤖 XGBoost ML-Modell (stärkste Ebene wenn Modelle geladen)
+                    # Schlägt Elo/Poisson weil es kalibriert und aus echten Daten trainiert ist
                     try:
-                        _elo = get_elo_poisson_prediction(home, away, league_name)
-                        if _elo:
-                            # 70% bisherige Schätzung (inkl. FD-CoUk), 30% Elo-Modell
-                            prob_b = int(0.7 * prob_b + 0.3 * _elo["btts_pct"])
-                            prob_o = int(0.7 * prob_o + 0.3 * _elo["over25_pct"])
-                            log(f"      🧠 Elo-Modell: {home}({_elo['elo_home']:.0f}) vs {away}({_elo['elo_away']:.0f}) "
-                                f"→ erw. Tore {_elo['exp_goals_home']}-{_elo['exp_goals_away']}, BTTS {_elo['btts_pct']}%, "
-                                f"finale Wahrsch. {prob_b}%")
+                        _ml = get_ml_prediction(home, away, league_name)
+                        if _ml:
+                            # 80% ML-Modell, 20% bisherige Schätzung (Absicherung bei Nischenteams)
+                            prob_b = int(0.80 * _ml.get("btts_pct", prob_b) + 0.20 * prob_b)
+                            prob_o = int(0.80 * _ml.get("over25_pct", prob_o) + 0.20 * prob_o)
+                            log(f"      🤖 XGBoost: BTTS {_ml.get('btts_pct')}%, Over2.5 {_ml.get('over25_pct')}% "
+                                f"→ final {prob_b}%/{prob_o}%")
+                        else:
+                            # Fallback: Elo + Poisson Formel
+                            _elo = get_elo_poisson_prediction(home, away, league_name)
+                            if _elo:
+                                prob_b = int(0.70 * prob_b + 0.30 * _elo["btts_pct"])
+                                prob_o = int(0.70 * prob_o + 0.30 * _elo["over25_pct"])
+                                log(f"      🧠 Elo-Fallback: {home}({_elo['elo_home']:.0f}) vs {away}({_elo['elo_away']:.0f}) "
+                                    f"BTTS {_elo['btts_pct']}% → final {prob_b}%")
                     except Exception:
                         pass
 
