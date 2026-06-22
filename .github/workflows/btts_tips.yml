@@ -46,7 +46,11 @@ jobs:
             groq \
             openai \
             anthropic \
-            supabase
+            supabase \
+            xgboost \
+            numpy \
+            pandas \
+            scikit-learn
           playwright install chromium --with-deps
 
       - name: Run Tips Bot 🤖
