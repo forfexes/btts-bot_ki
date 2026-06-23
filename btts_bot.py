@@ -5957,6 +5957,533 @@ def get_statsbomb_player_stats(league_name: str) -> dict:
 
 _SB_MATCH_PROPS_CACHE = {}  # {(home, away): [prop_candidates]}
 
+_SUPABASE_PLAYER_STATS_CACHE = {}  # {player_name: {stat_name: avg_value}}
+
+def get_supabase_player_avg_stats(player_name: str) -> dict:
+    """
+    Holt historische Spieler-Durchschnittswerte aus Supabase player_avg_stats View.
+    Wird täglich durch scrape_player_stats.py befüllt.
+    """
+    if not SUPABASE_URL or not SUPABASE_KEY:
+        return {}
+    if player_name in _SUPABASE_PLAYER_STATS_CACHE:
+        return _SUPABASE_PLAYER_STATS_CACHE[player_name]
+    try:
+        r = requests.get(
+            f"{SUPABASE_URL}/rest/v1/player_avg_stats",
+            headers={"apikey": SUPABASE_KEY, "Authorization": f"Bearer {SUPABASE_KEY}"},
+            params={"player_name": f"eq.{player_name}", "select": "stat_name,avg_value,hit_rate_pct,games"},
+            timeout=8,
+        )
+        if not r.ok:
+            _SUPABASE_PLAYER_STATS_CACHE[player_name] = {}
+            return {}
+        rows = r.json()
+        stats = {row["stat_name"]: {"avg": row["avg_value"], "hit_rate": row["hit_rate_pct"], "games": row["games"]} for row in rows}
+        _SUPABASE_PLAYER_STATS_CACHE[player_name] = stats
+        return stats
+    except Exception:
+        _SUPABASE_PLAYER_STATS_CACHE[player_name] = {}
+        return {}
+
+
+# ============================================================
+# 🧹 CLEAN STAT VALUE (aus Gemini-Analyse)
+# ============================================================
+def clean_stat_value(val):
+    """
+    Konvertiert SofaScore/FotMob Strings zu numerischen Werten.
+    "85%" → 85.0, "42/50" → 84.0 (Prozent), 1.85 → 1.85
+    """
+    if val is None:
+        return None, None
+    if isinstance(val, (int, float)):
+        return float(val), None
+    val_str = str(val).strip()
+    if val_str.endswith("%"):
+        try:
+            return float(val_str.replace("%", "")), None
+        except ValueError:
+            pass
+    if "/" in val_str:
+        try:
+            parts = val_str.split("/")
+            if len(parts) == 2 and float(parts[1]) > 0:
+                pct = (float(parts[0]) / float(parts[1])) * 100
+                return round(pct, 1), val_str
+        except ValueError:
+            pass
+    return None, val_str
+
+
+# ============================================================
+# ⚡ CLUBELO — Teamstärke-Ratings (kostenlos, HTTP API)
+# ============================================================
+_CLUBELO_CACHE = {}  # {date_str: {team_norm: elo}}
+
+def get_clubelo_ratings(target_date=None) -> dict:
+    """
+    Holt ClubElo-Ratings für alle Teams (http://api.clubelo.com/YYYY-MM-DD).
+    Gibt {team_name_lower: elo_rating} zurück.
+    Kein Key nötig. Fällt silent zurück wenn geblockt.
+    """
+    date_str = str(target_date or datetime.now(timezone.utc).date())
+    if date_str in _CLUBELO_CACHE:
+        return _CLUBELO_CACHE[date_str]
+
+    ratings = {}
+    try:
+        r = requests.get(
+            f"http://api.clubelo.com/{date_str}",
+            headers={"User-Agent": "Mozilla/5.0 Chrome/122.0.0.0"},
+            timeout=10,
+        )
+        if r.ok and r.text:
+            import csv as _csv, io as _io
+            reader = _csv.DictReader(_io.StringIO(r.text))
+            for row in reader:
+                club = (row.get("Club") or "").strip()
+                elo = row.get("Elo") or row.get("elo")
+                if club and elo:
+                    ratings[club.lower()] = float(elo)
+            log(f"   ⚡ ClubElo: {len(ratings)} Teams geladen")
+    except Exception as _ce:
+        log(f"   ⚡ ClubElo: {str(_ce)[:50]} (silent fail)", "WARN")
+
+    _CLUBELO_CACHE[date_str] = ratings
+    return ratings
+
+
+def get_clubelo_for_match(home_team: str, away_team: str, target_date=None) -> dict:
+    """Gibt ClubElo für Heim- und Auswärtsteam zurück."""
+    ratings = get_clubelo_ratings(target_date)
+    if not ratings:
+        return {}
+
+    h_norm = home_team.lower()
+    a_norm = away_team.lower()
+
+    h_elo = ratings.get(h_norm)
+    a_elo = ratings.get(a_norm)
+
+    # Fuzzy-Match falls exakter Name fehlt
+    if not h_elo:
+        h_elo = next((v for k, v in ratings.items() if k[:6] in h_norm or h_norm[:6] in k), None)
+    if not a_elo:
+        a_elo = next((v for k, v in ratings.items() if k[:6] in a_norm or a_norm[:6] in k), None)
+
+    return {
+        "elo_home": round(h_elo, 0) if h_elo else None,
+        "elo_away": round(a_elo, 0) if a_elo else None,
+        "elo_diff": round(h_elo - a_elo, 0) if h_elo and a_elo else None,
+        "source": "clubelo",
+    }
+
+
+# ============================================================
+# 💰 SOFASCORE ODDS (BTTS, Over2.5, BTTS HT, Player Props)
+# ============================================================
+_SOFA_ODDS_CACHE = {}  # {event_id: odds_dict}
+
+def get_sofascore_odds(event_id: str) -> dict:
+    """
+    Holt SofaScore Bet365-Quoten für ein Event:
+    1X2, BTTS, Over2.5, BTTS HT, Over1.5 HT
+    Nutzt cloudscraper falls installiert.
+    """
+    if not event_id:
+        return {}
+    if event_id in _SOFA_ODDS_CACHE:
+        return _SOFA_ODDS_CACHE[event_id]
+
+    odds = {}
+    url = f"https://api.sofascore.com/api/v1/event/{event_id}/odds/provider/1/featured"
+
+    try:
+        # cloudscraper falls verfügbar, sonst requests
+        try:
+            import cloudscraper as _cs
+            _sess = _cs.create_scraper()
+        except ImportError:
+            _sess = requests.Session()
+
+        headers = {
+            "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 Chrome/122.0.0.0 Safari/537.36",
+            "Accept": "application/json",
+            "Referer": "https://www.sofascore.com/",
+        }
+        r = _sess.get(url, headers=headers, timeout=12)
+        if not r.ok:
+            _SOFA_ODDS_CACHE[event_id] = {}
+            return {}
+
+        data = r.json()
+        for market in data.get("featuredOdds", {}).get("choices", []):
+            mname = (market.get("name") or "").lower()
+            options = market.get("sourceOdds", [])
+
+            if "full time" in mname or "1x2" in mname:
+                for o in options:
+                    fv = o.get("fractionalValue", "")
+                    val = float(o.get("decimalValue") or 0)
+                    if fv == "1": odds["home_win"] = val
+                    elif fv == "X": odds["draw"] = val
+                    elif fv == "2": odds["away_win"] = val
+
+            elif "both teams to score" in mname and "half" not in mname:
+                for o in options:
+                    fv = (o.get("fractionalValue") or o.get("name") or "").lower()
+                    val = float(o.get("decimalValue") or 0)
+                    if "yes" in fv or fv == "1": odds["btts_yes"] = val
+                    elif "no" in fv or fv == "2": odds["btts_no"] = val
+
+            elif "both teams to score" in mname and "half" in mname:
+                for o in options:
+                    fv = (o.get("fractionalValue") or o.get("name") or "").lower()
+                    val = float(o.get("decimalValue") or 0)
+                    if "yes" in fv: odds["btts_ht_yes"] = val
+                    elif "no" in fv: odds["btts_ht_no"] = val
+
+            elif "over/under" in mname or "total goals" in mname:
+                for o in options:
+                    oname = (o.get("name") or "")
+                    val = float(o.get("decimalValue") or 0)
+                    if "2.5" in oname:
+                        if "over" in oname.lower(): odds["over25"] = val
+                        elif "under" in oname.lower(): odds["under25"] = val
+                    elif "1.5" in oname:
+                        if "over" in oname.lower(): odds["over15_ht"] = val
+
+        log(f"   💰 SofaScore Odds: {list(odds.keys())} für Event {event_id}")
+    except Exception as _se:
+        log(f"   💰 SofaScore Odds Error: {str(_se)[:60]}", "WARN")
+
+    _SOFA_ODDS_CACHE[event_id] = odds
+    return odds
+
+
+def get_sofascore_player_props(event_id: str) -> list:
+    """
+    Holt SofaScore Spieler-Props (/submarkets):
+    Schüsse, SOT, Karten, Assists — mit echten Bet365-Quoten.
+    """
+    if not event_id:
+        return []
+
+    props = []
+    url = f"https://api.sofascore.com/api/v1/event/{event_id}/odds/provider/1/submarkets"
+
+    try:
+        try:
+            import cloudscraper as _cs
+            _sess = _cs.create_scraper()
+        except ImportError:
+            _sess = requests.Session()
+
+        headers = {
+            "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) Chrome/122.0.0.0 Safari/537.36",
+            "Referer": "https://www.sofascore.com/",
+        }
+        r = _sess.get(url, headers=headers, timeout=12)
+        if not r.ok:
+            return []
+
+        data = r.json()
+        for submarket in data.get("submarkets", []):
+            market_group = submarket.get("marketGroup", "")
+            for market in submarket.get("choices", []):
+                player = market.get("player") or {}
+                player_name = player.get("name", "")
+                player_id = str(player.get("id", ""))
+                for option in market.get("sourceOdds", []):
+                    line_name = option.get("name", "")
+                    try:
+                        quote = float(option.get("decimalValue") or 0)
+                    except (TypeError, ValueError):
+                        continue
+                    if quote < 1.20 or not player_name:
+                        continue
+                    props.append({
+                        "player_id": player_id,
+                        "player_name": player_name,
+                        "market_group": market_group,
+                        "line": line_name,
+                        "odds": quote,
+                    })
+
+        if props:
+            log(f"   💰 SofaScore Player Props: {len(props)} Props für Event {event_id}")
+    except Exception as _spe:
+        log(f"   💰 SofaScore Player Props Error: {str(_spe)[:60]}", "WARN")
+
+    return props
+
+
+# ============================================================
+# 📊 SOFASCORE TEAM FORM — letzte N Spiele, BTTS-Rate
+# ============================================================
+_SOFA_TEAM_FORM_CACHE = {}  # {team_id: {btts_rate, over25_rate, ...}}
+
+def get_sofascore_team_form(team_id: str, last_n: int = 6) -> dict:
+    """
+    Holt letzte N Spiele eines Teams von SofaScore und berechnet:
+    BTTS-Rate, Over2.5-Rate, Ø Tore erzielt/kassiert
+    Sehr nützlich für Pre-Match-Analyse — direkter als martj42.
+    """
+    if not team_id:
+        return {}
+    cache_key = f"{team_id}_{last_n}"
+    if cache_key in _SOFA_TEAM_FORM_CACHE:
+        return _SOFA_TEAM_FORM_CACHE[cache_key]
+
+    result = {}
+    try:
+        try:
+            import cloudscraper as _cs
+            _sess = _cs.create_scraper()
+        except ImportError:
+            _sess = requests.Session()
+
+        headers = {
+            "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 Chrome/122.0.0.0 Safari/537.36",
+            "Referer": "https://www.sofascore.com/",
+        }
+        r = _sess.get(
+            f"https://api.sofascore.com/api/v1/team/{team_id}/events/last/0",
+            headers=headers, timeout=12,
+        )
+        if not r.ok:
+            _SOFA_TEAM_FORM_CACHE[cache_key] = {}
+            return {}
+
+        events = r.json().get("events", [])[:last_n]
+        if not events:
+            _SOFA_TEAM_FORM_CACHE[cache_key] = {}
+            return {}
+
+        btts = over25 = goals_scored = goals_conceded = valid = 0
+        for ev in events:
+            hs = (ev.get("homeScore") or {}).get("current")
+            as_ = (ev.get("awayScore") or {}).get("current")
+            if hs is None or as_ is None:
+                continue
+            valid += 1
+            home_team_id = (ev.get("homeTeam") or {}).get("id")
+            is_home = str(home_team_id) == str(team_id)
+            scored = hs if is_home else as_
+            conceded = as_ if is_home else hs
+            goals_scored += scored
+            goals_conceded += conceded
+            if hs > 0 and as_ > 0:
+                btts += 1
+            if hs + as_ > 2:
+                over25 += 1
+
+        if valid == 0:
+            _SOFA_TEAM_FORM_CACHE[cache_key] = {}
+            return {}
+
+        result = {
+            "btts_rate": round(btts / valid * 100, 1),
+            "over25_rate": round(over25 / valid * 100, 1),
+            "avg_scored": round(goals_scored / valid, 2),
+            "avg_conceded": round(goals_conceded / valid, 2),
+            "games": valid,
+            "source": "sofascore_team_form",
+        }
+        log(f"   📊 SofaScore Form Team {team_id}: BTTS {result['btts_rate']}%, Ø {result['avg_scored']}-{result['avg_conceded']}")
+
+    except Exception as _tfe:
+        log(f"   📊 SofaScore Team Form Error: {str(_tfe)[:60]}", "WARN")
+
+    _SOFA_TEAM_FORM_CACHE[cache_key] = result
+    return result
+
+
+def get_sofascore_match_form(event_id: str) -> dict:
+    """
+    Holt Team-IDs für ein Spiel und berechnet kombinierte BTTS-Rate beider Teams.
+    Direkte Alternative zu martj42 für Vereinsspiele.
+    """
+    try:
+        try:
+            import cloudscraper as _cs
+            _sess = _cs.create_scraper()
+        except ImportError:
+            _sess = requests.Session()
+
+        headers = {"User-Agent": "Mozilla/5.0 Chrome/122", "Referer": "https://www.sofascore.com/"}
+        r = _sess.get(f"https://api.sofascore.com/api/v1/event/{event_id}", headers=headers, timeout=10)
+        if not r.ok:
+            return {}
+
+        ev = r.json().get("event", {})
+        home_id = str((ev.get("homeTeam") or {}).get("id", ""))
+        away_id = str((ev.get("awayTeam") or {}).get("id", ""))
+
+        h_form = get_sofascore_team_form(home_id)
+        a_form = get_sofascore_team_form(away_id)
+
+        if not h_form or not a_form:
+            return {}
+
+        return {
+            "home_btts_rate": h_form["btts_rate"],
+            "away_btts_rate": a_form["btts_rate"],
+            "combined_btts_rate": round((h_form["btts_rate"] + a_form["btts_rate"]) / 2, 1),
+            "home_over25_rate": h_form["over25_rate"],
+            "away_over25_rate": a_form["over25_rate"],
+            "combined_over25_rate": round((h_form["over25_rate"] + a_form["over25_rate"]) / 2, 1),
+            "home_avg_scored": h_form["avg_scored"],
+            "away_avg_scored": a_form["avg_scored"],
+            "source": "sofascore_form",
+        }
+    except Exception:
+        return {}
+
+
+# ============================================================
+# ⚡ SOFASCORE ATTACK MOMENTUM + INCIDENTS (für Live-Bot)
+# ============================================================
+
+def get_sofascore_attack_momentum(event_id: str) -> dict:
+    """
+    Holt Attack Momentum Kurve — zeigt welches Team gerade drückt.
+    Nützlich für Live-Bot Alerts (z.B. "Team A dominiert letzte 5 Min").
+    """
+    try:
+        try:
+            import cloudscraper as _cs
+            _sess = _cs.create_scraper()
+        except ImportError:
+            _sess = requests.Session()
+
+        headers = {"User-Agent": "Mozilla/5.0 Chrome/122", "Referer": "https://www.sofascore.com/"}
+        r = _sess.get(
+            f"https://api.sofascore.com/api/v1/event/{event_id}/attack-momentum",
+            headers=headers, timeout=10
+        )
+        if not r.ok:
+            return {}
+
+        data = r.json()
+        momentum = data.get("attackMomentum") or data.get("momentum") or []
+        if not momentum:
+            return {}
+
+        # Letzte 5 Minuten auswerten
+        recent = momentum[-5:] if len(momentum) >= 5 else momentum
+        home_pressure = sum(1 for m in recent if m.get("home", 0) > m.get("away", 0))
+        away_pressure = len(recent) - home_pressure
+
+        return {
+            "home_pressure_last5": home_pressure,
+            "away_pressure_last5": away_pressure,
+            "dominant": "home" if home_pressure > away_pressure else "away" if away_pressure > home_pressure else "balanced",
+            "data_points": len(momentum),
+        }
+    except Exception:
+        return {}
+
+
+def get_sofascore_incidents(event_id: str) -> list:
+    """
+    Holt Live-Ticker Events (Tore, Karten, Elfmeter, Wechsel).
+    Trigger für Live-Bot Alerts.
+    """
+    try:
+        try:
+            import cloudscraper as _cs
+            _sess = _cs.create_scraper()
+        except ImportError:
+            _sess = requests.Session()
+
+        headers = {"User-Agent": "Mozilla/5.0 Chrome/122", "Referer": "https://www.sofascore.com/"}
+        r = _sess.get(
+            f"https://api.sofascore.com/api/v1/event/{event_id}/incidents",
+            headers=headers, timeout=10
+        )
+        if not r.ok:
+            return []
+
+        incidents = r.json().get("incidents", [])
+        # Nur relevante Events
+        relevant = []
+        for inc in incidents:
+            inc_type = inc.get("incidentType", "").lower()
+            if inc_type in ("goal", "card", "period", "injurytime", "substitution"):
+                player = (inc.get("player") or {}).get("name", "")
+                relevant.append({
+                    "type": inc_type,
+                    "minute": inc.get("time"),
+                    "player": player,
+                    "team": "home" if inc.get("isHome") else "away",
+                    "detail": inc.get("incidentClass", ""),
+                })
+        return relevant
+    except Exception:
+        return []
+
+# 🎯 VALUE-BERECHNUNG (prob × odds > 1.10 = +10% Edge)
+# ============================================================
+
+def calculate_value_edge(probability: float, odds: float) -> float:
+    """
+    Berechnet den mathematischen Value-Index.
+    > 1.10 = mindestens 10% Edge → Wert-Tipp
+    """
+    if not probability or not odds or probability <= 0 or odds <= 0:
+        return 0.0
+    return round(probability * odds, 3)
+
+
+def check_prop_value(player_name: str, market_group: str, line: str,
+                     odds: float, supabase_stats: dict) -> dict:
+    """
+    Vergleicht Buchmacher-Quote mit historischer Hit-Rate aus Supabase.
+    Gibt Value-Info zurück wenn Edge ≥ 10%.
+    """
+    # Stat-Name Mapping: SofaScore → Supabase
+    stat_map = {
+        "Player shots": ["totalShots", "shots"],
+        "Player shots on target": ["shotsOnTarget", "shotsonTarget"],
+        "Player cards": ["yellowCards", "yellowCard"],
+        "Player assists": ["assists", "goalAssist"],
+        "Player tackles": ["tackles", "totalTackles"],
+    }
+
+    stat_names = stat_map.get(market_group, [])
+    hit_rate = None
+    avg_val = None
+    games = 0
+
+    for sn in stat_names:
+        if sn in supabase_stats:
+            row = supabase_stats[sn]
+            hit_rate = row.get("hit_rate", 0) / 100  # % → 0-1
+            avg_val = row.get("avg")
+            games = row.get("games", 0)
+            break
+
+    if hit_rate is None or games < 3:
+        return {}
+
+    edge = calculate_value_edge(hit_rate, odds)
+
+    if edge >= 1.10:
+        return {
+            "player": player_name,
+            "market": f"{market_group} — {line}",
+            "odds": odds,
+            "hit_rate_pct": round(hit_rate * 100, 1),
+            "edge_pct": round((edge - 1) * 100, 1),
+            "value_index": edge,
+            "games_sample": games,
+            "avg_stat": avg_val,
+        }
+    return {}
+
+
 def get_statsbomb_props_for_match(home_team: str, away_team: str, league_name: str = "") -> list:
     """
     Holt Spieler-Props direkt aus StatsBomb Event-Daten für ein konkretes Match.
@@ -9008,6 +9535,179 @@ def fetch_odds_api(league_name, target_date):
             continue
 
     return []
+
+
+# ============================================================
+# 🎯 THE ODDS API — SOCCER PLAYER PROPS
+# ============================================================
+_ODDS_API_PROPS_CACHE = {}
+_ODDS_API_PLAYER_PROPS_MARKETS = [
+    "player_goal_scorer", "player_shots", "player_shots_on_target",
+    "player_cards", "player_assists", "player_tackles",
+]
+
+
+def fetch_odds_api_player_props(league_name: str, target_date) -> list:
+    """
+    Holt Soccer Player Props von The Odds API.
+    Returns: [{player, market, side, line, odds, match, league, kickoff}]
+    """
+    sport_key = LEAGUE_KEYS.get(league_name)
+    if not sport_key or not ODDS_API_KEYS:
+        return []
+
+    date_str = str(target_date)[:10]
+    cache_key = (sport_key, date_str)
+    if cache_key in _ODDS_API_PROPS_CACHE:
+        return _ODDS_API_PROPS_CACHE[cache_key]
+
+    props = []
+    for key in ODDS_API_KEYS:
+        try:
+            # Events für diese Liga heute
+            r_ev = requests.get(
+                f"https://api.the-odds-api.com/v4/sports/{sport_key}/events",
+                params={"apiKey": key, "dateFormat": "iso"},
+                timeout=12,
+            )
+            if not r_ev.ok:
+                continue
+
+            today_events = [
+                e for e in r_ev.json()
+                if e.get("commence_time", "").startswith(date_str)
+            ]
+            if not today_events:
+                break
+
+            for ev in today_events[:5]:  # Max 5 Events pro Liga (API-Calls schonen)
+                ev_id = ev.get("id")
+                home = ev.get("home_team", "")
+                away = ev.get("away_team", "")
+                kickoff = ev.get("commence_time", "")[:16].replace("T", " ")
+
+                try:
+                    r_p = requests.get(
+                        f"https://api.the-odds-api.com/v4/sports/{sport_key}/events/{ev_id}/odds",
+                        params={
+                            "apiKey": key,
+                            "regions": "eu,uk",
+                            "markets": ",".join(_ODDS_API_PLAYER_PROPS_MARKETS),
+                            "oddsFormat": "decimal",
+                        },
+                        timeout=12,
+                    )
+                    if not r_p.ok:
+                        continue
+
+                    # Beste Quote pro Spieler/Markt/Seite aus allen Buchmachern
+                    best = {}
+                    for bm in r_p.json().get("bookmakers", []):
+                        for market in bm.get("markets", []):
+                            mkey = market.get("key", "")
+                            for out in market.get("outcomes", []):
+                                player = out.get("description") or out.get("name", "")
+                                side = out.get("name", "")
+                                line = out.get("point")
+                                odds = float(out.get("price", 0) or 0)
+                                if odds < 1.20:
+                                    continue
+                                pk = (player, mkey, side)
+                                if odds > best.get(pk, {}).get("odds", 0):
+                                    best[pk] = {
+                                        "player": player, "market": mkey,
+                                        "side": side, "line": line, "odds": odds,
+                                        "match": f"{home} vs {away}",
+                                        "home": home, "away": away,
+                                        "league": league_name, "kickoff": kickoff,
+                                    }
+                    props.extend(best.values())
+                except Exception:
+                    continue
+
+            remaining = r_ev.headers.get("x-requests-remaining", "?")
+            log(f"   🎯 OddsAPI Props: {len(props)} Props für {league_name} (verbleibend: {remaining})")
+            break
+        except Exception as _e:
+            log(f"   🎯 OddsAPI Props Error: {str(_e)[:60]}", "WARN")
+            continue
+
+    _ODDS_API_PROPS_CACHE[cache_key] = props
+    return props
+
+
+def get_odds_api_player_prop_candidates(fixtures_cache: dict, target_date) -> list:
+    """
+    Holt Player Props für alle Ligen mit Odds-API-Abdeckung.
+    Gibt direkt verwendbare Prop-Builder-Kandidaten zurück.
+    """
+    candidates = []
+    processed = set()
+
+    for league in list(fixtures_cache or {}).keys():
+        if league in processed or league not in LEAGUE_KEYS:
+            continue
+        processed.add(league)
+
+        for p in fetch_odds_api_player_props(league, target_date):
+            market = p.get("market", "")
+            odds = p.get("odds", 0)
+            side = p.get("side", "")
+            line = p.get("line")
+            player = p.get("player", "")
+
+            if "goal" in market and odds >= 1.50:
+                candidates.append({
+                    "player": player, "team": "", "match": p["match"],
+                    "league": league, "kickoff": p["kickoff"],
+                    "market": "Anytime Goalscorer",
+                    "stat_val": round(1/odds, 2), "mtype": "shots",
+                    "odds": odds, "_source": "odds_api",
+                })
+            elif "shots_on_target" in market and side == "Over":
+                candidates.append({
+                    "player": player, "team": "", "match": p["match"],
+                    "league": league, "kickoff": p["kickoff"],
+                    "market": f"{line}+ Shots on Target" if line else "1+ SOT",
+                    "stat_val": round(1/odds, 2), "mtype": "shots",
+                    "odds": odds, "_source": "odds_api",
+                })
+            elif "shots" in market and "on_target" not in market and side == "Over":
+                candidates.append({
+                    "player": player, "team": "", "match": p["match"],
+                    "league": league, "kickoff": p["kickoff"],
+                    "market": f"{line}+ Shots" if line else "2+ Shots",
+                    "stat_val": round(1/odds, 2), "mtype": "shots",
+                    "odds": odds, "_source": "odds_api",
+                })
+            elif "card" in market and odds >= 2.50:
+                candidates.append({
+                    "player": player, "team": "", "match": p["match"],
+                    "league": league, "kickoff": p["kickoff"],
+                    "market": "Player to be Booked",
+                    "stat_val": round(1/odds, 2), "mtype": "booking",
+                    "odds": odds, "_source": "odds_api",
+                })
+            elif "assist" in market and odds >= 2.00:
+                candidates.append({
+                    "player": player, "team": "", "match": p["match"],
+                    "league": league, "kickoff": p["kickoff"],
+                    "market": "Anytime Assist",
+                    "stat_val": round(1/odds, 2), "mtype": "shots",
+                    "odds": odds, "_source": "odds_api",
+                })
+            elif "tackle" in market and side == "Over":
+                candidates.append({
+                    "player": player, "team": "", "match": p["match"],
+                    "league": league, "kickoff": p["kickoff"],
+                    "market": f"{line}+ Tackles" if line else "2+ Tackles",
+                    "stat_val": round(1/odds, 2), "mtype": "tackles",
+                    "odds": odds, "_source": "odds_api",
+                })
+
+    if candidates:
+        log(f"   🎯 OddsAPI: {len(candidates)} Player Prop Kandidaten total")
+    return candidates
 
 
 # 🆕 Round-Robin Counter für Football-Data Keys
@@ -16046,6 +16746,42 @@ def run_advanced_props_bot(active_leagues: list, fixtures_cache: dict, target_da
                         if gpg >= 0.5:
                             _add(shot_candidates, name, team, match_name, league, kickoff, "2+ Shots on Target", gpg, "shots")
 
+    # 🎯 The Odds API Player Props — primäre Quelle mit echten Quoten
+    if ODDS_API_KEYS:
+        try:
+            _odds_api_candidates = get_odds_api_player_prop_candidates(
+                fixtures_cache, target_date
+            )
+            for c in _odds_api_candidates:
+                mtype = c.get("mtype", "shots")
+                nm = c.get("player", "")
+                tm = c.get("team", "")
+                mn = c.get("match", "")
+                league = c.get("league", "")
+                ko = c.get("kickoff", "TBD")
+                sv = c.get("stat_val", 0)
+                market = c.get("market", "")
+                real_odds = c.get("odds", 0)
+                if mtype == "shots":
+                    _add(shot_candidates, nm, tm, mn, league, ko, market, sv, mtype)
+                    # Echte Quote direkt setzen
+                    if shot_candidates and real_odds > 0:
+                        shot_candidates[-1]["_real_odds"] = real_odds
+                elif mtype == "booking":
+                    _add(booking_candidates, nm, tm, mn, league, ko, market, sv, mtype)
+                    if booking_candidates and real_odds > 0:
+                        booking_candidates[-1]["_real_odds"] = real_odds
+                elif mtype == "tackles":
+                    _add(foul_candidates, nm, tm, mn, league, ko, market, sv, mtype)
+                    if foul_candidates and real_odds > 0:
+                        foul_candidates[-1]["_real_odds"] = real_odds
+
+            total = len(foul_candidates) + len(booking_candidates) + len(shot_candidates)
+            if total > 0:
+                log(f"🔑 Kandidaten nach OddsAPI: {len(foul_candidates)} Fouls/Tackles · {len(booking_candidates)} Bookings · {len(shot_candidates)} Shots/Goals")
+        except Exception as _oae:
+            log(f"🔑 OddsAPI Props Error: {str(_oae)[:60]}", "WARN")
+
     total = len(foul_candidates) + len(booking_candidates) + len(shot_candidates)
     log(f"🔑 Kandidaten: {len(foul_candidates)} Fouls · {len(booking_candidates)} Bookings · {len(shot_candidates)} Shots")
 
@@ -17147,14 +17883,13 @@ def run_pinnacle_props_bot(win_start_utc=None, win_end_utc=None, ch_tz=None, top
         selected = []
         used_players = set()
 
-        # 🆕 Runde 1: Round-Robin über alle vorhandenen Kategorien — erzwingt Vielfalt
-        # (verhindert, dass z.B. 4x "score" alle anderen Kategorien verdrängt)
-        cat_order = sorted(by_cat.keys(), key=lambda c: -len(by_cat[c]))  # größere Kategorien zuerst durchprobieren
+        # 🆕 Round-Robin — max 6 Legs (Bet Builder = 2-6 Tipps)
+        cat_order = sorted(by_cat.keys(), key=lambda c: -len(by_cat[c]))
         cat_pointers = {c: 0 for c in cat_order}
-        while len(selected) < 4:
+        while len(selected) < 6:
             progressed = False
             for cat in cat_order:
-                if len(selected) >= 4:
+                if len(selected) >= 6:
                     break
                 pointer = cat_pointers[cat]
                 cat_legs = by_cat[cat]
@@ -17164,9 +17899,9 @@ def run_pinnacle_props_bot(win_start_utc=None, win_end_utc=None, ch_tz=None, top
                     player = leg["selection"].lower()
                     cat_count = sum(1 for s in selected if s["_cat"] == cat)
                     if cat_count >= 2:
-                        break  # diese Kategorie ist voll, nächste Kategorie
+                        break  # max 2 Legs pro Kategorie für Vielfalt
                     if player in used_players and cat not in ["booked", "fouls", "tackles"]:
-                        continue  # nächster Leg in derselben Kategorie
+                        continue
                     selected.append(leg)
                     used_players.add(player)
                     progressed = True
@@ -17193,7 +17928,7 @@ def run_pinnacle_props_bot(win_start_utc=None, win_end_utc=None, ch_tz=None, top
                 _dedup_k = f"wmprop_{match_name}_{datetime.now(timezone.utc).date()}"
                 if _prop_chat and _dedup_k not in _STAT_INSIGHT_SENT_TODAY:
                     _STAT_INSIGHT_SENT_TODAY.add(_dedup_k)
-                    for _leg in selected[:4]:  # Max 4 einzelne Props
+                    for _leg in selected[:2]:  # Max 2 Props
                         _leg_odds = float(_leg.get("price", _leg.get("odds", 0)) or 0)
                         _leg_name = _leg.get("name", _leg.get("tip", ""))
                         if not _leg_name or _leg_odds < 1.30:
@@ -17212,12 +17947,27 @@ def run_pinnacle_props_bot(win_start_utc=None, win_end_utc=None, ch_tz=None, top
                     _send_stat_insight_fallback(match_name, legs)
             continue
 
-        builders.append({
-            "match": match_name,
-            "legs": selected,
-            "odds": combo_odds,
-            "_ko": selected[0].get("_ko"),
-        })
+        # 🆕 Generiere alle Größen 2-6 für dieses Match
+        _bb_labels = {
+            2: "🏗️ BET BUILDER",
+            3: "🎯 BET BUILDER",
+            4: "🔥 BET BUILDER",
+            5: "💎 BET BUILDER",
+            6: "👑 BET BUILDER",
+        }
+        for _n in range(2, min(len(selected) + 1, 7)):
+            _legs_n = selected[:_n]
+            _odds_n = _calc_combo_odds(_legs_n)
+            if _odds_n < 1.80:
+                continue
+            builders.append({
+                "match": match_name,
+                "legs": _legs_n,
+                "odds": _odds_n,
+                "label": _bb_labels.get(_n, f"🎯 BET BUILDER {_n}"),
+                "_ko": _legs_n[0].get("_ko"),
+                "_n": _n,
+            })
 
     if _rejected_too_few_legs or _rejected_low_odds:
         log(f"   🔑 Bet Builder Filter: {_rejected_too_few_legs} mit <2 Legs verworfen, {_rejected_low_odds} mit Quote<1.80 verworfen")
@@ -17268,12 +18018,100 @@ def run_pinnacle_props_bot(win_start_utc=None, win_end_utc=None, ch_tz=None, top
             if len(_btts_sent) >= 3:  # Max 3 Paare
                 break
 
-        log("🔑 Pinnacle Props: keine Bet Builder zusammengestellt")
-        return 0
+    # 🆕 SofaScore Player Props Value-Alert (Supabase Hit-Rate × Odds > 1.10)
+    _sofa_event_ids = {}
+    for league, fixtures in (fixtures_cache or {}).items():
+        for fix in (fixtures or []):
+            eid = fix.get("sofa_event_id") or fix.get("event_id")
+            if eid:
+                _sofa_event_ids[f"{fix.get('home','')}_vs_{fix.get('away','')}"] = str(eid)
+
+    if _sofa_event_ids:
+        _value_chat = TELEGRAM_GROUPS.get("advanced_props") or TELEGRAM_GROUPS.get("props")
+        _value_sent = 0
+        for match_key, ev_id in list(_sofa_event_ids.items())[:5]:
+            sofa_props = get_sofascore_player_props(ev_id)
+            for prop in sofa_props[:30]:
+                player = prop.get("player_name", "")
+                supabase_stats = get_supabase_player_avg_stats(player)
+                if not supabase_stats:
+                    continue
+                value_info = check_prop_value(
+                    player, prop.get("market_group", ""),
+                    prop.get("line", ""), prop.get("odds", 0), supabase_stats
+                )
+                if value_info and _value_chat and _value_sent < 5:
+                    _msg = (
+                        f"🎯 <b>PLAYER PROP VALUE</b>\n"
+                        f"━━━━━━━━━━━━━━━━━━\n"
+                        f"⚽ <b>{match_key.replace('_vs_', ' vs ')}</b>\n"
+                        f"👤 {value_info['player']}\n"
+                        f"📊 {value_info['market']}\n\n"
+                        f"💰 Quote: <b>{value_info['odds']}</b>\n"
+                        f"📈 Hit-Rate: <b>{value_info['hit_rate_pct']}%</b> ({value_info['games_sample']} Spiele)\n"
+                        f"🎯 Edge: <b>+{value_info['edge_pct']}%</b>\n"
+                        f"━━━━━━━━━━━━━━━━━━\n"
+                        f"💰 0.5u ✅"
+                    )
+                    send_telegram(_msg, chat_id=_value_chat)
+                    _value_sent += 1
+                    log(f"   🎯 Value Alert: {player} {value_info['market']} +{value_info['edge_pct']}%")
+
+    log("🔑 Pinnacle Props: keine Bet Builder zusammengestellt")
+    return 0
 
     # Sortierung nach Anstosszeit
     builders.sort(key=lambda x: x.get("_ko") or _dt2.max.replace(tzinfo=timezone.utc))
-    builders = builders[:6]  # Max 6 Builder pro Run
+
+    # 🆕 MULTI-MATCH BET BUILDER (wie Nate VIP — 2-3 Spiele gemischt)
+    # Nimmt das beste Leg aus 2-3 verschiedenen Matches und kombiniert sie
+    _match_best = {}  # {match_name: [sorted legs]}
+    for b in builders:
+        mn = b["match"]
+        if mn not in _match_best:
+            _match_best[mn] = b["legs"]
+
+    _match_names = list(_match_best.keys())
+    _mm_labels = {2:"🏗️ BET BUILDER", 3:"🎯 BET BUILDER", 4:"🔥 BET BUILDER",
+                  5:"💎 BET BUILDER", 6:"👑 BET BUILDER"}
+
+    if len(_match_names) >= 2:
+        # Generiere Multi-Match Kombis 2-6 Legs über 2-3 verschiedene Matches
+        for _total_legs in range(2, 7):
+            # Verteile Legs möglichst gleichmässig über 2-3 Matches
+            _n_matches = min(3, len(_match_names), _total_legs)
+            _legs_per_match = _total_legs // _n_matches
+            _remainder = _total_legs % _n_matches
+
+            _mm_legs = []
+            for i, mn in enumerate(_match_names[:_n_matches]):
+                _take = _legs_per_match + (1 if i < _remainder else 0)
+                _mm_legs.extend(_match_best[mn][:_take])
+
+            if len(_mm_legs) < 2:
+                continue
+
+            _mm_odds = _calc_combo_odds(_mm_legs)
+            if _mm_odds < 1.80:
+                continue
+
+            _sig = _combo_signature([l.get("selection","") for l in _mm_legs], prefix="mm")
+            _dup_id = f"mm_builder_{_bdate}_{_sig}".replace(" ", "_")
+            if is_duplicate_combo(_dup_id, _bdate):
+                continue
+
+            builders.append({
+                "match": " + ".join(_match_names[:_n_matches]),
+                "legs": _mm_legs,
+                "odds": _mm_odds,
+                "label": _mm_labels.get(_total_legs, "🎯 BET BUILDER"),
+                "_ko": _match_best[_match_names[0]][0].get("_ko"),
+                "_n": _total_legs,
+                "_multi_match": True,
+                "_match_names": _match_names[:_n_matches],
+            })
+
+    builders = builders[:12]  # Max 12 Builder pro Run
 
     # Nachrichten bauen — Bet365 Bet Builder Style
     sent = 0
@@ -17298,22 +18136,37 @@ def run_pinnacle_props_bot(win_start_utc=None, win_end_utc=None, ch_tz=None, top
             log(f"   ⏭️ Bet Builder Duplikat übersprungen: {b['match']}")
             continue
 
-        msg = f"🏗️ <b>BET BUILDER</b>  {b['odds']}\n"
-        msg += "━━━━━━━━━━━━━━━━━━\n"
-        msg += f"⚽ <b>{b['match']}</b>"
-        if tstr:
-            msg += " · ⏰ " + tstr
-        msg += "\n\n"
-        for leg in b["legs"]:
-            cat_emoji = {
-                "score": "⚽", "assist": "🎯", "booked": "🟨",
-                "shots": "🥅", "fouls": "👊", "tackles": "🦵",
-                "corners": "🔵", "saves": "🧤", "offsides": "🚩",
-                "result": "🏆", "other": "○"
-            }.get(leg["_cat"], "○")
-            _fbref_check = " 🔍" if leg.get("_fbref_confirmed") else ""
-            _either_check = " 🔀" if leg.get("_is_either") else ""
-            msg += f"{cat_emoji} {leg['player_prop']}{_fbref_check}{_either_check}\n"
+        _cat_icons = {"score":"⚽","assist":"🎯","booked":"🟨","shots":"🥅",
+                      "fouls":"👊","tackles":"🦵","corners":"🔵","saves":"🧤",
+                      "offsides":"🚩","result":"🏆","other":"○"}
+
+        msg = f"{b.get('label', '🏗️ BET BUILDER')}  {b['odds']}\n"
+        msg += "━━━━━━━━━━━━━━━━━━━━━━\n"
+
+        if b.get("_multi_match") and b.get("_match_names"):
+            # Multi-Match: Legs nach Match gruppieren
+            _legs_by_match = {}
+            for leg in b["legs"]:
+                _lm = leg.get("_match", b["match"])
+                _legs_by_match.setdefault(_lm, []).append(leg)
+            for _mn, _mlegs in _legs_by_match.items():
+                try:
+                    _ko_str = " · ⏰ " + _mlegs[0]["_ko"].strftime("%H:%M")
+                except Exception:
+                    _ko_str = ""
+                msg += f"\n⚽ <b>{_mn}</b>{_ko_str}\n"
+                for leg in _mlegs:
+                    msg += f"   {_cat_icons.get(leg['_cat'],'○')} {leg['player_prop']}\n"
+        else:
+            # Single-Match
+            msg += f"⚽ <b>{b['match']}</b>"
+            if tstr:
+                msg += " · ⏰ " + tstr
+            msg += "\n"
+            for leg in b["legs"]:
+                _fbref = " 🔍" if leg.get("_fbref_confirmed") else ""
+                _either = " 🔀" if leg.get("_is_either") else ""
+                msg += f"{_cat_icons.get(leg['_cat'],'○')} {leg['player_prop']}{_fbref}{_either}\n"
 
         msg += f"\n💰 @ <b>{b['odds']}</b> · 0.5u ✅"
 
@@ -18813,6 +19666,11 @@ def main():
                     # 🤖 XGBoost ML-Modell (stärkste Ebene wenn Modelle geladen)
                     # Schlägt Elo/Poisson weil es kalibriert und aus echten Daten trainiert ist
                     try:
+                        # 🆕 ClubElo als externe Teamstärke-Quelle
+                        _celo = get_clubelo_for_match(home, away, target_date)
+                        if _celo.get("elo_diff") is not None:
+                            log(f"      ⚡ ClubElo: {home} {_celo['elo_home']} vs {away} {_celo['elo_away']} (Diff: {_celo['elo_diff']})")
+
                         _ml = get_ml_prediction(home, away, league_name)
                         if _ml:
                             # 80% ML-Modell, 20% bisherige Schätzung (Absicherung bei Nischenteams)
