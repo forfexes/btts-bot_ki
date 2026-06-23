@@ -18078,6 +18078,79 @@ def run_pinnacle_props_bot(win_start_utc=None, win_end_utc=None, ch_tz=None, top
                     _value_sent += 1
                     log(f"   🎯 Value Alert: {player} {value_info['market']} +{value_info['edge_pct']}%")
 
+    # 🌍 WM: direkt Odds API Player Props holen (Goalscorer, Cards, SOT)
+    if ODDS_API_KEYS:
+        try:
+            from datetime import timedelta as _wm_td
+            _wm_date = (win_start_utc or datetime.now(timezone.utc)).date()
+            _wm_leagues = ["WM 2026", "WM 2026 Gruppe A", "WM 2026 Gruppe B",
+                           "WM 2026 Gruppe C", "WM 2026 Gruppe D", "WM 2026 Gruppe E",
+                           "WM 2026 Gruppe F", "WM 2026 Gruppe G", "WM 2026 Gruppe H",
+                           "WM 2026 Gruppe I"]
+            _wm_props_all = []
+            for _wm_lg in _wm_leagues:
+                _wm_props = fetch_odds_api_player_props(_wm_lg, _wm_date)
+                if _wm_props:
+                    _wm_props_all.extend(_wm_props)
+                    log(f"   🌍 OddsAPI WM Props: {len(_wm_props)} für {_wm_lg}")
+                    break  # Eine Liga reicht (alle zeigen dasselbe)
+
+            if _wm_props_all:
+                prop_chat = TELEGRAM_GROUPS.get("advanced_props") or TELEGRAM_GROUPS.get("props")
+                _wm_sent = 0
+                _wm_dedup = set()
+                for p in _wm_props_all:
+                    player = p.get("player", "")
+                    market = p.get("market", "")
+                    odds = float(p.get("odds", 0) or 0)
+                    match = p.get("match", "")
+                    kickoff = p.get("kickoff", "")
+                    side = p.get("side", "")
+
+                    if not player or odds < 1.30 or odds > 8.00:
+                        continue
+                    if "over" not in side.lower() and "yes" not in side.lower() and market not in ["player_goal_scorer"]:
+                        continue
+
+                    _dk = f"{player}_{market}_{match}"
+                    if _dk in _wm_dedup:
+                        continue
+                    _wm_dedup.add(_dk)
+
+                    # Markt-Label
+                    _mkt_labels = {
+                        "player_goal_scorer": "⚽ Anytime Goalscorer",
+                        "player_shots_on_target": "🎯 1+ Shot on Target",
+                        "player_shots": "💥 2+ Shots",
+                        "player_cards": "🟨 Player to be Booked",
+                        "player_assists": "🎯 Anytime Assist",
+                        "player_tackles": "🦵 2+ Tackles",
+                    }
+                    mkt_label = _mkt_labels.get(market, market)
+
+                    ko_str = kickoff[11:16] if len(kickoff) > 11 else kickoff
+                    msg = (
+                        f"\U0001F30D <b>WM PLAYER PROP</b>\n"
+                        f"\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\n"
+                        f"\u26BD <b>{match}</b> \u00B7 \u23F0 {ko_str}\n\n"
+                        f"\U0001F464 <b>{player}</b>\n"
+                        f"   {mkt_label}\n\n"
+                        f"\U0001F4B0 @ <b>{odds}</b> \u00B7 0.5u \u2705\n"
+                        f"\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\n"
+                        f"<i>\U0001F4CA The Odds API</i>"
+                    )
+                    if prop_chat:
+                        send_telegram(msg, chat_id=prop_chat)
+                        _wm_sent += 1
+                        log(f"   🌍 WM Prop gesendet: {player} {mkt_label} @ {odds}")
+
+                    if _wm_sent >= 10:
+                        break
+
+                log(f"   🌍 WM OddsAPI Props: {_wm_sent} gesendet")
+        except Exception as _wme:
+            log(f"   🌍 WM OddsAPI Fehler: {str(_wme)[:60]}", "WARN")
+
     log("🔑 Pinnacle Props: keine Bet Builder zusammengestellt")
     return 0
 
