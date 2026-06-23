@@ -1,0 +1,51 @@
+name: NETRATTLER Player Stats Scraper
+
+on:
+  # Täglich 02:00 UTC (nach Ende der meisten Abendspiele)
+  schedule:
+    - cron: '0 2 * * *'
+  # Manuell mit optionaler Event-ID oder Datum
+  workflow_dispatch:
+    inputs:
+      date:
+        description: "Datum (YYYY-MM-DD), leer = gestern"
+        required: false
+        default: ""
+      sofascore_event_id:
+        description: "SofaScore Event-ID (optional, überschreibt Datum)"
+        required: false
+        default: ""
+      yesterday:
+        description: "Gestern scrapen (true/false)"
+        required: false
+        default: "true"
+
+jobs:
+  scrape:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
+      - name: Install Dependencies
+        run: pip install requests supabase python-dotenv cloudscraper
+
+      - name: Scrape Player Stats (post-match)
+        env:
+          SUPABASE_URL: ${{ secrets.SUPABASE_URL }}
+          SUPABASE_KEY: ${{ secrets.SUPABASE_KEY }}
+          TELEGRAM_TOKEN: ${{ secrets.TELEGRAM_TOKEN }}
+          TELEGRAM_GROUP_STATS: ${{ secrets.TELEGRAM_GROUP_STATS }}
+        run: |
+          if [ -n "${{ github.event.inputs.sofascore_event_id }}" ]; then
+            python scrape_player_stats.py --event-id "${{ github.event.inputs.sofascore_event_id }}"
+          elif [ -n "${{ github.event.inputs.date }}" ]; then
+            python scrape_player_stats.py --date "${{ github.event.inputs.date }}"
+          else
+            python scrape_player_stats.py --yesterday
+          fi
