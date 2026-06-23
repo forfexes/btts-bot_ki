@@ -2447,8 +2447,8 @@ ALLSPORTS_API_KEY = env("ALLSPORTS_API_KEY", "")
 FOOTBALLDATA_IO_API_KEY = env("FOOTBALLDATA_IO_API_KEY", "")
 THESTATSAPI_KEY = env("THESTATSAPI_KEY", "")  # 🆕 thestatsapi.com — Player Stats, Odds, xG, Lineups
 THESTATSAPI_KEYS = env_list("THESTATSAPI_KEYS")  # 🆕 Komma-getrennte Keys für Rotation
-if not THESTATSAPI_KEYS and THESTATSAPI_KEY:
-    THESTATSAPI_KEYS = [THESTATSAPI_KEY]
+if not THESTATSAPI_KEYS:
+    THESTATSAPI_KEYS = [THESTATSAPI_KEY] if THESTATSAPI_KEY else []
 elif THESTATSAPI_KEYS and not THESTATSAPI_KEY:
     THESTATSAPI_KEY = THESTATSAPI_KEYS[0]
 SOCCERFOOTBALLINFO_API_KEY = env("SOCCERFOOTBALLINFO_API_KEY", "")  # 🆕 soccerfootballinfo.com
@@ -17003,7 +17003,28 @@ def run_pinnacle_props_bot(win_start_utc=None, win_end_utc=None, ch_tz=None, top
             _rejected_low_odds += 1
             if _is_wc_match:
                 log(f"   🌍 WM-Reject (Quote zu tief): {match_name} → {combo_odds}")
-                _send_stat_insight_fallback(match_name, legs)
+                # 🆕 Einzelne Props senden statt Kombi — Portugal vs Uzbekistan hat echte Player-Props
+                _prop_chat = TELEGRAM_GROUPS.get("advanced_props") or TELEGRAM_GROUPS.get("props")
+                _dedup_k = f"wmprop_{match_name}_{datetime.now(timezone.utc).date()}"
+                if _prop_chat and _dedup_k not in _STAT_INSIGHT_SENT_TODAY:
+                    _STAT_INSIGHT_SENT_TODAY.add(_dedup_k)
+                    for _leg in selected[:4]:  # Max 4 einzelne Props
+                        _leg_odds = float(_leg.get("price", _leg.get("odds", 0)) or 0)
+                        _leg_name = _leg.get("name", _leg.get("tip", ""))
+                        if not _leg_name or _leg_odds < 1.30:
+                            continue
+                        _msg = (
+                            f"🎯 <b>PLAYER PROP</b>  {_leg_odds}\n"
+                            f"━━━━━━━━━━━━━━━━━━\n"
+                            f"⚽ <b>{match_name}</b>\n"
+                            f"   ✅ {_leg_name}\n"
+                            f"━━━━━━━━━━━━━━━━━━\n"
+                            f"💰 @ {_leg_odds} · 0.5u"
+                        )
+                        send_telegram(_msg, chat_id=_prop_chat)
+                        log(f"   🎯 WM Single Prop: {_leg_name} @ {_leg_odds}")
+                else:
+                    _send_stat_insight_fallback(match_name, legs)
             continue
 
         builders.append({
