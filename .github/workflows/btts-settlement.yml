@@ -32,6 +32,8 @@ jobs:
           SPORTMONKS_API_KEY: ${{ secrets.SPORTMONKS_API_KEY }}
           SPORTDB_API_KEY: ${{ secrets.SPORTDB_API_KEY }}
           ALLSPORTS_API_KEY: ${{ secrets.ALLSPORTS_API_KEY }}
+          THESTATSAPI_KEY:   ${{ secrets.THESTATSAPI_KEY }}
+          API_NINJAS_KEY:    ${{ secrets.API_NINJAS_KEY }}
           OPENWEATHER_API_KEY: ${{ secrets.OPENWEATHER_API_KEY }}
           TELEGRAM_TOKEN: ${{ secrets.TELEGRAM_TOKEN }}
           TELEGRAM_CHAT_ID: ${{ secrets.TELEGRAM_CHAT_ID }}
