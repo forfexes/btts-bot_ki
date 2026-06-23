@@ -9636,15 +9636,18 @@ def fetch_odds_api_player_props(league_name: str, target_date) -> list:
     return props
 
 
-def get_odds_api_player_prop_candidates(fixtures_cache: dict, target_date) -> list:
+def get_odds_api_player_prop_candidates(fixtures_cache, target_date) -> list:
     """
     Holt Player Props für alle Ligen mit Odds-API-Abdeckung.
     Gibt direkt verwendbare Prop-Builder-Kandidaten zurück.
     """
+    # Fix: Falls versehentlich eine Liste übergeben wird → leeres dict
+    if isinstance(fixtures_cache, list):
+        fixtures_cache = {}
     candidates = []
     processed = set()
 
-    for league in list(fixtures_cache or {}).keys():
+    for league in list((fixtures_cache or {}).keys()):
         if league in processed or league not in LEAGUE_KEYS:
             continue
         processed.add(league)
@@ -17735,7 +17738,8 @@ def _send_stat_insight_fallback(match_name, legs):
         log(f"   📊 Stat-Analyse gesendet (statt Bet Builder): {match_name}")
 
 
-def run_pinnacle_props_bot(win_start_utc=None, win_end_utc=None, ch_tz=None, top_btts_tips=None) -> int:
+def run_pinnacle_props_bot(win_start_utc=None, win_end_utc=None, ch_tz=None, top_btts_tips=None, fixtures_cache=None) -> int:
+    fixtures_cache = fixtures_cache or {}
     """
     Pinnacle Player Props Bot.
     top_btts_tips: Beste BTTS-Tipps aus Hauptanalyse (als zusätzliche Bet-Builder-Legs).
@@ -20066,6 +20070,7 @@ def main():
                 win_end_utc=_win_end_utc,
                 ch_tz=_ch_tz,
                 top_btts_tips=_top_btts_for_props,
+                fixtures_cache=_fixtures_cache,
             )
         except Exception as _ppe:
             log(f"🔑 Pinnacle Props übersprungen: {str(_ppe)[:60]}", "WARN")
