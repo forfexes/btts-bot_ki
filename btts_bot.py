@@ -17555,17 +17555,9 @@ def fetch_pinnacle_player_props() -> List[Dict]:
             # Kategorie-Feld kann je nach API-Version anders heissen — alle Varianten prüfen
             cat = (sp.get("category") or sp.get("categoryName") or sp.get("type") or "").lower()
             desc = sp.get("description", "") or sp.get("name", "")
-            desc_lower = desc.lower()
-            # Breitere Erkennung inkl. WM Player Goal Matchups
-            is_player_prop = (
-                "player" in cat
-                or "goal matchup" in cat
-                or any(k in desc_lower for k in [
-                    "to score", "to assist", "to be booked", "shots", "fouls",
-                    "tackles", "saves", "carded", "offside", "booking",
-                    "anytime scorer", "first scorer", "last scorer",
-                    "yellow card", "red card",
-                ])
+            # Breitere Erkennung: "player" im Kategorienamen ODER im Beschreibungstext
+            is_player_prop = "player" in cat or any(
+                k in desc.lower() for k in ["to score", "to assist", "to be booked", "shots", "fouls", "tackles", "saves", "carded"]
             )
             if not is_player_prop:
                 continue
@@ -17573,15 +17565,6 @@ def fetch_pinnacle_player_props() -> List[Dict]:
             pparts = parent.get("participants", [])
             ph = next((p.get("name","") for p in pparts if p.get("alignment")=="home"), "")
             pa = next((p.get("name","") for p in pparts if p.get("alignment")=="away"), "")
-            # Fallback für WM Specials: Match-Name aus parent
-            if not ph or not pa:
-                parent_name = parent.get("name", "") or m.get("parentName", "") or ""
-                for _sep in [" vs ", " v "]:
-                    if _sep in parent_name:
-                        _pts = parent_name.split(_sep, 1)
-                        ph = ph or _pts[0].strip()
-                        pa = pa or (_pts[1].strip() if len(_pts) > 1 else "")
-                        break
             league_name = (m.get("league") or {}).get("name", "")
             starts = m.get("startTime", "") or parent.get("startTime", "")
             for part in m.get("participants", []):
@@ -17618,17 +17601,15 @@ _SKIP_PROP_KEYWORDS = [
 
 # Leg-Kategorien für Bet Builder
 _LEG_CATEGORY = {
-    "score": ["to score", "anytime goalscorer", "first goalscorer", "last goalscorer",
-               "score or assist", "goal matchup", "first goal", "to get on scoresheet"],
+    "score": ["to score", "anytime goalscorer", "first goalscorer", "last goalscorer", "score or assist"],
     "assist": ["to assist", "score or assist"],
-    "booked": ["to be booked", "receive a card", "be carded", "yellow card", "booking"],
-    "shots": ["shots on target", "shots on goal", "shot on target"],
-    "fouls": ["fouls won", "to be fouled", "foul committed", "foul"],
+    "booked": ["to be booked", "receive a card", "be carded"],
+    "shots": ["shots on target", "shots on goal"],
+    "fouls": ["fouls won", "to be fouled", "foul"],
     "tackles": ["tackle", "tackles won"],
-    "corners": ["corners", "corner kicks", "corners taken"],
+    "corners": ["corners", "corner kicks"],
     "saves": ["saves", "goalkeeper saves"],
     "offsides": ["offside"],
-    "cards": ["red card", "to be sent off"],
 }
 
 def _get_leg_category(prop_name):
@@ -17784,9 +17765,9 @@ def run_pinnacle_props_bot(win_start_utc=None, win_end_utc=None, ch_tz=None, top
             continue
         if match_name.lower() == prop_name:
             continue
-        if not (1.10 <= p["odds"] <= 6.00):
+        if not (1.15 <= p["odds"] <= 5.00):
             continue
-        if p["prob"] < 45:  # WM Props oft bei 60-70% implizierter Wahrscheinlichkeit
+        if p["prob"] < 55:  # Legs dürfen etwas lockerer sein — Combo filtert
             continue
 
         # 🔍 FBref Cross-Check: unabhängige Wahrscheinlichkeit gegen Pinnacle-Quote prüfen
@@ -17937,12 +17918,11 @@ def run_pinnacle_props_bot(win_start_utc=None, win_end_utc=None, ch_tz=None, top
             continue
 
         combo_odds = _calc_combo_odds(selected)
-        # WM Props haben niedrigere Quoten → 1.40 Mindest für WM, 1.80 sonst
-        _min_combo = 1.40 if _is_wc_match else 1.80
-        if combo_odds < _min_combo:
+        # Nur Builders mit sinnvoller Quote senden
+        if combo_odds < 1.80:
             _rejected_low_odds += 1
             if _is_wc_match:
-                log(f"   🌍 WM-Reject (Combo {combo_odds} < {_min_combo}): {match_name}")
+                log(f"   🌍 WM-Reject (Quote zu tief): {match_name} → {combo_odds}")
                 # 🆕 Einzelne Props senden statt Kombi — Portugal vs Uzbekistan hat echte Player-Props
                 _prop_chat = TELEGRAM_GROUPS.get("advanced_props") or TELEGRAM_GROUPS.get("props")
                 _dedup_k = f"wmprop_{match_name}_{datetime.now(timezone.utc).date()}"
@@ -17978,8 +17958,7 @@ def run_pinnacle_props_bot(win_start_utc=None, win_end_utc=None, ch_tz=None, top
         for _n in range(2, min(len(selected) + 1, 7)):
             _legs_n = selected[:_n]
             _odds_n = _calc_combo_odds(_legs_n)
-            _min_n = 1.40 if _is_wc_match else 1.80
-            if _odds_n < _min_n:
+            if _odds_n < 1.80:
                 continue
             builders.append({
                 "match": match_name,
@@ -20082,11 +20061,17 @@ def main():
                 key=lambda x: int(x.get("probability", 0)),
                 reverse=True
             )[:20]
+            # Props: immer 24h Fenster (ab jetzt bis morgen 14:00 UTC)
+            # damit WM-Spiele nachts nicht rausgefiltert werden
+            from datetime import timedelta as _td_props
+            _props_start = datetime.now(timezone.utc)
+            _props_end   = _props_start + _td_props(hours=16)
             run_pinnacle_props_bot(
-                win_start_utc=_win_start_utc,
-                win_end_utc=_win_end_utc,
+                win_start_utc=_props_start,
+                win_end_utc=_props_end,
                 ch_tz=_ch_tz,
                 top_btts_tips=_top_btts_for_props,
+                fixtures_cache=_fixtures_cache,
             )
         except Exception as _ppe:
             log(f"🔑 Pinnacle Props übersprungen: {str(_ppe)[:60]}", "WARN")
