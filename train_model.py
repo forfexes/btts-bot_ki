@@ -628,11 +628,11 @@ def save_model_to_supabase(model, meta):
     pickle.dump({"model": model, "meta": meta, "feature_cols": FEATURE_COLS}, buf)
     model_b64 = base64.b64encode(buf.getvalue()).decode("utf-8")
 
-    headers = {
+    headers_upsert = {
         "apikey": SUPABASE_KEY,
         "Authorization": f"Bearer {SUPABASE_KEY}",
         "Content-Type": "application/json",
-        "Prefer": "resolution=merge-duplicates",
+        "Prefer": "resolution=merge-duplicates,return=minimal",
     }
     payload = {
         "model_name": meta["model_name"],
@@ -640,12 +640,27 @@ def save_model_to_supabase(model, meta):
         "meta": json.dumps(meta),
         "updated_at": datetime.now(timezone.utc).isoformat(),
     }
-    r = requests.post(
+    # Versuche erst PATCH (Update falls vorhanden), dann POST (Insert neu)
+    r = requests.patch(
         f"{SUPABASE_URL}/rest/v1/ml_models",
-        headers=headers,
+        headers={**headers_upsert, "Prefer": "return=minimal"},
+        params={"model_name": f"eq.{meta['model_name']}"},
         json=payload,
         timeout=30,
     )
+    if not r.ok or r.status_code == 204:
+        # PATCH erfolgreich (204 No Content) oder Fallback auf POST
+        if r.status_code == 204:
+            size_kb = len(model_b64) / 1024
+            print(f"   ✅ {meta['model_name']} in Supabase aktualisiert ({size_kb:.0f} KB)")
+            return
+        # POST als Fallback (neues Modell)
+        r = requests.post(
+            f"{SUPABASE_URL}/rest/v1/ml_models",
+            headers=headers_upsert,
+            json=payload,
+            timeout=30,
+        )
     if r.ok:
         size_kb = len(model_b64) / 1024
         print(f"   ✅ {meta['model_name']} in Supabase gespeichert ({size_kb:.0f} KB)")
