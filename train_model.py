@@ -14,6 +14,11 @@ Features pro Spiel:
 - Heim-Over2.5-Rate letzte 10 Spiele
 - Auswärts-Over2.5-Rate letzte 10 Spiele
 - Elo-Differenz
+
+FIXES (2026-06-23):
+- BUG FIX: _avg() NaN-Filter → sum([NaN, 1.5]) = NaN verhindert
+- BUG FIX: cards_home/away NaN-Guard → openfootball None-Werte
+  vergifteten rolling avg → dropna entfernte alle 33k Zeilen → X leer
 """
 
 import os, sys, json, math, base64, io, pickle
@@ -248,7 +253,7 @@ def load_all_matches():
 
 def compute_elo_ratings(df):
     """
-    Berechnet Elo-Ratings für jeden Eintrag NACH dem Spiel, 
+    Berechnet Elo-Ratings für jeden Eintrag NACH dem Spiel,
     sodass Features vor-dem-Spiel sauber sind (kein Data-Leakage).
     """
     ratings = {}  # {team_key: elo}
@@ -390,7 +395,7 @@ def compute_form_features(df, n=10):
     df["avg_conceded_combined"] = (df["avg_conceded_home"] + df["avg_conceded_away"]) / 2
 
     # ── Rolling Schüsse/Ecken/Karten (aus football-data.co.uk) ────────────
-    # Nur wo Daten vorhanden (sonst 0 = neutral)
+    # Nur wo Daten vorhanden (sonst Default = neutral)
     shot_avg_h, shot_avg_a = [], []
     corner_avg_h, corner_avg_a = [], []
     card_avg_h, card_avg_a = [], []
@@ -401,8 +406,12 @@ def compute_form_features(df, n=10):
     for _, row in df.iterrows():
         home, away = row["home"], row["away"]
 
+        # ── FIX: NaN-sichere _avg Funktion ──────────────────────────────
+        # Ohne diesen Filter führt ein einziger None/NaN-Wert aus openfootball
+        # dazu, dass sum([NaN, 1.5, 2.0]) = NaN → alle nachfolgenden Zeilen
+        # bekommen NaN → dropna() entfernt alle 33k Zeilen → X ist leer → Crash
         def _avg(store, team, default):
-            hist = store.get(team, [])[-10:]
+            hist = [v for v in store.get(team, [])[-10:] if v == v]  # v==v filtert NaN
             return sum(hist) / len(hist) if hist else default
 
         shot_avg_h.append(_avg(team_shots, home, 11.0))
@@ -413,15 +422,23 @@ def compute_form_features(df, n=10):
         card_avg_a.append(_avg(team_cards, away, 1.5))
 
         # Update mit echten Werten wenn vorhanden
-        if row.get("shots_home") is not None and row["shots_home"] > 0:
-            team_shots.setdefault(home, []).append(row["shots_home"])
-            team_shots.setdefault(away, []).append(row["shots_away"])
-        if row.get("corners_home") is not None and row["corners_home"] > 0:
-            team_corners.setdefault(home, []).append(row["corners_home"])
-            team_corners.setdefault(away, []).append(row["corners_away"])
-        if row.get("cards_home") is not None:
-            team_cards.setdefault(home, []).append(row["cards_home"])
-            team_cards.setdefault(away, []).append(row["cards_away"])
+        if row.get("shots_home") is not None and not pd.isna(row["shots_home"]) and row["shots_home"] > 0:
+            team_shots.setdefault(home, []).append(float(row["shots_home"]))
+            team_shots.setdefault(away, []).append(float(row["shots_away"]))
+        if row.get("corners_home") is not None and not pd.isna(row["corners_home"]) and row["corners_home"] > 0:
+            team_corners.setdefault(home, []).append(float(row["corners_home"]))
+            team_corners.setdefault(away, []).append(float(row["corners_away"]))
+
+        # ── FIX: cards NaN-Guard ─────────────────────────────────────────
+        # Originalcode: if row.get("cards_home") is not None:
+        # Problem: openfootball setzt cards_home=None → pandas speichert als NaN
+        # NaN is not None → True → NaN landet im dict → _avg() gibt NaN zurück
+        # JETZT: expliziter pd.isna() Check + float() Cast für sicheres Speichern
+        cards_h = row.get("cards_home")
+        cards_a = row.get("cards_away")
+        if cards_h is not None and not pd.isna(cards_h):
+            team_cards.setdefault(home, []).append(float(cards_h))
+            team_cards.setdefault(away, []).append(float(cards_a) if cards_a is not None and not pd.isna(cards_a) else 0.0)
 
     df["avg_shots_home"] = shot_avg_h
     df["avg_shots_away"] = shot_avg_a
@@ -433,13 +450,12 @@ def compute_form_features(df, n=10):
     df["total_corners_exp"] = df["avg_corners_home"] + df["avg_corners_away"]
     df["total_cards_exp"] = df["avg_cards_home"] + df["avg_cards_away"]
 
-    # ── Form-Punkte (W=3/D=1/L=0 — aus bestehendem Feature-Engineering-Code) ──
+    # ── Form-Punkte (W=3/D=1/L=0) ─────────────────────────────────────────
     form_pts_home = []
     form_pts_away = []
     streak_win_home = []
     streak_win_away = []
 
-    # Nochmal über History iterieren für Punkte-Features (getrennt, sauber)
     team_results = {}
     for _, row in df.iterrows():
         home, away = row["home"], row["away"]
@@ -447,7 +463,7 @@ def compute_form_features(df, n=10):
         def _form_pts(team, last_k=5):
             hist = team_results.get(team, [])[-last_k:]
             pts = sum(3 if r == "W" else 1 if r == "D" else 0 for r in hist)
-            return pts / 15.0  # max 15 Punkte (5 Siege) → normiert auf 0-1
+            return pts / 15.0  # max 15 Punkte → normiert auf 0-1
 
         def _streak(team):
             hist = team_results.get(team, [])
@@ -457,14 +473,13 @@ def compute_form_features(df, n=10):
                     streak += 1
                 else:
                     break
-            return min(streak / 5.0, 1.0)  # normiert
+            return min(streak / 5.0, 1.0)
 
         form_pts_home.append(_form_pts(home))
         form_pts_away.append(_form_pts(away))
         streak_win_home.append(_streak(home))
         streak_win_away.append(_streak(away))
 
-        # Ergebnis für dieses Spiel speichern
         if row["home_goals"] > row["away_goals"]:
             team_results.setdefault(home, []).append("W")
             team_results.setdefault(away, []).append("L")
@@ -481,7 +496,7 @@ def compute_form_features(df, n=10):
     df["streak_win_home"] = streak_win_home
     df["streak_win_away"] = streak_win_away
 
-    # ── H2H Features aus Match-History ──
+    # ── H2H Features ──────────────────────────────────────────────────────
     h2h_history = {}
     h2h_btts = []
     h2h_avg_goals = []
@@ -497,7 +512,7 @@ def compute_form_features(df, n=10):
             h2h_avg_goals.append(sum(m["goals"] for m in hist) / len(hist))
             h2h_matches.append(min(len(hist) / 10.0, 1.0))
         else:
-            h2h_btts.append(0.5)      # Prior: 50% wenn keine H2H-Daten
+            h2h_btts.append(0.5)
             h2h_avg_goals.append(2.5)
             h2h_matches.append(0.0)
 
@@ -530,7 +545,7 @@ FEATURE_COLS = [
     # Halbzeit-Features
     "btts_ht_rate_home", "btts_ht_rate_away",
     "o15ht_rate_home", "o15ht_rate_away",
-    # Form-Punkte (W=3/D=1/L=0, aus bestehendem Feature-Engineering-Code)
+    # Form-Punkte
     "form_pts_home", "form_pts_away", "form_pts_diff",
     "streak_win_home", "streak_win_away",
     # H2H-History
@@ -545,7 +560,7 @@ FEATURE_COLS = [
 def train_model(df, target_col, model_name):
     """Trainiert XGBoost-Klassifikator mit Time-Series-CV und Kalibrierung."""
     df_clean = df.dropna(subset=FEATURE_COLS + [target_col])
-    # Erste 5 Spiele pro Team weglassen (noch keine stabilen Form-Features)
+    # Erste 200 Zeilen weglassen (noch keine stabilen Form-Features)
     df_clean = df_clean.iloc[200:].reset_index(drop=True)
 
     X = df_clean[FEATURE_COLS].values
@@ -554,6 +569,9 @@ def train_model(df, target_col, model_name):
     print(f"\n{'='*60}")
     print(f"🧠 Trainiere Modell: {model_name}")
     print(f"   Datensätze: {len(X)}, Positiv-Rate: {y.mean():.1%}")
+
+    if len(X) < 100:
+        raise ValueError(f"Zu wenig Trainingsdaten für {model_name}: {len(X)} Zeilen nach dropna/iloc[200:]")
 
     # XGBoost-Parameter
     base_model = xgb.XGBClassifier(
@@ -565,7 +583,6 @@ def train_model(df, target_col, model_name):
         min_child_weight=10,
         scale_pos_weight=(1 - y.mean()) / y.mean(),
         eval_metric="logloss",
-        
         random_state=42,
         n_jobs=-1,
     )
@@ -582,7 +599,7 @@ def train_model(df, target_col, model_name):
     brier = brier_score_loss(y_eval, proba)
     auc = roc_auc_score(y_eval, proba)
     print(f"   ✅ Brier Score: {brier:.4f} (niedriger = besser, Baseline ~0.24)")
-    print(f"   ✅ ROC-AUC:     {auc:.4f} (höher = besser, Zuffall = 0.5)")
+    print(f"   ✅ ROC-AUC:     {auc:.4f} (höher = besser, Zufall = 0.5)")
 
     return calibrated, {
         "model_name": model_name,
@@ -652,6 +669,16 @@ if __name__ == "__main__":
     df = compute_elo_ratings(df)
     print("📊 Berechne Form-Features...")
     df = compute_form_features(df)
+
+    # Sanity-Check: NaN-Anteil pro Feature ausgeben
+    print("\n🔍 NaN-Check FEATURE_COLS:")
+    nan_counts = df[FEATURE_COLS].isna().sum()
+    nan_cols = nan_counts[nan_counts > 0]
+    if len(nan_cols) == 0:
+        print("   ✅ Keine NaN-Werte in Feature-Spalten")
+    else:
+        for col, cnt in nan_cols.items():
+            print(f"   ⚠️  {col}: {cnt} NaN ({cnt/len(df):.1%})")
 
     # Targets definieren
     targets = {
