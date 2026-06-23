@@ -48,6 +48,7 @@ jobs:
             anthropic \
             supabase \
             xgboost \
+            cloudscraper \
             numpy \
             pandas \
             scikit-learn
@@ -73,6 +74,7 @@ jobs:
           FOOTYSTATS_API_KEY:         ${{ secrets.FOOTYSTATS_API_KEY }}
           OPENWEATHER_API_KEY:        ${{ secrets.OPENWEATHER_API_KEY }}
           THESTATSAPI_KEY:            ${{ secrets.THESTATSAPI_KEY }}
+          THESTATSAPI_KEYS:           ${{ secrets.THESTATSAPI_KEYS }}
           API_NINJAS_KEY:             ${{ secrets.API_NINJAS_KEY }}
           # ── Telegram ──
           TELEGRAM_TOKEN:             ${{ secrets.TELEGRAM_TOKEN }}
