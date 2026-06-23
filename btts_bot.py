@@ -5809,9 +5809,15 @@ def get_statsbomb_player_stats(league_name: str) -> dict:
         # Letzte 10 Spiele für aktuelle Form
         recent = matches[-10:] if len(matches) > 10 else matches
 
-        shots_count = {}
+        shots_count = {}        # SOT (Schüsse aufs Tor)
+        total_shots_count = {}  # Alle Schüsse
         fouls_count = {}
         cards_count = {}
+        goals_count = {}
+        key_passes_count = {}   # Key Passes (Torschussvorbereitung)
+        assists_count = {}      # Assists (Torvorlage)
+        offsides_count = {}     # Abseits
+        _player_home_away = {}  # {player: {"home": n, "away": n}}
         goals_count = {}
         player_team = {}
         games_played = {}
@@ -5829,6 +5835,10 @@ def get_statsbomb_player_stats(league_name: str) -> dict:
                     continue
                 events = re.json()
 
+                # Home/Away für dieses Match bestimmen
+                home_team_name = match.get("home_team", {}).get("home_team_name", "")
+                away_team_name = match.get("away_team", {}).get("away_team_name", "")
+
                 for ev in events:
                     ev_type = (ev.get("type") or {}).get("name", "")
                     player = (ev.get("player") or {}).get("name", "")
@@ -5839,40 +5849,98 @@ def get_statsbomb_player_stats(league_name: str) -> dict:
                     player_team[player] = team
                     games_played.setdefault(player, set()).add(match_id)
 
+                    # Home/Away Flag pro Spieler
+                    is_home = (team == home_team_name)
+                    player_home_away = _player_home_away.get(player, {"home": 0, "away": 0})
+                    if is_home:
+                        player_home_away["home"] = player_home_away.get("home", 0) + 1
+                    else:
+                        player_home_away["away"] = player_home_away.get("away", 0) + 1
+                    _player_home_away[player] = player_home_away
+
                     if ev_type == "Shot":
+                        # Total shots (alle)
+                        total_shots_count[player] = total_shots_count.get(player, 0) + 1
                         outcome = (ev.get("shot") or {}).get("outcome", {}).get("name", "")
+                        # SOT (Schüsse aufs Tor)
                         if outcome in ("Goal", "Saved", "Saved To Post", "Saved Off T"):
                             shots_count[player] = shots_count.get(player, 0) + 1
                         if outcome == "Goal":
                             goals_count[player] = goals_count.get(player, 0) + 1
+
                     elif ev_type == "Foul Committed":
                         fouls_count[player] = fouls_count.get(player, 0) + 1
+
                     elif ev_type == "Bad Behaviour":
                         card = (ev.get("bad_behaviour") or {}).get("card", {}).get("name", "")
                         if "Yellow" in card:
                             cards_count[player] = cards_count.get(player, 0) + 1
 
+                    elif ev_type == "Pass":
+                        pass_data = ev.get("pass") or {}
+                        # Key Pass (direkt torschussvorbereitung)
+                        if pass_data.get("key_pass"):
+                            key_passes_count[player] = key_passes_count.get(player, 0) + 1
+                        # Assist (Torvorlage)
+                        if pass_data.get("goal_assist"):
+                            assists_count[player] = assists_count.get(player, 0) + 1
+
+                    elif ev_type == "Offside":
+                        offsides_count[player] = offsides_count.get(player, 0) + 1
+
             except Exception:
                 continue
 
-        # Stats aggregieren
-        for player in set(list(shots_count) + list(fouls_count) + list(cards_count)):
+        # Stats aggregieren — alle Märkte
+        _all_players = set(
+            list(shots_count) + list(total_shots_count) +
+            list(fouls_count) + list(cards_count) +
+            list(key_passes_count) + list(assists_count)
+        )
+        for player in _all_players:
             games = len(games_played.get(player, {1}))
-            sot = round(shots_count.get(player, 0) / games, 2)
+            sot   = round(shots_count.get(player, 0) / games, 2)
+            total_sh = round(total_shots_count.get(player, 0) / games, 2)
             fouls = round(fouls_count.get(player, 0) / games, 2)
             cards = round(cards_count.get(player, 0) / games, 3)
             goals = round(goals_count.get(player, 0) / games, 2)
+            kp    = round(key_passes_count.get(player, 0) / games, 2)
+            ast   = round(assists_count.get(player, 0) / games, 2)
+            offs  = round(offsides_count.get(player, 0) / games, 2)
+            ha    = _player_home_away.get(player, {})
 
-            if sot < 0.3 and fouls < 0.5 and cards < 0.1:
-                continue  # Uninteressant
+            # Nur interessante Spieler behalten
+            if sot < 0.3 and fouls < 0.5 and cards < 0.1 and kp < 0.3 and goals < 0.15:
+                continue
+
+            # Positionserkennung aus Stats (Stürmer=viele Schüsse, Spielmacher=viele KP, Sechser=viele Fouls+Karten)
+            if total_sh >= 1.5:
+                position_type = "striker"   # Stürmer/Außen
+            elif kp >= 0.8 or ast >= 0.3:
+                position_type = "playmaker" # Spielmacher (De Bruyne, Musiala)
+            elif fouls >= 1.5 or cards >= 0.2:
+                position_type = "defensive" # Sechser/Innenverteidiger (Rodri, Rüdiger)
+            else:
+                position_type = "unknown"
 
             player_stats[player] = {
                 "team": player_team.get(player, ""),
+                "position_type": position_type,
+                # Torschuss-Märkte
                 "sot_per90": sot,
+                "shots_per90": total_sh,
+                "goals_per90": goals,
+                # Vorlagen-Märkte (Spielmacher)
+                "key_passes_per90": kp,
+                "assists_per90": ast,
+                # Karten-Märkte (Defensive)
                 "fouls_per90": fouls,
                 "yellow_cards_per90": cards,
-                "goals_per90": goals,
+                # Sonstiges
+                "offsides_per90": offs,
                 "games": games,
+                "home_games": ha.get("home", 0),
+                "away_games": ha.get("away", 0),
                 "source": "statsbomb_http",
             }
 
@@ -5885,6 +5953,91 @@ def get_statsbomb_player_stats(league_name: str) -> dict:
         log(f"StatsBomb HTTP Error: {str(e)[:60]}", "WARN")
         STATSBOMB_PLAYER_CACHE[league_name] = {}
         return {}
+
+
+_SB_MATCH_PROPS_CACHE = {}  # {(home, away): [prop_candidates]}
+
+def get_statsbomb_props_for_match(home_team: str, away_team: str, league_name: str = "") -> list:
+    """
+    Holt Spieler-Props direkt aus StatsBomb Event-Daten für ein konkretes Match.
+    Aggregiert Shots, SOT, Fouls, Cards aus den letzten Spielen jedes Spielers
+    in der Liga → gibt Kandidaten für den Prop Builder zurück.
+    Format: [{"player", "team", "market", "stat_val", "mtype", "match", "league", "kickoff"}]
+    """
+    cache_key = (normalize_team_name(home_team), normalize_team_name(away_team))
+    if cache_key in _SB_MATCH_PROPS_CACHE:
+        return _SB_MATCH_PROPS_CACHE[cache_key]
+
+    # Liga-Stats laden (aggregiert über letzte Spiele)
+    stats = get_statsbomb_player_stats(league_name)
+    if not stats:
+        _SB_MATCH_PROPS_CACHE[cache_key] = []
+        return []
+
+    match_name = f"{home_team} vs {away_team}"
+    h_norm = normalize_team_name(home_team)
+    a_norm = normalize_team_name(away_team)
+    candidates = []
+
+    for player_name, s in stats.items():
+        team = s.get("team", "")
+        t_norm = normalize_team_name(team)
+
+        if not (t_norm[:6] in h_norm or h_norm[:6] in t_norm or
+                t_norm[:6] in a_norm or a_norm[:6] in t_norm):
+            continue
+
+        pos   = s.get("position_type", "unknown")
+        sot   = s.get("sot_per90", 0) or 0
+        shots = s.get("shots_per90", 0) or 0
+        fouls = s.get("fouls_per90", 0) or 0
+        cards = s.get("yellow_cards_per90", 0) or 0
+        goals = s.get("goals_per90", 0) or 0
+        kp    = s.get("key_passes_per90", 0) or 0
+        ast   = s.get("assists_per90", 0) or 0
+        offs  = s.get("offsides_per90", 0) or 0
+
+        # ── STÜRMER: Torschuss-Märkte ──────────────────────────────
+        if shots >= 2.0:
+            candidates.append({"player": player_name, "team": team, "match": match_name,
+                "league": league_name, "kickoff": "TBD",
+                "market": "2.5+ Total Shots", "stat_val": shots, "mtype": "shots"})
+        if sot >= 1.0:
+            candidates.append({"player": player_name, "team": team, "match": match_name,
+                "league": league_name, "kickoff": "TBD",
+                "market": "1+ Shot on Target", "stat_val": sot, "mtype": "shots"})
+        if goals >= 0.35:
+            candidates.append({"player": player_name, "team": team, "match": match_name,
+                "league": league_name, "kickoff": "TBD",
+                "market": "Anytime Goalscorer", "stat_val": goals, "mtype": "shots"})
+        if offs >= 0.5:
+            candidates.append({"player": player_name, "team": team, "match": match_name,
+                "league": league_name, "kickoff": "TBD",
+                "market": "1+ Offside", "stat_val": offs, "mtype": "shots"})
+
+        # ── SPIELMACHER: Vorlagen-Märkte ───────────────────────────
+        if kp >= 1.0:
+            candidates.append({"player": player_name, "team": team, "match": match_name,
+                "league": league_name, "kickoff": "TBD",
+                "market": "2+ Key Passes", "stat_val": kp, "mtype": "shots"})
+        if ast >= 0.25:
+            candidates.append({"player": player_name, "team": team, "match": match_name,
+                "league": league_name, "kickoff": "TBD",
+                "market": "Anytime Assist", "stat_val": ast, "mtype": "shots"})
+
+        # ── DEFENSIVE / SECHSER: Karten-Märkte ────────────────────
+        if fouls >= 1.5:
+            candidates.append({"player": player_name, "team": team, "match": match_name,
+                "league": league_name, "kickoff": "TBD",
+                "market": "2+ Fouls Committed", "stat_val": fouls, "mtype": "foul"})
+        if cards >= 0.15:
+            candidates.append({"player": player_name, "team": team, "match": match_name,
+                "league": league_name, "kickoff": "TBD",
+                "market": "Player to be Booked", "stat_val": cards, "mtype": "booking"})
+
+    log(f"   📊 StatsBomb Props: {len(candidates)} Kandidaten für {match_name}")
+    _SB_MATCH_PROPS_CACHE[cache_key] = candidates
+    return candidates
 
 
 def get_player_props_for_match(home_team: str, away_team: str, league_name: str) -> list:
@@ -15930,6 +16083,38 @@ def run_advanced_props_bot(active_leagues: list, fixtures_cache: dict, target_da
 
         total = len(foul_candidates) + len(booking_candidates) + len(shot_candidates)
         log(f"🔑 Kandidaten nach FBref: {len(foul_candidates)} Fouls · {len(booking_candidates)} Bookings · {len(shot_candidates)} Shots")
+
+    # 🆕 StatsBomb direkt — funktioniert für WM, Bundesliga, La Liga, Ligue 1, Copa America, UEFA Euro
+    if total < 4:
+        log("🔑 Versuche StatsBomb für Player Props...")
+        _sb_fixtures = list((fixtures_cache or {}).items())
+        # Auch Pinnacle-Matches direkt nutzen
+        for league, fixtures in _sb_fixtures:
+            for fix in (fixtures or [])[:5]:
+                home, away = fix.get("home", ""), fix.get("away", "")
+                if not home or not away:
+                    continue
+                try:
+                    sb_candidates = get_statsbomb_props_for_match(home, away, league)
+                    for c in sb_candidates:
+                        mtype = c.get("mtype", "shots")
+                        nm = c.get("player", "")
+                        tm = c.get("team", "")
+                        mn = c.get("match", f"{home} vs {away}")
+                        ko = c.get("kickoff", fix.get("time", "TBD"))
+                        sv = c.get("stat_val", 0)
+                        market = c.get("market", "")
+                        if mtype == "shots":
+                            _add(shot_candidates, nm, tm, mn, league, ko, market, sv, mtype)
+                        elif mtype == "foul":
+                            _add(foul_candidates, nm, tm, mn, league, ko, market, sv, mtype)
+                        elif mtype == "booking":
+                            _add(booking_candidates, nm, tm, mn, league, ko, market, sv, mtype)
+                except Exception:
+                    pass
+
+        total = len(foul_candidates) + len(booking_candidates) + len(shot_candidates)
+        log(f"🔑 Kandidaten nach StatsBomb: {len(foul_candidates)} Fouls · {len(booking_candidates)} Bookings · {len(shot_candidates)} Shots")
 
     # 🆕 TheStatsAPI als weitere Kandidatenquelle
     if total < 3 and THESTATSAPI_KEYS:
