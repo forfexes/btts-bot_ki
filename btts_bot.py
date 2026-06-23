@@ -6414,6 +6414,16 @@ def get_ml_prediction(home_team, away_team, league_name):
     elo_h = elo_ratings.get(h_key, ELO_RATINGS_CACHE.get("_global", {}).get(h_key, 1500)) + 60
     elo_a = elo_ratings.get(a_key, ELO_RATINGS_CACHE.get("_global", {}).get(a_key, 1500))
 
+    # 🆕 Falls kein Elo für diese Teams (Nischenliga): martj42-Stats als Feature-Basis
+    if elo_h == 1560 and elo_a == 1500:  # = beide Default
+        h_st = get_national_team_btts_stats(home_team)
+        a_st = get_national_team_btts_stats(away_team)
+        if h_st and a_st:
+            fh["btts_rate"] = h_st.get("btts_pct", 50) / 100
+            fa["btts_rate"] = a_st.get("btts_pct", 50) / 100
+            fh["o25_rate"] = h_st.get("over25_pct", 50) / 100
+            fa["o25_rate"] = a_st.get("over25_pct", 50) / 100
+
     # Form-Features
     fh = _ml_get_team_form(home_team)
     fa = _ml_get_team_form(away_team)
@@ -12244,8 +12254,16 @@ def generate_multi_combo_bets(all_tips, num_tips=3):
     normalized = []
     for t in all_tips:
         try:
-            odds = float(str(t.get("oddsYes", t.get("odds", 0))).replace(",", "."))
-            if odds >= 1.40:  # Niedrigere Schwelle = mehr Tipps in Combos
+            odds = float(str(t.get("oddsYes", t.get("odds", 0)) or 0).replace(",", "."))
+            # 🆕 Fallback: wenn kein echter Odds, fairOdds aus Wahrscheinlichkeit nutzen
+            if odds < 1.40:
+                fair = float(str(t.get("fairOdds", 0) or 0).replace(",", "."))
+                prob = int(t.get("probability", 0) or 0)
+                if fair >= 1.40:
+                    odds = fair
+                elif prob >= 55:
+                    odds = round(100 / prob, 2)  # z.B. 67% → 1.49
+            if odds >= 1.40:
                 normalized.append({
                     "match": t.get("match", ""),
                     "league": t.get("league", ""),
@@ -15917,7 +15935,15 @@ def run_advanced_props_bot(active_leagues: list, fixtures_cache: dict, target_da
     if total < 3 and THESTATSAPI_KEYS:
         log("🔑 Versuche TheStatsAPI für Player Props...")
         _seen_leagues = set()
-        for league, fixtures in (fixtures_cache or {}).items():
+
+        # Kombiniere fixtures_cache + Pinnacle-Fixtures direkt
+        _all_fix_sources = dict(fixtures_cache or {})
+        # Pinnacle-Fixtures aus dem Cache direkt nutzen
+        for _pfix in _pinnacle_matches_for_props if '_pinnacle_matches_for_props' in dir() else []:
+            _ln = _pfix.get("league", "Unknown")
+            _all_fix_sources.setdefault(_ln, []).append(_pfix)
+
+        for league, fixtures in _all_fix_sources.items():
             if league in _seen_leagues:
                 continue
             _seen_leagues.add(league)
@@ -16788,7 +16814,11 @@ def _send_stat_insight_fallback(match_name, legs):
         log(f"   📊 Stat-Analyse gesendet (statt Bet Builder): {match_name}")
 
 
-def run_pinnacle_props_bot(win_start_utc=None, win_end_utc=None, ch_tz=None) -> int:
+def run_pinnacle_props_bot(win_start_utc=None, win_end_utc=None, ch_tz=None, top_btts_tips=None) -> int:
+    """
+    Pinnacle Player Props Bot.
+    top_btts_tips: Beste BTTS-Tipps aus Hauptanalyse (als zusätzliche Bet-Builder-Legs).
+    """
     """Bet Builder Style: Pro Spiel 2-4 Legs kombiniert → Prop Hunter Kanal.
     Quellen: Pinnacle (echte Quoten) + FBref (unabhängige Stats) für Cross-Validation."""
     from datetime import datetime as _dt2
@@ -16986,7 +17016,52 @@ def run_pinnacle_props_bot(win_start_utc=None, win_end_utc=None, ch_tz=None) -> 
     if _rejected_too_few_legs or _rejected_low_odds:
         log(f"   🔑 Bet Builder Filter: {_rejected_too_few_legs} mit <2 Legs verworfen, {_rejected_low_odds} mit Quote<1.80 verworfen")
 
-    if not builders:
+    # 🆕 BTTS-Tipps als Bet Builder — wenn top_btts_tips übergeben und genug vorhanden
+    if top_btts_tips and len(top_btts_tips) >= 2:
+        log(f"   🔑 Verwende {len(top_btts_tips)} BTTS-Tipps als Bet Builder Beine...")
+        prop_chat = TELEGRAM_GROUPS.get("advanced_props") or TELEGRAM_GROUPS.get("props")
+
+        # Paare nach höchster kombinierter Wahrscheinlichkeit bilden
+        _btts_sent = set()
+        for i, t1 in enumerate(top_btts_tips[:10]):
+            for t2 in top_btts_tips[i+1:10]:
+                if t1.get("match") == t2.get("match"):
+                    continue
+                _pair_key = f"{t1['match']}_{t2['match']}"
+                if _pair_key in _btts_sent:
+                    continue
+                _btts_sent.add(_pair_key)
+
+                # Fair-Quote berechnen
+                p1 = int(t1.get("probability", 67))
+                p2 = int(t2.get("probability", 67))
+                o1 = float(t1.get("oddsYes") or round(100/p1, 2))
+                o2 = float(t2.get("oddsYes") or round(100/p2, 2))
+                if o1 < 1.40: o1 = round(100/p1, 2)
+                if o2 < 1.40: o2 = round(100/p2, 2)
+                combo_odds = round(o1 * o2, 2)
+
+                if combo_odds < 1.90:  # Min-Quote für BTTS-Kombi
+                    continue
+
+                msg = (
+                    f"🏗️ <b>BET BUILDER</b>  {combo_odds}\n"
+                    f"━━━━━━━━━━━━━━━━━━\n"
+                    f"⚽ <b>{t1['match']}</b>\n"
+                    f"   ✅ BTTS YES ({p1}%)\n\n"
+                    f"⚽ <b>{t2['match']}</b>\n"
+                    f"   ✅ BTTS YES ({p2}%)\n"
+                    f"━━━━━━━━━━━━━━━━━━\n"
+                    f"💰 @ {combo_odds} · 0.5u"
+                )
+
+                if prop_chat:
+                    send_telegram(msg, chat_id=prop_chat)
+                    log(f"   ✅ BTTS Bet Builder: {t1['match']} + {t2['match']} @ {combo_odds}")
+                break  # Pro t1 nur ein bestes Paar
+            if len(_btts_sent) >= 3:  # Max 3 Paare
+                break
+
         log("🔑 Pinnacle Props: keine Bet Builder zusammengestellt")
         return 0
 
@@ -18391,6 +18466,7 @@ def main():
     tips_by_market = {m: [] for m in MARKETS_TO_RUN}
     total_analyzed = 0
     _fixtures_cache = {}
+    _m42_sent_today = set()  # Dedup: martj42-Match nur einmal analysieren, nicht für jede intl. Liga
 
     # ── Pinnacle global laden ──
     log("📊 Pinnacle Matchups laden...")
@@ -18698,7 +18774,8 @@ def main():
     # (ESPN/FotMob/etc. liefern aus GitHub Actions eh 0 — spart ~5 Min Actions-Minuten)
     _skip_league_loop = False
     try:
-        if pinnacle_tips_count >= 30 and env("FORCE_LEAGUE_LOOP", "false").lower() not in ["1", "true", "yes"]:
+        # 🆕 Schwelle auf 10 gesenkt (vorher 30) — auch Morgen-Runs mit wenigen Matches sparen Zeit
+        if pinnacle_tips_count >= 10 and env("FORCE_LEAGUE_LOOP", "false").lower() not in ["1", "true", "yes"]:
             _skip_league_loop = True
             log(f"⚡ Liga-Schleife übersprungen ({pinnacle_tips_count} Pinnacle-Tipps reichen) — spart ~5 Min")
     except Exception:
@@ -18722,13 +18799,17 @@ def main():
                            "freundschaftsspiele"]
                 if any(kw in league.lower() for kw in intl_kw):
                     log(f"   🌍 [{league}] Länderspiel-Analyse via martj42...")
-                    # Niedrigerer Threshold für Freundschaftsspiele
                     is_friendly = any(k in league.lower() for k in ["freundschaft","friendly","international friendly"])
                     btts_threshold = 55 if is_friendly else 62
                     for fix in fixtures[:8]:
                         h, a = fix.get("home",""), fix.get("away","")
                         if not h or not a:
                             continue
+                        # 🆕 Dedup — selbes Match nicht mehrfach senden
+                        _m42_key = f"{h}_{a}"
+                        if _m42_key in _m42_sent_today:
+                            continue
+                        _m42_sent_today.add(_m42_key)
                         h_st = get_national_team_btts_stats(h)
                         a_st = get_national_team_btts_stats(a)
                         if h_st and a_st:
@@ -18910,10 +18991,17 @@ def main():
         )
         # 🔑 Pinnacle Player Props (echte Quoten — funktioniert aus Actions!)
         try:
+            # 🆕 Beste BTTS-Tipps nach Wahrscheinlichkeit für Prop Builder vorbereiten
+            _top_btts_for_props = sorted(
+                [t for t in tips_by_market.get("btts", []) if int(t.get("probability", 0)) >= 65],
+                key=lambda x: int(x.get("probability", 0)),
+                reverse=True
+            )[:20]
             run_pinnacle_props_bot(
                 win_start_utc=_win_start_utc,
                 win_end_utc=_win_end_utc,
                 ch_tz=_ch_tz,
+                top_btts_tips=_top_btts_for_props,
             )
         except Exception as _ppe:
             log(f"🔑 Pinnacle Props übersprungen: {str(_ppe)[:60]}", "WARN")
