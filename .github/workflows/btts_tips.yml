@@ -72,6 +72,8 @@ jobs:
           ALLSPORTS_API_KEY:          ${{ secrets.ALLSPORTS_API_KEY }}
           FOOTYSTATS_API_KEY:         ${{ secrets.FOOTYSTATS_API_KEY }}
           OPENWEATHER_API_KEY:        ${{ secrets.OPENWEATHER_API_KEY }}
+          THESTATSAPI_KEY:            ${{ secrets.THESTATSAPI_KEY }}
+          API_NINJAS_KEY:             ${{ secrets.API_NINJAS_KEY }}
           # ── Telegram ──
           TELEGRAM_TOKEN:             ${{ secrets.TELEGRAM_TOKEN }}
           TELEGRAM_CHAT_ID:           ${{ secrets.TELEGRAM_CHAT_ID }}
