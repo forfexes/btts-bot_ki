@@ -17530,6 +17530,28 @@ def fetch_pinnacle_player_props() -> List[Dict]:
                 if len(sample_cats) >= 8:
                     break
             log(f"   🔑 Pinnacle Props: Beispiel-Kategorien: {list(sample_cats)[:8]}")
+            # Vollständiger Kategorie-Bericht für WM
+            from collections import defaultdict as _dd
+            _wm_by_cat = _dd(list)
+            for _m2 in data:
+                if _m2.get("type") != "special":
+                    continue
+                _lg2 = (_m2.get("league") or {}).get("name", "")
+                if "world cup" not in _lg2.lower() and "fifa" not in _lg2.lower():
+                    continue
+                _sp2 = _m2.get("special", {}) or {}
+                _cat2 = _sp2.get("category") or _sp2.get("categoryName") or "?"
+                _desc2 = _sp2.get("description", "") or _sp2.get("name", "")
+                _par2 = _m2.get("parent") or {}
+                _ph2 = next((p.get("name","") for p in _par2.get("participants",[]) if p.get("alignment")=="home"), "?")
+                _pa2 = next((p.get("name","") for p in _par2.get("participants",[]) if p.get("alignment")=="away"), "?")
+                _parts2 = [p.get("name","") for p in _m2.get("participants", [])]
+                _wm_by_cat[_cat2].append(f"{_desc2} | {_ph2} vs {_pa2} → {_parts2[:3]}")
+            log(f"   📊 WM Specials Kategorien ({len(_wm_by_cat)} total):")
+            for _cat2, _items2 in sorted(_wm_by_cat.items()):
+                log(f"      [{_cat2}] {len(_items2)} Props")
+                for _ex in _items2[:3]:
+                    log(f"         {_ex}")
 
         # Quoten holen — mit Specials-Flag (gleicher Endpunkt wie funktionierende Matchups-Funktion)
         r2_data, status2 = _pinnacle_get_json(
@@ -20086,7 +20108,7 @@ def main():
             )[:20]
             from datetime import timedelta as _td_props
             _props_start = datetime.now(timezone.utc)
-            _props_end   = _props_start + _td_props(hours=16)
+            _props_end   = _props_start + _td_props(hours=24)
             run_pinnacle_props_bot(
                 win_start_utc=_props_start,
                 win_end_utc=_props_end,
