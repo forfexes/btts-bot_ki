@@ -18226,6 +18226,11 @@ def run_pinnacle_props_bot(win_start_utc=None, win_end_utc=None, ch_tz=None, top
 
     def _add(player, team, match, league, market, odds, prob=0, model_prob=0, source="", ko=""):
         if not player or not market or not match: return
+        # Generische Namen filtern
+        _skip_names = {"either team","player","both teams","team","yes","no",
+                       "either player","home team","away team","a player"}
+        if player.strip().lower() in _skip_names: return
+        if len(player.strip()) < 3: return
         c = _cat(market)
         if c == "other": return
         _prop_db.append({
@@ -18248,17 +18253,39 @@ def run_pinnacle_props_bot(win_start_utc=None, win_end_utc=None, ch_tz=None, top
     try:
         _pin = fetch_pinnacle_player_props()
         log(f"   📊 DB Pinnacle: {len(_pin)} Props")
+        # Debug: zeige erste Tackle/Foul Props
+        _pin_samples = [p for p in _pin if any(k in p.get("player_prop","").lower() 
+                        for k in ["tackle","foul","booked","shot"])][:3]
+        for _s in _pin_samples:
+            log(f"   DB PIN sample: prop={_s.get('player_prop','')} sel={_s.get('selection','')} odds={_s.get('odds',0)}")
         for _p in _pin:
-            _pname = _p.get("player_prop","")
+            _pname = _p.get("player_prop","")  # z.B. "Ivan Perisic 3+ Tackles"
+            _sel = _p.get("selection","")       # z.B. "Ivan Perisic" oder "Yes"
             _match = _p.get("match","")
             _odds = float(_p.get("odds",0) or 0)
             if _odds < 1.05 or _odds > 15.0: continue
             if " vs " not in _match: continue
-            _player = _player_from_prop(_pname)
-            _sel = _p.get("selection","").lower()
+            # Spielername: selection wenn nicht "Yes/No", sonst aus player_prop
+            if _sel and _sel.lower() not in ("yes","no","over","under"):
+                _player = _sel.strip()
+                _market = _pname
+            else:
+                _player = _player_from_prop(_pname)
+                _market = _pname
+            if not _player or len(_player) < 2: continue
+            # Team-Props filtern: kein Spielername wenn es ein Team ist
+            _skip_prop_terms = [
+                "to score?","to score ", "both teams","either team","either player",
+                "team to score","1st half","2nd half","match result","both teams to",
+                "winner","who scores first","first team to","btts","over ","under ",
+            ]
+            _pname_l = _pname.lower()
+            if any(t in _pname_l for t in _skip_prop_terms): continue
+            # Nur echte Spielernamen: min 2 Wörter, kein Teamname
+            if len(_player.split()) < 2: continue
             _pts = _match.split(" vs ")
-            _team = _pts[0] if len(_pts)>1 and _pts[0].lower()[:4] in _sel else (_pts[1] if len(_pts)>1 else "")
-            _add(_player, _team, _match, _p.get("league",""), _pname,
+            _team = ""
+            _add(_player, _team, _match, _p.get("league",""), _market,
                  _odds, int(_p.get("prob",0) or 0), 0, "Pinnacle", str(_p.get("starts",""))[:5])
     except Exception as _e:
         log(f"   DB Pinnacle: {str(_e)[:60]}", "WARN")
@@ -18296,11 +18323,16 @@ def run_pinnacle_props_bot(win_start_utc=None, win_end_utc=None, ch_tz=None, top
                             "DEF":"2+ Tackles","GK":"1+ Save"}.get(_pos, "")
                 _home = _t.get("home_team",""); _away = _t.get("away_team","")
                 _match = f"{_home} vs {_away}" if _home and _away else ""
-                _mp = float(_t.get("model_p") or _t.get("confidence") or 0)
+                _mp_raw = float(_t.get("model_p") or _t.get("confidence") or 0)
+                # confidence=82.7 → 82.7% → als Dezimal 0.827
+                _mp = _mp_raw / 100 if _mp_raw > 1.0 else _mp_raw
                 _fair = float(_t.get("fair_odds") or 0)
                 _ko = str(_t.get("kickoff",""))
-                if not _p or not _mkt or (_mp > 0 and _mp < 0.45): continue
-                _add(_p, "", _match, "", _mkt, _fair, int(_mp*100), _mp, "ScoutingStats", _ko[11:16])
+                _form = _t.get("form") or {}
+                _hr = float(_form.get("hit_rate") or 0) / 100 if _form else 0
+                _best_p = max(_mp, _hr)
+                if not _p or not _mkt or (_best_p > 0 and _best_p < 0.45): continue
+                _add(_p, "", _match, "", _mkt, _fair, int(_best_p*100), _best_p, "ScoutingStats", _ko[11:16])
         else:
             log(f"   DB ScoutingStats: {_ss_r.status_code}")
     except Exception as _e:
@@ -18483,7 +18515,9 @@ def run_pinnacle_props_bot(win_start_utc=None, win_end_utc=None, ch_tz=None, top
             cats = list(dict.fromkeys(l["category"] for l in legs))
             icons = "".join(dict.fromkeys(_CAT_ICONS.get(c,"🎯") for c in cats))
             var_s = f" <i>({variant})</i>" if variant else ""
-            msg = (f"\U0001f3d7\ufe0f <b>BET BUILDER {t:.2f}</b> {icons}{var_s}{NL}{SEP}{NL}")
+            # Quote als X/1 Format wenn möglich (Nate Style)
+            _frac = f"{int(round(t-1))}/1" if t >= 2.0 and t == int(t) else f"{t:.2f}"
+            msg = (f"\U0001f3d7\ufe0f <b>BET BUILDER {_frac}</b> {icons}{var_s}{NL}{SEP}{NL}")
             for i, l in enumerate(legs, 1):
                 o = f" @ {l['odds']:.2f}" if l["odds"]>1.0 else ""
                 conf = ""
@@ -18505,9 +18539,28 @@ def run_pinnacle_props_bot(win_start_utc=None, win_end_utc=None, ch_tz=None, top
             return True
 
         # Props gruppieren
+        # Quellen-Gewichtung: Statz.ai/ScoutingStats bevorzugen (haben model_prob)
+        # Pinnacle: nur wenn Spielername bekannt (min 2 Wörter)
+        _prop_db_filtered = []
+        for _p in _prop_db:
+            _pn = _p.get("player","").strip()
+            # Pinnacle Team-Props noch mal filtern
+            if _p["source"] == "Pinnacle":
+                if len(_pn.split()) < 2: continue
+                _pm = _p.get("market","").lower()
+                if any(t in _pm for t in ["to score?","both teams","either","1st half","btts","over ","under ","match"]): continue
+            _prop_db_filtered.append(_p)
+
+        log(f"   📊 DB nach Filter: {len(_prop_db_filtered)} Props (von {len(_prop_db)})")
+        from collections import Counter as _Ctr2
+        _fc = _Ctr2(p["category"] for p in _prop_db_filtered)
+        _fs = _Ctr2(p["source"] for p in _prop_db_filtered)
+        log(f"   📊 Kategorien gefiltert: {dict(_fc.most_common(8))}")
+        log(f"   📊 Quellen gefiltert: {dict(_fs)}")
+
         _by_match = _ddb(lambda: _ddb(lambda: _ddb(list)))
         _by_cat_all = _ddb(list)
-        for _p in _prop_db:
+        for _p in _prop_db_filtered:
             if _p["category"] not in _BUILDER_CATS: continue
             if _p["odds"] < 1.05 or _p["odds"] > 10.0: continue
             _by_match[_p["match"]][_p["player"]][_p["category"]].append(_p)
@@ -18530,6 +18583,8 @@ def run_pinnacle_props_bot(win_start_utc=None, win_end_utc=None, ch_tz=None, top
                         if ln not in _seen_l or _pp2["odds"] < _seen_l[ln]["odds"]:
                             _seen_l[ln] = _pp2
                     _deduped = sorted(_seen_l.values(), key=lambda x: x["line"], reverse=True)
+                    # Nur wenn echte Ladder: Linien müssen sich unterscheiden UND Odds variieren
+                    if len(set(p["line"] for p in _deduped)) < 2: continue
                     if len(_deduped) < 2: continue
                     # Mehrere Varianten wie Nate (hohe→mittlere→niedrige Linie)
                     _built = False
@@ -18544,12 +18599,18 @@ def run_pinnacle_props_bot(win_start_utc=None, win_end_utc=None, ch_tz=None, top
         # Mehrere Spieler To Be Booked, verschiedene Spiele, Quote 13-61
         log(f"   🟨 Aystar Booking Builder...")
         _yc_props = _by_cat_all.get("yellow_cards", [])
-        # Sortiere nach Confidence, verschiedene Spieler + Spiele
-        _yc_sorted = sorted(_yc_props, key=lambda x: x["model_prob"] or x["prob"]/100, reverse=True)
+        # Priorisiere Quellen mit model_prob
+        def _yc_score(p):
+            src_bonus = {"Statz.ai": 0.2, "ScoutingStats": 0.15, "Oddspedia": 0.1}.get(p["source"], 0)
+            return (p["model_prob"] or p["prob"]/100) + src_bonus
+        _yc_sorted = sorted(_yc_props, key=_yc_score, reverse=True)
         # Dedup: beste Quote pro Spieler
         _yc_best = {}
         for _p in _yc_sorted:
-            _k = f"{_p['player']}_{_p['match']}"
+            # Nur echte Spielernamen (min 2 Wörter)
+            _pn = _p["player"].strip()
+            if len(_pn.split()) < 2 or len(_pn) < 5: continue
+            _k = f"{_pn}_{_p['match']}"
             if _k not in _yc_best or _p["odds"] < _yc_best[_k]["odds"]:
                 _yc_best[_k] = _p
         _yc_unique = list(_yc_best.values())
@@ -18786,7 +18847,10 @@ def run_pinnacle_props_bot(win_start_utc=None, win_end_utc=None, ch_tz=None, top
                             if isinstance(_v, list) and len(_v) > 0:
                                 _sz_items = _v
                                 log(f"   Statz.ai key '{_k}': {len(_v)} items")
-                                break
+                        if _v:
+                            _sz_mkts = set(str(i.get("market_name","")) for i in _v[:20])
+                            log(f"   Statz.ai market_names: {list(_sz_mkts)[:10]}")
+                        break
                         if not _sz_items:
                             # Suche in allen Werten
                             for _k, _v in _sz_props.items():
