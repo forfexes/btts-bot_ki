@@ -17530,28 +17530,6 @@ def fetch_pinnacle_player_props() -> List[Dict]:
                 if len(sample_cats) >= 8:
                     break
             log(f"   🔑 Pinnacle Props: Beispiel-Kategorien: {list(sample_cats)[:8]}")
-            # Vollständiger Kategorie-Bericht für WM
-            from collections import defaultdict as _dd
-            _wm_by_cat = _dd(list)
-            for _m2 in data:
-                if _m2.get("type") != "special":
-                    continue
-                _lg2 = (_m2.get("league") or {}).get("name", "")
-                if "world cup" not in _lg2.lower() and "fifa" not in _lg2.lower():
-                    continue
-                _sp2 = _m2.get("special", {}) or {}
-                _cat2 = _sp2.get("category") or _sp2.get("categoryName") or "?"
-                _desc2 = _sp2.get("description", "") or _sp2.get("name", "")
-                _par2 = _m2.get("parent") or {}
-                _ph2 = next((p.get("name","") for p in _par2.get("participants",[]) if p.get("alignment")=="home"), "?")
-                _pa2 = next((p.get("name","") for p in _par2.get("participants",[]) if p.get("alignment")=="away"), "?")
-                _parts2 = [p.get("name","") for p in _m2.get("participants", [])]
-                _wm_by_cat[_cat2].append(f"{_desc2} | {_ph2} vs {_pa2} → {_parts2[:3]}")
-            log(f"   📊 WM Specials Kategorien ({len(_wm_by_cat)} total):")
-            for _cat2, _items2 in sorted(_wm_by_cat.items()):
-                log(f"      [{_cat2}] {len(_items2)} Props")
-                for _ex in _items2[:3]:
-                    log(f"         {_ex}")
 
         # Quoten holen — mit Specials-Flag (gleicher Endpunkt wie funktionierende Matchups-Funktion)
         r2_data, status2 = _pinnacle_get_json(
@@ -18101,6 +18079,52 @@ def run_pinnacle_props_bot(win_start_utc=None, win_end_utc=None, ch_tz=None, top
                     send_telegram(_msg, chat_id=_value_chat)
                     _value_sent += 1
                     log(f"   🎯 Value Alert: {player} {value_info['market']} +{value_info['edge_pct']}%")
+
+    # 🌍 AllSports API: WM Player Props (Goalscorer, Cards, SOT)
+    if ALLSPORTS_API_KEY:
+        try:
+            import datetime as _dt_as
+            _as_date = (win_start_utc or datetime.now(timezone.utc)).strftime("%Y-%m-%d")
+            _as_tomorrow = (datetime.now(timezone.utc) + __import__("datetime").timedelta(days=1)).strftime("%Y-%m-%d")
+            
+            # WM Fixture-IDs holen
+            _as_r = requests.get(
+                "https://apiv2.allsportsapi.com/football/",
+                params={
+                    "met": "Fixtures",
+                    "APIkey": ALLSPORTS_API_KEY,
+                    "from": _as_date,
+                    "to": _as_tomorrow,
+                    "leagueId": "1175",  # FIFA World Cup 2026
+                },
+                timeout=15,
+            )
+            log(f"   🌍 AllSports WM Fixtures: {_as_r.status_code}")
+            if _as_r.ok:
+                _as_data = _as_r.json()
+                _as_fixtures = _as_data.get("result", []) or []
+                log(f"   🌍 AllSports WM Fixtures: {len(_as_fixtures)} Spiele")
+                for _fix in _as_fixtures[:2]:
+                    log(f"      {_fix.get('event_home_team')} vs {_fix.get('event_away_team')} (ID: {_fix.get('event_key')})")
+                
+                # Player Props für erste Fixture holen
+                if _as_fixtures:
+                    _fix_id = _as_fixtures[0].get("event_key")
+                    _as_props = requests.get(
+                        "https://apiv2.allsportsapi.com/football/",
+                        params={
+                            "met": "Odds",
+                            "APIkey": ALLSPORTS_API_KEY,
+                            "matchId": _fix_id,
+                        },
+                        timeout=15,
+                    )
+                    log(f"   🌍 AllSports Odds Status: {_as_props.status_code}")
+                    if _as_props.ok:
+                        _as_odds = _as_props.json()
+                        log(f"   🌍 AllSports Odds Response: {str(_as_odds)[:500]}")
+        except Exception as _ase:
+            log(f"   🌍 AllSports Error: {str(_ase)[:80]}", "WARN")
 
     log("🔑 Pinnacle Props: keine Bet Builder zusammengestellt")
     return 0
