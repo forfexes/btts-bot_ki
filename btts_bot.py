@@ -17086,9 +17086,9 @@ def check_config():
     log(f"   • Tavily: {'✅ aktiv!' if TAVILY_API_KEY else '❌ TAVILY_API_KEY fehlt (optional)'}")
     log(f"   • AllSports API: {'✅ aktiv!' if ALLSPORTS_API_KEY else '❌ ALLSPORTS_API_KEY fehlt (optional)'}")
     log(f"   • Odds-API.io: {'✅ aktiv!' if ODDSAPIIO_KEY else '❌ ODDSAPIIO_KEY fehlt (optional)'}")
-    log(f"   • FootyMetrics: ✅ Player Props via Playwright (kostenlos)")
-    log(f"   • Oddspedia: ✅ WM Player Props via Playwright (kostenlos)")
-    log(f"   • ScoutingStats: ✅ Player Props via Playwright (kostenlos)")
+    log(f"   • FootyMetrics: ✅ Player Props (kostenlos)")
+    log(f"   • Oddspedia: ✅ WM Player Props (kostenlos)")
+    log(f"   • ScoutingStats: ✅ Player Props via API (kostenlos)")
     log(f"   • Statz.ai: ✅ AI Prop Projections via Playwright (kostenlos)")
     log(f"   • Footballdata.io: {'✅ aktiv!' if FOOTBALLDATA_IO_API_KEY else '❌ FOOTBALLDATA_IO_API_KEY fehlt (optional, Settlement-Fallback)'}")
     log(f"   • OpenLigaDB: ✅ aktiv (kein Key, nur deutsche Ligen)")
@@ -18095,23 +18095,21 @@ def run_pinnacle_props_bot(win_start_utc=None, win_end_utc=None, ch_tz=None, top
     _pp_today = datetime.now(timezone.utc).date()
     _pp_total = 0
 
-    # Dedup aus Supabase laden (heutige prop_picks)
+    # Dedup aus Supabase prop_picks
     try:
-        if not (SUPABASE_URL and SUPABASE_KEY):
-            raise Exception("No Supabase config")
-        _existing = requests.get(
-            f"{SUPABASE_URL}/rest/v1/prop_picks",
-            headers={"apikey": SUPABASE_KEY, "Authorization": f"Bearer {SUPABASE_KEY}"},
-            params={"select": "dedup_key", "sent_date": f"eq.{_pp_today}", "limit": "500"},
-            timeout=8,
-        )
-        _existing_data = type("R", (), {"data": _existing.json() if _existing.ok else []})()
-        for _row in (_existing_data.data or []):
-            _dk = _row.get("dedup_key","")
-            if _dk:
-                _pp_dedup.add(_dk)
-                _STAT_INSIGHT_SENT_TODAY.add(_dk)
-        log(f"   Player Props Dedup: {len(_pp_dedup)} bereits heute gesendet")
+        if SUPABASE_URL and SUPABASE_KEY:
+            _ex = requests.get(
+                f"{SUPABASE_URL}/rest/v1/prop_picks",
+                headers={"apikey": SUPABASE_KEY, "Authorization": f"Bearer {SUPABASE_KEY}"},
+                params={"select": "dedup_key", "sent_date": f"eq.{_pp_today}", "limit": "500"},
+                timeout=8,
+            )
+            for _row in (_ex.json() if _ex.ok else []):
+                _dk = _row.get("dedup_key","")
+                if _dk:
+                    _pp_dedup.add(_dk)
+                    _STAT_INSIGHT_SENT_TODAY.add(_dk)
+            log(f"   Player Props Dedup: {len(_pp_dedup)} bereits heute gesendet")
     except Exception as _dde:
         log(f"   Player Props Dedup load: {str(_dde)[:50]}", "WARN")
 
@@ -18141,7 +18139,6 @@ def run_pinnacle_props_bot(win_start_utc=None, win_end_utc=None, ch_tz=None, top
             send_telegram(_msg, chat_id=_pp_chat)
             _pp_total += 1
             log(f"   Prop: {player} | {market} | {source}")
-            # In Supabase speichern für Run-übergreifendes Dedup
             try:
                 if SUPABASE_URL and SUPABASE_KEY:
                     requests.post(
@@ -18164,41 +18161,31 @@ def run_pinnacle_props_bot(win_start_utc=None, win_end_utc=None, ch_tz=None, top
         import re as _re_pp
         import json as _json_pp
 
-        # cloudscraper Session (Cloudflare bypass)
-        try:
-            import cloudscraper as _css
-            _cs_sess = _css.create_scraper(browser={"browser":"chrome","platform":"windows","mobile":False})
-        except ImportError:
-            _cs_sess = None
-
         # ═══════════════════════════════════════
-        # 1. ODDSPEDIA — WM Player Props
+        # 1. ODDSPEDIA — WM Props via Playwright mit Wait
         # ═══════════════════════════════════════
         try:
-            # Oddspedia braucht Playwright (Cloudflare JS-Challenge)
+            # Playwright mit längerer Wartezeit für JS-Rendering
             _op_html = scrape_with_playwright(
                 "https://oddspedia.com/soccer/world/world-cup/player-props",
-                timeout=20000
+                timeout=25000
             )
             log(f"   Oddspedia HTML: {len(_op_html) if _op_html else 0} chars")
-            if _op_html:
-                _op_icons = {
-                    "Anytime Goalscorer": "⚽", "First Goalscorer": "⚽",
-                    "Player Shots on Target": "🎯", "Player Shots": "💥",
-                    "Player Fouls Committed": "🦵", "Player Tackles": "🦵",
-                    "To Be Booked": "🟨",
-                }
-                # Spieler + Match + Markt + US Odds aus HTML
+            if _op_html and len(_op_html) > 50000:
+                _op_icons = {"Anytime Goalscorer":"⚽","First Goalscorer":"⚽",
+                             "Player Shots on Target":"🎯","Player Shots":"💥",
+                             "Player Fouls Committed":"🦵","Player Tackles":"🦵",
+                             "To Be Booked":"🟨"}
+                # Spieler + Markt + Quote aus gerendered HTML
                 _op_hits = _re_pp.findall(
                     r'([A-Z][a-z]+(?: (?:van |de |Von |Al |El )?[A-Z][a-zA-Z\-]+)+)'
-                    r'[^<]{0,200}?(\d{1,2} \w+ \| [^<|]{5,40}vs[^<|]{5,30})'
-                    r'[^<]{0,500}?(Anytime Goalscorer|Player Shots on Target|Player Shots|'
+                    r'[^<]{0,300}?(Anytime Goalscorer|Player Shots on Target|Player Shots|'
                     r'First Goalscorer|Player Fouls Committed|Player Tackles|To Be Booked)'
                     r'[^<]{0,200}?([+\-]\d{3,4})',
                     _op_html, _re_pp.DOTALL
                 )
-                log(f"   Oddspedia Props gefunden: {len(_op_hits)}")
-                for _player, _match, _market, _us in _op_hits[:25]:
+                log(f"   Oddspedia Props: {len(_op_hits)}")
+                for _player, _market, _us in _op_hits[:25]:
                     try:
                         _n = int(_us)
                         _dec = round((_n/100)+1, 2) if _n > 0 else round((100/abs(_n))+1, 2)
@@ -18206,228 +18193,134 @@ def run_pinnacle_props_bot(win_start_utc=None, win_end_utc=None, ch_tz=None, top
                         continue
                     if not (1.20 <= _dec <= 20.0):
                         continue
-                    _send_prop(_player.strip(), _market, _match.strip(), _dec,
-                               "Oddspedia/DraftKings", _op_icons.get(_market, "🎯"))
+                    _send_prop(_player.strip(), _market, "WM 2026", _dec,
+                               "Oddspedia", _op_icons.get(_market, "🎯"))
+            else:
+                log(f"   Oddspedia: zu wenig HTML ({len(_op_html) if _op_html else 0}) — Cloudflare Block")
         except Exception as _e:
             log(f"   Oddspedia Error: {str(_e)[:60]}", "WARN")
 
         # ═══════════════════════════════════════
-        # 2. FOOTYMETRICS — alle Ligen, via Playwright + API intercept
+        # 2. FOOTYMETRICS — Next.js RSC Streaming Parser
         # ═══════════════════════════════════════
         if _pp_total < 30:
             try:
+                import cloudscraper as _css_fm
+                _fm_cs = _css_fm.create_scraper()
                 _fm_markets = [
                     ("player-shots-on-target", "1+ Shot on Target", "🎯"),
-                    ("player-goals",           "Anytime Goalscorer", "⚽"),
-                    ("player-cards",           "To Be Booked",       "🟨"),
-                    ("player-shots",           "2+ Shots",           "💥"),
-                    ("player-fouls-committed", "2+ Fouls",           "🦵"),
-                    ("player-tackles",         "2+ Tackles",         "🦵"),
+                    ("player-goals",           "Anytime Goalscorer",  "⚽"),
+                    ("player-cards",           "To Be Booked",        "🟨"),
+                    ("player-shots",           "2+ Shots",            "💥"),
+                    ("player-fouls-committed", "2+ Fouls",            "🦵"),
+                    ("player-tackles",         "2+ Tackles",          "🦵"),
                 ]
                 for _slug, _name, _icon in _fm_markets:
                     if _pp_total >= 30:
                         break
                     try:
-                        # FootyMetrics lädt Daten via XHR nach JS-Render
-                        # Direkte API mit cloudscraper versuchen
-                        _fm_html = None
-                        if _cs_sess:
-                            # Versuche direkte JSON-API Endpunkte
-                            for _fm_api in [
-                                f"https://www.footymetrics.com/api/player-props/{_slug}",
-                                f"https://www.footymetrics.com/api/trends/{_slug}?minHitRate=70",
-                                f"https://www.footymetrics.com/api/{_slug}",
-                            ]:
-                                try:
-                                    _fm_ar = _cs_sess.get(_fm_api, timeout=10,
-                                        headers={"Accept":"application/json","Referer":"https://www.footymetrics.com/"})
-                                    log(f"   FootyMetrics API {_fm_api.split('/')[-1]}: {_fm_ar.status_code}")
-                                    if _fm_ar.ok and _fm_ar.text.strip().startswith(('[','{')):
-                                        _fm_html = _fm_ar.text
-                                        break
-                                except Exception:
-                                    pass
-                        if not _fm_html:
-                            _fm_html = scrape_with_playwright(
-                                f"https://www.footymetrics.com/trends/{_slug}",
-                                timeout=20000
-                            )
-                        log(f"   FootyMetrics {_slug}: {len(_fm_html) if _fm_html else 0} chars")
-                        if not _fm_html:
-                            continue
-                        # JSON aus __NEXT_DATA__ oder window.__data__
-                        _fm_nd = _re_pp.search(
-                            r'id="__NEXT_DATA__"[^>]*>(\{.*?\})</script>',
-                            _fm_html, _re_pp.DOTALL
-                        )
-                        if _fm_nd:
+                        # Playwright mit Network-Request-Intercept Simulation
+                        # FootyMetrics lädt via /api/trpc/ — versuche direkt
+                        _fm_trpc_urls = [
+                            f"https://www.footymetrics.com/api/trpc/trend.getPlayerTrends?input=%7B%22market%22%3A%22{_slug}%22%2C%22minHitRate%22%3A70%7D",
+                            f"https://www.footymetrics.com/api/trpc/playerTrend.list?input=%7B%22slug%22%3A%22{_slug}%22%7D",
+                            f"https://www.footymetrics.com/_next/data/latest/trends/{_slug}.json",
+                        ]
+                        _fm_data = None
+                        for _fu in _fm_trpc_urls:
                             try:
-                                _fm_json = _json_pp.loads(_fm_nd.group(1))
-                                _fm_str = str(_fm_json)
-                                # Spieler + Hit Rate aus JSON
-                                _fm_hits = _re_pp.findall(
-                                    r"'(?:playerName|name)':\s*'([^']{3,40})'[^}]{0,200}?"
-                                    r"'(?:hitRate|hit_rate)':\s*([0-9.]+)",
-                                    _fm_str
-                                )
-                                log(f"   FootyMetrics {_slug} Players: {len(_fm_hits)}")
-                                for _p, _hr in _fm_hits[:8]:
-                                    if float(_hr) < 70:
-                                        continue
-                                    _send_prop(_p, _name, "Upcoming Fixture", 0,
-                                               "FootyMetrics", _icon, "",
-                                               f"Hit Rate: {float(_hr):.0f}%")
-                            except Exception as _fje:
-                                log(f"   FootyMetrics JSON parse: {str(_fje)[:50]}", "WARN")
-                        else:
-                            # Next.js: suche JSON in <script> tags
-                            _fm_scripts = _re_pp.findall(
-                                r'<script[^>]*>\s*self\.__next_f\.push\(\[.*?(\[.*?\])\s*\]\)',
-                                _fm_html, _re_pp.DOTALL
+                                _fr = _fm_cs.get(_fu, timeout=10,
+                                    headers={"Accept":"application/json","Referer":"https://www.footymetrics.com/"})
+                                log(f"   FootyMetrics {_slug} trpc: {_fr.status_code}")
+                                if _fr.ok and _fr.text.strip().startswith(('[','{')):
+                                    _fm_data = _fr.json()
+                                    log(f"   FootyMetrics {_slug} data: {str(_fm_data)[:200]}")
+                                    break
+                            except Exception:
+                                pass
+
+                        if _fm_data:
+                            # tRPC Response: {result: {data: [...]}}
+                            _fm_items = (
+                                _fm_data.get("result",{}).get("data",[]) or
+                                _fm_data.get("data",[]) or
+                                (_fm_data if isinstance(_fm_data, list) else [])
                             )
-                            # Alternativ: alle JSON-ähnlichen Blöcke mit playerName
-                            _fm_raw = _re_pp.findall(
-                                r'"playerName":"([^"]{3,40})"[^}]{0,300}"hitRate":([0-9.]+)',
-                                _fm_html
-                            )
-                            if not _fm_raw:
-                                _fm_raw = _re_pp.findall(
-                                    r'"name":"([A-Z][^"]{3,30})"[^}]{0,300}"hitRate":([0-9.]+)',
-                                    _fm_html
-                                )
-                            log(f"   FootyMetrics {_slug} raw matches: {len(_fm_raw)}")
-                            # Auch Fixture-Kontext suchen
-                            _fm_full = _re_pp.findall(
-                                r'"playerName":"([^"]+)"[^}]{0,500}"hitRate":([0-9.]+)[^}]{0,300}"fixture":"([^"]*)"',
-                                _fm_html
-                            )
-                            log(f"   FootyMetrics {_slug} full matches: {len(_fm_full)}")
-                            # HTML-Schnipsel zur Diagnose (nur beim ersten Markt)
-                            if _slug == "player-shots-on-target" and not _fm_raw and not _fm_full:
-                                # Suche nach irgendeinem JSON-Pattern
-                                _fm_probe = _re_pp.search(r'"hitRate"', _fm_html)
-                                _fm_probe2 = _re_pp.search(r'"hit_rate"', _fm_html)
-                                _fm_probe3 = _re_pp.search(r'"playerName"', _fm_html)
-                                log(f"   FootyMetrics hitRate: {bool(_fm_probe)} hit_rate: {bool(_fm_probe2)} playerName: {bool(_fm_probe3)}")
-                                # Sample aus dem HTML
-                                _fm_idx = _fm_html.find('"player')
-                                if _fm_idx > 0:
-                                    log(f"   FootyMetrics player-context: {_fm_html[_fm_idx:_fm_idx+200]}")
-                                else:
-                                    log(f"   FootyMetrics HTML[3000:3300]: {_fm_html[3000:3300]}")
-                            for _item in (_fm_full or [])[:8]:
-                                _p, _hr, _fix = _item
-                                if float(_hr) < 70: continue
-                                _send_prop(_p, _name, _fix or "Upcoming Fixture", 0,
-                                           "FootyMetrics", _icon, "", f"Hit Rate: {float(_hr):.0f}%")
-                            if not _fm_full:
-                                for _p, _hr in (_fm_raw or [])[:8]:
-                                    if float(_hr) < 70: continue
-                                    _send_prop(_p, _name, "Upcoming Fixture", 0,
-                                               "FootyMetrics", _icon, "", f"Hit Rate: {float(_hr):.0f}%")
+                            for _t in (_fm_items or [])[:8]:
+                                _p = _t.get("playerName") or _t.get("player","")
+                                _m_str = _t.get("fixture") or _t.get("match","")
+                                if isinstance(_m_str, dict):
+                                    _m_str = f"{_m_str.get('home','')} vs {_m_str.get('away','')}"
+                                _hr = float(_t.get("hitRate") or _t.get("hit_rate") or 0)
+                                if not _p or _hr < 70:
+                                    continue
+                                _send_prop(_p, _name, str(_m_str) or "Upcoming", 0,
+                                           "FootyMetrics", _icon, "", f"Hit Rate: {_hr:.0f}%")
                     except Exception as _fme2:
                         log(f"   FootyMetrics {_slug}: {str(_fme2)[:50]}", "WARN")
             except Exception as _e:
                 log(f"   FootyMetrics Error: {str(_e)[:60]}", "WARN")
 
         # ═══════════════════════════════════════
-        # 3. SCOUTINGSTATS — XHR Intercept via Playwright
+        # 3. SCOUTINGSTATS — /api/props/board
         # ═══════════════════════════════════════
         if _pp_total < 30:
             try:
-                # ScoutingStats: /api/props/board direkt laden (JSON API)
                 import cloudscraper as _css2
                 _ss_cs = _css2.create_scraper()
-                _ss_urls_to_try = [
+                _ss_r = _ss_cs.get(
                     "https://scoutingstats.ai/api/props/board",
-                    "https://scoutingstats.ai/api/props/board?sport=football",
-                    "https://scoutingstats.ai/api/props/fixtures",
-                ]
-                for _ss_url in _ss_urls_to_try:
-                    try:
-                        _ss_r = _ss_cs.get(_ss_url, timeout=12,
-                            headers={"Accept":"application/json","Referer":"https://scoutingstats.ai/"})
-                        log(f"   ScoutingStats {_ss_url.split('/')[-1]}: {_ss_r.status_code} / {len(_ss_r.text)} chars")
-                        if _ss_r.ok and _ss_r.text.strip().startswith(('[','{')):
-                            _ss_data = _ss_r.json()
-                            _ss_items = _ss_data if isinstance(_ss_data, list) else (
-                                _ss_data.get("data") or _ss_data.get("props") or
-                                _ss_data.get("board") or _ss_data.get("fixtures") or []
-                            )
-                            log(f"   ScoutingStats items: {len(_ss_items)}")
-                            if _ss_items and isinstance(_ss_items, list):
-                                log(f"   ScoutingStats sample keys: {list(_ss_items[0].keys())[:10]}")
-                            # Keys aus Log: away_team, confidence, disagreement, fair_odds,
-                            # fixture_id, form, general_position, home_team, inputs, is_home
-                            # → inputs enthält wahrscheinlich player/market details
-                            for _t in (_ss_items if isinstance(_ss_items, list) else [])[:20]:
-                                _home = _t.get("home_team","")
-                                _away = _t.get("away_team","")
-                                _match = f"{_home} vs {_away}" if _home and _away else ""
-                                _conf = float(_t.get("confidence") or 0)
-                                _fair = float(_t.get("fair_odds") or 0)
-                                _pos = _t.get("general_position") or _t.get("position","")
-                                _inputs = _t.get("inputs") or {}
-                                # inputs ist dict mit player/market Details
-                                if isinstance(_inputs, dict):
-                                    _p = (_inputs.get("playerName") or _inputs.get("player") or
-                                          _inputs.get("name") or "")
-                                    _m = (_inputs.get("market") or _inputs.get("prop") or
-                                          _inputs.get("type") or _pos or "Player Prop")
-                                else:
-                                    _p = _t.get("player","")
-                                    _m = _pos or "Player Prop"
-                                # Log erste 3 für Diagnose
-                                # Direkte Keys: player_name, market_id, model_p, fair_odds, line
-                                _p = _t.get("player_name") or ""
-                                _market_id = _t.get("market_id","")
-                                # market_id kann Zahl oder String sein
-                                # Bekannte IDs: 336=Shots on Target (basierend auf context)
-                                _ss_market_map = {
-                                    "shots_on_target":"1+ Shot on Target",
-                                    "goals":"Anytime Goalscorer",
-                                    "yellow_cards":"To Be Booked",
-                                    "shots":"2+ Shots",
-                                    "tackles":"2+ Tackles",
-                                    "fouls":"2+ Fouls",
-                                    "assists":"1+ Assist",
-                                    "sot":"1+ Shot on Target",
-                                    "cards":"To Be Booked",
-                                    # Numerische IDs
-                                    "336":"1+ Shot on Target",
-                                    "337":"Anytime Goalscorer",
-                                    "338":"To Be Booked",
-                                    "339":"2+ Shots",
-                                    "340":"2+ Tackles",
-                                    "341":"2+ Fouls",
-                                }
-                                _m = _ss_market_map.get(str(_market_id).lower(),
-                                     _ss_market_map.get(str(_market_id),
-                                     _pos or f"Prop ({_market_id})"))
-                                _ss_icons = {"goals":"⚽","shots_on_target":"🎯","sot":"🎯",
-                                             "yellow_cards":"🟨","cards":"🟨","shots":"💥",
-                                             "tackles":"🦵","fouls":"🦵","assists":"🅰️"}
-                                _icon2 = _ss_icons.get(str(_market_id).lower(), "📊")
-                                _model_p = float(_t.get("model_p") or _t.get("confidence") or 0)
-                                _fair2 = float(_t.get("fair_odds") or 0)
-                                _line = _t.get("line","")
-                                _ko2 = str(_t.get("kickoff",""))
-                                _ko_s2 = _ko2[11:16] if len(_ko2) > 11 else ""
-                                if not _p or _model_p < 0.55: continue
-                                _fair_use = _fair2 if _fair2 > 1.0 else (round(1/_model_p,2) if _model_p > 0 else 0)
-                                _send_prop(_p, _m, _match or "Upcoming", _fair_use,
-                                           "ScoutingStats", _icon2, _ko_s2,
-                                           extra=f"Model: {_model_p*100:.0f}% | Line: {_line}")
-                            break
-                        else:
-                            log(f"   ScoutingStats sample: {_ss_r.text[:200]}")
-                    except Exception as _ssue:
-                        log(f"   ScoutingStats {_ss_url}: {str(_ssue)[:50]}", "WARN")
-            except Exception as _sse:
-                log(f"   ScoutingStats Error: {str(_sse)[:60]}", "WARN")
+                    timeout=12,
+                    headers={"Accept":"application/json","Referer":"https://scoutingstats.ai/"}
+                )
+                log(f"   ScoutingStats board: {_ss_r.status_code} / {len(_ss_r.text)} chars")
+                if _ss_r.ok and _ss_r.text.strip().startswith(('[','{')):
+                    _ss_data = _ss_r.json()
+                    _ss_items = _ss_data if isinstance(_ss_data, list) else (
+                        _ss_data.get("data") or _ss_data.get("props") or
+                        _ss_data.get("board") or []
+                    )
+                    log(f"   ScoutingStats items: {len(_ss_items)}")
+                    if _ss_items:
+                        log(f"   ScoutingStats sample keys: {list(_ss_items[0].keys())[:10]}")
+                    _ss_market_map = {
+                        "shots_on_target":"1+ Shot on Target","goals":"Anytime Goalscorer",
+                        "yellow_cards":"To Be Booked","shots":"2+ Shots",
+                        "tackles":"2+ Tackles","fouls":"2+ Fouls","assists":"1+ Assist",
+                        "336":"1+ Shot on Target","337":"Anytime Goalscorer",
+                        "338":"To Be Booked","339":"2+ Shots","340":"2+ Tackles",
+                        "341":"2+ Fouls",
+                    }
+                    _ss_icons = {"goals":"⚽","shots_on_target":"🎯","337":"⚽",
+                                 "yellow_cards":"🟨","338":"🟨","shots":"💥","339":"💥",
+                                 "tackles":"🦵","340":"🦵","fouls":"🦵","341":"🦵",
+                                 "336":"🎯","assists":"🅰️"}
+                    for _t in (_ss_items if isinstance(_ss_items, list) else [])[:20]:
+                        _p = _t.get("player_name") or ""
+                        _market_id = str(_t.get("market_id",""))
+                        _home = _t.get("home_team","")
+                        _away = _t.get("away_team","")
+                        _match = f"{_home} vs {_away}" if _home and _away else ""
+                        _pos = _t.get("general_position") or _t.get("position","")
+                        _m = _ss_market_map.get(_market_id.lower(),
+                             _ss_market_map.get(_market_id, _pos or f"Prop({_market_id})"))
+                        _icon2 = _ss_icons.get(_market_id, "📊")
+                        _model_p = float(_t.get("model_p") or _t.get("confidence") or 0)
+                        _fair2 = float(_t.get("fair_odds") or 0)
+                        _line = _t.get("line","")
+                        _ko2 = str(_t.get("kickoff",""))
+                        _ko_s2 = _ko2[11:16] if len(_ko2) > 11 else ""
+                        if not _p or _model_p < 0.55:
+                            continue
+                        _fair_use = _fair2 if _fair2 > 1.0 else (round(1/_model_p,2) if _model_p > 0 else 0)
+                        _send_prop(_p, _m, _match or "Upcoming", _fair_use,
+                                   "ScoutingStats", _icon2, _ko_s2,
+                                   extra=f"Model: {_model_p*100:.0f}% | Line: {_line}")
+            except Exception as _e:
+                log(f"   ScoutingStats Error: {str(_e)[:60]}", "WARN")
 
         # ═══════════════════════════════════════
-        # 4. STATZ.AI — Inertia.js Props
+        # 4. STATZ.AI — Inertia.js / Laravel
         # ═══════════════════════════════════════
         if _pp_total < 30:
             try:
@@ -18435,80 +18328,55 @@ def run_pinnacle_props_bot(win_start_utc=None, win_end_utc=None, ch_tz=None, top
                     "https://statz.ai/projections/player-props",
                     timeout=25000
                 )
-                log(f"   Statz.ai HTML: {len(_sz_html) if _sz_html else 0} chars")
                 if _sz_html:
-                    # Inertia.js: Daten in <div id="app" data-page='...'> oder window.__inertia__
                     _sz_dp = _re_pp.search(
-                        r'id=["\']app["\'][^>]*data-page=["\'](\{.*?\})["\']',
+                        r'data-page=["\'](\{.*?\})["\']',
                         _sz_html, _re_pp.DOTALL
                     )
-                    if not _sz_dp:
-                        _sz_dp = _re_pp.search(
-                            r'data-page=["\'](\{.*?\})["\']',
-                            _sz_html, _re_pp.DOTALL
-                        )
                     if _sz_dp:
                         try:
                             import html as _html_mod
-                            _sz_raw = _html_mod.unescape(_sz_dp.group(1))
-                            _sz_json = _json_pp.loads(_sz_raw)
-                            log(f"   Statz.ai Inertia keys: {list(_sz_json.get('props',{}).keys())[:10]}")
+                            _sz_json = _json_pp.loads(_html_mod.unescape(_sz_dp.group(1)))
                             _sz_props = _sz_json.get("props",{})
-                            # Props suchen
-                            # 37 items gefunden — alle Felder loggen zum Debuggen
                             _sz_items = None
-                            for _k in ["projections","props","playerProps","data","predictions","trends"]:
+                            for _k in ["projections","props","playerProps","data","predictions"]:
                                 _v = _sz_props.get(_k)
                                 if isinstance(_v, list) and len(_v) > 0:
-                                    log(f"   Statz.ai key '{_k}': {len(_v)} items, sample keys: {list(_v[0].keys())[:8] if _v else []}")
                                     _sz_items = _v
                                     break
-                            # Falls nichts: alle Keys mit Liste loggen
-                            if not _sz_items:
-                                for _k,_v in _sz_props.items():
-                                    if isinstance(_v, list) and len(_v) > 0:
-                                        log(f"   Statz.ai list key '{_k}': {len(_v)} → sample: {str(_v[0])[:120]}")
-                            log(f"   Statz.ai items: {len(_sz_items) if isinstance(_sz_items, list) else 'None'}")
-                            # Keys aus Log: id, fixture, home_team, away_team, team, opponent, player, position
-                            # Prob-Felder noch unbekannt — ersten Item komplett loggen
-                            if _sz_items and isinstance(_sz_items, list) and len(_sz_items) > 0:
-                                log(f"   Statz.ai full item[0]: {str(_sz_items[0])[:300]}")
+                            log(f"   Statz.ai items: {len(_sz_items) if _sz_items else 0}")
+                            _sz_mkt_map = {
+                                1:"Anytime Goalscorer",2:"2+ Shots",3:"1+ Shot on Target",
+                                4:"1+ Assist",5:"2+ Tackles",6:"2+ Fouls",7:"To Be Booked"
+                            }
+                            _sz_pos_map = {
+                                "attacker":"Anytime Goalscorer","forward":"Anytime Goalscorer",
+                                "midfielder":"1+ Shot on Target","defender":"2+ Tackles",
+                                "FWD":"Anytime Goalscorer","MID":"1+ Shot on Target",
+                                "DEF":"2+ Tackles","ATT":"Anytime Goalscorer"
+                            }
+                            _sz_icons = {1:"⚽",2:"💥",3:"🎯",4:"🅰️",5:"🦵",6:"🦵",7:"🟨"}
                             for _t in (_sz_items if isinstance(_sz_items, list) else [])[:20]:
-                                # player ist dict: {id, name, position}
                                 _p_raw = _t.get("player") or {}
                                 _p = _p_raw.get("name","") if isinstance(_p_raw, dict) else str(_p_raw)
-                                # home_team/away_team sind auch dicts
                                 _h_raw = _t.get("home_team") or {}
                                 _a_raw = _t.get("away_team") or {}
                                 _home = _h_raw.get("name","") if isinstance(_h_raw, dict) else str(_h_raw)
                                 _away = _a_raw.get("name","") if isinstance(_a_raw, dict) else str(_a_raw)
                                 _match = f"{_home} vs {_away}" if _home and _away else ""
-                                # fixture dict
                                 _fix = _t.get("fixture") or {}
                                 _ko = str(_fix.get("kickoff_iso","") if isinstance(_fix, dict) else "")
                                 _ko_s = _ko[11:16] if len(_ko) > 11 else ""
-                                # market ist Zahl: 1=Goals, 2=Shots, 3=SOT, 4=Assists, 5=Tackles, 6=Fouls
-                                _sz_markets = {1:"Anytime Goalscorer",2:"2+ Shots",3:"1+ Shot on Target",
-                                               4:"1+ Assist",5:"2+ Tackles",6:"2+ Fouls",7:"To Be Booked"}
-                                # market kann fehlen — position als Fallback
                                 _m_raw = _t.get("market")
-                                _pos_raw = (_t.get("position") or {})
+                                _pos_raw = _t.get("position") or {}
                                 _pos_str = _pos_raw.get("name","") if isinstance(_pos_raw, dict) else str(_pos_raw or "")
-                                _sz_mkt_map = {1:"Anytime Goalscorer",2:"2+ Shots",3:"1+ Shot on Target",
-                                               4:"1+ Assist",5:"2+ Tackles",6:"2+ Fouls",7:"To Be Booked"}
-                                _sz_pos_map = {"attacker":"Anytime Goalscorer","forward":"Anytime Goalscorer",
-                                               "midfielder":"1+ Shot on Target","defender":"2+ Tackles",
-                                               "goalkeeper":"Save","FWD":"Anytime Goalscorer",
-                                               "MID":"1+ Shot on Target","DEF":"2+ Tackles","ATT":"Anytime Goalscorer"}
                                 if _m_raw and isinstance(_m_raw, int):
                                     _m = _sz_mkt_map.get(_m_raw, f"Prop {_m_raw}")
                                 elif _m_raw:
                                     _m = str(_m_raw)
                                 else:
                                     _m = _sz_pos_map.get(_pos_str, "Player Prop")
-                                _sz_icons = {1:"⚽",2:"💥",3:"🎯",4:"🅰️",5:"🦵",6:"🦵",7:"🟨"}
-                                _icon = _sz_icons.get(_t.get("market",0) if isinstance(_t.get("market"),int) else 0, "🤖")
-                                # Prob aus verschiedenen Feldern
+                                _icon = _sz_icons.get(_m_raw if isinstance(_m_raw,int) else 0, "🤖")
                                 _prob = float(_t.get("probability") or _t.get("projection") or
                                               _t.get("confidence") or _t.get("score") or 0)
                                 if _prob > 1: _prob /= 100
@@ -18519,10 +18387,7 @@ def run_pinnacle_props_bot(win_start_utc=None, win_end_utc=None, ch_tz=None, top
                                 _send_prop(_p, _m, _match or "WM", _fair,
                                            "Statz.ai", _icon, _ko_s, extra=_extra)
                         except Exception as _ize:
-                            log(f"   Statz.ai Inertia parse: {str(_ize)[:60]}", "WARN")
-                    else:
-                        log(f"   Statz.ai: kein data-page gefunden")
-                        log(f"   Statz.ai sample2: {_sz_html[2000:2500]}")
+                            log(f"   Statz.ai parse: {str(_ize)[:60]}", "WARN")
             except Exception as _e:
                 log(f"   Statz.ai Error: {str(_e)[:60]}", "WARN")
 
@@ -19940,7 +19805,6 @@ def main():
     # Tips Mode
     log(f"🎯 Tips Mode - suche Spiele...")
 
-    # ─── Cache vorbeladen: heutige Tips aus Supabase → kein Run-übergreifender Spam ───
     global _SENT_TIPS_CACHE
     if SUPABASE_URL and SUPABASE_KEY:
         try:
