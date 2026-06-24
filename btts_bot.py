@@ -13496,7 +13496,7 @@ def send_top_tips(tips_by_market, target_date):
     # Auto-void alte Pending Tipps (älter als 3 Tage)
     _auto_void_old_pending()
 
-    # Auswertung IMMER in alle Gruppen senden (nach den Tipps)
+    # Wenn keine Tipps → Auswertung in ALLE Gruppen senden
     if total_tips == 0:
         _send_daily_auswertung_to_all_groups(stats)
         return
@@ -13526,12 +13526,11 @@ def send_top_tips(tips_by_market, target_date):
                 continue
 
             # 🛡️ Safe Filter: schlechte Ligen ausfiltern
-            _league_str = str(tip.get("league","") or tip.get("competition","") or "").lower()
-            _skip_keywords = ["reserve", "women", "u20", "u21", "u19", "u18", "youth",
-                              "frauen", "reserva", "damen", "feminine", "femini",
-                              "amateur", "friendly", "freundschaft"]
-            if any(_kw in _league_str for _kw in _skip_keywords):
-                log(f"   ⏭️ Liga gefiltert: {match_name} ({_league_str[:30]})")
+            _tip_league = str(t.get("league","") or t.get("competition","") or t.get("league_name","") or "").lower()
+            _skip_kw = ["reserve","women","u20","u21","u19","u18","youth","frauen",
+                        "reserva","damen","feminine","femini","amateur","friendly"]
+            if any(_kw in _tip_league for _kw in _skip_kw):
+                log(f"   ⏭️ Liga gefiltert: {match_name} ({_tip_league[:25]})")
                 continue
 
             # ✅ NEUES FORMAT - Variante 3
@@ -13885,7 +13884,6 @@ def send_top_tips(tips_by_market, target_date):
         # Kein Footer - direkt Tipps ohne Zusammenfassung
 
     log(f"Gespeichert in Supabase: {saved}")
-    # Markt-Auswertung in jede Gruppe senden
     try:
         _send_daily_auswertung_to_all_groups()
     except Exception as _ae:
@@ -14820,6 +14818,53 @@ def format_result_text(tip, result, status):
     msg += "━━━━━━━━━━━━━━━━━━"
 
     return msg
+
+
+def get_match_result_from_sources(tip):
+    """Holt Spielergebnis aus SofaScore, AllSports, API-Football."""
+    match = tip.get("match", "")
+    tip_date = str(tip.get("date", ""))
+    if not match or " vs " not in match or not tip_date:
+        return None
+    parts = match.split(" vs ", 1)
+    if len(parts) != 2:
+        return None
+    home_team, away_team = parts[0].strip(), parts[1].strip()
+    # 1. SofaScore
+    try:
+        result = _sofascore_find_result(home_team, away_team, tip_date)
+        if result:
+            return result
+    except Exception:
+        pass
+    # 2. AllSports
+    try:
+        result = _allsports_find_result(home_team, away_team, tip_date)
+        if result:
+            return result
+    except Exception:
+        pass
+    # 3. API-Football
+    try:
+        fixtures = _af_fixtures_for_date(tip_date)
+        h_t = home_team.lower()
+        a_t = away_team.lower()
+        for fx in (fixtures or []):
+            fx_home = (fx.get("teams",{}).get("home",{}).get("name","") or "").lower()
+            fx_away = (fx.get("teams",{}).get("away",{}).get("name","") or "").lower()
+            if (h_t[:6] in fx_home or fx_home[:6] in h_t) and (a_t[:6] in fx_away or fx_away[:6] in a_t):
+                gs = fx.get("goals",{})
+                hs = int(gs.get("home") or 0)
+                as_ = int(gs.get("away") or 0)
+                ht = fx.get("score",{}).get("halftime",{})
+                ht_h = int(ht.get("home") or 0)
+                ht_a = int(ht.get("away") or 0)
+                return {"home_score":hs,"away_score":as_,"ht_home":ht_h,"ht_away":ht_a,
+                        "btts":hs>0 and as_>0,"over25":(hs+as_)>2,
+                        "btts_ht":ht_h>0 and ht_a>0,"total_goals":hs+as_,"status":"finished"}
+    except Exception:
+        pass
+    return None
 
 
 def run_settlement():
@@ -18080,302 +18125,179 @@ def run_pinnacle_props_bot(win_start_utc=None, win_end_utc=None, ch_tz=None, top
     _pp_dedup = set()
     _pp_today = datetime.now(timezone.utc).date()
     _pp_total = 0
-
-    # Dedup aus Supabase prop_picks
     try:
         if SUPABASE_URL and SUPABASE_KEY:
-            _ex = requests.get(
-                f"{SUPABASE_URL}/rest/v1/prop_picks",
-                headers={"apikey": SUPABASE_KEY, "Authorization": f"Bearer {SUPABASE_KEY}"},
-                params={"select": "dedup_key", "sent_date": f"eq.{_pp_today}", "limit": "500"},
-                timeout=8,
-            )
+            _ex = requests.get(f"{SUPABASE_URL}/rest/v1/prop_picks",
+                headers={"apikey":SUPABASE_KEY,"Authorization":f"Bearer {SUPABASE_KEY}"},
+                params={"select":"dedup_key","sent_date":f"eq.{_pp_today}","limit":"500"},timeout=8)
             for _row in (_ex.json() if _ex.ok else []):
                 _dk = _row.get("dedup_key","")
-                if _dk:
-                    _pp_dedup.add(_dk)
-                    _STAT_INSIGHT_SENT_TODAY.add(_dk)
+                if _dk: _pp_dedup.add(_dk); _STAT_INSIGHT_SENT_TODAY.add(_dk)
             log(f"   Player Props Dedup: {len(_pp_dedup)} bereits heute gesendet")
     except Exception as _dde:
-        log(f"   Player Props Dedup load: {str(_dde)[:50]}", "WARN")
+        log(f"   Player Props Dedup: {str(_dde)[:50]}", "WARN")
 
     def _send_prop(player, market, match, odds_dec, source, icon="🎯", ko_s="", extra=""):
         nonlocal _pp_total
-        if not player or not market:
-            return False
+        if not player or not market: return False
         _dk = f"pp_{match}_{player}_{market}_{_pp_today}"
-        if _dk in _pp_dedup or _dk in _STAT_INSIGHT_SENT_TODAY:
-            return False
-        _pp_dedup.add(_dk)
-        _STAT_INSIGHT_SENT_TODAY.add(_dk)
+        if _dk in _pp_dedup or _dk in _STAT_INSIGHT_SENT_TODAY: return False
+        _pp_dedup.add(_dk); _STAT_INSIGHT_SENT_TODAY.add(_dk)
         _odds_str = f" @ <b>{odds_dec}</b>" if odds_dec and float(odds_dec) > 1.0 else ""
         _ko_part = f" \u00B7 \u23F0 {ko_s}" if ko_s else ""
         _extra_part = f"   {extra}\n" if extra else ""
-        _msg = (
-            f"\U0001F3AF <b>PLAYER PROP</b>\n"
-            f"\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\n"
-            f"\u26BD <b>{match}</b>{_ko_part}\n\n"
-            f"\U0001F464 <b>{player}</b>\n"
-            f"   {icon} {market}{_odds_str}\n"
-            f"{_extra_part}"
-            f"\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\n"
-            f"<i>\U0001F4CA {source}</i>"
-        )
+        _msg = (f"\U0001F3AF <b>PLAYER PROP</b>\n\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\n"
+                f"\u26BD <b>{match}</b>{_ko_part}\n\n\U0001F464 <b>{player}</b>\n"
+                f"   {icon} {market}{_odds_str}\n{_extra_part}"
+                f"\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\n<i>\U0001F4CA {source}</i>")
         if _pp_chat:
-            send_telegram(_msg, chat_id=_pp_chat)
-            _pp_total += 1
+            send_telegram(_msg, chat_id=_pp_chat); _pp_total += 1
             log(f"   Prop: {player} | {market} | {source}")
             try:
                 if SUPABASE_URL and SUPABASE_KEY:
-                    requests.post(
-                        f"{SUPABASE_URL}/rest/v1/prop_picks",
-                        headers={"apikey": SUPABASE_KEY, "Authorization": f"Bearer {SUPABASE_KEY}",
-                                 "Content-Type": "application/json",
-                                 "Prefer": "resolution=merge-duplicates"},
-                        json={"dedup_key": _dk, "player": str(player)[:100],
-                              "market": str(market)[:100], "match": str(match)[:200],
-                              "source": source, "sent_date": str(_pp_today)},
-                        timeout=5,
-                    )
-            except Exception:
-                pass
+                    requests.post(f"{SUPABASE_URL}/rest/v1/prop_picks",
+                        headers={"apikey":SUPABASE_KEY,"Authorization":f"Bearer {SUPABASE_KEY}",
+                                 "Content-Type":"application/json","Prefer":"resolution=merge-duplicates"},
+                        json={"dedup_key":_dk,"player":str(player)[:100],"market":str(market)[:100],
+                              "match":str(match)[:200],"source":source,"sent_date":str(_pp_today)},timeout=5)
+            except Exception: pass
         return True
 
-    if not PLAYWRIGHT_AVAILABLE:
-        log("   Player Props: Playwright nicht verfügbar", "WARN")
-    else:
-        import re as _re_pp
-        import json as _json_pp
-
-        # ═══════════════════════════════════════
-        # 1. ODDSPEDIA — WM Props via Playwright mit Wait
-        # ═══════════════════════════════════════
+    if PLAYWRIGHT_AVAILABLE:
+        import re as _re_pp, json as _json_pp
+        # 1. ODDSPEDIA
         try:
-            # Playwright mit längerer Wartezeit für JS-Rendering
-            _op_html = scrape_with_playwright(
-                "https://oddspedia.com/soccer/world/world-cup/player-props",
-                timeout=25000
-            )
+            _op_html = scrape_with_playwright("https://oddspedia.com/soccer/world/world-cup/player-props",timeout=25000)
             log(f"   Oddspedia HTML: {len(_op_html) if _op_html else 0} chars")
             if _op_html and len(_op_html) > 50000:
-                _op_icons = {"Anytime Goalscorer":"⚽","First Goalscorer":"⚽",
-                             "Player Shots on Target":"🎯","Player Shots":"💥",
-                             "Player Fouls Committed":"🦵","Player Tackles":"🦵",
-                             "To Be Booked":"🟨"}
-                # Spieler + Markt + Quote aus gerendered HTML
+                _op_icons = {"Anytime Goalscorer":"⚽","First Goalscorer":"⚽","Player Shots on Target":"🎯",
+                             "Player Shots":"💥","Player Fouls Committed":"🦵","Player Tackles":"🦵","To Be Booked":"🟨"}
                 _op_hits = _re_pp.findall(
                     r'([A-Z][a-z]+(?: (?:van |de |Von |Al |El )?[A-Z][a-zA-Z\-]+)+)'
                     r'[^<]{0,300}?(Anytime Goalscorer|Player Shots on Target|Player Shots|'
                     r'First Goalscorer|Player Fouls Committed|Player Tackles|To Be Booked)'
-                    r'[^<]{0,200}?([+\-]\d{3,4})',
-                    _op_html, _re_pp.DOTALL
-                )
+                    r'[^<]{0,200}?([+\-]\d{3,4})', _op_html, _re_pp.DOTALL)
                 log(f"   Oddspedia Props: {len(_op_hits)}")
                 for _player, _market, _us in _op_hits[:25]:
                     try:
                         _n = int(_us)
-                        _dec = round((_n/100)+1, 2) if _n > 0 else round((100/abs(_n))+1, 2)
-                    except Exception:
-                        continue
-                    if not (1.20 <= _dec <= 20.0):
-                        continue
-                    _send_prop(_player.strip(), _market, "WM 2026", _dec,
-                               "Oddspedia", _op_icons.get(_market, "🎯"))
-            else:
-                log(f"   Oddspedia: zu wenig HTML ({len(_op_html) if _op_html else 0}) — Cloudflare Block")
-        except Exception as _e:
-            log(f"   Oddspedia Error: {str(_e)[:60]}", "WARN")
+                        _dec = round((_n/100)+1,2) if _n > 0 else round((100/abs(_n))+1,2)
+                    except Exception: continue
+                    if not (1.20 <= _dec <= 20.0): continue
+                    _send_prop(_player.strip(), _market, "WM 2026", _dec, "Oddspedia", _op_icons.get(_market,"🎯"))
+        except Exception as _e: log(f"   Oddspedia Error: {str(_e)[:60]}", "WARN")
 
-        # ═══════════════════════════════════════
-        # 2. FOOTYMETRICS — Next.js RSC Streaming Parser
-        # ═══════════════════════════════════════
+        # 2. FOOTYMETRICS via tRPC
         if _pp_total < 30:
             try:
                 import cloudscraper as _css_fm
                 _fm_cs = _css_fm.create_scraper()
-                _fm_markets = [
-                    ("player-shots-on-target", "1+ Shot on Target", "🎯"),
-                    ("player-goals",           "Anytime Goalscorer",  "⚽"),
-                    ("player-cards",           "To Be Booked",        "🟨"),
-                    ("player-shots",           "2+ Shots",            "💥"),
-                    ("player-fouls-committed", "2+ Fouls",            "🦵"),
-                    ("player-tackles",         "2+ Tackles",          "🦵"),
-                ]
+                _fm_markets = [("player-shots-on-target","1+ Shot on Target","🎯"),
+                               ("player-goals","Anytime Goalscorer","⚽"),("player-cards","To Be Booked","🟨"),
+                               ("player-shots","2+ Shots","💥"),("player-fouls-committed","2+ Fouls","🦵"),
+                               ("player-tackles","2+ Tackles","🦵")]
                 for _slug, _name, _icon in _fm_markets:
-                    if _pp_total >= 30:
-                        break
-                    try:
-                        # Playwright mit Network-Request-Intercept Simulation
-                        # FootyMetrics lädt via /api/trpc/ — versuche direkt
-                        _fm_trpc_urls = [
-                            f"https://www.footymetrics.com/api/trpc/trend.getPlayerTrends?input=%7B%22market%22%3A%22{_slug}%22%2C%22minHitRate%22%3A70%7D",
-                            f"https://www.footymetrics.com/api/trpc/playerTrend.list?input=%7B%22slug%22%3A%22{_slug}%22%7D",
-                            f"https://www.footymetrics.com/_next/data/latest/trends/{_slug}.json",
-                        ]
-                        _fm_data = None
-                        for _fu in _fm_trpc_urls:
-                            try:
-                                _fr = _fm_cs.get(_fu, timeout=10,
-                                    headers={"Accept":"application/json","Referer":"https://www.footymetrics.com/"})
-                                log(f"   FootyMetrics {_slug} trpc: {_fr.status_code}")
-                                if _fr.ok and _fr.text.strip().startswith(('[','{')):
-                                    _fm_data = _fr.json()
-                                    log(f"   FootyMetrics {_slug} data: {str(_fm_data)[:200]}")
-                                    break
-                            except Exception:
-                                pass
+                    if _pp_total >= 30: break
+                    for _fu in [f"https://www.footymetrics.com/api/trpc/trend.getPlayerTrends?input=%7B%22market%22%3A%22{_slug}%22%7D",
+                                f"https://www.footymetrics.com/_next/data/latest/trends/{_slug}.json"]:
+                        try:
+                            _fr = _fm_cs.get(_fu, timeout=10, headers={"Accept":"application/json","Referer":"https://www.footymetrics.com/"})
+                            log(f"   FootyMetrics {_slug}: {_fr.status_code}")
+                            if _fr.ok and _fr.text.strip().startswith(('[','{')):
+                                _fd = _fr.json()
+                                _fi = _fd.get("result",{}).get("data",[]) or _fd.get("data",[]) or (_fd if isinstance(_fd,list) else [])
+                                for _t in (_fi or [])[:8]:
+                                    _p = _t.get("playerName") or _t.get("player","")
+                                    _m = _t.get("fixture") or _t.get("match","")
+                                    if isinstance(_m,dict): _m = f"{_m.get('home','')} vs {_m.get('away','')}"
+                                    _hr = float(_t.get("hitRate") or 0)
+                                    if not _p or _hr < 70: continue
+                                    _send_prop(_p, _name, str(_m) or "Upcoming", 0, "FootyMetrics", _icon, "", f"Hit Rate: {_hr:.0f}%")
+                                break
+                        except Exception: pass
+            except Exception as _e: log(f"   FootyMetrics Error: {str(_e)[:60]}", "WARN")
 
-                        if _fm_data:
-                            # tRPC Response: {result: {data: [...]}}
-                            _fm_items = (
-                                _fm_data.get("result",{}).get("data",[]) or
-                                _fm_data.get("data",[]) or
-                                (_fm_data if isinstance(_fm_data, list) else [])
-                            )
-                            for _t in (_fm_items or [])[:8]:
-                                _p = _t.get("playerName") or _t.get("player","")
-                                _m_str = _t.get("fixture") or _t.get("match","")
-                                if isinstance(_m_str, dict):
-                                    _m_str = f"{_m_str.get('home','')} vs {_m_str.get('away','')}"
-                                _hr = float(_t.get("hitRate") or _t.get("hit_rate") or 0)
-                                if not _p or _hr < 70:
-                                    continue
-                                _send_prop(_p, _name, str(_m_str) or "Upcoming", 0,
-                                           "FootyMetrics", _icon, "", f"Hit Rate: {_hr:.0f}%")
-                    except Exception as _fme2:
-                        log(f"   FootyMetrics {_slug}: {str(_fme2)[:50]}", "WARN")
-            except Exception as _e:
-                log(f"   FootyMetrics Error: {str(_e)[:60]}", "WARN")
-
-        # ═══════════════════════════════════════
-        # 3. SCOUTINGSTATS — /api/props/board
-        # ═══════════════════════════════════════
+        # 3. SCOUTINGSTATS
         if _pp_total < 30:
             try:
                 import cloudscraper as _css2
                 _ss_cs = _css2.create_scraper()
-                _ss_r = _ss_cs.get(
-                    "https://scoutingstats.ai/api/props/board",
-                    timeout=12,
-                    headers={"Accept":"application/json","Referer":"https://scoutingstats.ai/"}
-                )
-                log(f"   ScoutingStats board: {_ss_r.status_code} / {len(_ss_r.text)} chars")
+                _ss_r = _ss_cs.get("https://scoutingstats.ai/api/props/board", timeout=12,
+                    headers={"Accept":"application/json","Referer":"https://scoutingstats.ai/"})
+                log(f"   ScoutingStats: {_ss_r.status_code} / {len(_ss_r.text)} chars")
                 if _ss_r.ok and _ss_r.text.strip().startswith(('[','{')):
-                    _ss_data = _ss_r.json()
-                    _ss_items = _ss_data if isinstance(_ss_data, list) else (
-                        _ss_data.get("data") or _ss_data.get("props") or
-                        _ss_data.get("board") or []
-                    )
-                    log(f"   ScoutingStats items: {len(_ss_items)}")
-                    if _ss_items:
-                        log(f"   ScoutingStats sample keys: {list(_ss_items[0].keys())[:10]}")
-                    _ss_market_map = {
-                        "shots_on_target":"1+ Shot on Target","goals":"Anytime Goalscorer",
-                        "yellow_cards":"To Be Booked","shots":"2+ Shots",
-                        "tackles":"2+ Tackles","fouls":"2+ Fouls","assists":"1+ Assist",
-                        "336":"1+ Shot on Target","337":"Anytime Goalscorer",
-                        "338":"To Be Booked","339":"2+ Shots","340":"2+ Tackles",
-                        "341":"2+ Fouls",
-                    }
-                    _ss_icons = {"goals":"⚽","shots_on_target":"🎯","337":"⚽",
-                                 "yellow_cards":"🟨","338":"🟨","shots":"💥","339":"💥",
-                                 "tackles":"🦵","340":"🦵","fouls":"🦵","341":"🦵",
-                                 "336":"🎯","assists":"🅰️"}
-                    for _t in (_ss_items if isinstance(_ss_items, list) else [])[:20]:
-                        _p = _t.get("player_name") or ""
-                        _market_id = str(_t.get("market_id",""))
-                        _home = _t.get("home_team","")
-                        _away = _t.get("away_team","")
+                    _ss_items = _ss_r.json() if isinstance(_ss_r.json(),list) else (
+                        _ss_r.json().get("data") or _ss_r.json().get("props") or [])
+                    _ss_mkt = {"shots_on_target":"1+ Shot on Target","goals":"Anytime Goalscorer",
+                               "yellow_cards":"To Be Booked","shots":"2+ Shots","tackles":"2+ Tackles",
+                               "fouls":"2+ Fouls","assists":"1+ Assist","336":"1+ Shot on Target",
+                               "337":"Anytime Goalscorer","338":"To Be Booked","339":"2+ Shots","340":"2+ Tackles"}
+                    _ss_icn = {"goals":"⚽","337":"⚽","shots_on_target":"🎯","336":"🎯",
+                               "yellow_cards":"🟨","338":"🟨","shots":"💥","339":"💥","tackles":"🦵","340":"🦵"}
+                    for _t in (_ss_items if isinstance(_ss_items,list) else [])[:20]:
+                        _p = _t.get("player_name","")
+                        _mid = str(_t.get("market_id",""))
+                        _home = _t.get("home_team",""); _away = _t.get("away_team","")
                         _match = f"{_home} vs {_away}" if _home and _away else ""
-                        _pos = _t.get("general_position") or _t.get("position","")
-                        _m = _ss_market_map.get(_market_id.lower(),
-                             _ss_market_map.get(_market_id, _pos or f"Prop({_market_id})"))
-                        _icon2 = _ss_icons.get(_market_id, "📊")
-                        _model_p = float(_t.get("model_p") or _t.get("confidence") or 0)
+                        _pos = _t.get("general_position","")
+                        _m = _ss_mkt.get(_mid.lower(), _ss_mkt.get(_mid, _pos or f"Prop({_mid})"))
+                        _icon2 = _ss_icn.get(_mid, "📊")
+                        _mp = float(_t.get("model_p") or _t.get("confidence") or 0)
                         _fair2 = float(_t.get("fair_odds") or 0)
-                        _line = _t.get("line","")
                         _ko2 = str(_t.get("kickoff",""))
                         _ko_s2 = _ko2[11:16] if len(_ko2) > 11 else ""
-                        if not _p or _model_p < 0.55:
-                            continue
-                        _fair_use = _fair2 if _fair2 > 1.0 else (round(1/_model_p,2) if _model_p > 0 else 0)
-                        _send_prop(_p, _m, _match or "Upcoming", _fair_use,
-                                   "ScoutingStats", _icon2, _ko_s2,
-                                   extra=f"Model: {_model_p*100:.0f}% | Line: {_line}")
-            except Exception as _e:
-                log(f"   ScoutingStats Error: {str(_e)[:60]}", "WARN")
+                        if not _p or _mp < 0.55: continue
+                        _fair_use = _fair2 if _fair2 > 1.0 else (round(1/_mp,2) if _mp > 0 else 0)
+                        _send_prop(_p, _m, _match or "Upcoming", _fair_use, "ScoutingStats", _icon2, _ko_s2,
+                                   extra=f"Model: {_mp*100:.0f}%")
+            except Exception as _e: log(f"   ScoutingStats Error: {str(_e)[:60]}", "WARN")
 
-        # ═══════════════════════════════════════
-        # 4. STATZ.AI — Inertia.js / Laravel
-        # ═══════════════════════════════════════
+        # 4. STATZ.AI
         if _pp_total < 30:
             try:
-                _sz_html = scrape_with_playwright(
-                    "https://statz.ai/projections/player-props",
-                    timeout=25000
-                )
+                _sz_html = scrape_with_playwright("https://statz.ai/projections/player-props", timeout=25000)
                 if _sz_html:
-                    _sz_dp = _re_pp.search(
-                        r'data-page=["\'](\{.*?\})["\']',
-                        _sz_html, _re_pp.DOTALL
-                    )
+                    _sz_dp = _re_pp.search(r'data-page=["\'](\{.*?\})["\']', _sz_html, _re_pp.DOTALL)
                     if _sz_dp:
-                        try:
-                            import html as _html_mod
-                            _sz_json = _json_pp.loads(_html_mod.unescape(_sz_dp.group(1)))
-                            _sz_props = _sz_json.get("props",{})
-                            _sz_items = None
-                            for _k in ["projections","props","playerProps","data","predictions"]:
-                                _v = _sz_props.get(_k)
-                                if isinstance(_v, list) and len(_v) > 0:
-                                    _sz_items = _v
-                                    break
-                            log(f"   Statz.ai items: {len(_sz_items) if _sz_items else 0}")
-                            _sz_mkt_map = {
-                                1:"Anytime Goalscorer",2:"2+ Shots",3:"1+ Shot on Target",
-                                4:"1+ Assist",5:"2+ Tackles",6:"2+ Fouls",7:"To Be Booked"
-                            }
-                            _sz_pos_map = {
-                                "attacker":"Anytime Goalscorer","forward":"Anytime Goalscorer",
-                                "midfielder":"1+ Shot on Target","defender":"2+ Tackles",
-                                "FWD":"Anytime Goalscorer","MID":"1+ Shot on Target",
-                                "DEF":"2+ Tackles","ATT":"Anytime Goalscorer"
-                            }
-                            _sz_icons = {1:"⚽",2:"💥",3:"🎯",4:"🅰️",5:"🦵",6:"🦵",7:"🟨"}
-                            for _t in (_sz_items if isinstance(_sz_items, list) else [])[:20]:
-                                _p_raw = _t.get("player") or {}
-                                _p = _p_raw.get("name","") if isinstance(_p_raw, dict) else str(_p_raw)
-                                _h_raw = _t.get("home_team") or {}
-                                _a_raw = _t.get("away_team") or {}
-                                _home = _h_raw.get("name","") if isinstance(_h_raw, dict) else str(_h_raw)
-                                _away = _a_raw.get("name","") if isinstance(_a_raw, dict) else str(_a_raw)
-                                _match = f"{_home} vs {_away}" if _home and _away else ""
-                                _fix = _t.get("fixture") or {}
-                                _ko = str(_fix.get("kickoff_iso","") if isinstance(_fix, dict) else "")
-                                _ko_s = _ko[11:16] if len(_ko) > 11 else ""
-                                _m_raw = _t.get("market")
-                                _pos_raw = _t.get("position") or {}
-                                _pos_str = _pos_raw.get("name","") if isinstance(_pos_raw, dict) else str(_pos_raw or "")
-                                if _m_raw and isinstance(_m_raw, int):
-                                    _m = _sz_mkt_map.get(_m_raw, f"Prop {_m_raw}")
-                                elif _m_raw:
-                                    _m = str(_m_raw)
-                                else:
-                                    _m = _sz_pos_map.get(_pos_str, "Player Prop")
-                                _icon = _sz_icons.get(_m_raw if isinstance(_m_raw,int) else 0, "🤖")
-                                _prob = float(_t.get("probability") or _t.get("projection") or
-                                              _t.get("confidence") or _t.get("score") or 0)
-                                if _prob > 1: _prob /= 100
-                                if not _p: continue
-                                if _prob > 0 and _prob < 0.50: continue
-                                _fair = round(1/_prob, 2) if _prob > 0.1 else 0
-                                _extra = f"AI: {_prob*100:.0f}%" if _prob > 0 else ""
-                                _send_prop(_p, _m, _match or "WM", _fair,
-                                           "Statz.ai", _icon, _ko_s, extra=_extra)
-                        except Exception as _ize:
-                            log(f"   Statz.ai parse: {str(_ize)[:60]}", "WARN")
-            except Exception as _e:
-                log(f"   Statz.ai Error: {str(_e)[:60]}", "WARN")
+                        import html as _html_mod
+                        _sz_json = _json_pp.loads(_html_mod.unescape(_sz_dp.group(1)))
+                        _sz_props = _sz_json.get("props",{})
+                        _sz_items = None
+                        for _k in ["projections","props","playerProps","data","predictions"]:
+                            _v = _sz_props.get(_k)
+                            if isinstance(_v, list) and len(_v) > 0: _sz_items = _v; break
+                        log(f"   Statz.ai items: {len(_sz_items) if _sz_items else 0}")
+                        _sz_mkt = {1:"Anytime Goalscorer",2:"2+ Shots",3:"1+ Shot on Target",
+                                   4:"1+ Assist",5:"2+ Tackles",6:"2+ Fouls",7:"To Be Booked"}
+                        _sz_pos = {"attacker":"Anytime Goalscorer","forward":"Anytime Goalscorer",
+                                   "midfielder":"1+ Shot on Target","defender":"2+ Tackles",
+                                   "FWD":"Anytime Goalscorer","MID":"1+ Shot on Target","DEF":"2+ Tackles"}
+                        _sz_icn = {1:"⚽",2:"💥",3:"🎯",4:"🅰️",5:"🦵",6:"🦵",7:"🟨"}
+                        for _t in (_sz_items if isinstance(_sz_items,list) else [])[:20]:
+                            _p_raw = _t.get("player") or {}
+                            _p = _p_raw.get("name","") if isinstance(_p_raw,dict) else str(_p_raw)
+                            _h_raw = _t.get("home_team") or {}; _a_raw = _t.get("away_team") or {}
+                            _home = _h_raw.get("name","") if isinstance(_h_raw,dict) else str(_h_raw)
+                            _away = _a_raw.get("name","") if isinstance(_a_raw,dict) else str(_a_raw)
+                            _match = f"{_home} vs {_away}" if _home and _away else ""
+                            _fix = _t.get("fixture") or {}
+                            _ko = str(_fix.get("kickoff_iso","") if isinstance(_fix,dict) else "")
+                            _ko_s = _ko[11:16] if len(_ko) > 11 else ""
+                            _m_raw = _t.get("market")
+                            _pos_raw = _t.get("position") or {}
+                            _pos_str = _pos_raw.get("name","") if isinstance(_pos_raw,dict) else str(_pos_raw or "")
+                            if _m_raw and isinstance(_m_raw,int): _m = _sz_mkt.get(_m_raw, f"Prop {_m_raw}")
+                            elif _m_raw: _m = str(_m_raw)
+                            else: _m = _sz_pos.get(_pos_str, "Player Prop")
+                            _icon = _sz_icn.get(_m_raw if isinstance(_m_raw,int) else 0, "🤖")
+                            _prob = float(_t.get("probability") or _t.get("projection") or _t.get("score") or 0)
+                            if _prob > 1: _prob /= 100
+                            if not _p: continue
+                            if _prob > 0 and _prob < 0.50: continue
+                            _fair = round(1/_prob,2) if _prob > 0.1 else 0
+                            _send_prop(_p, _m, _match or "WM", _fair, "Statz.ai", _icon, _ko_s,
+                                       extra=f"AI: {_prob*100:.0f}%" if _prob > 0 else "")
+            except Exception as _e: log(f"   Statz.ai Error: {str(_e)[:60]}", "WARN")
 
     log(f"   Player Props total: {_pp_total} gesendet")
     log("\U0001F511 Pinnacle Props: keine Bet Builder zusammengestellt")
@@ -19008,10 +18930,6 @@ def integrate_edge_filter_into_pipeline(tips_by_market: Dict[str, List[Dict]],
         combos = build_cross_match_combos(filtered)
 
     _log("EDGE", f"🎯 FINAL: {total_after}/{total_before} Tipps, {len(combos)} Combos")
-    # Safe: max 12 Tipps pro Markt
-    for _mk2 in list(kept.keys()):
-        if len(kept[_mk2]) > 12:
-            kept[_mk2] = kept[_mk2][:12]
     return {
         "filtered_tips": filtered,
         "combos": combos,
