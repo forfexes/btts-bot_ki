@@ -18080,49 +18080,43 @@ def run_pinnacle_props_bot(win_start_utc=None, win_end_utc=None, ch_tz=None, top
                     _value_sent += 1
                     log(f"   🎯 Value Alert: {player} {value_info['market']} +{value_info['edge_pct']}%")
 
-    # 🌍 AllSports API: WM Player Props (Goalscorer, Cards, SOT)
+    # 🌍 AllSports API: WM League-ID finden + Player Props
     if ALLSPORTS_API_KEY:
         try:
-            import datetime as _dt_as
+            from datetime import timedelta as _td_as
             _as_date = (win_start_utc or datetime.now(timezone.utc)).strftime("%Y-%m-%d")
-            _as_tomorrow = (datetime.now(timezone.utc) + __import__("datetime").timedelta(days=1)).strftime("%Y-%m-%d")
-            
-            # WM Fixture-IDs holen
+
+            # Suche alle heutigen Fixtures — finde WM League-ID
             _as_r = requests.get(
                 "https://apiv2.allsportsapi.com/football/",
-                params={
-                    "met": "Fixtures",
-                    "APIkey": ALLSPORTS_API_KEY,
-                    "from": _as_date,
-                    "to": _as_tomorrow,
-                    "leagueId": "1175",  # FIFA World Cup 2026
-                },
+                params={"met": "Fixtures", "APIkey": ALLSPORTS_API_KEY,
+                        "from": _as_date, "to": _as_date},
                 timeout=15,
             )
-            log(f"   🌍 AllSports WM Fixtures: {_as_r.status_code}")
+            log(f"   🌍 AllSports Fixtures: {_as_r.status_code}")
             if _as_r.ok:
-                _as_data = _as_r.json()
-                _as_fixtures = _as_data.get("result", []) or []
-                log(f"   🌍 AllSports WM Fixtures: {len(_as_fixtures)} Spiele")
-                for _fix in _as_fixtures[:2]:
-                    log(f"      {_fix.get('event_home_team')} vs {_fix.get('event_away_team')} (ID: {_fix.get('event_key')})")
+                _as_all = _as_r.json().get("result", []) or []
+                _wm_fix = [f for f in _as_all if any(k in (f.get("league_name","")).lower()
+                           for k in ["world cup", "world cup 2026", "fifa world", "wm 2026"])]
+                log(f"   🌍 AllSports: {len(_as_all)} Fixtures heute, {len(_wm_fix)} WM")
+                for _f in _wm_fix[:5]:
+                    log(f"      {_f.get('event_home_team')} vs {_f.get('event_away_team')} | {_f.get('league_name')} | LeagueID={_f.get('league_key')} | FixID={_f.get('event_key')}")
                 
-                # Player Props für erste Fixture holen
-                if _as_fixtures:
-                    _fix_id = _as_fixtures[0].get("event_key")
-                    _as_props = requests.get(
+                # Wenn WM gefunden: Odds holen
+                if _wm_fix:
+                    _fix_id = _wm_fix[0].get("event_key")
+                    _as_odds = requests.get(
                         "https://apiv2.allsportsapi.com/football/",
-                        params={
-                            "met": "Odds",
-                            "APIkey": ALLSPORTS_API_KEY,
-                            "matchId": _fix_id,
-                        },
+                        params={"met": "Odds", "APIkey": ALLSPORTS_API_KEY, "matchId": _fix_id},
                         timeout=15,
                     )
-                    log(f"   🌍 AllSports Odds Status: {_as_props.status_code}")
-                    if _as_props.ok:
-                        _as_odds = _as_props.json()
-                        log(f"   🌍 AllSports Odds Response: {str(_as_odds)[:500]}")
+                    log(f"   🌍 AllSports Odds: {_as_odds.status_code}")
+                    if _as_odds.ok:
+                        log(f"   🌍 AllSports Odds Data: {str(_as_odds.json())[:600]}")
+                else:
+                    # Zeige alle Liga-Namen um die richtige zu finden
+                    _all_leagues = set(f.get("league_name","") for f in _as_all)
+                    log(f"   🌍 AllSports Ligen heute: {list(_all_leagues)[:15]}")
         except Exception as _ase:
             log(f"   🌍 AllSports Error: {str(_ase)[:80]}", "WARN")
 
