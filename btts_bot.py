@@ -18570,6 +18570,14 @@ def run_pinnacle_props_bot(win_start_utc=None, win_end_utc=None, ch_tz=None, top
         # Gleicher Spieler + gleiche Kategorie, steigende Linien → Varianten
         # z.B. Perisic 3+ Tackles, 2+ Tackles, 1+ Tackles @ 375/1, 160/1, 70/1
         log(f"   🎯 Nate Ladder Builder...")
+        _ladder_candidates = sum(1 for _m, _pls in _by_match.items() 
+                                  for _pl, _cats in _pls.items() 
+                                  for _c, _props in _cats.items() if len(_props) >= 2)
+        log(f"   Ladder Kandidaten: {_ladder_candidates} (Spieler mit 2+ Linien)")
+        # Debug: zeige Tackle/Foul Props
+        _debug_cats = [p for p in _prop_db_filtered if p["category"] in ["tackles","fouls","yellow_cards"]][:5]
+        for _dp in _debug_cats:
+            log(f"   DB sample: {_dp['player']} | {_dp['market']} | {_dp['odds']} | {_dp['source']}")
         for _match, _players in list(_by_match.items())[:30]:
             for _player, _cats in list(_players.items()):
                 for _c, _props in list(_cats.items()):
@@ -18626,11 +18634,11 @@ def run_pinnacle_props_bot(win_start_utc=None, win_end_utc=None, ch_tz=None, top
                 _used_yc_p.add(_yp["player"])
                 if len(_yc_legs) >= 6: break
 
-            for _sz in range(min(len(_yc_legs), 6), 2, -1):
+            for _sz in range(min(len(_yc_legs), 5), 2, -1):
                 legs = _yc_legs[:_sz]
                 t = _tod(legs)
-                # Aystar Ziel: 13-61 Quote
-                if 5.0 <= t <= 100.0:
+                # Aystar Ziel: 10-80 Quote
+                if 5.0 <= t <= 80.0:
                     if _send_builder(legs, "AYSTAR BOOKING"):
                         _builder_sent_today.add(_gk_yc)
                         break
@@ -18689,8 +18697,10 @@ def run_pinnacle_props_bot(win_start_utc=None, win_end_utc=None, ch_tz=None, top
 
             if len(_cross) >= 3:
                 for _sz in range(min(len(_cross), 5), 2, -1):
-                    if _send_builder(_cross[:_sz], "CROSS-MATCH"):
-                        _builder_sent_today.add(_gk_cross); break
+                    _t = _tod(_cross[:_sz])
+                    if _t <= 50.0:  # Cap: max 50/1
+                        if _send_builder(_cross[:_sz], "CROSS-MATCH"):
+                            _builder_sent_today.add(_gk_cross); break
 
         # ── CATEGORY BUILDERS ──────────────────────────────────────
         # Shots on Target Builder, Tackles Builder etc.
@@ -18841,23 +18851,31 @@ def run_pinnacle_props_bot(win_start_utc=None, win_end_utc=None, ch_tz=None, top
                         _sz_props = _sz_json.get("props",{})
                         log(f"   Statz.ai props keys: {list(_sz_props.keys())[:8]}")
                         _sz_items = None
+                        # Suche Player Props: muss player Feld haben
                         for _k in ["projections","props","playerProps","data","predictions",
-                                   "player_projections","results","picks","tips"]:
+                                   "player_projections","results","picks","tips","players"]:
                             _v = _sz_props.get(_k)
-                            if isinstance(_v, list) and len(_v) > 0:
-                                _sz_items = _v
-                                log(f"   Statz.ai key '{_k}': {len(_v)} items")
-                        if _v:
-                            _sz_mkts = set(str(i.get("market_name","")) for i in _v[:20])
-                            log(f"   Statz.ai market_names: {list(_sz_mkts)[:10]}")
+                            if isinstance(_v, list) and len(_v) > 0 and isinstance(_v[0], dict):
+                                if any(kk in _v[0] for kk in ["player","player_name","playerName","market_name"]):
+                                    _sz_items = _v
+                                    _sz_mkts = set(str(i.get("market_name","") or i.get("market","")) for i in _v[:20])
+                                    log(f"   Statz.ai key '{_k}': {len(_v)} items, markets: {list(_sz_mkts)[:5]}")
+                                    break
                         if not _sz_items:
-                            # Suche in allen Werten
-                            for _k, _v in _sz_props.items():
-                                if isinstance(_v, list) and len(_v) > 0 and isinstance(_v[0], dict):
-                                    if any(kk in _v[0] for kk in ["player","name","player_name"]):
-                                        _sz_items = _v
-                                        log(f"   Statz.ai auto key '{_k}': {len(_v)} items")
-                                        break
+                            # Rekursiv suchen
+                            def _find_sz(d, depth=0):
+                                if depth > 5: return None
+                                if isinstance(d, list) and len(d) > 0 and isinstance(d[0], dict):
+                                    if any(kk in d[0] for kk in ["player","player_name","market_name"]):
+                                        return d
+                                if isinstance(d, dict):
+                                    for v in d.values():
+                                        r = _find_sz(v, depth+1)
+                                        if r: return r
+                                return None
+                            _sz_items = _find_sz(_sz_data)
+                            if _sz_items:
+                                log(f"   Statz.ai deep: {len(_sz_items)} items, keys: {list(_sz_items[0].keys())[:6]}")
                         log(f"   Statz.ai items: {len(_sz_items) if _sz_items else 0}")
                         if _sz_items:
                             log(f"   Statz.ai keys: {list(_sz_items[0].keys())[:10]}")
@@ -18927,8 +18945,8 @@ def run_pinnacle_props_bot(win_start_utc=None, win_end_utc=None, ch_tz=None, top
         def _build_and_send(legs, label=""):
             nonlocal _pp_total
             if not legs: return
-            _total = round(__import__("functools").reduce(lambda a,b: a*b, [l["odds"] for l in legs]), 2)
-            if _total < 1.80: return
+            _total = round(__import__("functools").reduce(lambda a,b: a*b, [l["odds"] for l in legs if l.get("odds",0)>1.0] or [1.0]), 2)
+            if _total < 2.50: return  # min 2.50 für Prop Builder
             _bmsg = "\U0001f3d7\ufe0f <b>PROP BUILDER " + str(len(legs)) + " LEGS</b>"
             if label: _bmsg += " (" + label + ")"
             _bmsg += NL + SEP + NL
