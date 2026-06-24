@@ -18132,19 +18132,22 @@ def run_pinnacle_props_bot(win_start_utc=None, win_end_utc=None, ch_tz=None, top
                 params={"select":"dedup_key","sent_date":f"eq.{_pp_today}","limit":"500"},timeout=8)
             for _row in (_ex.json() if _ex.ok else []):
                 _dk = _row.get("dedup_key","")
-                if _dk: _pp_dedup.add(_dk); _STAT_INSIGHT_SENT_TODAY.add(_dk)
-            log(f"   Player Props Dedup: {len(_pp_dedup)} bereits heute gesendet")
+                if _dk: _pp_dedup.add(_dk)
+                # NICHT in _STAT_INSIGHT_SENT_TODAY — Props können als Builder neu kombiniert werden
+            log(f"   Player Props Dedup: {len(_pp_dedup)} bereits heute gesendet (werden neu kombiniert)")
     except Exception as _dde:
         log(f"   Player Props Dedup: {str(_dde)[:50]}", "WARN")
 
     # Props sammeln für Prop Builder
     _prop_candidates = []  # [{player, market, match, odds_dec, source, icon, ko_s, confidence}]
 
+    _builder_sent_today = set()  # nur für Builder-Dedup
+
     def _collect_prop(player, market, match, odds_dec, source, icon="🎯", ko_s="", extra="", confidence=0.6):
         nonlocal _pp_total
         if not player or not market: return False
         _dk = f"pp_{match}_{player}_{market}_{_pp_today}"
-        if _dk in _pp_dedup or _dk in _STAT_INSIGHT_SENT_TODAY: return False
+        if _dk in _builder_sent_today: return False  # nur Builder-Dedup, nicht Supabase-History
         _pp_dedup.add(_dk); _STAT_INSIGHT_SENT_TODAY.add(_dk)
         _prop_candidates.append({
             "player": player, "market": market, "match": match,
@@ -18152,27 +18155,457 @@ def run_pinnacle_props_bot(win_start_utc=None, win_end_utc=None, ch_tz=None, top
             "source": source, "icon": icon, "ko_s": ko_s, "extra": extra,
             "confidence": confidence, "dedup_key": _dk,
         })
-        log(f"   Prop: {player} | {market} | {source}")
-        try:
-            if SUPABASE_URL and SUPABASE_KEY:
-                requests.post(f"{SUPABASE_URL}/rest/v1/prop_picks",
-                    headers={"apikey":SUPABASE_KEY,"Authorization":f"Bearer {SUPABASE_KEY}",
-                             "Content-Type":"application/json","Prefer":"resolution=merge-duplicates"},
-                    json={"dedup_key":_dk,"player":str(player)[:100],"market":str(market)[:100],
-                          "match":str(match)[:200],"source":source,"sent_date":str(_pp_today)},timeout=5)
-        except Exception: pass
+        log(f"   Prop gesammelt: {player} | {market} | {source}")
         return True
 
     # Alias für Kompatibilität
     _send_prop = _collect_prop
 
+    # ═══════════════════════════════════════════════════════════════════
+    # NETRATTLER PROP DATABASE — alle Quellen, alle Märkte
+    # ═══════════════════════════════════════════════════════════════════
+
+    _FULL_CAT_MAP = {
+        "score":        ["to score","anytime goalscorer","first goalscorer","last goalscorer",
+                         "anytime scorer","to get on scoresheet","goal matchup"],
+        "assist":       ["to assist","1+ assist","2+ assist","3+ assist"],
+        "score_assist": ["score or assist","to score or assist","score and assist"],
+        "yellow_cards": ["to be booked","yellow card","receive a card","be carded",
+                         "booking","player cards","either player to be booked"],
+        "red_card":     ["red card","to be sent off","sent off"],
+        "sot":          ["shots on target","shot on target","shots on goal",
+                         "headed shots on target","shots on target outside box"],
+        "shots":        ["2+ shots","3+ shots","4+ shots","5+ shots","player shots",
+                         "shots in game","total shots"],
+        "tackles":      ["tackle","tackles won","total tackles","player tackles"],
+        "fouls":        ["fouls committed","foul committed","player fouls committed",
+                         "fouls won","foul won","to be fouled","player to be fouled"],
+        "saves":        ["saves","goalkeeper saves","goalie saves","keeper saves"],
+        "offsides":     ["offside","total offsides","player offside"],
+        "passes":       ["passes","player passes"],
+        "corners":      ["corners","corner kicks","total corners"],
+        "free_kicks":   ["free kick","free-kick"],
+        "throw_ins":    ["throw-in","throw in"],
+        "goal_kicks":   ["goal kick"],
+    }
+
+    _CAT_ICONS = {
+        "score":"⚽","assist":"🅰️","score_assist":"⚽🅰️","yellow_cards":"🟨",
+        "red_card":"🟥","sot":"🎯","shots":"💥","tackles":"🦵","fouls":"🦵",
+        "saves":"🧤","offsides":"🏃","passes":"📋","corners":"🔵",
+        "free_kicks":"🦶","throw_ins":"🤾","goal_kicks":"🥅",
+    }
+
+    # Builder-würdige Kategorien (nicht Corners/Free Kicks für Player Props)
+    _BUILDER_CATS = ["score","assist","score_assist","yellow_cards","sot","shots",
+                     "tackles","fouls","saves","offsides","passes","red_card"]
+
+    def _cat(market_name):
+        mn = market_name.lower()
+        for cat, kws in _FULL_CAT_MAP.items():
+            if any(k in mn for k in kws):
+                return cat
+        return "other"
+
+    def _line(market_name):
+        import re as _rl
+        m = _rl.search(r'(\d+(?:\.\d+)?)\+', market_name)
+        if m: return float(m.group(1))
+        m2 = _rl.search(r'over\s+(\d+(?:\.\d+)?)', market_name.lower())
+        if m2: return float(m2.group(1))
+        return 1.0
+
+    def _player_from_prop(prop_name):
+        import re as _rp
+        # "Ivan Perisic 3+ Tackles" → "Ivan Perisic"
+        result = _rp.sub(r'\s+\d+\+.*$', '', prop_name, flags=_rp.I).strip()
+        result = _rp.sub(r'\s+(to\s|anytime|first|last|player|either|over\s)\S.*$', '', result, flags=_rp.I).strip()
+        return result if len(result) >= 3 else prop_name.split(" ")[0]
+
+    _prop_db = []  # einheitliche DB aller Props
+
+    def _add(player, team, match, league, market, odds, prob=0, model_prob=0, source="", ko=""):
+        if not player or not market or not match: return
+        c = _cat(market)
+        if c == "other": return
+        _prop_db.append({
+            "player": player.strip()[:80],
+            "team": (team or "")[:60],
+            "match": match[:150],
+            "league": (league or "")[:80],
+            "market": market[:150],
+            "category": c,
+            "line": _line(market),
+            "odds": float(odds) if odds else 0.0,
+            "prob": int(prob),
+            "model_prob": float(model_prob) if model_prob else 0.0,
+            "source": source,
+            "ko": ko,
+            "icon": _CAT_ICONS.get(c, "🎯"),
+        })
+
+    # ── QUELLE 1: PINNACLE ─────────────────────────────────────────
+    try:
+        _pin = fetch_pinnacle_player_props()
+        log(f"   📊 DB Pinnacle: {len(_pin)} Props")
+        for _p in _pin:
+            _pname = _p.get("player_prop","")
+            _match = _p.get("match","")
+            _odds = float(_p.get("odds",0) or 0)
+            if _odds < 1.05 or _odds > 15.0: continue
+            if " vs " not in _match: continue
+            _player = _player_from_prop(_pname)
+            _sel = _p.get("selection","").lower()
+            _pts = _match.split(" vs ")
+            _team = _pts[0] if len(_pts)>1 and _pts[0].lower()[:4] in _sel else (_pts[1] if len(_pts)>1 else "")
+            _add(_player, _team, _match, _p.get("league",""), _pname,
+                 _odds, int(_p.get("prob",0) or 0), 0, "Pinnacle", str(_p.get("starts",""))[:5])
+    except Exception as _e:
+        log(f"   DB Pinnacle: {str(_e)[:60]}", "WARN")
+
+    # ── QUELLE 2: SCOUTINGSTATS ────────────────────────────────────
+    try:
+        import cloudscraper as _css_db
+        _ss = _css_db.create_scraper()
+        _ss_r = _ss.get("https://scoutingstats.ai/api/props/board", timeout=12,
+            headers={"Accept":"application/json","Referer":"https://scoutingstats.ai/"})
+        if _ss_r.ok:
+            _ss_raw = _ss_r.json()
+            _ss_items = _ss_raw if isinstance(_ss_raw,list) else (
+                _ss_raw.get("data") or _ss_raw.get("props") or _ss_raw.get("board") or
+                (list(_ss_raw.values())[0] if isinstance(_ss_raw,dict) and _ss_raw else []))
+            if not isinstance(_ss_items, list): _ss_items = []
+            log(f"   📊 DB ScoutingStats: {len(_ss_items)} Items")
+            if _ss_items: log(f"   SS keys: {list(_ss_items[0].keys())[:8]}")
+            _SS_MKT = {
+                "336":"1+ Shot on Target","337":"Anytime Goalscorer","338":"To Be Booked",
+                "339":"2+ Shots","340":"2+ Tackles","341":"2+ Fouls","342":"1+ Assist",
+                "343":"2+ Shots on Target","344":"3+ Tackles","345":"3+ Fouls",
+                "shots_on_target":"1+ Shot on Target","goals":"Anytime Goalscorer",
+                "yellow_cards":"To Be Booked","shots":"2+ Shots","tackles":"2+ Tackles",
+                "fouls":"2+ Fouls","assists":"1+ Assist","saves":"1+ Save",
+                "offsides":"1+ Offside","passes":"30+ Passes",
+            }
+            for _t in _ss_items:
+                _p = _t.get("player_name","")
+                _mid = str(_t.get("market_id",""))
+                _mkt = _SS_MKT.get(_mid, _SS_MKT.get(_mid.lower(), ""))
+                if not _mkt:
+                    _pos = _t.get("general_position","")
+                    _mkt = {"FWD":"Anytime Goalscorer","MID":"1+ Shot on Target",
+                            "DEF":"2+ Tackles","GK":"1+ Save"}.get(_pos, "")
+                _home = _t.get("home_team",""); _away = _t.get("away_team","")
+                _match = f"{_home} vs {_away}" if _home and _away else ""
+                _mp = float(_t.get("model_p") or _t.get("confidence") or 0)
+                _fair = float(_t.get("fair_odds") or 0)
+                _ko = str(_t.get("kickoff",""))
+                if not _p or not _mkt or (_mp > 0 and _mp < 0.45): continue
+                _add(_p, "", _match, "", _mkt, _fair, int(_mp*100), _mp, "ScoutingStats", _ko[11:16])
+        else:
+            log(f"   DB ScoutingStats: {_ss_r.status_code}")
+    except Exception as _e:
+        log(f"   DB ScoutingStats: {str(_e)[:60]}", "WARN")
+
+    # ── QUELLE 3: STATZ.AI ─────────────────────────────────────────
+    try:
+        _sz_html = scrape_with_playwright("https://statz.ai/projections/player-props", timeout=20000)
+        if _sz_html:
+            import re as _re_sz, json as _json_sz, html as _html_sz
+            _sz_dp = _re_sz.search(r'data-page=["\'](\{.*?\})["\']', _sz_html, _re_sz.DOTALL)
+            if _sz_dp:
+                _sz_data = _json_sz.loads(_html_sz.unescape(_sz_dp.group(1)))
+                _sz_pp = _sz_data.get("props",{})
+                _sz_items = None
+                for _k in ["projections","props","playerProps","data","predictions","player_projections","results"]:
+                    _v = _sz_pp.get(_k)
+                    if isinstance(_v,list) and _v: _sz_items=_v; break
+                if not _sz_items:
+                    for _k,_v in _sz_pp.items():
+                        if isinstance(_v,list) and _v and isinstance(_v[0],dict):
+                            if any(kk in _v[0] for kk in ["player","name","player_name"]):
+                                _sz_items=_v; break
+                log(f"   📊 DB Statz.ai: {len(_sz_items) if _sz_items else 0} Items")
+                if _sz_items: log(f"   Statz keys: {list(_sz_items[0].keys())[:10]}")
+                _SZ_MKT = {1:"Anytime Goalscorer",2:"2+ Shots",3:"1+ Shot on Target",
+                           4:"1+ Assist",5:"2+ Tackles",6:"2+ Fouls",7:"To Be Booked",
+                           8:"1+ Save",9:"1+ Offside",10:"30+ Passes"}
+                _SZ_POS = {"attacker":"Anytime Goalscorer","forward":"Anytime Goalscorer",
+                           "FWD":"Anytime Goalscorer","midfielder":"1+ Shot on Target",
+                           "MID":"1+ Shot on Target","defender":"2+ Tackles","DEF":"2+ Tackles",
+                           "goalkeeper":"1+ Save","GK":"1+ Save","ATT":"Anytime Goalscorer"}
+                for _t in (_sz_items or []):
+                    _p_r = _t.get("player") or {}
+                    _p = _p_r.get("name","") if isinstance(_p_r,dict) else str(_p_r)
+                    _h = _t.get("home_team") or {}; _a = _t.get("away_team") or {}
+                    _home = _h.get("name","") if isinstance(_h,dict) else str(_h)
+                    _away = _a.get("name","") if isinstance(_a,dict) else str(_a)
+                    _match = f"{_home} vs {_away}" if _home and _away else ""
+                    _fix = _t.get("fixture") or {}
+                    _ko = str(_fix.get("kickoff_iso","") if isinstance(_fix,dict) else "")
+                    _m_raw = _t.get("market")
+                    _pos_r = _t.get("position") or {}
+                    _pos_s = _pos_r.get("name","") if isinstance(_pos_r,dict) else str(_pos_r or "")
+                    if isinstance(_m_raw,int): _mkt = _SZ_MKT.get(_m_raw,"")
+                    elif _m_raw: _mkt = str(_m_raw)
+                    else: _mkt = _SZ_POS.get(_pos_s,"")
+                    _prob = float(_t.get("probability") or _t.get("projection") or _t.get("score") or 0)
+                    if _prob > 1: _prob /= 100
+                    if not _p or not _mkt or (_prob > 0 and _prob < 0.40): continue
+                    _fair = round(1/_prob,2) if _prob > 0.1 else 0
+                    _add(_p,"",_match,"",_mkt,_fair,int(_prob*100),_prob,"Statz.ai",_ko[11:16])
+    except Exception as _e:
+        log(f"   DB Statz.ai: {str(_e)[:60]}", "WARN")
+
+    # ── QUELLE 4: ODDSPEDIA ────────────────────────────────────────
+    try:
+        _op_html = scrape_with_playwright(
+            "https://oddspedia.com/soccer/world/world-cup/player-props", timeout=15000)
+        if _op_html and len(_op_html) > 80000:
+            import re as _re_op
+            log(f"   📊 DB Oddspedia: {len(_op_html)} chars")
+            _OP_MKTS = [
+                "Anytime Goalscorer","First Goalscorer","Player Shots on Target",
+                "Player Shots","Player Fouls Committed","Player Tackles","To Be Booked",
+                "Player Offsides","Player Saves","Player Passes",
+                "Player to Score or Assist","Player Cards","Player Headed Shots on Target",
+            ]
+            for _mkt in _OP_MKTS:
+                _hits = _re_op.findall(
+                    r'([A-Z][a-z]+(?: (?:van |de |Von |Al |El |Da |dos |dos )?[A-Z][a-zA-Z\-\']+)+)'
+                    r'[^<]{0,400}?' + _re_op.escape(_mkt) + r'[^<]{0,300}?([+\-]\d{3,4})',
+                    _op_html, _re_op.DOTALL)
+                for _player, _us in _hits[:15]:
+                    try:
+                        _n = int(_us)
+                        _dec = round((_n/100)+1,2) if _n>0 else round((100/abs(_n))+1,2)
+                        if 1.05 <= _dec <= 15.0:
+                            _add(_player.strip(),"","WM 2026","FIFA World Cup",
+                                 _mkt,_dec,int(100/_dec*0.95),0,"Oddspedia","")
+                    except Exception: pass
+        else:
+            log(f"   DB Oddspedia: {len(_op_html) if _op_html else 0} chars (Cloudflare?)")
+    except Exception as _e:
+        log(f"   DB Oddspedia: {str(_e)[:60]}", "WARN")
+
+    # ── QUELLE 5: FOTMOB ───────────────────────────────────────────
+    try:
+        _fm_seen = set()
+        for _fix in (list(active_fixtures_cache)[:15] if hasattr(active_fixtures_cache,'__iter__') else []):
+            if not isinstance(_fix,dict): continue
+            _home = _fix.get("home",""); _away = _fix.get("away","")
+            if not _home or not _away: continue
+            _match = f"{_home} vs {_away}"
+            for _team in [_home, _away]:
+                if _team in _fm_seen: continue
+                _fm_seen.add(_team)
+                for _fp in (get_fotmob_player_season_stats(_team) or []):
+                    _pname = _fp.get("name","")
+                    if not _pname: continue
+                    _yc = float(_fp.get("yellow_cards") or 0)
+                    _goals = float(_fp.get("goals") or 0)
+                    if _yc >= 3:
+                        _add(_pname,_team,_match,"","To Be Booked",1.85,55,0.0,"FotMob","")
+                    if _goals >= 3:
+                        _add(_pname,_team,_match,"","Anytime Goalscorer",2.50,40,0.0,"FotMob","")
+    except Exception as _e:
+        log(f"   DB FotMob: {str(_e)[:60]}", "WARN")
+
+    # ── STATISTIK ──────────────────────────────────────────────────
+    log(f"   📊 PROP DB: {len(_prop_db)} Props total")
+    if _prop_db:
+        from collections import Counter as _Ctr
+        _cc = _Ctr(p["category"] for p in _prop_db)
+        _sc = _Ctr(p["source"] for p in _prop_db)
+        log(f"   📊 Kategorien: {dict(_cc.most_common(10))}")
+        log(f"   📊 Quellen: {dict(_sc)}")
+
+    # ── SUPABASE SPEICHERN ─────────────────────────────────────────
+    try:
+        if SUPABASE_URL and SUPABASE_KEY and _prop_db:
+            _saved = 0
+            for _row in _prop_db[:300]:
+                try:
+                    requests.post(
+                        f"{SUPABASE_URL}/rest/v1/player_prop_db",
+                        headers={"apikey":SUPABASE_KEY,"Authorization":f"Bearer {SUPABASE_KEY}",
+                                 "Content-Type":"application/json","Prefer":"resolution=merge-duplicates"},
+                        json={"player":_row["player"],"team":_row["team"],"match":_row["match"],
+                              "league":_row["league"],"market":_row["market"],"category":_row["category"],
+                              "line":_row["line"],"source":_row["source"],"date":str(_pp_today),
+                              "pinnacle_odds":_row["odds"] if _row["source"]=="Pinnacle" else None,
+                              "pinnacle_prob":_row["prob"] if _row["source"]=="Pinnacle" else None,
+                              "model_prob":_row["model_prob"] or None,
+                              "fair_odds":_row["odds"] if _row["source"]!="Pinnacle" else None},
+                        timeout=2)
+                    _saved += 1
+                except Exception: pass
+            log(f"   📊 DB Supabase: {_saved} Props gespeichert")
+    except Exception as _e:
+        log(f"   DB Supabase: {str(_e)[:60]}", "WARN")
+
+    # ════════════════════════════════════════════════════════════════
+    # BUILDER LOGIK — Ladder + Mix + Cross-Match
+    # ════════════════════════════════════════════════════════════════
+    if not _prop_db or not _pp_chat:
+        log("   Prop DB: leer oder kein Kanal")
+    else:
+        from collections import defaultdict as _ddb
+        import functools as _ft
+
+        NL = chr(10); SEP = chr(0x2501) * 18
+
+        def _total_odds(legs):
+            t = 1.0
+            for l in legs:
+                if l["odds"] > 1.0: t *= l["odds"]
+            return round(t, 2)
+
+        def _send_builder(legs, label, variant=""):
+            nonlocal _pp_total
+            _t = _total_odds(legs)
+            if _t < 1.50: return False
+            _srcs = list(dict.fromkeys(l["source"] for l in legs))
+            _cats = list(dict.fromkeys(l["category"] for l in legs))
+            _icon_str = "".join(dict.fromkeys(_CAT_ICONS.get(c,"🎯") for c in _cats))
+            _var_str = f" <i>({variant})</i>" if variant else ""
+            _msg = (f"\U0001f3d7\ufe0f <b>PROP BUILDER {len(legs)} LEGS</b> "
+                    f"{_icon_str}{_var_str}{NL}{SEP}{NL}")
+            for _i, _l in enumerate(legs, 1):
+                _o = f" @ {_l['odds']}" if _l["odds"]>1.0 else ""
+                _c = (f" ({_l['model_prob']*100:.0f}%)" if _l.get("model_prob",0)>0
+                      else (f" ({_l['prob']}%)" if _l.get("prob",0)>0 else ""))
+                _match_line = (f"   \u26bd {_l['match']}{NL}" 
+                               if label == "CROSS" else "")
+                _msg += f"{_i}. {_l['icon']} <b>{_l['player']}</b>{NL}"
+                _msg += f"   {_l['market']}{_o}{_c}{NL}"
+                _msg += _match_line
+            if label != "CROSS":
+                _msg += f"\u26bd <b>{legs[0]['match']}</b>{NL}" if legs else ""
+            _msg += f"{SEP}{NL}\U0001f4b0 @ <b>{_t}</b> \u00b7 0.5u{NL}"
+            _msg += f"<i>\U0001f4ca {' + '.join(_srcs)}</i>"
+            send_telegram(_msg, chat_id=_pp_chat)
+            _pp_total += 1
+            log(f"   \U0001f3d7 {label} {len(legs)}L @ {_t}")
+            return True
+
+        # Gruppiere nach Match → Spieler → Kategorie
+        _by_match = _ddb(lambda: _ddb(lambda: _ddb(list)))
+        for _p in _prop_db:
+            if _p["category"] not in _BUILDER_CATS: continue
+            if _p["odds"] < 1.05 or _p["odds"] > 12.0: continue
+            _by_match[_p["match"]][_p["player"]][_p["category"]].append(_p)
+
+        # ── STRATEGIE 1: LADDER ────────────────────────────────────
+        # Gleicher Spieler, gleiche Kategorie, steigende Linien
+        for _match, _players in list(_by_match.items())[:25]:
+            for _player, _cats in list(_players.items()):
+                for _c, _props in list(_cats.items()):
+                    if len(_props) < 2: continue
+                    _gk = f"L_{_player[:15]}_{_match[:20]}_{_c}_{_pp_today}"
+                    if _gk in _builder_sent_today: continue
+                    # Dedup nach Line, sortiere aufsteigend
+                    _seen_l = {}
+                    for _pp2 in _props:
+                        _ln = _pp2["line"]
+                        if _ln not in _seen_l or _pp2["odds"] < _seen_l[_ln]["odds"]:
+                            _seen_l[_ln] = _pp2
+                    _deduped = sorted(_seen_l.values(), key=lambda x: x["line"])
+                    if len(_deduped) < 2: continue
+                    # Varianten 5→4→3→2
+                    for _sz in range(min(len(_deduped),5), 1, -1):
+                        if _send_builder(_deduped[:_sz], "LADDER", f"{_player}"):
+                            _builder_sent_today.add(_gk); break
+
+        # ── STRATEGIE 2: MIX SAME MATCH ───────────────────────────
+        # Verschiedene Spieler + verschiedene Kategorien, gleiches Spiel
+        for _match, _players in list(_by_match.items())[:20]:
+            _gk = f"M_{_match[:30]}_{_pp_today}"
+            if _gk in _builder_sent_today: continue
+            _mix = []
+            _used_p = set(); _used_c = set()
+            # Alle Props dieses Spiels, sortiert nach Confidence
+            _all = []
+            for _pl, _cats in _players.items():
+                for _c, _props in _cats.items():
+                    _best = sorted(_props,
+                        key=lambda x: x["model_prob"] or x["prob"]/100, reverse=True)[0]
+                    _all.append(_best)
+            _all.sort(key=lambda x: x["model_prob"] or x["prob"]/100, reverse=True)
+            for _pp2 in _all:
+                if _pp2["player"] in _used_p: continue
+                if _pp2["category"] in _used_c: continue
+                _mix.append(_pp2)
+                _used_p.add(_pp2["player"]); _used_c.add(_pp2["category"])
+                if len(_mix) >= 5: break
+            if len(_mix) < 3: continue
+            for _sz in range(min(len(_mix),5), 2, -1):
+                if _send_builder(_mix[:_sz], "MIX"):
+                    _builder_sent_today.add(_gk); break
+
+        # ── STRATEGIE 3: CROSS-MATCH ───────────────────────────────
+        # Beste Props aus verschiedenen Spielen
+        _gk_x = f"X_{_pp_today}"
+        if _gk_x not in _builder_sent_today:
+            _cross = []
+            _used_xm = set(); _used_xp = set()
+            for _match, _players in list(_by_match.items())[:20]:
+                if _match in _used_xm: continue
+                _best_m = []
+                for _pl, _cats in _players.items():
+                    if _pl in _used_xp: continue
+                    for _c, _props in _cats.items():
+                        _bp = sorted(_props,
+                            key=lambda x: x["model_prob"] or x["prob"]/100, reverse=True)[0]
+                        if _bp["odds"] >= 1.20:
+                            _best_m.append(_bp)
+                if _best_m:
+                    _best_m.sort(key=lambda x: x["model_prob"] or x["prob"]/100, reverse=True)
+                    _cross.append(_best_m[0])
+                    _used_xm.add(_match)
+                    _used_xp.add(_best_m[0]["player"])
+                    if len(_cross) >= 5: break
+            if len(_cross) >= 3:
+                for _sz in range(min(len(_cross),5), 2, -1):
+                    if _send_builder(_cross[:_sz], "CROSS"):
+                        _builder_sent_today.add(_gk_x); break
+
+        # ── STRATEGIE 4: CATEGORY BUILDER ─────────────────────────
+        # Alle Yellow Card Props / Alle Tackle Props etc. kombiniert
+        _by_cat = _ddb(list)
+        for _p in _prop_db:
+            if _p["category"] in _BUILDER_CATS and 1.05 <= _p["odds"] <= 8.0:
+                _by_cat[_p["category"]].append(_p)
+
+        for _c in ["yellow_cards","tackles","fouls","sot","saves","offsides"]:
+            _gk_c = f"C_{_c}_{_pp_today}"
+            if _gk_c in _builder_sent_today: continue
+            _cprops = _by_cat.get(_c, [])
+            if len(_cprops) < 3: continue
+            # Sortiere nach Confidence, verschiedene Spieler
+            _cprops.sort(key=lambda x: x["model_prob"] or x["prob"]/100, reverse=True)
+            _clegs = []
+            _cup = set()
+            for _cp in _cprops:
+                if _cp["player"] in _cup: continue
+                _clegs.append(_cp)
+                _cup.add(_cp["player"])
+                if len(_clegs) >= 5: break
+            if len(_clegs) < 3: continue
+            for _sz in range(min(len(_clegs),5), 2, -1):
+                if _send_builder(_clegs[:_sz], "CAT", _c.upper().replace("_"," ")):
+                    _builder_sent_today.add(_gk_c); break
+
+        log(f"   \U0001f3d7 Builder gesamt: {_pp_total} gesendet")
+
+
+
     if PLAYWRIGHT_AVAILABLE:
         import re as _re_pp, json as _json_pp
-        # 1. ODDSPEDIA
+        # 1. ODDSPEDIA — oft Cloudflare geblockt, kurzes Timeout
         try:
-            _op_html = scrape_with_playwright("https://oddspedia.com/soccer/world/world-cup/player-props",timeout=25000)
+            _op_html = scrape_with_playwright("https://oddspedia.com/soccer/world/world-cup/player-props",timeout=12000)
             log(f"   Oddspedia HTML: {len(_op_html) if _op_html else 0} chars")
-            if _op_html and len(_op_html) > 50000:
+            if _op_html and len(_op_html) > 80000:
                 _op_icons = {"Anytime Goalscorer":"⚽","First Goalscorer":"⚽","Player Shots on Target":"🎯",
                              "Player Shots":"💥","Player Fouls Committed":"🦵","Player Tackles":"🦵","To Be Booked":"🟨"}
                 _op_hits = _re_pp.findall(
@@ -18190,8 +18623,9 @@ def run_pinnacle_props_bot(win_start_utc=None, win_end_utc=None, ch_tz=None, top
                     _send_prop(_player.strip(), _market, "WM 2026", _dec, "Oddspedia", _op_icons.get(_market,"🎯"))
         except Exception as _e: log(f"   Oddspedia Error: {str(_e)[:60]}", "WARN")
 
-        # 2. FOOTYMETRICS via tRPC
-        if _pp_total < 30:
+        # 2. FOOTYMETRICS — tRPC Endpunkte alle 404, übersprungen
+        # if _pp_total < 30:  # deaktiviert bis neue Endpunkte gefunden
+        if False:
             try:
                 import cloudscraper as _css_fm
                 _fm_cs = _css_fm.create_scraper()
@@ -18228,9 +18662,26 @@ def run_pinnacle_props_bot(win_start_utc=None, win_end_utc=None, ch_tz=None, top
                 _ss_r = _ss_cs.get("https://scoutingstats.ai/api/props/board", timeout=12,
                     headers={"Accept":"application/json","Referer":"https://scoutingstats.ai/"})
                 log(f"   ScoutingStats: {_ss_r.status_code} / {len(_ss_r.text)} chars")
-                if _ss_r.ok and _ss_r.text.strip().startswith(('[','{')):
-                    _ss_items = _ss_r.json() if isinstance(_ss_r.json(),list) else (
-                        _ss_r.json().get("data") or _ss_r.json().get("props") or [])
+                if _ss_r.ok:
+                    try:
+                        _ss_raw = _ss_r.json()
+                        if isinstance(_ss_raw, list):
+                            _ss_items = _ss_raw
+                        elif isinstance(_ss_raw, dict):
+                            _ss_items = (_ss_raw.get("data") or _ss_raw.get("props") or
+                                        _ss_raw.get("board") or _ss_raw.get("results") or
+                                        list(_ss_raw.values())[0] if _ss_raw else [])
+                            if not isinstance(_ss_items, list): _ss_items = []
+                        else:
+                            _ss_items = []
+                        log(f"   ScoutingStats items: {len(_ss_items)}")
+                        if _ss_items:
+                            log(f"   ScoutingStats keys: {list(_ss_items[0].keys())[:8]}")
+                            log(f"   ScoutingStats sample: {str(_ss_items[0])[:300]}")
+                    except Exception as _ss_pe:
+                        log(f"   ScoutingStats parse: {str(_ss_pe)[:60]}", "WARN")
+                        _ss_items = []
+                if _ss_r.ok and _ss_items:
                     _ss_mkt = {"shots_on_target":"1+ Shot on Target","goals":"Anytime Goalscorer",
                                "yellow_cards":"To Be Booked","shots":"2+ Shots","tackles":"2+ Tackles",
                                "fouls":"2+ Fouls","assists":"1+ Assist","336":"1+ Shot on Target",
@@ -18249,7 +18700,8 @@ def run_pinnacle_props_bot(win_start_utc=None, win_end_utc=None, ch_tz=None, top
                         _fair2 = float(_t.get("fair_odds") or 0)
                         _ko2 = str(_t.get("kickoff",""))
                         _ko_s2 = _ko2[11:16] if len(_ko2) > 11 else ""
-                        if not _p or _mp < 0.55: continue
+                        if not _p: continue
+                        if _mp > 0 and _mp < 0.50: continue  # nur filtern wenn model_p gesetzt
                         _fair_use = _fair2 if _fair2 > 1.0 else (round(1/_mp,2) if _mp > 0 else 0)
                         _send_prop(_p, _m, _match or "Upcoming", _fair_use, "ScoutingStats", _icon2, _ko_s2,
                                    extra=f"Model: {_mp*100:.0f}%")
@@ -18264,12 +18716,28 @@ def run_pinnacle_props_bot(win_start_utc=None, win_end_utc=None, ch_tz=None, top
                     if _sz_dp:
                         import html as _html_mod
                         _sz_json = _json_pp.loads(_html_mod.unescape(_sz_dp.group(1)))
+                        log(f"   Statz.ai page keys: {list(_sz_json.keys())[:8]}")
                         _sz_props = _sz_json.get("props",{})
+                        log(f"   Statz.ai props keys: {list(_sz_props.keys())[:8]}")
                         _sz_items = None
-                        for _k in ["projections","props","playerProps","data","predictions"]:
+                        for _k in ["projections","props","playerProps","data","predictions",
+                                   "player_projections","results","picks","tips"]:
                             _v = _sz_props.get(_k)
-                            if isinstance(_v, list) and len(_v) > 0: _sz_items = _v; break
+                            if isinstance(_v, list) and len(_v) > 0:
+                                _sz_items = _v
+                                log(f"   Statz.ai key '{_k}': {len(_v)} items")
+                                break
+                        if not _sz_items:
+                            # Suche in allen Werten
+                            for _k, _v in _sz_props.items():
+                                if isinstance(_v, list) and len(_v) > 0 and isinstance(_v[0], dict):
+                                    if any(kk in _v[0] for kk in ["player","name","player_name"]):
+                                        _sz_items = _v
+                                        log(f"   Statz.ai auto key '{_k}': {len(_v)} items")
+                                        break
                         log(f"   Statz.ai items: {len(_sz_items) if _sz_items else 0}")
+                        if _sz_items:
+                            log(f"   Statz.ai keys: {list(_sz_items[0].keys())[:10]}")
                         _sz_mkt = {1:"Anytime Goalscorer",2:"2+ Shots",3:"1+ Shot on Target",
                                    4:"1+ Assist",5:"2+ Tackles",6:"2+ Fouls",7:"To Be Booked"}
                         _sz_pos = {"attacker":"Anytime Goalscorer","forward":"Anytime Goalscorer",
@@ -18296,7 +18764,7 @@ def run_pinnacle_props_bot(win_start_utc=None, win_end_utc=None, ch_tz=None, top
                             _prob = float(_t.get("probability") or _t.get("projection") or _t.get("score") or 0)
                             if _prob > 1: _prob /= 100
                             if not _p: continue
-                            if _prob > 0 and _prob < 0.50: continue
+                            if _prob > 0 and _prob < 0.45: continue  # niedrigere Schwelle
                             _fair = round(1/_prob,2) if _prob > 0.1 else 0
                             _send_prop(_p, _m, _match or "WM", _fair, "Statz.ai", _icon, _ko_s,
                                        extra=f"AI: {_prob*100:.0f}%" if _prob > 0 else "")
@@ -18351,6 +18819,19 @@ def run_pinnacle_props_bot(win_start_utc=None, win_end_utc=None, ch_tz=None, top
             send_telegram(_bmsg, chat_id=_pp_chat)
             _pp_total += 1
             log(f"   \U0001f3d7 Prop Builder {len(legs)} Legs @ {_total}" + (f" [{label}]" if label else ""))
+            for _leg in legs:
+                _leg_dk = "pp_" + _leg["match"] + "_" + _leg["player"] + "_" + _leg["market"] + "_" + str(_pp_today)
+                _builder_sent_today.add(_leg_dk)
+                try:
+                    if SUPABASE_URL and SUPABASE_KEY:
+                        requests.post(SUPABASE_URL + "/rest/v1/prop_picks",
+                            headers={"apikey":SUPABASE_KEY,"Authorization":"Bearer " + SUPABASE_KEY,
+                                     "Content-Type":"application/json","Prefer":"resolution=merge-duplicates"},
+                            json={"dedup_key":_leg_dk,"player":str(_leg["player"])[:100],
+                                  "market":str(_leg["market"])[:100],"match":str(_leg["match"])[:200],
+                                  "source":_leg["source"],"sent_date":str(_pp_today)},timeout=5)
+                except Exception:
+                    pass
 
         if _prop_candidates and _pp_chat:
             _prop_candidates.sort(key=lambda x: x["confidence"], reverse=True)
