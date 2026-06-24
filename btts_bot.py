@@ -18850,7 +18850,6 @@ def run_pinnacle_props_bot(win_start_utc=None, win_end_utc=None, ch_tz=None, top
                         if _v:
                             _sz_mkts = set(str(i.get("market_name","")) for i in _v[:20])
                             log(f"   Statz.ai market_names: {list(_sz_mkts)[:10]}")
-                            break
                         if not _sz_items:
                             # Suche in allen Werten
                             for _k, _v in _sz_props.items():
