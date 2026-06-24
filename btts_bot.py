@@ -18095,6 +18095,20 @@ def run_pinnacle_props_bot(win_start_utc=None, win_end_utc=None, ch_tz=None, top
     _pp_today = datetime.now(timezone.utc).date()
     _pp_total = 0
 
+    # Dedup aus Supabase laden (heutige prop_picks)
+    try:
+        _existing = supabase.table("prop_picks").select("dedup_key").eq(
+            "sent_date", str(_pp_today)
+        ).execute()
+        for _row in (_existing.data or []):
+            _dk = _row.get("dedup_key","")
+            if _dk:
+                _pp_dedup.add(_dk)
+                _STAT_INSIGHT_SENT_TODAY.add(_dk)
+        log(f"   Player Props Dedup: {len(_pp_dedup)} bereits heute gesendet")
+    except Exception as _dde:
+        log(f"   Player Props Dedup load: {str(_dde)[:50]}", "WARN")
+
     def _send_prop(player, market, match, odds_dec, source, icon="🎯", ko_s="", extra=""):
         nonlocal _pp_total
         if not player or not market:
@@ -18121,6 +18135,18 @@ def run_pinnacle_props_bot(win_start_utc=None, win_end_utc=None, ch_tz=None, top
             send_telegram(_msg, chat_id=_pp_chat)
             _pp_total += 1
             log(f"   Prop: {player} | {market} | {source}")
+            # In Supabase speichern für Run-übergreifendes Dedup
+            try:
+                supabase.table("prop_picks").upsert({
+                    "dedup_key": _dk,
+                    "player": player,
+                    "market": market,
+                    "match": match,
+                    "source": source,
+                    "sent_date": str(_pp_today),
+                }, on_conflict="dedup_key").execute()
+            except Exception:
+                pass
         return True
 
     if not PLAYWRIGHT_AVAILABLE:
@@ -18267,6 +18293,19 @@ def run_pinnacle_props_bot(win_start_utc=None, win_end_utc=None, ch_tz=None, top
                                 _fm_html
                             )
                             log(f"   FootyMetrics {_slug} full matches: {len(_fm_full)}")
+                            # HTML-Schnipsel zur Diagnose (nur beim ersten Markt)
+                            if _slug == "player-shots-on-target" and not _fm_raw and not _fm_full:
+                                # Suche nach irgendeinem JSON-Pattern
+                                _fm_probe = _re_pp.search(r'"hitRate"', _fm_html)
+                                _fm_probe2 = _re_pp.search(r'"hit_rate"', _fm_html)
+                                _fm_probe3 = _re_pp.search(r'"playerName"', _fm_html)
+                                log(f"   FootyMetrics hitRate: {bool(_fm_probe)} hit_rate: {bool(_fm_probe2)} playerName: {bool(_fm_probe3)}")
+                                # Sample aus dem HTML
+                                _fm_idx = _fm_html.find('"player')
+                                if _fm_idx > 0:
+                                    log(f"   FootyMetrics player-context: {_fm_html[_fm_idx:_fm_idx+200]}")
+                                else:
+                                    log(f"   FootyMetrics HTML[3000:3300]: {_fm_html[3000:3300]}")
                             for _item in (_fm_full or [])[:8]:
                                 _p, _hr, _fix = _item
                                 if float(_hr) < 70: continue
@@ -18309,23 +18348,35 @@ def run_pinnacle_props_bot(win_start_utc=None, win_end_utc=None, ch_tz=None, top
                             log(f"   ScoutingStats items: {len(_ss_items)}")
                             if _ss_items and isinstance(_ss_items, list):
                                 log(f"   ScoutingStats sample keys: {list(_ss_items[0].keys())[:10]}")
+                            # Keys aus Log: away_team, confidence, disagreement, fair_odds,
+                            # fixture_id, form, general_position, home_team, inputs, is_home
+                            # → inputs enthält wahrscheinlich player/market details
                             for _t in (_ss_items if isinstance(_ss_items, list) else [])[:20]:
-                                _p = (_t.get("playerName") or _t.get("player_name") or
-                                      _t.get("player") or "")
-                                _m = (_t.get("market") or _t.get("marketName") or
-                                      _t.get("prop") or _t.get("type") or "")
-                                _match = (_t.get("fixture") or _t.get("match") or
-                                          _t.get("matchName") or "")
-                                if isinstance(_match, dict):
-                                    _match = f"{_match.get('home','') or _match.get('homeTeam','')} vs {_match.get('away','') or _match.get('awayTeam','')}"
-                                _prob = float(_t.get("modelProbability") or _t.get("probability") or
-                                              _t.get("model_prob") or _t.get("hitRate") or 0)
-                                if _prob > 1: _prob /= 100
-                                if not _p or _prob < 0.55: continue
-                                _fair = round(1/_prob, 2) if _prob > 0 else 0
-                                _send_prop(_p, _m or "Player Prop", str(_match) or "Upcoming",
-                                           _fair, "ScoutingStats", "📊",
-                                           extra=f"Model: {_prob*100:.0f}%")
+                                _home = _t.get("home_team","")
+                                _away = _t.get("away_team","")
+                                _match = f"{_home} vs {_away}" if _home and _away else ""
+                                _conf = float(_t.get("confidence") or 0)
+                                _fair = float(_t.get("fair_odds") or 0)
+                                _pos = _t.get("general_position") or _t.get("position","")
+                                _inputs = _t.get("inputs") or {}
+                                # inputs ist dict mit player/market Details
+                                if isinstance(_inputs, dict):
+                                    _p = (_inputs.get("playerName") or _inputs.get("player") or
+                                          _inputs.get("name") or "")
+                                    _m = (_inputs.get("market") or _inputs.get("prop") or
+                                          _inputs.get("type") or _pos or "Player Prop")
+                                else:
+                                    _p = _t.get("player","")
+                                    _m = _pos or "Player Prop"
+                                # Log erste 3 für Diagnose
+                                if not _p:
+                                    log(f"   SS item keys: {list(_t.keys())} inputs: {str(_inputs)[:80]}")
+                                    continue
+                                if _conf < 0.55: continue
+                                _fair_d = round(1/_conf,2) if _conf > 0 else _fair
+                                _send_prop(_p, _m, _match or "Upcoming", _fair_d,
+                                           "ScoutingStats", "📊",
+                                           extra=f"Conf: {_conf*100:.0f}%")
                             break
                         else:
                             log(f"   ScoutingStats sample: {_ss_r.text[:200]}")
@@ -18377,8 +18428,11 @@ def run_pinnacle_props_bot(win_start_utc=None, win_end_utc=None, ch_tz=None, top
                                     if isinstance(_v, list) and len(_v) > 0:
                                         log(f"   Statz.ai list key '{_k}': {len(_v)} → sample: {str(_v[0])[:120]}")
                             log(f"   Statz.ai items: {len(_sz_items) if isinstance(_sz_items, list) else 'None'}")
+                            # Keys aus Log: id, fixture, home_team, away_team, team, opponent, player, position
+                            # Prob-Felder noch unbekannt — ersten Item komplett loggen
+                            if _sz_items and isinstance(_sz_items, list) and len(_sz_items) > 0:
+                                log(f"   Statz.ai full item[0]: {str(_sz_items[0])[:300]}")
                             for _t in (_sz_items if isinstance(_sz_items, list) else [])[:20]:
-                                # Keys aus Log: id, fixture, home_team, away_team, team, opponent, player, position
                                 _p = _t.get("player") or _t.get("playerName") or _t.get("name","")
                                 _home = _t.get("home_team") or _t.get("homeTeam","")
                                 _away = _t.get("away_team") or _t.get("awayTeam","")
@@ -18386,20 +18440,22 @@ def run_pinnacle_props_bot(win_start_utc=None, win_end_utc=None, ch_tz=None, top
                                 _m = (_t.get("market") or _t.get("prop") or _t.get("type") or
                                       _t.get("stat") or _t.get("category") or
                                       _t.get("position") or "Player Prop")
-                                # Wahrscheinlichkeit aus allen möglichen Feldern
                                 _prob = float(
                                     _t.get("probability") or _t.get("projection") or
                                     _t.get("confidence") or _t.get("prob") or
-                                    _t.get("model_probability") or _t.get("hit_rate") or 0
+                                    _t.get("model_probability") or _t.get("hit_rate") or
+                                    _t.get("score") or _t.get("value") or 0
                                 )
                                 if _prob > 1: _prob /= 100
-                                if not _p or _prob < 0.55: continue
-                                _fair = round(1/_prob, 2) if _prob > 0 else 0
-                                _ko = str(_t.get("kickoff") or _t.get("date") or _t.get("starts_at",""))
+                                if not _p: continue
+                                # Auch ohne Prob senden wenn Spieler bekannt (Prob=0 → kein fair odds)
+                                _fair = round(1/_prob, 2) if _prob > 0.1 else 0
+                                _ko = str(_t.get("kickoff") or _t.get("date") or _t.get("starts_at") or _t.get("fixture_date",""))
                                 _ko_s = _ko[11:16] if len(_ko) > 11 else ""
+                                _extra = f"AI: {_prob*100:.0f}%" if _prob > 0 else f"Pos: {_m}"
+                                if _prob > 0 and _prob < 0.50: continue
                                 _send_prop(_p, _m, _match or "Upcoming", _fair,
-                                           "Statz.ai", "🤖", _ko_s,
-                                           extra=f"AI: {_prob*100:.0f}%")
+                                           "Statz.ai", "🤖", _ko_s, extra=_extra)
                         except Exception as _ize:
                             log(f"   Statz.ai Inertia parse: {str(_ize)[:60]}", "WARN")
                     else:
@@ -19821,6 +19877,28 @@ def main():
 
     # Tips Mode
     log(f"🎯 Tips Mode - suche Spiele...")
+
+    # ─── Cache vorbeladen: heutige Tips aus Supabase → kein Run-übergreifender Spam ───
+    global _SENT_TIPS_CACHE
+    if SUPABASE_URL and SUPABASE_KEY:
+        try:
+            _preload_r = requests.get(
+                f"{SUPABASE_URL}/rest/v1/tips",
+                headers={"apikey": SUPABASE_KEY, "Authorization": f"Bearer {SUPABASE_KEY}"},
+                params={"date": f"eq.{target_date}", "select": "match,market", "limit": "500"},
+                timeout=8,
+            )
+            if _preload_r.ok:
+                _preload_count = 0
+                for _row in (_preload_r.json() or []):
+                    _m = normalize_team_name(_row.get("match",""))
+                    _mk = _row.get("market","")
+                    _ck = f"{_m[:20]}_{_mk}_{target_date}"
+                    _SENT_TIPS_CACHE.add(_ck)
+                    _preload_count += 1
+                log(f"   📋 Cache vorgeladen: {_preload_count} heutige Tips aus Supabase")
+        except Exception as _pre:
+            log(f"   Cache preload: {str(_pre)[:50]}", "WARN")
 
     log(f"🗓️  Datum (Target): {target_date}")
     log(f"Märkte: {[MARKET_INFO[m]['name'] for m in MARKETS_TO_RUN]}")
