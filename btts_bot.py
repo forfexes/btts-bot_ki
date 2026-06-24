@@ -18326,6 +18326,7 @@ def run_pinnacle_props_bot(win_start_utc=None, win_end_utc=None, ch_tz=None, top
                                 _sz_items=_v; break
                 log(f"   📊 DB Statz.ai: {len(_sz_items) if _sz_items else 0} Items")
                 if _sz_items: log(f"   Statz keys: {list(_sz_items[0].keys())[:10]}")
+                _sz_seen = set()  # Dedup für Statz.ai
                 _SZ_MKT = {1:"Anytime Goalscorer",2:"2+ Shots",3:"1+ Shot on Target",
                            4:"1+ Assist",5:"2+ Tackles",6:"2+ Fouls",7:"To Be Booked",
                            8:"1+ Save",9:"1+ Offside",10:"30+ Passes"}
@@ -18343,15 +18344,22 @@ def run_pinnacle_props_bot(win_start_utc=None, win_end_utc=None, ch_tz=None, top
                     _fix = _t.get("fixture") or {}
                     _ko = str(_fix.get("kickoff_iso","") if isinstance(_fix,dict) else "")
                     _m_raw = _t.get("market")
+                    _m_name = _t.get("market_name","")  # direktes Markt-Feld!
                     _pos_r = _t.get("position") or {}
                     _pos_s = _pos_r.get("name","") if isinstance(_pos_r,dict) else str(_pos_r or "")
-                    if isinstance(_m_raw,int): _mkt = _SZ_MKT.get(_m_raw,"")
+                    if _m_name:  # market_name hat Vorrang
+                        _mkt = str(_m_name)
+                    elif isinstance(_m_raw,int): _mkt = _SZ_MKT.get(_m_raw,"")
                     elif _m_raw: _mkt = str(_m_raw)
                     else: _mkt = _SZ_POS.get(_pos_s,"")
                     _prob = float(_t.get("probability") or _t.get("projection") or _t.get("score") or 0)
                     if _prob > 1: _prob /= 100
                     if not _p or not _mkt or (_prob > 0 and _prob < 0.40): continue
                     _fair = round(1/_prob,2) if _prob > 0.1 else 0
+                    # Dedup: gleicher Spieler+Markt nur einmal
+                    _sz_dk = f"{_p}_{_mkt}_{_match}"
+                    if _sz_dk in _sz_seen: continue
+                    _sz_seen.add(_sz_dk)
                     _add(_p,"",_match,"",_mkt,_fair,int(_prob*100),_prob,"Statz.ai",_ko[11:16])
     except Exception as _e:
         log(f"   DB Statz.ai: {str(_e)[:60]}", "WARN")
@@ -18390,7 +18398,14 @@ def run_pinnacle_props_bot(win_start_utc=None, win_end_utc=None, ch_tz=None, top
     # ── QUELLE 5: FOTMOB ───────────────────────────────────────────
     try:
         _fm_seen = set()
-        for _fix in (list(active_fixtures_cache)[:15] if hasattr(active_fixtures_cache,'__iter__') else []):
+        # Extrahiere Matches aus bereits geladenen Pinnacle Props
+        _fm_matches = list(set(_p2["match"] for _p2 in _prop_db if " vs " in _p2.get("match","")))[:15]
+        for _fix_str in _fm_matches:
+            _fix_parts = _fix_str.split(" vs ", 1)
+            if len(_fix_parts) < 2: continue
+            _fix = {"home": _fix_parts[0].strip(), "away": _fix_parts[1].strip()}
+        for _fix in [{"home": m.split(" vs ")[0], "away": m.split(" vs ")[1]} 
+                     for m in _fm_matches if " vs " in m]:
             if not isinstance(_fix,dict): continue
             _home = _fix.get("home",""); _away = _fix.get("away","")
             if not _home or not _away: continue
@@ -18444,158 +18459,203 @@ def run_pinnacle_props_bot(win_start_utc=None, win_end_utc=None, ch_tz=None, top
         log(f"   DB Supabase: {str(_e)[:60]}", "WARN")
 
     # ════════════════════════════════════════════════════════════════
-    # BUILDER LOGIK — Ladder + Mix + Cross-Match
+    # BUILDER LOGIK — Nate Style + Aystar Style
     # ════════════════════════════════════════════════════════════════
     if not _prop_db or not _pp_chat:
         log("   Prop DB: leer oder kein Kanal")
     else:
         from collections import defaultdict as _ddb
-        import functools as _ft
 
         NL = chr(10); SEP = chr(0x2501) * 18
 
-        def _total_odds(legs):
+        def _tod(legs):
+            """Gesamtquote berechnen."""
             t = 1.0
             for l in legs:
                 if l["odds"] > 1.0: t *= l["odds"]
             return round(t, 2)
 
-        def _send_builder(legs, label, variant=""):
+        def _send_builder(legs, style="", variant=""):
             nonlocal _pp_total
-            _t = _total_odds(legs)
-            if _t < 1.50: return False
-            _srcs = list(dict.fromkeys(l["source"] for l in legs))
-            _cats = list(dict.fromkeys(l["category"] for l in legs))
-            _icon_str = "".join(dict.fromkeys(_CAT_ICONS.get(c,"🎯") for c in _cats))
-            _var_str = f" <i>({variant})</i>" if variant else ""
-            _msg = (f"\U0001f3d7\ufe0f <b>PROP BUILDER {len(legs)} LEGS</b> "
-                    f"{_icon_str}{_var_str}{NL}{SEP}{NL}")
-            for _i, _l in enumerate(legs, 1):
-                _o = f" @ {_l['odds']}" if _l["odds"]>1.0 else ""
-                _c = (f" ({_l['model_prob']*100:.0f}%)" if _l.get("model_prob",0)>0
-                      else (f" ({_l['prob']}%)" if _l.get("prob",0)>0 else ""))
-                _match_line = (f"   \u26bd {_l['match']}{NL}" 
-                               if label == "CROSS" else "")
-                _msg += f"{_i}. {_l['icon']} <b>{_l['player']}</b>{NL}"
-                _msg += f"   {_l['market']}{_o}{_c}{NL}"
-                _msg += _match_line
-            if label != "CROSS":
-                _msg += f"\u26bd <b>{legs[0]['match']}</b>{NL}" if legs else ""
-            _msg += f"{SEP}{NL}\U0001f4b0 @ <b>{_t}</b> \u00b7 0.5u{NL}"
-            _msg += f"<i>\U0001f4ca {' + '.join(_srcs)}</i>"
-            send_telegram(_msg, chat_id=_pp_chat)
+            t = _tod(legs)
+            if t < 1.50: return False
+            srcs = list(dict.fromkeys(l["source"] for l in legs))
+            cats = list(dict.fromkeys(l["category"] for l in legs))
+            icons = "".join(dict.fromkeys(_CAT_ICONS.get(c,"🎯") for c in cats))
+            var_s = f" <i>({variant})</i>" if variant else ""
+            msg = (f"\U0001f3d7\ufe0f <b>BET BUILDER {t:.2f}</b> {icons}{var_s}{NL}{SEP}{NL}")
+            for i, l in enumerate(legs, 1):
+                o = f" @ {l['odds']:.2f}" if l["odds"]>1.0 else ""
+                conf = ""
+                if l.get("model_prob",0)>0: conf = f" ({l['model_prob']*100:.0f}%)"
+                elif l.get("prob",0)>0: conf = f" ({l['prob']}%)"
+                # Hit Rate aus form falls vorhanden
+                hr = f" · L5: {l.get('hit_rate','')}%" if l.get("hit_rate") else ""
+                match_line = f"   \u26bd {l['match']}{NL}" if len(set(x["match"] for x in legs))>1 else ""
+                msg += f"{i}. {l['icon']} <b>{l['player']}</b>{NL}"
+                msg += f"   {l['market']}{o}{conf}{hr}{NL}"
+                msg += match_line
+            if len(set(x["match"] for x in legs)) == 1:
+                msg += f"\u26bd <b>{legs[0]['match']}</b>{NL}"
+            msg += f"{SEP}{NL}\U0001f4b0 @ <b>{t:.2f}</b> \u00b7 0.5u{NL}"
+            msg += f"<i>\U0001f4ca {' + '.join(srcs)}</i>"
+            send_telegram(msg, chat_id=_pp_chat)
             _pp_total += 1
-            log(f"   \U0001f3d7 {label} {len(legs)}L @ {_t}")
+            log(f"   \U0001f3d7 {style} {len(legs)}L @ {t:.2f}")
             return True
 
-        # Gruppiere nach Match → Spieler → Kategorie
+        # Props gruppieren
         _by_match = _ddb(lambda: _ddb(lambda: _ddb(list)))
+        _by_cat_all = _ddb(list)
         for _p in _prop_db:
             if _p["category"] not in _BUILDER_CATS: continue
-            if _p["odds"] < 1.05 or _p["odds"] > 12.0: continue
+            if _p["odds"] < 1.05 or _p["odds"] > 10.0: continue
             _by_match[_p["match"]][_p["player"]][_p["category"]].append(_p)
+            _by_cat_all[_p["category"]].append(_p)
 
-        # ── STRATEGIE 1: LADDER ────────────────────────────────────
-        # Gleicher Spieler, gleiche Kategorie, steigende Linien
-        for _match, _players in list(_by_match.items())[:25]:
+        # ── NATE STYLE: LADDER ─────────────────────────────────────
+        # Gleicher Spieler + gleiche Kategorie, steigende Linien → Varianten
+        # z.B. Perisic 3+ Tackles, 2+ Tackles, 1+ Tackles @ 375/1, 160/1, 70/1
+        log(f"   🎯 Nate Ladder Builder...")
+        for _match, _players in list(_by_match.items())[:30]:
             for _player, _cats in list(_players.items()):
                 for _c, _props in list(_cats.items()):
                     if len(_props) < 2: continue
-                    _gk = f"L_{_player[:15]}_{_match[:20]}_{_c}_{_pp_today}"
+                    _gk = f"NL_{_player[:15]}_{_match[:20]}_{_c}_{_pp_today}"
                     if _gk in _builder_sent_today: continue
-                    # Dedup nach Line, sortiere aufsteigend
+                    # Dedup nach Line
                     _seen_l = {}
                     for _pp2 in _props:
-                        _ln = _pp2["line"]
-                        if _ln not in _seen_l or _pp2["odds"] < _seen_l[_ln]["odds"]:
-                            _seen_l[_ln] = _pp2
-                    _deduped = sorted(_seen_l.values(), key=lambda x: x["line"])
+                        ln = _pp2["line"]
+                        if ln not in _seen_l or _pp2["odds"] < _seen_l[ln]["odds"]:
+                            _seen_l[ln] = _pp2
+                    _deduped = sorted(_seen_l.values(), key=lambda x: x["line"], reverse=True)
                     if len(_deduped) < 2: continue
-                    # Varianten 5→4→3→2
-                    for _sz in range(min(len(_deduped),5), 1, -1):
-                        if _send_builder(_deduped[:_sz], "LADDER", f"{_player}"):
-                            _builder_sent_today.add(_gk); break
+                    # Mehrere Varianten wie Nate (hohe→mittlere→niedrige Linie)
+                    _built = False
+                    for _sz in range(min(len(_deduped), 5), 1, -1):
+                        legs = _deduped[:_sz]
+                        if _send_builder(legs, "NATE LADDER", f"{_player} {_c}"):
+                            _built = True
+                    if _built:
+                        _builder_sent_today.add(_gk)
 
-        # ── STRATEGIE 2: MIX SAME MATCH ───────────────────────────
-        # Verschiedene Spieler + verschiedene Kategorien, gleiches Spiel
+        # ── AYSTAR STYLE: BOOKING BUILDER ──────────────────────────
+        # Mehrere Spieler To Be Booked, verschiedene Spiele, Quote 13-61
+        log(f"   🟨 Aystar Booking Builder...")
+        _yc_props = _by_cat_all.get("yellow_cards", [])
+        # Sortiere nach Confidence, verschiedene Spieler + Spiele
+        _yc_sorted = sorted(_yc_props, key=lambda x: x["model_prob"] or x["prob"]/100, reverse=True)
+        # Dedup: beste Quote pro Spieler
+        _yc_best = {}
+        for _p in _yc_sorted:
+            _k = f"{_p['player']}_{_p['match']}"
+            if _k not in _yc_best or _p["odds"] < _yc_best[_k]["odds"]:
+                _yc_best[_k] = _p
+        _yc_unique = list(_yc_best.values())
+
+        # Baue verschiedene Größen: 6→5→4→3 Legs
+        _gk_yc = f"AY_YC_{_pp_today}"
+        if _gk_yc not in _builder_sent_today and len(_yc_unique) >= 3:
+            _used_yc_p = set()
+            _yc_legs = []
+            for _yp in _yc_unique:
+                if _yp["player"] in _used_yc_p: continue
+                _yc_legs.append(_yp)
+                _used_yc_p.add(_yp["player"])
+                if len(_yc_legs) >= 6: break
+
+            for _sz in range(min(len(_yc_legs), 6), 2, -1):
+                legs = _yc_legs[:_sz]
+                t = _tod(legs)
+                # Aystar Ziel: 13-61 Quote
+                if 5.0 <= t <= 100.0:
+                    if _send_builder(legs, "AYSTAR BOOKING"):
+                        _builder_sent_today.add(_gk_yc)
+                        break
+
+        # ── AYSTAR MIX: SCORE/ASSIST + BOOKING ─────────────────────
+        # Score or Assist + To Be Booked gemischt
+        log(f"   🎯 Aystar Mix Builder...")
         for _match, _players in list(_by_match.items())[:20]:
-            _gk = f"M_{_match[:30]}_{_pp_today}"
-            if _gk in _builder_sent_today: continue
-            _mix = []
-            _used_p = set(); _used_c = set()
-            # Alle Props dieses Spiels, sortiert nach Confidence
-            _all = []
+            _gk_mix = f"AY_MIX_{_match[:30]}_{_pp_today}"
+            if _gk_mix in _builder_sent_today: continue
+
+            _mix_legs = []
+            _used_mp = set(); _used_mc = set()
+            # Alle Props dieses Spiels nach Confidence
+            _all_mp = []
             for _pl, _cats in _players.items():
                 for _c, _props in _cats.items():
-                    _best = sorted(_props,
-                        key=lambda x: x["model_prob"] or x["prob"]/100, reverse=True)[0]
-                    _all.append(_best)
-            _all.sort(key=lambda x: x["model_prob"] or x["prob"]/100, reverse=True)
-            for _pp2 in _all:
-                if _pp2["player"] in _used_p: continue
-                if _pp2["category"] in _used_c: continue
-                _mix.append(_pp2)
-                _used_p.add(_pp2["player"]); _used_c.add(_pp2["category"])
-                if len(_mix) >= 5: break
-            if len(_mix) < 3: continue
-            for _sz in range(min(len(_mix),5), 2, -1):
-                if _send_builder(_mix[:_sz], "MIX"):
-                    _builder_sent_today.add(_gk); break
+                    if _c not in ["score","assist","score_assist","yellow_cards","sot","fouls","tackles"]:
+                        continue
+                    _best = sorted(_props, key=lambda x: x["model_prob"] or x["prob"]/100, reverse=True)[0]
+                    if _best["odds"] <= 8.0:
+                        _all_mp.append(_best)
+            _all_mp.sort(key=lambda x: x["model_prob"] or x["prob"]/100, reverse=True)
 
-        # ── STRATEGIE 3: CROSS-MATCH ───────────────────────────────
-        # Beste Props aus verschiedenen Spielen
-        _gk_x = f"X_{_pp_today}"
-        if _gk_x not in _builder_sent_today:
+            for _ap in _all_mp:
+                if _ap["player"] in _used_mp: continue
+                if _ap["category"] in _used_mc: continue
+                _mix_legs.append(_ap)
+                _used_mp.add(_ap["player"])
+                _used_mc.add(_ap["category"])
+                if len(_mix_legs) >= 5: break
+
+            if len(_mix_legs) < 3: continue
+            for _sz in range(min(len(_mix_legs), 5), 2, -1):
+                if _send_builder(_mix_legs[:_sz], "MIX"):
+                    _builder_sent_today.add(_gk_mix); break
+
+        # ── CROSS-MATCH BUILDER ────────────────────────────────────
+        # Beste Props aus verschiedenen Spielen (Aystar macht das auch)
+        _gk_cross = f"CROSS_{_pp_today}"
+        if _gk_cross not in _builder_sent_today:
             _cross = []
             _used_xm = set(); _used_xp = set()
-            for _match, _players in list(_by_match.items())[:20]:
-                if _match in _used_xm: continue
-                _best_m = []
-                for _pl, _cats in _players.items():
-                    if _pl in _used_xp: continue
-                    for _c, _props in _cats.items():
-                        _bp = sorted(_props,
-                            key=lambda x: x["model_prob"] or x["prob"]/100, reverse=True)[0]
-                        if _bp["odds"] >= 1.20:
-                            _best_m.append(_bp)
-                if _best_m:
-                    _best_m.sort(key=lambda x: x["model_prob"] or x["prob"]/100, reverse=True)
-                    _cross.append(_best_m[0])
-                    _used_xm.add(_match)
-                    _used_xp.add(_best_m[0]["player"])
+            # Fokus auf Yellow Cards + Score/Assist für Aystar-Style
+            for _cat_prio in ["yellow_cards", "score", "assist", "sot", "tackles", "fouls"]:
+                for _p in sorted(_by_cat_all.get(_cat_prio, []),
+                                 key=lambda x: x["model_prob"] or x["prob"]/100, reverse=True):
+                    if _p["match"] in _used_xm: continue
+                    if _p["player"] in _used_xp: continue
+                    if _p["odds"] > 8.0: continue
+                    _cross.append(_p)
+                    _used_xm.add(_p["match"])
+                    _used_xp.add(_p["player"])
                     if len(_cross) >= 5: break
+                if len(_cross) >= 5: break
+
             if len(_cross) >= 3:
-                for _sz in range(min(len(_cross),5), 2, -1):
-                    if _send_builder(_cross[:_sz], "CROSS"):
-                        _builder_sent_today.add(_gk_x); break
+                for _sz in range(min(len(_cross), 5), 2, -1):
+                    if _send_builder(_cross[:_sz], "CROSS-MATCH"):
+                        _builder_sent_today.add(_gk_cross); break
 
-        # ── STRATEGIE 4: CATEGORY BUILDER ─────────────────────────
-        # Alle Yellow Card Props / Alle Tackle Props etc. kombiniert
-        _by_cat = _ddb(list)
-        for _p in _prop_db:
-            if _p["category"] in _BUILDER_CATS and 1.05 <= _p["odds"] <= 8.0:
-                _by_cat[_p["category"]].append(_p)
-
-        for _c in ["yellow_cards","tackles","fouls","sot","saves","offsides"]:
-            _gk_c = f"C_{_c}_{_pp_today}"
+        # ── CATEGORY BUILDERS ──────────────────────────────────────
+        # Shots on Target Builder, Tackles Builder etc.
+        for _c in ["sot", "tackles", "fouls", "saves", "offsides"]:
+            _gk_c = f"CAT_{_c}_{_pp_today}"
             if _gk_c in _builder_sent_today: continue
-            _cprops = _by_cat.get(_c, [])
+            _cprops = _by_cat_all.get(_c, [])
             if len(_cprops) < 3: continue
-            # Sortiere nach Confidence, verschiedene Spieler
             _cprops.sort(key=lambda x: x["model_prob"] or x["prob"]/100, reverse=True)
             _clegs = []
             _cup = set()
             for _cp in _cprops:
                 if _cp["player"] in _cup: continue
+                if _cp["odds"] > 7.0: continue
                 _clegs.append(_cp)
                 _cup.add(_cp["player"])
                 if len(_clegs) >= 5: break
             if len(_clegs) < 3: continue
-            for _sz in range(min(len(_clegs),5), 2, -1):
-                if _send_builder(_clegs[:_sz], "CAT", _c.upper().replace("_"," ")):
-                    _builder_sent_today.add(_gk_c); break
+            for _sz in range(min(len(_clegs), 5), 2, -1):
+                t = _tod(_clegs[:_sz])
+                if t >= 2.0:
+                    if _send_builder(_clegs[:_sz], f"CAT {_c.upper()}"):
+                        _builder_sent_today.add(_gk_c); break
 
         log(f"   \U0001f3d7 Builder gesamt: {_pp_total} gesendet")
+
 
 
 
