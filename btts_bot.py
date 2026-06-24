@@ -2444,6 +2444,7 @@ def calculate_elo_btts_probability(home_elo, away_elo):
 # 🆕 ALLSPORTSAPI - 500+ Ligen weltweit (100 Calls/Tag gratis)
 # ============================================================
 ALLSPORTS_API_KEY = env("ALLSPORTS_API_KEY", "")
+ODDSAPIIO_KEY = env("ODDSAPIIO_KEY", "")  # odds-api.io Bet365/Unibet Player Props
 FOOTBALLDATA_IO_API_KEY = env("FOOTBALLDATA_IO_API_KEY", "")
 THESTATSAPI_KEY = env("THESTATSAPI_KEY", "")  # 🆕 thestatsapi.com — Player Stats, Odds, xG, Lineups
 THESTATSAPI_KEYS = env_list("THESTATSAPI_KEYS")  # 🆕 Komma-getrennte Keys für Rotation
@@ -17084,6 +17085,7 @@ def check_config():
     log(f"   • DataHub.io: ✅ aktiv (kein Key!)")
     log(f"   • Tavily: {'✅ aktiv!' if TAVILY_API_KEY else '❌ TAVILY_API_KEY fehlt (optional)'}")
     log(f"   • AllSports API: {'✅ aktiv!' if ALLSPORTS_API_KEY else '❌ ALLSPORTS_API_KEY fehlt (optional)'}")
+    log(f"   • Odds-API.io: {'✅ aktiv! (Bet365/Unibet Props)' if ODDSAPIIO_KEY else '❌ ODDSAPIIO_KEY fehlt (optional)'}")
     log(f"   • Footballdata.io: {'✅ aktiv!' if FOOTBALLDATA_IO_API_KEY else '❌ FOOTBALLDATA_IO_API_KEY fehlt (optional, Settlement-Fallback)'}")
     log(f"   • OpenLigaDB: ✅ aktiv (kein Key, nur deutsche Ligen)")
     log(f"   • TheStatsAPI: {'✅ ' + str(len(THESTATSAPI_KEYS)) + ' Keys aktiv! (Player Stats, xG, Lineups, Odds, Settlement)' if THESTATSAPI_KEYS else '❌ THESTATSAPI_KEYS fehlt (optional aber empfohlen)'}")
@@ -18009,7 +18011,12 @@ def run_pinnacle_props_bot(win_start_utc=None, win_end_utc=None, ch_tz=None, top
                 _pair_key = f"{t1['match']}_{t2['match']}"
                 if _pair_key in _btts_sent:
                     continue
+                # Globaler Tages-Dedup: verhindert Duplikate über mehrere Runs
+                _global_key = f"btts_bb_{_pair_key}_{datetime.now(timezone.utc).date()}"
+                if _global_key in _STAT_INSIGHT_SENT_TODAY:
+                    continue
                 _btts_sent.add(_pair_key)
+                _STAT_INSIGHT_SENT_TODAY.add(_global_key)
 
                 # Fair-Quote berechnen
                 p1 = int(t1.get("probability", 67))
@@ -18080,47 +18087,99 @@ def run_pinnacle_props_bot(win_start_utc=None, win_end_utc=None, ch_tz=None, top
                     _value_sent += 1
                     log(f"   🎯 Value Alert: {player} {value_info['market']} +{value_info['edge_pct']}%")
 
-    # 🌍 AllSports API: WM League-ID finden + Player Props
-    if ALLSPORTS_API_KEY:
+    # 🌍 odds-api.io: Bet365/Unibet WM Player Props
+    if ODDSAPIIO_KEY:
         try:
-            from datetime import timedelta as _td_as
-            _as_date = (win_start_utc or datetime.now(timezone.utc)).strftime("%Y-%m-%d")
-
-            # Suche alle heutigen Fixtures — finde WM League-ID
-            _as_r = requests.get(
-                "https://apiv2.allsportsapi.com/football/",
-                params={"met": "Fixtures", "APIkey": ALLSPORTS_API_KEY,
-                        "from": _as_date, "to": _as_date},
+            from datetime import timedelta as _td_oio
+            _oio_now = datetime.now(timezone.utc)
+            _oio_end = _oio_now + _td_oio(hours=24)
+            _oio_ev = requests.get(
+                "https://api.odds-api.io/v1/events",
+                headers={"x-api-key": ODDSAPIIO_KEY},
+                params={"sport": "soccer", "league": "FIFA World Cup",
+                        "dateFrom": _oio_now.strftime("%Y-%m-%dT%H:%M:%SZ"),
+                        "dateTo": _oio_end.strftime("%Y-%m-%dT%H:%M:%SZ")},
                 timeout=15,
             )
-            log(f"   🌍 AllSports Fixtures: {_as_r.status_code}")
-            if _as_r.ok:
-                _as_all = _as_r.json().get("result", []) or []
-                _wm_fix = [f for f in _as_all if any(k in (f.get("league_name","")).lower()
-                           for k in ["world cup", "world cup 2026", "fifa world", "wm 2026"])]
-                log(f"   🌍 AllSports: {len(_as_all)} Fixtures heute, {len(_wm_fix)} WM")
-                for _f in _wm_fix[:5]:
-                    log(f"      {_f.get('event_home_team')} vs {_f.get('event_away_team')} | {_f.get('league_name')} | LeagueID={_f.get('league_key')} | FixID={_f.get('event_key')}")
-                
-                # Wenn WM gefunden: Odds holen
-                if _wm_fix:
-                    _fix_id = _wm_fix[0].get("event_key")
-                    _as_odds = requests.get(
-                        "https://apiv2.allsportsapi.com/football/",
-                        params={"met": "Odds", "APIkey": ALLSPORTS_API_KEY, "matchId": _fix_id},
+            log(f"   OddsAPIio Events: {_oio_ev.status_code}")
+            if _oio_ev.ok:
+                _oio_events = _oio_ev.json().get("data", []) or []
+                log(f"   OddsAPIio WM Events: {len(_oio_events)}")
+                _prop_chat = TELEGRAM_GROUPS.get("advanced_props") or TELEGRAM_GROUPS.get("props")
+                _oio_sent = 0
+                _oio_dedup = set()
+                _mkt_labels = {
+                    "player_to_score": "Anytime Goalscorer",
+                    "player_anytime_scorer": "Anytime Goalscorer",
+                    "player_to_be_booked": "To Be Booked",
+                    "player_shots_on_target": "1+ Shot on Target",
+                    "player_shots": "2+ Shots",
+                    "player_to_assist": "Anytime Assist",
+                }
+                for _ev in _oio_events:
+                    _ev_id = _ev.get("id") or _ev.get("eventId")
+                    _home = _ev.get("homeTeam", {}).get("name", "") if isinstance(_ev.get("homeTeam"), dict) else str(_ev.get("home", ""))
+                    _away = _ev.get("awayTeam", {}).get("name", "") if isinstance(_ev.get("awayTeam"), dict) else str(_ev.get("away", ""))
+                    _match = f"{_home} vs {_away}"
+                    _ko = str(_ev.get("startTime", "") or _ev.get("commence_time", ""))
+                    if not _ev_id:
+                        continue
+                    _oio_pr = requests.get(
+                        f"https://api.odds-api.io/v1/events/{_ev_id}/odds",
+                        headers={"x-api-key": ODDSAPIIO_KEY},
+                        params={"bookmakers": "bet365,unibet",
+                                "markets": "player_to_score,player_anytime_scorer,player_to_be_booked,player_shots_on_target,player_shots,player_to_assist"},
                         timeout=15,
                     )
-                    log(f"   🌍 AllSports Odds: {_as_odds.status_code}")
-                    if _as_odds.ok:
-                        log(f"   🌍 AllSports Odds Data: {str(_as_odds.json())[:600]}")
-                else:
-                    # Zeige alle Liga-Namen um die richtige zu finden
-                    _all_leagues = set(f.get("league_name","") for f in _as_all)
-                    log(f"   🌍 AllSports Ligen heute: {list(_all_leagues)[:15]}")
-        except Exception as _ase:
-            log(f"   🌍 AllSports Error: {str(_ase)[:80]}", "WARN")
+                    if not _oio_pr.ok:
+                        continue
+                    _bkms = (_oio_pr.json().get("data") or {}).get("bookmakers", []) or []
+                    _best = {}
+                    for _bm in _bkms:
+                        for _mkt in _bm.get("markets", []) or []:
+                            _mk = _mkt.get("key", "") or _mkt.get("market", "")
+                            for _out in _mkt.get("outcomes", []) or []:
+                                _player = _out.get("description") or _out.get("player") or _out.get("name", "")
+                                _side = str(_out.get("name", "") or _out.get("side", "")).lower()
+                                _price = float(_out.get("price", 0) or _out.get("odds", 0) or 0)
+                                if not _player or _price <= 1.0 or "no" in _side:
+                                    continue
+                                _bk = f"{_player}_{_mk}"
+                                if _bk not in _best or _price > _best[_bk][0]:
+                                    _best[_bk] = (_price, _mk, _player)
+                    for _bk, (_price, _mk, _player) in sorted(_best.items(), key=lambda x: -x[1][0]):
+                        if _price < 1.30 or _price > 8.00:
+                            continue
+                        _dk = f"oio_{_match}_{_player}_{_mk}_{datetime.now(timezone.utc).date()}"
+                        if _dk in _oio_dedup or _dk in _STAT_INSIGHT_SENT_TODAY:
+                            continue
+                        _oio_dedup.add(_dk)
+                        _STAT_INSIGHT_SENT_TODAY.add(_dk)
+                        _lbl = _mkt_labels.get(_mk, _mk)
+                        _ko_s = _ko[11:16] if len(_ko) > 11 else ""
+                        _msg = (
+                            f"\U0001F30D <b>WM PLAYER PROP</b>\n"
+                            f"\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\n"
+                            f"\u26BD <b>{_match}</b> \u00B7 \u23F0 {_ko_s}\n\n"
+                            f"\U0001F464 <b>{_player}</b>\n"
+                            f"   {_lbl}\n\n"
+                            f"\U0001F4B0 @ <b>{_price}</b> \u00B7 0.5u \u2705\n"
+                            f"\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\n"
+                            f"<i>\U0001F4CA Bet365/Unibet</i>"
+                        )
+                        if _prop_chat:
+                            send_telegram(_msg, chat_id=_prop_chat)
+                            _oio_sent += 1
+                            log(f"   OddsAPIio: {_player} {_lbl} @ {_price}")
+                        if _oio_sent >= 15:
+                            break
+                    if _oio_sent >= 15:
+                        break
+                log(f"   OddsAPIio WM Props: {_oio_sent} gesendet")
+        except Exception as _oioe:
+            log(f"   OddsAPIio Error: {str(_oioe)[:80]}", "WARN")
 
-    log("🔑 Pinnacle Props: keine Bet Builder zusammengestellt")
+    log("\U0001F511 Pinnacle Props: keine Bet Builder zusammengestellt")
     return 0
 
     # Sortierung nach Anstosszeit
