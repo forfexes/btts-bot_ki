@@ -18381,13 +18381,29 @@ def run_pinnacle_props_bot(win_start_utc=None, win_end_utc=None, ch_tz=None, top
                                 # Direkte Keys: player_name, market_id, model_p, fair_odds, line
                                 _p = _t.get("player_name") or ""
                                 _market_id = _t.get("market_id","")
-                                _ss_markets = {
-                                    "shots_on_target":"1+ Shot on Target","goals":"Anytime Goalscorer",
-                                    "yellow_cards":"To Be Booked","shots":"2+ Shots",
-                                    "tackles":"2+ Tackles","fouls":"2+ Fouls","assists":"1+ Assist",
-                                    "sot":"1+ Shot on Target","cards":"To Be Booked",
+                                # market_id kann Zahl oder String sein
+                                # Bekannte IDs: 336=Shots on Target (basierend auf context)
+                                _ss_market_map = {
+                                    "shots_on_target":"1+ Shot on Target",
+                                    "goals":"Anytime Goalscorer",
+                                    "yellow_cards":"To Be Booked",
+                                    "shots":"2+ Shots",
+                                    "tackles":"2+ Tackles",
+                                    "fouls":"2+ Fouls",
+                                    "assists":"1+ Assist",
+                                    "sot":"1+ Shot on Target",
+                                    "cards":"To Be Booked",
+                                    # Numerische IDs
+                                    "336":"1+ Shot on Target",
+                                    "337":"Anytime Goalscorer",
+                                    "338":"To Be Booked",
+                                    "339":"2+ Shots",
+                                    "340":"2+ Tackles",
+                                    "341":"2+ Fouls",
                                 }
-                                _m = _ss_markets.get(str(_market_id).lower(), str(_market_id) or _pos or "Player Prop")
+                                _m = _ss_market_map.get(str(_market_id).lower(),
+                                     _ss_market_map.get(str(_market_id),
+                                     _pos or f"Prop ({_market_id})"))
                                 _ss_icons = {"goals":"⚽","shots_on_target":"🎯","sot":"🎯",
                                              "yellow_cards":"🟨","cards":"🟨","shots":"💥",
                                              "tackles":"🦵","fouls":"🦵","assists":"🅰️"}
@@ -18474,10 +18490,24 @@ def run_pinnacle_props_bot(win_start_utc=None, win_end_utc=None, ch_tz=None, top
                                 # market ist Zahl: 1=Goals, 2=Shots, 3=SOT, 4=Assists, 5=Tackles, 6=Fouls
                                 _sz_markets = {1:"Anytime Goalscorer",2:"2+ Shots",3:"1+ Shot on Target",
                                                4:"1+ Assist",5:"2+ Tackles",6:"2+ Fouls",7:"To Be Booked"}
-                                _m_raw = _t.get("market") or _t.get("position","")
-                                _m = _sz_markets.get(_m_raw, f"Prop {_m_raw}") if isinstance(_m_raw, int) else str(_m_raw)
+                                # market kann fehlen — position als Fallback
+                                _m_raw = _t.get("market")
+                                _pos_raw = (_t.get("position") or {})
+                                _pos_str = _pos_raw.get("name","") if isinstance(_pos_raw, dict) else str(_pos_raw or "")
+                                _sz_mkt_map = {1:"Anytime Goalscorer",2:"2+ Shots",3:"1+ Shot on Target",
+                                               4:"1+ Assist",5:"2+ Tackles",6:"2+ Fouls",7:"To Be Booked"}
+                                _sz_pos_map = {"attacker":"Anytime Goalscorer","forward":"Anytime Goalscorer",
+                                               "midfielder":"1+ Shot on Target","defender":"2+ Tackles",
+                                               "goalkeeper":"Save","FWD":"Anytime Goalscorer",
+                                               "MID":"1+ Shot on Target","DEF":"2+ Tackles","ATT":"Anytime Goalscorer"}
+                                if _m_raw and isinstance(_m_raw, int):
+                                    _m = _sz_mkt_map.get(_m_raw, f"Prop {_m_raw}")
+                                elif _m_raw:
+                                    _m = str(_m_raw)
+                                else:
+                                    _m = _sz_pos_map.get(_pos_str, "Player Prop")
                                 _sz_icons = {1:"⚽",2:"💥",3:"🎯",4:"🅰️",5:"🦵",6:"🦵",7:"🟨"}
-                                _icon = _sz_icons.get(_t.get("market",0), "🤖")
+                                _icon = _sz_icons.get(_t.get("market",0) if isinstance(_t.get("market"),int) else 0, "🤖")
                                 # Prob aus verschiedenen Feldern
                                 _prob = float(_t.get("probability") or _t.get("projection") or
                                               _t.get("confidence") or _t.get("score") or 0)
