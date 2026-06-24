@@ -18011,12 +18011,11 @@ def run_pinnacle_props_bot(win_start_utc=None, win_end_utc=None, ch_tz=None, top
                 _pair_key = f"{t1['match']}_{t2['match']}"
                 if _pair_key in _btts_sent:
                     continue
-                # Globaler Tages-Dedup: verhindert Duplikate über mehrere Runs
-                _global_key = f"btts_bb_{_pair_key}_{datetime.now(timezone.utc).date()}"
-                if _global_key in _STAT_INSIGHT_SENT_TODAY:
+                _global_bb_key = f"btts_bb_{_pair_key}_{datetime.now(timezone.utc).date()}"
+                if _global_bb_key in _STAT_INSIGHT_SENT_TODAY:
                     continue
                 _btts_sent.add(_pair_key)
-                _STAT_INSIGHT_SENT_TODAY.add(_global_key)
+                _STAT_INSIGHT_SENT_TODAY.add(_global_bb_key)
 
                 # Fair-Quote berechnen
                 p1 = int(t1.get("probability", 67))
@@ -18087,24 +18086,38 @@ def run_pinnacle_props_bot(win_start_utc=None, win_end_utc=None, ch_tz=None, top
                     _value_sent += 1
                     log(f"   🎯 Value Alert: {player} {value_info['market']} +{value_info['edge_pct']}%")
 
-    # 🌍 odds-api.io: Bet365/Unibet WM Player Props
+    # 🌍 odds-api.io v3: Bet365/Unibet WM Player Props
     if ODDSAPIIO_KEY:
         try:
             from datetime import timedelta as _td_oio
             _oio_now = datetime.now(timezone.utc)
             _oio_end = _oio_now + _td_oio(hours=24)
+
+            # WM Events holen (v3 Endpunkt, apiKey als Query-Param)
             _oio_ev = requests.get(
-                "https://api.odds-api.io/v1/events",
-                headers={"x-api-key": ODDSAPIIO_KEY},
-                params={"sport": "soccer", "league": "FIFA World Cup",
-                        "dateFrom": _oio_now.strftime("%Y-%m-%dT%H:%M:%SZ"),
-                        "dateTo": _oio_end.strftime("%Y-%m-%dT%H:%M:%SZ")},
+                "https://api.odds-api.io/v3/events",
+                params={
+                    "sport": "football",
+                    "apiKey": ODDSAPIIO_KEY,
+                    "from": _oio_now.strftime("%Y-%m-%dT%H:%M:%SZ"),
+                    "to": _oio_end.strftime("%Y-%m-%dT%H:%M:%SZ"),
+                },
                 timeout=15,
             )
             log(f"   OddsAPIio Events: {_oio_ev.status_code}")
+
             if _oio_ev.ok:
-                _oio_events = _oio_ev.json().get("data", []) or []
-                log(f"   OddsAPIio WM Events: {len(_oio_events)}")
+                _oio_all = _oio_ev.json() if isinstance(_oio_ev.json(), list) else _oio_ev.json().get("data", []) or []
+                # WM Spiele filtern
+                _oio_events = [e for e in _oio_all if any(k in str(e.get("league", "") or e.get("tournament", "") or e.get("competition", "")).lower()
+                               for k in ["world cup", "fifa", "wm 2026"])]
+                log(f"   OddsAPIio WM Events: {len(_oio_events)} von {len(_oio_all)} total")
+
+                if not _oio_events:
+                    # Zeige erste 5 Ligen zur Diagnose
+                    _sample_leagues = list(set(str(e.get("league","") or e.get("tournament","") or e.get("competition","")) for e in _oio_all[:20]))
+                    log(f"   OddsAPIio Ligen-Sample: {_sample_leagues[:8]}")
+
                 _prop_chat = TELEGRAM_GROUPS.get("advanced_props") or TELEGRAM_GROUPS.get("props")
                 _oio_sent = 0
                 _oio_dedup = set()
@@ -18116,41 +18129,54 @@ def run_pinnacle_props_bot(win_start_utc=None, win_end_utc=None, ch_tz=None, top
                     "player_shots": "2+ Shots",
                     "player_to_assist": "Anytime Assist",
                 }
+
                 for _ev in _oio_events:
-                    _ev_id = _ev.get("id") or _ev.get("eventId")
-                    _home = _ev.get("homeTeam", {}).get("name", "") if isinstance(_ev.get("homeTeam"), dict) else str(_ev.get("home", ""))
-                    _away = _ev.get("awayTeam", {}).get("name", "") if isinstance(_ev.get("awayTeam"), dict) else str(_ev.get("away", ""))
+                    _ev_id = _ev.get("id") or _ev.get("eventId") or _ev.get("event_id")
+                    _home = str(_ev.get("homeTeam") or _ev.get("home") or _ev.get("home_team") or "")
+                    _away = str(_ev.get("awayTeam") or _ev.get("away") or _ev.get("away_team") or "")
                     _match = f"{_home} vs {_away}"
-                    _ko = str(_ev.get("startTime", "") or _ev.get("commence_time", ""))
+                    _ko = str(_ev.get("startTime") or _ev.get("commence_time") or _ev.get("date") or "")
                     if not _ev_id:
                         continue
+
                     _oio_pr = requests.get(
-                        f"https://api.odds-api.io/v1/events/{_ev_id}/odds",
-                        headers={"x-api-key": ODDSAPIIO_KEY},
-                        params={"bookmakers": "bet365,unibet",
-                                "markets": "player_to_score,player_anytime_scorer,player_to_be_booked,player_shots_on_target,player_shots,player_to_assist"},
+                        "https://api.odds-api.io/v3/odds",
+                        params={
+                            "eventId": _ev_id,
+                            "apiKey": ODDSAPIIO_KEY,
+                            "bookmakers": "bet365,unibet",
+                            "markets": "player_to_score,player_anytime_scorer,player_to_be_booked,player_shots_on_target,player_shots,player_to_assist",
+                        },
                         timeout=15,
                     )
                     if not _oio_pr.ok:
+                        log(f"   OddsAPIio Odds {_match}: {_oio_pr.status_code}", "WARN")
                         continue
-                    _bkms = (_oio_pr.json().get("data") or {}).get("bookmakers", []) or []
+
+                    _oio_resp = _oio_pr.json()
+                    _bkms = (_oio_resp.get("bookmakers") or _oio_resp.get("data", {}).get("bookmakers") or [])
+                    if not _bkms and isinstance(_oio_resp, dict):
+                        # Alternativer Response-Format
+                        _bkms = [v for v in _oio_resp.values() if isinstance(v, dict) and "markets" in v]
+
                     _best = {}
                     for _bm in _bkms:
-                        for _mkt in _bm.get("markets", []) or []:
-                            _mk = _mkt.get("key", "") or _mkt.get("market", "")
-                            for _out in _mkt.get("outcomes", []) or []:
-                                _player = _out.get("description") or _out.get("player") or _out.get("name", "")
-                                _side = str(_out.get("name", "") or _out.get("side", "")).lower()
-                                _price = float(_out.get("price", 0) or _out.get("odds", 0) or 0)
+                        for _mkt in (_bm.get("markets") or []):
+                            _mk = _mkt.get("key") or _mkt.get("market") or _mkt.get("name") or ""
+                            for _out in (_mkt.get("outcomes") or []):
+                                _player = _out.get("description") or _out.get("player") or _out.get("name") or ""
+                                _side = str(_out.get("name") or _out.get("side") or "").lower()
+                                _price = float(_out.get("price") or _out.get("odds") or 0)
                                 if not _player or _price <= 1.0 or "no" in _side:
                                     continue
                                 _bk = f"{_player}_{_mk}"
                                 if _bk not in _best or _price > _best[_bk][0]:
                                     _best[_bk] = (_price, _mk, _player)
+
                     for _bk, (_price, _mk, _player) in sorted(_best.items(), key=lambda x: -x[1][0]):
                         if _price < 1.30 or _price > 8.00:
                             continue
-                        _dk = f"oio_{_match}_{_player}_{_mk}_{datetime.now(timezone.utc).date()}"
+                        _dk = f"oio_{_match}_{_player}_{_mk}_{_oio_now.date()}"
                         if _dk in _oio_dedup or _dk in _STAT_INSIGHT_SENT_TODAY:
                             continue
                         _oio_dedup.add(_dk)
@@ -18175,6 +18201,7 @@ def run_pinnacle_props_bot(win_start_utc=None, win_end_utc=None, ch_tz=None, top
                             break
                     if _oio_sent >= 15:
                         break
+
                 log(f"   OddsAPIio WM Props: {_oio_sent} gesendet")
         except Exception as _oioe:
             log(f"   OddsAPIio Error: {str(_oioe)[:80]}", "WARN")
