@@ -13526,7 +13526,7 @@ def send_top_tips(tips_by_market, target_date):
                 continue
 
             # 🛡️ Safe Filter: schlechte Ligen ausfiltern
-            _tip_league = str(t.get("league","") or t.get("competition","") or t.get("league_name","") or "").lower()
+            _tip_league = str(r.get("league","") or r.get("competition","") or r.get("league_name","") or "").lower()
             _skip_kw = ["reserve","women","u20","u21","u19","u18","youth","frauen",
                         "reserva","damen","feminine","femini","amateur","friendly"]
             if any(_kw in _tip_league for _kw in _skip_kw):
