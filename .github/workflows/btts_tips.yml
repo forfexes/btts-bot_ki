@@ -76,6 +76,7 @@ jobs:
           THESTATSAPI_KEY:            ${{ secrets.THESTATSAPI_KEY }}
           THESTATSAPI_KEYS:           ${{ secrets.THESTATSAPI_KEYS }}
           API_NINJAS_KEY:             ${{ secrets.API_NINJAS_KEY }}
+          ODDSAPIIO_KEY:              ${{ secrets.ODDSAPIIO_KEY }}
           # ── Telegram ──
           TELEGRAM_TOKEN:             ${{ secrets.TELEGRAM_TOKEN }}
           TELEGRAM_CHAT_ID:           ${{ secrets.TELEGRAM_CHAT_ID }}
