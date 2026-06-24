@@ -17085,7 +17085,11 @@ def check_config():
     log(f"   • DataHub.io: ✅ aktiv (kein Key!)")
     log(f"   • Tavily: {'✅ aktiv!' if TAVILY_API_KEY else '❌ TAVILY_API_KEY fehlt (optional)'}")
     log(f"   • AllSports API: {'✅ aktiv!' if ALLSPORTS_API_KEY else '❌ ALLSPORTS_API_KEY fehlt (optional)'}")
-    log(f"   • Odds-API.io: {'✅ aktiv! (Bet365/Unibet Props)' if ODDSAPIIO_KEY else '❌ ODDSAPIIO_KEY fehlt (optional)'}")
+    log(f"   • Odds-API.io: {'✅ aktiv!' if ODDSAPIIO_KEY else '❌ ODDSAPIIO_KEY fehlt (optional)'}")
+    log(f"   • FootyMetrics: ✅ Player Props (kostenlos)")
+    log(f"   • Oddspedia: ✅ WM Player Props (kostenlos)")
+    log(f"   • ScoutingStats: ✅ Player Props via Playwright (kostenlos)")
+    log(f"   • Statz.ai: ✅ AI Prop Projections via Playwright (kostenlos)")
     log(f"   • Footballdata.io: {'✅ aktiv!' if FOOTBALLDATA_IO_API_KEY else '❌ FOOTBALLDATA_IO_API_KEY fehlt (optional, Settlement-Fallback)'}")
     log(f"   • OpenLigaDB: ✅ aktiv (kein Key, nur deutsche Ligen)")
     log(f"   • TheStatsAPI: {'✅ ' + str(len(THESTATSAPI_KEYS)) + ' Keys aktiv! (Player Stats, xG, Lineups, Odds, Settlement)' if THESTATSAPI_KEYS else '❌ THESTATSAPI_KEYS fehlt (optional aber empfohlen)'}")
@@ -18086,100 +18090,204 @@ def run_pinnacle_props_bot(win_start_utc=None, win_end_utc=None, ch_tz=None, top
                     _value_sent += 1
                     log(f"   🎯 Value Alert: {player} {value_info['market']} +{value_info['edge_pct']}%")
 
-    # 🌍 odds-api.io: WM Player Props
-    if ODDSAPIIO_KEY:
-        try:
-            from datetime import timedelta as _td_oio
-            _oio_now = datetime.now(timezone.utc)
-            _oio_end = _oio_now + _td_oio(hours=24)
-            # Nicht-Player-Prop Keys (werden gefiltert)
-            _SKIP_KEYS = {"yes","no","home","away","draw","over","under","hdp","max","1","x","2"}
+    _pp_chat = TELEGRAM_GROUPS.get("advanced_props") or TELEGRAM_GROUPS.get("props")
+    _pp_dedup = set()
+    _pp_today = datetime.now(timezone.utc).date()
+    _pp_total = 0
 
-            _oio_ev = requests.get(
-                "https://api.odds-api.io/v3/events",
-                params={"sport":"football","apiKey":ODDSAPIIO_KEY,
-                        "from":_oio_now.strftime("%Y-%m-%dT%H:%M:%SZ"),
-                        "to":_oio_end.strftime("%Y-%m-%dT%H:%M:%SZ")},
-                timeout=15,
+    def _send_prop(player, market, match, odds_dec, source, icon="🎯", ko_s="", extra=""):
+        nonlocal _pp_total
+        _dk = f"pp_{match}_{player}_{market}_{_pp_today}"
+        if _dk in _pp_dedup or _dk in _STAT_INSIGHT_SENT_TODAY:
+            return False
+        _pp_dedup.add(_dk)
+        _STAT_INSIGHT_SENT_TODAY.add(_dk)
+        _odds_str = f" @ <b>{odds_dec}</b>" if odds_dec and float(odds_dec) > 1.0 else ""
+        _msg = (
+            f"\U0001F3AF <b>PLAYER PROP</b>\n"
+            f"\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\n"
+            f"\u26BD <b>{match}</b>{(' \u00B7 \u23F0 ' + ko_s) if ko_s else ''}\n\n"
+            f"\U0001F464 <b>{player}</b>\n"
+            f"   {icon} {market}{_odds_str}\n"
+            f"{('   ' + extra + chr(10)) if extra else ''}"
+            f"\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\n"
+            f"<i>\U0001F4CA {source}</i>"
+        )
+        if _pp_chat:
+            send_telegram(_msg, chat_id=_pp_chat)
+            _pp_total += 1
+            log(f"   Prop: {player} | {market} | {source}")
+        return True
+
+    # ═══════════════════════════════════════
+    # 1. ODDSPEDIA — WM Player Props
+    # ═══════════════════════════════════════
+    try:
+        import re as _re_pp
+        _op_r = requests.get(
+            "https://oddspedia.com/soccer/world/world-cup/player-props",
+            headers={"User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36",
+                     "Accept": "text/html,application/xhtml+xml"},
+            timeout=15,
+        )
+        log(f"   Oddspedia: {_op_r.status_code}")
+        if _op_r.ok:
+            _op_html = _op_r.text
+            # Spielernamen + Match + Markt + US-Quote aus HTML
+            _op_blocks = _re_pp.findall(
+                r'([A-Z][a-z]+(?: [A-Z][a-z\-]+)+).*?'
+                r'(\d{1,2} \w{3}[^<]{3,30}vs[^<]{3,30}).*?'
+                r'(Anytime Goalscorer|Player Shots on Target|Player Shots|First Goalscorer|Player Fouls Committed|Player Tackles|To Be Booked).*?'
+                r'([+\-]\d{3,4})',
+                _op_html, _re_pp.DOTALL
             )
-            if _oio_ev.ok:
-                _oio_all = _oio_ev.json() if isinstance(_oio_ev.json(), list) else _oio_ev.json().get("data",[]) or []
-                _oio_wm = [e for e in _oio_all if any(k in str(
-                    e.get("league","") or e.get("tournament","") or e.get("competitionName","")
-                ).lower() for k in ["world cup","fifa","wm 2026"])]
-                log(f"   OddsAPIio WM: {len(_oio_wm)} von {len(_oio_all)}")
+            log(f"   Oddspedia: {len(_op_blocks)} Props")
+            _op_icons = {
+                "Anytime Goalscorer": "⚽", "First Goalscorer": "⚽",
+                "Player Shots on Target": "🎯", "Player Shots": "💥",
+                "Player Fouls Committed": "🦵", "Player Tackles": "🦵",
+                "To Be Booked": "🟨",
+            }
+            for _player, _match, _market, _us in _op_blocks[:25]:
+                try:
+                    _n = int(_us)
+                    _dec = round((_n/100)+1, 2) if _n > 0 else round((100/abs(_n))+1, 2)
+                except Exception:
+                    continue
+                if _dec < 1.20 or _dec > 20.0:
+                    continue
+                _send_prop(_player.strip(), _market, _match.strip(), _dec,
+                           "Oddspedia/DraftKings", _op_icons.get(_market, "🎯"))
+    except Exception as _e:
+        log(f"   Oddspedia Error: {str(_e)[:60]}", "WARN")
 
-                if _oio_wm:
-                    _ev_ids = ",".join(str(e.get("id","")) for e in _oio_wm[:10] if e.get("id"))
-                    _oio_pr = requests.get(
-                        "https://api.odds-api.io/v3/odds/multi",
-                        params={"eventIds":_ev_ids,"bookmakers":"Bet365,Unibet","apiKey":ODDSAPIIO_KEY},
-                        timeout=20,
-                    )
-                    if _oio_pr.ok:
-                        _events_odds = _oio_pr.json() if isinstance(_oio_pr.json(), list) else _oio_pr.json().get("data",[]) or []
-                        _prop_chat = TELEGRAM_GROUPS.get("advanced_props") or TELEGRAM_GROUPS.get("props")
-                        _oio_sent = 0
-                        _oio_dedup = set()
+    # ═══════════════════════════════════════
+    # 2. FOOTYMETRICS — alle Ligen Hit-Rate
+    # ═══════════════════════════════════════
+    try:
+        _fm_headers = {
+            "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36",
+            "Accept": "application/json",
+            "Referer": "https://www.footymetrics.com/",
+        }
+        _fm_markets = [
+            ("player-shots-on-target", "1+ Shot on Target",    "🎯"),
+            ("player-goals",           "Anytime Goalscorer",   "⚽"),
+            ("player-cards",           "To Be Booked",         "🟨"),
+            ("player-shots",           "2+ Shots",             "💥"),
+            ("player-fouls-committed", "2+ Fouls",             "🦵"),
+            ("player-tackles",         "2+ Tackles",           "🦵"),
+        ]
+        for _slug, _name, _icon in _fm_markets:
+            if _pp_total >= 30:
+                break
+            try:
+                _fm_r = requests.get(
+                    f"https://www.footymetrics.com/api/trends/{_slug}",
+                    headers=_fm_headers,
+                    params={"minHitRate": 70, "minHits": 4, "line": "0.5"},
+                    timeout=12,
+                )
+                log(f"   FootyMetrics {_slug}: {_fm_r.status_code}")
+                if not _fm_r.ok:
+                    continue
+                _d = _fm_r.json()
+                _items = _d if isinstance(_d, list) else (_d.get("trends") or _d.get("data") or _d.get("results") or [])
+                for _t in (_items or [])[:8]:
+                    _p = _t.get("playerName") or _t.get("player") or _t.get("name", "")
+                    _m = _t.get("fixture") or _t.get("match", "")
+                    if isinstance(_m, dict):
+                        _m = f"{_m.get('home','')} vs {_m.get('away','')}"
+                    _hr = float(_t.get("hitRate") or _t.get("hit_rate") or 0)
+                    _ko = str(_t.get("kickoff") or _t.get("date", ""))
+                    _ko_s = _ko[11:16] if len(_ko) > 11 else ""
+                    if not _p or _hr < 70:
+                        continue
+                    _send_prop(_p, _name, str(_m), 0, "FootyMetrics", _icon, _ko_s,
+                               f"Hit Rate: {_hr:.0f}%")
+            except Exception as _e2:
+                log(f"   FootyMetrics {_slug}: {str(_e2)[:50]}", "WARN")
+    except Exception as _e:
+        log(f"   FootyMetrics Error: {str(_e)[:60]}", "WARN")
 
-                        for _eod in _events_odds:
-                            _home = str(_eod.get("home","") or _eod.get("homeTeam",""))
-                            _away = str(_eod.get("away","") or _eod.get("awayTeam",""))
-                            _match = f"{_home} vs {_away}"
-                            _ko = str(_eod.get("date","") or _eod.get("startTime","") or "")
-                            _ko_s = _ko[11:16] if len(_ko) > 11 else ""
-                            _bkms = _eod.get("bookmakers") or {}
+    # ═══════════════════════════════════════
+    # 3. SCOUTINGSTATS — via Playwright
+    # ═══════════════════════════════════════
+    if PLAYWRIGHT_AVAILABLE and _pp_total < 30:
+        try:
+            _ss_html = scrape_with_playwright(
+                "https://scoutingstats.ai/player-props",
+                timeout=20000
+            )
+            log(f"   ScoutingStats HTML: {len(_ss_html) if _ss_html else 0} chars")
+            if _ss_html:
+                import re as _re_ss
+                import json as _json_ss
+                # JSON in Script-Tags suchen
+                _ss_jsons = _re_ss.findall(r'<script[^>]*>\s*(\{.*?"player.*?)\s*</script>', _ss_html, _re_ss.DOTALL)
+                if not _ss_jsons:
+                    # Next.js __NEXT_DATA__
+                    _nd = _re_ss.search(r'id="__NEXT_DATA__"[^>]*>(\{.*?\})</script>', _ss_html, _re_ss.DOTALL)
+                    if _nd:
+                        _ss_jsons = [_nd.group(1)]
+                log(f"   ScoutingStats JSON blocks: {len(_ss_jsons)}")
+                for _jb in _ss_jsons[:3]:
+                    try:
+                        _jd = _json_ss.loads(_jb[:50000])
+                        # Tief in JSON nach player props suchen
+                        _jstr = str(_jd)
+                        _players_found = _re_ss.findall(r"'playerName':\s*'([^']+)'.*?'market':\s*'([^']+)'.*?'modelProbability':\s*([0-9.]+)", _jstr)
+                        log(f"   ScoutingStats Players: {len(_players_found)}")
+                    except Exception:
+                        pass
+                # Auch direkt im HTML nach Player-Namen suchen
+                _ss_sample = _ss_html[1000:3000]
+                log(f"   ScoutingStats Sample: {_ss_sample[:400]}")
+        except Exception as _e:
+            log(f"   ScoutingStats Error: {str(_e)[:60]}", "WARN")
 
-                            for _bm_name, _mkt_list in (_bkms.items() if isinstance(_bkms, dict) else []):
-                                for _mkt in (_mkt_list or []):
-                                    _mkt_name = str(_mkt.get("name",""))
-                                    _mkt_lower = _mkt_name.lower()
-                                    # Nur Player Props (haben Spielernamen als Keys)
-                                    _odds_dict = {}
-                                    for _out in (_mkt.get("odds") or []):
-                                        for _ok, _ov in _out.items():
-                                            if _ok.lower() in _SKIP_KEYS:
-                                                continue
-                                            # Spielername als Key — versuche float konvertierung
-                                            try:
-                                                _price = float(_ov)
-                                                if 1.30 <= _price <= 8.00:
-                                                    _odds_dict[_ok] = _price
-                                            except (ValueError, TypeError):
-                                                pass
+    # ═══════════════════════════════════════
+    # 4. STATZ.AI — AI Projections via Playwright
+    # ═══════════════════════════════════════
+    if PLAYWRIGHT_AVAILABLE and _pp_total < 30:
+        try:
+            _sz_html = scrape_with_playwright(
+                "https://statz.ai/projections/player-props",
+                timeout=20000
+            )
+            log(f"   Statz.ai HTML: {len(_sz_html) if _sz_html else 0} chars")
+            if _sz_html:
+                import re as _re_sz
+                import json as _json_sz
+                # __NEXT_DATA__ oder API Calls
+                _nd2 = _re_sz.search(r'id="__NEXT_DATA__"[^>]*>(\{.*?\})</script>', _sz_html, _re_sz.DOTALL)
+                if _nd2:
+                    log(f"   Statz.ai NEXT_DATA: {len(_nd2.group(1))} chars")
+                    try:
+                        _sz_json = _json_sz.loads(_nd2.group(1))
+                        # Props aus JSON extrahieren
+                        _sz_str = str(_sz_json)
+                        _sz_players = _re_sz.findall(
+                            r"'(?:playerName|player|name)':\s*'([A-Z][^']{3,30})'.*?"
+                            r"'(?:market|prop|type)':\s*'([^']{5,40})'.*?"
+                            r"'(?:projection|probability|prob)':\s*([0-9.]+)",
+                            _sz_str
+                        )
+                        log(f"   Statz.ai Players: {len(_sz_players)}")
+                        for _p, _m, _prob in _sz_players[:15]:
+                            if float(_prob) < 0.55:
+                                continue
+                            _fair = round(1/float(_prob), 2)
+                            _send_prop(_p, _m, "Upcoming Fixture", _fair, "Statz.ai", "🤖",
+                                       extra=f"AI Proj: {float(_prob)*100:.0f}%")
+                    except Exception as _sze2:
+                        log(f"   Statz.ai JSON parse: {str(_sze2)[:50]}", "WARN")
+                # HTML Sample für Diagnose
+                log(f"   Statz.ai Sample: {_sz_html[500:900]}")
+        except Exception as _e:
+            log(f"   Statz.ai Error: {str(_e)[:60]}", "WARN")
 
-                                    for _player, _price in sorted(_odds_dict.items(), key=lambda x: -x[1]):
-                                        _dk = f"oio_{_match}_{_player}_{_mkt_name}_{_oio_now.date()}"
-                                        if _dk in _oio_dedup or _dk in _STAT_INSIGHT_SENT_TODAY:
-                                            continue
-                                        _oio_dedup.add(_dk)
-                                        _STAT_INSIGHT_SENT_TODAY.add(_dk)
-                                        _msg = (
-                                            f"\U0001F30D <b>WM PLAYER PROP</b>\n"
-                                            f"\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\n"
-                                            f"\u26BD <b>{_match}</b> \u00B7 \u23F0 {_ko_s}\n\n"
-                                            f"\U0001F464 <b>{_player}</b>\n"
-                                            f"   {_mkt_name}\n\n"
-                                            f"\U0001F4B0 @ <b>{_price}</b> \u00B7 0.5u \u2705\n"
-                                            f"\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\n"
-                                            f"<i>\U0001F4CA {_bm_name}</i>"
-                                        )
-                                        if _prop_chat:
-                                            send_telegram(_msg, chat_id=_prop_chat)
-                                            _oio_sent += 1
-                                            log(f"   OddsAPIio: {_player} {_mkt_name} @ {_price}")
-                                        if _oio_sent >= 20:
-                                            break
-                                    if _oio_sent >= 20:
-                                        break
-                                if _oio_sent >= 20:
-                                    break
-                            if _oio_sent >= 20:
-                                break
-                        log(f"   OddsAPIio WM Props: {_oio_sent} gesendet")
-        except Exception as _oioe:
-            log(f"   OddsAPIio Error: {str(_oioe)[:80]}", "WARN")
-
+    log(f"   Player Props total: {_pp_total} gesendet")
     log("\U0001F511 Pinnacle Props: keine Bet Builder zusammengestellt")
     return 0
 
