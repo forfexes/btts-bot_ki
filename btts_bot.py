@@ -18137,31 +18137,34 @@ def run_pinnacle_props_bot(win_start_utc=None, win_end_utc=None, ch_tz=None, top
     except Exception as _dde:
         log(f"   Player Props Dedup: {str(_dde)[:50]}", "WARN")
 
-    def _send_prop(player, market, match, odds_dec, source, icon="🎯", ko_s="", extra=""):
+    # Props sammeln für Prop Builder
+    _prop_candidates = []  # [{player, market, match, odds_dec, source, icon, ko_s, confidence}]
+
+    def _collect_prop(player, market, match, odds_dec, source, icon="🎯", ko_s="", extra="", confidence=0.6):
         nonlocal _pp_total
         if not player or not market: return False
         _dk = f"pp_{match}_{player}_{market}_{_pp_today}"
         if _dk in _pp_dedup or _dk in _STAT_INSIGHT_SENT_TODAY: return False
         _pp_dedup.add(_dk); _STAT_INSIGHT_SENT_TODAY.add(_dk)
-        _odds_str = f" @ <b>{odds_dec}</b>" if odds_dec and float(odds_dec) > 1.0 else ""
-        _ko_part = f" \u00B7 \u23F0 {ko_s}" if ko_s else ""
-        _extra_part = f"   {extra}\n" if extra else ""
-        _msg = (f"\U0001F3AF <b>PLAYER PROP</b>\n\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\n"
-                f"\u26BD <b>{match}</b>{_ko_part}\n\n\U0001F464 <b>{player}</b>\n"
-                f"   {icon} {market}{_odds_str}\n{_extra_part}"
-                f"\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\n<i>\U0001F4CA {source}</i>")
-        if _pp_chat:
-            send_telegram(_msg, chat_id=_pp_chat); _pp_total += 1
-            log(f"   Prop: {player} | {market} | {source}")
-            try:
-                if SUPABASE_URL and SUPABASE_KEY:
-                    requests.post(f"{SUPABASE_URL}/rest/v1/prop_picks",
-                        headers={"apikey":SUPABASE_KEY,"Authorization":f"Bearer {SUPABASE_KEY}",
-                                 "Content-Type":"application/json","Prefer":"resolution=merge-duplicates"},
-                        json={"dedup_key":_dk,"player":str(player)[:100],"market":str(market)[:100],
-                              "match":str(match)[:200],"source":source,"sent_date":str(_pp_today)},timeout=5)
-            except Exception: pass
+        _prop_candidates.append({
+            "player": player, "market": market, "match": match,
+            "odds": float(odds_dec) if odds_dec and float(str(odds_dec).replace(",",".") or 0) > 1.0 else 1.65,
+            "source": source, "icon": icon, "ko_s": ko_s, "extra": extra,
+            "confidence": confidence, "dedup_key": _dk,
+        })
+        log(f"   Prop: {player} | {market} | {source}")
+        try:
+            if SUPABASE_URL and SUPABASE_KEY:
+                requests.post(f"{SUPABASE_URL}/rest/v1/prop_picks",
+                    headers={"apikey":SUPABASE_KEY,"Authorization":f"Bearer {SUPABASE_KEY}",
+                             "Content-Type":"application/json","Prefer":"resolution=merge-duplicates"},
+                    json={"dedup_key":_dk,"player":str(player)[:100],"market":str(market)[:100],
+                          "match":str(match)[:200],"source":source,"sent_date":str(_pp_today)},timeout=5)
+        except Exception: pass
         return True
+
+    # Alias für Kompatibilität
+    _send_prop = _collect_prop
 
     if PLAYWRIGHT_AVAILABLE:
         import re as _re_pp, json as _json_pp
@@ -18299,8 +18302,105 @@ def run_pinnacle_props_bot(win_start_utc=None, win_end_utc=None, ch_tz=None, top
                                        extra=f"AI: {_prob*100:.0f}%" if _prob > 0 else "")
             except Exception as _e: log(f"   Statz.ai Error: {str(_e)[:60]}", "WARN")
 
+    # ═══════════════════════════════════════
+    # PROP BUILDER — beste Props kombinieren
+    # ═══════════════════════════════════════
+    if _prop_candidates and _pp_chat:
+        # Sortiere nach Confidence absteigend
+        _prop_candidates.sort(key=lambda x: x["confidence"], reverse=True)
+
+        # ═══════════════════════════════════════
+        # PROP BUILDER — 3 bis 5 Legs, mit Ladder
+        # ═══════════════════════════════════════
+        NL = "\n"
+        SEP = "\u2501" * 18
+
+        # Ladder: gleicher Spieler mit steigenden Lines
+        # z.B. Embolo 1+ Shot, 2+ Shots, 3+ Shots
+        _LADDER_MARKETS = [
+            ["1+ Shot on Target", "2+ Shots on Target", "3+ Shots on Target"],
+            ["1+ Shot on Target", "2+ Shots"],
+            ["Anytime Goalscorer", "2+ Goals"],
+            ["1+ Assist", "2+ Assists"],
+            ["2+ Tackles", "3+ Tackles", "4+ Tackles"],
+            ["2+ Fouls", "3+ Fouls"],
+            ["To Be Booked", "2+ Yellow Cards"],
+        ]
+
+        def _is_ladder_pair(m1, m2):
+            for _ladder in _LADDER_MARKETS:
+                if m1 in _ladder and m2 in _ladder and _ladder.index(m1) < _ladder.index(m2):
+                    return True
+            return False
+
+        def _build_and_send(legs, label=""):
+            nonlocal _pp_total
+            if not legs: return
+            _total = round(__import__("functools").reduce(lambda a,b: a*b, [l["odds"] for l in legs]), 2)
+            if _total < 1.80: return
+            _bmsg = "\U0001f3d7\ufe0f <b>PROP BUILDER " + str(len(legs)) + " LEGS</b>"
+            if label: _bmsg += " (" + label + ")"
+            _bmsg += NL + SEP + NL
+            for _i, _leg in enumerate(legs, 1):
+                _ko2 = (" \u23f0 " + _leg["ko_s"]) if _leg["ko_s"] else ""
+                _bmsg += (str(_i) + ". " + _leg["icon"] + " <b>" + _leg["player"] +
+                          "</b> \u2014 " + _leg["market"] + _ko2 + NL +
+                          "   \u26bd " + _leg["match"] + NL)
+            _bmsg += (SEP + NL + "\U0001f4b0 @ <b>" + str(_total) + "</b> \u00b7 0.5u" + NL +
+                      "<i>\U0001f4ca ScoutingStats + Statz.ai</i>")
+            send_telegram(_bmsg, chat_id=_pp_chat)
+            _pp_total += 1
+            log(f"   \U0001f3d7 Prop Builder {len(legs)} Legs @ {_total}" + (f" [{label}]" if label else ""))
+
+        if _prop_candidates and _pp_chat:
+            _prop_candidates.sort(key=lambda x: x["confidence"], reverse=True)
+            _used = set()
+
+            # 1. Ladder Builders: gleicher Spieler, steigende Lines
+            _player_props = {}
+            for _pc in _prop_candidates:
+                _pname = _pc["player"]
+                if _pname not in _player_props:
+                    _player_props[_pname] = []
+                _player_props[_pname].append(_pc)
+
+            for _pname, _pprops in _player_props.items():
+                if len(_pprops) < 2: continue
+                _ladder_legs = []
+                for _i, _p1 in enumerate(_pprops):
+                    for _p2 in _pprops[_i+1:]:
+                        if _is_ladder_pair(_p1["market"], _p2["market"]):
+                            if _p1 not in _ladder_legs: _ladder_legs.append(_p1)
+                            if _p2 not in _ladder_legs: _ladder_legs.append(_p2)
+                if len(_ladder_legs) >= 2:
+                    # Fülle mit anderen Props auf bis 3-5 Legs
+                    _extra = [p for p in _prop_candidates if p not in _ladder_legs and p["player"] not in _used]
+                    _combined = _ladder_legs + _extra[:max(0, 3-len(_ladder_legs))]
+                    if len(_combined) >= 3:
+                        _build_and_send(_combined[:5], f"Ladder {_pname}")
+                        for _p in _combined: _used.add(_p["player"])
+
+            # 2. Standard Builder 5 Legs (beste Confidence)
+            _avail = [p for p in _prop_candidates if p["player"] not in _used]
+            if len(_avail) >= 5:
+                _build_and_send(_avail[:5])
+                for _p in _avail[:5]: _used.add(_p["player"])
+                _avail = [p for p in _prop_candidates if p["player"] not in _used]
+
+            # 3. Standard Builder 4 Legs
+            _avail = [p for p in _prop_candidates if p["player"] not in _used]
+            if len(_avail) >= 4:
+                _build_and_send(_avail[:4])
+                for _p in _avail[:4]: _used.add(_p["player"])
+                _avail = [p for p in _prop_candidates if p["player"] not in _used]
+
+            # 4. Standard Builder 3 Legs (Rest)
+            _avail = [p for p in _prop_candidates if p["player"] not in _used]
+            if len(_avail) >= 3:
+                _build_and_send(_avail[:3])
+
     log(f"   Player Props total: {_pp_total} gesendet")
-    log("\U0001F511 Pinnacle Props: keine Bet Builder zusammengestellt")
+    log("🔑 Pinnacle Props: keine Bet Builder zusammengestellt")
     return 0
 
     # Sortierung nach Anstosszeit
