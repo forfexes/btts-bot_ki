@@ -2444,7 +2444,7 @@ def calculate_elo_btts_probability(home_elo, away_elo):
 # 🆕 ALLSPORTSAPI - 500+ Ligen weltweit (100 Calls/Tag gratis)
 # ============================================================
 ALLSPORTS_API_KEY = env("ALLSPORTS_API_KEY", "")
-ODDSAPIIO_KEY = env("ODDSAPIIO_KEY", "")  # odds-api.io
+ODDSAPIIO_KEY = env("ODDSAPIIO_KEY", "")
 FOOTBALLDATA_IO_API_KEY = env("FOOTBALLDATA_IO_API_KEY", "")
 THESTATSAPI_KEY = env("THESTATSAPI_KEY", "")  # 🆕 thestatsapi.com — Player Stats, Odds, xG, Lineups
 THESTATSAPI_KEYS = env_list("THESTATSAPI_KEYS")  # 🆕 Komma-getrennte Keys für Rotation
@@ -18086,113 +18086,97 @@ def run_pinnacle_props_bot(win_start_utc=None, win_end_utc=None, ch_tz=None, top
                     _value_sent += 1
                     log(f"   🎯 Value Alert: {player} {value_info['market']} +{value_info['edge_pct']}%")
 
-    # 🌍 odds-api.io: Bet365/Unibet WM Player Props
+    # 🌍 odds-api.io: WM Player Props
     if ODDSAPIIO_KEY:
         try:
             from datetime import timedelta as _td_oio
             _oio_now = datetime.now(timezone.utc)
             _oio_end = _oio_now + _td_oio(hours=24)
+            # Nicht-Player-Prop Keys (werden gefiltert)
+            _SKIP_KEYS = {"yes","no","home","away","draw","over","under","hdp","max","1","x","2"}
 
-            # Events holen
             _oio_ev = requests.get(
                 "https://api.odds-api.io/v3/events",
-                params={
-                    "sport": "football",
-                    "apiKey": ODDSAPIIO_KEY,
-                    "from": _oio_now.strftime("%Y-%m-%dT%H:%M:%SZ"),
-                    "to": _oio_end.strftime("%Y-%m-%dT%H:%M:%SZ"),
-                },
+                params={"sport":"football","apiKey":ODDSAPIIO_KEY,
+                        "from":_oio_now.strftime("%Y-%m-%dT%H:%M:%SZ"),
+                        "to":_oio_end.strftime("%Y-%m-%dT%H:%M:%SZ")},
                 timeout=15,
             )
-            log(f"   OddsAPIio Events: {_oio_ev.status_code}")
-            if not _oio_ev.ok:
-                log(f"   OddsAPIio Error: {_oio_ev.text[:200]}", "WARN")
-            else:
-                _oio_all = _oio_ev.json() if isinstance(_oio_ev.json(), list) else _oio_ev.json().get("data", []) or []
+            if _oio_ev.ok:
+                _oio_all = _oio_ev.json() if isinstance(_oio_ev.json(), list) else _oio_ev.json().get("data",[]) or []
                 _oio_wm = [e for e in _oio_all if any(k in str(
-                    e.get("league","") or e.get("tournament","") or e.get("competition","") or
-                    e.get("leagueName","") or e.get("competitionName","")
+                    e.get("league","") or e.get("tournament","") or e.get("competitionName","")
                 ).lower() for k in ["world cup","fifa","wm 2026"])]
                 log(f"   OddsAPIio WM: {len(_oio_wm)} von {len(_oio_all)}")
 
-                if not _oio_wm:
-                    _sample = list(set(str(
-                        e.get("league","") or e.get("tournament","") or e.get("competition","") or
-                        e.get("leagueName","") or e.get("competitionName","")
-                    ) for e in _oio_all[:30]))
-                    log(f"   OddsAPIio Sample Ligen: {_sample[:10]}")
-
-                _prop_chat = TELEGRAM_GROUPS.get("advanced_props") or TELEGRAM_GROUPS.get("props")
-                _oio_sent = 0
-                _oio_dedup = set()
-
-                # Alle WM Event IDs auf einmal holen (multi endpoint = 1 Request)
                 if _oio_wm:
-                    _ev_ids = ",".join(str(e.get("id") or e.get("eventId") or e.get("event_id","")) for e in _oio_wm[:10] if e.get("id") or e.get("eventId") or e.get("event_id"))
+                    _ev_ids = ",".join(str(e.get("id","")) for e in _oio_wm[:10] if e.get("id"))
                     _oio_pr = requests.get(
                         "https://api.odds-api.io/v3/odds/multi",
-                        params={"eventIds": _ev_ids, "bookmakers": "Bet365,Unibet", "apiKey": ODDSAPIIO_KEY},
+                        params={"eventIds":_ev_ids,"bookmakers":"Bet365,Unibet","apiKey":ODDSAPIIO_KEY},
                         timeout=20,
                     )
-                    log(f"   OddsAPIio Multi Odds: {_oio_pr.status_code}")
                     if _oio_pr.ok:
-                        _oio_resp = _oio_pr.json()
-                        _events_odds = _oio_resp if isinstance(_oio_resp, list) else _oio_resp.get("data", []) or []
-                        log(f"   OddsAPIio Markets Beispiel: {str(_oio_resp)[:400]}")
+                        _events_odds = _oio_pr.json() if isinstance(_oio_pr.json(), list) else _oio_pr.json().get("data",[]) or []
+                        _prop_chat = TELEGRAM_GROUPS.get("advanced_props") or TELEGRAM_GROUPS.get("props")
+                        _oio_sent = 0
+                        _oio_dedup = set()
 
                         for _eod in _events_odds:
                             _home = str(_eod.get("home","") or _eod.get("homeTeam",""))
                             _away = str(_eod.get("away","") or _eod.get("awayTeam",""))
                             _match = f"{_home} vs {_away}"
                             _ko = str(_eod.get("date","") or _eod.get("startTime","") or "")
+                            _ko_s = _ko[11:16] if len(_ko) > 11 else ""
                             _bkms = _eod.get("bookmakers") or {}
 
-                            # bookmakers ist ein dict: {"Bet365": [{name, odds}], ...}
                             for _bm_name, _mkt_list in (_bkms.items() if isinstance(_bkms, dict) else []):
                                 for _mkt in (_mkt_list or []):
-                                    _mkt_name = str(_mkt.get("name","")).lower()
-                                    # Player Props erkennen
-                                    if not any(k in _mkt_name for k in [
-                                        "goalscorer","to score","booked","yellow","shot","assist","card","foul","tackle"
-                                    ]):
-                                        continue
+                                    _mkt_name = str(_mkt.get("name",""))
+                                    _mkt_lower = _mkt_name.lower()
+                                    # Nur Player Props (haben Spielernamen als Keys)
+                                    _odds_dict = {}
                                     for _out in (_mkt.get("odds") or []):
                                         for _ok, _ov in _out.items():
-                                            if _ok in ["home","away","draw","over","under","hdp","max"]:
+                                            if _ok.lower() in _SKIP_KEYS:
                                                 continue
-                                            _price = float(_ov or 0)
-                                            if _price < 1.30 or _price > 8.00:
-                                                continue
-                                            _player = _ok
-                                            _dk = f"oio_{_match}_{_player}_{_mkt_name}_{_oio_now.date()}"
-                                            if _dk in _oio_dedup or _dk in _STAT_INSIGHT_SENT_TODAY:
-                                                continue
-                                            _oio_dedup.add(_dk)
-                                            _STAT_INSIGHT_SENT_TODAY.add(_dk)
-                                            _ko_s = _ko[11:16] if len(_ko) > 11 else ""
-                                            _msg = (
-                                                f"\U0001F30D <b>WM PLAYER PROP</b>\n"
-                                                f"\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\n"
-                                                f"\u26BD <b>{_match}</b> \u00B7 \u23F0 {_ko_s}\n\n"
-                                                f"\U0001F464 <b>{_player}</b>\n"
-                                                f"   {_mkt.get('name','')}\n\n"
-                                                f"\U0001F4B0 @ <b>{_price}</b> \u00B7 0.5u \u2705\n"
-                                                f"\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\n"
-                                                f"<i>\U0001F4CA {_bm_name}</i>"
-                                            )
-                                            if _prop_chat:
-                                                send_telegram(_msg, chat_id=_prop_chat)
-                                                _oio_sent += 1
-                                                log(f"   OddsAPIio: {_player} {_mkt_name} @ {_price}")
-                                            if _oio_sent >= 15:
-                                                break
-                                        if _oio_sent >= 15:
+                                            # Spielername als Key — versuche float konvertierung
+                                            try:
+                                                _price = float(_ov)
+                                                if 1.30 <= _price <= 8.00:
+                                                    _odds_dict[_ok] = _price
+                                            except (ValueError, TypeError):
+                                                pass
+
+                                    for _player, _price in sorted(_odds_dict.items(), key=lambda x: -x[1]):
+                                        _dk = f"oio_{_match}_{_player}_{_mkt_name}_{_oio_now.date()}"
+                                        if _dk in _oio_dedup or _dk in _STAT_INSIGHT_SENT_TODAY:
+                                            continue
+                                        _oio_dedup.add(_dk)
+                                        _STAT_INSIGHT_SENT_TODAY.add(_dk)
+                                        _msg = (
+                                            f"\U0001F30D <b>WM PLAYER PROP</b>\n"
+                                            f"\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\n"
+                                            f"\u26BD <b>{_match}</b> \u00B7 \u23F0 {_ko_s}\n\n"
+                                            f"\U0001F464 <b>{_player}</b>\n"
+                                            f"   {_mkt_name}\n\n"
+                                            f"\U0001F4B0 @ <b>{_price}</b> \u00B7 0.5u \u2705\n"
+                                            f"\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\n"
+                                            f"<i>\U0001F4CA {_bm_name}</i>"
+                                        )
+                                        if _prop_chat:
+                                            send_telegram(_msg, chat_id=_prop_chat)
+                                            _oio_sent += 1
+                                            log(f"   OddsAPIio: {_player} {_mkt_name} @ {_price}")
+                                        if _oio_sent >= 20:
                                             break
-                                if _oio_sent >= 15:
+                                    if _oio_sent >= 20:
+                                        break
+                                if _oio_sent >= 20:
                                     break
-                            if _oio_sent >= 15:
+                            if _oio_sent >= 20:
                                 break
-                log(f"   OddsAPIio WM Props: {_oio_sent} gesendet")
+                        log(f"   OddsAPIio WM Props: {_oio_sent} gesendet")
         except Exception as _oioe:
             log(f"   OddsAPIio Error: {str(_oioe)[:80]}", "WARN")
 
