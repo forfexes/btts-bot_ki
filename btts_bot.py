@@ -12730,39 +12730,11 @@ def send_telegram(text, chat_id=None, reply_markup=None):
 _SENT_TIPS_CACHE = set()
 
 def is_duplicate_tip(match, market, target_date):
-    """Prüft ob Tipp bereits gesendet wurde - In-Memory + Supabase"""
+    """Prüft ob Tipp bereits gesendet wurde - nur In-Memory (Bulk preload beim Start)"""
     global _SENT_TIPS_CACHE
-
-    # Normalisiere Match-Name für Vergleich
     match_norm = normalize_team_name(match)
-    cache_key = f"{match_norm[:20]}_{market}_{target_date}"
-
-    # 1. In-Memory Check (schnell!)
-    if cache_key in _SENT_TIPS_CACHE:
-        return True
-
-    # 2. Supabase Check
-    if SUPABASE_URL and SUPABASE_KEY:
-        try:
-            r = requests.get(
-                f"{SUPABASE_URL}/rest/v1/tips",
-                headers={"apikey": SUPABASE_KEY, "Authorization": f"Bearer {SUPABASE_KEY}"},
-                params={
-                    "date": f"eq.{target_date}",
-                    "market": f"eq.{market}",
-                    "match": f"eq.{match}",
-                    "select": "id",
-                    "limit": "1",
-                },
-                timeout=5,
-            )
-            if r.ok and len(r.json()) > 0:
-                _SENT_TIPS_CACHE.add(cache_key)
-                return True
-        except Exception:
-            pass
-
-    return False
+    cache_key = f"{match_norm[:50]}_{market}_{target_date}"
+    return cache_key in _SENT_TIPS_CACHE
 
 
 def _combo_signature(legs, prefix=""):
@@ -12815,7 +12787,7 @@ def mark_tip_sent(match, market, target_date):
     """Markiert Tipp als gesendet im In-Memory Cache"""
     global _SENT_TIPS_CACHE
     match_norm = normalize_team_name(match)
-    cache_key = f"{match_norm[:20]}_{market}_{target_date}"
+    cache_key = f"{match_norm[:50]}_{market}_{target_date}"
     _SENT_TIPS_CACHE.add(cache_key)
 
 
@@ -13524,7 +13496,7 @@ def send_top_tips(tips_by_market, target_date):
     # Auto-void alte Pending Tipps (älter als 3 Tage)
     _auto_void_old_pending()
 
-    # Wenn keine Tipps → Auswertung in ALLE Gruppen senden
+    # Auswertung IMMER in alle Gruppen senden (nach den Tipps)
     if total_tips == 0:
         _send_daily_auswertung_to_all_groups(stats)
         return
@@ -13551,6 +13523,15 @@ def send_top_tips(tips_by_market, target_date):
 
             if is_duplicate_tip(match_name, market_id, target_date):
                 log(f"   ⏭️ Duplikat übersprungen: {match_name} ({market_id})")
+                continue
+
+            # 🛡️ Safe Filter: schlechte Ligen ausfiltern
+            _league_str = str(tip.get("league","") or tip.get("competition","") or "").lower()
+            _skip_keywords = ["reserve", "women", "u20", "u21", "u19", "u18", "youth",
+                              "frauen", "reserva", "damen", "feminine", "femini",
+                              "amateur", "friendly", "freundschaft"]
+            if any(_kw in _league_str for _kw in _skip_keywords):
+                log(f"   ⏭️ Liga gefiltert: {match_name} ({_league_str[:30]})")
                 continue
 
             # ✅ NEUES FORMAT - Variante 3
@@ -13904,6 +13885,11 @@ def send_top_tips(tips_by_market, target_date):
         # Kein Footer - direkt Tipps ohne Zusammenfassung
 
     log(f"Gespeichert in Supabase: {saved}")
+    # Markt-Auswertung in jede Gruppe senden
+    try:
+        _send_daily_auswertung_to_all_groups()
+    except Exception as _ae:
+        log(f"Auswertung Error: {str(_ae)[:50]}", "WARN")
 
 
 # ============================================================
@@ -19022,6 +19008,10 @@ def integrate_edge_filter_into_pipeline(tips_by_market: Dict[str, List[Dict]],
         combos = build_cross_match_combos(filtered)
 
     _log("EDGE", f"🎯 FINAL: {total_after}/{total_before} Tipps, {len(combos)} Combos")
+    # Safe: max 12 Tipps pro Markt
+    for _mk2 in list(kept.keys()):
+        if len(kept[_mk2]) > 12:
+            kept[_mk2] = kept[_mk2][:12]
     return {
         "filtered_tips": filtered,
         "combos": combos,
@@ -19811,7 +19801,7 @@ def main():
             _preload_r = requests.get(
                 f"{SUPABASE_URL}/rest/v1/tips",
                 headers={"apikey": SUPABASE_KEY, "Authorization": f"Bearer {SUPABASE_KEY}"},
-                params={"date": f"eq.{target_date}", "select": "match,market", "limit": "500"},
+                params={"date": f"eq.{target_date}", "select": "match,market", "limit": "1000"},
                 timeout=8,
             )
             if _preload_r.ok:
@@ -19819,7 +19809,7 @@ def main():
                 for _row in (_preload_r.json() or []):
                     _m = normalize_team_name(_row.get("match",""))
                     _mk = _row.get("market","")
-                    _ck = f"{_m[:20]}_{_mk}_{target_date}"
+                    _ck = f"{_m[:50]}_{_mk}_{target_date}"
                     _SENT_TIPS_CACHE.add(_ck)
                     _preload_count += 1
                 log(f"   📋 Cache vorgeladen: {_preload_count} heutige Tips aus Supabase")
