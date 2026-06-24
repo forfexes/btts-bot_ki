@@ -18103,13 +18103,16 @@ def run_pinnacle_props_bot(win_start_utc=None, win_end_utc=None, ch_tz=None, top
         _pp_dedup.add(_dk)
         _STAT_INSIGHT_SENT_TODAY.add(_dk)
         _odds_str = f" @ <b>{odds_dec}</b>" if odds_dec and float(odds_dec) > 1.0 else ""
+        _nl = "\n"
+        _ko_part = f" \u00B7 \u23F0 {ko_s}" if ko_s else ""
+        _extra_part = f"   {extra}\n" if extra else ""
         _msg = (
             f"\U0001F3AF <b>PLAYER PROP</b>\n"
             f"\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\n"
-            f"\u26BD <b>{match}</b>{(' \u00B7 \u23F0 ' + ko_s) if ko_s else ''}\n\n"
+            f"\u26BD <b>{match}</b>{_ko_part}\n\n"
             f"\U0001F464 <b>{player}</b>\n"
             f"   {icon} {market}{_odds_str}\n"
-            f"{('   ' + extra + chr(10)) if extra else ''}"
+            f"{_extra_part}"
             f"\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\n"
             f"<i>\U0001F4CA {source}</i>"
         )
