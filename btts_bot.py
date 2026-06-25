@@ -84,9 +84,9 @@ API_FOOTBALL_KEYS = []
 API_FOOTBALL_KEY = ""
 
 # ============================================================
-# THESTATSAPI - Key Rotation
+# THESTATSAPI - robuste Key Rotation
 # Secret: THESTATSAPI_KEY = key1,key2,key3,key4
-# Optional auch: THESTATSAPI_KEYS
+# Optional: THESTATSAPI_KEYS = key1,key2,key3,key4
 # ============================================================
 
 THESTATSAPI_KEYS = env_list("THESTATSAPI_KEYS")
@@ -99,32 +99,69 @@ TSA_BAD_KEYS = set()
 
 def get_tsa_key():
     global TSA_KEY_INDEX
-
-    good_keys = [k for k in THESTATSAPI_KEYS if k not in TSA_BAD_KEYS]
+    good_keys = [k for k in THESTATSAPI_KEYS if k and k not in TSA_BAD_KEYS]
     if not good_keys:
         return ""
-
     key = good_keys[TSA_KEY_INDEX % len(good_keys)]
     TSA_KEY_INDEX += 1
     return key
-
 
 def mark_tsa_bad(key):
     if key:
         TSA_BAD_KEYS.add(key)
 
-
 def tsa_headers():
     key = get_tsa_key()
     if not key:
         return None, ""
-
     return {
         "Authorization": f"Bearer {key}",
         "x-api-key": key,
         "Accept": "application/json",
         "User-Agent": "NETRATTLER/1.0",
     }, key
+
+def tsa_get_json(url, params=None, timeout=20, retries=None):
+    """TheStatsAPI Request mit automatischer Key-Rotation."""
+    if retries is None:
+        retries = max(1, len(THESTATSAPI_KEYS))
+
+    last_error = None
+    for _ in range(retries):
+        headers, current_key = tsa_headers()
+        if not headers:
+            log("🚀 TSA: Keine gültigen API Keys vorhanden", "WARN")
+            return None
+
+        try:
+            r = requests.get(url, headers=headers, params=params or {}, timeout=timeout)
+
+            if r.status_code in (401, 403):
+                log(f"🚀 TSA Key ungültig/gesperrt → {current_key[:8]}...", "WARN")
+                mark_tsa_bad(current_key)
+                last_error = f"HTTP {r.status_code}"
+                continue
+
+            if r.status_code == 429:
+                log(f"🚀 TSA Rate Limit → {current_key[:8]}...", "WARN")
+                mark_tsa_bad(current_key)
+                last_error = "HTTP 429"
+                continue
+
+            if not r.ok:
+                log(f"🚀 TSA HTTP {r.status_code}: {r.text[:160]}", "WARN")
+                last_error = f"HTTP {r.status_code}"
+                continue
+
+            return r.json()
+
+        except Exception as e:
+            last_error = str(e)
+            log(f"🚀 TSA Request Fehler: {e}", "WARN")
+
+    log(f"🚀 TSA: Alle Keys erschöpft/ungültig ({last_error})", "WARN")
+    return None
+
 
 TELEGRAM_TOKEN = env("TELEGRAM_TOKEN")
 TELEGRAM_CHAT_ID = env("TELEGRAM_CHAT_ID")
