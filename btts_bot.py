@@ -8244,7 +8244,7 @@ def _fotmob_find_team_id(team_name):
                 if team_id:
                     break
     except Exception as _fte:
-        log(f"   🔍 FOTMOB-TEAM-DEBUG: '{team_name}' → Fehler {str(_fte)[:60]}", "WARN")
+        pass
 
     FOTMOB_TEAM_ID_CACHE[cache_key] = team_id
     return team_id
@@ -8263,7 +8263,6 @@ def get_fotmob_player_season_stats(team_name):
     players = []
     team_id = _fotmob_find_team_id(team_name)
     if not team_id:
-        log(f"   🔍 FOTMOB-TEAM-DEBUG: keine Team-ID für '{team_name}' gefunden")
         FOTMOB_PLAYER_STATS_CACHE[cache_key] = players
         return players
 
@@ -18510,7 +18509,7 @@ def run_pinnacle_props_bot(win_start_utc=None, win_end_utc=None, ch_tz=None, top
         def _send_builder(legs, style="", variant=""):
             nonlocal _pp_total
             t = _tod(legs)
-            if t < 1.50: return False
+            if t < 2.50: return False  # min 2.50
             srcs = list(dict.fromkeys(l["source"] for l in legs))
             cats = list(dict.fromkeys(l["category"] for l in legs))
             icons = "".join(dict.fromkeys(_CAT_ICONS.get(c,"🎯") for c in cats))
@@ -18625,7 +18624,9 @@ def run_pinnacle_props_bot(win_start_utc=None, win_end_utc=None, ch_tz=None, top
 
         # Baue verschiedene Größen: 6→5→4→3 Legs
         _gk_yc = f"AY_YC_{_pp_today}"
-        if _gk_yc not in _builder_sent_today and len(_yc_unique) >= 3:
+        if _gk_yc in _STAT_INSIGHT_SENT_TODAY: 
+            log("   🟨 Aystar Booking: bereits heute gesendet")
+        elif _gk_yc not in _builder_sent_today and len(_yc_unique) >= 3:
             _used_yc_p = set()
             _yc_legs = []
             for _yp in _yc_unique:
@@ -18638,9 +18639,10 @@ def run_pinnacle_props_bot(win_start_utc=None, win_end_utc=None, ch_tz=None, top
                 legs = _yc_legs[:_sz]
                 t = _tod(legs)
                 # Aystar Ziel: 10-80 Quote
-                if 5.0 <= t <= 80.0:
+                if 8.0 <= t <= 75.0:
                     if _send_builder(legs, "AYSTAR BOOKING"):
                         _builder_sent_today.add(_gk_yc)
+                        _STAT_INSIGHT_SENT_TODAY.add(_gk_yc)
                         break
 
         # ── AYSTAR MIX: SCORE/ASSIST + BOOKING ─────────────────────
@@ -18700,7 +18702,9 @@ def run_pinnacle_props_bot(win_start_utc=None, win_end_utc=None, ch_tz=None, top
                     _t = _tod(_cross[:_sz])
                     if _t <= 50.0:  # Cap: max 50/1
                         if _send_builder(_cross[:_sz], "CROSS-MATCH"):
-                            _builder_sent_today.add(_gk_cross); break
+                            _builder_sent_today.add(_gk_cross)
+                            _STAT_INSIGHT_SENT_TODAY.add(_gk_cross)
+                            break
 
         # ── CATEGORY BUILDERS ──────────────────────────────────────
         # Shots on Target Builder, Tackles Builder etc.
@@ -18723,12 +18727,18 @@ def run_pinnacle_props_bot(win_start_utc=None, win_end_utc=None, ch_tz=None, top
                 t = _tod(_clegs[:_sz])
                 if t >= 2.0:
                     if _send_builder(_clegs[:_sz], f"CAT {_c.upper()}"):
-                        _builder_sent_today.add(_gk_c); break
+                        _builder_sent_today.add(_gk_c)
+                        _STAT_INSIGHT_SENT_TODAY.add(_gk_c)
+                        break
 
         log(f"   \U0001f3d7 Builder gesamt: {_pp_total} gesendet")
 
 
 
+
+    # Prüfe ob DB Builder schon gesendet hat
+    _db_builders_done = len(_builder_sent_today)
+    log(f"   DB Builder fertig: {_db_builders_done} gesendet")
 
     if PLAYWRIGHT_AVAILABLE:
         import re as _re_pp, json as _json_pp
