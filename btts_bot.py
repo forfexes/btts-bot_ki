@@ -18165,8 +18165,29 @@ def run_pinnacle_props_bot(win_start_utc=None, win_end_utc=None, ch_tz=None, top
     # ═══════════════════════════════════════════════════════════════════
 
     _FULL_CAT_MAP = {
+        # Team-Props (GodTipsterr Style)
+        "team_shots":   ["home team shots","away team shots","team shots","total shots",
+                         "over 6.5 shots","over 7.5 shots","over 8.5 shots","over 9.5 shots",
+                         "over 10.5 shots","over 11.5 shots","over 12.5 shots","over 13.5 shots",
+                         "home team total shots","shots on target 3-way","over 2.5 shots on target"],
+        "team_corners": ["most corners","corner match","team corners","to win corners",
+                         "over 7 corners","over 8 corners","over 9 corners","over 10 corners",
+                         "over 11 corners","total corners","team total corners","over 0 corners",
+                         "1+ corners in half"],
+        "team_cards":   ["both teams to receive","teams to receive a card","team to receive",
+                         "most cards","team cards","both teams to receive a card"],
+        "throw_ins":    ["throw in","throw-in","total throw ins","over 32.5","over 30.5"],
+        "btts":         ["both teams to score","btts"],
+        "over_goals":   ["over 1 goal","over 2 goals","over 2.5","total goals 2","total goals 3",
+                         "home team total goals","over 0 goals","total goals 3-way"],
+        "ht_props":     ["to score in the 1st half","score in 1st half","1st half goals",
+                         "both teams to score 1st half","halftime"],
+        "fouls_won":    ["fouls won","1+ fouls won","to be fouled","alternative player to be fouled",
+                         "player to be fouled"],
+        # Spieler-Props
         "score":        ["to score","anytime goalscorer","first goalscorer","last goalscorer",
-                         "anytime scorer","to get on scoresheet","goal matchup"],
+                         "anytime scorer","to get on scoresheet","goal matchup",
+                         "score a header","header goal"],
         "assist":       ["to assist","1+ assist","2+ assist","3+ assist"],
         "score_assist": ["score or assist","to score or assist","score and assist"],
         "yellow_cards": ["to be booked","yellow card","receive a card","be carded",
@@ -18193,11 +18214,16 @@ def run_pinnacle_props_bot(win_start_utc=None, win_end_utc=None, ch_tz=None, top
         "red_card":"🟥","sot":"🎯","shots":"💥","tackles":"🦵","fouls":"🦵",
         "saves":"🧤","offsides":"🏃","passes":"📋","corners":"🔵",
         "free_kicks":"🦶","throw_ins":"🤾","goal_kicks":"🥅",
+        "team_shots":"💥","team_corners":"🔵","team_cards":"🃏",
+        "btts":"⚽","over_goals":"⚽","ht_props":"⏱️",
+        "throw_ins":"🤾","fouls_won":"🦵",
     }
 
-    # Builder-würdige Kategorien (nicht Corners/Free Kicks für Player Props)
+    # Builder-würdige Kategorien
     _BUILDER_CATS = ["score","assist","score_assist","yellow_cards","sot","shots",
-                     "tackles","fouls","saves","offsides","passes","red_card"]
+                     "tackles","fouls","saves","offsides","passes","red_card",
+                     "team_shots","team_corners","team_cards","btts","over_goals",
+                     "ht_props","throw_ins","fouls_won"]
 
     def _cat(market_name):
         mn = market_name.lower()
@@ -18225,13 +18251,18 @@ def run_pinnacle_props_bot(win_start_utc=None, win_end_utc=None, ch_tz=None, top
 
     def _add(player, team, match, league, market, odds, prob=0, model_prob=0, source="", ko=""):
         if not player or not market or not match: return
-        # Generische Namen filtern
         _skip_names = {"either team","player","both teams","team","yes","no",
                        "either player","home team","away team","a player"}
         if player.strip().lower() in _skip_names: return
         if len(player.strip()) < 3: return
         c = _cat(market)
         if c == "other": return
+        # StatsBomb Hit Rate Lookup
+        _sb = _SB_HR.get(player.strip(), {})
+        _hr_map = {"fouls":"hr_foul","fouls_won":"hr_foul_won","sot":"hr_sot",
+                   "shots":"hr_sot","yellow_cards":"hr_yc","score":"hr_goal"}
+        _sb_prob = _sb.get(_hr_map.get(c,""), 0) / 100 if _sb else 0
+        _best_prob = max(float(model_prob) if model_prob else 0, _sb_prob)
         _prop_db.append({
             "player": player.strip()[:80],
             "team": (team or "")[:60],
@@ -18241,12 +18272,72 @@ def run_pinnacle_props_bot(win_start_utc=None, win_end_utc=None, ch_tz=None, top
             "category": c,
             "line": _line(market),
             "odds": float(odds) if odds else 0.0,
-            "prob": int(prob),
-            "model_prob": float(model_prob) if model_prob else 0.0,
+            "prob": int(_sb_prob*100) if _sb_prob else int(prob),
+            "model_prob": _best_prob,
             "source": source,
             "ko": ko,
             "icon": _CAT_ICONS.get(c, "🎯"),
+            "sb_games": _sb.get("g", 0),
+            "hit_rate": int(_sb_prob*100) if _sb_prob else 0,
         })
+
+    # ── STATSBOMB HIT RATES laden ──────────────────────────────
+    _SB_HR = {}  # {spielername: {hr_foul, hr_sot, hr_yc, hr_goal, ...}}
+    try:
+        import json as _jsb, math as _msb, requests as _rsb
+        _SB_TOURNAMENTS = [(43,106),(55,282),(223,282)]  # WM22, Euro24, Copa24
+        _sb_db = {}
+        def _sb_hr(n, g):
+            avg = n/g if g > 0 else 0
+            return round((1-_msb.exp(-avg))*100,1) if avg > 0 else 0
+        
+        # Versuche gecachte Datei zuerst
+        import os as _os
+        _sb_cache = "/tmp/sb_hit_rates.json"
+        if _os.path.exists(_sb_cache):
+            with open(_sb_cache) as _f:
+                _SB_HR = _jsb.load(_f)
+            log(f"   📊 StatsBomb HR Cache: {len(_SB_HR)} Spieler")
+        else:
+            from collections import defaultdict as _dd_sb
+            _pdb = _dd_sb(lambda: {"g":0,"shots":0,"sot":0,"fc":0,"fw":0,"yc":0,"goals":0})
+            for _cid, _sid in _SB_TOURNAMENTS:
+                try:
+                    _ms = _rsb.get(f"https://raw.githubusercontent.com/statsbomb/open-data/master/data/matches/{_cid}/{_sid}.json", timeout=10).json()
+                    for _m in _ms:
+                        _mid = _m["match_id"]
+                        try:
+                            _evs = _rsb.get(f"https://raw.githubusercontent.com/statsbomb/open-data/master/data/events/{_mid}.json", timeout=8).json()
+                            _seen = set()
+                            for _e in _evs:
+                                _p = (_e.get("player") or {}).get("name","")
+                                if not _p: continue
+                                _et = (_e.get("type") or {}).get("name","")
+                                if _p not in _seen: _pdb[_p]["g"]+=1; _seen.add(_p)
+                                if _et=="Shot":
+                                    _pdb[_p]["shots"]+=1
+                                    _o=(_e.get("shot") or {}).get("outcome",{}).get("name","")
+                                    if _o=="Goal": _pdb[_p]["goals"]+=1
+                                    if _o in ["Saved","Saved to Post","Blocked"]: _pdb[_p]["sot"]+=1
+                                elif _et=="Foul Committed": _pdb[_p]["fc"]+=1
+                                elif _et=="Foul Won": _pdb[_p]["fw"]+=1
+                                elif _et=="Bad Behaviour":
+                                    if "Yellow" in (_e.get("bad_behaviour") or {}).get("card",{}).get("name",""): _pdb[_p]["yc"]+=1
+                        except: pass
+                except: pass
+            for _p, _s in _pdb.items():
+                if _s["g"] < 2: continue
+                _SB_HR[_p] = {
+                    "g":_s["g"], "hr_foul":_sb_hr(_s["fc"],_s["g"]),
+                    "hr_sot":_sb_hr(_s["sot"],_s["g"]), "hr_yc":_sb_hr(_s["yc"],_s["g"]),
+                    "hr_goal":_sb_hr(_s["goals"],_s["g"]),
+                    "hr_foul_won":_sb_hr(_s["fw"],_s["g"]),
+                    "avg_shots":round(_s["shots"]/_s["g"],2) if _s["g"]>0 else 0,
+                }
+            with open(_sb_cache,"w") as _f: _jsb.dump(_SB_HR,_f)
+            log(f"   📊 StatsBomb HR geladen: {len(_SB_HR)} Spieler (WM22+Euro24+Copa24)")
+    except Exception as _esb:
+        log(f"   StatsBomb HR: {str(_esb)[:60]}", "WARN")
 
     # ── QUELLE 1: PINNACLE ─────────────────────────────────────────
     try:
@@ -18272,16 +18363,21 @@ def run_pinnacle_props_bot(win_start_utc=None, win_end_utc=None, ch_tz=None, top
                 _player = _player_from_prop(_pname)
                 _market = _pname
             if not _player or len(_player) < 2: continue
-            # Team-Props filtern: kein Spielername wenn es ein Team ist
-            _skip_prop_terms = [
-                "to score?","to score ", "both teams","either team","either player",
-                "team to score","1st half","2nd half","match result","both teams to",
-                "winner","who scores first","first team to","btts","over ","under ",
-            ]
+            # Kategorisiere: Team-Prop oder Spieler-Prop?
             _pname_l = _pname.lower()
-            if any(t in _pname_l for t in _skip_prop_terms): continue
-            # Nur echte Spielernamen: min 2 Wörter, kein Teamname
-            if len(_player.split()) < 2: continue
+            _is_team_prop = any(t in _pname_l for t in [
+                "both teams to score","btts","either team to score",
+                "total goals","over 2 goals","over 1 goal",
+                "home team shots","away team shots","total shots",
+                "most corners","corner match","both teams to receive",
+                "team to get most","team total",
+            ])
+            # Spieler-Props brauchen echten Namen (min 2 Wörter)
+            if not _is_team_prop and len(_player.split()) < 2: continue
+            # Team-Props: player = match oder team name
+            if _is_team_prop:
+                _pts = _match.split(" vs ", 1)
+                _player = _pts[0].strip() if _pts else _player  # Home Team als Player
             _pts = _match.split(" vs ")
             _team = ""
             _add(_player, _team, _match, _p.get("league",""), _market,
@@ -18506,35 +18602,38 @@ def run_pinnacle_props_bot(win_start_utc=None, win_end_utc=None, ch_tz=None, top
                 if l["odds"] > 1.0: t *= l["odds"]
             return round(t, 2)
 
-        def _send_builder(legs, style="", variant=""):
+        def _send_builder(legs, style="", variant="", high_roller=False):
             nonlocal _pp_total
             t = _tod(legs)
-            if t < 2.50: return False  # min 2.50
+            # Standard: 2.5-50/1 | High Roller: 50-600/1
+            _min = 50.0 if high_roller else 2.50
+            _max = 600.0 if high_roller else 50.0
+            if t < _min or t > _max: return False
             srcs = list(dict.fromkeys(l["source"] for l in legs))
             cats = list(dict.fromkeys(l["category"] for l in legs))
             icons = "".join(dict.fromkeys(_CAT_ICONS.get(c,"🎯") for c in cats))
             var_s = f" <i>({variant})</i>" if variant else ""
-            # Quote als X/1 Format wenn möglich (Nate Style)
-            _frac = f"{int(round(t-1))}/1" if t >= 2.0 and t == int(t) else f"{t:.2f}"
-            msg = (f"\U0001f3d7\ufe0f <b>BET BUILDER {_frac}</b> {icons}{var_s}{NL}{SEP}{NL}")
+            _frac = f"{int(round(t-1))}/1" if t >= 2.0 and t == int(round(t)) else f"{t:.2f}"
+            _hr_tag = " \U0001f680 <b>HIGH ROLLER</b>" if high_roller else ""
+            _stake = "0.25u 🎲" if high_roller else "0.5u"
+            msg = (f"\U0001f3d7\ufe0f <b>BET BUILDER {_frac}</b>{_hr_tag} {icons}{var_s}{NL}{SEP}{NL}")
             for i, l in enumerate(legs, 1):
                 o = f" @ {l['odds']:.2f}" if l["odds"]>1.0 else ""
                 conf = ""
                 if l.get("model_prob",0)>0: conf = f" ({l['model_prob']*100:.0f}%)"
                 elif l.get("prob",0)>0: conf = f" ({l['prob']}%)"
-                # Hit Rate aus form falls vorhanden
-                hr = f" · L5: {l.get('hit_rate','')}%" if l.get("hit_rate") else ""
+                hr_str = f" · L5: {l.get('hit_rate','')}%" if l.get("hit_rate") else ""
                 match_line = f"   \u26bd {l['match']}{NL}" if len(set(x["match"] for x in legs))>1 else ""
                 msg += f"{i}. {l['icon']} <b>{l['player']}</b>{NL}"
-                msg += f"   {l['market']}{o}{conf}{hr}{NL}"
+                msg += f"   {l['market']}{o}{conf}{hr_str}{NL}"
                 msg += match_line
             if len(set(x["match"] for x in legs)) == 1:
                 msg += f"\u26bd <b>{legs[0]['match']}</b>{NL}"
-            msg += f"{SEP}{NL}\U0001f4b0 @ <b>{t:.2f}</b> \u00b7 0.5u{NL}"
+            msg += f"{SEP}{NL}\U0001f4b0 @ <b>{_frac}</b> \u00b7 {_stake}{NL}"
             msg += f"<i>\U0001f4ca {' + '.join(srcs)}</i>"
             send_telegram(msg, chat_id=_pp_chat)
             _pp_total += 1
-            log(f"   \U0001f3d7 {style} {len(legs)}L @ {t:.2f}")
+            log(f"   {'\U0001f680' if high_roller else '\U0001f3d7'} {style} {len(legs)}L @ {t:.2f}")
             return True
 
         # Props gruppieren
@@ -18602,6 +18701,36 @@ def run_pinnacle_props_bot(win_start_utc=None, win_end_utc=None, ch_tz=None, top
                     if _built:
                         _builder_sent_today.add(_gk)
 
+        # ── GODTIPSTERR STYLE: EIN SPIELER, ALLE KATEGORIEN ─────
+        # Haaland: Score 2+ + 4+ SOT + 2+ Fouls Won (verschiedene Märkte, ein Spieler)
+        log(f"   ⚡ GodTipsterr Builder...")
+        for _match, _players in list(_by_match.items())[:25]:
+            for _player, _cats in list(_players.items()):
+                # Nur wenn Spieler in 2+ verschiedenen Kategorien vorkommt
+                _avail_cats = [(c, ps) for c, ps in _cats.items() 
+                               if c in _BUILDER_CATS and any(p["odds"] <= 8.0 for p in ps)]
+                if len(_avail_cats) < 2: continue
+                _gk = f"GOD_{_player[:15]}_{_match[:20]}_{_pp_today}"
+                if _gk in _builder_sent_today: continue
+
+                # Beste Prop pro Kategorie
+                _god_legs = []
+                for _c, _props in sorted(_avail_cats, 
+                                          key=lambda x: max(p["model_prob"] or p["prob"]/100 for p in x[1]), 
+                                          reverse=True)[:5]:
+                    _best = sorted(_props, key=lambda x: x["model_prob"] or x["prob"]/100, reverse=True)[0]
+                    if _best["odds"] <= 8.0:
+                        _god_legs.append(_best)
+
+                if len(_god_legs) < 2: continue
+
+                # Varianten 5→4→3→2 Legs
+                for _sz in range(min(len(_god_legs), 5), 1, -1):
+                    if _send_builder(_god_legs[:_sz], "GOD", f"{_player}"):
+                        _builder_sent_today.add(_gk)
+                        _STAT_INSIGHT_SENT_TODAY.add(_gk)
+                        break
+
         # ── AYSTAR STYLE: BOOKING BUILDER ──────────────────────────
         # Mehrere Spieler To Be Booked, verschiedene Spiele, Quote 13-61
         log(f"   🟨 Aystar Booking Builder...")
@@ -18624,7 +18753,7 @@ def run_pinnacle_props_bot(win_start_utc=None, win_end_utc=None, ch_tz=None, top
 
         # Baue verschiedene Größen: 6→5→4→3 Legs
         _gk_yc = f"AY_YC_{_pp_today}"
-        if _gk_yc in _STAT_INSIGHT_SENT_TODAY: 
+        if _gk_yc in _STAT_INSIGHT_SENT_TODAY:
             log("   🟨 Aystar Booking: bereits heute gesendet")
         elif _gk_yc not in _builder_sent_today and len(_yc_unique) >= 3:
             _used_yc_p = set()
@@ -18635,15 +18764,27 @@ def run_pinnacle_props_bot(win_start_utc=None, win_end_utc=None, ch_tz=None, top
                 _used_yc_p.add(_yp["player"])
                 if len(_yc_legs) >= 6: break
 
-            for _sz in range(min(len(_yc_legs), 5), 2, -1):
+            # Standard: 3L, Ziel 8-50/1
+            _std_sent = False
+            for _sz in range(3, min(len(_yc_legs)+1, 5)):
                 legs = _yc_legs[:_sz]
                 t = _tod(legs)
-                # Aystar Ziel: 10-80 Quote
-                if 8.0 <= t <= 75.0:
+                if 8.0 <= t <= 50.0:
                     if _send_builder(legs, "AYSTAR BOOKING"):
-                        _builder_sent_today.add(_gk_yc)
-                        _STAT_INSIGHT_SENT_TODAY.add(_gk_yc)
+                        _std_sent = True
                         break
+
+            # High Roller: 5-6L, Ziel 50-500/1
+            _gk_yc_hr = f"AY_YC_HR_{_pp_today}"
+            if _gk_yc_hr not in _STAT_INSIGHT_SENT_TODAY and len(_yc_legs) >= 4:
+                for _sz in range(min(len(_yc_legs), 6), 3, -1):
+                    legs = _yc_legs[:_sz]
+                    if _send_builder(legs, "AYSTAR BOOKING HR", high_roller=True):
+                        _STAT_INSIGHT_SENT_TODAY.add(_gk_yc_hr)
+                        break
+
+            _builder_sent_today.add(_gk_yc)
+            _STAT_INSIGHT_SENT_TODAY.add(_gk_yc)
 
         # ── AYSTAR MIX: SCORE/ASSIST + BOOKING ─────────────────────
         # Score or Assist + To Be Booked gemischt
@@ -18678,6 +18819,42 @@ def run_pinnacle_props_bot(win_start_utc=None, win_end_utc=None, ch_tz=None, top
                 if _send_builder(_mix_legs[:_sz], "MIX"):
                     _builder_sent_today.add(_gk_mix); break
 
+        # ── MULTI-MARKET BUILDER (GodTipsterr Mix) ──────────────
+        # BTTS + Over Goals + Team Shots + Player Props kombiniert
+        # Nutze Pinnacle Props + BTTS Tips zusammen
+        _gk_mm = f"MM_{_pp_today}"
+        if _gk_mm not in _builder_sent_today:
+            _mm_legs = []
+            _mm_used_m = set()
+            _mm_used_c = set()
+
+            # Priorität: YC > Score > SOT > Team Props > Tackles
+            for _cat_prio in ["yellow_cards","score","sot","team_shots","team_corners",
+                              "team_cards","btts","over_goals","ht_props","tackles",
+                              "fouls","fouls_won","saves"]:
+                _cprops = _by_cat_all.get(_cat_prio, [])
+                if not _cprops: continue
+                _best = sorted(_cprops, key=lambda x: x["model_prob"] or x["prob"]/100, reverse=True)
+                for _bp in _best:
+                    if _bp["match"] in _mm_used_m and _cat_prio not in ["yellow_cards"]: continue
+                    if _bp["category"] in _mm_used_c: continue
+                    if _bp["odds"] > 7.0: continue
+                    if len(_bp["player"].split()) < 2: continue  # echte Spielernamen
+                    _mm_legs.append(_bp)
+                    _mm_used_c.add(_bp["category"])
+                    _mm_used_m.add(_bp["match"])
+                    if len(_mm_legs) >= 5: break
+                if len(_mm_legs) >= 5: break
+
+            if len(_mm_legs) >= 3:
+                for _sz in range(min(len(_mm_legs),5), 2, -1):
+                    _t = _tod(_mm_legs[:_sz])
+                    if 3.0 <= _t <= 50.0:
+                        if _send_builder(_mm_legs[:_sz], "MULTI-MKT"):
+                            _builder_sent_today.add(_gk_mm)
+                            _STAT_INSIGHT_SENT_TODAY.add(_gk_mm)
+                            break
+
         # ── CROSS-MATCH BUILDER ────────────────────────────────────
         # Beste Props aus verschiedenen Spielen (Aystar macht das auch)
         _gk_cross = f"CROSS_{_pp_today}"
@@ -18704,11 +18881,17 @@ def run_pinnacle_props_bot(win_start_utc=None, win_end_utc=None, ch_tz=None, top
                         if _send_builder(_cross[:_sz], "CROSS-MATCH"):
                             _builder_sent_today.add(_gk_cross)
                             _STAT_INSIGHT_SENT_TODAY.add(_gk_cross)
+                            # High Roller: mehr Legs
+                            _gk_cross_hr = f"CROSS_HR_{_pp_today}"
+                            if _gk_cross_hr not in _STAT_INSIGHT_SENT_TODAY and len(_cross) > _sz:
+                                if _send_builder(_cross[:min(len(_cross),6)],
+                                                 "CROSS-MATCH HR", high_roller=True):
+                                    _STAT_INSIGHT_SENT_TODAY.add(_gk_cross_hr)
                             break
 
         # ── CATEGORY BUILDERS ──────────────────────────────────────
         # Shots on Target Builder, Tackles Builder etc.
-        for _c in ["sot", "tackles", "fouls", "saves", "offsides"]:
+        for _c in ["sot", "tackles", "fouls", "saves", "offsides", "fouls_won", "yellow_cards"]:
             _gk_c = f"CAT_{_c}_{_pp_today}"
             if _gk_c in _builder_sent_today: continue
             _cprops = _by_cat_all.get(_c, [])
