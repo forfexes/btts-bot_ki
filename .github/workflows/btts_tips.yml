@@ -38,7 +38,12 @@ jobs:
           AI_SLEEP_SECONDS: "0.1"
           GROQ_SLEEP_SECONDS: "0.5"
 
-          ENABLE_CORNERS_SCORER: "false"
+          ENABLE_CORNERS_SCORER: "true"
+          ENABLE_CORNERS_BOT: "true"
+          ENABLE_SCORER_BOT: "false"
+          INCLUDE_CORNERS_IN_MULTI: "true"
+          CORNER_COMBO_MIN_PROB: "64"
+          MULTI_COMBO_MAX_CORNERS: "2"
           ENABLE_ADVANCED_PROPS: "true"
           ENABLE_AI_ADVANCED_PROPS: "false"
           PROP_WINDOW_HOURS: "12"
@@ -49,7 +54,7 @@ jobs:
           ENABLE_PROP_FBREF_CHECK: "false"
           ENABLE_PROP_ODDSPEDIA: "false"
           ENABLE_PROP_FOTMOB: "false"
-          MULTI_COMBO_SIZES: "3,4,5"
+          MULTI_COMBO_SIZES: "3,4,5,6,7,8,9,10,11"
 
           APIFOOTBALL_DISABLED: "true"
           API_FOOTBALL_KEY: ""
