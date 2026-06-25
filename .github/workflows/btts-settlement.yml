@@ -2,9 +2,7 @@ name: NETRATTLER Settlement
 
 on:
   schedule:
-    # Alle 6 Stunden
-    - cron: "0 */6 * * *"
-
+    - cron: "15 */6 * * *"
   workflow_dispatch:
 
 jobs:
@@ -21,34 +19,31 @@ jobs:
         with:
           python-version: "3.11"
 
-      - name: Install Dependencies
+      - name: Install requirements
         run: |
           python -m pip install --upgrade pip
-          pip install -r requirements.txt
+          if [ -f requirements.txt ]; then pip install -r requirements.txt; fi
 
       - name: Run Settlement
         env:
           SUPABASE_URL: ${{ secrets.SUPABASE_URL }}
           SUPABASE_KEY: ${{ secrets.SUPABASE_KEY }}
-
-          ODDS_API_KEYS: ${{ secrets.ODDS_API_KEYS }}
-          FOOTBALL_DATA_API_KEYS: ${{ secrets.FOOTBALL_DATA_API_KEYS }}
-          THESTATSAPI_KEY: ${{ secrets.THESTATSAPI_KEY }}
-
           TELEGRAM_TOKEN: ${{ secrets.TELEGRAM_TOKEN }}
           TELEGRAM_CHAT_ID: ${{ secrets.TELEGRAM_CHAT_ID }}
+          TELEGRAM_GROUP_BTTS: ${{ secrets.TELEGRAM_GROUP_BTTS }}
+          TELEGRAM_GROUP_OVER25: ${{ secrets.TELEGRAM_GROUP_OVER25 }}
+          TELEGRAM_GROUP_COMBO: ${{ secrets.TELEGRAM_GROUP_COMBO }}
+          TELEGRAM_GROUP_BTTS_HT: ${{ secrets.TELEGRAM_GROUP_BTTS_HT }}
+          TELEGRAM_GROUP_OVER15_HT: ${{ secrets.TELEGRAM_GROUP_OVER15_HT }}
           TELEGRAM_GROUP_STATS: ${{ secrets.TELEGRAM_GROUP_STATS }}
-
+          TELEGRAM_GROUP_HZ_LIVE: ${{ secrets.TELEGRAM_GROUP_HZ_LIVE }}
+          TELEGRAM_GROUP_LATE_GOALS: ${{ secrets.TELEGRAM_GROUP_LATE_GOALS }}
+          TELEGRAM_GROUP_ADVANCED_PROPS: ${{ secrets.TELEGRAM_GROUP_ADVANCED_PROPS }}
+          FOOTBALL_DATA_API_KEYS: ${{ secrets.FOOTBALL_DATA_API_KEYS }}
+          FOOTBALL_DATA_API_KEY: ${{ secrets.FOOTBALL_DATA_API_KEY }}
+          THESTATSAPI_KEY: ${{ secrets.THESTATSAPI_KEY }}
+          API_FOOTBALL_KEY: ""
+          APIFOOTBALL_DISABLED: "true"
         run: |
           echo "⚽ NETRATTLER Settlement startet..."
           python settlement.py
-
-      - name: Upload Logs
-        if: always()
-        uses: actions/upload-artifact@v4
-        with:
-          name: settlement-logs
-          path: |
-            *.log
-            *.json
-          if-no-files-found: ignore
