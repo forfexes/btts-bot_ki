@@ -13477,15 +13477,32 @@ def generate_multi_combo_bets(all_tips, num_tips=3):
                 elif prob >= 55:
                     odds = round(100 / prob, 2)  # z.B. 67% → 1.49
             if odds >= 1.40:
+                prob = int(t.get("probability", 0) or 0)
+                conf = int(t.get("confidence", 0) or 0)
+                # Falls keine Sterne gesetzt sind: aus Wahrscheinlichkeit ableiten.
+                if conf <= 0:
+                    if prob >= 72:
+                        conf = 5
+                    elif prob >= 67:
+                        conf = 4
+                    elif prob >= 62:
+                        conf = 3
+                    else:
+                        conf = 2
+                mk = t.get("market", "btts")
+                # Ecken nur in Multi-Combos, wenn sie wirklich stark genug sind.
+                if mk == "corners" and prob < int(env("CORNER_COMBO_MIN_PROB", "64")):
+                    continue
                 normalized.append({
                     "match": t.get("match", ""),
                     "league": t.get("league", ""),
-                    "market": t.get("market", "btts"),
+                    "market": mk,
                     "tip": t.get("tip", "YES"),
                     "odds": odds,
-                    "confidence": int(t.get("confidence", 0)),
+                    "confidence": conf,
                     "value_rating": t.get("valueRating", "OK"),
-                    "probability": int(t.get("probability", 0)),
+                    "probability": prob,
+                    "_combo_score": (prob * 1.0) + (conf * 6.0) - max(0, odds - 2.2) * 4.0,
                 })
         except Exception:
             continue
@@ -13496,7 +13513,7 @@ def generate_multi_combo_bets(all_tips, num_tips=3):
     # Sortiere nach Confidence + Probability
     sorted_tips = sorted(
         normalized,
-        key=lambda x: (x.get("confidence", 0), x.get("probability", 0)),
+        key=lambda x: (x.get("_combo_score", 0), x.get("probability", 0), x.get("confidence", 0)),
         reverse=True
     )
 
@@ -13504,8 +13521,28 @@ def generate_multi_combo_bets(all_tips, num_tips=3):
     if len(sorted_tips) < num_tips:
         return None
 
-    # Beste N Tipps nehmen
-    selected = sorted_tips[:num_tips]
+    # Beste N Tipps nehmen — aber sicherer:
+    # 1) keine doppelten Spiele in derselben Multi
+    # 2) Ecken nur als Zusatz, nicht komplette Corner-Multi
+    max_corners = int(env("MULTI_COMBO_MAX_CORNERS", "2"))
+    selected = []
+    seen_matches = set()
+    market_counts = {}
+    for tip in sorted_tips:
+        mkey = normalize_team_name(str(tip.get("match", "")))[:80]
+        if not mkey or mkey in seen_matches:
+            continue
+        mk = tip.get("market", "")
+        if mk == "corners" and market_counts.get("corners", 0) >= max_corners:
+            continue
+        selected.append(tip)
+        seen_matches.add(mkey)
+        market_counts[mk] = market_counts.get(mk, 0) + 1
+        if len(selected) >= num_tips:
+            break
+
+    if len(selected) < num_tips:
+        return None
 
     # Berechne Gesamt-Quote
     total_odds = 1.0
@@ -16294,6 +16331,15 @@ def run_corners_and_scorer_bots(target_date, active_leagues, odds_data_cache, fi
     group_hz = TELEGRAM_GROUPS.get("hz_live") or env("TELEGRAM_GROUP_HZ_LIVE", "")
     group_late = TELEGRAM_GROUPS.get("late_goals") or env("TELEGRAM_GROUP_LATE_GOALS", "")
 
+    if env("ENABLE_CORNERS_BOT", "true").lower() not in ["1", "true", "yes", "on"]:
+        group_hz = ""
+    if env("ENABLE_SCORER_BOT", "false").lower() not in ["1", "true", "yes", "on"]:
+        group_late = ""
+
+    # Für Multi-Combos speichern wir die besten Ecken-Tipps im Speicher.
+    run_corners_and_scorer_bots._last_corner_tips = []
+    run_corners_and_scorer_bots._last_scorer_tips = []
+
     if not group_hz and not group_late:
         log("Corners/Scorer: Keine Gruppen konfiguriert", "INFO")
         return
@@ -16427,6 +16473,18 @@ def run_corners_and_scorer_bots(target_date, active_leagues, odds_data_cache, fi
         for tip in scorer_tips:
             send_telegram(format_scorer_message(tip), group_late)
             mark_tip_sent(tip.get("match",""), "scorer", target_date)
+
+    try:
+        # Stärkste Ecken-Tipps für Multi-Combos merken.
+        run_corners_and_scorer_bots._last_corner_tips = sorted(
+            corners_tips,
+            key=lambda x: int(x.get("probability", 0) or 0),
+            reverse=True
+        )
+        run_corners_and_scorer_bots._last_scorer_tips = scorer_tips
+    except Exception:
+        run_corners_and_scorer_bots._last_corner_tips = corners_tips
+        run_corners_and_scorer_bots._last_scorer_tips = scorer_tips
 
     log(f"🔵⚽ Fertig: {corners_count} Ecken Tips, {scorer_count} Scorer Tips")
 
@@ -21787,12 +21845,31 @@ def main():
         except Exception as _ppe:
             log(f"🔑 Pinnacle Props übersprungen: {str(_ppe)[:60]}", "WARN")
 
-    # 🆕 MULTI-COMBO SYSTEM (3,4,5,6,7,8 Tipps)
+    # 🆕 MULTI-COMBO SYSTEM (3-11 Tipps, sicherste Spiele + optional Ecken)
     all_tips_flat = []
     for market_id, tips in tips_by_market.items():
         for tip in tips:
             tip["market"] = market_id
             all_tips_flat.append(tip)
+
+    # Ecken als Zusatz in Multi-Combos: nur wenn Corner Bot vorher gelaufen ist.
+    if env("INCLUDE_CORNERS_IN_MULTI", "true").lower() in ["1", "true", "yes", "on"]:
+        try:
+            _corner_combo_tips = getattr(run_corners_and_scorer_bots, "_last_corner_tips", []) or []
+            _corner_min = int(env("CORNER_COMBO_MIN_PROB", "64"))
+            _corner_added = 0
+            for ct in _corner_combo_tips:
+                if int(ct.get("probability", 0) or 0) < _corner_min:
+                    continue
+                ct = dict(ct)
+                ct["market"] = "corners"
+                ct["confidence"] = ct.get("confidence") or (5 if int(ct.get("probability",0) or 0) >= 72 else 4)
+                all_tips_flat.append(ct)
+                _corner_added += 1
+            if _corner_added:
+                log(f"🔵 Multi-Combo: {_corner_added} starke Ecken-Tipps hinzugefügt")
+        except Exception as _ce:
+            log(f"🔵 Multi-Combo Ecken übersprungen: {str(_ce)[:50]}", "WARN")
 
     if len(all_tips_flat) >= 3:
         log("")
@@ -21808,7 +21885,7 @@ def main():
         # Alle Combo-Größen generieren (3 bis 11)
         _combo_run_ts = datetime.now(timezone.utc).strftime("%H%M%S")
         generated = 0
-        for n in [int(x) for x in env("MULTI_COMBO_SIZES", "3,4,5").split(",") if x.strip().isdigit()]:
+        for n in [int(x) for x in env("MULTI_COMBO_SIZES", "3,4,5,6,7,8,9,10,11").split(",") if x.strip().isdigit()]:
             combo = generate_multi_combo_bets(all_tips_flat, num_tips=n)
             if combo:
                 # Deterministische Signatur — identische Kombi (gleiche Legs) wird nicht erneut gesendet
