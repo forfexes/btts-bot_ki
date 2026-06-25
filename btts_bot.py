@@ -273,6 +273,97 @@ SUPABASE_KEY = env("SUPABASE_KEY")
 MIN_PROBABILITY = int(env("MIN_PROBABILITY", "67"))  # 🆕 Hybrid: 67% (zwischen 65-69)
 MIN_ODDS = float(env("MIN_ODDS", "1.70"))
 MAX_ODDS = float(env("MAX_ODDS", "3.0"))
+
+# ============================================================
+# PROP BUILDER PROBABILITY FILTER
+# Gesamtquote darf hoch sein, aber Leg- und Kombi-Wahrscheinlichkeit müssen stimmen.
+# ============================================================
+PROP_BUILDER_MIN_MODEL_PROB = float(env("PROP_BUILDER_MIN_MODEL_PROB", "0.45"))   # Einzel-Leg min 45%
+PROP_BUILDER_MIN_LEG_CONF = int(env("PROP_BUILDER_MIN_LEG_CONF", "3"))
+PROP_BUILDER_MAX_SINGLE_ODDS_SAFE = float(env("PROP_BUILDER_MAX_SINGLE_ODDS_SAFE", "3.25"))
+PROP_BUILDER_MIN_COMBO_PROB = float(env("PROP_BUILDER_MIN_COMBO_PROB", "0.08"))  # Kombi min 8%
+PROP_BUILDER_ALLOW_HIGH_RISK = env("PROP_BUILDER_ALLOW_HIGH_RISK", "false").lower() in ["1", "true", "yes", "on"]
+
+def _leg_model_prob(p):
+    """Liest Modell-/Hit-Wahrscheinlichkeit einer Leg als 0-1 Wert."""
+    prob = (
+        p.get("model_prob")
+        or p.get("probability")
+        or p.get("prob")
+        or p.get("hit_rate")
+        or p.get("hit_rate_pct")
+        or 0
+    )
+    try:
+        prob = float(prob)
+        if prob > 1:
+            prob = prob / 100.0
+    except Exception:
+        prob = 0.0
+
+    if prob:
+        return max(0.01, min(0.99, prob))
+
+    try:
+        odds = float(p.get("odds") or p.get("price") or p.get("quote") or 0)
+        return 1.0 / odds if odds > 1 else 0.0
+    except Exception:
+        return 0.0
+
+
+def _safe_prop_leg(p):
+    """True nur für Prop-Builder-Legs mit realistischer Trefferchance."""
+    try:
+        odds = float(p.get("odds") or p.get("price") or p.get("quote") or 0)
+    except Exception:
+        odds = 0.0
+
+    prob = _leg_model_prob(p)
+
+    try:
+        conf = int(float(p.get("confidence") or p.get("conf") or 3))
+    except Exception:
+        conf = 3
+
+    if odds <= 1.01:
+        return False
+
+    if prob < PROP_BUILDER_MIN_MODEL_PROB:
+        return False
+
+    if conf < PROP_BUILDER_MIN_LEG_CONF:
+        return False
+
+    # Hohe Einzelquote ist erlaubt, wenn echte Modellwahrscheinlichkeit stark genug ist.
+    # Ohne echte Wahrscheinlichkeit schützt implied probability.
+    return True
+
+
+def _safe_builder_total(legs, total_odds):
+    """
+    Gesamtquote darf hoch sein.
+    Wichtig:
+    - jede Leg hat genug Wahrscheinlichkeit
+    - die kombinierte Trefferchance ist nicht zu tief
+    """
+    try:
+        if not legs:
+            return False
+
+        if not all(_safe_prop_leg(l) for l in legs):
+            return False
+
+        combo_prob = 1.0
+        for leg in legs:
+            combo_prob *= _leg_model_prob(leg)
+
+        if combo_prob < PROP_BUILDER_MIN_COMBO_PROB and not PROP_BUILDER_ALLOW_HIGH_RISK:
+            return False
+
+        return True
+    except Exception:
+        return False
+
 MIN_CONFIDENCE = int(env("MIN_CONFIDENCE", "3"))
 # 🆕 Nur HIGH + OK Value (LOW fliegt raus)
 MIN_VALUE_RATING = env("MIN_VALUE_RATING", "OK")  # HIGH, OK, oder LOW
@@ -1236,13 +1327,6 @@ MARKET_INFO = {
 
 def log(msg, level="INFO"):
     print(f"[{datetime.now().strftime('%H:%M:%S')}] [{level}] {msg}", flush=True)
-
-
-def log_tsa_key_status():
-    try:
-        log(f"   • TheStatsAPI Rotation: ✅ {len(THESTATSAPI_KEYS)} Keys geladen")
-    except Exception:
-        pass
 
 
 def get_local_time(utc_iso_str):
