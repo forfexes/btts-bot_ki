@@ -1,18 +1,17 @@
-name: NETRATTLER Main Bot
+name: NETRATTLER Main Bot FAST
 
 on:
-  workflow_dispatch:
   schedule:
-    # 4x täglich UTC
     - cron: "30 6 * * *"
     - cron: "30 12 * * *"
     - cron: "30 18 * * *"
     - cron: "30 21 * * *"
+  workflow_dispatch:
 
 jobs:
-  run-bot:
+  netrattler-fast:
     runs-on: ubuntu-latest
-    timeout-minutes: 90
+    timeout-minutes: 35
 
     steps:
       - name: Checkout
@@ -22,74 +21,63 @@ jobs:
         uses: actions/setup-python@v5
         with:
           python-version: "3.11"
+          cache: "pip"
 
-      - name: Install dependencies
+      - name: Install requirements
         run: |
           python -m pip install --upgrade pip
-          pip install -r requirements.txt
-          python -m playwright install chromium || true
+          if [ -f requirements.txt ]; then pip install -r requirements.txt; fi
 
-      - name: Preload Player Stats and Averages
-        continue-on-error: true
+      - name: Run NETRATTLER FAST
         env:
-          SUPABASE_URL: ${{ secrets.SUPABASE_URL }}
-          SUPABASE_KEY: ${{ secrets.SUPABASE_KEY }}
-          SUPABASE_SERVICE_ROLE_KEY: ${{ secrets.SUPABASE_SERVICE_ROLE_KEY }}
+          RUN_MODE: "tips"
+          RUN_SELF_TEST: "false"
+          NETRATTLER_FAST_MODE: "true"
+          MAX_LEAGUES_PER_RUN: "8"
+          SKIP_LEAGUE_LOOP_AFTER_PINNACLE_TIPS: "5"
+          AI_SLEEP_SECONDS: "0.1"
+          GROQ_SLEEP_SECONDS: "0.5"
 
-          TELEGRAM_TOKEN: ${{ secrets.TELEGRAM_TOKEN }}
-          TELEGRAM_CHAT_ID: ${{ secrets.TELEGRAM_CHAT_ID }}
-          TELEGRAM_GROUP_STATS: ${{ secrets.TELEGRAM_GROUP_STATS }}
-        run: |
-          echo "📊 Preload Player Stats/Averages"
-          python scrape_player_stats.py --rebuild-averages || true
+          ENABLE_CORNERS_SCORER: "false"
+          ENABLE_ADVANCED_PROPS: "true"
+          ENABLE_AI_ADVANCED_PROPS: "false"
+          PROP_WINDOW_HOURS: "12"
+          PROP_MAX_RAW_PROPS: "1800"
+          PROP_DB_SAVE_LIMIT: "100"
+          PROP_BUILDER_MAX_TOTAL: "25"
+          PROP_BUILDER_MAX_HIGH_ROLLER: "2"
+          ENABLE_PROP_FBREF_CHECK: "false"
+          ENABLE_PROP_ODDSPEDIA: "false"
+          ENABLE_PROP_FOTMOB: "false"
+          MULTI_COMBO_SIZES: "3,4,5"
 
-      - name: Run btts_bot.py
-        env:
+          APIFOOTBALL_DISABLED: "true"
+          API_FOOTBALL_KEY: ""
+
           GEMINI_API_KEYS: ${{ secrets.GEMINI_API_KEYS }}
+          GEMINI_API_KEY: ${{ secrets.GEMINI_API_KEY }}
           GROQ_API_KEYS: ${{ secrets.GROQ_API_KEYS }}
-          OPENROUTER_API_KEYS: ${{ secrets.OPENROUTER_API_KEYS }}
-          MISTRAL_API_KEYS: ${{ secrets.MISTRAL_API_KEYS }}
-          COHERE_API_KEY: ${{ secrets.COHERE_API_KEY }}
-          HUGGINGFACE_API_KEY: ${{ secrets.HUGGINGFACE_API_KEY }}
-
+          GROQ_API_KEY: ${{ secrets.GROQ_API_KEY }}
           ODDS_API_KEYS: ${{ secrets.ODDS_API_KEYS }}
-          ODDSAPIIO_KEY: ${{ secrets.ODDSAPIIO_KEY }}
+          ODDS_API_KEY: ${{ secrets.ODDS_API_KEY }}
           FOOTBALL_DATA_API_KEYS: ${{ secrets.FOOTBALL_DATA_API_KEYS }}
-          FOOTYSTATS_API_KEY: ${{ secrets.FOOTYSTATS_API_KEY }}
-          SPORTDB_API_KEY: ${{ secrets.SPORTDB_API_KEY }}
-          SPORTMONKS_API_KEY: ${{ secrets.SPORTMONKS_API_KEY }}
+          FOOTBALL_DATA_API_KEY: ${{ secrets.FOOTBALL_DATA_API_KEY }}
           THESTATSAPI_KEY: ${{ secrets.THESTATSAPI_KEY }}
-          ALLSPORTS_API_KEY: ${{ secrets.ALLSPORTS_API_KEY }}
-          API_NINJAS_KEY: ${{ secrets.API_NINJAS_KEY }}
-          OPENWEATHER_API_KEY: ${{ secrets.OPENWEATHER_API_KEY }}
-
-          SUPABASE_URL: ${{ secrets.SUPABASE_URL }}
-          SUPABASE_KEY: ${{ secrets.SUPABASE_KEY }}
-          SUPABASE_SERVICE_ROLE_KEY: ${{ secrets.SUPABASE_SERVICE_ROLE_KEY }}
 
           TELEGRAM_TOKEN: ${{ secrets.TELEGRAM_TOKEN }}
           TELEGRAM_CHAT_ID: ${{ secrets.TELEGRAM_CHAT_ID }}
           TELEGRAM_GROUP_BTTS: ${{ secrets.TELEGRAM_GROUP_BTTS }}
           TELEGRAM_GROUP_OVER25: ${{ secrets.TELEGRAM_GROUP_OVER25 }}
           TELEGRAM_GROUP_COMBO: ${{ secrets.TELEGRAM_GROUP_COMBO }}
-          TELEGRAM_GROUP_COMBOS: ${{ secrets.TELEGRAM_GROUP_COMBOS }}
           TELEGRAM_GROUP_BTTS_HT: ${{ secrets.TELEGRAM_GROUP_BTTS_HT }}
+          TELEGRAM_GROUP_OVER15_HT: ${{ secrets.TELEGRAM_GROUP_OVER15_HT }}
+          TELEGRAM_GROUP_STATS: ${{ secrets.TELEGRAM_GROUP_STATS }}
           TELEGRAM_GROUP_HZ_LIVE: ${{ secrets.TELEGRAM_GROUP_HZ_LIVE }}
           TELEGRAM_GROUP_LATE_GOALS: ${{ secrets.TELEGRAM_GROUP_LATE_GOALS }}
-          TELEGRAM_GROUP_STATS: ${{ secrets.TELEGRAM_GROUP_STATS }}
+          TELEGRAM_GROUP_ADVANCED_PROPS: ${{ secrets.TELEGRAM_GROUP_ADVANCED_PROPS }}
 
-          AI_SLEEP_SECONDS: ${{ secrets.AI_SLEEP_SECONDS }}
-          API_FOOTBALL_KEYS: ""
+          SUPABASE_URL: ${{ secrets.SUPABASE_URL }}
+          SUPABASE_KEY: ${{ secrets.SUPABASE_KEY }}
         run: |
+          echo "⚡ NETRATTLER FAST Run startet..."
           python btts_bot.py
-
-      - name: Upload logs/artifacts
-        if: always()
-        uses: actions/upload-artifact@v4
-        with:
-          name: netrattler-main-logs
-          path: |
-            *.log
-            *.json
-            models/*.pkl
-          if-no-files-found: ignore
