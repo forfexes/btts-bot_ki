@@ -13498,7 +13498,7 @@ def generate_multi_combo_bets(all_tips, num_tips=3):
                         conf = 2
                 mk = t.get("market", "btts")
                 # Ecken nur in Multi-Combos, wenn sie wirklich stark genug sind.
-                if mk == "corners" and prob < int(env("CORNER_COMBO_MIN_PROB", "64")):
+                if mk == "corners" and prob < int(env("CORNER_COMBO_MIN_PROB", "60")):
                     continue
                 normalized.append({
                     "match": t.get("match", ""),
@@ -13919,8 +13919,11 @@ def send_top_tips(tips_by_market, target_date):
                 u_str = f"+{units}" if units >= 0 else str(units)
                 stats_header += f"{medal} {lg}: {w}/{tot} ({pct}%) · {u_str}U" + "\n"
 
-    # Summary NUR in BTTS Kanal — nicht in Prop Builder / Stats
-    send_telegram(stats_header, TELEGRAM_GROUPS.get("btts", TELEGRAM_CHAT_ID))
+    # Summary NUR in BTTS Kanal — optional, im Fast Mode aus.
+    if env("SEND_BTTS_STATS_HEADER", "false").lower() in ["1", "true", "yes", "on"]:
+        send_telegram(stats_header, TELEGRAM_GROUPS.get("btts", TELEGRAM_CHAT_ID))
+    else:
+        log("⚡ BTTS Stats-Header übersprungen (Fast Mode)")
 
     # Auto-void alte Pending Tipps (älter als 3 Tage)
     _auto_void_old_pending()
@@ -14000,7 +14003,12 @@ def send_top_tips(tips_by_market, target_date):
                 continue
 
             if is_duplicate_tip(match_name, market_id, target_date):
-                log(f"   ⏭️ Duplikat übersprungen: {match_name} ({market_id})")
+                try:
+                    globals()["_DUP_TIP_SKIP_COUNT"] = globals().get("_DUP_TIP_SKIP_COUNT", 0) + 1
+                except Exception:
+                    pass
+                if env("LOG_DUPLICATE_TIPS", "false").lower() in ["1", "true", "yes", "on"]:
+                    log(f"   ⏭️ Duplikat übersprungen: {match_name} ({market_id})")
                 continue
 
             # 🛡️ Safe Filter: schlechte Ligen ausfiltern
@@ -14361,11 +14369,21 @@ def send_top_tips(tips_by_market, target_date):
 
         # Kein Footer - direkt Tipps ohne Zusammenfassung
 
-    log(f"Gespeichert in Supabase: {saved}")
     try:
-        _send_daily_auswertung_to_all_groups()
-    except Exception as _ae:
-        log(f"Auswertung Error: {str(_ae)[:50]}", "WARN")
+        _dup_cnt = int(globals().get("_DUP_TIP_SKIP_COUNT", 0) or 0)
+        if _dup_cnt:
+            log(f"   ⏭️ Duplikate übersprungen: {_dup_cnt}")
+            globals()["_DUP_TIP_SKIP_COUNT"] = 0
+    except Exception:
+        pass
+    log(f"Gespeichert in Supabase: {saved}")
+    if env("SEND_GROUP_AUSWERTUNG_EVERY_RUN", "false").lower() in ["1", "true", "yes", "on"]:
+        try:
+            _send_daily_auswertung_to_all_groups()
+        except Exception as _ae:
+            log(f"Auswertung Error: {str(_ae)[:50]}", "WARN")
+    else:
+        log("⚡ Gruppen-Auswertung übersprungen (Fast Mode)")
 
 
 # ============================================================
@@ -16436,8 +16454,11 @@ def run_corners_and_scorer_bots(target_date, active_leagues, odds_data_cache, fi
                         # Nicht nochmal einzeln senden, aber für Multi-Combos behalten.
                         tip_dup = analyze_corners_tip_simple(fixture, league)
                         if tip_dup:
+                            tip_dup["_multi_only"] = True
                             corners_tips.append(tip_dup)
-                        log(f"   ⏭️ Ecken Duplikat: {match_name} (für Multi behalten)")
+                        
+                        if env("LOG_DUPLICATE_CORNERS", "false").lower() in ["1", "true", "yes", "on"]:
+                            log(f"   ⏭️ Ecken Duplikat: {match_name} (nur Multi)")
                         continue
 
                     tip = analyze_corners_tip_simple(fixture, league)
@@ -16505,9 +16526,21 @@ def run_corners_and_scorer_bots(target_date, active_leagues, odds_data_cache, fi
                 log(f"   Scorer Error: {e}", "WARN")
 
     # Header + Tipps senden
-    if corners_tips and group_hz:
+    # Doppelte Ecken bleiben nur für Multi-Combos im Speicher, werden aber nicht erneut gesendet/gespeichert.
+    _corner_send_tips = [t for t in corners_tips if not t.get("_multi_only")]
+    try:
+        _corner_send_limit = int(env("MAX_CORNER_TIPS_SEND", "8"))
+    except Exception:
+        _corner_send_limit = 8
+    _corner_send_tips = sorted(
+        _corner_send_tips,
+        key=lambda x: int(x.get("probability", 0) or 0),
+        reverse=True
+    )[:_corner_send_limit]
+
+    if _corner_send_tips and group_hz:
         send_telegram(f"🔵 <b>CORNER SNIPER</b>\n<i>📅 {target_date}</i>", group_hz)
-        for tip in corners_tips:
+        for tip in _corner_send_tips:
             _cmsg = format_corners_message(tip)
             _cmid = send_telegram(_cmsg, group_hz)
             mark_tip_sent(tip.get("match",""), "corners", target_date)
@@ -16546,7 +16579,12 @@ def run_corners_and_scorer_bots(target_date, active_leagues, odds_data_cache, fi
         run_corners_and_scorer_bots._last_corner_tips = corners_tips
         run_corners_and_scorer_bots._last_scorer_tips = scorer_tips
 
-    log(f"🔵⚽ Fertig: {corners_count} Ecken Tips, {scorer_count} Scorer Tips")
+    try:
+        _multi_only_corners = len([t for t in corners_tips if t.get("_multi_only")])
+        _sent_corners = len([t for t in corners_tips if not t.get("_multi_only")])
+        log(f"🔵⚽ Fertig: {_sent_corners} neue Ecken, {_multi_only_corners} Multi-only, {scorer_count} Scorer")
+    except Exception:
+        log(f"🔵⚽ Fertig: {corners_count} Ecken Tips, {scorer_count} Scorer Tips")
 
 
 
@@ -21943,7 +21981,7 @@ def main():
     if env("INCLUDE_CORNERS_IN_MULTI", "true").lower() in ["1", "true", "yes", "on"]:
         try:
             _corner_combo_tips = getattr(run_corners_and_scorer_bots, "_last_corner_tips", []) or []
-            _corner_min = int(env("CORNER_COMBO_MIN_PROB", "64"))
+            _corner_min = int(env("CORNER_COMBO_MIN_PROB", "60"))
             _corner_added = 0
             for ct in _corner_combo_tips:
                 if int(ct.get("probability", 0) or 0) < _corner_min:
