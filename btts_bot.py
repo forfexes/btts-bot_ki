@@ -605,9 +605,9 @@ AUTO_LEAGUE_MIN_WINRATE = float(env("AUTO_LEAGUE_MIN_WINRATE", "48"))
 AUTO_LEAGUE_MIN_ROI = float(env("AUTO_LEAGUE_MIN_ROI", "-2.0"))
 AUTO_LEAGUE_LOOKBACK_DAYS = int(env("AUTO_LEAGUE_LOOKBACK_DAYS", "120"))
 
-MAX_LEAGUES_PER_RUN = int(env("MAX_LEAGUES_PER_RUN", "25"))  # 25 pro Run!
-AI_SLEEP_SECONDS = float(env("AI_SLEEP_SECONDS", "1.0"))
-GROQ_SLEEP_SECONDS = float(env("GROQ_SLEEP_SECONDS", "2.0"))
+MAX_LEAGUES_PER_RUN = int(env("MAX_LEAGUES_PER_RUN", "8"))  # 25 pro Run!
+AI_SLEEP_SECONDS = float(env("AI_SLEEP_SECONDS", "0.1"))
+GROQ_SLEEP_SECONDS = float(env("GROQ_SLEEP_SECONDS", "0.5"))
 USE_GROQ_FALLBACK = env("USE_GROQ_FALLBACK", "true").lower() in ["1", "true", "yes", "on"]
 
 ALWAYS_ON_LEAGUES = [
@@ -8635,6 +8635,8 @@ def _fotmob_find_team_id(team_name):
 
 
 def get_fotmob_player_season_stats(team_name):
+    if env("ENABLE_PROP_FOTMOB", "false").lower() not in ["1", "true", "yes"]:
+        return []
     """
     Holt Kader-Saisonstats von FotMob (Tore, Karten, Schüsse p90 etc.)
     für ein Team — kostenlos, kein Key. Best-Effort mit Debug-Logging,
@@ -18084,6 +18086,8 @@ def _calc_combo_odds(legs):
     return round(odds * disc, 2)
 
 def _fbref_prop_edge_check(player_name, league_name, prop_name, pinnacle_prob):
+    if env("ENABLE_PROP_FBREF_CHECK", "false").lower() not in ["1", "true", "yes"]:
+        return pinnacle_prob, False, False
     """
     Kreuzvergleich: FBref-Statistik vs. Pinnacle-Quote.
     Berechnet eine unabhängige Wahrscheinlichkeit aus echten Saison-Stats
@@ -18186,6 +18190,13 @@ def run_pinnacle_props_bot(win_start_utc=None, win_end_utc=None, ch_tz=None, top
     Quellen: Pinnacle (echte Quoten) + FBref (unabhängige Stats) für Cross-Validation."""
     from datetime import datetime as _dt2
     props = fetch_pinnacle_player_props()
+    try:
+        _raw_cap = int(env("PROP_MAX_RAW_PROPS", "1800"))
+        if _raw_cap > 0 and len(props) > _raw_cap:
+            log(f"⚡ Props Cap: {len(props)} → {_raw_cap} Raw Props")
+            props = props[:_raw_cap]
+    except Exception:
+        pass
     if not props:
         log("🔑 Pinnacle Props: keine Specials verfügbar")
         return 0
@@ -18949,7 +18960,7 @@ def run_pinnacle_props_bot(win_start_utc=None, win_end_utc=None, ch_tz=None, top
     try:
         if SUPABASE_URL and SUPABASE_KEY and _prop_db:
             _saved = 0
-            for _row in _prop_db[:300]:
+            for _row in _prop_db[:int(env("PROP_DB_SAVE_LIMIT", "100"))]:
                 try:
                     requests.post(
                         f"{SUPABASE_URL}/rest/v1/player_prop_db",
@@ -18992,11 +19003,11 @@ def run_pinnacle_props_bot(win_start_utc=None, win_end_utc=None, ch_tz=None, top
 
             # NETRATTLER V5 Gate: weniger Spam, keine blinden Card/High-Odds Builder.
             try:
-                _max_total = int(os.environ.get("PROP_BUILDER_MAX_TOTAL", "35"))
+                _max_total = int(os.environ.get("PROP_BUILDER_MAX_TOTAL", "25"))
             except Exception:
                 _max_total = 35
             try:
-                _max_hr = int(os.environ.get("PROP_BUILDER_MAX_HIGH_ROLLER", "3"))
+                _max_hr = int(os.environ.get("PROP_BUILDER_MAX_HIGH_ROLLER", "2"))
             except Exception:
                 _max_hr = 3
             if _pp_total >= _max_total:
@@ -19643,7 +19654,7 @@ def run_pinnacle_props_bot(win_start_utc=None, win_end_utc=None, ch_tz=None, top
             nonlocal _pp_total
             if not legs: return
             try:
-                _max_total = int(os.environ.get("PROP_BUILDER_MAX_TOTAL", "35"))
+                _max_total = int(os.environ.get("PROP_BUILDER_MAX_TOTAL", "25"))
             except Exception:
                 _max_total = 35
             if _pp_total >= _max_total:
@@ -21078,7 +21089,7 @@ print(f"   • Pinnacle:       ✅ (kostenlos via guest token)", flush=True)
 # ════════════════════════════════════════════════════════════════════════
 # DEBUG (lokaler Test)
 # ════════════════════════════════════════════════════════════════════════
-if __name__ == "__main__":
+if __name__ == "__main__" and env("RUN_SELF_TEST", "false").lower() in ["1", "true", "yes", "on"]:
     print("\n" + "="*70)
     print("🧪 NetRattler Pro V3 - Self Test")
     print("="*70)
@@ -21536,10 +21547,11 @@ def main():
     # (ESPN/FotMob/etc. liefern aus GitHub Actions eh 0 — spart ~5 Min Actions-Minuten)
     _skip_league_loop = False
     try:
-        # 🆕 Schwelle auf 10 gesenkt (vorher 30) — auch Morgen-Runs mit wenigen Matches sparen Zeit
-        if pinnacle_tips_count >= 10 and env("FORCE_LEAGUE_LOOP", "false").lower() not in ["1", "true", "yes"]:
+        _fast_mode = env("NETRATTLER_FAST_MODE", "true").lower() in ["1", "true", "yes", "on"]
+        _skip_after = int(env("SKIP_LEAGUE_LOOP_AFTER_PINNACLE_TIPS", "5"))
+        if (_fast_mode or pinnacle_tips_count >= _skip_after) and env("FORCE_LEAGUE_LOOP", "false").lower() not in ["1", "true", "yes"]:
             _skip_league_loop = True
-            log(f"⚡ Liga-Schleife übersprungen ({pinnacle_tips_count} Pinnacle-Tipps reichen) — spart ~5 Min")
+            log(f"⚡ Liga-Schleife übersprungen (Fast Mode / {pinnacle_tips_count} Pinnacle-Tipps) — spart Actions-Minuten")
     except Exception:
         pass
 
@@ -21746,11 +21758,14 @@ def main():
 
     # 🔑 ADVANCED PROPS BOT
     if env("ENABLE_ADVANCED_PROPS", "true").lower() in ["1", "true", "yes"]:
-        run_advanced_props_bot(
-            active_leagues=active_leagues,
-            fixtures_cache=_fixtures_cache,
-            target_date=target_date,
-        )
+        if env("ENABLE_AI_ADVANCED_PROPS", "false").lower() in ["1", "true", "yes"]:
+            run_advanced_props_bot(
+                active_leagues=active_leagues,
+                fixtures_cache=_fixtures_cache,
+                target_date=target_date,
+            )
+        else:
+            log("⚡ AI Advanced Props übersprungen — Pinnacle Props bleiben aktiv")
         # 🔑 Pinnacle Player Props (echte Quoten — funktioniert aus Actions!)
         try:
             # 🆕 Beste BTTS-Tipps nach Wahrscheinlichkeit für Prop Builder vorbereiten
@@ -21761,7 +21776,7 @@ def main():
             )[:20]
             from datetime import timedelta as _td_props
             _props_start = datetime.now(timezone.utc)
-            _props_end   = _props_start + _td_props(hours=24)
+            _props_end   = _props_start + _td_props(hours=int(env("PROP_WINDOW_HOURS", "12")))
             run_pinnacle_props_bot(
                 win_start_utc=_props_start,
                 win_end_utc=_props_end,
@@ -21793,7 +21808,7 @@ def main():
         # Alle Combo-Größen generieren (3 bis 11)
         _combo_run_ts = datetime.now(timezone.utc).strftime("%H%M%S")
         generated = 0
-        for n in [3, 4, 5, 6, 7, 8, 9, 10, 11]:
+        for n in [int(x) for x in env("MULTI_COMBO_SIZES", "3,4,5").split(",") if x.strip().isdigit()]:
             combo = generate_multi_combo_bets(all_tips_flat, num_tips=n)
             if combo:
                 # Deterministische Signatur — identische Kombi (gleiche Legs) wird nicht erneut gesendet
