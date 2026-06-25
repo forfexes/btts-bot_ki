@@ -1,24 +1,27 @@
 name: NETRATTLER Player Stats Scraper
 
 on:
-  # Täglich 02:00 UTC (nach Ende der meisten Abendspiele)
   schedule:
-    - cron: '0 2 * * *'
-  # Manuell mit optionaler Event-ID oder Datum
+    - cron: "0 2 * * *"
+
   workflow_dispatch:
     inputs:
       date:
-        description: "Datum (YYYY-MM-DD), leer = gestern"
+        description: "Datum YYYY-MM-DD, leer = gestern"
         required: false
         default: ""
       sofascore_event_id:
-        description: "SofaScore Event-ID (optional, überschreibt Datum)"
+        description: "SofaScore Event-ID optional"
         required: false
         default: ""
-      yesterday:
-        description: "Gestern scrapen (true/false)"
+      fotmob_match_id:
+        description: "FotMob Match-ID optional"
         required: false
-        default: "true"
+        default: ""
+      rebuild_averages:
+        description: "Nur Player Averages neu berechnen"
+        required: false
+        default: "false"
 
 jobs:
   scrape:
@@ -26,24 +29,34 @@ jobs:
     timeout-minutes: 30
 
     steps:
-      - uses: actions/checkout@v4
+      - name: Checkout
+        uses: actions/checkout@v4
 
-      - uses: actions/setup-python@v5
+      - name: Setup Python
+        uses: actions/setup-python@v5
         with:
           python-version: "3.11"
 
       - name: Install Dependencies
-        run: pip install requests supabase python-dotenv cloudscraper
+        run: |
+          python -m pip install --upgrade pip
+          pip install -r requirements.txt
 
-      - name: Scrape Player Stats (post-match)
+      - name: Scrape Player Stats
         env:
           SUPABASE_URL: ${{ secrets.SUPABASE_URL }}
           SUPABASE_KEY: ${{ secrets.SUPABASE_KEY }}
+          SUPABASE_SERVICE_ROLE_KEY: ${{ secrets.SUPABASE_SERVICE_ROLE_KEY }}
           TELEGRAM_TOKEN: ${{ secrets.TELEGRAM_TOKEN }}
+          TELEGRAM_CHAT_ID: ${{ secrets.TELEGRAM_CHAT_ID }}
           TELEGRAM_GROUP_STATS: ${{ secrets.TELEGRAM_GROUP_STATS }}
         run: |
-          if [ -n "${{ github.event.inputs.sofascore_event_id }}" ]; then
-            python scrape_player_stats.py --event-id "${{ github.event.inputs.sofascore_event_id }}"
+          if [ "${{ github.event.inputs.rebuild_averages }}" = "true" ]; then
+            python scrape_player_stats.py --rebuild-averages
+          elif [ -n "${{ github.event.inputs.sofascore_event_id }}" ]; then
+            python scrape_player_stats.py --source sofascore --event-id "${{ github.event.inputs.sofascore_event_id }}"
+          elif [ -n "${{ github.event.inputs.fotmob_match_id }}" ]; then
+            python scrape_player_stats.py --source fotmob --match-id "${{ github.event.inputs.fotmob_match_id }}"
           elif [ -n "${{ github.event.inputs.date }}" ]; then
             python scrape_player_stats.py --date "${{ github.event.inputs.date }}"
           else
