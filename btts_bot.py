@@ -16438,8 +16438,17 @@ def run_corners_and_scorer_bots(target_date, active_leagues, odds_data_cache, fi
 
         # Ecken-Tipps - auch ohne API-Football IDs!
         if group_hz:
+            try:
+                _max_corner_fixtures = int(env("MAX_CORNER_FIXTURES_ANALYZE", "14"))
+            except Exception:
+                _max_corner_fixtures = 14
+            _corner_checked = 0
             for fixture in fixtures:
                 try:
+                    if _max_corner_fixtures > 0 and _corner_checked >= _max_corner_fixtures:
+                        log(f"   ⚡ Corner Analyse-Cap erreicht: {_corner_checked} Fixtures")
+                        break
+                    _corner_checked += 1
                     home_norm = normalize_team_name(fixture.get("home", ""))
                     away_norm = normalize_team_name(fixture.get("away", ""))
                     match_key = f"{home_norm[:12]}_{away_norm[:12]}"
@@ -21478,8 +21487,20 @@ def main():
         log(f"🎰 Analysiere {len(_PINNACLE_MATCHUPS)} Pinnacle Matches...")
         from datetime import datetime as _pdt
         _processed_this_run = set()  # 🆕 Sicherheitsnetz gegen Restduplikate innerhalb des Runs
+        try:
+            _max_pinnacle_analyze = int(env("PINNACLE_MAX_MATCHES_ANALYZE", "18"))
+            _target_pinnacle_tips = int(env("PINNACLE_TARGET_TIPS", "70"))
+        except Exception:
+            _max_pinnacle_analyze, _target_pinnacle_tips = 18, 70
+
         for pm in _PINNACLE_MATCHUPS:
             try:
+                if _max_pinnacle_analyze > 0 and total_analyzed >= _max_pinnacle_analyze:
+                    log(f"   ⚡ Pinnacle Analyse-Cap erreicht: {total_analyzed} Matches")
+                    break
+                if _target_pinnacle_tips > 0 and pinnacle_tips_count >= _target_pinnacle_tips:
+                    log(f"   ⚡ Pinnacle Tipp-Ziel erreicht: {pinnacle_tips_count} Tipps")
+                    break
                 home = pm.get("home", "")
                 away = pm.get("away", "")
                 league_name = pm.get("league_name", "")
@@ -21543,25 +21564,27 @@ def main():
                         pass
                 else:
                     # 🆕 football-data.co.uk: echte BTTS/Over-Raten für ~20 Top-Vereinsligen
-                    try:
-                        _fh = get_fd_co_uk_team_stats(home, league_name)
-                        _fa = get_fd_co_uk_team_stats(away, league_name)
-                        if _fh and _fa:
-                            _mb = (_fh["btts_pct"] + _fa["btts_pct"]) / 2
-                            _mo = (_fh["over25_pct"] + _fa["over25_pct"]) / 2
-                            prob_b = int(0.6 * _mb + 0.4 * prob_b)
-                            prob_o = int(0.6 * _mo + 0.4 * prob_o)
-                            log(f"      📊 FD-CoUk: {home} {_fh['btts_pct']}% / {away} {_fa['btts_pct']}% BTTS → {prob_b}% ({_fh['games']}/{_fa['games']} Spiele)")
-                    except Exception:
-                        pass
+                    if env("ENABLE_FDCOUK_MATCH_STATS", "false").lower() in ["1", "true", "yes", "on"]:
+                        try:
+                            _fh = get_fd_co_uk_team_stats(home, league_name)
+                            _fa = get_fd_co_uk_team_stats(away, league_name)
+                            if _fh and _fa:
+                                _mb = (_fh["btts_pct"] + _fa["btts_pct"]) / 2
+                                _mo = (_fh["over25_pct"] + _fa["over25_pct"]) / 2
+                                prob_b = int(0.6 * _mb + 0.4 * prob_b)
+                                prob_o = int(0.6 * _mo + 0.4 * prob_o)
+                                log(f"      📊 FD-CoUk: {home} {_fh['btts_pct']}% / {away} {_fa['btts_pct']}% BTTS → {prob_b}% ({_fh['games']}/{_fa['games']} Spiele)")
+                        except Exception:
+                            pass
 
                     # 🤖 XGBoost ML-Modell (stärkste Ebene wenn Modelle geladen)
                     # Schlägt Elo/Poisson weil es kalibriert und aus echten Daten trainiert ist
                     try:
                         # 🆕 ClubElo als externe Teamstärke-Quelle
-                        _celo = get_clubelo_for_match(home, away, target_date)
-                        if _celo.get("elo_diff") is not None:
-                            log(f"      ⚡ ClubElo: {home} {_celo['elo_home']} vs {away} {_celo['elo_away']} (Diff: {_celo['elo_diff']})")
+                        if env("ENABLE_CLUBELO_MATCH_STATS", "false").lower() in ["1", "true", "yes", "on"]:
+                            _celo = get_clubelo_for_match(home, away, target_date)
+                            if _celo.get("elo_diff") is not None:
+                                log(f"      ⚡ ClubElo: {home} {_celo['elo_home']} vs {away} {_celo['elo_away']} (Diff: {_celo['elo_diff']})")
 
                         _ml = get_ml_prediction(home, away, league_name)
                         if _ml:
