@@ -275,6 +275,213 @@ MIN_ODDS = float(env("MIN_ODDS", "1.70"))
 MAX_ODDS = float(env("MAX_ODDS", "3.0"))
 
 # ============================================================
+# PROP BUILDER SCORE V1
+# Qualität zuerst, Quote danach.
+# ============================================================
+
+PROP_SCORE_MIN_LEG = float(env("PROP_SCORE_MIN_LEG", "78"))          # einzelne Leg min 78/100
+PROP_SCORE_MIN_BUILDER_AVG = float(env("PROP_SCORE_MIN_BUILDER_AVG", "82"))  # Builder Ø min 82/100
+PROP_SCORE_MIN_COMBO_PROB = float(env("PROP_SCORE_MIN_COMBO_PROB", "0.06"))   # Kombi min 6%
+PROP_SCORE_ALLOW_BOOKINGS = env("PROP_SCORE_ALLOW_BOOKINGS", "false").lower() in ["1", "true", "yes", "on"]
+PROP_SCORE_MAX_BOOKING_ODDS = float(env("PROP_SCORE_MAX_BOOKING_ODDS", "3.20"))
+PROP_SCORE_MAX_LEGS_DEFAULT = int(env("PROP_SCORE_MAX_LEGS_DEFAULT", "5"))
+
+def _prop_category(p):
+    txt = " ".join(str(p.get(k, "")) for k in [
+        "category", "market", "prop", "description", "selection", "name"
+    ]).lower()
+    if any(x in txt for x in ["tackle", "tackles"]):
+        return "tackles"
+    if any(x in txt for x in ["foul", "fouls"]):
+        return "fouls"
+    if any(x in txt for x in ["shot on target", "sot", "shots on target"]):
+        return "sot"
+    if any(x in txt for x in ["shot", "shots"]):
+        return "shots"
+    if any(x in txt for x in ["booked", "booking", "card", "yellow"]):
+        return "booking"
+    if any(x in txt for x in ["score", "goalscorer", "goal"]):
+        return "score"
+    return "other"
+
+
+def _prop_odds(p):
+    try:
+        return float(p.get("odds") or p.get("price") or p.get("quote") or 0)
+    except Exception:
+        return 0.0
+
+
+def _prop_prob(p):
+    prob = (
+        p.get("model_prob")
+        or p.get("probability")
+        or p.get("prob")
+        or p.get("hit_rate")
+        or p.get("hit_rate_pct")
+        or p.get("hr")
+        or 0
+    )
+    try:
+        prob = float(prob)
+        if prob > 1:
+            prob = prob / 100.0
+    except Exception:
+        prob = 0.0
+
+    # Falls keine echte Probability vorhanden ist, konservativ aus Quote schätzen
+    if prob <= 0:
+        odds = _prop_odds(p)
+        if odds > 1:
+            prob = 1.0 / odds
+        else:
+            prob = 0.0
+
+    return max(0.01, min(0.99, prob))
+
+
+def _prop_edge(p):
+    odds = _prop_odds(p)
+    prob = _prop_prob(p)
+    if odds <= 1:
+        return -100.0
+    return (prob - (1.0 / odds)) * 100.0
+
+
+def _prop_score(p):
+    """
+    Score 0-100.
+    Nicht perfekt, aber viel besser als reine Quote.
+    """
+    cat = _prop_category(p)
+    odds = _prop_odds(p)
+    prob = _prop_prob(p)
+    edge = _prop_edge(p)
+
+    score = 0.0
+
+    # Wahrscheinlichkeit
+    if prob >= 0.70:
+        score += 45
+    elif prob >= 0.60:
+        score += 38
+    elif prob >= 0.52:
+        score += 30
+    elif prob >= 0.45:
+        score += 20
+    else:
+        score -= 30
+
+    # Edge
+    if edge >= 18:
+        score += 30
+    elif edge >= 12:
+        score += 24
+    elif edge >= 8:
+        score += 18
+    elif edge >= 4:
+        score += 10
+    elif edge < 0:
+        score -= 25
+
+    # Marktqualität
+    if cat in ["tackles", "fouls", "sot"]:
+        score += 20
+    elif cat in ["shots"]:
+        score += 14
+    elif cat == "score":
+        score += 8
+    elif cat == "booking":
+        score -= 8
+    else:
+        score -= 10
+
+    # Quote-Risiko: hohe Quote ist ok, aber nur mit hoher Prob/Edge.
+    if odds >= 5 and prob < 0.45:
+        score -= 30
+    elif odds >= 4 and prob < 0.50:
+        score -= 18
+    elif odds >= 3.2 and prob < 0.55:
+        score -= 8
+
+    # Booking-Schutz
+    if cat == "booking":
+        if not PROP_SCORE_ALLOW_BOOKINGS:
+            score -= 35
+        if odds > PROP_SCORE_MAX_BOOKING_ODDS:
+            score -= 25
+
+    return max(0.0, min(100.0, score))
+
+
+def _prop_leg_ok(p):
+    cat = _prop_category(p)
+    odds = _prop_odds(p)
+    prob = _prop_prob(p)
+    score = _prop_score(p)
+
+    if odds <= 1.01:
+        return False
+
+    # Bookings nur sehr streng oder wenn explizit erlaubt
+    if cat == "booking" and not PROP_SCORE_ALLOW_BOOKINGS:
+        return False
+
+    if score < PROP_SCORE_MIN_LEG:
+        return False
+
+    if prob < 0.45:
+        return False
+
+    if _prop_edge(p) < 4:
+        return False
+
+    return True
+
+
+def _builder_quality_ok(legs):
+    if not legs:
+        return False
+
+    scores = [_prop_score(l) for l in legs]
+    avg_score = sum(scores) / len(scores)
+
+    combo_prob = 1.0
+    for leg in legs:
+        combo_prob *= _prop_prob(leg)
+
+    if avg_score < PROP_SCORE_MIN_BUILDER_AVG:
+        return False
+
+    if combo_prob < PROP_SCORE_MIN_COMBO_PROB:
+        return False
+
+    # Mehr als 1 Booking pro Builder vermeiden
+    booking_count = sum(1 for l in legs if _prop_category(l) == "booking")
+    if booking_count > 1:
+        return False
+
+    return True
+
+
+def _rank_props_for_builder(props):
+    good = [p for p in props if _prop_leg_ok(p)]
+    good.sort(key=lambda p: (_prop_score(p), _prop_edge(p), _prop_prob(p)), reverse=True)
+    return good
+
+
+def _builder_debug_line(legs):
+    try:
+        avg_score = sum(_prop_score(l) for l in legs) / max(len(legs), 1)
+        combo_prob = 1.0
+        for l in legs:
+            combo_prob *= _prop_prob(l)
+        return f"score={avg_score:.0f}/100 · p={combo_prob*100:.1f}%"
+    except Exception:
+        return "score=n/a"
+
+
+# ============================================================
 # PROP BUILDER PROBABILITY FILTER
 # Gesamtquote darf hoch sein, aber Leg- und Kombi-Wahrscheinlichkeit müssen stimmen.
 # ============================================================
