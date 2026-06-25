@@ -16377,7 +16377,11 @@ def run_corners_and_scorer_bots(target_date, active_leagues, odds_data_cache, fi
                     # 🆕 Duplikat zwischen Runs prüfen!
                     match_name = f"{fixture.get('home','')} vs {fixture.get('away','')}"
                     if is_duplicate_tip(match_name, "corners", target_date):
-                        log(f"   ⏭️ Ecken Duplikat: {match_name}")
+                        # Nicht nochmal einzeln senden, aber für Multi-Combos behalten.
+                        tip_dup = analyze_corners_tip_simple(fixture, league)
+                        if tip_dup:
+                            corners_tips.append(tip_dup)
+                        log(f"   ⏭️ Ecken Duplikat: {match_name} (für Multi behalten)")
                         continue
 
                     tip = analyze_corners_tip_simple(fixture, league)
@@ -17988,6 +17992,15 @@ def _pinnacle_get_json(url, params):
 
 def fetch_pinnacle_player_props() -> List[Dict]:
     """Player Props Specials von Pinnacle (echte Quoten)."""
+    global _PINNACLE_PLAYER_PROPS_CACHE
+    try:
+        if env("PINNACLE_PROPS_CACHE_IN_RUN", "true").lower() in ["1", "true", "yes", "on"]:
+            _cached = globals().get("_PINNACLE_PLAYER_PROPS_CACHE")
+            if isinstance(_cached, list) and _cached:
+                log(f"   ⚡ Pinnacle Props Cache HIT: {len(_cached)} Props")
+                return list(_cached)
+    except Exception:
+        pass
     try:
         data, status = _pinnacle_get_json(
             f"{PINNACLE_BASE}/sports/{PINNACLE_SPORT_SOCCER}/matchups",
@@ -18086,6 +18099,10 @@ def fetch_pinnacle_player_props() -> List[Dict]:
         if skipped_no_price:
             log(f"   🔑 Pinnacle Props: {skipped_no_price} Props ohne Preis übersprungen")
         _log("PINNACLE", f"🔑 {len(props)} Player-Prop-Quoten geladen")
+        try:
+            globals()["_PINNACLE_PLAYER_PROPS_CACHE"] = list(props)
+        except Exception:
+            pass
         return props
     except Exception as e:
         _log("PINNACLE", f"Props Fehler: {str(e)[:80]}", "WARN")
@@ -18614,6 +18631,10 @@ def run_pinnacle_props_bot(win_start_utc=None, win_end_utc=None, ch_tz=None, top
     _send_prop = _collect_prop
 
     # ═══════════════════════════════════════════════════════════════════
+    if env("ENABLE_HEAVY_PROP_DB_BUILDER", "false").lower() not in ["1", "true", "yes", "on"]:
+        log("   ⚡ Heavy Prop DB Builder übersprungen — Multi/BTTS/Pinnacle Quick bleiben aktiv")
+        return _pp_total
+
     # NETRATTLER PROP DATABASE — alle Quellen, alle Märkte
     # ═══════════════════════════════════════════════════════════════════
 
@@ -18736,6 +18757,16 @@ def run_pinnacle_props_bot(win_start_utc=None, win_end_utc=None, ch_tz=None, top
 
     # ── STATSBOMB HIT RATES laden ──────────────────────────────
     _SB_HR = {}  # {spielername: {hr_foul, hr_sot, hr_yc, hr_goal, ...}}
+    try:
+        if env("ENABLE_STATSBOMB_HR", "false").lower() not in ["1", "true", "yes", "on"]:
+            import json as _sb_fast_json, os as _sb_fast_os
+            _sb_fast_cache = "/tmp/sb_hit_rates.json"
+            if not _sb_fast_os.path.exists(_sb_fast_cache):
+                with open(_sb_fast_cache, "w") as _sb_fast_f:
+                    _sb_fast_json.dump({}, _sb_fast_f)
+            log("   ⚡ StatsBomb HR übersprungen (Fast Mode)")
+    except Exception:
+        pass
     try:
         import json as _jsb, math as _msb, requests as _rsb
         _SB_TOURNAMENTS = [(43,106),(55,282),(223,282)]  # WM22, Euro24, Copa24
@@ -19018,7 +19049,7 @@ def run_pinnacle_props_bot(win_start_utc=None, win_end_utc=None, ch_tz=None, top
     try:
         if SUPABASE_URL and SUPABASE_KEY and _prop_db:
             _saved = 0
-            for _row in _prop_db[:int(env("PROP_DB_SAVE_LIMIT", "100"))]:
+            for _row in _prop_db[:int(env("PROP_DB_SAVE_LIMIT", "50"))]:
                 try:
                     requests.post(
                         f"{SUPABASE_URL}/rest/v1/player_prop_db",
@@ -19496,7 +19527,7 @@ def run_pinnacle_props_bot(win_start_utc=None, win_end_utc=None, ch_tz=None, top
     _db_builders_done = len(_builder_sent_today)
     log(f"   DB Builder fertig: {_db_builders_done} gesendet")
 
-    if PLAYWRIGHT_AVAILABLE:
+    if PLAYWRIGHT_AVAILABLE and env("ENABLE_PROP_EXTRA_SOURCES", "false").lower() in ["1", "true", "yes", "on"]:
         import re as _re_pp, json as _json_pp
         # 1. ODDSPEDIA — oft Cloudflare geblockt, kurzes Timeout
         try:
