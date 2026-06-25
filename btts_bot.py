@@ -13192,7 +13192,14 @@ def is_valid_tip(tip, target_date):
 
     time_str = tip.get("time", "")
     if not is_future_game(time_str, target_date):
-        log(f"   ⚠️ Spiel bereits vorbei: {tip.get('match','')} um {time_str}")
+        try:
+            _past_key = f"{normalize_team_name(tip.get('match',''))[:60]}_{time_str}_{target_date}"
+            _past_cache = globals().setdefault("_PAST_TIP_LOG_CACHE", set())
+            if _past_key not in _past_cache:
+                log(f"   ⚠️ Spiel bereits vorbei: {tip.get('match','')} um {time_str}")
+                _past_cache.add(_past_key)
+        except Exception:
+            log(f"   ⚠️ Spiel bereits vorbei: {tip.get('match','')} um {time_str}")
         return False
 
     return True
@@ -13934,8 +13941,57 @@ def send_top_tips(tips_by_market, target_date):
         emoji = market_emoji.get(market_id, "💎")
 
         # Kein Header - direkt Tipps senden
+        # FAST: Für Runtime und Telegram-Spam nur die stärksten Einzel-Tipps je Markt senden.
+        try:
+            _max_per_market = int(env("MAX_TIPS_PER_MARKET_SEND", "8"))
+            _max_total_single = int(env("MAX_TOTAL_SINGLE_TIPS_SEND", "35"))
+        except Exception:
+            _max_per_market, _max_total_single = 8, 35
 
-        for i, r in enumerate(tips, 1):
+        def _tip_send_score(_t):
+            try:
+                _prob = int(_t.get("probability", 0) or 0)
+            except Exception:
+                _prob = 0
+            try:
+                _conf = int(_t.get("confidence", 0) or 0)
+            except Exception:
+                _conf = 0
+            try:
+                _od = float(str(_t.get("oddsYes", _t.get("odds", 1.8))).replace(",", "."))
+            except Exception:
+                _od = 1.8
+            # sichere Tipps bevorzugen; extreme Quoten nicht pushen
+            return (_prob * 1.0) + (_conf * 6.0) - max(0, _od - 2.2) * 4.0
+
+        _send_candidates = []
+        _seen_send_matches = set()
+        for _t in tips:
+            _t["date"] = str(target_date)
+            _mk = normalize_team_name(str(_t.get("match", "")))[:80]
+            if not _mk or _mk in _seen_send_matches:
+                continue
+            _seen_send_matches.add(_mk)
+
+            # Future-Filter ohne wiederholtes Logging; spart Minuten bei späten Runs.
+            _time_fast = str(_t.get("time", "") or "")
+            if _time_fast and _time_fast not in ["TBD", "Heute", "N/A", "-", ""]:
+                try:
+                    if not is_future_game(_time_fast, target_date):
+                        continue
+                except Exception:
+                    pass
+
+            _send_candidates.append(_t)
+
+        tips_to_send = sorted(_send_candidates, key=_tip_send_score, reverse=True)[:_max_per_market]
+        if saved >= _max_total_single:
+            log(f"   ⚡ Einzel-Tipp Cap erreicht ({_max_total_single})")
+            break
+
+        for i, r in enumerate(tips_to_send, 1):
+            if saved >= _max_total_single:
+                break
             confidence = int(r.get("confidence", 0))
             match_name = r.get("match", "?")
 
