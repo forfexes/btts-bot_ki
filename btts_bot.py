@@ -1238,6 +1238,13 @@ def log(msg, level="INFO"):
     print(f"[{datetime.now().strftime('%H:%M:%S')}] [{level}] {msg}", flush=True)
 
 
+def log_tsa_key_status():
+    try:
+        log(f"   • TheStatsAPI Rotation: ✅ {len(THESTATSAPI_KEYS)} Keys geladen")
+    except Exception:
+        pass
+
+
 def get_local_time(utc_iso_str):
     try:
         dt_utc = datetime.fromisoformat(utc_iso_str.replace("Z", "+00:00"))
