@@ -18989,14 +18989,131 @@ def run_pinnacle_props_bot(win_start_utc=None, win_end_utc=None, ch_tz=None, top
         def _send_builder(legs, style="", variant="", high_roller=False):
             nonlocal _pp_total
             t = _tod(legs)
+
+            # NETRATTLER V5 Gate: weniger Spam, keine blinden Card/High-Odds Builder.
+            try:
+                _max_total = int(os.environ.get("PROP_BUILDER_MAX_TOTAL", "35"))
+            except Exception:
+                _max_total = 35
+            try:
+                _max_hr = int(os.environ.get("PROP_BUILDER_MAX_HIGH_ROLLER", "3"))
+            except Exception:
+                _max_hr = 3
+            if _pp_total >= _max_total:
+                return False
+            if high_roller and getattr(_send_builder, "_hr_count", 0) >= _max_hr:
+                return False
+
+            def _num(x, default=0.0):
+                try:
+                    if x is None or x == "":
+                        return default
+                    return float(str(x).replace(",", "."))
+                except Exception:
+                    return default
+
+            def _leg_prob(l):
+                odds = max(_num(l.get("odds"), 1.0), 1.01)
+                mp = _num(l.get("model_prob"), 0.0)
+                if mp > 1.0:
+                    mp = mp / 100.0
+                if 0.01 <= mp <= 0.95:
+                    return mp
+                pr = _num(l.get("prob"), 0.0)
+                if pr > 1.0:
+                    pr = pr / 100.0
+                if 0.01 <= pr <= 0.95:
+                    return pr
+                return max(0.02, min(0.90, 1.0 / odds * 0.92))
+
+            def _leg_score(l):
+                odds = max(_num(l.get("odds"), 1.0), 1.01)
+                implied = 1.0 / odds
+                p = _leg_prob(l)
+                mp = _num(l.get("model_prob"), 0.0)
+                if mp > 1.0:
+                    mp = mp / 100.0
+                edge = (mp - implied) if mp > 0 else 0.0
+                cat = str(l.get("category", "")).lower()
+                src = str(l.get("source", ""))
+                src_bonus = {
+                    "Statz.ai": 12, "ScoutingStats": 12, "FotMob": 7,
+                    "Oddspedia": 4, "Pinnacle": 0
+                }.get(src, 0)
+                cat_bonus = 0
+                if cat in ("tackles", "fouls", "sot", "shots", "saves"):
+                    cat_bonus += 8
+                if cat in ("yellow_cards", "booked", "cards"):
+                    cat_bonus -= 10
+                if cat in ("score", "goalscorer"):
+                    cat_bonus -= 3
+                odds_penalty = 0
+                if odds > 3.25:
+                    odds_penalty += (odds - 3.25) * 6
+                if odds > 6.0:
+                    odds_penalty += 10
+                score = 42 + (p * 48) + src_bonus + cat_bonus + (edge * 70) - odds_penalty
+                return max(0, min(99, score))
+
+            # Spieler/Leg-Dedupe
+            if len(legs) < 2:
+                return False
+            _uniq = set()
+            for _l in legs:
+                _pn = str(_l.get("player", "")).strip()
+                _mk = str(_l.get("market", "")).strip()
+                if len(_pn.split()) < 2:
+                    return False
+                _key = (_pn.lower(), _mk.lower())
+                if _key in _uniq:
+                    return False
+                _uniq.add(_key)
+
+            _scores = [_leg_score(_l) for _l in legs]
+            _avg_score = sum(_scores) / len(_scores)
+            _min_score = min(_scores)
+            try:
+                _min_leg_score = float(os.environ.get("PROP_BUILDER_MIN_LEG_SCORE", "68"))
+                _min_avg_score = float(os.environ.get("PROP_BUILDER_MIN_AVG_SCORE", "74"))
+            except Exception:
+                _min_leg_score, _min_avg_score = 68.0, 74.0
+            if _min_score < _min_leg_score or _avg_score < _min_avg_score:
+                return False
+
+            _cats_all = [str(l.get("category", "")).lower() for l in legs]
+            _is_card_builder = ("BOOKING" in str(style).upper()) or all(c in ("yellow_cards", "booked", "cards") for c in _cats_all)
+
+            # Karten ja, aber nicht blind nur wegen hoher Pinnacle-Quote.
+            _allow_blind_cards = os.environ.get("PROP_BUILDER_ALLOW_BLIND_CARDS", "false").lower() in ("1", "true", "yes")
+            for _l in legs:
+                _cat = str(_l.get("category", "")).lower()
+                _src = str(_l.get("source", ""))
+                _od = _num(_l.get("odds"), 0.0)
+                _mp = _num(_l.get("model_prob"), 0.0)
+                _hr = _num(_l.get("hit_rate"), 0.0)
+                if _cat in ("yellow_cards", "booked", "cards"):
+                    if not _is_card_builder and _cats_all.count(_cat) > int(os.environ.get("PROP_BUILDER_MAX_CARDS_NORMAL", "1")):
+                        return False
+                    if _src == "Pinnacle" and _mp <= 0 and _hr <= 0 and not _allow_blind_cards:
+                        return False
+                    if _src == "Pinnacle" and _od > float(os.environ.get("PROP_BUILDER_MAX_PINNACLE_CARD_ODDS", "3.20")) and _mp <= 0:
+                        return False
+
+            _combo_prob = 1.0
+            for _l in legs:
+                _combo_prob *= max(0.02, min(0.95, _leg_prob(_l)))
+            _min_combo = float(os.environ.get("PROP_BUILDER_MIN_COMBO_PROB_HR" if high_roller else "PROP_BUILDER_MIN_COMBO_PROB", "0.035" if high_roller else "0.07"))
+            if _combo_prob < _min_combo:
+                return False
+
             # Standard: 2.5-50/1 | High Roller: 50-600/1
             _min = 50.0 if high_roller else 2.50
             _max = 600.0 if high_roller else 50.0
-            if t < _min or t > _max: return False
-            srcs = list(dict.fromkeys(l["source"] for l in legs))
+            if t < _min or t > _max:
+                return False
             cats = list(dict.fromkeys(l["category"] for l in legs))
             icons = "".join(dict.fromkeys(_CAT_ICONS.get(c,"🎯") for c in cats))
-            var_s = f" <i>({variant})</i>" if variant else ""
+            var_s = ""
             _frac = f"{int(round(t-1))}/1" if t >= 2.0 and t == int(round(t)) else f"{t:.2f}"
             _hr_tag = " \U0001f680 <b>HIGH ROLLER</b>" if high_roller else ""
             _stake = "0.25u 🎲" if high_roller else "0.5u"
@@ -19014,9 +19131,11 @@ def run_pinnacle_props_bot(win_start_utc=None, win_end_utc=None, ch_tz=None, top
             if len(set(x["match"] for x in legs)) == 1:
                 msg += f"\u26bd <b>{legs[0]['match']}</b>{NL}"
             msg += f"{SEP}{NL}\U0001f4b0 @ <b>{_frac}</b> \u00b7 {_stake}{NL}"
-            msg += f"<i>\U0001f4ca {' + '.join(srcs)}</i>"
+            msg += f"📊 Score: <b>{_avg_score:.0f}/100</b> · P≈{_combo_prob*100:.1f}%"
             send_telegram(msg, chat_id=_pp_chat)
             _pp_total += 1
+            if high_roller:
+                _send_builder._hr_count = getattr(_send_builder, "_hr_count", 0) + 1
             emoji = "🚀" if high_roller else "🏗️"
             log(f"   {emoji} {style} {len(legs)}L @ {t:.2f}")
             return True
@@ -19523,10 +19642,25 @@ def run_pinnacle_props_bot(win_start_utc=None, win_end_utc=None, ch_tz=None, top
         def _build_and_send(legs, label=""):
             nonlocal _pp_total
             if not legs: return
+            try:
+                _max_total = int(os.environ.get("PROP_BUILDER_MAX_TOTAL", "35"))
+            except Exception:
+                _max_total = 35
+            if _pp_total >= _max_total:
+                return
+            def _safe_conf(_x):
+                try:
+                    return float(_x.get("confidence", 0) or 0)
+                except Exception:
+                    return 0.0
+            _avg_conf = sum(_safe_conf(x) for x in legs) / max(1, len(legs))
+            if min(_safe_conf(x) for x in legs) < float(os.environ.get("PROP_SCRAPER_MIN_LEG_CONF", "62")):
+                return
             _total = round(__import__("functools").reduce(lambda a,b: a*b, [l["odds"] for l in legs if l.get("odds",0)>1.0] or [1.0]), 2)
             if _total < 2.50: return  # min 2.50 für Prop Builder
+            if _total > 80 and _avg_conf < float(os.environ.get("PROP_SCRAPER_HR_MIN_AVG_CONF", "76")):
+                return
             _bmsg = "\U0001f3d7\ufe0f <b>PROP BUILDER " + str(len(legs)) + " LEGS</b>"
-            if label: _bmsg += " (" + label + ")"
             _bmsg += NL + SEP + NL
             for _i, _leg in enumerate(legs, 1):
                 _ko2 = (" \u23f0 " + _leg["ko_s"]) if _leg["ko_s"] else ""
@@ -19534,7 +19668,7 @@ def run_pinnacle_props_bot(win_start_utc=None, win_end_utc=None, ch_tz=None, top
                           "</b> \u2014 " + _leg["market"] + _ko2 + NL +
                           "   \u26bd " + _leg["match"] + NL)
             _bmsg += (SEP + NL + "\U0001f4b0 @ <b>" + str(_total) + "</b> \u00b7 0.5u" + NL +
-                      "<i>\U0001f4ca ScoutingStats + Statz.ai</i>")
+                      "📊 Score: <b>" + str(round(_avg_conf)) + "/100</b>")
             send_telegram(_bmsg, chat_id=_pp_chat)
             _pp_total += 1
             log(f"   \U0001f3d7 Prop Builder {len(legs)} Legs @ {_total}" + (f" [{label}]" if label else ""))
@@ -19654,7 +19788,7 @@ def run_pinnacle_props_bot(win_start_utc=None, win_end_utc=None, ch_tz=None, top
                 "_match_names": _match_names[:_n_matches],
             })
 
-    builders = builders[:12]  # Max 12 Builder pro Run
+    builders = builders[:int(os.environ.get('PROP_BUILDER_MAX_LIST', '8'))]  # NETRATTLER V5 Cap
 
     # Nachrichten bauen — Bet365 Bet Builder Style
     sent = 0
