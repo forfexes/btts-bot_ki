@@ -77,6 +77,12 @@ if not API_FOOTBALL_KEYS:
 # Erster Key für Backwards-Kompatibilität
 API_FOOTBALL_KEY = API_FOOTBALL_KEYS[0] if API_FOOTBALL_KEYS else ""
 
+# API-Football deaktiviert: Account suspended / keine neuen Accounts.
+# Der Bot nutzt stattdessen Football-Data, Pinnacle/Odds, FBref/FotMob/StatsBomb etc.
+API_FOOTBALL_ENABLED = False
+API_FOOTBALL_KEYS = []
+API_FOOTBALL_KEY = ""
+
 TELEGRAM_TOKEN = env("TELEGRAM_TOKEN")
 TELEGRAM_CHAT_ID = env("TELEGRAM_CHAT_ID")
 
@@ -18633,7 +18639,8 @@ def run_pinnacle_props_bot(win_start_utc=None, win_end_utc=None, ch_tz=None, top
             msg += f"<i>\U0001f4ca {' + '.join(srcs)}</i>"
             send_telegram(msg, chat_id=_pp_chat)
             _pp_total += 1
-            log(f"   {'\U0001f680' if high_roller else '\U0001f3d7'} {style} {len(legs)}L @ {t:.2f}")
+            emoji = "🚀" if high_roller else "🏗️"
+            log(f"   {emoji} {style} {len(legs)}L @ {t:.2f}")
             return True
 
         # Props gruppieren
