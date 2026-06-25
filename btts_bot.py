@@ -8055,7 +8055,7 @@ def get_historical_weather_impact(league_name, month):
 
     impact = "neutral"
 
-    # Wintermonate in Europa
+    # Wintermoladder in Europa
     if league_name in WINTER_LEAGUES:
         if month in [11, 12, 1, 2]:
             impact = "slightly_negative"  # Kälte, Regen
@@ -17002,7 +17002,7 @@ _advanced_props_manager = AdvancedPropsManager()
 
 def run_advanced_props_bot(active_leagues: list, fixtures_cache: dict, target_date) -> None:
     """
-    Prop Builder Bot — Nate Betting Style.
+    Prop Builder Bot — Ladder Betting Style.
     Combo-Typen:
       🟥 FOULS BUILDER      — FC + FW kombiniert, verschiedene Spiele
       🟨 BOOKING BUILDER    — Nuno Tavares Style, 2-4x Player to be Booked
@@ -17025,7 +17025,7 @@ def run_advanced_props_bot(active_leagues: list, fixtures_cache: dict, target_da
     shot_candidates    = []
 
     def _score(stats, mtype, league):
-        """Berechnet Prop Score nach ChatGPT/Nate Betting Methodik."""
+        """Berechnet Prop Score nach ChatGPT/Ladder Betting Methodik."""
         score = 0
         reasons = []
 
@@ -17377,7 +17377,7 @@ def run_advanced_props_bot(active_leagues: list, fixtures_cache: dict, target_da
         ],
     }
 
-    prompt = f"""Du bist Prop Builder Analyst (Nate Betting Style). Heute {target_date}.
+    prompt = f"""Du bist Prop Builder Analyst (Ladder Betting Style). Heute {target_date}.
 
 Kandidaten mit FBref/StatsBomb/FPL Stats:
 {_json.dumps(payload, ensure_ascii=False, indent=1)}
@@ -17435,7 +17435,7 @@ Antworte NUR JSON:
     nl = "\n"
     header = (
         f"🔑 <b>PROP BUILDER — {target_date}</b>{nl}"
-        f"<i>Shots · Fouls · Bookings · Nate Style</i>{nl}"
+        f"<i>Shots · Fouls · Bookings · Ladder Style</i>{nl}"
         f"━━━━━━━━━━━━━━━━━━━━{nl}"
         f"<i>📊 {total} Kandidaten · {len(combos)} Kombis · {source}</i>"
     )
@@ -18970,7 +18970,7 @@ def run_pinnacle_props_bot(win_start_utc=None, win_end_utc=None, ch_tz=None, top
         log(f"   DB Supabase: {str(_e)[:60]}", "WARN")
 
     # ════════════════════════════════════════════════════════════════
-    # BUILDER LOGIK — Nate Style + Aystar Style
+    # BUILDER LOGIK — Ladder Style + Aystar Style
     # ════════════════════════════════════════════════════════════════
     if not _prop_db or not _pp_chat:
         log("   Prop DB: leer oder kein Kanal")
@@ -19049,10 +19049,10 @@ def run_pinnacle_props_bot(win_start_utc=None, win_end_utc=None, ch_tz=None, top
             _by_match[_p["match"]][_p["player"]][_p["category"]].append(_p)
             _by_cat_all[_p["category"]].append(_p)
 
-        # ── NATE STYLE: LADDER ─────────────────────────────────────
+        # ── LADDER: LADDER ─────────────────────────────────────
         # Gleicher Spieler + gleiche Kategorie, steigende Linien → Varianten
         # z.B. Perisic 3+ Tackles, 2+ Tackles, 1+ Tackles @ 375/1, 160/1, 70/1
-        log(f"   🎯 Nate Ladder Builder...")
+        log(f"   🎯 Ladder Builder...")
         _ladder_candidates = sum(1 for _m, _pls in _by_match.items() 
                                   for _pl, _cats in _pls.items() 
                                   for _c, _props in _cats.items() if len(_props) >= 2)
@@ -19077,11 +19077,11 @@ def run_pinnacle_props_bot(win_start_utc=None, win_end_utc=None, ch_tz=None, top
                     # Nur wenn echte Ladder: Linien müssen sich unterscheiden UND Odds variieren
                     if len(set(p["line"] for p in _deduped)) < 2: continue
                     if len(_deduped) < 2: continue
-                    # Mehrere Varianten wie Nate (hohe→mittlere→niedrige Linie)
+                    # Mehrere Varianten wie Ladder (hohe→mittlere→niedrige Linie)
                     _built = False
                     for _sz in range(min(len(_deduped), 5), 1, -1):
                         legs = _deduped[:_sz]
-                        if _send_builder(legs, "NATE LADDER", f"{_player} {_c}"):
+                        if _send_builder(legs, "LADDER LADDER", f"{_player} {_c}"):
                             _built = True
                     if _built:
                         _builder_sent_today.add(_gk)
@@ -19606,7 +19606,7 @@ def run_pinnacle_props_bot(win_start_utc=None, win_end_utc=None, ch_tz=None, top
     # Sortierung nach Anstosszeit
     builders.sort(key=lambda x: x.get("_ko") or _dt2.max.replace(tzinfo=timezone.utc))
 
-    # 🆕 MULTI-MATCH BET BUILDER (wie Nate VIP — 2-3 Spiele gemischt)
+    # 🆕 MULTI-MATCH BET BUILDER (wie Ladder VIP — 2-3 Spiele gemischt)
     # Nimmt das beste Leg aus 2-3 verschiedenen Matches und kombiniert sie
     _match_best = {}  # {match_name: [sorted legs]}
     for b in builders:
