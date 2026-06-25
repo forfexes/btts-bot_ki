@@ -44,6 +44,8 @@ jobs:
           INCLUDE_CORNERS_IN_MULTI: "true"
           CORNER_COMBO_MIN_PROB: "64"
           MULTI_COMBO_MAX_CORNERS: "2"
+          MAX_TIPS_PER_MARKET_SEND: "8"
+          MAX_TOTAL_SINGLE_TIPS_SEND: "35"
           ENABLE_ADVANCED_PROPS: "true"
           ENABLE_AI_ADVANCED_PROPS: "false"
           PROP_WINDOW_HOURS: "12"
