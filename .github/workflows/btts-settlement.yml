@@ -1,4 +1,4 @@
-name: NETRATTLER Settlement V3 FAST
+name: NETRATTLER Settlement V4 DATECACHE
 
 on:
   schedule:
@@ -8,7 +8,7 @@ on:
 jobs:
   settlement:
     runs-on: ubuntu-latest
-    timeout-minutes: 5
+    timeout-minutes: 3
 
     steps:
       - name: Checkout
@@ -25,27 +25,20 @@ jobs:
           python -m pip install --upgrade pip
           pip install requests python-dotenv
 
-      - name: Run Settlement V3 FAST
+      - name: Run Settlement V4
         env:
           SUPABASE_URL: ${{ secrets.SUPABASE_URL }}
           SUPABASE_KEY: ${{ secrets.SUPABASE_KEY }}
           TELEGRAM_TOKEN: ${{ secrets.TELEGRAM_TOKEN }}
           TELEGRAM_CHAT_ID: ${{ secrets.TELEGRAM_CHAT_ID }}
-          TELEGRAM_GROUP_BTTS: ${{ secrets.TELEGRAM_GROUP_BTTS }}
-          TELEGRAM_GROUP_OVER25: ${{ secrets.TELEGRAM_GROUP_OVER25 }}
-          TELEGRAM_GROUP_COMBO: ${{ secrets.TELEGRAM_GROUP_COMBO }}
-          TELEGRAM_GROUP_COMBOS: ${{ secrets.TELEGRAM_GROUP_COMBOS }}
-          TELEGRAM_GROUP_BTTS_HT: ${{ secrets.TELEGRAM_GROUP_BTTS_HT }}
-          TELEGRAM_GROUP_OVER15_HT: ${{ secrets.TELEGRAM_GROUP_OVER15_HT }}
-          TELEGRAM_GROUP_HZ_LIVE: ${{ secrets.TELEGRAM_GROUP_HZ_LIVE }}
           TELEGRAM_GROUP_STATS: ${{ secrets.TELEGRAM_GROUP_STATS }}
           FOOTBALL_DATA_API_KEYS: ${{ secrets.FOOTBALL_DATA_API_KEYS }}
           FOOTBALL_DATA_API_KEY: ${{ secrets.FOOTBALL_DATA_API_KEY }}
-          SETTLEMENT_DAYS_BACK: "1"
-          SETTLEMENT_LIMIT: "120"
-          SETTLEMENT_MAX_GAMES: "35"
-          SETTLEMENT_TIMEOUT_SECONDS: "90"
+          SETTLEMENT_DAYS_BACK: "2"
+          SETTLEMENT_LIMIT: "250"
+          SETTLEMENT_MAX_DATES: "3"
+          SETTLEMENT_TIMEOUT_SECONDS: "60"
           SETTLEMENT_SEND_SUMMARY: "true"
         run: |
-          echo "⚽ NETRATTLER Settlement V3 FAST startet..."
+          echo "⚽ NETRATTLER Settlement V4 DATECACHE startet..."
           python settlement.py
