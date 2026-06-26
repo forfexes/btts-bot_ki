@@ -1,10 +1,20 @@
 #!/usr/bin/env python3
 """
-NETRATTLER Settlement V4 DATECACHE - FIX
-========================================
-Wichtig:
-Diese Datei ist PYTHON.
-Workflow-YAML gehört in .github/workflows/btts-settlement.yml
+NETRATTLER Settlement V5 MORE SOURCES
+====================================
+Fix für V4:
+V4 war schnell, aber hatte zu wenig Ergebnisabdeckung.
+V5 lädt pro Datum mehrere freie Ergebnisquellen:
+
+1) TheSportsDB eventsday
+2) ScoreBat feed
+3) ESPN Soccer Scoreboards
+4) Football-Data API
+
+Bleibt schnell:
+- keine 250 Einzel-API-Aufrufe
+- pro Datum Quellen laden
+- danach lokale Matching-Logik
 """
 
 import os
@@ -20,10 +30,10 @@ SUPABASE_URL = os.getenv("SUPABASE_URL", "").rstrip("/")
 SUPABASE_KEY = os.getenv("SUPABASE_SERVICE_ROLE_KEY") or os.getenv("SUPABASE_KEY", "")
 TELEGRAM_TOKEN = os.getenv("TELEGRAM_TOKEN", "")
 
-DAYS_BACK = int(os.getenv("SETTLEMENT_DAYS_BACK", "2"))
-LIMIT = int(os.getenv("SETTLEMENT_LIMIT", "250"))
-MAX_DATES = int(os.getenv("SETTLEMENT_MAX_DATES", "3"))
-TIMEOUT_SECONDS = int(os.getenv("SETTLEMENT_TIMEOUT_SECONDS", "60"))
+DAYS_BACK = int(os.getenv("SETTLEMENT_DAYS_BACK", "3"))
+LIMIT = int(os.getenv("SETTLEMENT_LIMIT", "300"))
+MAX_DATES = int(os.getenv("SETTLEMENT_MAX_DATES", "4"))
+TIMEOUT_SECONDS = int(os.getenv("SETTLEMENT_TIMEOUT_SECONDS", "90"))
 SEND_SUMMARY = os.getenv("SETTLEMENT_SEND_SUMMARY", "true").lower() in ("1", "true", "yes", "on")
 
 TELEGRAM_STATS = os.getenv("TELEGRAM_GROUP_STATS") or os.getenv("TELEGRAM_CHAT_ID", "")
@@ -57,7 +67,7 @@ def timed_out() -> bool:
 def norm(s: Any) -> str:
     s = str(s or "").lower()
     s = s.replace("&", " and ")
-    s = re.sub(r"\b(fc|cf|sc|afc|u19|u20|u21|ii|b)\b", " ", s)
+    s = re.sub(r"\b(fc|cf|sc|afc|u19|u20|u21|ii|iii|b|women|w)\b", " ", s)
     s = re.sub(r"[^a-z0-9äöüß]+", " ", s)
     return re.sub(r"\s+", " ", s).strip()
 
@@ -68,11 +78,13 @@ def team_match(a: str, b: str) -> bool:
         return False
     if na == nb or na in nb or nb in na:
         return True
+
     wa, wb = set(na.split()), set(nb.split())
     if not wa or not wb:
         return False
     inter = len(wa & wb)
-    return inter >= max(1, min(len(wa), len(wb)) - 1)
+    small = min(len(wa), len(wb))
+    return inter >= max(1, small - 1)
 
 
 def send_telegram(text: str) -> bool:
@@ -97,7 +109,7 @@ def send_telegram(text: str) -> bool:
 def sb_get(table: str, params: Dict[str, Any]) -> List[Dict[str, Any]]:
     if not SUPABASE_URL or not SUPABASE_KEY:
         raise RuntimeError("SUPABASE_URL/SUPABASE_KEY fehlt")
-    r = requests.get(f"{SUPABASE_URL}/rest/v1/{table}", headers=HEADERS_SB, params=params, timeout=20)
+    r = requests.get(f"{SUPABASE_URL}/rest/v1/{table}", headers=HEADERS_SB, params=params, timeout=25)
     if not r.ok:
         raise RuntimeError(f"Supabase GET {table} {r.status_code}: {r.text[:300]}")
     return r.json()
@@ -113,7 +125,6 @@ def sb_patch_tip(tip: Dict[str, Any], data: Dict[str, Any]) -> bool:
 
     headers = dict(HEADERS_SB)
     headers["Prefer"] = "return=minimal"
-
     r = requests.patch(f"{SUPABASE_URL}/rest/v1/tips", headers=headers, params=params, json=data, timeout=12)
     if not r.ok:
         log(f"PATCH Fehler {r.status_code}: {r.text[:120]}", "WARN")
@@ -151,6 +162,24 @@ def load_pending() -> List[Dict[str, Any]]:
     return rows[:LIMIT]
 
 
+def add_result(out: List[Dict[str, Any]], home: str, away: str, hg: Any, ag: Any, source: str,
+               hth: Any = None, hta: Any = None):
+    try:
+        if home is None or away is None or hg in (None, "") or ag in (None, ""):
+            return
+        out.append({
+            "home": str(home),
+            "away": str(away),
+            "home_goals": int(hg),
+            "away_goals": int(ag),
+            "ht_home_goals": int(hth) if hth not in (None, "") else None,
+            "ht_away_goals": int(hta) if hta not in (None, "") else None,
+            "source": source,
+        })
+    except Exception:
+        return
+
+
 def source_thesportsdb_date(d: str) -> List[Dict[str, Any]]:
     out = []
     try:
@@ -162,21 +191,78 @@ def source_thesportsdb_date(d: str) -> List[Dict[str, Any]]:
         if not r.ok:
             return out
         for e in (r.json().get("events") or []):
-            hs = e.get("intHomeScore")
-            aw = e.get("intAwayScore")
-            if hs in (None, "") or aw in (None, ""):
-                continue
-            out.append({
-                "home": e.get("strHomeTeam") or "",
-                "away": e.get("strAwayTeam") or "",
-                "home_goals": int(hs),
-                "away_goals": int(aw),
-                "ht_home_goals": None,
-                "ht_away_goals": None,
-                "source": "thesportsdb",
-            })
+            add_result(out, e.get("strHomeTeam"), e.get("strAwayTeam"), e.get("intHomeScore"), e.get("intAwayScore"), "thesportsdb")
     except Exception as e:
         log(f"TheSportsDB {d} skip: {e}", "WARN")
+    return out
+
+
+def source_scorebat_date(d: str) -> List[Dict[str, Any]]:
+    out = []
+    try:
+        # ScoreBat feed enthält oft aktuelle/recent Spiele weltweit.
+        r = requests.get("https://www.scorebat.com/video-api/v3/", timeout=15)
+        if not r.ok:
+            return out
+        data = r.json().get("response") or []
+        for e in data:
+            dt = str(e.get("date") or "")
+            if d not in dt:
+                continue
+            title = e.get("title") or ""
+            if " - " not in title:
+                continue
+            home, away = title.split(" - ", 1)
+            score = str(e.get("competition") or "")
+            # ScoreBat hat nicht immer Score strukturiert. In vielen Feeds steht Score nicht sauber drin.
+            # Falls kein Score vorhanden, überspringen.
+            m = re.search(r"(\d+)\s*[-:]\s*(\d+)", str(e))
+            if not m:
+                continue
+            add_result(out, home, away, m.group(1), m.group(2), "scorebat")
+    except Exception as e:
+        log(f"ScoreBat {d} skip: {e}", "WARN")
+    return out
+
+
+ESPN_LEAGUES = [
+    "eng.1", "eng.2", "esp.1", "esp.2", "ita.1", "ger.1", "ger.2", "fra.1", "ned.1", "por.1",
+    "swe.1", "nor.1", "fin.1", "den.1", "bel.1", "aut.1", "sui.1", "tur.1", "usa.1", "mex.1",
+    "bra.1", "arg.1", "chn.1", "jpn.1", "aus.1",
+    "uefa.champions", "uefa.europa", "fifa.world",
+]
+
+
+def source_espn_date(d: str) -> List[Dict[str, Any]]:
+    out = []
+    ymd = d.replace("-", "")
+    for league in ESPN_LEAGUES:
+        if timed_out():
+            break
+        try:
+            url = f"https://site.api.espn.com/apis/site/v2/sports/soccer/{league}/scoreboard"
+            r = requests.get(url, params={"dates": ymd}, timeout=7)
+            if not r.ok:
+                continue
+            for ev in r.json().get("events", []):
+                comp = (ev.get("competitions") or [{}])[0]
+                if comp.get("status", {}).get("type", {}).get("completed") is not True:
+                    continue
+                competitors = comp.get("competitors") or []
+                if len(competitors) < 2:
+                    continue
+                home = away = None
+                for c in competitors:
+                    nm = (c.get("team") or {}).get("displayName") or (c.get("team") or {}).get("name") or ""
+                    sc = c.get("score")
+                    if c.get("homeAway") == "home":
+                        home = (nm, sc)
+                    elif c.get("homeAway") == "away":
+                        away = (nm, sc)
+                if home and away:
+                    add_result(out, home[0], away[0], home[1], away[1], f"espn:{league}")
+        except Exception:
+            continue
     return out
 
 
@@ -184,7 +270,6 @@ def source_football_data_date(d: str) -> List[Dict[str, Any]]:
     out = []
     if not FOOTBALL_DATA_KEYS:
         return out
-
     for api_key in FOOTBALL_DATA_KEYS[:2]:
         try:
             r = requests.get(
@@ -197,22 +282,19 @@ def source_football_data_date(d: str) -> List[Dict[str, Any]]:
                 continue
             if not r.ok:
                 continue
-
             for m in r.json().get("matches", []):
                 ft = (m.get("score") or {}).get("fullTime") or {}
                 ht = (m.get("score") or {}).get("halfTime") or {}
-                if ft.get("home") is None or ft.get("away") is None:
-                    continue
-
-                out.append({
-                    "home": (m.get("homeTeam") or {}).get("name", ""),
-                    "away": (m.get("awayTeam") or {}).get("name", ""),
-                    "home_goals": int(ft.get("home") or 0),
-                    "away_goals": int(ft.get("away") or 0),
-                    "ht_home_goals": int(ht.get("home") or 0) if ht.get("home") is not None else None,
-                    "ht_away_goals": int(ht.get("away") or 0) if ht.get("away") is not None else None,
-                    "source": "football-data",
-                })
+                add_result(
+                    out,
+                    (m.get("homeTeam") or {}).get("name", ""),
+                    (m.get("awayTeam") or {}).get("name", ""),
+                    ft.get("home"),
+                    ft.get("away"),
+                    "football-data",
+                    ht.get("home"),
+                    ht.get("away"),
+                )
             if out:
                 return out
         except Exception:
@@ -225,8 +307,17 @@ def load_results_for_date(d: str) -> List[Dict[str, Any]]:
         return DATE_RESULTS[d]
 
     results = []
-    results.extend(source_thesportsdb_date(d))
-    results.extend(source_football_data_date(d))
+    for name, fn in [
+        ("TheSportsDB", source_thesportsdb_date),
+        ("ScoreBat", source_scorebat_date),
+        ("ESPN", source_espn_date),
+        ("FootballData", source_football_data_date),
+    ]:
+        if timed_out():
+            break
+        before = len(results)
+        results.extend(fn(d))
+        log(f"Quelle {name} {d}: +{len(results)-before}")
 
     seen = set()
     clean = []
@@ -238,7 +329,7 @@ def load_results_for_date(d: str) -> List[Dict[str, Any]]:
         clean.append(r)
 
     DATE_RESULTS[d] = clean
-    log(f"Ergebnisse {d}: {len(clean)} geladen")
+    log(f"Ergebnisse {d}: {len(clean)} total")
     return clean
 
 
@@ -300,14 +391,14 @@ def send_summary(settled: List[Dict[str, Any]], skipped: int):
     if not SEND_SUMMARY:
         return
     if not settled:
-        send_telegram(f"📊 <b>Settlement V4 FIX</b>\nKeine Tipps ausgewertet.\nOffen/ohne Ergebnis: {skipped}")
+        send_telegram(f"📊 <b>Settlement V5</b>\nKeine Tipps ausgewertet.\nOffen/ohne Ergebnis: {skipped}")
         return
 
     by = {}
     for x in settled:
         by.setdefault(group_key(x), []).append(x)
 
-    lines = ["📊 <b>Settlement V4 FIX</b>"]
+    lines = ["📊 <b>Settlement V5</b>"]
     tw = tl = 0
     for g, items in sorted(by.items()):
         w = sum(1 for i in items if i["status"] == "won")
@@ -323,11 +414,11 @@ def send_summary(settled: List[Dict[str, Any]], skipped: int):
 
 
 def main():
-    log("⚽ NETRATTLER Settlement V4 FIX startet")
+    log("⚽ NETRATTLER Settlement V5 MORE SOURCES startet")
     tips = load_pending()
     log(f"Offene Tipps geladen: {len(tips)} | Limit={LIMIT} | Days={DAYS_BACK}")
 
-    dates = sorted({tip_date(t) for t in tips})[:MAX_DATES]
+    dates = sorted({tip_date(t) for t in tips})[-MAX_DATES:]
     log(f"Dates: {dates}")
 
     for d in dates:
@@ -377,7 +468,7 @@ def main():
             settled.append(item)
 
     send_summary(settled, skipped)
-    log(f"✅ Settlement V4 FIX fertig: {len(settled)} ausgewertet, {skipped} offen/nicht auswertbar, Dates={len(dates)}")
+    log(f"✅ Settlement V5 fertig: {len(settled)} ausgewertet, {skipped} offen/nicht auswertbar, ResultCache={sum(len(v) for v in DATE_RESULTS.values())}")
 
 
 if __name__ == "__main__":
