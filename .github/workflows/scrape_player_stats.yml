@@ -1,14 +1,27 @@
-name: NETRATTLER Player Stats Scraper V10
+name: NETRATTLER Player Stats Scraper V11
 
 on:
-  schedule:
-    - cron: "15 4 * * *"
   workflow_dispatch:
+    inputs:
+      date:
+        description: "Datum für SofaScore YYYY-MM-DD, leer = gestern"
+        required: false
+        default: ""
+      source:
+        description: "all | statsbomb | sofascore | fbref"
+        required: false
+        default: "all"
+      rebuild_only:
+        description: "Nur player_avg_stats neu berechnen true/false"
+        required: false
+        default: "false"
+  schedule:
+    - cron: "10 4 * * *"
 
 jobs:
   scrape-player-stats:
     runs-on: ubuntu-latest
-    timeout-minutes: 12
+    timeout-minutes: 25
 
     steps:
       - uses: actions/checkout@v4
@@ -23,11 +36,24 @@ jobs:
           python -m pip install --upgrade pip
           pip install requests python-dotenv
 
-      - name: Run Player Stats Scraper V10
+      - name: Run Player Stats Scraper V11
         env:
           SUPABASE_URL: ${{ secrets.SUPABASE_URL }}
           SUPABASE_KEY: ${{ secrets.SUPABASE_KEY }}
-          STATSBOMB_MAX_MATCHES: "60"
+          STATSBOMB_MAX_MATCHES: "80"
+          SOFASCORE_MAX_EVENTS: "25"
+          FBREF_MAX_PAGES: "5"
         run: |
-          echo "📊 NETRATTLER Player Stats Scraper V10 startet..."
-          python scrape_player_stats.py
+          DATE="${{ github.event.inputs.date }}"
+          SOURCE="${{ github.event.inputs.source }}"
+          REBUILD="${{ github.event.inputs.rebuild_only }}"
+
+          if [ -z "$SOURCE" ]; then SOURCE="all"; fi
+
+          if [ "$REBUILD" = "true" ]; then
+            python scrape_player_stats.py --rebuild-only
+          elif [ -n "$DATE" ]; then
+            python scrape_player_stats.py --date "$DATE" --source "$SOURCE"
+          else
+            python scrape_player_stats.py --source "$SOURCE"
+          fi
