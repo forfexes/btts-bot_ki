@@ -1,3 +1,4 @@
+# NETRATTLER V11 FOOTBALL ONLY - Prop Hunter bleibt anderer Chat/anderes Projekt
 from typing import List, Dict, Optional, Tuple, Any
 """
 AI TIPP BOT - GITHUB SINGLE FILE EDITION
