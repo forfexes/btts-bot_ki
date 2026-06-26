@@ -1,61 +1,44 @@
-name: NETRATTLER Main Bot FAST
+name: NETRATTLER V11 Football Main
 
 on:
+  workflow_dispatch:
   schedule:
     - cron: "30 6 * * *"
     - cron: "30 12 * * *"
     - cron: "30 18 * * *"
     - cron: "30 21 * * *"
-  workflow_dispatch:
 
 jobs:
-  netrattler-fast:
+  run-bot:
     runs-on: ubuntu-latest
     timeout-minutes: 35
 
     steps:
-      - name: Checkout
-        uses: actions/checkout@v4
+      - uses: actions/checkout@v4
 
-      - name: Setup Python
-        uses: actions/setup-python@v5
+      - uses: actions/setup-python@v5
         with:
           python-version: "3.11"
           cache: "pip"
 
-      - name: Install requirements
+      - name: Install dependencies
         run: |
           python -m pip install --upgrade pip
-          if [ -f requirements.txt ]; then pip install -r requirements.txt; fi
+          if [ -f requirements.txt ]; then pip install -r requirements.txt; else pip install requests python-dotenv supabase; fi
 
-      - name: Run NETRATTLER FAST
+      - name: Run NETRATTLER V11
         env:
           RUN_MODE: "tips"
           RUN_SELF_TEST: "false"
+          NETRATTLER_VERSION: "V11_FOOTBALL"
           NETRATTLER_FAST_MODE: "true"
+          ENABLE_PROP_HUNTER: "false"
+          APIFOOTBALL_DISABLED: "true"
+          API_FOOTBALL_KEY: ""
           MAX_LEAGUES_PER_RUN: "8"
-          SKIP_LEAGUE_LOOP_AFTER_PINNACLE_TIPS: "5"
-          AI_SLEEP_SECONDS: "0.1"
-          GROQ_SLEEP_SECONDS: "0.5"
-
-          ENABLE_CORNERS_SCORER: "true"
-          ENABLE_CORNERS_BOT: "true"
-          ENABLE_SCORER_BOT: "false"
-          INCLUDE_CORNERS_IN_MULTI: "true"
-          CORNER_COMBO_MIN_PROB: "60"
-          MULTI_COMBO_MAX_CORNERS: "2"
-          MAX_CORNER_TIPS_SEND: "8"
-          SEND_GROUP_AUSWERTUNG_EVERY_RUN: "false"
-          SEND_BTTS_STATS_HEADER: "false"
-          LOG_DUPLICATE_TIPS: "false"
-          LOG_DUPLICATE_CORNERS: "false"
           PINNACLE_MAX_MATCHES_ANALYZE: "18"
           PINNACLE_TARGET_TIPS: "70"
-          ENABLE_FDCOUK_MATCH_STATS: "false"
-          ENABLE_CLUBELO_MATCH_STATS: "false"
-          MAX_CORNER_FIXTURES_ANALYZE: "14"
-          MAX_TIPS_PER_MARKET_SEND: "8"
-          MAX_TOTAL_SINGLE_TIPS_SEND: "35"
+          SKIP_LEAGUE_LOOP_AFTER_PINNACLE_TIPS: "5"
           ENABLE_ADVANCED_PROPS: "true"
           ENABLE_AI_ADVANCED_PROPS: "false"
           PROP_WINDOW_HOURS: "12"
@@ -70,17 +53,28 @@ jobs:
           ENABLE_PROP_FBREF_CHECK: "false"
           ENABLE_PROP_ODDSPEDIA: "false"
           ENABLE_PROP_FOTMOB: "false"
+          ENABLE_CORNERS_SCORER: "true"
+          ENABLE_CORNERS_BOT: "true"
+          ENABLE_SCORER_BOT: "false"
+          INCLUDE_CORNERS_IN_MULTI: "true"
+          CORNER_COMBO_MIN_PROB: "60"
+          MULTI_COMBO_MAX_CORNERS: "2"
           MULTI_COMBO_SIZES: "3,4,5,6,7,8,9,10,11"
-
-          APIFOOTBALL_DISABLED: "true"
-          API_FOOTBALL_KEY: ""
+          MAX_TIPS_PER_MARKET_SEND: "8"
+          MAX_TOTAL_SINGLE_TIPS_SEND: "35"
+          MAX_CORNER_TIPS_SEND: "8"
+          SEND_GROUP_AUSWERTUNG_EVERY_RUN: "false"
+          SEND_BTTS_STATS_HEADER: "false"
+          LOG_DUPLICATE_TIPS: "false"
+          LOG_DUPLICATE_CORNERS: "false"
+          ENABLE_FDCOUK_MATCH_STATS: "false"
+          ENABLE_CLUBELO_MATCH_STATS: "false"
+          MAX_CORNER_FIXTURES_ANALYZE: "14"
+          PLAYER_STATS_SOURCE: "supabase"
 
           GEMINI_API_KEYS: ${{ secrets.GEMINI_API_KEYS }}
-          GEMINI_API_KEY: ${{ secrets.GEMINI_API_KEY }}
           GROQ_API_KEYS: ${{ secrets.GROQ_API_KEYS }}
-          GROQ_API_KEY: ${{ secrets.GROQ_API_KEY }}
           ODDS_API_KEYS: ${{ secrets.ODDS_API_KEYS }}
-          ODDS_API_KEY: ${{ secrets.ODDS_API_KEY }}
           FOOTBALL_DATA_API_KEYS: ${{ secrets.FOOTBALL_DATA_API_KEYS }}
           FOOTBALL_DATA_API_KEY: ${{ secrets.FOOTBALL_DATA_API_KEY }}
           THESTATSAPI_KEY: ${{ secrets.THESTATSAPI_KEY }}
@@ -90,15 +84,16 @@ jobs:
           TELEGRAM_GROUP_BTTS: ${{ secrets.TELEGRAM_GROUP_BTTS }}
           TELEGRAM_GROUP_OVER25: ${{ secrets.TELEGRAM_GROUP_OVER25 }}
           TELEGRAM_GROUP_COMBO: ${{ secrets.TELEGRAM_GROUP_COMBO }}
+          TELEGRAM_GROUP_COMBOS: ${{ secrets.TELEGRAM_GROUP_COMBOS }}
           TELEGRAM_GROUP_BTTS_HT: ${{ secrets.TELEGRAM_GROUP_BTTS_HT }}
           TELEGRAM_GROUP_OVER15_HT: ${{ secrets.TELEGRAM_GROUP_OVER15_HT }}
-          TELEGRAM_GROUP_STATS: ${{ secrets.TELEGRAM_GROUP_STATS }}
           TELEGRAM_GROUP_HZ_LIVE: ${{ secrets.TELEGRAM_GROUP_HZ_LIVE }}
           TELEGRAM_GROUP_LATE_GOALS: ${{ secrets.TELEGRAM_GROUP_LATE_GOALS }}
+          TELEGRAM_GROUP_STATS: ${{ secrets.TELEGRAM_GROUP_STATS }}
           TELEGRAM_GROUP_ADVANCED_PROPS: ${{ secrets.TELEGRAM_GROUP_ADVANCED_PROPS }}
 
           SUPABASE_URL: ${{ secrets.SUPABASE_URL }}
           SUPABASE_KEY: ${{ secrets.SUPABASE_KEY }}
         run: |
-          echo "⚡ NETRATTLER FAST Run startet..."
+          echo "NETRATTLER V11 Football startet..."
           python btts_bot.py
