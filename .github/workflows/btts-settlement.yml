@@ -1,4 +1,4 @@
-name: NETRATTLER Settlement V2
+name: NETRATTLER Settlement V3 FAST
 
 on:
   schedule:
@@ -8,7 +8,7 @@ on:
 jobs:
   settlement:
     runs-on: ubuntu-latest
-    timeout-minutes: 20
+    timeout-minutes: 5
 
     steps:
       - name: Checkout
@@ -25,7 +25,7 @@ jobs:
           python -m pip install --upgrade pip
           pip install requests python-dotenv
 
-      - name: Run Settlement V2
+      - name: Run Settlement V3 FAST
         env:
           SUPABASE_URL: ${{ secrets.SUPABASE_URL }}
           SUPABASE_KEY: ${{ secrets.SUPABASE_KEY }}
@@ -41,10 +41,11 @@ jobs:
           TELEGRAM_GROUP_STATS: ${{ secrets.TELEGRAM_GROUP_STATS }}
           FOOTBALL_DATA_API_KEYS: ${{ secrets.FOOTBALL_DATA_API_KEYS }}
           FOOTBALL_DATA_API_KEY: ${{ secrets.FOOTBALL_DATA_API_KEY }}
-          THESTATSAPI_KEY: ${{ secrets.THESTATSAPI_KEY }}
-          SETTLEMENT_DAYS_BACK: "3"
-          SETTLEMENT_LIMIT: "500"
+          SETTLEMENT_DAYS_BACK: "1"
+          SETTLEMENT_LIMIT: "120"
+          SETTLEMENT_MAX_GAMES: "35"
+          SETTLEMENT_TIMEOUT_SECONDS: "90"
           SETTLEMENT_SEND_SUMMARY: "true"
         run: |
-          echo "⚽ NETRATTLER Settlement V2 startet..."
+          echo "⚽ NETRATTLER Settlement V3 FAST startet..."
           python settlement.py
