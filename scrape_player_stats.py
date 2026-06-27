@@ -71,19 +71,59 @@ def jget(url, params=None, headers=None):
 # ============================================================
 # SUPABASE
 # ============================================================
+def _dedupe_for_conflict(rows: List[Dict], conflict: str) -> List[Dict]:
+    """Postgres kann innerhalb eines UPSERT-Kommandos nicht 2x denselben Conflict-Key updaten."""
+    if not rows or not conflict:
+        return rows
+    keys = [k.strip() for k in conflict.split(",") if k.strip()]
+    if not keys:
+        return rows
+
+    # Compatibility: alte Referee-Rows nutzen referee_name, neue Tabellen oft referee.
+    if any("referee" in k for k in keys):
+        for r in rows:
+            if r.get("referee_name") and not r.get("referee"):
+                r["referee"] = r.get("referee_name")
+            if r.get("referee") and not r.get("referee_name"):
+                r["referee_name"] = r.get("referee")
+
+    seen = {}
+    passthrough = []
+    for r in rows:
+        vals = []
+        complete = True
+        for k in keys:
+            v = r.get(k)
+            if v is None or str(v) == "":
+                complete = False
+                break
+            vals.append(str(v))
+        if not complete:
+            passthrough.append(r)
+            continue
+        seen[tuple(vals)] = r  # last row wins
+    return list(seen.values()) + passthrough
+
+
 def upsert(table: str, rows: List[Dict], conflict: str = "") -> int:
     if not rows: return 0
     if not SUPABASE_URL or not SUPABASE_KEY:
         log(f"  ⚠️ Supabase nicht konfiguriert"); return 0
+
+    rows = _dedupe_for_conflict(rows, conflict)
+
     total = 0
     h = dict(SB_HEADERS)
     h["Prefer"] = "resolution=merge-duplicates,return=minimal"
     url = f"{SUPABASE_URL}/rest/v1/{table}" + (f"?on_conflict={conflict}" if conflict else "")
-    for i in range(0, len(rows), 300):
-        chunk = rows[i:i+300]
+    for i in range(0, len(rows), 250):
+        chunk = rows[i:i+250]
+        chunk = _dedupe_for_conflict(chunk, conflict)
         try:
             r = HTTP.post(url, headers=h, json=chunk, timeout=45)
-            if not r.ok: log(f"  ⚠️ UPSERT {table} {r.status_code}: {r.text[:200]}"); continue
+            if not r.ok:
+                log(f"  ⚠️ UPSERT {table} {r.status_code}: {r.text[:350]}")
+                continue
             total += len(chunk)
         except Exception as e:
             log(f"  ⚠️ UPSERT {table}: {e}")
@@ -701,12 +741,20 @@ def xgabora_rows():
     log("📦 13. xgabora Club Football Match Data 2000-2025...")
     rows = []
     try:
-        # Hauptdatensatz
-        base = "https://raw.githubusercontent.com/xgabora/Club-Football-Match-Data-2000-2025/main"
-        # Versuche verschiedene Dateinamen
-        for _fname in ["football_matches.csv", "matches.csv", "data.csv", "club_football_matches.csv"]:
-            r = safe_get(f"{base}/{_fname}", timeout=60)
-            if r: break
+        # Hauptdatensatz: Repo hat je nach Version andere Pfade/Dateinamen.
+        urls = [
+            "https://raw.githubusercontent.com/xgabora/Club-Football-Match-Data-2000-2025/main/data/Matches.csv",
+            "https://raw.githubusercontent.com/xgabora/Club-Football-Match-Data-2000-2025/main/data/matches.csv",
+            "https://raw.githubusercontent.com/xgabora/Club-Football-Match-Data-2000-2025/main/Matches.csv",
+            "https://raw.githubusercontent.com/xgabora/Club-Football-Match-Data-2000-2025/main/matches.csv",
+            "https://raw.githubusercontent.com/xgabora/Club-Football-Match-Data-2000-2025/master/data/Matches.csv",
+            "https://raw.githubusercontent.com/xgabora/Club-Football-Match-Data-2000-2025/master/data/matches.csv",
+        ]
+        r = None
+        for _url in urls:
+            r = safe_get(_url, timeout=90)
+            if r:
+                break
         if not r:
             health("xgabora", "empty", 0); return rows
         reader = csv.DictReader(io.StringIO(r.text))
@@ -766,34 +814,87 @@ def openfootball_rows():
         ("https://raw.githubusercontent.com/openfootball/football.json/master/2025-26/it.1.json", "Serie A 25/26"),
         ("https://raw.githubusercontent.com/openfootball/football.json/master/2025-26/fr.1.json", "Ligue 1 25/26"),
     ]
+
+    def _extract_matches(data):
+        if isinstance(data, dict):
+            if isinstance(data.get("matches"), list):
+                return data.get("matches") or []
+            if isinstance(data.get("rounds"), list):
+                out = []
+                for rnd in data.get("rounds") or []:
+                    if isinstance(rnd, dict):
+                        out.extend(rnd.get("matches") or [])
+                return out
+            return []
+        if isinstance(data, list):
+            out = []
+            for item in data:
+                if isinstance(item, dict) and isinstance(item.get("matches"), list):
+                    out.extend(item.get("matches") or [])
+                elif isinstance(item, dict):
+                    out.append(item)
+            return out
+        return []
+
+    def _team_name(x):
+        if isinstance(x, str):
+            return x
+        if isinstance(x, dict):
+            return x.get("name") or x.get("team") or ""
+        return ""
+
+    def _score_ft(score):
+        if isinstance(score, dict):
+            ft = score.get("ft") or score.get("fulltime") or score.get("full_time")
+            if isinstance(ft, list) and len(ft) >= 2:
+                return si(ft[0]), si(ft[1])
+            if isinstance(ft, dict):
+                return si(ft.get("home")), si(ft.get("away"))
+            if "home" in score and "away" in score:
+                return si(score.get("home")), si(score.get("away"))
+        if isinstance(score, list) and len(score) >= 2:
+            return si(score[0]), si(score[1])
+        return None, None
+
     for url, league_name in sources:
         try:
             data = jget(url)
-            if not data: continue
-            # openfootball kann dict mit "matches" key oder direkte Liste sein
-            if isinstance(data, list):
-                matches = data
-            else:
-                matches = data.get("matches") or []
+            if not data:
+                continue
+            matches = _extract_matches(data)
             for match in matches:
-                if not isinstance(match, dict): continue
-                score = match.get("score") or {}
-                ft = score.get("ft") or []
-                if not ft or len(ft) < 2: continue
-                home = (match.get("team1") or {})
-                away = (match.get("team2") or {})
-                h_name = home if isinstance(home, str) else home.get("name", "")
-                a_name = away if isinstance(away, str) else away.get("name", "")
+                if not isinstance(match, dict):
+                    continue
+                h_name = _team_name(match.get("team1") or match.get("home") or match.get("home_team"))
+                a_name = _team_name(match.get("team2") or match.get("away") or match.get("away_team"))
                 md = match.get("date", "")
+                hg, ag = _score_ft(match.get("score") or {})
                 goals = match.get("goals") or []
-                for goal in goals:
-                    scorer = goal.get("name", "")
-                    team = goal.get("team", "")
-                    if scorer:
+
+                # Manche openfootball Dateien liefern nur Resultate, keine Goal-Events.
+                # Dann wenigstens Team-Goal-Pseudo-Rows erzeugen, damit aktuelle Ergebnisse nicht verloren gehen.
+                if goals:
+                    for goal in goals:
+                        if not isinstance(goal, dict):
+                            continue
+                        scorer = goal.get("name") or goal.get("player") or ""
+                        team = goal.get("team") or ""
+                        if scorer:
+                            rows.append(player_row(
+                                scorer, team, f"openfootball_{league_name}_{md}_{h_name}",
+                                md, h_name, a_name, "openfootball",
+                                goals=1
+                            ))
+                elif hg is not None or ag is not None:
+                    if hg:
                         rows.append(player_row(
-                            scorer, team, f"openfootball_{league_name}_{md}_{h_name}",
-                            md, h_name, a_name, "openfootball",
-                            goals=1
+                            f"{h_name} team goals", h_name, f"openfootball_{league_name}_{md}_{h_name}",
+                            md, h_name, a_name, "openfootball", goals=hg
+                        ))
+                    if ag:
+                        rows.append(player_row(
+                            f"{a_name} team goals", a_name, f"openfootball_{league_name}_{md}_{a_name}",
+                            md, h_name, a_name, "openfootball", goals=ag
                         ))
         except Exception as e:
             log(f"  ⚠️ openfootball {league_name}: {e}")
@@ -895,7 +996,7 @@ def jfjelstul_referee_rows():
                     "updated_at": now()
                 })
         if rows:
-            upsert("referee_stats", rows, "referee_name")
+            upsert("referee_stats", rows, "source,referee_name")
     except Exception as e:
         log(f"  ⚠️ jfjelstul: {e}")
     health("jfjelstul_wc", "ok" if rows else "empty", len(rows))
@@ -1198,21 +1299,68 @@ def rebuild(days_back=365):
     out = []
     for p, a in agg.items():
         g = max(1, a["games"])
+        minutes_avg = round(a["minutes"] / g, 2)
+        shots_avg = round(a["shots"] / g, 3)
+        sot_avg = round(a["sot"] / g, 3)
+        goals_avg = round(a["goals"] / g, 3)
+        assists_avg = round(a["assists"] / g, 3)
+        passes_avg = round(a["passes"] / g, 3)
+        tackles_avg = round(a["tackles"] / g, 3)
+        fouls_committed_avg = round(a["fouls_committed"] / g, 3)
+        fouls_won_avg = round(a["fouls_won"] / g, 3)
+        cards_avg = round(a["cards"] / g, 3)
+        corners_avg = round(a["corners"] / g, 3)
+        xg_avg = round(a["xg_total"] / g, 4)
+        xa_avg = round(a["xa_total"] / g, 4)
+
         out.append({
-            "player_name": p, "team_name": a["team_name"], "games": a["games"],
-            "minutes_avg": round(a["minutes"] / g, 2),
-            "shots_avg": round(a["shots"] / g, 3),
-            "sot_avg": round(a["sot"] / g, 3),
-            "goals_avg": round(a["goals"] / g, 3),
-            "assists_avg": round(a["assists"] / g, 3),
-            "passes_avg": round(a["passes"] / g, 3),
-            "tackles_avg": round(a["tackles"] / g, 3),
-            "fouls_committed_avg": round(a["fouls_committed"] / g, 3),
-            "fouls_won_avg": round(a["fouls_won"] / g, 3),
-            "cards_avg": round(a["cards"] / g, 3),
-            "corners_avg": round(a["corners"] / g, 3),
-            "xg_avg": round(a["xg_total"] / g, 4),
-            "xa_avg": round(a["xa_total"] / g, 4),
+            "player_name": p,
+            "team_name": a["team_name"] or "",
+            "team": a["team_name"] or "",
+            "league": "",
+            "position": "",
+            "games": a["games"],
+
+            # Compatibility columns for old and new bot versions
+            "minutes": minutes_avg,
+            "minutes_avg": minutes_avg,
+            "shots": shots_avg,
+            "shots_pg": shots_avg,
+            "shots_avg": shots_avg,
+            "sot": sot_avg,
+            "sot_pg": sot_avg,
+            "sot_avg": sot_avg,
+            "goals": goals_avg,
+            "goals_pg": goals_avg,
+            "goals_avg": goals_avg,
+            "assists": assists_avg,
+            "assists_pg": assists_avg,
+            "assists_avg": assists_avg,
+            "passes": passes_avg,
+            "passes_pg": passes_avg,
+            "passes_avg": passes_avg,
+            "tackles": tackles_avg,
+            "tackles_pg": tackles_avg,
+            "tackles_avg": tackles_avg,
+            "fouls_committed": fouls_committed_avg,
+            "fouls_committed_pg": fouls_committed_avg,
+            "fouls_committed_avg": fouls_committed_avg,
+            "fouls_won": fouls_won_avg,
+            "fouls_won_pg": fouls_won_avg,
+            "fouls_won_avg": fouls_won_avg,
+            "cards": cards_avg,
+            "cards_pg": cards_avg,
+            "cards_avg": cards_avg,
+            "corners": corners_avg,
+            "corners_pg": corners_avg,
+            "corners_avg": corners_avg,
+            "xg": xg_avg,
+            "xg_pg": xg_avg,
+            "xg_avg": xg_avg,
+            "xa": xa_avg,
+            "xa_pg": xa_avg,
+            "xa_avg": xa_avg,
+
             # Hit Rates (Wahrscheinlichkeit mind. 1x in einem Spiel)
             "hr_sot": round(a["games_sot"] / g, 3),
             "hr_shot": round(a["games_shot"] / g, 3),
