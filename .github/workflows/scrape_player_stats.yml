@@ -1,27 +1,27 @@
-name: NETRATTLER Player Stats Scraper V11
+name: NETRATTLER Player Stats Scraper V13
 
 on:
+  schedule:
+    - cron: "10 4 * * *"
   workflow_dispatch:
     inputs:
       date:
-        description: "Datum für SofaScore YYYY-MM-DD, leer = gestern"
+        description: "Datum YYYY-MM-DD (leer = gestern)"
         required: false
         default: ""
       source:
-        description: "all | statsbomb | sofascore | fbref"
+        description: "all | statsbomb | fotmob | espn | fpl | sofascore | fbref | understat | fdcouk | xgabora | wm2026 | weather | referee | clubelo | martj42"
         required: false
         default: "all"
       rebuild_only:
-        description: "Nur player_avg_stats neu berechnen true/false"
+        description: "Nur player_avg_stats + Hit Rates neu berechnen (true/false)"
         required: false
         default: "false"
-  schedule:
-    - cron: "10 4 * * *"
 
 jobs:
   scrape-player-stats:
     runs-on: ubuntu-latest
-    timeout-minutes: 25
+    timeout-minutes: 30
 
     steps:
       - uses: actions/checkout@v4
@@ -34,22 +34,23 @@ jobs:
       - name: Install dependencies
         run: |
           python -m pip install --upgrade pip
-          pip install requests python-dotenv
+          pip install requests python-dotenv pandas beautifulsoup4 lxml
 
-      - name: Run Player Stats Scraper V11
+      - name: Run Player Stats Scraper V13
         env:
           SUPABASE_URL: ${{ secrets.SUPABASE_URL }}
           SUPABASE_KEY: ${{ secrets.SUPABASE_KEY }}
-          STATSBOMB_MAX_MATCHES: "80"
-          SOFASCORE_MAX_EVENTS: "25"
-          FBREF_MAX_PAGES: "5"
+          THESTATSAPI_KEY: ${{ secrets.THESTATSAPI_KEY }}
+          FOOTBALL_DATA_API_KEYS: ${{ secrets.FOOTBALL_DATA_API_KEYS }}
+          FOOTBALL_DATA_API_KEY: ${{ secrets.FOOTBALL_DATA_API_KEY }}
+          SPORTMONKS_API_KEY: ${{ secrets.SPORTMONKS_KEY }}
+          STATSBOMB_MAX_MATCHES: "120"
+          SOFASCORE_MAX_EVENTS: "30"
         run: |
           DATE="${{ github.event.inputs.date }}"
           SOURCE="${{ github.event.inputs.source }}"
           REBUILD="${{ github.event.inputs.rebuild_only }}"
-
           if [ -z "$SOURCE" ]; then SOURCE="all"; fi
-
           if [ "$REBUILD" = "true" ]; then
             python scrape_player_stats.py --rebuild-only
           elif [ -n "$DATE" ]; then
