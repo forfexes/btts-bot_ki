@@ -1,4 +1,4 @@
-# NETRATTLER V11 FOOTBALL ONLY - Prop Hunter bleibt anderer Chat/anderes Projekt
+# NETRATTLER V15 FOOTBALL DATA FUSION ONLY - Prop Hunter bleibt anderer Chat/anderes Projekt
 from typing import List, Dict, Optional, Tuple, Any
 """
 AI TIPP BOT - GITHUB SINGLE FILE EDITION
@@ -35,6 +35,11 @@ import time
 from datetime import date, datetime, timedelta, timezone
 
 import requests
+
+try:
+    from data_fusion_v15 import apply_data_fusion_to_tips
+except Exception:
+    apply_data_fusion_to_tips = None
 
 try:
     from dotenv import load_dotenv
@@ -18423,7 +18428,7 @@ def run_pinnacle_props_bot(win_start_utc=None, win_end_utc=None, ch_tz=None, top
     Pinnacle Player Props Bot.
     top_btts_tips: Beste BTTS-Tipps aus Hauptanalyse (als zusätzliche Bet-Builder-Legs).
     """
-    """Bet Builder Style: Pro Spiel 2-4 Legs kombiniert → Prop Hunter Kanal.
+    """Bet Builder Style: Pro Spiel 2-4 Legs kombiniert → Prop Builder Kanal.
     Quellen: Pinnacle (echte Quoten) + FBref (unabhängige Stats) für Cross-Validation."""
     from datetime import datetime as _dt2
     props = fetch_pinnacle_player_props()
@@ -22337,6 +22342,13 @@ def main():
                 log(f"   🎯 Edge Filter angewendet (mit Pinnacle-Fallback)")
         except Exception as _efe:
             log(f"   🎯 Edge Filter übersprungen: {str(_efe)[:60]}")
+
+    # 🧠 V15 DATA FUSION: History/League/Elo/Injury Features aus Supabase ins Scoring einrechnen
+    if apply_data_fusion_to_tips and env("ENABLE_DATA_FUSION_V15", "true").lower() in ["1", "true", "yes", "on"]:
+        try:
+            tips_by_market = apply_data_fusion_to_tips(tips_by_market, SUPABASE_URL, SUPABASE_KEY, log=log)
+        except Exception as _dfe:
+            log(f"🧠 V15 Data Fusion übersprungen: {str(_dfe)[:80]}", "WARN")
 
     # ⏰ Sortierung nach Anstosszeit (früheste zuerst)
     for _mk in tips_by_market:
