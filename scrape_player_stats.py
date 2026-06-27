@@ -194,6 +194,9 @@ def fotmob_rows_for_date(date_str):
     rows = []
     try:
         data = jget(f"https://www.fotmob.com/api/matches?date={date_str.replace('-','')}")
+        if not data:
+            # Fallback: neuerer FotMob Endpoint
+            data = jget(f"https://www.fotmob.com/api/fixtures?date={date_str}")
         if not data: health("fotmob", "empty", 0, date_str); return rows
         leagues = data.get("leagues") or []
         for league in leagues:
@@ -588,9 +591,10 @@ def football_data_org_rows(api_keys_str=""):
                         rows.append(player_row(
                             pname, team, f"fdorg_{mid}", md, home, away, "football_data_org"
                         ))
-                time.sleep(1.0)
+                time.sleep(3.0)
         except Exception as e:
             log(f"  ⚠️ FD.org {comp}: {e}")
+        time.sleep(2.0)  # Extra Sleep für Rate Limit
     health("football_data_org", "ok" if rows else "empty", len(rows))
     log(f"  ✅ Football-Data.org: {len(rows)} Rows")
     return rows
@@ -699,7 +703,10 @@ def xgabora_rows():
     try:
         # Hauptdatensatz
         base = "https://raw.githubusercontent.com/xgabora/Club-Football-Match-Data-2000-2025/main"
-        r = safe_get(f"{base}/football_matches.csv", timeout=60)
+        # Versuche verschiedene Dateinamen
+        for _fname in ["football_matches.csv", "matches.csv", "data.csv", "club_football_matches.csv"]:
+            r = safe_get(f"{base}/{_fname}", timeout=60)
+            if r: break
         if not r:
             health("xgabora", "empty", 0); return rows
         reader = csv.DictReader(io.StringIO(r.text))
@@ -723,7 +730,7 @@ def xgabora_rows():
                 "hthg": si(row.get("hthg", row.get("HTHG", 0))),
                 "htag": si(row.get("htag", row.get("HTAG", 0))),
                 "home_shots": si(row.get("hs", row.get("HS", 0))),
-                "away_shots": si(row.get("as", row.get("AS", 0))),
+                "away_shots": si(row.get("as_", row.get("as", row.get("AS", 0)))),
                 "home_sot": si(row.get("hst", row.get("HST", 0))),
                 "away_sot": si(row.get("ast", row.get("AST", 0))),
                 "home_corners": si(row.get("hc", row.get("HC", 0))),
@@ -763,8 +770,13 @@ def openfootball_rows():
         try:
             data = jget(url)
             if not data: continue
-            matches = data.get("matches") or []
+            # openfootball kann dict mit "matches" key oder direkte Liste sein
+            if isinstance(data, list):
+                matches = data
+            else:
+                matches = data.get("matches") or []
             for match in matches:
+                if not isinstance(match, dict): continue
                 score = match.get("score") or {}
                 ft = score.get("ft") or []
                 if not ft or len(ft) < 2: continue
@@ -1155,7 +1167,10 @@ def rebuild(days_back=365):
     agg = {}
     for r in rows:
         p = clean(r.get("player_name", ""))
-        if not p: continue
+        # Filtere ungültige Namen
+        if not p or len(p) < 2: continue
+        if p.upper() == p and len(p) > 15: continue  # "COMPETITION_RECORD" etc
+        if any(c.isdigit() for c in p) and len(p) < 4: continue
         a = agg.setdefault(p, {
             "player_name": p, "team_name": r.get("team_name") or "", "games": 0,
             "minutes": 0, "shots": 0, "sot": 0, "goals": 0, "assists": 0,
