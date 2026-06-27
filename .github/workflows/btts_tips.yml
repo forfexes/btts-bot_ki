@@ -1,4 +1,4 @@
-name: NETRATTLER V11 Football Main
+name: NETRATTLER V15 Football Main
 
 on:
   workflow_dispatch:
@@ -25,44 +25,46 @@ jobs:
         run: |
           python -m pip install --upgrade pip
           if [ -f requirements.txt ]; then pip install -r requirements.txt; else pip install requests python-dotenv supabase; fi
+          pip install cloudscraper playwright beautifulsoup4 lxml pandas
+          python -m playwright install chromium
 
-      - name: Run NETRATTLER V11
+      - name: Run NETRATTLER V15F Delivery
         env:
           RUN_MODE: "tips"
           RUN_SELF_TEST: "false"
-          NETRATTLER_VERSION: "V11_FOOTBALL"
-          NETRATTLER_FAST_MODE: "true"
+          NETRATTLER_VERSION: "V15_DATA_FUSION"
+          NETRATTLER_FAST_MODE: "false"
           ENABLE_PROP_HUNTER: "false"
           APIFOOTBALL_DISABLED: "true"
           API_FOOTBALL_KEY: ""
-          MAX_LEAGUES_PER_RUN: "8"
-          PINNACLE_MAX_MATCHES_ANALYZE: "25"
+          MAX_LEAGUES_PER_RUN: "80"
+          PINNACLE_MAX_MATCHES_ANALYZE: "80"
           PINNACLE_TARGET_TIPS: "50"
-          SKIP_LEAGUE_LOOP_AFTER_PINNACLE_TIPS: "5"
+          SKIP_LEAGUE_LOOP_AFTER_PINNACLE_TIPS: "999"
           ENABLE_ADVANCED_PROPS: "true"
           ENABLE_AI_ADVANCED_PROPS: "false"
           PROP_WINDOW_HOURS: "12"
           PROP_MAX_RAW_PROPS: "1800"
           PINNACLE_PROPS_CACHE_IN_RUN: "true"
           ENABLE_HEAVY_PROP_DB_BUILDER: "true"
-          ENABLE_STATSBOMB_HR: "false"
-          ENABLE_PROP_EXTRA_SOURCES: "false"
-          PROP_DB_SAVE_LIMIT: "120"
-          PROP_BUILDER_MAX_TOTAL: "35"
+          ENABLE_STATSBOMB_HR: "true"
+          ENABLE_PROP_EXTRA_SOURCES: "true"
+          PROP_DB_SAVE_LIMIT: "300"
+          PROP_BUILDER_MAX_TOTAL: "45"
           ENABLE_GOAL_HUNTER: "true"
           GOAL_HUNTER_MAX_TIPS_SEND: "6"
-          GOAL_HUNTER_MIN_PROB: "62"
+          GOAL_HUNTER_MIN_PROB: "56"
           SCORER_MAX_TIPS_SEND: "6"
-          SCORER_MIN_PROB: "62"
-          PROP_BUILDER_MAX_HIGH_ROLLER: "2"
-          PROP_BUILDER_MIN_LEG_SCORE: "65"
-          PROP_BUILDER_MIN_AVG_SCORE: "70"
-          PROP_BUILDER_MIN_COMBO_PROB: "0.06"
-          PROP_BUILDER_ALLOW_BLIND_CARDS: "false"
+          SCORER_MIN_PROB: "56"
+          PROP_BUILDER_MAX_HIGH_ROLLER: "4"
+          PROP_BUILDER_MIN_LEG_SCORE: "38"
+          PROP_BUILDER_MIN_AVG_SCORE: "44"
+          PROP_BUILDER_MIN_COMBO_PROB: "0.015"
+          PROP_BUILDER_ALLOW_BLIND_CARDS: "true"
           PROP_SCRAPER_MIN_LEG_CONF: "55"
           FORCE_PLAYER_BUILDER_MAX: "3"
           ENABLE_HIGH_ODDS_CARD_BUILDERS: "true"
-          HIGH_ODDS_CARD_BUILDERS_MAX: "3"
+          HIGH_ODDS_CARD_BUILDERS_MAX: "5"
           HIGH_ODDS_CARD_BUILDER_MIN_ODDS: "8.0"
           HIGH_ODDS_CARD_BUILDER_MAX_ODDS: "80.0"
           HIGH_ODDS_CARD_MAX_LEGS_PER_MATCH: "3"
@@ -90,11 +92,21 @@ jobs:
           ENABLE_CLUBELO_MATCH_STATS: "false"
           MAX_CORNER_FIXTURES_ANALYZE: "20"
           PLAYER_STATS_SOURCE: "supabase"
-          MIN_PROBABILITY: "72"
-          MIN_ODDS: "1.75"
+          FORCE_LEAGUE_LOOP: "true"
+          FORCE_EMERGENCY_BUILDERS: "true"
+          FORCE_EMERGENCY_BUILDERS_MAX: "3"
+          PROP_BUILDER_MAX_PINNACLE_CARD_ODDS: "5.50"
+          SEND_GROUP_AUSWERTUNG_EVERY_RUN: "true"
+          ENABLE_DATA_FUSION_V15: "true"
+          DATA_FUSION_V15_MAX_ROWS: "20000"
+          DATA_FUSION_V15_MAX_BOOST: "7"
+          DATA_FUSION_V15_MIN_BOOST: "-5"
+          DATA_FUSION_V15_CACHE_SECONDS: "900"
+          MIN_PROBABILITY: "62"
+          MIN_ODDS: "1.60"
           MAX_ODDS: "2.80"
-          MIN_CONFIDENCE: "4"
-          STRICT_MIN_PROBABILITY: "75"
+          MIN_CONFIDENCE: "3"
+          STRICT_MIN_PROBABILITY: "66"
 
           GEMINI_API_KEYS: ${{ secrets.GEMINI_API_KEYS }}
           GROQ_API_KEYS: ${{ secrets.GROQ_API_KEYS }}
@@ -119,5 +131,5 @@ jobs:
           SUPABASE_URL: ${{ secrets.SUPABASE_URL }}
           SUPABASE_KEY: ${{ secrets.SUPABASE_KEY }}
         run: |
-          echo "NETRATTLER V11 Football startet..."
+          echo "NETRATTLER V15 Football Data Fusion startet..."
           python btts_bot.py
