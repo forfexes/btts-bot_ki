@@ -7386,6 +7386,7 @@ def _ml_get_team_form(team_name, n=10):
             "btts_ht_rate": 0.20, "o15ht_rate": 0.45,
             "avg_scored": 1.30, "avg_conceded": 1.20,
             "form_pts": 0.33, "streak_win": 0.0,
+            "avg_shots": 11.5, "avg_corners": 5.0, "avg_cards": 2.0,
         }
 
     last = hist[-n:]
@@ -7520,6 +7521,10 @@ def get_ml_prediction(home_team, away_team, league_name):
         fh["streak_win"], fa["streak_win"],
         # H2H
         h2h_btts, h2h_goals, h2h_norm,
+        # Shots/Corners/Cards Defaults für Nischen-Ligen
+        fh.get("avg_shots", 11.5), fa.get("avg_shots", 11.5), fh.get("avg_shots", 11.5) + fa.get("avg_shots", 11.5),
+        fh.get("avg_corners", 5.0), fa.get("avg_corners", 5.0), fh.get("avg_corners", 5.0) + fa.get("avg_corners", 5.0),
+        fh.get("avg_cards", 2.0), fa.get("avg_cards", 2.0), fh.get("avg_cards", 2.0) + fa.get("avg_cards", 2.0),
     ]
 
     import numpy as np
@@ -20047,6 +20052,186 @@ def run_pinnacle_props_bot(win_start_utc=None, win_end_utc=None, ch_tz=None, top
                                        extra=f"AI: {_prob*100:.0f}%" if _prob > 0 else "")
             except Exception as _e: log(f"   Statz.ai Error: {str(_e)[:60]}", "WARN")
 
+    # ═══════════════════════════════════════════════════════════════
+    # NEUE BUILDER-STRATEGIEN V13
+    # Nate Tackles | Fouls Won | Same Game | Combo Player
+    # Nate Shots | Defensive Combo | Scorer Assist | Mix Master
+    # WM Special | Supabase Star
+    # ═══════════════════════════════════════════════════════════════
+    if _prop_db and _pp_chat and _pp_total < int(os.environ.get("PROP_BUILDER_MAX_TOTAL", "50")):
+
+        def _hr(player_name, stat):
+            if not SUPABASE_URL or not SUPABASE_KEY: return 0.0
+            try:
+                import requests as _rhr
+                r = _rhr.get(f"{SUPABASE_URL}/rest/v1/player_avg_stats",
+                    headers={"apikey":SUPABASE_KEY,"Authorization":f"Bearer {SUPABASE_KEY}"},
+                    params={"player_name":f"eq.{player_name}","select":stat},timeout=5)
+                if r.ok and r.json(): return float(r.json()[0].get(stat,0) or 0)
+            except: pass
+            return 0.0
+
+        def _gpc(cat, mn=1.15, mx=5.0):
+            return [p for p in _prop_db
+                    if str(p.get("category","")).lower()==cat.lower()
+                    and mn<=float(p.get("odds",0) or 0)<=mx
+                    and p.get("player") and len(str(p.get("player","")).split())>=2]
+
+        # 1. NATE TACKLES — Spieler mit hoher Tackle HR
+        try:
+            _tp = _gpc("tackles",1.15,5.0)
+            _tbp = {}
+            for p in _tp: _tbp.setdefault(p.get("player",""),[]).append(p)
+            for _pl,_pp in sorted(_tbp.items(),key=lambda x:-len(x[1]))[:5]:
+                if len(_pp)<2: continue
+                legs=sorted(_pp,key=lambda x:float(x.get("odds",1) or 1))[:4]
+                if len(legs)>=2 and (_hr(_pl,"hr_tackle")>=0.55 or _hr(_pl,"hr_tackle")==0.0):
+                    _send_builder(legs,"NATE TACKLES",f"{_pl}")
+        except Exception as _e: log(f"   Nate Tackles: {str(_e)[:50]}","WARN")
+
+        # 2. NATE SHOTS — Stürmer mit hoher Shot HR
+        try:
+            _sp = _gpc("shots",1.20,4.0)
+            _sbp = {}
+            for p in _sp: _sbp.setdefault(p.get("player",""),[]).append(p)
+            for _pl,_pp in sorted(_sbp.items(),key=lambda x:-len(x[1]))[:5]:
+                if len(_pp)<2: continue
+                legs=sorted(_pp,key=lambda x:float(x.get("odds",1) or 1))[:3]
+                if len(legs)>=2 and (_hr(_pl,"hr_shot")>=0.60 or _hr(_pl,"hr_shot")==0.0):
+                    _send_builder(legs,"NATE SHOTS",f"{_pl}")
+        except Exception as _e: log(f"   Nate Shots: {str(_e)[:50]}","WARN")
+
+        # 3. FOULS WON — Player To Be Fouled
+        try:
+            _fwp=[p for p in _prop_db
+                  if any(kw in str(p.get("player_prop","") or p.get("market","")).lower()
+                         for kw in ["fouled","foul won","to be fouled","fouls won","alternative player"])
+                  and float(p.get("odds",0) or 0)>=1.20
+                  and p.get("player") and len(str(p.get("player","")).split())>=2]
+            _fwbp={}
+            for p in _fwp: _fwbp.setdefault(p.get("player",""),[]).append(p)
+            _fwl=[]
+            for _pl,_pp in sorted(_fwbp.items(),key=lambda x:-float(x[1][0].get("odds",1) or 1))[:6]:
+                if _pp: _fwl.append(_pp[0])
+            for _sz in [4,3,2]:
+                if len(_fwl)>=_sz: _send_builder(_fwl[:_sz],"FOULS WON","Multi-Player"); break
+        except Exception as _e: log(f"   Fouls Won: {str(_e)[:50]}","WARN")
+
+        # 4. SAME GAME — 3-5 Legs aus einem Spiel
+        try:
+            _bym={}
+            for p in _prop_db:
+                m=p.get("match","") or p.get("match_id","")
+                if m: _bym.setdefault(m,[]).append(p)
+            for _match,_mps in sorted(_bym.items(),key=lambda x:-len(x[1]))[:10]:
+                if len(_mps)<3: continue
+                _best=sorted(_mps,key=lambda x:float(x.get("model_prob",0) or 0)+
+                             (0.1 if x.get("category","") in ("tackles","fouls","shots") else 0),reverse=True)
+                _seen=set(); _sgl=[]
+                for p in _best:
+                    pl=p.get("player","")
+                    if pl and pl not in _seen and len(pl.split())>=2:
+                        _sgl.append(p); _seen.add(pl)
+                    if len(_sgl)>=5: break
+                for _sz in [5,4,3]:
+                    if len(_sgl)>=_sz: _send_builder(_sgl[:_sz],"SAME GAME",_match[:30]); break
+        except Exception as _e: log(f"   Same Game: {str(_e)[:50]}","WARN")
+
+        # 5. COMBO PLAYER — ein Spieler, 3+ Märkte
+        try:
+            _bypa={}
+            for p in _prop_db:
+                pl=p.get("player","")
+                if pl and len(pl.split())>=2: _bypa.setdefault(pl,[]).append(p)
+            for _pl,_pps in sorted(_bypa.items(),key=lambda x:-len(set(p.get("category","") for p in x[1])))[:8]:
+                cats=set(p.get("category","") for p in _pps)
+                if len(cats)<3: continue
+                _cpl=[]; _pcat=["tackles","fouls","shots","sot","booked","score","assist"]
+                for cat in _pcat:
+                    cp=[p for p in _pps if p.get("category","")==cat]
+                    if cp: _cpl.append(sorted(cp,key=lambda x:float(x.get("model_prob",0) or 0),reverse=True)[0])
+                    if len(_cpl)>=4: break
+                if len(_cpl)>=3: _send_builder(_cpl,"COMBO PLAYER",_pl)
+        except Exception as _e: log(f"   Combo Player: {str(_e)[:50]}","WARN")
+
+        # 6. DEFENSIVE COMBO — Tackles + Fouls
+        try:
+            _dp=_gpc("tackles",1.15,4.5)+_gpc("fouls",1.15,4.5)
+            _dbp={}
+            for p in _dp: _dbp.setdefault(p.get("player",""),[]).append(p)
+            _dl=[]
+            for pl,props in sorted(_dbp.items(),key=lambda x:-float(x[1][0].get("model_prob",0) or 0))[:6]:
+                _dl.append(sorted(props,key=lambda x:float(x.get("model_prob",0) or 0),reverse=True)[0])
+            for _sz in [5,4,3]:
+                if len(_dl)>=_sz: _send_builder(_dl[:_sz],"DEFENSIVE COMBO","Tackles+Fouls"); break
+        except Exception as _e: log(f"   Defensive Combo: {str(_e)[:50]}","WARN")
+
+        # 7. SCORER ASSIST — Score + Assist Multi-Player
+        try:
+            _sap=_gpc("score",1.50,8.0)+_gpc("assist",1.50,8.0)
+            _sabp={}
+            for p in _sap: _sabp.setdefault(p.get("player",""),[]).append(p)
+            _sal=[]
+            for pl,props in sorted(_sabp.items(),key=lambda x:-float(x[1][0].get("model_prob",0) or 0))[:5]:
+                _sal.append(sorted(props,key=lambda x:float(x.get("model_prob",0) or 0),reverse=True)[0])
+            for _sz in [4,3]:
+                if len(_sal)>=_sz: _send_builder(_sal[:_sz],"SCORER ASSIST","Multi-Player"); break
+        except Exception as _e: log(f"   Scorer Assist: {str(_e)[:50]}","WARN")
+
+        # 8. MIX MASTER — beste Props aller Kategorien
+        try:
+            _acats=["tackles","fouls","shots","sot","booked","score","assist","corners"]
+            _mml=[]; _spmm=set()
+            for cat in _acats:
+                cp=[p for p in _prop_db
+                    if str(p.get("category","")).lower()==cat
+                    and float(p.get("model_prob",0) or 0)>=0.50
+                    and p.get("player","") not in _spmm
+                    and len(str(p.get("player","")).split())>=2
+                    and 1.15<=float(p.get("odds",0) or 0)<=6.0]
+                cp.sort(key=lambda x:float(x.get("model_prob",0) or 0),reverse=True)
+                if cp: _mml.append(cp[0]); _spmm.add(cp[0].get("player",""))
+                if len(_mml)>=6: break
+            for _sz in [5,4,3]:
+                if len(_mml)>=_sz: _send_builder(_mml[:_sz],"MIX MASTER","All-Markets"); break
+        except Exception as _e: log(f"   Mix Master: {str(_e)[:50]}","WARN")
+
+        # 9. WM SPECIAL — WM-Spiele
+        try:
+            _wmp=[p for p in _prop_db
+                  if any(kw in str(p.get("league","")).lower() for kw in ["world cup","fifa","wm","wc"])
+                  and float(p.get("odds",0) or 0)>=1.20
+                  and p.get("player") and len(str(p.get("player","")).split())>=2]
+            if _wmp:
+                _wmbm={}
+                for p in _wmp:
+                    m=p.get("match","")
+                    if m: _wmbm.setdefault(m,[]).append(p)
+                for _match,_wps in sorted(_wmbm.items(),key=lambda x:-len(x[1]))[:3]:
+                    _wl=sorted(_wps,key=lambda x:float(x.get("model_prob",0) or 0),reverse=True)[:4]
+                    if len(_wl)>=2: _send_builder(_wl,"WM SPECIAL",_match[:25])
+        except Exception as _e: log(f"   WM Special: {str(_e)[:50]}","WARN")
+
+        # 10. SUPABASE STAR — Top Hit Rate Spieler aus DB
+        try:
+            if SUPABASE_URL and SUPABASE_KEY:
+                import requests as _rstar
+                _sr=_rstar.get(f"{SUPABASE_URL}/rest/v1/player_avg_stats",
+                    headers={"apikey":SUPABASE_KEY,"Authorization":f"Bearer {SUPABASE_KEY}"},
+                    params={"select":"player_name,hr_tackle,hr_shot,hr_foul_committed,hr_yc,games",
+                            "games":"gte.5","order":"hr_tackle.desc","limit":"20"},timeout=8)
+                if _sr.ok:
+                    _stnames=set(p.get("player_name","") for p in (_sr.json() or []) if p.get("hr_tackle",0)>=0.60)
+                    _stl=[]; _stse=set()
+                    for p in _prop_db:
+                        pl=p.get("player","")
+                        if pl in _stnames and pl not in _stse:
+                            _stl.append(p); _stse.add(pl)
+                        if len(_stl)>=5: break
+                    if len(_stl)>=3: _send_builder(_stl[:4],"SUPABASE STAR","Top Hit Rate")
+        except Exception as _e: log(f"   Supabase Star: {str(_e)[:50]}","WARN")
+
+
     # ═══════════════════════════════════════
     # PROP BUILDER — beste Props kombinieren
     # ═══════════════════════════════════════
@@ -20608,6 +20793,7 @@ def filter_tips_by_edge(tips: List[Dict], market: str = "btts",
             fair_odds = 0.0
         if fair_odds <= 1.0:
             stats["no_quote"] += 1
+            filtered.append(tip)
             continue
 
         tip_market = tip.get("market") or market
