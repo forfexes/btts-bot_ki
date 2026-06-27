@@ -17938,6 +17938,55 @@ MARKET_INFO_EXTENDED = {
 
 PINNACLE_BASE = "https://guest.api.arcadia.pinnacle.com/0.1"
 PINNACLE_SPORT_SOCCER = 29
+
+# ============================================================
+# 🔍 PLAYER NAME VALIDATION
+# ============================================================
+import unicodedata
+
+_TEAM_WORDS = {
+    "yes", "no", "over", "under", "both", "either", "team", "first", "second",
+    "to", "score", "scored", "goal", "goals", "match", "half", "total",
+    "home", "away", "draw", "none", "other", "player"
+}
+
+def strip_accents(text: str) -> str:
+    text = text or ""
+    return "".join(
+        c for c in unicodedata.normalize("NFKD", text)
+        if not unicodedata.combining(c)
+    )
+
+def looks_like_player(name: str) -> bool:
+    n = strip_accents(name or "").lower()
+    n = re.sub(r"[^a-z0-9\s\-\']", " ", n)
+    n = re.sub(r"\s+", " ", n).strip()
+    if not n or n in _TEAM_WORDS:
+        return False
+    parts = [p for p in n.replace("-", " ").split() if p]
+    if len(parts) >= 2:
+        return True
+    if len(parts) == 1 and len(parts[0]) >= 4 and parts[0] not in _TEAM_WORDS:
+        return True
+    return False
+
+def extract_player_from_description(desc: str) -> str:
+    if not desc:
+        return ""
+    d = re.sub(r"\s+", " ", desc).strip()
+    patterns = [
+        r"^(.*?)\s+(?:anytime\s+)?(?:to\s+score|goalscorer|goal scorer)\b",
+        r"^(.*?)\s+(?:to\s+be\s+booked|player\s+to\s+be\s+booked|card|yellow card)\b",
+        r"^(.*?)\s+(?:to\s+assist|anytime assist|assist)\b",
+        r"^(.*?)\s+(?:\d+\+?\s+)?(?:shots? on target|sot|shots?|tackles?|fouls?|offsides?)\b",
+    ]
+    for pat in patterns:
+        m = re.search(pat, d, flags=re.I)
+        if m:
+            cand = m.group(1).strip(" -:|")
+            return cand if looks_like_player(cand) else ""
+    return ""
+
 PINNACLE_GUEST_KEY = "CmX2KcMrXuFmNg6YFbmTxE0y9CIrOi0R"
 
 PINNACLE_HEADERS = {
@@ -18735,7 +18784,7 @@ def run_pinnacle_props_bot(win_start_utc=None, win_end_utc=None, ch_tz=None, top
     _send_prop = _collect_prop
 
     # ═══════════════════════════════════════════════════════════════════
-    if env("ENABLE_HEAVY_PROP_DB_BUILDER", "false").lower() not in ["1", "true", "yes", "on"]:
+    if env("ENABLE_HEAVY_PROP_DB_BUILDER", "true").lower() not in ["1", "true", "yes", "on"]:
         log("   ⚡ Heavy Prop DB Builder übersprungen — Multi/BTTS/Pinnacle Quick bleiben aktiv")
         return _pp_total
 
@@ -18833,6 +18882,7 @@ def run_pinnacle_props_bot(win_start_utc=None, win_end_utc=None, ch_tz=None, top
                        "either player","home team","away team","a player"}
         if player.strip().lower() in _skip_names: return
         if len(player.strip()) < 3: return
+        if not looks_like_player(player): return
         c = _cat(market)
         if c == "other": return
         # StatsBomb Hit Rate Lookup
@@ -19196,7 +19246,7 @@ def run_pinnacle_props_bot(win_start_utc=None, win_end_utc=None, ch_tz=None, top
 
             # NETRATTLER V5 Gate: weniger Spam, keine blinden Card/High-Odds Builder.
             try:
-                _max_total = int(os.environ.get("PROP_BUILDER_MAX_TOTAL", "25"))
+                _max_total = int(os.environ.get("PROP_BUILDER_MAX_TOTAL", "35"))
             except Exception:
                 _max_total = 35
             try:
@@ -19277,8 +19327,8 @@ def run_pinnacle_props_bot(win_start_utc=None, win_end_utc=None, ch_tz=None, top
             _avg_score = sum(_scores) / len(_scores)
             _min_score = min(_scores)
             try:
-                _min_leg_score = float(os.environ.get("PROP_BUILDER_MIN_LEG_SCORE", "68"))
-                _min_avg_score = float(os.environ.get("PROP_BUILDER_MIN_AVG_SCORE", "74"))
+                _min_leg_score = float(os.environ.get("PROP_BUILDER_MIN_LEG_SCORE", "55"))
+                _min_avg_score = float(os.environ.get("PROP_BUILDER_MIN_AVG_SCORE", "62"))
             except Exception:
                 _min_leg_score, _min_avg_score = 68.0, 74.0
             if _min_score < _min_leg_score or _avg_score < _min_avg_score:
@@ -19622,6 +19672,191 @@ def run_pinnacle_props_bot(win_start_utc=None, win_end_utc=None, ch_tz=None, top
                         _STAT_INSIGHT_SENT_TODAY.add(_gk_c)
                         break
 
+
+        # ── V11 FORCE PLAYER BUILDER FALLBACK ───────────────────────
+        # Wenn zu harte Gates alle Player Builder blocken, trotzdem 2-3 sichere Builder senden.
+        if _pp_total == 0 and _prop_db:
+            try:
+                log("   ⚽ V11 Fallback: baue Player Builder aus besten Props")
+                _prio = {"sot": 1, "shots": 2, "fouls": 3, "fouls_won": 4, "tackles": 5,
+                         "yellow_cards": 6, "score": 7, "assist": 8, "score_assist": 9}
+                _pool = [
+                    p for p in _prop_db
+                    if p.get("category") in _prio
+                    and 1.20 <= float(p.get("odds") or 0) <= 5.50
+                    and len(str(p.get("player","")).split()) >= 2
+                ]
+                def _fallback_score(p):
+                    try:
+                        mp = float(p.get("model_prob") or 0)
+                        if mp > 1: mp /= 100
+                    except Exception:
+                        mp = 0.0
+                    try:
+                        pr = float(p.get("prob") or 0)
+                        if pr > 1: pr /= 100
+                    except Exception:
+                        pr = 0.0
+                    try:
+                        od = float(p.get("odds") or 1.5)
+                    except Exception:
+                        od = 1.5
+                    src_bonus = {"ScoutingStats": 18, "Statz.ai": 15, "Pinnacle": 4, "FotMob": 6}.get(p.get("source",""), 0)
+                    cat_bonus = 10 if p.get("category") in ("sot","shots","fouls","tackles") else 0
+                    return max(mp, pr, 1/od*0.90) * 100 + src_bonus + cat_bonus - max(0, od-3.2)*5
+
+                _pool.sort(key=_fallback_score, reverse=True)
+
+                _sent_fb = 0
+                _used_keys = set()
+                for _size in (2, 3):
+                    _legs = []
+                    _used_players = set()
+                    _used_matches = set()
+                    _used_cats = {}
+                    for _p in _pool:
+                        _pl = _p.get("player","")
+                        _mt = _p.get("match","")
+                        _cat = _p.get("category","")
+                        if _pl.lower() in _used_players:
+                            continue
+                        if _size == 2 and _mt in _used_matches:
+                            continue
+                        if _used_cats.get(_cat, 0) >= 2:
+                            continue
+                        _legs.append(_p)
+                        _used_players.add(_pl.lower())
+                        _used_matches.add(_mt)
+                        _used_cats[_cat] = _used_cats.get(_cat, 0) + 1
+                        if len(_legs) >= _size:
+                            break
+                    if len(_legs) < _size:
+                        continue
+                    _od = _tod(_legs)
+                    if not (1.80 <= _od <= 25.0):
+                        continue
+                    _gk = "V11_FORCE_PLAYER_BUILDER_" + str(_size) + "_" + "_".join(l.get("player","")[:12] for l in _legs)
+                    if _gk in _used_keys:
+                        continue
+                    _used_keys.add(_gk)
+                    if _send_builder(_legs, "PLAYER BUILDER", variant="", high_roller=False):
+                        _sent_fb += 1
+                    if _sent_fb >= int(env("FORCE_PLAYER_BUILDER_MAX", "3")):
+                        break
+                log(f"   ⚽ V11 Fallback Player Builder gesendet: {_sent_fb}")
+            except Exception as _fb_e:
+                log(f"   V11 Fallback Player Builder Fehler: {str(_fb_e)[:80]}", "WARN")
+
+
+
+        # ── V12 HIGH ODDS CARDS BUILDER ──────────────────────────────
+        # Ziel: höhere Quoten wie 1. Match + 2. Match, Karten/Fouls über mehrere Spiele.
+        if env("ENABLE_HIGH_ODDS_CARD_BUILDERS", "true").lower() in ["1", "true", "yes", "on"] and _prop_db:
+            try:
+                _cards_max = int(env("HIGH_ODDS_CARD_BUILDERS_MAX", "3"))
+                _cards_min_odds = float(env("HIGH_ODDS_CARD_BUILDER_MIN_ODDS", "8.0"))
+                _cards_max_odds = float(env("HIGH_ODDS_CARD_BUILDER_MAX_ODDS", "80.0"))
+                _cards_sent = 0
+
+                def _v12_cat(_p):
+                    return str(_p.get("category") or _p.get("market") or _p.get("prop") or "").lower()
+
+                def _v12_text(_p):
+                    return (
+                        str(_p.get("category") or "") + " " +
+                        str(_p.get("market") or "") + " " +
+                        str(_p.get("prop") or "") + " " +
+                        str(_p.get("selection") or "") + " " +
+                        str(_p.get("tip") or "")
+                    ).lower()
+
+                def _v12_is_card_or_foul(_p):
+                    _t = _v12_text(_p)
+                    return any(x in _t for x in ["card", "booked", "booking", "yellow", "foul"])
+
+                def _v12_leg_ok(_p):
+                    if not _v12_is_card_or_foul(_p):
+                        return False
+                    try:
+                        _od = float(_p.get("odds") or 0)
+                    except Exception:
+                        _od = 0
+                    _player = str(_p.get("player") or _p.get("selection") or "").strip()
+                    return 1.18 <= _od <= 9.50 and len(_player.split()) >= 2
+
+                def _v12_rank(_p):
+                    try:
+                        _od = float(_p.get("odds") or 1.0)
+                    except Exception:
+                        _od = 1.0
+                    try:
+                        _prob = float(_p.get("model_prob") or _p.get("prob") or 0)
+                        if _prob > 1:
+                            _prob /= 100
+                    except Exception:
+                        _prob = 0.0
+                    _t = _v12_text(_p)
+                    _src = str(_p.get("source") or "")
+                    _bonus = 0
+                    if "foul" in _t:
+                        _bonus += 16
+                    if any(x in _t for x in ["booked", "booking", "yellow", "card"]):
+                        _bonus += 10
+                    if _src in ("Pinnacle", "ScoutingStats", "TheStatsAPI"):
+                        _bonus += 8
+                    return max(_prob * 100, min(72, 100 / max(_od, 1.01))) + _bonus - max(0, _od - 5.0) * 2.5
+
+                _pool = [_p for _p in _prop_db if _v12_leg_ok(_p)]
+                _pool.sort(key=_v12_rank, reverse=True)
+
+                _patterns = [
+                    ("CARDS BUILDER 2 MATCH", 4),
+                    ("CARDS BUILDER HIGH", 5),
+                    ("CARDS BUILDER JACKPOT", 6),
+                ]
+
+                for _title, _size in _patterns:
+                    if _cards_sent >= _cards_max:
+                        break
+                    _legs = []
+                    _used_players = set()
+                    _match_count = {}
+                    _booked_count = 0
+
+                    for _p in _pool:
+                        _player = str(_p.get("player") or _p.get("selection") or "").strip().lower()
+                        _match = str(_p.get("match") or _p.get("event") or _p.get("fixture") or "").strip()
+                        if not _player or _player in _used_players:
+                            continue
+                        if _match_count.get(_match, 0) >= int(env("HIGH_ODDS_CARD_MAX_LEGS_PER_MATCH", "3")):
+                            continue
+                        _t = _v12_text(_p)
+                        if any(x in _t for x in ["booked", "booking", "yellow", "card"]):
+                            if _booked_count >= int(env("HIGH_ODDS_CARD_MAX_BOOKED_LEGS", "3")):
+                                continue
+                            _booked_count += 1
+
+                        _legs.append(_p)
+                        _used_players.add(_player)
+                        _match_count[_match] = _match_count.get(_match, 0) + 1
+
+                        if len(_legs) >= _size and len([m for m,n in _match_count.items() if n > 0]) >= 2:
+                            break
+
+                    if len(_legs) < _size:
+                        continue
+                    _odds = _tod(_legs)
+                    if not (_cards_min_odds <= _odds <= _cards_max_odds):
+                        continue
+                    if _send_builder(_legs, _title, variant="HIGH ODDS", high_roller=True):
+                        _cards_sent += 1
+                        _pp_total += 1
+
+                log(f"   🟨 V12 High Odds Cards Builder gesendet: {_cards_sent}")
+            except Exception as _v12_cards_e:
+                log(f"   🟨 V12 High Odds Cards Builder Fehler: {str(_v12_cards_e)[:100]}", "WARN")
+
+
         log(f"   \U0001f3d7 Builder gesamt: {_pp_total} gesendet")
 
 
@@ -19847,7 +20082,7 @@ def run_pinnacle_props_bot(win_start_utc=None, win_end_utc=None, ch_tz=None, top
             nonlocal _pp_total
             if not legs: return
             try:
-                _max_total = int(os.environ.get("PROP_BUILDER_MAX_TOTAL", "25"))
+                _max_total = int(os.environ.get("PROP_BUILDER_MAX_TOTAL", "35"))
             except Exception:
                 _max_total = 35
             if _pp_total >= _max_total:
