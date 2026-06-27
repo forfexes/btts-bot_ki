@@ -996,7 +996,7 @@ def jfjelstul_referee_rows():
                     "updated_at": now()
                 })
         if rows:
-            upsert("referee_stats", rows, "source,referee_name")
+            upsert("referee_stats", rows, "referee_name,match_date,home_team")
     except Exception as e:
         log(f"  ⚠️ jfjelstul: {e}")
     health("jfjelstul_wc", "ok" if rows else "empty", len(rows))
