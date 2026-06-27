@@ -84,7 +84,6 @@ jobs:
           MAX_TIPS_PER_MARKET_SEND: "6"
           MAX_TOTAL_SINGLE_TIPS_SEND: "25"
           MAX_CORNER_TIPS_SEND: "8"
-          SEND_GROUP_AUSWERTUNG_EVERY_RUN: "false"
           SEND_BTTS_STATS_HEADER: "false"
           LOG_DUPLICATE_TIPS: "false"
           LOG_DUPLICATE_CORNERS: "false"
