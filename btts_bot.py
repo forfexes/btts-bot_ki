@@ -19871,6 +19871,174 @@ def run_pinnacle_props_bot(win_start_utc=None, win_end_utc=None, ch_tz=None, top
                 log(f"   🟨 V12 High Odds Cards Builder Fehler: {str(_v12_cards_e)[:100]}", "WARN")
 
 
+        # ── V15F EMERGENCY DELIVERY BUILDER ──────────────────────────
+        # Wenn alle normalen Gates blocken, aber echte Pinnacle/ScoutingStats Props vorhanden sind,
+        # trotzdem 1-3 Builder senden. Sonst läuft der Bot "fertig" mit 0 Ausgaben.
+        if _pp_total == 0 and env("FORCE_EMERGENCY_BUILDERS", "true").lower() in ["1", "true", "yes", "on"] and _prop_db:
+            try:
+                log("   🚑 V15F Emergency Builder: normale Gates haben 0 gesendet, baue Delivery-Builder")
+
+                def _e_num(x, default=0.0):
+                    try:
+                        if x is None or x == "":
+                            return default
+                        return float(str(x).replace(",", "."))
+                    except Exception:
+                        return default
+
+                def _e_text(p):
+                    return (
+                        str(p.get("category") or "") + " " +
+                        str(p.get("market") or "") + " " +
+                        str(p.get("prop") or "") + " " +
+                        str(p.get("selection") or "") + " " +
+                        str(p.get("tip") or "")
+                    ).lower()
+
+                def _e_is_valid(p):
+                    od = _e_num(p.get("odds"), 0)
+                    player = str(p.get("player") or p.get("selection") or "").strip()
+                    match = str(p.get("match") or p.get("event") or p.get("fixture") or "").strip()
+                    if not (1.18 <= od <= 9.5):
+                        return False
+                    if len(player.split()) < 2:
+                        return False
+                    if " vs " not in match:
+                        return False
+                    return True
+
+                def _e_rank(p):
+                    od = _e_num(p.get("odds"), 1.0)
+                    mp = _e_num(p.get("model_prob"), 0)
+                    if mp > 1:
+                        mp /= 100
+                    pr = _e_num(p.get("prob"), 0)
+                    if pr > 1:
+                        pr /= 100
+                    cat = str(p.get("category") or "").lower()
+                    src = str(p.get("source") or "")
+                    t = _e_text(p)
+                    score = max(mp, pr, min(0.72, 1 / max(od, 1.01) * 0.92)) * 100
+                    if src in ("ScoutingStats", "Statz.ai"):
+                        score += 16
+                    if src == "Pinnacle":
+                        score += 5
+                    if cat in ("sot", "shots", "fouls", "tackles", "fouls_won"):
+                        score += 14
+                    if any(x in t for x in ["booked", "booking", "yellow", "card"]):
+                        score += 12
+                    if cat in ("score", "goalscorer"):
+                        score -= 4
+                    score -= max(0, od - 4.8) * 3
+                    return score
+
+                def _e_tod(legs):
+                    t = 1.0
+                    for l in legs:
+                        t *= max(1.0, _e_num(l.get("odds"), 1.0))
+                    return round(t, 2)
+
+                def _e_send(legs, title):
+                    nonlocal _pp_total
+                    if len(legs) < 2:
+                        return False
+                    total = _e_tod(legs)
+                    if not (2.20 <= total <= 95.0):
+                        return False
+
+                    key = "V15F_" + title + "_" + "_".join(
+                        (str(l.get("player") or "")[:14] + str(l.get("market") or "")[:10]).lower()
+                        for l in legs
+                    )
+                    if key in _builder_sent_today or key in _STAT_INSIGHT_SENT_TODAY:
+                        return False
+
+                    cats = list(dict.fromkeys(str(l.get("category") or "") for l in legs))
+                    icons = "".join(dict.fromkeys(_CAT_ICONS.get(c, "🎯") for c in cats))
+                    frac = f"{int(round(total-1))}/1" if total >= 2 and total == int(round(total)) else f"{total:.2f}"
+                    msg = f"🏗️ <b>{title} {frac}</b> {icons}{NL}{SEP}{NL}"
+                    for i, l in enumerate(legs, 1):
+                        player = str(l.get("player") or l.get("selection") or "").strip()
+                        market = str(l.get("market") or l.get("prop") or l.get("tip") or "").strip()
+                        match = str(l.get("match") or l.get("event") or l.get("fixture") or "").strip()
+                        odds = _e_num(l.get("odds"), 0)
+                        icon = l.get("icon") or _CAT_ICONS.get(str(l.get("category") or ""), "🎯")
+                        src = str(l.get("source") or "")
+                        msg += f"{i}. {icon} <b>{player}</b>{NL}"
+                        msg += f"   {market} @ {odds:.2f} · {src}{NL}"
+                        if len(set(str(x.get("match") or "") for x in legs)) > 1:
+                            msg += f"   ⚽ {match}{NL}"
+                    if len(set(str(x.get("match") or "") for x in legs)) == 1:
+                        msg += f"⚽ <b>{str(legs[0].get('match') or '')}</b>{NL}"
+                    msg += f"{SEP}{NL}💰 @ <b>{frac}</b> · 0.5u{NL}"
+                    msg += "🧠 V15F Delivery Fallback · echte Marktquoten"
+                    send_telegram(msg, chat_id=_pp_chat)
+                    _pp_total += 1
+                    _builder_sent_today.add(key)
+                    _STAT_INSIGHT_SENT_TODAY.add(key)
+                    log(f"   🚑 V15F {title}: {len(legs)}L @ {total:.2f}")
+                    return True
+
+                _valid = [p for p in _prop_db if _e_is_valid(p)]
+                _valid.sort(key=_e_rank, reverse=True)
+
+                def _pick(pool, size=3, min_matches=1):
+                    legs, used_players, match_count = [], set(), {}
+                    for p in pool:
+                        pl = str(p.get("player") or p.get("selection") or "").strip().lower()
+                        mt = str(p.get("match") or p.get("event") or p.get("fixture") or "").strip()
+                        if not pl or pl in used_players:
+                            continue
+                        if match_count.get(mt, 0) >= 2:
+                            continue
+                        legs.append(p)
+                        used_players.add(pl)
+                        match_count[mt] = match_count.get(mt, 0) + 1
+                        if len(legs) >= size and len([m for m,n in match_count.items() if n]) >= min_matches:
+                            return legs
+                    return legs
+
+                _sent_em = 0
+
+                # 1) Karten/Fouls High Odds über mehrere Spiele
+                _cards = [
+                    p for p in _valid
+                    if any(x in _e_text(p) for x in ["booked", "booking", "yellow", "card", "foul"])
+                ]
+                for _size in (4, 3, 2):
+                    if _sent_em >= int(env("FORCE_EMERGENCY_BUILDERS_MAX", "3")):
+                        break
+                    legs = _pick(_cards, _size, min_matches=2 if _size >= 3 else 1)
+                    if len(legs) >= 2 and _e_send(legs, "V15F CARDS/FOULS BUILDER"):
+                        _sent_em += 1
+                        break
+
+                # 2) SOT/Shots/Fouls Mix
+                _mix = [
+                    p for p in _valid
+                    if str(p.get("category") or "").lower() in ("sot", "shots", "fouls", "fouls_won", "tackles", "yellow_cards")
+                ]
+                for _size in (3, 2):
+                    if _sent_em >= int(env("FORCE_EMERGENCY_BUILDERS_MAX", "3")):
+                        break
+                    legs = _pick(_mix, _size, min_matches=1)
+                    if len(legs) >= 2 and _e_send(legs, "V15F PLAYER MIX BUILDER"):
+                        _sent_em += 1
+                        break
+
+                # 3) Goalscorer/Score fallback nur wenn sonst nichts ging
+                if _sent_em == 0:
+                    _score_pool = [p for p in _valid if str(p.get("category") or "").lower() in ("score", "score_assist", "assist")]
+                    legs = _pick(_score_pool, 2, min_matches=1)
+                    if len(legs) >= 2 and _e_send(legs, "V15F SCORE BUILDER"):
+                        _sent_em += 1
+
+                log(f"   🚑 V15F Emergency Builder gesendet: {_sent_em}")
+            except Exception as _em_e:
+                log(f"   🚑 V15F Emergency Builder Fehler: {str(_em_e)[:100]}", "WARN")
+
+
+
         log(f"   \U0001f3d7 Builder gesamt: {_pp_total} gesendet")
 
 
