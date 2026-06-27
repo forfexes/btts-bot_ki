@@ -1,311 +1,512 @@
 #!/usr/bin/env python3
 """
-NETRATTLER Player Stats Scraper V11
-Multi-source: StatsBomb Open Data + SofaScore + FBref.
-Graceful: 403/blocked Quellen crashen nicht.
-Schreibt optional in Supabase:
-- player_match_stats
-- player_avg_stats
-- source_health
+NETRATTLER Settlement V11
+========================
+Stabile Settlement-Engine:
+- keine nicht vorhandenen Supabase-Spalten wie final_score / settlement_source
+- Date-Cache: Ergebnisse pro Datum nur einmal laden
+- mehrere freie Ergebnisquellen
+- Fuzzy Team Matching
+- kompakte Telegram-Auswertung
+- schnell genug für GitHub Actions
+
+Schreibt nur:
+status
+result
+settled_at
+
+Wenn diese Spalten fehlen, wird automatisch auf vorhandene Felder reduziert.
 """
 
-import os, re, time, json, argparse
+import os
+import re
+import time
+import traceback
 from datetime import datetime, timezone, timedelta
-from typing import Any, Dict, List
+from difflib import SequenceMatcher
+from typing import Any, Dict, List, Optional, Tuple
+
 import requests
 
 SUPABASE_URL = os.getenv("SUPABASE_URL", "").rstrip("/")
 SUPABASE_KEY = os.getenv("SUPABASE_SERVICE_ROLE_KEY") or os.getenv("SUPABASE_KEY", "")
-SB_HEADERS = {
+TELEGRAM_TOKEN = os.getenv("TELEGRAM_TOKEN", "")
+
+DAYS_BACK = int(os.getenv("SETTLEMENT_DAYS_BACK", "4"))
+LIMIT = int(os.getenv("SETTLEMENT_LIMIT", "400"))
+MAX_DATES = int(os.getenv("SETTLEMENT_MAX_DATES", "5"))
+TIMEOUT_SECONDS = int(os.getenv("SETTLEMENT_TIMEOUT_SECONDS", "100"))
+FUZZY_THRESHOLD = float(os.getenv("SETTLEMENT_FUZZY_THRESHOLD", "0.58"))
+SEND_SUMMARY = os.getenv("SETTLEMENT_SEND_SUMMARY", "true").lower() in ("1", "true", "yes", "on")
+DEBUG_MISSES = int(os.getenv("SETTLEMENT_DEBUG_MISSES", "10"))
+
+TELEGRAM_STATS = os.getenv("TELEGRAM_GROUP_STATS") or os.getenv("TELEGRAM_CHAT_ID", "")
+
+FOOTBALL_DATA_KEYS = []
+for name in ("FOOTBALL_DATA_API_KEYS", "FOOTBALL_DATA_API_KEY"):
+    raw = os.getenv(name, "")
+    for x in raw.replace("\n", ",").replace(";", ",").split(","):
+        x = x.strip()
+        if x and x not in FOOTBALL_DATA_KEYS:
+            FOOTBALL_DATA_KEYS.append(x)
+
+HEADERS_SB = {
     "apikey": SUPABASE_KEY,
     "Authorization": f"Bearer {SUPABASE_KEY}",
     "Content-Type": "application/json",
 }
 
-HTTP = requests.Session()
-HTTP.headers.update({
-    "User-Agent": "Mozilla/5.0 Chrome/124 Safari/537.36",
-    "Accept": "application/json,text/html,*/*",
-    "Accept-Language": "en-US,en;q=0.9,de;q=0.7",
-    "Referer": "https://www.google.com/",
-})
+START = time.time()
+DATE_RESULTS: Dict[str, List[Dict[str, Any]]] = {}
+TABLE_COLUMNS_CACHE: Dict[str, set] = {}
 
-def log(x): print(x, flush=True)
-def now(): return datetime.now(timezone.utc).isoformat()
-def si(x, d=0):
-    try: return int(float(str(x).replace(",", ".")))
-    except Exception: return d
-def sf(x, d=0.0):
-    try: return float(str(x).replace(",", "."))
-    except Exception: return d
-def clean(s): return re.sub(r"\s+", " ", str(s or "")).strip()
+ALIASES = {
+    "turkiye": "turkey",
+    "türkiye": "turkey",
+    "usa": "united states",
+    "u s a": "united states",
+    "us": "united states",
+    "netherlands": "holland",
+    "deutschland": "germany",
+    "espana": "spain",
+    "brasil": "brazil",
+    "man utd": "manchester united",
+    "man united": "manchester united",
+    "man city": "manchester city",
+    "inter": "internazionale",
+    "psg": "paris saint germain",
+    "sydney ii": "sydney fc npl",
+    "sydney fc ii": "sydney fc npl",
+    "sydney united": "sydney united 58",
+    "melbourne city npl": "melbourne city ii",
+    "adelaide united ii": "adelaide united youth",
+    "hammarby talang": "hammarby tff",
+    "sjk akatemia": "sjk akatemia",
+    "gremio novorizontino": "novorizontino",
+}
 
-def upsert(table: str, rows: List[Dict[str, Any]], conflict: str = "") -> int:
-    if not rows: return 0
-    if not SUPABASE_URL or not SUPABASE_KEY:
-        log(f"⚠️ Supabase fehlt: {len(rows)} Rows nicht gespeichert ({table})")
-        return 0
-    total = 0
-    h = dict(SB_HEADERS); h["Prefer"] = "resolution=merge-duplicates,return=minimal"
-    url = f"{SUPABASE_URL}/rest/v1/{table}" + (f"?on_conflict={conflict}" if conflict else "")
-    for i in range(0, len(rows), 350):
-        chunk = rows[i:i+350]
-        try:
-            r = HTTP.post(url, headers=h, json=chunk, timeout=45)
-            if not r.ok:
-                log(f"⚠️ UPSERT {table} {r.status_code}: {r.text[:220]}")
-                continue
-            total += len(chunk)
-        except Exception as e:
-            log(f"⚠️ UPSERT {table} Fehler: {e}")
-    return total
+STOPWORDS = {
+    "fc", "cf", "sc", "afc", "ac", "club", "football", "soccer",
+    "u19", "u20", "u21", "u23", "ii", "iii", "b", "reserves",
+    "women", "woman", "w", "ladies", "youth", "academy",
+    "de", "the", "fk", "if", "bk", "sk", "nk", "cd", "sd", "ud",
+}
+
+
+def log(msg: str, level: str = "INFO"):
+    print(f"[{datetime.now().strftime('%H:%M:%S')}] [{level}] {msg}", flush=True)
+
+
+def timed_out() -> bool:
+    return time.time() - START > TIMEOUT_SECONDS
+
+
+def base_norm(s: Any) -> str:
+    s = str(s or "").lower().strip()
+    replacements = {
+        "&": " and ", "ø": "o", "ö": "o", "ó": "o", "ò": "o",
+        "ä": "a", "á": "a", "à": "a", "ü": "u", "ú": "u",
+        "é": "e", "è": "e", "ê": "e", "ı": "i", "ş": "s",
+        "ğ": "g", "ç": "c",
+    }
+    for a, b in replacements.items():
+        s = s.replace(a, b)
+    s = re.sub(r"[^a-z0-9]+", " ", s)
+    s = re.sub(r"\s+", " ", s).strip()
+    return ALIASES.get(s, s)
+
+
+def norm(s: Any) -> str:
+    words = []
+    for w in base_norm(s).split():
+        if w not in STOPWORDS:
+            words.append(w)
+    return " ".join(words)
+
+
+def sim(a: str, b: str) -> float:
+    na, nb = norm(a), norm(b)
+    if not na or not nb:
+        return 0.0
+    if na == nb:
+        return 1.0
+    if na in nb or nb in na:
+        return 0.92
+    ta, tb = set(na.split()), set(nb.split())
+    jacc = len(ta & tb) / max(1, len(ta | tb)) if ta and tb else 0.0
+    seq = SequenceMatcher(None, na, nb).ratio()
+    return min(1.0, max(jacc, seq))
+
+
+def match_pair(home: str, away: str, res: Dict[str, Any]) -> Tuple[float, bool]:
+    rh, ra = res.get("home", ""), res.get("away", "")
+    direct = (sim(home, rh) + sim(away, ra)) / 2
+    swapped = (sim(home, ra) + sim(away, rh)) / 2
+    return (swapped, True) if swapped > direct else (direct, False)
+
+
+def send_telegram(text: str) -> bool:
+    if not TELEGRAM_TOKEN or not TELEGRAM_STATS:
+        return False
+    try:
+        r = requests.post(
+            f"https://api.telegram.org/bot{TELEGRAM_TOKEN}/sendMessage",
+            json={"chat_id": TELEGRAM_STATS, "text": text, "parse_mode": "HTML", "disable_web_page_preview": True},
+            timeout=10,
+        )
+        return r.ok
+    except Exception:
+        return False
+
 
 def sb_get(table: str, params: Dict[str, Any]) -> List[Dict[str, Any]]:
-    if not SUPABASE_URL or not SUPABASE_KEY: return []
+    if not SUPABASE_URL or not SUPABASE_KEY:
+        raise RuntimeError("SUPABASE_URL/SUPABASE_KEY fehlt")
+    r = requests.get(f"{SUPABASE_URL}/rest/v1/{table}", headers=HEADERS_SB, params=params, timeout=25)
+    if not r.ok:
+        raise RuntimeError(f"Supabase GET {table} {r.status_code}: {r.text[:300]}")
+    return r.json()
+
+
+def get_table_columns(table: str) -> set:
+    if table in TABLE_COLUMNS_CACHE:
+        return TABLE_COLUMNS_CACHE[table]
     try:
-        r = HTTP.get(f"{SUPABASE_URL}/rest/v1/{table}", headers=SB_HEADERS, params=params, timeout=35)
-        return r.json() if r.ok else []
+        rows = sb_get(table, {"select": "*", "limit": "1"})
+        cols = set(rows[0].keys()) if rows else {"status", "result", "settled_at", "id", "tip_id"}
     except Exception:
-        return []
+        cols = {"status", "result", "settled_at", "id", "tip_id"}
+    TABLE_COLUMNS_CACHE[table] = cols
+    return cols
 
-def health(source, status, rows=0, msg=""):
-    upsert("source_health", [{
-        "source": source, "status": status, "rows": rows,
-        "message": str(msg)[:400], "checked_at": now()
-    }], "source")
 
-# ---------- StatsBomb ----------
-def jget(url):
-    r = HTTP.get(url, timeout=25); r.raise_for_status(); return r.json()
+def sb_patch_tip(tip: Dict[str, Any], data: Dict[str, Any]) -> bool:
+    if tip.get("id") is not None:
+        params = {"id": f"eq.{tip['id']}"}
+    elif tip.get("tip_id"):
+        params = {"tip_id": f"eq.{tip['tip_id']}"}
+    else:
+        return False
 
-def statsbomb_rows(max_matches=80):
-    base = "https://raw.githubusercontent.com/statsbomb/open-data/master/data"
-    rows = []
+    cols = get_table_columns("tips")
+    payload = {k: v for k, v in data.items() if k in cols}
+    if not payload:
+        return False
+
+    headers = dict(HEADERS_SB)
+    headers["Prefer"] = "return=minimal"
+    r = requests.patch(f"{SUPABASE_URL}/rest/v1/tips", headers=headers, params=params, json=payload, timeout=12)
+    if not r.ok:
+        log(f"PATCH Fehler {r.status_code}: {r.text[:150]}", "WARN")
+    return r.ok
+
+
+def tip_date(tip: Dict[str, Any]) -> str:
+    for k in ("date", "match_date", "kickoff_date", "kickoff_at", "created_at"):
+        v = str(tip.get(k) or "")
+        m = re.search(r"\d{4}-\d{2}-\d{2}", v)
+        if m:
+            return m.group(0)
+    return datetime.now(timezone.utc).date().isoformat()
+
+
+def parse_match(tip: Dict[str, Any]) -> Tuple[str, str]:
+    m = tip.get("match") or tip.get("fixture") or tip.get("game") or ""
+    for sep in (" vs ", " v ", " - "):
+        if sep in m:
+            a, b = m.split(sep, 1)
+            return a.strip(), b.strip()
+    return str(tip.get("home_team") or tip.get("home") or "").strip(), str(tip.get("away_team") or tip.get("away") or "").strip()
+
+
+def load_pending() -> List[Dict[str, Any]]:
+    since = (datetime.now(timezone.utc) - timedelta(days=DAYS_BACK)).date().isoformat()
+    rows = sb_get("tips", {
+        "select": "*",
+        "status": "eq.pending",
+        "date": f"gte.{since}",
+        "order": "date.asc",
+        "limit": str(LIMIT),
+    })
+    return rows[:LIMIT]
+
+
+def add_result(out: List[Dict[str, Any]], home: Any, away: Any, hg: Any, ag: Any, source: str, hth: Any = None, hta: Any = None):
     try:
-        comps = jget(base + "/competitions.json")
-    except Exception as e:
-        log(f"⚠️ StatsBomb competitions Fehler: {e}"); health("statsbomb", "error", 0, e); return rows
-    comps = [c for c in comps if any(x in str(c.get("competition_name","")).lower() for x in ["world cup","euro","copa america","champions league"])]
-    seen = 0
-    for c in comps[:8]:
-        if seen >= max_matches: break
-        try: matches = jget(f"{base}/matches/{c['competition_id']}/{c['season_id']}.json")
-        except Exception: continue
-        for m in matches:
-            if seen >= max_matches: break
-            mid = m.get("match_id")
-            try: events = jget(f"{base}/events/{mid}.json")
-            except Exception: continue
-            seen += 1
-            per = {}
-            home = (m.get("home_team") or {}).get("home_team_name","")
-            away = (m.get("away_team") or {}).get("away_team_name","")
-            md = str(m.get("match_date") or "")
-            for e in events:
-                player = (e.get("player") or {}).get("name")
-                if not player: continue
-                p = per.setdefault(player, {
-                    "player_name": clean(player), "team_name": clean((e.get("team") or {}).get("name","")),
-                    "match_id": f"statsbomb_{mid}", "match_date": md, "home_team": home, "away_team": away,
-                    "minutes": 0, "shots": 0, "sot": 0, "goals": 0, "assists": 0, "passes": 0,
-                    "tackles": 0, "fouls_committed": 0, "fouls_won": 0, "cards": 0, "corners": 0,
-                    "source": "statsbomb_open_data", "updated_at": now()
-                })
-                t = (e.get("type") or {}).get("name","")
-                if t == "Shot":
-                    p["shots"] += 1
-                    out = ((e.get("shot") or {}).get("outcome") or {}).get("name","")
-                    if out in ("Goal","Saved","Saved To Post"): p["sot"] += 1
-                    if out == "Goal": p["goals"] += 1
-                elif t == "Pass":
-                    p["passes"] += 1
-                    if ((e.get("pass") or {}).get("goal_assist") is True): p["assists"] += 1
-                    if ((e.get("pass") or {}).get("type") or {}).get("name") == "Corner": p["corners"] += 1
-                elif t == "Foul Committed":
-                    p["fouls_committed"] += 1
-                    if ((e.get("foul_committed") or {}).get("card") or {}).get("name"): p["cards"] += 1
-                elif t == "Foul Won": p["fouls_won"] += 1
-                elif t in ("Duel","Block","Interception","Ball Recovery"): p["tackles"] += 1
-            rows.extend(per.values())
-    health("statsbomb", "ok", len(rows), f"matches={seen}")
-    return rows
-
-# ---------- SofaScore ----------
-def sofa(path):
-    url = "https://api.sofascore.com/api/v1" + path
-    try:
-        r = HTTP.get(url, timeout=18)
-        if r.status_code == 403:
-            log(f"  [GET] 403 {url}"); return None
-        if not r.ok:
-            log(f"  [GET] {r.status_code} {url}"); return None
-        return r.json()
-    except Exception as e:
-        log(f"  [GET] ERR {url}: {e}"); return None
-
-def sofascore_event_rows(eid):
-    data = sofa(f"/event/{eid}/lineups")
-    if not data: return []
-    evdata = sofa(f"/event/{eid}") or {}
-    ev = evdata.get("event", {})
-    home = (ev.get("homeTeam") or {}).get("name","")
-    away = (ev.get("awayTeam") or {}).get("name","")
-    ts = ev.get("startTimestamp")
-    md = datetime.fromtimestamp(ts, timezone.utc).date().isoformat() if ts else ""
-    rows = []
-    for side in ("home","away"):
-        team = home if side == "home" else away
-        for item in ((data.get(side) or {}).get("players") or []):
-            player = item.get("player") or {}
-            st = item.get("statistics") or {}
-            name = player.get("name") or player.get("shortName")
-            if not name: continue
-            rows.append({
-                "player_name": clean(name), "team_name": team, "match_id": f"sofascore_{eid}",
-                "match_date": md, "home_team": home, "away_team": away,
-                "minutes": si(st.get("minutesPlayed") or st.get("minutes")),
-                "shots": si(st.get("totalShots") or st.get("shots")),
-                "sot": si(st.get("shotsOnTarget")),
-                "goals": si(st.get("goals")), "assists": si(st.get("goalAssist") or st.get("assists")),
-                "passes": si(st.get("totalPass") or st.get("passes")),
-                "tackles": si(st.get("totalTackle") or st.get("tackles")),
-                "fouls_committed": si(st.get("fouls") or st.get("foulsCommitted")),
-                "fouls_won": si(st.get("wasFouled") or st.get("foulsWon")),
-                "cards": si(st.get("yellowCards")) + si(st.get("redCards")),
-                "corners": 0, "source": "sofascore", "updated_at": now()
-            })
-    return rows
-
-def sofascore_rows_for_date(d, max_events=25):
-    data = sofa(f"/sport/football/scheduled-events/{d}")
-    if not data:
-        health("sofascore", "blocked_or_empty", 0, d); return []
-    events = data.get("events") or []
-    fin = [e for e in events if ((e.get("status") or {}).get("type") or "").lower() in ("finished","afterpenalties","afterextra")]
-    log(f"  → SofaScore {d}: {len(events)} Events, {len(fin)} beendet")
-    rows = []
-    for ev in fin[:max_events]:
-        if ev.get("id"):
-            rows.extend(sofascore_event_rows(ev["id"]))
-            time.sleep(0.25)
-    health("sofascore", "ok" if rows else "empty", len(rows), d)
-    return rows
-
-# ---------- FBref ----------
-FBREF_URLS = [
-    "https://fbref.com/en/comps/9/stats/Premier-League-Stats",
-    "https://fbref.com/en/comps/12/stats/La-Liga-Stats",
-    "https://fbref.com/en/comps/11/stats/Serie-A-Stats",
-    "https://fbref.com/en/comps/20/stats/Bundesliga-Stats",
-    "https://fbref.com/en/comps/13/stats/Ligue-1-Stats",
-]
-def strip(html):
-    html = re.sub(r"<br\s*/?>", " ", html)
-    html = re.sub(r"<.*?>", "", html)
-    return re.sub(r"\s+", " ", html).strip()
-
-def fbref_parse(html):
-    rows = []
-    for tr in re.findall(r"<tr[^>]*>(.*?)</tr>", html, re.S|re.I):
-        if 'data-stat="player"' not in tr: continue
-        cells = {}
-        for stat, val in re.findall(r'data-stat="([^"]+)"[^>]*>(.*?)</t[dh]>', tr, re.S|re.I):
-            cells[stat] = strip(val)
-        player = cells.get("player")
-        if not player or player.lower() == "player": continue
-        rows.append({
-            "player_name": clean(player), "team_name": clean(cells.get("team") or cells.get("squad") or ""),
-            "match_id": "fbref_season", "match_date": "", "home_team": "", "away_team": "",
-            "minutes": si(cells.get("minutes")), "shots": si(cells.get("shots_total")),
-            "sot": si(cells.get("shots_on_target")), "goals": si(cells.get("goals")),
-            "assists": si(cells.get("assists")), "passes": si(cells.get("passes_completed")),
-            "tackles": si(cells.get("tackles")), "fouls_committed": 0, "fouls_won": 0,
-            "cards": si(cells.get("cards_yellow")) + si(cells.get("cards_red")),
-            "corners": 0, "source": "fbref", "updated_at": now()
-        })
-    return rows
-
-def fbref_rows(max_pages=5):
-    rows = []
-    for url in FBREF_URLS[:max_pages]:
-        try:
-            r = HTTP.get(url, timeout=20)
-            if r.status_code in (403,429):
-                log(f"  FBref block {r.status_code}: {url}"); continue
-            if not r.ok:
-                log(f"  FBref {r.status_code}: {url}"); continue
-            parsed = fbref_parse(r.text)
-            log(f"  FBref: {len(parsed)} Spieler")
-            rows.extend(parsed)
-            time.sleep(2.0)
-        except Exception as e:
-            log(f"  FBref Fehler: {e}")
-    health("fbref", "ok" if rows else "blocked_or_empty", len(rows), "")
-    return rows
-
-# ---------- Rebuild ----------
-def rebuild(days_back=240):
-    since = (datetime.now(timezone.utc) - timedelta(days=days_back)).date().isoformat()
-    rows = sb_get("player_match_stats", {"select":"*", "match_date":f"gte.{since}", "limit":"20000"})
-    if not rows:
-        log("  ⚠️ Keine player_match_stats für Rebuild"); return 0
-    agg = {}
-    for r in rows:
-        p = clean(r.get("player_name"))
-        if not p: continue
-        a = agg.setdefault(p, {"player_name":p, "team_name":r.get("team_name") or "", "games":0})
-        a["games"] += 1
-        for k in ("minutes","shots","sot","goals","assists","passes","tackles","fouls_committed","fouls_won","cards","corners"):
-            a[k] = a.get(k,0.0) + sf(r.get(k))
-    out = []
-    for p,a in agg.items():
-        g = max(1, a["games"])
+        if home in (None, "") or away in (None, "") or hg in (None, "") or ag in (None, ""):
+            return
         out.append({
-            "player_name": p, "team_name": a["team_name"], "games": a["games"],
-            "minutes_avg": round(a.get("minutes",0)/g,2),
-            "shots_avg": round(a.get("shots",0)/g,3), "sot_avg": round(a.get("sot",0)/g,3),
-            "goals_avg": round(a.get("goals",0)/g,3), "assists_avg": round(a.get("assists",0)/g,3),
-            "passes_avg": round(a.get("passes",0)/g,3), "tackles_avg": round(a.get("tackles",0)/g,3),
-            "fouls_committed_avg": round(a.get("fouls_committed",0)/g,3),
-            "fouls_won_avg": round(a.get("fouls_won",0)/g,3), "cards_avg": round(a.get("cards",0)/g,3),
-            "corners_avg": round(a.get("corners",0)/g,3), "source": "rebuild_multi_source", "updated_at": now()
+            "home": str(home),
+            "away": str(away),
+            "home_goals": int(hg),
+            "away_goals": int(ag),
+            "ht_home_goals": int(hth) if hth not in (None, "") else None,
+            "ht_away_goals": int(hta) if hta not in (None, "") else None,
+            "source": source,
         })
-    return upsert("player_avg_stats", out, "player_name")
+    except Exception:
+        return
+
+
+def source_thesportsdb_date(d: str) -> List[Dict[str, Any]]:
+    out = []
+    try:
+        r = requests.get("https://www.thesportsdb.com/api/v1/json/3/eventsday.php", params={"d": d, "s": "Soccer"}, timeout=12)
+        if r.ok:
+            for e in (r.json().get("events") or []):
+                add_result(out, e.get("strHomeTeam"), e.get("strAwayTeam"), e.get("intHomeScore"), e.get("intAwayScore"), "thesportsdb")
+    except Exception as e:
+        log(f"TheSportsDB skip: {e}", "WARN")
+    return out
+
+
+def source_espn_date(d: str) -> List[Dict[str, Any]]:
+    out = []
+    ymd = d.replace("-", "")
+    leagues = os.getenv("SETTLEMENT_ESPN_LEAGUES", "fifa.world,eng.1,esp.1,ita.1,ger.1,fra.1,usa.1,bra.1,arg.1,aus.1,swe.1,nor.1,fin.1,chn.1,jpn.1").split(",")
+    for league in [x.strip() for x in leagues if x.strip()]:
+        if timed_out():
+            break
+        try:
+            r = requests.get(f"https://site.api.espn.com/apis/site/v2/sports/soccer/{league}/scoreboard", params={"dates": ymd}, timeout=6)
+            if not r.ok:
+                continue
+            for ev in r.json().get("events", []):
+                comp = (ev.get("competitions") or [{}])[0]
+                if comp.get("status", {}).get("type", {}).get("completed") is not True:
+                    continue
+                home = away = None
+                for c in comp.get("competitors") or []:
+                    nm = (c.get("team") or {}).get("displayName") or (c.get("team") or {}).get("name") or ""
+                    sc = c.get("score")
+                    if c.get("homeAway") == "home":
+                        home = (nm, sc)
+                    elif c.get("homeAway") == "away":
+                        away = (nm, sc)
+                if home and away:
+                    add_result(out, home[0], away[0], home[1], away[1], f"espn:{league}")
+        except Exception:
+            continue
+    return out
+
+
+def source_football_data_date(d: str) -> List[Dict[str, Any]]:
+    out = []
+    if not FOOTBALL_DATA_KEYS:
+        return out
+    for api_key in FOOTBALL_DATA_KEYS[:2]:
+        try:
+            r = requests.get(
+                "https://api.football-data.org/v4/matches",
+                headers={"X-Auth-Token": api_key},
+                params={"dateFrom": d, "dateTo": d},
+                timeout=12,
+            )
+            if r.status_code in (401, 403, 429) or not r.ok:
+                continue
+            for m in r.json().get("matches", []):
+                ft = (m.get("score") or {}).get("fullTime") or {}
+                ht = (m.get("score") or {}).get("halfTime") or {}
+                add_result(
+                    out,
+                    (m.get("homeTeam") or {}).get("name", ""),
+                    (m.get("awayTeam") or {}).get("name", ""),
+                    ft.get("home"), ft.get("away"),
+                    "football-data",
+                    ht.get("home"), ht.get("away"),
+                )
+            if out:
+                return out
+        except Exception:
+            continue
+    return out
+
+
+def load_results_for_date(d: str) -> List[Dict[str, Any]]:
+    if d in DATE_RESULTS:
+        return DATE_RESULTS[d]
+    results = []
+    for name, fn in [("TheSportsDB", source_thesportsdb_date), ("ESPN", source_espn_date), ("FootballData", source_football_data_date)]:
+        if timed_out():
+            break
+        before = len(results)
+        results.extend(fn(d))
+        log(f"Quelle {name} {d}: +{len(results)-before}")
+
+    seen = set()
+    clean = []
+    for r in results:
+        key = (norm(r.get("home")), norm(r.get("away")), r.get("home_goals"), r.get("away_goals"))
+        if key in seen:
+            continue
+        seen.add(key)
+        clean.append(r)
+    DATE_RESULTS[d] = clean
+    log(f"Ergebnisse {d}: {len(clean)} total")
+    return clean
+
+
+def find_result(home: str, away: str, d: str) -> Tuple[Optional[Dict[str, Any]], float]:
+    best = None
+    best_score = 0.0
+    best_swapped = False
+    for r in load_results_for_date(d):
+        score, swapped = match_pair(home, away, r)
+        if score > best_score:
+            best_score = score
+            best = r
+            best_swapped = swapped
+
+    if best and best_score >= FUZZY_THRESHOLD:
+        if best_swapped:
+            b = dict(best)
+            b["home"], b["away"] = best["away"], best["home"]
+            b["home_goals"], b["away_goals"] = best["away_goals"], best["home_goals"]
+            b["ht_home_goals"], b["ht_away_goals"] = best.get("ht_away_goals"), best.get("ht_home_goals")
+            b["source"] = str(best.get("source", "")) + ":swapped"
+            best = b
+        return best, best_score
+    return None, best_score
+
+
+def settle_market(tip: Dict[str, Any], res: Dict[str, Any]) -> Optional[str]:
+    market = norm(tip.get("market") or tip.get("type") or tip.get("category") or "")
+    pick = norm(tip.get("tip") or tip.get("pick") or tip.get("selection") or "")
+    hg, ag = int(res["home_goals"]), int(res["away_goals"])
+    total = hg + ag
+    hth, hta = res.get("ht_home_goals"), res.get("ht_away_goals")
+
+    if "btts ht" in market or "btts_ht" in market:
+        if hth is None or hta is None:
+            return None
+        return "won" if hth > 0 and hta > 0 else "lost"
+    if "btts" in market:
+        yes = hg > 0 and ag > 0
+        if "no" in pick:
+            yes = not yes
+        return "won" if yes else "lost"
+    if "over15 ht" in market or "over1 5 ht" in market:
+        if hth is None or hta is None:
+            return None
+        return "won" if (hth + hta) > 1.5 else "lost"
+    if "over25" in market or "over 2 5" in market or "over2 5" in market:
+        return "won" if total > 2.5 else "lost"
+    if "combo" in market:
+        return "won" if (hg > 0 and ag > 0 and total > 2.5) else "lost"
+    return None
+
+
+def group_key(tip: Dict[str, Any]) -> str:
+    m = norm(tip.get("market") or tip.get("type") or tip.get("category") or "")
+    if "btts ht" in m or "btts_ht" in m:
+        return "BTTS HT"
+    if "over15 ht" in m or "over1 5 ht" in m:
+        return "Over HT"
+    if "over25" in m or "over 2 5" in m:
+        return "Over2.5"
+    if "combo" in m:
+        return "Combo"
+    if "corner" in m:
+        return "Corners"
+    return "BTTS"
+
+
+def send_summary(settled: List[Dict[str, Any]], skipped: int, debug: List[str]):
+    if not SEND_SUMMARY:
+        return
+    if not settled:
+        msg = f"📊 <b>Settlement V11</b>\nKeine Tipps ausgewertet.\nOffen/ohne Ergebnis: {skipped}"
+        if debug:
+            msg += "\n\n<pre>" + "\n".join(debug[:5])[:1200] + "</pre>"
+        send_telegram(msg)
+        return
+
+    by = {}
+    for x in settled:
+        by.setdefault(group_key(x), []).append(x)
+
+    lines = ["📊 <b>Settlement V11</b>"]
+    tw = tl = 0
+    for g, items in sorted(by.items()):
+        w = sum(1 for i in items if i["status"] == "won")
+        l = sum(1 for i in items if i["status"] == "lost")
+        tw += w
+        tl += l
+        hr = round(w / max(1, w + l) * 100, 1)
+        lines.append(f"{g}: ✅ {w} ❌ {l} · {hr}%")
+    lines.append(f"\nTotal: ✅ {tw} ❌ {tl} · <b>{round(tw / max(1, tw + tl) * 100, 1)}%</b>")
+    lines.append(f"Offen/ohne Ergebnis: {skipped}")
+    send_telegram("\n".join(lines))
+
 
 def main():
-    ap = argparse.ArgumentParser()
-    ap.add_argument("--date", default="")
-    ap.add_argument("--source", default="all", choices=["all","statsbomb","sofascore","fbref"])
-    ap.add_argument("--rebuild-only", action="store_true")
-    ap.add_argument("--days-back", type=int, default=240)
-    ap.add_argument("--statsbomb-matches", type=int, default=int(os.getenv("STATSBOMB_MAX_MATCHES","80")))
-    ap.add_argument("--sofascore-events", type=int, default=int(os.getenv("SOFASCORE_MAX_EVENTS","25")))
-    ap.add_argument("--fbref-pages", type=int, default=int(os.getenv("FBREF_MAX_PAGES","5")))
-    args = ap.parse_args()
+    log("⚽ NETRATTLER Settlement V11 startet")
+    tips = load_pending()
+    log(f"Offene Tipps geladen: {len(tips)} | Limit={LIMIT} | Days={DAYS_BACK}")
 
-    if args.rebuild_only:
-        log(f"✅ player_avg_stats aktualisiert: {rebuild(args.days_back)}"); return
+    dates = sorted({tip_date(t) for t in tips})[-MAX_DATES:]
+    log(f"Dates: {dates}")
 
-    all_rows = []
-    if args.source in ("all","statsbomb"):
-        log("📦 StatsBomb Open Data...")
-        r = statsbomb_rows(args.statsbomb_matches); log(f"  StatsBomb Rows: {len(r)}"); all_rows += r
-    if args.source in ("all","sofascore"):
-        d = args.date or (datetime.now(timezone.utc)-timedelta(days=1)).date().isoformat()
-        log(f"📦 SofaScore {d}...")
-        r = sofascore_rows_for_date(d, args.sofascore_events); log(f"  SofaScore Rows: {len(r)}"); all_rows += r
-    if args.source in ("all","fbref"):
-        log("📦 FBref...")
-        r = fbref_rows(args.fbref_pages); log(f"  FBref Rows: {len(r)}"); all_rows += r
+    for d in dates:
+        if timed_out():
+            break
+        load_results_for_date(d)
 
-    dedup = {}
-    for r in all_rows:
-        dedup[(r.get("source"), r.get("match_id"), r.get("player_name"), r.get("team_name"))] = r
-    final = list(dedup.values())
-    log(f"📦 Rows gebaut total: {len(final)}")
-    saved = upsert("player_match_stats", final, "source,match_id,player_name")
-    log(f"✅ player_match_stats gespeichert: {saved}")
-    log(f"✅ player_avg_stats aktualisiert: {rebuild(args.days_back)}")
+    settled = []
+    skipped = 0
+    debug = []
+
+    for tip in tips:
+        if timed_out():
+            log("⏱️ Timeout-Limit erreicht, stoppe sauber", "WARN")
+            break
+
+        d = tip_date(tip)
+        if d not in dates:
+            skipped += 1
+            continue
+
+        home, away = parse_match(tip)
+        if not home or not away:
+            skipped += 1
+            continue
+
+        res, score = find_result(home, away, d)
+        if not res:
+            skipped += 1
+            if len(debug) < DEBUG_MISSES:
+                debug.append(f"MISS {home} vs {away} best={score:.2f}")
+            continue
+
+        status = settle_market(tip, res)
+        if not status:
+            skipped += 1
+            continue
+
+        data = {
+            "status": status,
+            "result": status,
+            "settled_at": datetime.now(timezone.utc).isoformat(),
+        }
+
+        if sb_patch_tip(tip, data):
+            item = dict(tip)
+            item["status"] = status
+            settled.append(item)
+
+    if debug:
+        log("Debug Misses:")
+        for x in debug[:DEBUG_MISSES]:
+            log("   " + x)
+
+    send_summary(settled, skipped, debug)
+    log(f"✅ Settlement V11 fertig: {len(settled)} ausgewertet, {skipped} offen/nicht auswertbar, Results={sum(len(v) for v in DATE_RESULTS.values())}")
+
 
 if __name__ == "__main__":
-    main()
+    try:
+        main()
+    except Exception as e:
+        log(f"FATAL: {e}", "ERROR")
+        print(traceback.format_exc())
+        raise
