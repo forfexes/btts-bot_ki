@@ -15978,18 +15978,22 @@ def analyze_corners_tip_simple(fixture, league):
             cum += (math.exp(-lam) * lam**k) / math.factorial(k)
         return round((1 - cum) * 100)
 
-    # Mehrere Linien durchprobieren, höchste mit prob>=60% UND realistischer Buchmacher-Quote >=1.70 wählen
+    # Corner Min-Prob und Min-Odds aus ENV
+    _corner_min_prob = int(env("CORNER_COMBO_MIN_PROB", "62"))
+    _corner_min_odds = float(env("CORNER_MIN_ODDS", "1.60"))
+    _corner_max_odds = float(env("CORNER_MAX_ODDS", "3.50"))
+
     candidates = []
-    for line in [7.5, 8.5, 9.5, 10.5, 11.5]:
+    for line in [7.5, 8.5, 9.5, 10.5, 11.5, 12.5]:
         prob = poisson_over(line)
-        if prob < 60:
+        if prob < _corner_min_prob:
             continue
-        # Simulierte Buchmacher-Quote inkl. Marge (~7%, realistischer als reine Fair Odds)
+        # Simulierte Buchmacher-Quote inkl. Marge (~7%)
         book_odds = round((100 / prob) * 1.07, 2) if prob > 0 else 0
         candidates.append((line, prob, book_odds))
 
-    # Bevorzuge die höchste Linie, die Quote >=1.70 erreicht (beste Balance Sicherheit/Value)
-    valid = [c for c in candidates if c[2] >= MIN_ODDS_VALUE]
+    # Quote ≥1.60 (Value) und ≤3.50
+    valid = [c for c in candidates if _corner_min_odds <= c[2] <= _corner_max_odds]
     if not valid:
         return None
     line, prob, book_odds = max(valid, key=lambda c: c[0])  # höchste qualifizierende Linie
