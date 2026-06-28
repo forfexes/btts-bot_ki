@@ -1089,31 +1089,113 @@ def openmeteo_rows():
 def sofascore_rows_for_date(date_str, max_events=30):
     log(f"📦 19. SofaScore {date_str}...")
     rows = []
+
+    # SofaScore blockt GitHub Runner manchmal mit 403.
+    # Darum: Browser-Headers, Warmup über sofascore.com und api/www Fallback.
+    sofa_headers = {
+        "User-Agent": (
+            "Mozilla/5.0 (Windows NT 10.0; Win64; x64) "
+            "AppleWebKit/537.36 (KHTML, like Gecko) "
+            "Chrome/124.0.0.0 Safari/537.36"
+        ),
+        "Accept": "application/json, text/plain, */*",
+        "Accept-Language": "en-US,en;q=0.9,de;q=0.7",
+        "Referer": "https://www.sofascore.com/football",
+        "Origin": "https://www.sofascore.com",
+        "Cache-Control": "no-cache",
+        "Pragma": "no-cache",
+        "Sec-Fetch-Site": "same-site",
+        "Sec-Fetch-Mode": "cors",
+        "Sec-Fetch-Dest": "empty",
+    }
+
+    def sofa_json(path_or_url, timeout=25):
+        urls = []
+        if str(path_or_url).startswith("http"):
+            urls = [path_or_url]
+        else:
+            path = "/" + str(path_or_url).lstrip("/")
+            urls = [
+                "https://api.sofascore.com" + path,
+                "https://www.sofascore.com" + path,
+            ]
+
+        # Warmup: Cookies setzen. Fehler ignorieren.
+        try:
+            HTTP.get("https://www.sofascore.com/football", headers=sofa_headers, timeout=12)
+        except Exception:
+            pass
+
+        for u in urls:
+            try:
+                r = HTTP.get(u, headers=sofa_headers, timeout=timeout)
+                if r.status_code == 403:
+                    log(f"  🚫 SofaScore 403: {u[:90]}")
+                    continue
+                if r.status_code == 404:
+                    log(f"  ⚠️ SofaScore 404: {u[:90]}")
+                    continue
+                if r.status_code == 429:
+                    log(f"  ⏳ SofaScore 429 Rate Limit: {u[:90]}")
+                    time.sleep(2.0)
+                    continue
+                if not r.ok:
+                    log(f"  ⚠️ SofaScore {r.status_code}: {u[:90]}")
+                    continue
+                return r.json()
+            except Exception as e:
+                log(f"  ⚠️ SofaScore request error: {str(e)[:90]}")
+        return None
+
     try:
-        data = jget(f"https://api.sofascore.com/api/v1/sport/football/scheduled-events/{date_str}")
-        if not data: health("sofascore", "blocked", 0, date_str); return rows
+        data = sofa_json(f"/api/v1/sport/football/scheduled-events/{date_str}")
+        if not data:
+            health("sofascore", "blocked_or_empty", 0, date_str)
+            log("  ⚠️ SofaScore: blocked/empty, übersprungen")
+            return rows
+
         events = data.get("events") or []
-        fin = [e for e in events if (e.get("status") or {}).get("type", "").lower() in
-               ("finished", "afterpenalties", "afterextra")]
+        fin = [
+            e for e in events
+            if (e.get("status") or {}).get("type", "").lower()
+            in ("finished", "afterpenalties", "afterextra")
+        ]
+
+        # Falls der Tag in der Zukunft liegt: auch nicht fertige Spiele als Fixture-Kontext zählen,
+        # aber Player Stats gibt es erst nach Spielende.
+        if not fin:
+            log(f"  SofaScore: {len(events)} geplante Spiele, 0 beendet → keine Player Stats")
+            health("sofascore", "fixtures_only", len(events), date_str)
+            return rows
+
         log(f"  SofaScore: {len(fin)} beendete Spiele")
+
         for ev in fin[:max_events]:
             eid = ev.get("id")
-            if not eid: continue
-            lineups = jget(f"https://api.sofascore.com/api/v1/event/{eid}/lineups")
-            if not lineups: continue
-            evdata = jget(f"https://api.sofascore.com/api/v1/event/{eid}") or {}
-            event = evdata.get("event", {})
-            home = (event.get("homeTeam") or {}).get("name", "")
-            away = (event.get("awayTeam") or {}).get("name", "")
-            ts = event.get("startTimestamp")
+            if not eid:
+                continue
+
+            evdata = sofa_json(f"/api/v1/event/{eid}") or {}
+            event = evdata.get("event") or ev
+            home = (event.get("homeTeam") or ev.get("homeTeam") or {}).get("name", "")
+            away = (event.get("awayTeam") or ev.get("awayTeam") or {}).get("name", "")
+            ts = event.get("startTimestamp") or ev.get("startTimestamp")
             md = datetime.fromtimestamp(ts, timezone.utc).date().isoformat() if ts else date_str
+
+            lineups = sofa_json(f"/api/v1/event/{eid}/lineups")
+            if not lineups:
+                continue
+
             for side in ("home", "away"):
                 team = home if side == "home" else away
-                for item in ((lineups.get(side) or {}).get("players") or []):
+                players = ((lineups.get(side) or {}).get("players") or [])
+                for item in players:
                     pl = item.get("player") or {}
                     st = item.get("statistics") or {}
                     pname = pl.get("name") or pl.get("shortName", "")
-                    if not pname: continue
+                    if not pname:
+                        continue
+
                     rows.append(player_row(
                         pname, team, f"sofascore_{eid}", md, home, away, "sofascore",
                         minutes=si(st.get("minutesPlayed") or st.get("minutes", 0)),
@@ -1129,10 +1211,12 @@ def sofascore_rows_for_date(date_str, max_events=30):
                         xg=sf(st.get("expectedGoals", st.get("xg", 0))),
                         xa=sf(st.get("expectedAssists", st.get("xa", 0))),
                     ))
-            time.sleep(0.3)
+            time.sleep(0.35)
+
     except Exception as e:
         log(f"  ⚠️ SofaScore: {e}")
-    health("sofascore", "ok" if rows else "empty", len(rows), date_str)
+
+    health("sofascore", "ok" if rows else "blocked_or_empty", len(rows), date_str)
     log(f"  ✅ SofaScore: {len(rows)} Rows")
     return rows
 
@@ -1151,40 +1235,103 @@ FBREF_URLS = [
 ]
 
 def fbref_rows():
-    log("📦 20. FBref (wenn nicht geblockt)...")
+    log("📦 20. FBref (Fallback-Modus)...")
     rows = []
-    for url, league_name in FBREF_URLS:
-        r = safe_get(url, timeout=25)
-        if not r: time.sleep(7); continue
+
+    fb_headers = {
+        "User-Agent": (
+            "Mozilla/5.0 (Windows NT 10.0; Win64; x64) "
+            "AppleWebKit/537.36 (KHTML, like Gecko) "
+            "Chrome/124.0.0.0 Safari/537.36"
+        ),
+        "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8",
+        "Accept-Language": "en-US,en;q=0.9,de;q=0.7",
+        "Referer": "https://www.google.com/",
+        "Cache-Control": "no-cache",
+        "Pragma": "no-cache",
+    }
+
+    def _get_fbref_html(url):
+        # 1) normaler Request
         try:
-            html = r.text
-            html = re.sub(r"<br\s*/?>", " ", html)
-            for tr in re.findall(r"<tr[^>]*>(.*?)</tr>", html, re.S|re.I):
-                if 'data-stat="player"' not in tr: continue
-                cells = {}
-                for stat, val in re.findall(r'data-stat="([^"]+)"[^>]*>(.*?)</t[dh]>', tr, re.S|re.I):
-                    cells[stat] = re.sub(r"<.*?>", "", val).strip()
-                pname = cells.get("player", "")
-                if not pname or pname.lower() == "player": continue
-                rows.append(player_row(
-                    pname, cells.get("team") or cells.get("squad", ""),
-                    "fbref_season", "", "", "", "fbref",
-                    minutes=si(cells.get("minutes", 0)),
-                    shots=si(cells.get("shots_total", 0)),
-                    sot=si(cells.get("shots_on_target", 0)),
-                    goals=si(cells.get("goals", 0)),
-                    assists=si(cells.get("assists", 0)),
-                    passes=si(cells.get("passes_completed", 0)),
-                    tackles=si(cells.get("tackles", 0)),
-                    cards=si(cells.get("cards_yellow", 0)) + si(cells.get("cards_red", 0)),
-                    xg=sf(cells.get("xg", 0)),
-                    xa=sf(cells.get("xa", 0)),
-                ))
-            log(f"  FBref {league_name}: {len(rows)} Spieler")
+            r = HTTP.get(url, headers=fb_headers, timeout=35)
+            if r.ok and "data-stat" in r.text:
+                return r.text
+            if r.status_code == 403:
+                log(f"  🚫 FBref 403 normal: {url[:80]}")
+            elif r.status_code == 429:
+                log(f"  ⏳ FBref 429 Rate Limit: {url[:80]}")
+            elif not r.ok:
+                log(f"  ⚠️ FBref {r.status_code}: {url[:80]}")
         except Exception as e:
-            log(f"  ⚠️ FBref {league_name}: {e}")
-        time.sleep(7)
-    health("fbref", "ok" if rows else "blocked_or_empty", len(rows))
+            log(f"  ⚠️ FBref normal error: {str(e)[:90]}")
+
+        # 2) cloudscraper Fallback, falls im Workflow installiert
+        try:
+            import cloudscraper  # type: ignore
+            scraper = cloudscraper.create_scraper(
+                browser={"browser": "chrome", "platform": "windows", "mobile": False}
+            )
+            r = scraper.get(url, headers=fb_headers, timeout=45)
+            if r.ok and "data-stat" in r.text:
+                log("  ✅ FBref via cloudscraper")
+                return r.text
+            log(f"  ⚠️ FBref cloudscraper {r.status_code}: {url[:80]}")
+        except Exception as e:
+            log(f"  ⚠️ FBref cloudscraper fehlt/blockiert: {str(e)[:100]}")
+
+        return None
+
+    def _cell_map(tr_html):
+        cells = {}
+        for stat, val in re.findall(r'data-stat="([^"]+)"[^>]*>(.*?)</t[dh]>', tr_html, re.S | re.I):
+            val = re.sub(r"<br\s*/?>", " ", val, flags=re.I)
+            val = re.sub(r"<.*?>", "", val)
+            cells[stat] = clean(val)
+        return cells
+
+    for url, league_name in FBREF_URLS:
+        html = _get_fbref_html(url)
+        if not html:
+            time.sleep(10)
+            continue
+
+        try:
+            before = len(rows)
+
+            # FBref versteckt Tabellen oft in HTML-Kommentaren.
+            html_uncommented = html.replace("<!--", "").replace("-->", "")
+            for tr in re.findall(r"<tr[^>]*>(.*?)</tr>", html_uncommented, re.S | re.I):
+                if 'data-stat="player"' not in tr:
+                    continue
+                cells = _cell_map(tr)
+                pname = cells.get("player", "")
+                if not pname or pname.lower() == "player":
+                    continue
+                team = cells.get("team") or cells.get("squad") or ""
+                rows.append(player_row(
+                    pname, team, f"fbref_{league_name}_{pname}", today(), "", "", "fbref",
+                    minutes=si(cells.get("minutes", cells.get("playing_time_minutes", 0))),
+                    shots=si(cells.get("shots_total", cells.get("standard_shots", 0))),
+                    sot=si(cells.get("shots_on_target", cells.get("standard_shots_on_target", 0))),
+                    goals=si(cells.get("goals", cells.get("standard_goals", 0))),
+                    assists=si(cells.get("assists", cells.get("standard_assists", 0))),
+                    passes=si(cells.get("passes_completed", cells.get("passing_passes_completed", 0))),
+                    tackles=si(cells.get("tackles", cells.get("defense_tackles", 0))),
+                    cards=si(cells.get("cards_yellow", 0)) + si(cells.get("cards_red", 0)),
+                    xg=sf(cells.get("xg", cells.get("standard_xg", 0))),
+                    xa=sf(cells.get("xa", cells.get("standard_xa", 0))),
+                ))
+
+            log(f"  FBref {league_name}: {len(rows)-before} Spieler")
+        except Exception as e:
+            log(f"  ⚠️ FBref parse {league_name}: {e}")
+
+        time.sleep(12)
+
+    # Keine harte Fehlerbehandlung: FBref blockt GitHub oft. Andere Quellen ersetzen es.
+    status = "ok" if rows else "blocked_or_empty"
+    health("fbref", status, len(rows), "GitHub Runner may be blocked by FBref 403")
     log(f"  ✅ FBref total: {len(rows)} Rows")
     return rows
 
