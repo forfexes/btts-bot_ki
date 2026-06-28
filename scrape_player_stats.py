@@ -1315,6 +1315,8 @@ def rebuild(days_back=365):
 
         out.append({
             "player_name": p,
+            "stat_name": "avg",
+            "stat_type": "player_average",
             "team_name": a["team_name"] or "",
             "team": a["team_name"] or "",
             "league": "",
