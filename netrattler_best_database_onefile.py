@@ -26,11 +26,18 @@ class Supabase:
         if not rows: return 0
         total=0
         for i in range(0,len(rows),chunk):
+            part=rows[i:i+chunk]
+            # FIX: PostgREST Bulk-Insert braucht in jedem Objekt exakt dieselben Keys.
+            # Sonst kommt PGRST102: "All object keys must match".
+            all_keys=set()
+            for row in part:
+                all_keys.update(row.keys())
+            part=[{k: row.get(k, None) for k in all_keys} for row in part]
             url=self.rest+'/'+table
             if on_conflict: url += '?on_conflict='+urllib.parse.quote(on_conflict)
-            r=requests.post(url,headers=self.headers('resolution=merge-duplicates,return=minimal'),data=json.dumps(rows[i:i+chunk],ensure_ascii=False,default=str).encode(),timeout=45)
+            r=requests.post(url,headers=self.headers('resolution=merge-duplicates,return=minimal'),data=json.dumps(part,ensure_ascii=False,default=str).encode(),timeout=45)
             if r.status_code>=400: print(f'WARN UPSERT {table} {r.status_code}: {r.text[:500]}')
-            else: total += len(rows[i:i+chunk])
+            else: total += len(part)
             time.sleep(0.03)
         return total
     def count(self,table):
