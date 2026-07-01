@@ -18602,6 +18602,50 @@ def run_pinnacle_props_bot(win_start_utc=None, win_end_utc=None, ch_tz=None, top
                 if l["odds"] > 1.0: t *= l["odds"]
             return round(t, 2)
 
+        def _norm_builder_player_name(_s):
+            """Robuste Spieler-Normalisierung für Builder-Filter."""
+            import re as _re_bpn
+            _s = (_s or "").lower().strip()
+            _s = _re_bpn.sub(r"[^a-z0-9äöüßáéíóúàèìòùâêîôûãõñç\s-]", " ", _s)
+            _s = _re_bpn.sub(r"\s+", " ", _s).strip()
+            return _s
+
+        def _is_score_card_same_player_combo(legs):
+            """
+            Verwirft nur Low-Probability-Kombis:
+            gleicher Spieler trifft / Score-or-Assist UND bekommt Karte.
+            Beispiel: Kane Anytime Goalscorer + Kane To Be Booked.
+            Andere Nate/Aystar/GOD Builder bleiben erlaubt.
+            """
+            _by_player = {}
+            for _l in legs:
+                _player = _norm_builder_player_name(_l.get("player", ""))
+                if not _player or len(_player) < 4:
+                    continue
+                _cat = str(_l.get("category", "")).lower()
+                _market = str(_l.get("market", "")).lower()
+
+                _is_score = (
+                    _cat in {"score", "goal", "goals", "score_assist", "anytime_goalscorer"}
+                    or "goalscorer" in _market
+                    or "to score" in _market
+                    or "score or assist" in _market
+                    or "goal scorer" in _market
+                )
+                _is_card = (
+                    _cat in {"yellow_cards", "cards", "booking", "bookings"}
+                    or "to be booked" in _market
+                    or "booked" in _market
+                    or "yellow card" in _market
+                    or "card" in _market
+                )
+
+                _state = _by_player.setdefault(_player, {"score": False, "card": False})
+                _state["score"] = _state["score"] or _is_score
+                _state["card"] = _state["card"] or _is_card
+
+            return any(_v["score"] and _v["card"] for _v in _by_player.values())
+
         def _send_builder(legs, style="", variant="", high_roller=False):
             nonlocal _pp_total
             t = _tod(legs)
@@ -18610,6 +18654,12 @@ def run_pinnacle_props_bot(win_start_utc=None, win_end_utc=None, ch_tz=None, top
             # Ziel: keine schwachen Builder mehr wie @2.59 / @3.08 / @4.03.
             _style_u = (style or "").upper()
             _legs_n = len(legs)
+
+            # Kein Low-Probability Quatsch: gleicher Spieler Score + Karte.
+            # Wichtig: KEIN Mengen-Cap für Nate/Aystar/GOD, nur diese Kombi wird geblockt.
+            if _is_score_card_same_player_combo(legs):
+                log(f"   ⏭️ Builder verworfen: gleicher Spieler Score+Karte ({style})")
+                return False
 
             if high_roller:
                 _min = 50.0
