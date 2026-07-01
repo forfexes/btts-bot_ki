@@ -18552,6 +18552,350 @@ def run_pinnacle_props_bot(win_start_utc=None, win_end_utc=None, ch_tz=None, top
     except Exception as _e:
         log(f"   DB FotMob: {str(_e)[:60]}", "WARN")
 
+    # ── QUELLE 6: SUPABASE PLAYER AVG STATS → NATE/AYSTAR LADDERS ─────
+    # Baut die Builder aus unseren eigenen historischen Player-Stats:
+    # shots, sot, fouls_committed, fouls_won, tackles, cards.
+    # Das ist für Nate/Aystar-Style wichtig, weil Pinnacle oft nur Score/Card liefert.
+    try:
+        _stat_added = 0
+        _stat_players = {}
+        _stat_seen = set()
+
+        # Nur Spieler aus heutigen Pinnacle/Prop-Matches nehmen, damit keine Random-Spieler kommen.
+        for _base in _prop_db:
+            _pn = (_base.get("player") or "").strip()
+            if not _pn or len(_pn.split()) < 2 or len(_pn) < 5:
+                continue
+            if _pn.lower() in {"either team", "both teams", "home team", "away team"}:
+                continue
+            if _pn not in _stat_players:
+                _stat_players[_pn] = {
+                    "team": _base.get("team", ""),
+                    "match": _base.get("match", ""),
+                    "league": _base.get("league", ""),
+                    "ko": _base.get("ko", ""),
+                }
+            if len(_stat_players) >= 450:
+                break
+
+        def _stat_obj(_stats, *_names):
+            for _n in _names:
+                if _n in _stats and isinstance(_stats[_n], dict):
+                    return _stats[_n]
+            return {}
+
+        def _sf_float(_x, _default=0.0):
+            try:
+                if _x is None:
+                    return _default
+                return float(_x)
+            except Exception:
+                return _default
+
+        def _add_stat_prop(_player, _ctx, _market, _cat, _line, _odds, _hit, _avg, _games):
+            nonlocal _stat_added
+            if _hit < 45 and _avg <= 0:
+                return
+            _key = f"{_player}|{_ctx.get('match','')}|{_market}"
+            if _key in _stat_seen:
+                return
+            _stat_seen.add(_key)
+
+            # Hit Rate bestimmt Model-Prob, Odds sind konservative Builder-Preise.
+            _mp = max(0.35, min(0.88, _hit / 100.0 if _hit else 0.50))
+            _prop_db.append({
+                "player": _player[:80],
+                "team": (_ctx.get("team") or "")[:60],
+                "match": (_ctx.get("match") or "Unknown Match")[:150],
+                "league": (_ctx.get("league") or "")[:80],
+                "market": _market[:150],
+                "category": _cat,
+                "line": float(_line),
+                "odds": float(_odds),
+                "prob": int(round(_mp * 100)),
+                "model_prob": _mp,
+                "source": "SupabaseStats",
+                "ko": _ctx.get("ko") or "",
+                "icon": _CAT_ICONS.get(_cat, "🎯"),
+                "hit_rate": int(round(_hit)) if _hit else "",
+                "games": int(_games) if _games else 0,
+            })
+            _stat_added += 1
+
+        for _player, _ctx in list(_stat_players.items()):
+            try:
+                _stats = get_supabase_player_avg_stats(_player) or {}
+            except Exception:
+                _stats = {}
+            if not _stats:
+                continue
+
+            _sot = _stat_obj(_stats, "sot", "shots_on_target", "shot_on_target", "games_sot")
+            _shots = _stat_obj(_stats, "shots", "total_shots", "games_shot")
+            _fc = _stat_obj(_stats, "fouls_committed", "fouls", "games_foul")
+            _fw = _stat_obj(_stats, "fouls_won", "fouls_drawn", "player_to_be_fouled")
+            _tk = _stat_obj(_stats, "tackles", "tackles_won", "games_tackle")
+            _yc = _stat_obj(_stats, "cards", "yellow_cards", "games_card")
+
+            # SOT / Shots
+            _avg = _sf_float(_sot.get("avg") or _sot.get("avg_value"))
+            _hr = _sf_float(_sot.get("hit_rate") or _sot.get("hit_rate_pct"))
+            _g = _sf_float(_sot.get("games"))
+            if _g >= 3 and (_hr >= 55 or _avg >= 0.8):
+                _add_stat_prop(_player, _ctx, "1+ Shot on Target", "sot", 1, 1.55, max(_hr, 58), _avg, _g)
+            if _g >= 3 and (_hr >= 45 or _avg >= 1.4):
+                _add_stat_prop(_player, _ctx, "2+ Shots on Target", "sot", 2, 2.20, max(_hr, 46), _avg, _g)
+
+            _avg = _sf_float(_shots.get("avg") or _shots.get("avg_value"))
+            _hr = _sf_float(_shots.get("hit_rate") or _shots.get("hit_rate_pct"))
+            _g = _sf_float(_shots.get("games"))
+            if _g >= 3 and (_hr >= 60 or _avg >= 1.7):
+                _add_stat_prop(_player, _ctx, "2+ Shots", "shots", 2, 1.55, max(_hr, 62), _avg, _g)
+            if _g >= 3 and (_hr >= 50 or _avg >= 2.6):
+                _add_stat_prop(_player, _ctx, "3+ Shots", "shots", 3, 2.05, max(_hr, 52), _avg, _g)
+            if _g >= 3 and (_hr >= 42 or _avg >= 3.4):
+                _add_stat_prop(_player, _ctx, "4+ Shots", "shots", 4, 3.00, max(_hr, 44), _avg, _g)
+
+            # Fouls committed / fouls won
+            _avg = _sf_float(_fc.get("avg") or _fc.get("avg_value"))
+            _hr = _sf_float(_fc.get("hit_rate") or _fc.get("hit_rate_pct"))
+            _g = _sf_float(_fc.get("games"))
+            if _g >= 3 and (_hr >= 60 or _avg >= 1.5):
+                _add_stat_prop(_player, _ctx, "2+ Fouls Committed", "fouls", 2, 1.75, max(_hr, 60), _avg, _g)
+            if _g >= 3 and (_hr >= 45 or _avg >= 2.4):
+                _add_stat_prop(_player, _ctx, "3+ Fouls Committed", "fouls", 3, 2.60, max(_hr, 46), _avg, _g)
+
+            _avg = _sf_float(_fw.get("avg") or _fw.get("avg_value"))
+            _hr = _sf_float(_fw.get("hit_rate") or _fw.get("hit_rate_pct"))
+            _g = _sf_float(_fw.get("games"))
+            if _g >= 3 and (_hr >= 60 or _avg >= 0.9):
+                _add_stat_prop(_player, _ctx, "1+ Fouls Won", "fouls_won", 1, 1.45, max(_hr, 62), _avg, _g)
+            if _g >= 3 and (_hr >= 50 or _avg >= 1.8):
+                _add_stat_prop(_player, _ctx, "2+ Fouls Won", "fouls_won", 2, 1.95, max(_hr, 52), _avg, _g)
+
+            # Tackles
+            _avg = _sf_float(_tk.get("avg") or _tk.get("avg_value"))
+            _hr = _sf_float(_tk.get("hit_rate") or _tk.get("hit_rate_pct"))
+            _g = _sf_float(_tk.get("games"))
+            if _g >= 3 and (_hr >= 60 or _avg >= 1.5):
+                _add_stat_prop(_player, _ctx, "2+ Tackles", "tackles", 2, 1.60, max(_hr, 60), _avg, _g)
+            if _g >= 3 and (_hr >= 45 or _avg >= 2.5):
+                _add_stat_prop(_player, _ctx, "3+ Tackles", "tackles", 3, 2.30, max(_hr, 46), _avg, _g)
+
+            # Karten aus Stats nur als Backup. Pinnacle-To-Be-Booked bleibt bevorzugt.
+            _avg = _sf_float(_yc.get("avg") or _yc.get("avg_value"))
+            _hr = _sf_float(_yc.get("hit_rate") or _yc.get("hit_rate_pct"))
+            _g = _sf_float(_yc.get("games"))
+            if _g >= 5 and (_hr >= 28 or _avg >= 0.22):
+                _add_stat_prop(_player, _ctx, "Player To Be Booked", "yellow_cards", 1, 3.60, max(_hr, 30), _avg, _g)
+
+        if _stat_players:
+            log(f"   📊 SupabaseStats geprüft: {len(_stat_players)} Spieler")
+        log(f"   📊 SupabaseStats Builder-Props ergänzt: {_stat_added}")
+    except Exception as _e:
+        log(f"   SupabaseStats Builder-Props: {str(_e)[:80]}", "WARN")
+
+
+    # ── FINAL ALL-SOURCE FUSION + FALLBACKS ─────────────────────────
+    # Ziel: ALLE Quellen berücksichtigen, nicht nur Live-Pinnacle.
+    # Quellen: Pinnacle, ScoutingStats, Statz.ai, Oddspedia, FootyMetrics,
+    # SupabaseStats, Supabase player_prop_db, TheStatsAPI/FBref/StatsBomb wenn vorhanden.
+    try:
+        from collections import Counter as _AllCtr
+
+        _all_sources_before = _AllCtr(str(p.get("source", "unknown")) for p in _prop_db)
+        _all_cats_before = _AllCtr(str(p.get("category", "unknown")) for p in _prop_db)
+        log(f"   🧩 ALL-SOURCE vor Fallback: Quellen={dict(_all_sources_before)}")
+        log(f"   🧩 ALL-SOURCE vor Fallback: Kategorien={dict(_all_cats_before.most_common(12))}")
+
+        def _as_float(_x, _default=0.0):
+            try:
+                if _x is None or _x == "":
+                    return _default
+                return float(_x)
+            except Exception:
+                return _default
+
+        def _norm_txt(_s):
+            import re as _re_norm
+            _s = str(_s or "").lower().strip()
+            _s = _re_norm.sub(r"[^a-z0-9äöüßáéíóúàèìòùâêîôûãõñç\s+.-]", " ", _s)
+            _s = _re_norm.sub(r"\s+", " ", _s).strip()
+            return _s
+
+        def _detect_cat(_market, _fallback=""):
+            _m = _norm_txt(_market)
+            _f = _norm_txt(_fallback)
+            _x = f"{_m} {_f}"
+            if "shot on target" in _x or "sot" in _x:
+                return "sot"
+            if "shots" in _x or "shot total" in _x or "total shots" in _x:
+                return "shots"
+            if "fouls committed" in _x or "player fouls" in _x or "to commit" in _x:
+                return "fouls"
+            if "fouls won" in _x or "fouled" in _x or "drawn" in _x:
+                return "fouls_won"
+            if "tackle" in _x:
+                return "tackles"
+            if "booked" in _x or "yellow card" in _x or "card" in _x or "booking" in _x:
+                return "yellow_cards"
+            if "goalscorer" in _x or "to score" in _x or "score or assist" in _x:
+                return "score"
+            return _fallback or "misc"
+
+        def _safe_prop(_row, _source_prefix="SupabaseDB"):
+            _player = (_row.get("player") or _row.get("player_name") or _row.get("selection") or "").strip()
+            _match = (_row.get("match") or _row.get("fixture") or _row.get("game") or "").strip()
+            _market = (_row.get("market") or _row.get("market_name") or _row.get("prop") or "").strip()
+            if not _player or not _market:
+                return None
+            if len(_player.split()) < 2 or len(_player) < 5:
+                return None
+
+            _src0 = (_row.get("source") or "").strip()
+            _src = f"{_source_prefix}:{_src0}" if _src0 and not str(_src0).startswith(_source_prefix) else (_src0 or _source_prefix)
+            _cat = _detect_cat(_market, _row.get("category") or "")
+            _odds = _as_float(_row.get("odds") or _row.get("pinnacle_odds") or _row.get("fair_odds") or _row.get("price") or 0)
+            if _odds <= 1.01:
+                # konservative Fallback-Preise je Markt, damit Builder nicht wegen fehlender Quote stirbt
+                _odds = {
+                    "sot": 1.55, "shots": 1.70, "fouls": 1.85, "fouls_won": 1.70,
+                    "tackles": 1.70, "yellow_cards": 3.60, "score": 2.20
+                }.get(_cat, 1.70)
+
+            _mp = _as_float(_row.get("model_prob") or 0)
+            if _mp > 1.0:
+                _mp = _mp / 100.0
+            _prob = _as_float(_row.get("prob") or _row.get("pinnacle_prob") or 0)
+            if _prob <= 1 and _mp > 0:
+                _prob = int(round(_mp * 100))
+            elif _prob <= 0:
+                _prob = int(round({
+                    "sot": 58, "shots": 56, "fouls": 54, "fouls_won": 54,
+                    "tackles": 54, "yellow_cards": 32, "score": 40
+                }.get(_cat, 50)))
+
+            _line = _as_float(_row.get("line") or 0)
+            if _line <= 0:
+                if "4+" in _market: _line = 4
+                elif "3+" in _market: _line = 3
+                elif "2+" in _market: _line = 2
+                else: _line = 1
+
+            return {
+                "player": _player[:80],
+                "team": (_row.get("team") or "")[:60],
+                "match": (_match or "Unknown Match")[:150],
+                "league": (_row.get("league") or "")[:80],
+                "market": _market[:150],
+                "category": _cat,
+                "line": float(_line),
+                "odds": float(_odds),
+                "prob": int(round(_prob)),
+                "model_prob": _mp if _mp > 0 else max(0.30, min(0.88, float(_prob) / 100.0)),
+                "source": _src,
+                "ko": _row.get("ko") or "",
+                "icon": _CAT_ICONS.get(_cat, "🎯"),
+                "hit_rate": _row.get("hit_rate") or "",
+                "games": int(_as_float(_row.get("games") or 0)),
+            }
+
+        def _source_weight(_src):
+            _s = str(_src or "")
+            if _s.startswith("SupabaseStats"): return 120
+            if _s.startswith("Statz.ai"): return 115
+            if _s.startswith("ScoutingStats"): return 110
+            if _s.startswith("Pinnacle"): return 105
+            if _s.startswith("SupabaseDB:Pinnacle"): return 104
+            if _s.startswith("SupabaseDB:Statz.ai"): return 103
+            if _s.startswith("SupabaseDB:ScoutingStats"): return 102
+            if _s.startswith("Oddspedia"): return 95
+            if _s.startswith("FootyMetrics"): return 92
+            if _s.startswith("StatsBomb"): return 90
+            if _s.startswith("SupabaseDB"): return 88
+            return 70
+
+        # Fallback A: Supabase player_prop_db von heute/letzten Runs laden.
+        _db_added = 0
+        _known_matches = set(_norm_txt(p.get("match")) for p in _prop_db if p.get("match"))
+        _known_players = set(_norm_txt(p.get("player")) for p in _prop_db if p.get("player"))
+        if SUPABASE_URL and SUPABASE_KEY:
+            _db_rows = []
+            _headers = {"apikey": SUPABASE_KEY, "Authorization": f"Bearer {SUPABASE_KEY}"}
+            _select = "player,team,match,league,market,category,line,source,date,pinnacle_odds,pinnacle_prob,model_prob,fair_odds"
+            for _params in (
+                {"select": _select, "date": f"eq.{_pp_today}", "limit": "1200"},
+                {"select": _select, "order": "date.desc", "limit": "1200"},
+            ):
+                try:
+                    _r = requests.get(f"{SUPABASE_URL}/rest/v1/player_prop_db", headers=_headers, params=_params, timeout=12)
+                    if _r.ok and _r.text:
+                        _db_rows.extend(_r.json() or [])
+                except Exception as _e_db:
+                    log(f"   🧩 SupabaseDB Fallback: {str(_e_db)[:70]}", "WARN")
+            _seen_db = set()
+            for _r in _db_rows:
+                _pr = _safe_prop(_r, "SupabaseDB")
+                if not _pr:
+                    continue
+                _mk = _norm_txt(_pr.get("match"))
+                _pn = _norm_txt(_pr.get("player"))
+                # Priorität: heutige Spiele/Spieler. Fallback trotzdem erlaubt, wenn Match leer/Unknown.
+                if _known_matches and _mk and _mk not in _known_matches and _pn not in _known_players:
+                    continue
+                _key = (_pn, _mk, _norm_txt(_pr.get("market")), _pr.get("line"))
+                if _key in _seen_db:
+                    continue
+                _seen_db.add(_key)
+                _prop_db.append(_pr)
+                _db_added += 1
+        log(f"   🧩 SupabaseDB Fallback ergänzt: {_db_added}")
+
+        # Fallback B: Mindest-Coverage prüfen. Kein Stop, nur klares Log.
+        _need_cats = ["shots", "sot", "fouls", "fouls_won", "tackles", "yellow_cards", "score"]
+        _cat_now = _AllCtr(str(p.get("category", "unknown")) for p in _prop_db)
+        _src_now = _AllCtr(str(p.get("source", "unknown")) for p in _prop_db)
+        _missing_cats = [c for c in _need_cats if _cat_now.get(c, 0) == 0]
+        if _missing_cats:
+            log(f"   🧩 ALL-SOURCE Warnung: fehlende Kategorien {', '.join(_missing_cats)}", "WARN")
+        else:
+            log("   🧩 ALL-SOURCE Coverage: Shots/SOT/Fouls/Fouled/Tackles/Cards/Score vorhanden")
+
+        # Final-Dedup: gleiche Spieler/Match/Markt/Line aus allen Quellen → beste Quelle/Prob/Quote behalten.
+        _dedup = {}
+        for _p in _prop_db:
+            try:
+                _key = (
+                    _norm_txt(_p.get("player")),
+                    _norm_txt(_p.get("match")),
+                    _norm_txt(_p.get("market")),
+                    float(_p.get("line") or 0),
+                )
+                if not _key[0] or not _key[2]:
+                    continue
+                _score = (
+                    _source_weight(_p.get("source"))
+                    + (_as_float(_p.get("model_prob")) * 30.0)
+                    + (_as_float(_p.get("prob")) / 10.0)
+                    + min(5.0, _as_float(_p.get("games")) / 10.0)
+                )
+                _old = _dedup.get(_key)
+                if not _old or _score > _old[0]:
+                    _dedup[_key] = (_score, _p)
+            except Exception:
+                continue
+        _before_dedup = len(_prop_db)
+        _prop_db[:] = [v[1] for v in _dedup.values()]
+        log(f"   🧩 ALL-SOURCE Final Dedup: {_before_dedup} → {len(_prop_db)}")
+
+        _src_final = _AllCtr(str(p.get("source", "unknown")) for p in _prop_db)
+        _cat_final = _AllCtr(str(p.get("category", "unknown")) for p in _prop_db)
+        log(f"   🧩 ALL-SOURCE final Quellen: {dict(_src_final)}")
+        log(f"   🧩 ALL-SOURCE final Kategorien: {dict(_cat_final.most_common(12))}")
+    except Exception as _e:
+        log(f"   🧩 ALL-SOURCE Fusion/Fallback Fehler: {str(_e)[:120]}", "WARN")
+
+
     # ── STATISTIK ──────────────────────────────────────────────────
     log(f"   📊 PROP DB: {len(_prop_db)} Props total")
     if _prop_db:
@@ -18729,6 +19073,20 @@ def run_pinnacle_props_bot(win_start_utc=None, win_end_utc=None, ch_tz=None, top
         # Quellen-Gewichtung: Statz.ai/ScoutingStats bevorzugen (haben model_prob)
         # Pinnacle: nur wenn Spielername bekannt (min 2 Wörter)
         _prop_db_filtered = []
+
+        def _builder_source_bonus_final(_src):
+            _s = str(_src or "").split(":")[0]
+            return {
+                "SupabaseStats": 0.30,
+                "Statz.ai": 0.25,
+                "ScoutingStats": 0.22,
+                "Pinnacle": 0.18,
+                "Oddspedia": 0.12,
+                "FootyMetrics": 0.10,
+                "StatsBomb": 0.08,
+                "SupabaseDB": 0.06,
+            }.get(_s, 0.0)
+
         for _p in _prop_db:
             _pn = _p.get("player","").strip()
             # Pinnacle Team-Props noch mal filtern
@@ -18805,9 +19163,9 @@ def run_pinnacle_props_bot(win_start_utc=None, win_end_utc=None, ch_tz=None, top
                 # Beste Prop pro Kategorie
                 _god_legs = []
                 for _c, _props in sorted(_avail_cats, 
-                                          key=lambda x: max(p["model_prob"] or p["prob"]/100 for p in x[1]), 
+                                          key=lambda x: max((p["model_prob"] or p["prob"]/100) + _builder_source_bonus_final(p.get("source")) for p in x[1]), 
                                           reverse=True)[:5]:
-                    _best = sorted(_props, key=lambda x: x["model_prob"] or x["prob"]/100, reverse=True)[0]
+                    _best = sorted(_props, key=lambda x: (x["model_prob"] or x["prob"]/100) + _builder_source_bonus_final(x.get("source")), reverse=True)[0]
                     if _best["odds"] <= 8.0:
                         _god_legs.append(_best)
 
@@ -18826,7 +19184,7 @@ def run_pinnacle_props_bot(win_start_utc=None, win_end_utc=None, ch_tz=None, top
         _yc_props = _by_cat_all.get("yellow_cards", [])
         # Priorisiere Quellen mit model_prob
         def _yc_score(p):
-            src_bonus = {"Statz.ai": 0.2, "ScoutingStats": 0.15, "Oddspedia": 0.1}.get(p["source"], 0)
+            src_bonus = {"SupabaseStats": 0.30, "Statz.ai": 0.25, "ScoutingStats": 0.20, "Pinnacle": 0.15, "Oddspedia": 0.12, "FootyMetrics": 0.10}.get(str(p["source"]).split(":")[0], 0)
             return (p["model_prob"] or p["prob"]/100) + src_bonus
         _yc_sorted = sorted(_yc_props, key=_yc_score, reverse=True)
         # Dedup: beste Quote pro Spieler
