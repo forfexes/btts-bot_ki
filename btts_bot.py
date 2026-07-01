@@ -1,4 +1,3 @@
-# NETRATTLER V15 FOOTBALL DATA FUSION ONLY - Prop Hunter bleibt anderer Chat/anderes Projekt
 from typing import List, Dict, Optional, Tuple, Any
 """
 AI TIPP BOT - GITHUB SINGLE FILE EDITION
@@ -35,11 +34,6 @@ import time
 from datetime import date, datetime, timedelta, timezone
 
 import requests
-
-try:
-    from data_fusion_v15 import apply_data_fusion_to_tips
-except Exception:
-    apply_data_fusion_to_tips = None
 
 try:
     from dotenv import load_dotenv
@@ -82,92 +76,6 @@ if not API_FOOTBALL_KEYS:
         API_FOOTBALL_KEYS = [single_key]
 # Erster Key für Backwards-Kompatibilität
 API_FOOTBALL_KEY = API_FOOTBALL_KEYS[0] if API_FOOTBALL_KEYS else ""
-
-# API-Football deaktiviert: Account suspended / keine neuen Accounts.
-# Der Bot nutzt stattdessen Football-Data, Pinnacle/Odds, FBref/FotMob/StatsBomb etc.
-API_FOOTBALL_ENABLED = False
-API_FOOTBALL_KEYS = []
-API_FOOTBALL_KEY = ""
-
-# ============================================================
-# THESTATSAPI - robuste Key Rotation
-# Secret: THESTATSAPI_KEY = key1,key2,key3,key4
-# Optional: THESTATSAPI_KEYS = key1,key2,key3,key4
-# ============================================================
-
-THESTATSAPI_KEYS = env_list("THESTATSAPI_KEYS")
-if not THESTATSAPI_KEYS:
-    THESTATSAPI_KEYS = env_list("THESTATSAPI_KEY")
-
-THESTATSAPI_KEY = THESTATSAPI_KEYS[0] if THESTATSAPI_KEYS else ""
-TSA_KEY_INDEX = 0
-TSA_BAD_KEYS = set()
-
-def get_tsa_key():
-    global TSA_KEY_INDEX
-    good_keys = [k for k in THESTATSAPI_KEYS if k and k not in TSA_BAD_KEYS]
-    if not good_keys:
-        return ""
-    key = good_keys[TSA_KEY_INDEX % len(good_keys)]
-    TSA_KEY_INDEX += 1
-    return key
-
-def mark_tsa_bad(key):
-    if key:
-        TSA_BAD_KEYS.add(key)
-
-def tsa_headers():
-    key = get_tsa_key()
-    if not key:
-        return None, ""
-    return {
-        "Authorization": f"Bearer {key}",
-        "x-api-key": key,
-        "Accept": "application/json",
-        "User-Agent": "NETRATTLER/1.0",
-    }, key
-
-def tsa_get_json(url, params=None, timeout=20, retries=None):
-    """TheStatsAPI Request mit automatischer Key-Rotation."""
-    if retries is None:
-        retries = max(1, len(THESTATSAPI_KEYS))
-
-    last_error = None
-    for _ in range(retries):
-        headers, current_key = tsa_headers()
-        if not headers:
-            log("🚀 TSA: Keine gültigen API Keys vorhanden", "WARN")
-            return None
-
-        try:
-            r = requests.get(url, headers=headers, params=params or {}, timeout=timeout)
-
-            if r.status_code in (401, 403):
-                log(f"🚀 TSA Key ungültig/gesperrt → {current_key[:8]}...", "WARN")
-                mark_tsa_bad(current_key)
-                last_error = f"HTTP {r.status_code}"
-                continue
-
-            if r.status_code == 429:
-                log(f"🚀 TSA Rate Limit → {current_key[:8]}...", "WARN")
-                mark_tsa_bad(current_key)
-                last_error = "HTTP 429"
-                continue
-
-            if not r.ok:
-                log(f"🚀 TSA HTTP {r.status_code}: {r.text[:160]}", "WARN")
-                last_error = f"HTTP {r.status_code}"
-                continue
-
-            return r.json()
-
-        except Exception as e:
-            last_error = str(e)
-            log(f"🚀 TSA Request Fehler: {e}", "WARN")
-
-    log(f"🚀 TSA: Alle Keys erschöpft/ungültig ({last_error})", "WARN")
-    return None
-
 
 TELEGRAM_TOKEN = env("TELEGRAM_TOKEN")
 TELEGRAM_CHAT_ID = env("TELEGRAM_CHAT_ID")
@@ -279,304 +187,6 @@ SUPABASE_KEY = env("SUPABASE_KEY")
 MIN_PROBABILITY = int(env("MIN_PROBABILITY", "67"))  # 🆕 Hybrid: 67% (zwischen 65-69)
 MIN_ODDS = float(env("MIN_ODDS", "1.70"))
 MAX_ODDS = float(env("MAX_ODDS", "3.0"))
-
-# ============================================================
-# PROP BUILDER SCORE V1
-# Qualität zuerst, Quote danach.
-# ============================================================
-
-PROP_SCORE_MIN_LEG = float(env("PROP_SCORE_MIN_LEG", "78"))          # einzelne Leg min 78/100
-PROP_SCORE_MIN_BUILDER_AVG = float(env("PROP_SCORE_MIN_BUILDER_AVG", "82"))  # Builder Ø min 82/100
-PROP_SCORE_MIN_COMBO_PROB = float(env("PROP_SCORE_MIN_COMBO_PROB", "0.06"))   # Kombi min 6%
-PROP_SCORE_ALLOW_BOOKINGS = env("PROP_SCORE_ALLOW_BOOKINGS", "false").lower() in ["1", "true", "yes", "on"]
-PROP_SCORE_MAX_BOOKING_ODDS = float(env("PROP_SCORE_MAX_BOOKING_ODDS", "3.20"))
-PROP_SCORE_MAX_LEGS_DEFAULT = int(env("PROP_SCORE_MAX_LEGS_DEFAULT", "5"))
-
-def _prop_category(p):
-    txt = " ".join(str(p.get(k, "")) for k in [
-        "category", "market", "prop", "description", "selection", "name"
-    ]).lower()
-    if any(x in txt for x in ["tackle", "tackles"]):
-        return "tackles"
-    if any(x in txt for x in ["foul", "fouls"]):
-        return "fouls"
-    if any(x in txt for x in ["shot on target", "sot", "shots on target"]):
-        return "sot"
-    if any(x in txt for x in ["shot", "shots"]):
-        return "shots"
-    if any(x in txt for x in ["booked", "booking", "card", "yellow"]):
-        return "booking"
-    if any(x in txt for x in ["score", "goalscorer", "goal"]):
-        return "score"
-    return "other"
-
-
-def _prop_odds(p):
-    try:
-        return float(p.get("odds") or p.get("price") or p.get("quote") or 0)
-    except Exception:
-        return 0.0
-
-
-def _prop_prob(p):
-    prob = (
-        p.get("model_prob")
-        or p.get("probability")
-        or p.get("prob")
-        or p.get("hit_rate")
-        or p.get("hit_rate_pct")
-        or p.get("hr")
-        or 0
-    )
-    try:
-        prob = float(prob)
-        if prob > 1:
-            prob = prob / 100.0
-    except Exception:
-        prob = 0.0
-
-    # Falls keine echte Probability vorhanden ist, konservativ aus Quote schätzen
-    if prob <= 0:
-        odds = _prop_odds(p)
-        if odds > 1:
-            prob = 1.0 / odds
-        else:
-            prob = 0.0
-
-    return max(0.01, min(0.99, prob))
-
-
-def _prop_edge(p):
-    odds = _prop_odds(p)
-    prob = _prop_prob(p)
-    if odds <= 1:
-        return -100.0
-    return (prob - (1.0 / odds)) * 100.0
-
-
-def _prop_score(p):
-    """
-    Score 0-100.
-    Nicht perfekt, aber viel besser als reine Quote.
-    """
-    cat = _prop_category(p)
-    odds = _prop_odds(p)
-    prob = _prop_prob(p)
-    edge = _prop_edge(p)
-
-    score = 0.0
-
-    # Wahrscheinlichkeit
-    if prob >= 0.70:
-        score += 45
-    elif prob >= 0.60:
-        score += 38
-    elif prob >= 0.52:
-        score += 30
-    elif prob >= 0.45:
-        score += 20
-    else:
-        score -= 30
-
-    # Edge
-    if edge >= 18:
-        score += 30
-    elif edge >= 12:
-        score += 24
-    elif edge >= 8:
-        score += 18
-    elif edge >= 4:
-        score += 10
-    elif edge < 0:
-        score -= 25
-
-    # Marktqualität
-    if cat in ["tackles", "fouls", "sot"]:
-        score += 20
-    elif cat in ["shots"]:
-        score += 14
-    elif cat == "score":
-        score += 8
-    elif cat == "booking":
-        score -= 8
-    else:
-        score -= 10
-
-    # Quote-Risiko: hohe Quote ist ok, aber nur mit hoher Prob/Edge.
-    if odds >= 5 and prob < 0.45:
-        score -= 30
-    elif odds >= 4 and prob < 0.50:
-        score -= 18
-    elif odds >= 3.2 and prob < 0.55:
-        score -= 8
-
-    # Booking-Schutz
-    if cat == "booking":
-        if not PROP_SCORE_ALLOW_BOOKINGS:
-            score -= 35
-        if odds > PROP_SCORE_MAX_BOOKING_ODDS:
-            score -= 25
-
-    return max(0.0, min(100.0, score))
-
-
-def _prop_leg_ok(p):
-    cat = _prop_category(p)
-    odds = _prop_odds(p)
-    prob = _prop_prob(p)
-    score = _prop_score(p)
-
-    if odds <= 1.01:
-        return False
-
-    # Bookings nur sehr streng oder wenn explizit erlaubt
-    if cat == "booking" and not PROP_SCORE_ALLOW_BOOKINGS:
-        return False
-
-    if score < PROP_SCORE_MIN_LEG:
-        return False
-
-    if prob < 0.45:
-        return False
-
-    if _prop_edge(p) < 4:
-        return False
-
-    return True
-
-
-def _builder_quality_ok(legs):
-    if not legs:
-        return False
-
-    scores = [_prop_score(l) for l in legs]
-    avg_score = sum(scores) / len(scores)
-
-    combo_prob = 1.0
-    for leg in legs:
-        combo_prob *= _prop_prob(leg)
-
-    if avg_score < PROP_SCORE_MIN_BUILDER_AVG:
-        return False
-
-    if combo_prob < PROP_SCORE_MIN_COMBO_PROB:
-        return False
-
-    # Mehr als 1 Booking pro Builder vermeiden
-    booking_count = sum(1 for l in legs if _prop_category(l) == "booking")
-    if booking_count > 1:
-        return False
-
-    return True
-
-
-def _rank_props_for_builder(props):
-    good = [p for p in props if _prop_leg_ok(p)]
-    good.sort(key=lambda p: (_prop_score(p), _prop_edge(p), _prop_prob(p)), reverse=True)
-    return good
-
-
-def _builder_debug_line(legs):
-    try:
-        avg_score = sum(_prop_score(l) for l in legs) / max(len(legs), 1)
-        combo_prob = 1.0
-        for l in legs:
-            combo_prob *= _prop_prob(l)
-        return f"score={avg_score:.0f}/100 · p={combo_prob*100:.1f}%"
-    except Exception:
-        return "score=n/a"
-
-
-# ============================================================
-# PROP BUILDER PROBABILITY FILTER
-# Gesamtquote darf hoch sein, aber Leg- und Kombi-Wahrscheinlichkeit müssen stimmen.
-# ============================================================
-PROP_BUILDER_MIN_MODEL_PROB = float(env("PROP_BUILDER_MIN_MODEL_PROB", "0.45"))   # Einzel-Leg min 45%
-PROP_BUILDER_MIN_LEG_CONF = int(env("PROP_BUILDER_MIN_LEG_CONF", "3"))
-PROP_BUILDER_MAX_SINGLE_ODDS_SAFE = float(env("PROP_BUILDER_MAX_SINGLE_ODDS_SAFE", "3.25"))
-PROP_BUILDER_MIN_COMBO_PROB = float(env("PROP_BUILDER_MIN_COMBO_PROB", "0.08"))  # Kombi min 8%
-PROP_BUILDER_ALLOW_HIGH_RISK = env("PROP_BUILDER_ALLOW_HIGH_RISK", "false").lower() in ["1", "true", "yes", "on"]
-
-def _leg_model_prob(p):
-    """Liest Modell-/Hit-Wahrscheinlichkeit einer Leg als 0-1 Wert."""
-    prob = (
-        p.get("model_prob")
-        or p.get("probability")
-        or p.get("prob")
-        or p.get("hit_rate")
-        or p.get("hit_rate_pct")
-        or 0
-    )
-    try:
-        prob = float(prob)
-        if prob > 1:
-            prob = prob / 100.0
-    except Exception:
-        prob = 0.0
-
-    if prob:
-        return max(0.01, min(0.99, prob))
-
-    try:
-        odds = float(p.get("odds") or p.get("price") or p.get("quote") or 0)
-        return 1.0 / odds if odds > 1 else 0.0
-    except Exception:
-        return 0.0
-
-
-def _safe_prop_leg(p):
-    """True nur für Prop-Builder-Legs mit realistischer Trefferchance."""
-    try:
-        odds = float(p.get("odds") or p.get("price") or p.get("quote") or 0)
-    except Exception:
-        odds = 0.0
-
-    prob = _leg_model_prob(p)
-
-    try:
-        conf = int(float(p.get("confidence") or p.get("conf") or 3))
-    except Exception:
-        conf = 3
-
-    if odds <= 1.01:
-        return False
-
-    if prob < PROP_BUILDER_MIN_MODEL_PROB:
-        return False
-
-    if conf < PROP_BUILDER_MIN_LEG_CONF:
-        return False
-
-    # Hohe Einzelquote ist erlaubt, wenn echte Modellwahrscheinlichkeit stark genug ist.
-    # Ohne echte Wahrscheinlichkeit schützt implied probability.
-    return True
-
-
-def _safe_builder_total(legs, total_odds):
-    """
-    Gesamtquote darf hoch sein.
-    Wichtig:
-    - jede Leg hat genug Wahrscheinlichkeit
-    - die kombinierte Trefferchance ist nicht zu tief
-    """
-    try:
-        if not legs:
-            return False
-
-        if not all(_safe_prop_leg(l) for l in legs):
-            return False
-
-        combo_prob = 1.0
-        for leg in legs:
-            combo_prob *= _leg_model_prob(leg)
-
-        if combo_prob < PROP_BUILDER_MIN_COMBO_PROB and not PROP_BUILDER_ALLOW_HIGH_RISK:
-            return False
-
-        return True
-    except Exception:
-        return False
-
 MIN_CONFIDENCE = int(env("MIN_CONFIDENCE", "3"))
 # 🆕 Nur HIGH + OK Value (LOW fliegt raus)
 MIN_VALUE_RATING = env("MIN_VALUE_RATING", "OK")  # HIGH, OK, oder LOW
@@ -611,9 +221,9 @@ AUTO_LEAGUE_MIN_WINRATE = float(env("AUTO_LEAGUE_MIN_WINRATE", "48"))
 AUTO_LEAGUE_MIN_ROI = float(env("AUTO_LEAGUE_MIN_ROI", "-2.0"))
 AUTO_LEAGUE_LOOKBACK_DAYS = int(env("AUTO_LEAGUE_LOOKBACK_DAYS", "120"))
 
-MAX_LEAGUES_PER_RUN = int(env("MAX_LEAGUES_PER_RUN", "8"))  # 25 pro Run!
-AI_SLEEP_SECONDS = float(env("AI_SLEEP_SECONDS", "0.1"))
-GROQ_SLEEP_SECONDS = float(env("GROQ_SLEEP_SECONDS", "0.5"))
+MAX_LEAGUES_PER_RUN = int(env("MAX_LEAGUES_PER_RUN", "25"))  # 25 pro Run!
+AI_SLEEP_SECONDS = float(env("AI_SLEEP_SECONDS", "1.0"))
+GROQ_SLEEP_SECONDS = float(env("GROQ_SLEEP_SECONDS", "2.0"))
 USE_GROQ_FALLBACK = env("USE_GROQ_FALLBACK", "true").lower() in ["1", "true", "yes", "on"]
 
 ALWAYS_ON_LEAGUES = [
@@ -7391,7 +7001,6 @@ def _ml_get_team_form(team_name, n=10):
             "btts_ht_rate": 0.20, "o15ht_rate": 0.45,
             "avg_scored": 1.30, "avg_conceded": 1.20,
             "form_pts": 0.33, "streak_win": 0.0,
-            "avg_shots": 11.5, "avg_corners": 5.0, "avg_cards": 2.0,
         }
 
     last = hist[-n:]
@@ -7526,10 +7135,6 @@ def get_ml_prediction(home_team, away_team, league_name):
         fh["streak_win"], fa["streak_win"],
         # H2H
         h2h_btts, h2h_goals, h2h_norm,
-        # Shots/Corners/Cards Defaults für Nischen-Ligen
-        fh.get("avg_shots", 11.5), fa.get("avg_shots", 11.5), fh.get("avg_shots", 11.5) + fa.get("avg_shots", 11.5),
-        fh.get("avg_corners", 5.0), fa.get("avg_corners", 5.0), fh.get("avg_corners", 5.0) + fa.get("avg_corners", 5.0),
-        fh.get("avg_cards", 2.0), fa.get("avg_cards", 2.0), fh.get("avg_cards", 2.0) + fa.get("avg_cards", 2.0),
     ]
 
     import numpy as np
@@ -8066,7 +7671,7 @@ def get_historical_weather_impact(league_name, month):
 
     impact = "neutral"
 
-    # Wintermoladder in Europa
+    # Wintermonate in Europa
     if league_name in WINTER_LEAGUES:
         if month in [11, 12, 1, 2]:
             impact = "slightly_negative"  # Kälte, Regen
@@ -8646,8 +8251,6 @@ def _fotmob_find_team_id(team_name):
 
 
 def get_fotmob_player_season_stats(team_name):
-    if env("ENABLE_PROP_FOTMOB", "false").lower() not in ["1", "true", "yes"]:
-        return []
     """
     Holt Kader-Saisonstats von FotMob (Tore, Karten, Schüsse p90 etc.)
     für ein Team — kostenlos, kein Key. Best-Effort mit Debug-Logging,
@@ -13203,14 +12806,7 @@ def is_valid_tip(tip, target_date):
 
     time_str = tip.get("time", "")
     if not is_future_game(time_str, target_date):
-        try:
-            _past_key = f"{normalize_team_name(tip.get('match',''))[:60]}_{time_str}_{target_date}"
-            _past_cache = globals().setdefault("_PAST_TIP_LOG_CACHE", set())
-            if _past_key not in _past_cache:
-                log(f"   ⚠️ Spiel bereits vorbei: {tip.get('match','')} um {time_str}")
-                _past_cache.add(_past_key)
-        except Exception:
-            log(f"   ⚠️ Spiel bereits vorbei: {tip.get('match','')} um {time_str}")
+        log(f"   ⚠️ Spiel bereits vorbei: {tip.get('match','')} um {time_str}")
         return False
 
     return True
@@ -13495,32 +13091,15 @@ def generate_multi_combo_bets(all_tips, num_tips=3):
                 elif prob >= 55:
                     odds = round(100 / prob, 2)  # z.B. 67% → 1.49
             if odds >= 1.40:
-                prob = int(t.get("probability", 0) or 0)
-                conf = int(t.get("confidence", 0) or 0)
-                # Falls keine Sterne gesetzt sind: aus Wahrscheinlichkeit ableiten.
-                if conf <= 0:
-                    if prob >= 72:
-                        conf = 5
-                    elif prob >= 67:
-                        conf = 4
-                    elif prob >= 62:
-                        conf = 3
-                    else:
-                        conf = 2
-                mk = t.get("market", "btts")
-                # Ecken nur in Multi-Combos, wenn sie wirklich stark genug sind.
-                if mk == "corners" and prob < int(env("CORNER_COMBO_MIN_PROB", "60")):
-                    continue
                 normalized.append({
                     "match": t.get("match", ""),
                     "league": t.get("league", ""),
-                    "market": mk,
+                    "market": t.get("market", "btts"),
                     "tip": t.get("tip", "YES"),
                     "odds": odds,
-                    "confidence": conf,
+                    "confidence": int(t.get("confidence", 0)),
                     "value_rating": t.get("valueRating", "OK"),
-                    "probability": prob,
-                    "_combo_score": (prob * 1.0) + (conf * 6.0) - max(0, odds - 2.2) * 4.0,
+                    "probability": int(t.get("probability", 0)),
                 })
         except Exception:
             continue
@@ -13531,7 +13110,7 @@ def generate_multi_combo_bets(all_tips, num_tips=3):
     # Sortiere nach Confidence + Probability
     sorted_tips = sorted(
         normalized,
-        key=lambda x: (x.get("_combo_score", 0), x.get("probability", 0), x.get("confidence", 0)),
+        key=lambda x: (x.get("confidence", 0), x.get("probability", 0)),
         reverse=True
     )
 
@@ -13539,28 +13118,8 @@ def generate_multi_combo_bets(all_tips, num_tips=3):
     if len(sorted_tips) < num_tips:
         return None
 
-    # Beste N Tipps nehmen — aber sicherer:
-    # 1) keine doppelten Spiele in derselben Multi
-    # 2) Ecken nur als Zusatz, nicht komplette Corner-Multi
-    max_corners = int(env("MULTI_COMBO_MAX_CORNERS", "2"))
-    selected = []
-    seen_matches = set()
-    market_counts = {}
-    for tip in sorted_tips:
-        mkey = normalize_team_name(str(tip.get("match", "")))[:80]
-        if not mkey or mkey in seen_matches:
-            continue
-        mk = tip.get("market", "")
-        if mk == "corners" and market_counts.get("corners", 0) >= max_corners:
-            continue
-        selected.append(tip)
-        seen_matches.add(mkey)
-        market_counts[mk] = market_counts.get(mk, 0) + 1
-        if len(selected) >= num_tips:
-            break
-
-    if len(selected) < num_tips:
-        return None
+    # Beste N Tipps nehmen
+    selected = sorted_tips[:num_tips]
 
     # Berechne Gesamt-Quote
     total_odds = 1.0
@@ -13930,11 +13489,8 @@ def send_top_tips(tips_by_market, target_date):
                 u_str = f"+{units}" if units >= 0 else str(units)
                 stats_header += f"{medal} {lg}: {w}/{tot} ({pct}%) · {u_str}U" + "\n"
 
-    # Summary NUR in BTTS Kanal — optional, im Fast Mode aus.
-    if env("SEND_BTTS_STATS_HEADER", "false").lower() in ["1", "true", "yes", "on"]:
-        send_telegram(stats_header, TELEGRAM_GROUPS.get("btts", TELEGRAM_CHAT_ID))
-    else:
-        log("⚡ BTTS Stats-Header übersprungen (Fast Mode)")
+    # Summary NUR in BTTS Kanal — nicht in Prop Builder / Stats
+    send_telegram(stats_header, TELEGRAM_GROUPS.get("btts", TELEGRAM_CHAT_ID))
 
     # Auto-void alte Pending Tipps (älter als 3 Tage)
     _auto_void_old_pending()
@@ -13955,57 +13511,8 @@ def send_top_tips(tips_by_market, target_date):
         emoji = market_emoji.get(market_id, "💎")
 
         # Kein Header - direkt Tipps senden
-        # FAST: Für Runtime und Telegram-Spam nur die stärksten Einzel-Tipps je Markt senden.
-        try:
-            _max_per_market = int(env("MAX_TIPS_PER_MARKET_SEND", "8"))
-            _max_total_single = int(env("MAX_TOTAL_SINGLE_TIPS_SEND", "35"))
-        except Exception:
-            _max_per_market, _max_total_single = 8, 35
 
-        def _tip_send_score(_t):
-            try:
-                _prob = int(_t.get("probability", 0) or 0)
-            except Exception:
-                _prob = 0
-            try:
-                _conf = int(_t.get("confidence", 0) or 0)
-            except Exception:
-                _conf = 0
-            try:
-                _od = float(str(_t.get("oddsYes", _t.get("odds", 1.8))).replace(",", "."))
-            except Exception:
-                _od = 1.8
-            # sichere Tipps bevorzugen; extreme Quoten nicht pushen
-            return (_prob * 1.0) + (_conf * 6.0) - max(0, _od - 2.2) * 4.0
-
-        _send_candidates = []
-        _seen_send_matches = set()
-        for _t in tips:
-            _t["date"] = str(target_date)
-            _mk = normalize_team_name(str(_t.get("match", "")))[:80]
-            if not _mk or _mk in _seen_send_matches:
-                continue
-            _seen_send_matches.add(_mk)
-
-            # Future-Filter ohne wiederholtes Logging; spart Minuten bei späten Runs.
-            _time_fast = str(_t.get("time", "") or "")
-            if _time_fast and _time_fast not in ["TBD", "Heute", "N/A", "-", ""]:
-                try:
-                    if not is_future_game(_time_fast, target_date):
-                        continue
-                except Exception:
-                    pass
-
-            _send_candidates.append(_t)
-
-        tips_to_send = sorted(_send_candidates, key=_tip_send_score, reverse=True)[:_max_per_market]
-        if saved >= _max_total_single:
-            log(f"   ⚡ Einzel-Tipp Cap erreicht ({_max_total_single})")
-            break
-
-        for i, r in enumerate(tips_to_send, 1):
-            if saved >= _max_total_single:
-                break
+        for i, r in enumerate(tips, 1):
             confidence = int(r.get("confidence", 0))
             match_name = r.get("match", "?")
 
@@ -14014,12 +13521,7 @@ def send_top_tips(tips_by_market, target_date):
                 continue
 
             if is_duplicate_tip(match_name, market_id, target_date):
-                try:
-                    globals()["_DUP_TIP_SKIP_COUNT"] = globals().get("_DUP_TIP_SKIP_COUNT", 0) + 1
-                except Exception:
-                    pass
-                if env("LOG_DUPLICATE_TIPS", "false").lower() in ["1", "true", "yes", "on"]:
-                    log(f"   ⏭️ Duplikat übersprungen: {match_name} ({market_id})")
+                log(f"   ⏭️ Duplikat übersprungen: {match_name} ({market_id})")
                 continue
 
             # 🛡️ Safe Filter: schlechte Ligen ausfiltern
@@ -14380,21 +13882,11 @@ def send_top_tips(tips_by_market, target_date):
 
         # Kein Footer - direkt Tipps ohne Zusammenfassung
 
-    try:
-        _dup_cnt = int(globals().get("_DUP_TIP_SKIP_COUNT", 0) or 0)
-        if _dup_cnt:
-            log(f"   ⏭️ Duplikate übersprungen: {_dup_cnt}")
-            globals()["_DUP_TIP_SKIP_COUNT"] = 0
-    except Exception:
-        pass
     log(f"Gespeichert in Supabase: {saved}")
-    if env("SEND_GROUP_AUSWERTUNG_EVERY_RUN", "false").lower() in ["1", "true", "yes", "on"]:
-        try:
-            _send_daily_auswertung_to_all_groups()
-        except Exception as _ae:
-            log(f"Auswertung Error: {str(_ae)[:50]}", "WARN")
-    else:
-        log("⚡ Gruppen-Auswertung übersprungen (Fast Mode)")
+    try:
+        _send_daily_auswertung_to_all_groups()
+    except Exception as _ae:
+        log(f"Auswertung Error: {str(_ae)[:50]}", "WARN")
 
 
 # ============================================================
@@ -15983,22 +15475,18 @@ def analyze_corners_tip_simple(fixture, league):
             cum += (math.exp(-lam) * lam**k) / math.factorial(k)
         return round((1 - cum) * 100)
 
-    # Corner Min-Prob und Min-Odds aus ENV
-    _corner_min_prob = int(env("CORNER_COMBO_MIN_PROB", "62"))
-    _corner_min_odds = float(env("CORNER_MIN_ODDS", "1.60"))
-    _corner_max_odds = float(env("CORNER_MAX_ODDS", "3.50"))
-
+    # Mehrere Linien durchprobieren, höchste mit prob>=60% UND realistischer Buchmacher-Quote >=1.70 wählen
     candidates = []
-    for line in [7.5, 8.5, 9.5, 10.5, 11.5, 12.5]:
+    for line in [7.5, 8.5, 9.5, 10.5, 11.5]:
         prob = poisson_over(line)
-        if prob < _corner_min_prob:
+        if prob < 60:
             continue
-        # Simulierte Buchmacher-Quote inkl. Marge (~7%)
+        # Simulierte Buchmacher-Quote inkl. Marge (~7%, realistischer als reine Fair Odds)
         book_odds = round((100 / prob) * 1.07, 2) if prob > 0 else 0
         candidates.append((line, prob, book_odds))
 
-    # Quote ≥1.60 (Value) und ≤3.50
-    valid = [c for c in candidates if _corner_min_odds <= c[2] <= _corner_max_odds]
+    # Bevorzuge die höchste Linie, die Quote >=1.70 erreicht (beste Balance Sicherheit/Value)
+    valid = [c for c in candidates if c[2] >= MIN_ODDS_VALUE]
     if not valid:
         return None
     line, prob, book_odds = max(valid, key=lambda c: c[0])  # höchste qualifizierende Linie
@@ -16420,15 +15908,6 @@ def run_corners_and_scorer_bots(target_date, active_leagues, odds_data_cache, fi
     group_hz = TELEGRAM_GROUPS.get("hz_live") or env("TELEGRAM_GROUP_HZ_LIVE", "")
     group_late = TELEGRAM_GROUPS.get("late_goals") or env("TELEGRAM_GROUP_LATE_GOALS", "")
 
-    if env("ENABLE_CORNERS_BOT", "true").lower() not in ["1", "true", "yes", "on"]:
-        group_hz = ""
-    if env("ENABLE_SCORER_BOT", "false").lower() not in ["1", "true", "yes", "on"]:
-        group_late = ""
-
-    # Für Multi-Combos speichern wir die besten Ecken-Tipps im Speicher.
-    run_corners_and_scorer_bots._last_corner_tips = []
-    run_corners_and_scorer_bots._last_scorer_tips = []
-
     if not group_hz and not group_late:
         log("Corners/Scorer: Keine Gruppen konfiguriert", "INFO")
         return
@@ -16453,17 +15932,8 @@ def run_corners_and_scorer_bots(target_date, active_leagues, odds_data_cache, fi
 
         # Ecken-Tipps - auch ohne API-Football IDs!
         if group_hz:
-            try:
-                _max_corner_fixtures = int(env("MAX_CORNER_FIXTURES_ANALYZE", "14"))
-            except Exception:
-                _max_corner_fixtures = 14
-            _corner_checked = 0
             for fixture in fixtures:
                 try:
-                    if _max_corner_fixtures > 0 and _corner_checked >= _max_corner_fixtures:
-                        log(f"   ⚡ Corner Analyse-Cap erreicht: {_corner_checked} Fixtures")
-                        break
-                    _corner_checked += 1
                     home_norm = normalize_team_name(fixture.get("home", ""))
                     away_norm = normalize_team_name(fixture.get("away", ""))
                     match_key = f"{home_norm[:12]}_{away_norm[:12]}"
@@ -16475,14 +15945,7 @@ def run_corners_and_scorer_bots(target_date, active_leagues, odds_data_cache, fi
                     # 🆕 Duplikat zwischen Runs prüfen!
                     match_name = f"{fixture.get('home','')} vs {fixture.get('away','')}"
                     if is_duplicate_tip(match_name, "corners", target_date):
-                        # Nicht nochmal einzeln senden, aber für Multi-Combos behalten.
-                        tip_dup = analyze_corners_tip_simple(fixture, league)
-                        if tip_dup:
-                            tip_dup["_multi_only"] = True
-                            corners_tips.append(tip_dup)
-                        
-                        if env("LOG_DUPLICATE_CORNERS", "false").lower() in ["1", "true", "yes", "on"]:
-                            log(f"   ⏭️ Ecken Duplikat: {match_name} (nur Multi)")
+                        log(f"   ⏭️ Ecken Duplikat: {match_name}")
                         continue
 
                     tip = analyze_corners_tip_simple(fixture, league)
@@ -16550,21 +16013,9 @@ def run_corners_and_scorer_bots(target_date, active_leagues, odds_data_cache, fi
                 log(f"   Scorer Error: {e}", "WARN")
 
     # Header + Tipps senden
-    # Doppelte Ecken bleiben nur für Multi-Combos im Speicher, werden aber nicht erneut gesendet/gespeichert.
-    _corner_send_tips = [t for t in corners_tips if not t.get("_multi_only")]
-    try:
-        _corner_send_limit = int(env("MAX_CORNER_TIPS_SEND", "8"))
-    except Exception:
-        _corner_send_limit = 8
-    _corner_send_tips = sorted(
-        _corner_send_tips,
-        key=lambda x: int(x.get("probability", 0) or 0),
-        reverse=True
-    )[:_corner_send_limit]
-
-    if _corner_send_tips and group_hz:
+    if corners_tips and group_hz:
         send_telegram(f"🔵 <b>CORNER SNIPER</b>\n<i>📅 {target_date}</i>", group_hz)
-        for tip in _corner_send_tips:
+        for tip in corners_tips:
             _cmsg = format_corners_message(tip)
             _cmid = send_telegram(_cmsg, group_hz)
             mark_tip_sent(tip.get("match",""), "corners", target_date)
@@ -16591,24 +16042,7 @@ def run_corners_and_scorer_bots(target_date, active_leagues, odds_data_cache, fi
             send_telegram(format_scorer_message(tip), group_late)
             mark_tip_sent(tip.get("match",""), "scorer", target_date)
 
-    try:
-        # Stärkste Ecken-Tipps für Multi-Combos merken.
-        run_corners_and_scorer_bots._last_corner_tips = sorted(
-            corners_tips,
-            key=lambda x: int(x.get("probability", 0) or 0),
-            reverse=True
-        )
-        run_corners_and_scorer_bots._last_scorer_tips = scorer_tips
-    except Exception:
-        run_corners_and_scorer_bots._last_corner_tips = corners_tips
-        run_corners_and_scorer_bots._last_scorer_tips = scorer_tips
-
-    try:
-        _multi_only_corners = len([t for t in corners_tips if t.get("_multi_only")])
-        _sent_corners = len([t for t in corners_tips if not t.get("_multi_only")])
-        log(f"🔵⚽ Fertig: {_sent_corners} neue Ecken, {_multi_only_corners} Multi-only, {scorer_count} Scorer")
-    except Exception:
-        log(f"🔵⚽ Fertig: {corners_count} Ecken Tips, {scorer_count} Scorer Tips")
+    log(f"🔵⚽ Fertig: {corners_count} Ecken Tips, {scorer_count} Scorer Tips")
 
 
 
@@ -17184,7 +16618,7 @@ _advanced_props_manager = AdvancedPropsManager()
 
 def run_advanced_props_bot(active_leagues: list, fixtures_cache: dict, target_date) -> None:
     """
-    Prop Builder Bot — Ladder Betting Style.
+    Prop Builder Bot — Nate Betting Style.
     Combo-Typen:
       🟥 FOULS BUILDER      — FC + FW kombiniert, verschiedene Spiele
       🟨 BOOKING BUILDER    — Nuno Tavares Style, 2-4x Player to be Booked
@@ -17207,7 +16641,7 @@ def run_advanced_props_bot(active_leagues: list, fixtures_cache: dict, target_da
     shot_candidates    = []
 
     def _score(stats, mtype, league):
-        """Berechnet Prop Score nach ChatGPT/Ladder Betting Methodik."""
+        """Berechnet Prop Score nach ChatGPT/Nate Betting Methodik."""
         score = 0
         reasons = []
 
@@ -17559,7 +16993,7 @@ def run_advanced_props_bot(active_leagues: list, fixtures_cache: dict, target_da
         ],
     }
 
-    prompt = f"""Du bist Prop Builder Analyst (Ladder Betting Style). Heute {target_date}.
+    prompt = f"""Du bist Prop Builder Analyst (Nate Betting Style). Heute {target_date}.
 
 Kandidaten mit FBref/StatsBomb/FPL Stats:
 {_json.dumps(payload, ensure_ascii=False, indent=1)}
@@ -17617,7 +17051,7 @@ Antworte NUR JSON:
     nl = "\n"
     header = (
         f"🔑 <b>PROP BUILDER — {target_date}</b>{nl}"
-        f"<i>Shots · Fouls · Bookings · Ladder Style</i>{nl}"
+        f"<i>Shots · Fouls · Bookings · Nate Style</i>{nl}"
         f"━━━━━━━━━━━━━━━━━━━━{nl}"
         f"<i>📊 {total} Kandidaten · {len(combos)} Kombis · {source}</i>"
     )
@@ -17952,55 +17386,6 @@ MARKET_INFO_EXTENDED = {
 
 PINNACLE_BASE = "https://guest.api.arcadia.pinnacle.com/0.1"
 PINNACLE_SPORT_SOCCER = 29
-
-# ============================================================
-# 🔍 PLAYER NAME VALIDATION
-# ============================================================
-import unicodedata
-
-_TEAM_WORDS = {
-    "yes", "no", "over", "under", "both", "either", "team", "first", "second",
-    "to", "score", "scored", "goal", "goals", "match", "half", "total",
-    "home", "away", "draw", "none", "other", "player"
-}
-
-def strip_accents(text: str) -> str:
-    text = text or ""
-    return "".join(
-        c for c in unicodedata.normalize("NFKD", text)
-        if not unicodedata.combining(c)
-    )
-
-def looks_like_player(name: str) -> bool:
-    n = strip_accents(name or "").lower()
-    n = re.sub(r"[^a-z0-9\s\-\']", " ", n)
-    n = re.sub(r"\s+", " ", n).strip()
-    if not n or n in _TEAM_WORDS:
-        return False
-    parts = [p for p in n.replace("-", " ").split() if p]
-    if len(parts) >= 2:
-        return True
-    if len(parts) == 1 and len(parts[0]) >= 4 and parts[0] not in _TEAM_WORDS:
-        return True
-    return False
-
-def extract_player_from_description(desc: str) -> str:
-    if not desc:
-        return ""
-    d = re.sub(r"\s+", " ", desc).strip()
-    patterns = [
-        r"^(.*?)\s+(?:anytime\s+)?(?:to\s+score|goalscorer|goal scorer)\b",
-        r"^(.*?)\s+(?:to\s+be\s+booked|player\s+to\s+be\s+booked|card|yellow card)\b",
-        r"^(.*?)\s+(?:to\s+assist|anytime assist|assist)\b",
-        r"^(.*?)\s+(?:\d+\+?\s+)?(?:shots? on target|sot|shots?|tackles?|fouls?|offsides?)\b",
-    ]
-    for pat in patterns:
-        m = re.search(pat, d, flags=re.I)
-        if m:
-            cand = m.group(1).strip(" -:|")
-            return cand if looks_like_player(cand) else ""
-    return ""
-
 PINNACLE_GUEST_KEY = "CmX2KcMrXuFmNg6YFbmTxE0y9CIrOi0R"
 
 PINNACLE_HEADERS = {
@@ -18159,15 +17544,6 @@ def _pinnacle_get_json(url, params):
 
 def fetch_pinnacle_player_props() -> List[Dict]:
     """Player Props Specials von Pinnacle (echte Quoten)."""
-    global _PINNACLE_PLAYER_PROPS_CACHE
-    try:
-        if env("PINNACLE_PROPS_CACHE_IN_RUN", "true").lower() in ["1", "true", "yes", "on"]:
-            _cached = globals().get("_PINNACLE_PLAYER_PROPS_CACHE")
-            if isinstance(_cached, list) and _cached:
-                log(f"   ⚡ Pinnacle Props Cache HIT: {len(_cached)} Props")
-                return list(_cached)
-    except Exception:
-        pass
     try:
         data, status = _pinnacle_get_json(
             f"{PINNACLE_BASE}/sports/{PINNACLE_SPORT_SOCCER}/matchups",
@@ -18266,10 +17642,6 @@ def fetch_pinnacle_player_props() -> List[Dict]:
         if skipped_no_price:
             log(f"   🔑 Pinnacle Props: {skipped_no_price} Props ohne Preis übersprungen")
         _log("PINNACLE", f"🔑 {len(props)} Player-Prop-Quoten geladen")
-        try:
-            globals()["_PINNACLE_PLAYER_PROPS_CACHE"] = list(props)
-        except Exception:
-            pass
         return props
     except Exception as e:
         _log("PINNACLE", f"Props Fehler: {str(e)[:80]}", "WARN")
@@ -18328,8 +17700,6 @@ def _calc_combo_odds(legs):
     return round(odds * disc, 2)
 
 def _fbref_prop_edge_check(player_name, league_name, prop_name, pinnacle_prob):
-    if env("ENABLE_PROP_FBREF_CHECK", "false").lower() not in ["1", "true", "yes"]:
-        return pinnacle_prob, False, False
     """
     Kreuzvergleich: FBref-Statistik vs. Pinnacle-Quote.
     Berechnet eine unabhängige Wahrscheinlichkeit aus echten Saison-Stats
@@ -18428,17 +17798,10 @@ def run_pinnacle_props_bot(win_start_utc=None, win_end_utc=None, ch_tz=None, top
     Pinnacle Player Props Bot.
     top_btts_tips: Beste BTTS-Tipps aus Hauptanalyse (als zusätzliche Bet-Builder-Legs).
     """
-    """Bet Builder Style: Pro Spiel 2-4 Legs kombiniert → Prop Builder Kanal.
+    """Bet Builder Style: Pro Spiel 2-4 Legs kombiniert → Prop Hunter Kanal.
     Quellen: Pinnacle (echte Quoten) + FBref (unabhängige Stats) für Cross-Validation."""
     from datetime import datetime as _dt2
     props = fetch_pinnacle_player_props()
-    try:
-        _raw_cap = int(env("PROP_MAX_RAW_PROPS", "1800"))
-        if _raw_cap > 0 and len(props) > _raw_cap:
-            log(f"⚡ Props Cap: {len(props)} → {_raw_cap} Raw Props")
-            props = props[:_raw_cap]
-    except Exception:
-        pass
     if not props:
         log("🔑 Pinnacle Props: keine Specials verfügbar")
         return 0
@@ -18798,10 +18161,6 @@ def run_pinnacle_props_bot(win_start_utc=None, win_end_utc=None, ch_tz=None, top
     _send_prop = _collect_prop
 
     # ═══════════════════════════════════════════════════════════════════
-    if env("ENABLE_HEAVY_PROP_DB_BUILDER", "true").lower() not in ["1", "true", "yes", "on"]:
-        log("   ⚡ Heavy Prop DB Builder übersprungen — Multi/BTTS/Pinnacle Quick bleiben aktiv")
-        return _pp_total
-
     # NETRATTLER PROP DATABASE — alle Quellen, alle Märkte
     # ═══════════════════════════════════════════════════════════════════
 
@@ -18896,7 +18255,6 @@ def run_pinnacle_props_bot(win_start_utc=None, win_end_utc=None, ch_tz=None, top
                        "either player","home team","away team","a player"}
         if player.strip().lower() in _skip_names: return
         if len(player.strip()) < 3: return
-        if not looks_like_player(player): return
         c = _cat(market)
         if c == "other": return
         # StatsBomb Hit Rate Lookup
@@ -18925,16 +18283,6 @@ def run_pinnacle_props_bot(win_start_utc=None, win_end_utc=None, ch_tz=None, top
 
     # ── STATSBOMB HIT RATES laden ──────────────────────────────
     _SB_HR = {}  # {spielername: {hr_foul, hr_sot, hr_yc, hr_goal, ...}}
-    try:
-        if env("ENABLE_STATSBOMB_HR", "false").lower() not in ["1", "true", "yes", "on"]:
-            import json as _sb_fast_json, os as _sb_fast_os
-            _sb_fast_cache = "/tmp/sb_hit_rates.json"
-            if not _sb_fast_os.path.exists(_sb_fast_cache):
-                with open(_sb_fast_cache, "w") as _sb_fast_f:
-                    _sb_fast_json.dump({}, _sb_fast_f)
-            log("   ⚡ StatsBomb HR übersprungen (Fast Mode)")
-    except Exception:
-        pass
     try:
         import json as _jsb, math as _msb, requests as _rsb
         _SB_TOURNAMENTS = [(43,106),(55,282),(223,282)]  # WM22, Euro24, Copa24
@@ -19217,7 +18565,7 @@ def run_pinnacle_props_bot(win_start_utc=None, win_end_utc=None, ch_tz=None, top
     try:
         if SUPABASE_URL and SUPABASE_KEY and _prop_db:
             _saved = 0
-            for _row in _prop_db[:int(env("PROP_DB_SAVE_LIMIT", "50"))]:
+            for _row in _prop_db[:300]:
                 try:
                     requests.post(
                         f"{SUPABASE_URL}/rest/v1/player_prop_db",
@@ -19238,7 +18586,7 @@ def run_pinnacle_props_bot(win_start_utc=None, win_end_utc=None, ch_tz=None, top
         log(f"   DB Supabase: {str(_e)[:60]}", "WARN")
 
     # ════════════════════════════════════════════════════════════════
-    # BUILDER LOGIK — Ladder Style + Aystar Style
+    # BUILDER LOGIK — Nate Style + Aystar Style
     # ════════════════════════════════════════════════════════════════
     if not _prop_db or not _pp_chat:
         log("   Prop DB: leer oder kein Kanal")
@@ -19258,130 +18606,51 @@ def run_pinnacle_props_bot(win_start_utc=None, win_end_utc=None, ch_tz=None, top
             nonlocal _pp_total
             t = _tod(legs)
 
-            # NETRATTLER V5 Gate: weniger Spam, keine blinden Card/High-Odds Builder.
-            try:
-                _max_total = int(os.environ.get("PROP_BUILDER_MAX_TOTAL", "35"))
-            except Exception:
-                _max_total = 35
-            try:
-                _max_hr = int(os.environ.get("PROP_BUILDER_MAX_HIGH_ROLLER", "2"))
-            except Exception:
-                _max_hr = 3
-            if _pp_total >= _max_total:
-                return False
-            if high_roller and getattr(_send_builder, "_hr_count", 0) >= _max_hr:
-                return False
+            # NETRATTLER HARD PROP-BUILDER ODDS GUARD
+            # Ziel: keine schwachen Builder mehr wie @2.59 / @3.08 / @4.03.
+            _style_u = (style or "").upper()
+            _legs_n = len(legs)
 
-            def _num(x, default=0.0):
-                try:
-                    if x is None or x == "":
-                        return default
-                    return float(str(x).replace(",", "."))
-                except Exception:
-                    return default
+            if high_roller:
+                _min = 50.0
+                _max = 600.0
+            elif "AYSTAR BOOKING" in _style_u:
+                _min = 12.0
+                _max = 50.0
+            elif "GOD" in _style_u:
+                _min = 10.0 if _legs_n >= 3 else 5.0
+                _max = 50.0
+            elif "MIX" in _style_u:
+                _min = 8.0
+                _max = 50.0
+            elif "MULTI-MKT" in _style_u:
+                _min = 8.0
+                _max = 50.0
+            elif "CROSS-MATCH" in _style_u:
+                _min = 8.0
+                _max = 50.0
+            elif "CAT YELLOW_CARDS" in _style_u:
+                _min = 10.0
+                _max = 50.0
+            elif "CAT SOT" in _style_u:
+                _min = 5.0
+                _max = 50.0
+            elif _style_u.startswith("CAT "):
+                _min = 5.0
+                _max = 50.0
+            elif "NATE" in _style_u:
+                _min = 5.0
+                _max = 50.0
+            else:
+                _min = 5.0
+                _max = 50.0
 
-            def _leg_prob(l):
-                odds = max(_num(l.get("odds"), 1.0), 1.01)
-                mp = _num(l.get("model_prob"), 0.0)
-                if mp > 1.0:
-                    mp = mp / 100.0
-                if 0.01 <= mp <= 0.95:
-                    return mp
-                pr = _num(l.get("prob"), 0.0)
-                if pr > 1.0:
-                    pr = pr / 100.0
-                if 0.01 <= pr <= 0.95:
-                    return pr
-                return max(0.02, min(0.90, 1.0 / odds * 0.92))
-
-            def _leg_score(l):
-                odds = max(_num(l.get("odds"), 1.0), 1.01)
-                implied = 1.0 / odds
-                p = _leg_prob(l)
-                mp = _num(l.get("model_prob"), 0.0)
-                if mp > 1.0:
-                    mp = mp / 100.0
-                edge = (mp - implied) if mp > 0 else 0.0
-                cat = str(l.get("category", "")).lower()
-                src = str(l.get("source", ""))
-                src_bonus = {
-                    "Statz.ai": 12, "ScoutingStats": 12, "FotMob": 7,
-                    "Oddspedia": 4, "Pinnacle": 0
-                }.get(src, 0)
-                cat_bonus = 0
-                if cat in ("tackles", "fouls", "sot", "shots", "saves"):
-                    cat_bonus += 8
-                if cat in ("yellow_cards", "booked", "cards"):
-                    cat_bonus -= 10
-                if cat in ("score", "goalscorer"):
-                    cat_bonus -= 3
-                odds_penalty = 0
-                if odds > 3.25:
-                    odds_penalty += (odds - 3.25) * 6
-                if odds > 6.0:
-                    odds_penalty += 10
-                score = 42 + (p * 48) + src_bonus + cat_bonus + (edge * 70) - odds_penalty
-                return max(0, min(99, score))
-
-            # Spieler/Leg-Dedupe
-            if len(legs) < 2:
-                return False
-            _uniq = set()
-            for _l in legs:
-                _pn = str(_l.get("player", "")).strip()
-                _mk = str(_l.get("market", "")).strip()
-                if len(_pn.split()) < 2:
-                    return False
-                _key = (_pn.lower(), _mk.lower())
-                if _key in _uniq:
-                    return False
-                _uniq.add(_key)
-
-            _scores = [_leg_score(_l) for _l in legs]
-            _avg_score = sum(_scores) / len(_scores)
-            _min_score = min(_scores)
-            try:
-                _min_leg_score = float(os.environ.get("PROP_BUILDER_MIN_LEG_SCORE", "55"))
-                _min_avg_score = float(os.environ.get("PROP_BUILDER_MIN_AVG_SCORE", "62"))
-            except Exception:
-                _min_leg_score, _min_avg_score = 68.0, 74.0
-            if _min_score < _min_leg_score or _avg_score < _min_avg_score:
-                return False
-
-            _cats_all = [str(l.get("category", "")).lower() for l in legs]
-            _is_card_builder = ("BOOKING" in str(style).upper()) or all(c in ("yellow_cards", "booked", "cards") for c in _cats_all)
-
-            # Karten ja, aber nicht blind nur wegen hoher Pinnacle-Quote.
-            _allow_blind_cards = os.environ.get("PROP_BUILDER_ALLOW_BLIND_CARDS", "false").lower() in ("1", "true", "yes")
-            for _l in legs:
-                _cat = str(_l.get("category", "")).lower()
-                _src = str(_l.get("source", ""))
-                _od = _num(_l.get("odds"), 0.0)
-                _mp = _num(_l.get("model_prob"), 0.0)
-                _hr = _num(_l.get("hit_rate"), 0.0)
-                if _cat in ("yellow_cards", "booked", "cards"):
-                    if not _is_card_builder and _cats_all.count(_cat) > int(os.environ.get("PROP_BUILDER_MAX_CARDS_NORMAL", "1")):
-                        return False
-                    if _src == "Pinnacle" and _mp <= 0 and _hr <= 0 and not _allow_blind_cards:
-                        return False
-                    if _src == "Pinnacle" and _od > float(os.environ.get("PROP_BUILDER_MAX_PINNACLE_CARD_ODDS", "3.20")) and _mp <= 0:
-                        return False
-
-            _combo_prob = 1.0
-            for _l in legs:
-                _combo_prob *= max(0.02, min(0.95, _leg_prob(_l)))
-            _min_combo = float(os.environ.get("PROP_BUILDER_MIN_COMBO_PROB_HR" if high_roller else "PROP_BUILDER_MIN_COMBO_PROB", "0.035" if high_roller else "0.07"))
-            if _combo_prob < _min_combo:
-                return False
-
-            # Standard: 2.5-50/1 | High Roller: 50-600/1
-            _min = 50.0 if high_roller else 2.50
-            _max = 600.0 if high_roller else 50.0
             if t < _min or t > _max:
                 return False
+            srcs = list(dict.fromkeys(l["source"] for l in legs))
             cats = list(dict.fromkeys(l["category"] for l in legs))
             icons = "".join(dict.fromkeys(_CAT_ICONS.get(c,"🎯") for c in cats))
-            var_s = ""
+            var_s = f" <i>({variant})</i>" if variant else ""
             _frac = f"{int(round(t-1))}/1" if t >= 2.0 and t == int(round(t)) else f"{t:.2f}"
             _hr_tag = " \U0001f680 <b>HIGH ROLLER</b>" if high_roller else ""
             _stake = "0.25u 🎲" if high_roller else "0.5u"
@@ -19399,13 +18668,10 @@ def run_pinnacle_props_bot(win_start_utc=None, win_end_utc=None, ch_tz=None, top
             if len(set(x["match"] for x in legs)) == 1:
                 msg += f"\u26bd <b>{legs[0]['match']}</b>{NL}"
             msg += f"{SEP}{NL}\U0001f4b0 @ <b>{_frac}</b> \u00b7 {_stake}{NL}"
-            msg += f"📊 Score: <b>{_avg_score:.0f}/100</b> · P≈{_combo_prob*100:.1f}%"
+            msg += f"<i>\U0001f4ca {' + '.join(srcs)}</i>"
             send_telegram(msg, chat_id=_pp_chat)
             _pp_total += 1
-            if high_roller:
-                _send_builder._hr_count = getattr(_send_builder, "_hr_count", 0) + 1
-            emoji = "🚀" if high_roller else "🏗️"
-            log(f"   {emoji} {style} {len(legs)}L @ {t:.2f}")
+            log(f"   {'\U0001f680' if high_roller else '\U0001f3d7'} {style} {len(legs)}L @ {t:.2f}")
             return True
 
         # Props gruppieren
@@ -19436,10 +18702,10 @@ def run_pinnacle_props_bot(win_start_utc=None, win_end_utc=None, ch_tz=None, top
             _by_match[_p["match"]][_p["player"]][_p["category"]].append(_p)
             _by_cat_all[_p["category"]].append(_p)
 
-        # ── LADDER: LADDER ─────────────────────────────────────
+        # ── NATE STYLE: LADDER ─────────────────────────────────────
         # Gleicher Spieler + gleiche Kategorie, steigende Linien → Varianten
         # z.B. Perisic 3+ Tackles, 2+ Tackles, 1+ Tackles @ 375/1, 160/1, 70/1
-        log(f"   🎯 Ladder Builder...")
+        log(f"   🎯 Nate Ladder Builder...")
         _ladder_candidates = sum(1 for _m, _pls in _by_match.items() 
                                   for _pl, _cats in _pls.items() 
                                   for _c, _props in _cats.items() if len(_props) >= 2)
@@ -19464,11 +18730,11 @@ def run_pinnacle_props_bot(win_start_utc=None, win_end_utc=None, ch_tz=None, top
                     # Nur wenn echte Ladder: Linien müssen sich unterscheiden UND Odds variieren
                     if len(set(p["line"] for p in _deduped)) < 2: continue
                     if len(_deduped) < 2: continue
-                    # Mehrere Varianten wie Ladder (hohe→mittlere→niedrige Linie)
+                    # Mehrere Varianten wie Nate (hohe→mittlere→niedrige Linie)
                     _built = False
                     for _sz in range(min(len(_deduped), 5), 1, -1):
                         legs = _deduped[:_sz]
-                        if _send_builder(legs, "LADDER LADDER", f"{_player} {_c}"):
+                        if _send_builder(legs, "NATE LADDER", f"{_player} {_c}"):
                             _built = True
                     if _built:
                         _builder_sent_today.add(_gk)
@@ -19536,12 +18802,12 @@ def run_pinnacle_props_bot(win_start_utc=None, win_end_utc=None, ch_tz=None, top
                 _used_yc_p.add(_yp["player"])
                 if len(_yc_legs) >= 6: break
 
-            # Standard: 3L, Ziel 8-50/1
+            # Standard: 3L, Ziel 12-50/1
             _std_sent = False
             for _sz in range(3, min(len(_yc_legs)+1, 5)):
                 legs = _yc_legs[:_sz]
                 t = _tod(legs)
-                if 8.0 <= t <= 50.0:
+                if 12.0 <= t <= 50.0:
                     if _send_builder(legs, "AYSTAR BOOKING"):
                         _std_sent = True
                         break
@@ -19621,7 +18887,7 @@ def run_pinnacle_props_bot(win_start_utc=None, win_end_utc=None, ch_tz=None, top
             if len(_mm_legs) >= 3:
                 for _sz in range(min(len(_mm_legs),5), 2, -1):
                     _t = _tod(_mm_legs[:_sz])
-                    if 3.0 <= _t <= 50.0:
+                    if 8.0 <= _t <= 50.0:
                         if _send_builder(_mm_legs[:_sz], "MULTI-MKT"):
                             _builder_sent_today.add(_gk_mm)
                             _STAT_INSIGHT_SENT_TODAY.add(_gk_mm)
@@ -19649,7 +18915,7 @@ def run_pinnacle_props_bot(win_start_utc=None, win_end_utc=None, ch_tz=None, top
             if len(_cross) >= 3:
                 for _sz in range(min(len(_cross), 5), 2, -1):
                     _t = _tod(_cross[:_sz])
-                    if _t <= 50.0:  # Cap: max 50/1
+                    if 8.0 <= _t <= 50.0:  # hart: min 8 / max 50
                         if _send_builder(_cross[:_sz], "CROSS-MATCH"):
                             _builder_sent_today.add(_gk_cross)
                             _STAT_INSIGHT_SENT_TODAY.add(_gk_cross)
@@ -19680,364 +18946,12 @@ def run_pinnacle_props_bot(win_start_utc=None, win_end_utc=None, ch_tz=None, top
             if len(_clegs) < 3: continue
             for _sz in range(min(len(_clegs), 5), 2, -1):
                 t = _tod(_clegs[:_sz])
-                if t >= 2.0:
+                _cat_min_total = 10.0 if _c == "yellow_cards" else 5.0
+                if t >= _cat_min_total:
                     if _send_builder(_clegs[:_sz], f"CAT {_c.upper()}"):
                         _builder_sent_today.add(_gk_c)
                         _STAT_INSIGHT_SENT_TODAY.add(_gk_c)
                         break
-
-
-        # ── V11 FORCE PLAYER BUILDER FALLBACK ───────────────────────
-        # Wenn zu harte Gates alle Player Builder blocken, trotzdem 2-3 sichere Builder senden.
-        if _pp_total == 0 and _prop_db:
-            try:
-                log("   ⚽ V11 Fallback: baue Player Builder aus besten Props")
-                _prio = {"sot": 1, "shots": 2, "fouls": 3, "fouls_won": 4, "tackles": 5,
-                         "yellow_cards": 6, "score": 7, "assist": 8, "score_assist": 9}
-                _pool = [
-                    p for p in _prop_db
-                    if p.get("category") in _prio
-                    and 1.20 <= float(p.get("odds") or 0) <= 5.50
-                    and len(str(p.get("player","")).split()) >= 2
-                ]
-                def _fallback_score(p):
-                    try:
-                        mp = float(p.get("model_prob") or 0)
-                        if mp > 1: mp /= 100
-                    except Exception:
-                        mp = 0.0
-                    try:
-                        pr = float(p.get("prob") or 0)
-                        if pr > 1: pr /= 100
-                    except Exception:
-                        pr = 0.0
-                    try:
-                        od = float(p.get("odds") or 1.5)
-                    except Exception:
-                        od = 1.5
-                    src_bonus = {"ScoutingStats": 18, "Statz.ai": 15, "Pinnacle": 4, "FotMob": 6}.get(p.get("source",""), 0)
-                    cat_bonus = 10 if p.get("category") in ("sot","shots","fouls","tackles") else 0
-                    return max(mp, pr, 1/od*0.90) * 100 + src_bonus + cat_bonus - max(0, od-3.2)*5
-
-                _pool.sort(key=_fallback_score, reverse=True)
-
-                _sent_fb = 0
-                _used_keys = set()
-                for _size in (2, 3):
-                    _legs = []
-                    _used_players = set()
-                    _used_matches = set()
-                    _used_cats = {}
-                    for _p in _pool:
-                        _pl = _p.get("player","")
-                        _mt = _p.get("match","")
-                        _cat = _p.get("category","")
-                        if _pl.lower() in _used_players:
-                            continue
-                        if _size == 2 and _mt in _used_matches:
-                            continue
-                        if _used_cats.get(_cat, 0) >= 2:
-                            continue
-                        _legs.append(_p)
-                        _used_players.add(_pl.lower())
-                        _used_matches.add(_mt)
-                        _used_cats[_cat] = _used_cats.get(_cat, 0) + 1
-                        if len(_legs) >= _size:
-                            break
-                    if len(_legs) < _size:
-                        continue
-                    _od = _tod(_legs)
-                    if not (1.80 <= _od <= 25.0):
-                        continue
-                    _gk = "V11_FORCE_PLAYER_BUILDER_" + str(_size) + "_" + "_".join(l.get("player","")[:12] for l in _legs)
-                    if _gk in _used_keys:
-                        continue
-                    _used_keys.add(_gk)
-                    if _send_builder(_legs, "PLAYER BUILDER", variant="", high_roller=False):
-                        _sent_fb += 1
-                    if _sent_fb >= int(env("FORCE_PLAYER_BUILDER_MAX", "3")):
-                        break
-                log(f"   ⚽ V11 Fallback Player Builder gesendet: {_sent_fb}")
-            except Exception as _fb_e:
-                log(f"   V11 Fallback Player Builder Fehler: {str(_fb_e)[:80]}", "WARN")
-
-
-
-        # ── V12 HIGH ODDS CARDS BUILDER ──────────────────────────────
-        # Ziel: höhere Quoten wie 1. Match + 2. Match, Karten/Fouls über mehrere Spiele.
-        if env("ENABLE_HIGH_ODDS_CARD_BUILDERS", "true").lower() in ["1", "true", "yes", "on"] and _prop_db:
-            try:
-                _cards_max = int(env("HIGH_ODDS_CARD_BUILDERS_MAX", "3"))
-                _cards_min_odds = float(env("HIGH_ODDS_CARD_BUILDER_MIN_ODDS", "8.0"))
-                _cards_max_odds = float(env("HIGH_ODDS_CARD_BUILDER_MAX_ODDS", "80.0"))
-                _cards_sent = 0
-
-                def _v12_cat(_p):
-                    return str(_p.get("category") or _p.get("market") or _p.get("prop") or "").lower()
-
-                def _v12_text(_p):
-                    return (
-                        str(_p.get("category") or "") + " " +
-                        str(_p.get("market") or "") + " " +
-                        str(_p.get("prop") or "") + " " +
-                        str(_p.get("selection") or "") + " " +
-                        str(_p.get("tip") or "")
-                    ).lower()
-
-                def _v12_is_card_or_foul(_p):
-                    _t = _v12_text(_p)
-                    return any(x in _t for x in ["card", "booked", "booking", "yellow", "foul"])
-
-                def _v12_leg_ok(_p):
-                    if not _v12_is_card_or_foul(_p):
-                        return False
-                    try:
-                        _od = float(_p.get("odds") or 0)
-                    except Exception:
-                        _od = 0
-                    _player = str(_p.get("player") or _p.get("selection") or "").strip()
-                    return 1.18 <= _od <= 9.50 and len(_player.split()) >= 2
-
-                def _v12_rank(_p):
-                    try:
-                        _od = float(_p.get("odds") or 1.0)
-                    except Exception:
-                        _od = 1.0
-                    try:
-                        _prob = float(_p.get("model_prob") or _p.get("prob") or 0)
-                        if _prob > 1:
-                            _prob /= 100
-                    except Exception:
-                        _prob = 0.0
-                    _t = _v12_text(_p)
-                    _src = str(_p.get("source") or "")
-                    _bonus = 0
-                    if "foul" in _t:
-                        _bonus += 16
-                    if any(x in _t for x in ["booked", "booking", "yellow", "card"]):
-                        _bonus += 10
-                    if _src in ("Pinnacle", "ScoutingStats", "TheStatsAPI"):
-                        _bonus += 8
-                    return max(_prob * 100, min(72, 100 / max(_od, 1.01))) + _bonus - max(0, _od - 5.0) * 2.5
-
-                _pool = [_p for _p in _prop_db if _v12_leg_ok(_p)]
-                _pool.sort(key=_v12_rank, reverse=True)
-
-                _patterns = [
-                    ("CARDS BUILDER 2 MATCH", 4),
-                    ("CARDS BUILDER HIGH", 5),
-                    ("CARDS BUILDER JACKPOT", 6),
-                ]
-
-                for _title, _size in _patterns:
-                    if _cards_sent >= _cards_max:
-                        break
-                    _legs = []
-                    _used_players = set()
-                    _match_count = {}
-                    _booked_count = 0
-
-                    for _p in _pool:
-                        _player = str(_p.get("player") or _p.get("selection") or "").strip().lower()
-                        _match = str(_p.get("match") or _p.get("event") or _p.get("fixture") or "").strip()
-                        if not _player or _player in _used_players:
-                            continue
-                        if _match_count.get(_match, 0) >= int(env("HIGH_ODDS_CARD_MAX_LEGS_PER_MATCH", "3")):
-                            continue
-                        _t = _v12_text(_p)
-                        if any(x in _t for x in ["booked", "booking", "yellow", "card"]):
-                            if _booked_count >= int(env("HIGH_ODDS_CARD_MAX_BOOKED_LEGS", "3")):
-                                continue
-                            _booked_count += 1
-
-                        _legs.append(_p)
-                        _used_players.add(_player)
-                        _match_count[_match] = _match_count.get(_match, 0) + 1
-
-                        if len(_legs) >= _size and len([m for m,n in _match_count.items() if n > 0]) >= 2:
-                            break
-
-                    if len(_legs) < _size:
-                        continue
-                    _odds = _tod(_legs)
-                    if not (_cards_min_odds <= _odds <= _cards_max_odds):
-                        continue
-                    if _send_builder(_legs, _title, variant="HIGH ODDS", high_roller=True):
-                        _cards_sent += 1
-                        _pp_total += 1
-
-                log(f"   🟨 V12 High Odds Cards Builder gesendet: {_cards_sent}")
-            except Exception as _v12_cards_e:
-                log(f"   🟨 V12 High Odds Cards Builder Fehler: {str(_v12_cards_e)[:100]}", "WARN")
-
-
-        # ── V15F EMERGENCY DELIVERY BUILDER ──────────────────────────
-        # Wenn alle normalen Gates blocken, aber echte Pinnacle/ScoutingStats Props vorhanden sind,
-        # trotzdem 1-3 Builder senden. Sonst läuft der Bot "fertig" mit 0 Ausgaben.
-        if _pp_total == 0 and env("FORCE_EMERGENCY_BUILDERS", "true").lower() in ["1", "true", "yes", "on"] and _prop_db:
-            try:
-                log("   🚑 V15F Emergency Builder: normale Gates haben 0 gesendet, baue Delivery-Builder")
-
-                def _e_num(x, default=0.0):
-                    try:
-                        if x is None or x == "":
-                            return default
-                        return float(str(x).replace(",", "."))
-                    except Exception:
-                        return default
-
-                def _e_text(p):
-                    return (
-                        str(p.get("category") or "") + " " +
-                        str(p.get("market") or "") + " " +
-                        str(p.get("prop") or "") + " " +
-                        str(p.get("selection") or "") + " " +
-                        str(p.get("tip") or "")
-                    ).lower()
-
-                def _e_is_valid(p):
-                    od = _e_num(p.get("odds"), 0)
-                    player = str(p.get("player") or p.get("selection") or "").strip()
-                    match = str(p.get("match") or p.get("event") or p.get("fixture") or "").strip()
-                    if not (1.18 <= od <= 9.5):
-                        return False
-                    if len(player.split()) < 2:
-                        return False
-                    if " vs " not in match:
-                        return False
-                    return True
-
-                def _e_rank(p):
-                    od = _e_num(p.get("odds"), 1.0)
-                    mp = _e_num(p.get("model_prob"), 0)
-                    if mp > 1:
-                        mp /= 100
-                    pr = _e_num(p.get("prob"), 0)
-                    if pr > 1:
-                        pr /= 100
-                    cat = str(p.get("category") or "").lower()
-                    src = str(p.get("source") or "")
-                    t = _e_text(p)
-                    score = max(mp, pr, min(0.72, 1 / max(od, 1.01) * 0.92)) * 100
-                    if src in ("ScoutingStats", "Statz.ai"):
-                        score += 16
-                    if src == "Pinnacle":
-                        score += 5
-                    if cat in ("sot", "shots", "fouls", "tackles", "fouls_won"):
-                        score += 14
-                    if any(x in t for x in ["booked", "booking", "yellow", "card"]):
-                        score += 12
-                    if cat in ("score", "goalscorer"):
-                        score -= 4
-                    score -= max(0, od - 4.8) * 3
-                    return score
-
-                def _e_tod(legs):
-                    t = 1.0
-                    for l in legs:
-                        t *= max(1.0, _e_num(l.get("odds"), 1.0))
-                    return round(t, 2)
-
-                def _e_send(legs, title):
-                    nonlocal _pp_total
-                    if len(legs) < 2:
-                        return False
-                    total = _e_tod(legs)
-                    if not (2.20 <= total <= 95.0):
-                        return False
-
-                    key = "V15F_" + title + "_" + "_".join(
-                        (str(l.get("player") or "")[:14] + str(l.get("market") or "")[:10]).lower()
-                        for l in legs
-                    )
-                    if key in _builder_sent_today or key in _STAT_INSIGHT_SENT_TODAY:
-                        return False
-
-                    cats = list(dict.fromkeys(str(l.get("category") or "") for l in legs))
-                    icons = "".join(dict.fromkeys(_CAT_ICONS.get(c, "🎯") for c in cats))
-                    frac = f"{int(round(total-1))}/1" if total >= 2 and total == int(round(total)) else f"{total:.2f}"
-                    msg = f"🏗️ <b>{title} {frac}</b> {icons}{NL}{SEP}{NL}"
-                    for i, l in enumerate(legs, 1):
-                        player = str(l.get("player") or l.get("selection") or "").strip()
-                        market = str(l.get("market") or l.get("prop") or l.get("tip") or "").strip()
-                        match = str(l.get("match") or l.get("event") or l.get("fixture") or "").strip()
-                        odds = _e_num(l.get("odds"), 0)
-                        icon = l.get("icon") or _CAT_ICONS.get(str(l.get("category") or ""), "🎯")
-                        src = str(l.get("source") or "")
-                        msg += f"{i}. {icon} <b>{player}</b>{NL}"
-                        msg += f"   {market} @ {odds:.2f} · {src}{NL}"
-                        if len(set(str(x.get("match") or "") for x in legs)) > 1:
-                            msg += f"   ⚽ {match}{NL}"
-                    if len(set(str(x.get("match") or "") for x in legs)) == 1:
-                        msg += f"⚽ <b>{str(legs[0].get('match') or '')}</b>{NL}"
-                    msg += f"{SEP}{NL}💰 @ <b>{frac}</b> · 0.5u{NL}"
-                    msg += "🧠 V15F Delivery Fallback · echte Marktquoten"
-                    send_telegram(msg, chat_id=_pp_chat)
-                    _pp_total += 1
-                    _builder_sent_today.add(key)
-                    _STAT_INSIGHT_SENT_TODAY.add(key)
-                    log(f"   🚑 V15F {title}: {len(legs)}L @ {total:.2f}")
-                    return True
-
-                _valid = [p for p in _prop_db if _e_is_valid(p)]
-                _valid.sort(key=_e_rank, reverse=True)
-
-                def _pick(pool, size=3, min_matches=1):
-                    legs, used_players, match_count = [], set(), {}
-                    for p in pool:
-                        pl = str(p.get("player") or p.get("selection") or "").strip().lower()
-                        mt = str(p.get("match") or p.get("event") or p.get("fixture") or "").strip()
-                        if not pl or pl in used_players:
-                            continue
-                        if match_count.get(mt, 0) >= 2:
-                            continue
-                        legs.append(p)
-                        used_players.add(pl)
-                        match_count[mt] = match_count.get(mt, 0) + 1
-                        if len(legs) >= size and len([m for m,n in match_count.items() if n]) >= min_matches:
-                            return legs
-                    return legs
-
-                _sent_em = 0
-
-                # 1) Karten/Fouls High Odds über mehrere Spiele
-                _cards = [
-                    p for p in _valid
-                    if any(x in _e_text(p) for x in ["booked", "booking", "yellow", "card", "foul"])
-                ]
-                for _size in (4, 3, 2):
-                    if _sent_em >= int(env("FORCE_EMERGENCY_BUILDERS_MAX", "3")):
-                        break
-                    legs = _pick(_cards, _size, min_matches=2 if _size >= 3 else 1)
-                    if len(legs) >= 2 and _e_send(legs, "V15F CARDS/FOULS BUILDER"):
-                        _sent_em += 1
-                        break
-
-                # 2) SOT/Shots/Fouls Mix
-                _mix = [
-                    p for p in _valid
-                    if str(p.get("category") or "").lower() in ("sot", "shots", "fouls", "fouls_won", "tackles", "yellow_cards")
-                ]
-                for _size in (3, 2):
-                    if _sent_em >= int(env("FORCE_EMERGENCY_BUILDERS_MAX", "3")):
-                        break
-                    legs = _pick(_mix, _size, min_matches=1)
-                    if len(legs) >= 2 and _e_send(legs, "V15F PLAYER MIX BUILDER"):
-                        _sent_em += 1
-                        break
-
-                # 3) Goalscorer/Score fallback nur wenn sonst nichts ging
-                if _sent_em == 0:
-                    _score_pool = [p for p in _valid if str(p.get("category") or "").lower() in ("score", "score_assist", "assist")]
-                    legs = _pick(_score_pool, 2, min_matches=1)
-                    if len(legs) >= 2 and _e_send(legs, "V15F SCORE BUILDER"):
-                        _sent_em += 1
-
-                log(f"   🚑 V15F Emergency Builder gesendet: {_sent_em}")
-            except Exception as _em_e:
-                log(f"   🚑 V15F Emergency Builder Fehler: {str(_em_e)[:100]}", "WARN")
-
-
 
         log(f"   \U0001f3d7 Builder gesamt: {_pp_total} gesendet")
 
@@ -20048,7 +18962,7 @@ def run_pinnacle_props_bot(win_start_utc=None, win_end_utc=None, ch_tz=None, top
     _db_builders_done = len(_builder_sent_today)
     log(f"   DB Builder fertig: {_db_builders_done} gesendet")
 
-    if PLAYWRIGHT_AVAILABLE and env("ENABLE_PROP_EXTRA_SOURCES", "false").lower() in ["1", "true", "yes", "on"]:
+    if PLAYWRIGHT_AVAILABLE:
         import re as _re_pp, json as _json_pp
         # 1. ODDSPEDIA — oft Cloudflare geblockt, kurzes Timeout
         try:
@@ -20229,186 +19143,6 @@ def run_pinnacle_props_bot(win_start_utc=None, win_end_utc=None, ch_tz=None, top
                                        extra=f"AI: {_prob*100:.0f}%" if _prob > 0 else "")
             except Exception as _e: log(f"   Statz.ai Error: {str(_e)[:60]}", "WARN")
 
-    # ═══════════════════════════════════════════════════════════════
-    # NEUE BUILDER-STRATEGIEN V13
-    # Nate Tackles | Fouls Won | Same Game | Combo Player
-    # Nate Shots | Defensive Combo | Scorer Assist | Mix Master
-    # WM Special | Supabase Star
-    # ═══════════════════════════════════════════════════════════════
-    if _prop_db and _pp_chat and _pp_total < int(os.environ.get("PROP_BUILDER_MAX_TOTAL", "50")):
-
-        def _hr(player_name, stat):
-            if not SUPABASE_URL or not SUPABASE_KEY: return 0.0
-            try:
-                import requests as _rhr
-                r = _rhr.get(f"{SUPABASE_URL}/rest/v1/player_avg_stats",
-                    headers={"apikey":SUPABASE_KEY,"Authorization":f"Bearer {SUPABASE_KEY}"},
-                    params={"player_name":f"eq.{player_name}","select":stat},timeout=5)
-                if r.ok and r.json(): return float(r.json()[0].get(stat,0) or 0)
-            except: pass
-            return 0.0
-
-        def _gpc(cat, mn=1.15, mx=5.0):
-            return [p for p in _prop_db
-                    if str(p.get("category","")).lower()==cat.lower()
-                    and mn<=float(p.get("odds",0) or 0)<=mx
-                    and p.get("player") and len(str(p.get("player","")).split())>=2]
-
-        # 1. NATE TACKLES — Spieler mit hoher Tackle HR
-        try:
-            _tp = _gpc("tackles",1.15,5.0)
-            _tbp = {}
-            for p in _tp: _tbp.setdefault(p.get("player",""),[]).append(p)
-            for _pl,_pp in sorted(_tbp.items(),key=lambda x:-len(x[1]))[:5]:
-                if len(_pp)<2: continue
-                legs=sorted(_pp,key=lambda x:float(x.get("odds",1) or 1))[:4]
-                if len(legs)>=2 and (_hr(_pl,"hr_tackle")>=0.55 or _hr(_pl,"hr_tackle")==0.0):
-                    _send_builder(legs,"NATE TACKLES",f"{_pl}")
-        except Exception as _e: log(f"   Nate Tackles: {str(_e)[:50]}","WARN")
-
-        # 2. NATE SHOTS — Stürmer mit hoher Shot HR
-        try:
-            _sp = _gpc("shots",1.20,4.0)
-            _sbp = {}
-            for p in _sp: _sbp.setdefault(p.get("player",""),[]).append(p)
-            for _pl,_pp in sorted(_sbp.items(),key=lambda x:-len(x[1]))[:5]:
-                if len(_pp)<2: continue
-                legs=sorted(_pp,key=lambda x:float(x.get("odds",1) or 1))[:3]
-                if len(legs)>=2 and (_hr(_pl,"hr_shot")>=0.60 or _hr(_pl,"hr_shot")==0.0):
-                    _send_builder(legs,"NATE SHOTS",f"{_pl}")
-        except Exception as _e: log(f"   Nate Shots: {str(_e)[:50]}","WARN")
-
-        # 3. FOULS WON — Player To Be Fouled
-        try:
-            _fwp=[p for p in _prop_db
-                  if any(kw in str(p.get("player_prop","") or p.get("market","")).lower()
-                         for kw in ["fouled","foul won","to be fouled","fouls won","alternative player"])
-                  and float(p.get("odds",0) or 0)>=1.20
-                  and p.get("player") and len(str(p.get("player","")).split())>=2]
-            _fwbp={}
-            for p in _fwp: _fwbp.setdefault(p.get("player",""),[]).append(p)
-            _fwl=[]
-            for _pl,_pp in sorted(_fwbp.items(),key=lambda x:-float(x[1][0].get("odds",1) or 1))[:6]:
-                if _pp: _fwl.append(_pp[0])
-            for _sz in [4,3,2]:
-                if len(_fwl)>=_sz: _send_builder(_fwl[:_sz],"FOULS WON","Multi-Player"); break
-        except Exception as _e: log(f"   Fouls Won: {str(_e)[:50]}","WARN")
-
-        # 4. SAME GAME — 3-5 Legs aus einem Spiel
-        try:
-            _bym={}
-            for p in _prop_db:
-                m=p.get("match","") or p.get("match_id","")
-                if m: _bym.setdefault(m,[]).append(p)
-            for _match,_mps in sorted(_bym.items(),key=lambda x:-len(x[1]))[:10]:
-                if len(_mps)<3: continue
-                _best=sorted(_mps,key=lambda x:float(x.get("model_prob",0) or 0)+
-                             (0.1 if x.get("category","") in ("tackles","fouls","shots") else 0),reverse=True)
-                _seen=set(); _sgl=[]
-                for p in _best:
-                    pl=p.get("player","")
-                    if pl and pl not in _seen and len(pl.split())>=2:
-                        _sgl.append(p); _seen.add(pl)
-                    if len(_sgl)>=5: break
-                for _sz in [5,4,3]:
-                    if len(_sgl)>=_sz: _send_builder(_sgl[:_sz],"SAME GAME",_match[:30]); break
-        except Exception as _e: log(f"   Same Game: {str(_e)[:50]}","WARN")
-
-        # 5. COMBO PLAYER — ein Spieler, 3+ Märkte
-        try:
-            _bypa={}
-            for p in _prop_db:
-                pl=p.get("player","")
-                if pl and len(pl.split())>=2: _bypa.setdefault(pl,[]).append(p)
-            for _pl,_pps in sorted(_bypa.items(),key=lambda x:-len(set(p.get("category","") for p in x[1])))[:8]:
-                cats=set(p.get("category","") for p in _pps)
-                if len(cats)<3: continue
-                _cpl=[]; _pcat=["tackles","fouls","shots","sot","booked","score","assist"]
-                for cat in _pcat:
-                    cp=[p for p in _pps if p.get("category","")==cat]
-                    if cp: _cpl.append(sorted(cp,key=lambda x:float(x.get("model_prob",0) or 0),reverse=True)[0])
-                    if len(_cpl)>=4: break
-                if len(_cpl)>=3: _send_builder(_cpl,"COMBO PLAYER",_pl)
-        except Exception as _e: log(f"   Combo Player: {str(_e)[:50]}","WARN")
-
-        # 6. DEFENSIVE COMBO — Tackles + Fouls
-        try:
-            _dp=_gpc("tackles",1.15,4.5)+_gpc("fouls",1.15,4.5)
-            _dbp={}
-            for p in _dp: _dbp.setdefault(p.get("player",""),[]).append(p)
-            _dl=[]
-            for pl,props in sorted(_dbp.items(),key=lambda x:-float(x[1][0].get("model_prob",0) or 0))[:6]:
-                _dl.append(sorted(props,key=lambda x:float(x.get("model_prob",0) or 0),reverse=True)[0])
-            for _sz in [5,4,3]:
-                if len(_dl)>=_sz: _send_builder(_dl[:_sz],"DEFENSIVE COMBO","Tackles+Fouls"); break
-        except Exception as _e: log(f"   Defensive Combo: {str(_e)[:50]}","WARN")
-
-        # 7. SCORER ASSIST — Score + Assist Multi-Player
-        try:
-            _sap=_gpc("score",1.50,8.0)+_gpc("assist",1.50,8.0)
-            _sabp={}
-            for p in _sap: _sabp.setdefault(p.get("player",""),[]).append(p)
-            _sal=[]
-            for pl,props in sorted(_sabp.items(),key=lambda x:-float(x[1][0].get("model_prob",0) or 0))[:5]:
-                _sal.append(sorted(props,key=lambda x:float(x.get("model_prob",0) or 0),reverse=True)[0])
-            for _sz in [4,3]:
-                if len(_sal)>=_sz: _send_builder(_sal[:_sz],"SCORER ASSIST","Multi-Player"); break
-        except Exception as _e: log(f"   Scorer Assist: {str(_e)[:50]}","WARN")
-
-        # 8. MIX MASTER — beste Props aller Kategorien
-        try:
-            _acats=["tackles","fouls","shots","sot","booked","score","assist","corners"]
-            _mml=[]; _spmm=set()
-            for cat in _acats:
-                cp=[p for p in _prop_db
-                    if str(p.get("category","")).lower()==cat
-                    and float(p.get("model_prob",0) or 0)>=0.50
-                    and p.get("player","") not in _spmm
-                    and len(str(p.get("player","")).split())>=2
-                    and 1.15<=float(p.get("odds",0) or 0)<=6.0]
-                cp.sort(key=lambda x:float(x.get("model_prob",0) or 0),reverse=True)
-                if cp: _mml.append(cp[0]); _spmm.add(cp[0].get("player",""))
-                if len(_mml)>=6: break
-            for _sz in [5,4,3]:
-                if len(_mml)>=_sz: _send_builder(_mml[:_sz],"MIX MASTER","All-Markets"); break
-        except Exception as _e: log(f"   Mix Master: {str(_e)[:50]}","WARN")
-
-        # 9. WM SPECIAL — WM-Spiele
-        try:
-            _wmp=[p for p in _prop_db
-                  if any(kw in str(p.get("league","")).lower() for kw in ["world cup","fifa","wm","wc"])
-                  and float(p.get("odds",0) or 0)>=1.20
-                  and p.get("player") and len(str(p.get("player","")).split())>=2]
-            if _wmp:
-                _wmbm={}
-                for p in _wmp:
-                    m=p.get("match","")
-                    if m: _wmbm.setdefault(m,[]).append(p)
-                for _match,_wps in sorted(_wmbm.items(),key=lambda x:-len(x[1]))[:3]:
-                    _wl=sorted(_wps,key=lambda x:float(x.get("model_prob",0) or 0),reverse=True)[:4]
-                    if len(_wl)>=2: _send_builder(_wl,"WM SPECIAL",_match[:25])
-        except Exception as _e: log(f"   WM Special: {str(_e)[:50]}","WARN")
-
-        # 10. SUPABASE STAR — Top Hit Rate Spieler aus DB
-        try:
-            if SUPABASE_URL and SUPABASE_KEY:
-                import requests as _rstar
-                _sr=_rstar.get(f"{SUPABASE_URL}/rest/v1/player_avg_stats",
-                    headers={"apikey":SUPABASE_KEY,"Authorization":f"Bearer {SUPABASE_KEY}"},
-                    params={"select":"player_name,hr_tackle,hr_shot,hr_foul_committed,hr_yc,games",
-                            "games":"gte.5","order":"hr_tackle.desc","limit":"20"},timeout=8)
-                if _sr.ok:
-                    _stnames=set(p.get("player_name","") for p in (_sr.json() or []) if p.get("hr_tackle",0)>=0.60)
-                    _stl=[]; _stse=set()
-                    for p in _prop_db:
-                        pl=p.get("player","")
-                        if pl in _stnames and pl not in _stse:
-                            _stl.append(p); _stse.add(pl)
-                        if len(_stl)>=5: break
-                    if len(_stl)>=3: _send_builder(_stl[:4],"SUPABASE STAR","Top Hit Rate")
-        except Exception as _e: log(f"   Supabase Star: {str(_e)[:50]}","WARN")
-
-
     # ═══════════════════════════════════════
     # PROP BUILDER — beste Props kombinieren
     # ═══════════════════════════════════════
@@ -20443,25 +19177,10 @@ def run_pinnacle_props_bot(win_start_utc=None, win_end_utc=None, ch_tz=None, top
         def _build_and_send(legs, label=""):
             nonlocal _pp_total
             if not legs: return
-            try:
-                _max_total = int(os.environ.get("PROP_BUILDER_MAX_TOTAL", "35"))
-            except Exception:
-                _max_total = 35
-            if _pp_total >= _max_total:
-                return
-            def _safe_conf(_x):
-                try:
-                    return float(_x.get("confidence", 0) or 0)
-                except Exception:
-                    return 0.0
-            _avg_conf = sum(_safe_conf(x) for x in legs) / max(1, len(legs))
-            if min(_safe_conf(x) for x in legs) < float(os.environ.get("PROP_SCRAPER_MIN_LEG_CONF", "62")):
-                return
             _total = round(__import__("functools").reduce(lambda a,b: a*b, [l["odds"] for l in legs if l.get("odds",0)>1.0] or [1.0]), 2)
             if _total < 2.50: return  # min 2.50 für Prop Builder
-            if _total > 80 and _avg_conf < float(os.environ.get("PROP_SCRAPER_HR_MIN_AVG_CONF", "76")):
-                return
             _bmsg = "\U0001f3d7\ufe0f <b>PROP BUILDER " + str(len(legs)) + " LEGS</b>"
+            if label: _bmsg += " (" + label + ")"
             _bmsg += NL + SEP + NL
             for _i, _leg in enumerate(legs, 1):
                 _ko2 = (" \u23f0 " + _leg["ko_s"]) if _leg["ko_s"] else ""
@@ -20469,7 +19188,7 @@ def run_pinnacle_props_bot(win_start_utc=None, win_end_utc=None, ch_tz=None, top
                           "</b> \u2014 " + _leg["market"] + _ko2 + NL +
                           "   \u26bd " + _leg["match"] + NL)
             _bmsg += (SEP + NL + "\U0001f4b0 @ <b>" + str(_total) + "</b> \u00b7 0.5u" + NL +
-                      "📊 Score: <b>" + str(round(_avg_conf)) + "/100</b>")
+                      "<i>\U0001f4ca ScoutingStats + Statz.ai</i>")
             send_telegram(_bmsg, chat_id=_pp_chat)
             _pp_total += 1
             log(f"   \U0001f3d7 Prop Builder {len(legs)} Legs @ {_total}" + (f" [{label}]" if label else ""))
@@ -20541,7 +19260,7 @@ def run_pinnacle_props_bot(win_start_utc=None, win_end_utc=None, ch_tz=None, top
     # Sortierung nach Anstosszeit
     builders.sort(key=lambda x: x.get("_ko") or _dt2.max.replace(tzinfo=timezone.utc))
 
-    # 🆕 MULTI-MATCH BET BUILDER (wie Ladder VIP — 2-3 Spiele gemischt)
+    # 🆕 MULTI-MATCH BET BUILDER (wie Nate VIP — 2-3 Spiele gemischt)
     # Nimmt das beste Leg aus 2-3 verschiedenen Matches und kombiniert sie
     _match_best = {}  # {match_name: [sorted legs]}
     for b in builders:
@@ -20589,7 +19308,7 @@ def run_pinnacle_props_bot(win_start_utc=None, win_end_utc=None, ch_tz=None, top
                 "_match_names": _match_names[:_n_matches],
             })
 
-    builders = builders[:int(os.environ.get('PROP_BUILDER_MAX_LIST', '8'))]  # NETRATTLER V5 Cap
+    builders = builders[:12]  # Max 12 Builder pro Run
 
     # Nachrichten bauen — Bet365 Bet Builder Style
     sent = 0
@@ -20970,7 +19689,6 @@ def filter_tips_by_edge(tips: List[Dict], market: str = "btts",
             fair_odds = 0.0
         if fair_odds <= 1.0:
             stats["no_quote"] += 1
-            filtered.append(tip)
             continue
 
         tip_market = tip.get("market") or market
@@ -21880,7 +20598,7 @@ print(f"   • Pinnacle:       ✅ (kostenlos via guest token)", flush=True)
 # ════════════════════════════════════════════════════════════════════════
 # DEBUG (lokaler Test)
 # ════════════════════════════════════════════════════════════════════════
-if __name__ == "__main__" and env("RUN_SELF_TEST", "false").lower() in ["1", "true", "yes", "on"]:
+if __name__ == "__main__":
     print("\n" + "="*70)
     print("🧪 NetRattler Pro V3 - Self Test")
     print("="*70)
@@ -22086,20 +20804,8 @@ def main():
         log(f"🎰 Analysiere {len(_PINNACLE_MATCHUPS)} Pinnacle Matches...")
         from datetime import datetime as _pdt
         _processed_this_run = set()  # 🆕 Sicherheitsnetz gegen Restduplikate innerhalb des Runs
-        try:
-            _max_pinnacle_analyze = int(env("PINNACLE_MAX_MATCHES_ANALYZE", "18"))
-            _target_pinnacle_tips = int(env("PINNACLE_TARGET_TIPS", "70"))
-        except Exception:
-            _max_pinnacle_analyze, _target_pinnacle_tips = 18, 70
-
         for pm in _PINNACLE_MATCHUPS:
             try:
-                if _max_pinnacle_analyze > 0 and total_analyzed >= _max_pinnacle_analyze:
-                    log(f"   ⚡ Pinnacle Analyse-Cap erreicht: {total_analyzed} Matches")
-                    break
-                if _target_pinnacle_tips > 0 and pinnacle_tips_count >= _target_pinnacle_tips:
-                    log(f"   ⚡ Pinnacle Tipp-Ziel erreicht: {pinnacle_tips_count} Tipps")
-                    break
                 home = pm.get("home", "")
                 away = pm.get("away", "")
                 league_name = pm.get("league_name", "")
@@ -22163,27 +20869,25 @@ def main():
                         pass
                 else:
                     # 🆕 football-data.co.uk: echte BTTS/Over-Raten für ~20 Top-Vereinsligen
-                    if env("ENABLE_FDCOUK_MATCH_STATS", "false").lower() in ["1", "true", "yes", "on"]:
-                        try:
-                            _fh = get_fd_co_uk_team_stats(home, league_name)
-                            _fa = get_fd_co_uk_team_stats(away, league_name)
-                            if _fh and _fa:
-                                _mb = (_fh["btts_pct"] + _fa["btts_pct"]) / 2
-                                _mo = (_fh["over25_pct"] + _fa["over25_pct"]) / 2
-                                prob_b = int(0.6 * _mb + 0.4 * prob_b)
-                                prob_o = int(0.6 * _mo + 0.4 * prob_o)
-                                log(f"      📊 FD-CoUk: {home} {_fh['btts_pct']}% / {away} {_fa['btts_pct']}% BTTS → {prob_b}% ({_fh['games']}/{_fa['games']} Spiele)")
-                        except Exception:
-                            pass
+                    try:
+                        _fh = get_fd_co_uk_team_stats(home, league_name)
+                        _fa = get_fd_co_uk_team_stats(away, league_name)
+                        if _fh and _fa:
+                            _mb = (_fh["btts_pct"] + _fa["btts_pct"]) / 2
+                            _mo = (_fh["over25_pct"] + _fa["over25_pct"]) / 2
+                            prob_b = int(0.6 * _mb + 0.4 * prob_b)
+                            prob_o = int(0.6 * _mo + 0.4 * prob_o)
+                            log(f"      📊 FD-CoUk: {home} {_fh['btts_pct']}% / {away} {_fa['btts_pct']}% BTTS → {prob_b}% ({_fh['games']}/{_fa['games']} Spiele)")
+                    except Exception:
+                        pass
 
                     # 🤖 XGBoost ML-Modell (stärkste Ebene wenn Modelle geladen)
                     # Schlägt Elo/Poisson weil es kalibriert und aus echten Daten trainiert ist
                     try:
                         # 🆕 ClubElo als externe Teamstärke-Quelle
-                        if env("ENABLE_CLUBELO_MATCH_STATS", "false").lower() in ["1", "true", "yes", "on"]:
-                            _celo = get_clubelo_for_match(home, away, target_date)
-                            if _celo.get("elo_diff") is not None:
-                                log(f"      ⚡ ClubElo: {home} {_celo['elo_home']} vs {away} {_celo['elo_away']} (Diff: {_celo['elo_diff']})")
+                        _celo = get_clubelo_for_match(home, away, target_date)
+                        if _celo.get("elo_diff") is not None:
+                            log(f"      ⚡ ClubElo: {home} {_celo['elo_home']} vs {away} {_celo['elo_away']} (Diff: {_celo['elo_diff']})")
 
                         _ml = get_ml_prediction(home, away, league_name)
                         if _ml:
@@ -22352,11 +21056,10 @@ def main():
     # (ESPN/FotMob/etc. liefern aus GitHub Actions eh 0 — spart ~5 Min Actions-Minuten)
     _skip_league_loop = False
     try:
-        _fast_mode = env("NETRATTLER_FAST_MODE", "true").lower() in ["1", "true", "yes", "on"]
-        _skip_after = int(env("SKIP_LEAGUE_LOOP_AFTER_PINNACLE_TIPS", "5"))
-        if (_fast_mode or pinnacle_tips_count >= _skip_after) and env("FORCE_LEAGUE_LOOP", "false").lower() not in ["1", "true", "yes"]:
+        # 🆕 Schwelle auf 10 gesenkt (vorher 30) — auch Morgen-Runs mit wenigen Matches sparen Zeit
+        if pinnacle_tips_count >= 10 and env("FORCE_LEAGUE_LOOP", "false").lower() not in ["1", "true", "yes"]:
             _skip_league_loop = True
-            log(f"⚡ Liga-Schleife übersprungen (Fast Mode / {pinnacle_tips_count} Pinnacle-Tipps) — spart Actions-Minuten")
+            log(f"⚡ Liga-Schleife übersprungen ({pinnacle_tips_count} Pinnacle-Tipps reichen) — spart ~5 Min")
     except Exception:
         pass
 
@@ -22511,13 +21214,6 @@ def main():
         except Exception as _efe:
             log(f"   🎯 Edge Filter übersprungen: {str(_efe)[:60]}")
 
-    # 🧠 V15 DATA FUSION: History/League/Elo/Injury Features aus Supabase ins Scoring einrechnen
-    if apply_data_fusion_to_tips and env("ENABLE_DATA_FUSION_V15", "true").lower() in ["1", "true", "yes", "on"]:
-        try:
-            tips_by_market = apply_data_fusion_to_tips(tips_by_market, SUPABASE_URL, SUPABASE_KEY, log=log)
-        except Exception as _dfe:
-            log(f"🧠 V15 Data Fusion übersprungen: {str(_dfe)[:80]}", "WARN")
-
     # ⏰ Sortierung nach Anstosszeit (früheste zuerst)
     for _mk in tips_by_market:
         try:
@@ -22570,14 +21266,11 @@ def main():
 
     # 🔑 ADVANCED PROPS BOT
     if env("ENABLE_ADVANCED_PROPS", "true").lower() in ["1", "true", "yes"]:
-        if env("ENABLE_AI_ADVANCED_PROPS", "false").lower() in ["1", "true", "yes"]:
-            run_advanced_props_bot(
-                active_leagues=active_leagues,
-                fixtures_cache=_fixtures_cache,
-                target_date=target_date,
-            )
-        else:
-            log("⚡ AI Advanced Props übersprungen — Pinnacle Props bleiben aktiv")
+        run_advanced_props_bot(
+            active_leagues=active_leagues,
+            fixtures_cache=_fixtures_cache,
+            target_date=target_date,
+        )
         # 🔑 Pinnacle Player Props (echte Quoten — funktioniert aus Actions!)
         try:
             # 🆕 Beste BTTS-Tipps nach Wahrscheinlichkeit für Prop Builder vorbereiten
@@ -22588,7 +21281,7 @@ def main():
             )[:20]
             from datetime import timedelta as _td_props
             _props_start = datetime.now(timezone.utc)
-            _props_end   = _props_start + _td_props(hours=int(env("PROP_WINDOW_HOURS", "12")))
+            _props_end   = _props_start + _td_props(hours=24)
             run_pinnacle_props_bot(
                 win_start_utc=_props_start,
                 win_end_utc=_props_end,
@@ -22599,31 +21292,12 @@ def main():
         except Exception as _ppe:
             log(f"🔑 Pinnacle Props übersprungen: {str(_ppe)[:60]}", "WARN")
 
-    # 🆕 MULTI-COMBO SYSTEM (3-11 Tipps, sicherste Spiele + optional Ecken)
+    # 🆕 MULTI-COMBO SYSTEM (3,4,5,6,7,8 Tipps)
     all_tips_flat = []
     for market_id, tips in tips_by_market.items():
         for tip in tips:
             tip["market"] = market_id
             all_tips_flat.append(tip)
-
-    # Ecken als Zusatz in Multi-Combos: nur wenn Corner Bot vorher gelaufen ist.
-    if env("INCLUDE_CORNERS_IN_MULTI", "true").lower() in ["1", "true", "yes", "on"]:
-        try:
-            _corner_combo_tips = getattr(run_corners_and_scorer_bots, "_last_corner_tips", []) or []
-            _corner_min = int(env("CORNER_COMBO_MIN_PROB", "60"))
-            _corner_added = 0
-            for ct in _corner_combo_tips:
-                if int(ct.get("probability", 0) or 0) < _corner_min:
-                    continue
-                ct = dict(ct)
-                ct["market"] = "corners"
-                ct["confidence"] = ct.get("confidence") or (5 if int(ct.get("probability",0) or 0) >= 72 else 4)
-                all_tips_flat.append(ct)
-                _corner_added += 1
-            if _corner_added:
-                log(f"🔵 Multi-Combo: {_corner_added} starke Ecken-Tipps hinzugefügt")
-        except Exception as _ce:
-            log(f"🔵 Multi-Combo Ecken übersprungen: {str(_ce)[:50]}", "WARN")
 
     if len(all_tips_flat) >= 3:
         log("")
@@ -22639,7 +21313,7 @@ def main():
         # Alle Combo-Größen generieren (3 bis 11)
         _combo_run_ts = datetime.now(timezone.utc).strftime("%H%M%S")
         generated = 0
-        for n in [int(x) for x in env("MULTI_COMBO_SIZES", "3,4,5,6,7,8,9,10,11").split(",") if x.strip().isdigit()]:
+        for n in [3, 4, 5, 6, 7, 8, 9, 10, 11]:
             combo = generate_multi_combo_bets(all_tips_flat, num_tips=n)
             if combo:
                 # Deterministische Signatur — identische Kombi (gleiche Legs) wird nicht erneut gesendet
