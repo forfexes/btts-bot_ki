@@ -18671,7 +18671,8 @@ def run_pinnacle_props_bot(win_start_utc=None, win_end_utc=None, ch_tz=None, top
             msg += f"<i>\U0001f4ca {' + '.join(srcs)}</i>"
             send_telegram(msg, chat_id=_pp_chat)
             _pp_total += 1
-            log(f"   {'\U0001f680' if high_roller else '\U0001f3d7'} {style} {len(legs)}L @ {t:.2f}")
+            _builder_icon = "🚀" if high_roller else "🏗"
+            log(f"   {_builder_icon} {style} {len(legs)}L @ {t:.2f}")
             return True
 
         # Props gruppieren
