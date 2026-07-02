@@ -1,0 +1,49 @@
+name: NETRATTLER All Source Harvester
+
+on:
+  workflow_dispatch:
+  schedule:
+    # 1x pro Tag reicht für Discovery/History/Open Data
+    - cron: "17 4 * * *"
+
+jobs:
+  harvest:
+    runs-on: ubuntu-latest
+    timeout-minutes: 40
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
+      - name: Install dependencies
+        run: |
+          python -m pip install --upgrade pip
+          pip install -r requirements_all_source.txt
+
+      - name: Run all source harvester
+        env:
+          SUPABASE_URL: ${{ secrets.SUPABASE_URL }}
+          SUPABASE_KEY: ${{ secrets.SUPABASE_KEY }}
+          SUPABASE_SERVICE_ROLE_KEY: ${{ secrets.SUPABASE_SERVICE_ROLE_KEY }}
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          THESPORTSDB_API_KEY: ${{ secrets.THESPORTSDB_API_KEY }}
+          ENABLE_SOCCERDATA: "0"
+          MAX_STATSBOMB_MATCHES: "40"
+          MAX_OPENFOOTBALL_FILES: "80"
+          MAX_FOOTBALL_DATA_ROWS_PER_CSV: "800"
+          SEASONS: "2526,2425,2324"
+        run: |
+          python netrattler_all_source_harvester.py
+
+      - name: Upload local summary
+        uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: netrattler-all-source-summary
+          path: netrattler_all_source_summary.json
+          if-no-files-found: ignore
