@@ -1,3 +1,4 @@
+
 name: NETRATTLER Settlement V16 Final
 
 on:
@@ -20,7 +21,7 @@ jobs:
       - run: |
           python -m pip install --upgrade pip
           pip install requests python-dateutil
-      - name: Run Settlement 
+      - name: Run Settlement V16
         env:
           SUPABASE_URL: ${{ secrets.SUPABASE_URL }}
           SUPABASE_KEY: ${{ secrets.SUPABASE_KEY }}
