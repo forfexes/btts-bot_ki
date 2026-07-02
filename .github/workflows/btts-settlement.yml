@@ -1,43 +1,41 @@
-name: NETRATTLER Settlement V11
+name: NETRATTLER Settlement V16 Final
 
 on:
   workflow_dispatch:
   schedule:
-    - cron: "20 */3 * * *"
+    - cron: "20 7 * * *"
+    - cron: "20 13 * * *"
+    - cron: "20 20 * * *"
+    - cron: "20 23 * * *"
 
 jobs:
   settlement:
     runs-on: ubuntu-latest
-    timeout-minutes: 3
-
+    timeout-minutes: 25
     steps:
       - uses: actions/checkout@v4
-
       - uses: actions/setup-python@v5
         with:
           python-version: "3.11"
-          cache: "pip"
-
-      - name: Install dependencies
-        run: |
+      - run: |
           python -m pip install --upgrade pip
-          pip install requests python-dotenv
-
-      - name: Run Settlement V11
+          pip install requests python-dateutil
+      - name: Run Settlement V16
         env:
           SUPABASE_URL: ${{ secrets.SUPABASE_URL }}
           SUPABASE_KEY: ${{ secrets.SUPABASE_KEY }}
+          SUPABASE_SERVICE_ROLE_KEY: ${{ secrets.SUPABASE_SERVICE_ROLE_KEY }}
           TELEGRAM_TOKEN: ${{ secrets.TELEGRAM_TOKEN }}
+          TELEGRAM_BOT_TOKEN: ${{ secrets.TELEGRAM_BOT_TOKEN }}
           TELEGRAM_CHAT_ID: ${{ secrets.TELEGRAM_CHAT_ID }}
+          TELEGRAM_GROUP_BTTS: ${{ secrets.TELEGRAM_GROUP_BTTS }}
+          TELEGRAM_GROUP_OVER25: ${{ secrets.TELEGRAM_GROUP_OVER25 }}
+          TELEGRAM_GROUP_COMBO: ${{ secrets.TELEGRAM_GROUP_COMBO }}
+          TELEGRAM_GROUP_BTTS_HT: ${{ secrets.TELEGRAM_GROUP_BTTS_HT }}
           TELEGRAM_GROUP_STATS: ${{ secrets.TELEGRAM_GROUP_STATS }}
-          FOOTBALL_DATA_API_KEYS: ${{ secrets.FOOTBALL_DATA_API_KEYS }}
-          FOOTBALL_DATA_API_KEY: ${{ secrets.FOOTBALL_DATA_API_KEY }}
-          SETTLEMENT_DAYS_BACK: "4"
-          SETTLEMENT_LIMIT: "400"
-          SETTLEMENT_MAX_DATES: "5"
-          SETTLEMENT_TIMEOUT_SECONDS: "100"
-          SETTLEMENT_FUZZY_THRESHOLD: "0.58"
-          SETTLEMENT_SEND_SUMMARY: "true"
-        run: |
-          echo "NETRATTLER Settlement V11 startet..."
-          python settlement.py
+          TELEGRAM_GROUP_BUILDER: ${{ secrets.TELEGRAM_GROUP_BUILDER }}
+          TELEGRAM_GROUP_PROPS: ${{ secrets.TELEGRAM_GROUP_PROPS }}
+          TELEGRAM_GROUP_CORNERS: ${{ secrets.TELEGRAM_GROUP_CORNERS }}
+          SETTLEMENT_DAYS: "7"
+          SETTLEMENT_LIMIT: "1000"
+        run: python netrattler_settlement_v16_final.py
