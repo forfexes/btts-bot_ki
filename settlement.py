@@ -1,512 +1,230 @@
 #!/usr/bin/env python3
-"""
-NETRATTLER Settlement V11
-========================
-Stabile Settlement-Engine:
-- keine nicht vorhandenen Supabase-Spalten wie final_score / settlement_source
-- Date-Cache: Ergebnisse pro Datum nur einmal laden
-- mehrere freie Ergebnisquellen
-- Fuzzy Team Matching
-- kompakte Telegram-Auswertung
-- schnell genug für GitHub Actions
-
-Schreibt nur:
-status
-result
-settled_at
-
-Wenn diese Spalten fehlen, wird automatisch auf vorhandene Felder reduziert.
-"""
-
-import os
-import re
-import time
-import traceback
+import os, re, json, hashlib, unicodedata
 from datetime import datetime, timezone, timedelta
-from difflib import SequenceMatcher
-from typing import Any, Dict, List, Optional, Tuple
-
+from collections import defaultdict, Counter
 import requests
 
-SUPABASE_URL = os.getenv("SUPABASE_URL", "").rstrip("/")
-SUPABASE_KEY = os.getenv("SUPABASE_SERVICE_ROLE_KEY") or os.getenv("SUPABASE_KEY", "")
-TELEGRAM_TOKEN = os.getenv("TELEGRAM_TOKEN", "")
-
-DAYS_BACK = int(os.getenv("SETTLEMENT_DAYS_BACK", "4"))
-LIMIT = int(os.getenv("SETTLEMENT_LIMIT", "400"))
-MAX_DATES = int(os.getenv("SETTLEMENT_MAX_DATES", "5"))
-TIMEOUT_SECONDS = int(os.getenv("SETTLEMENT_TIMEOUT_SECONDS", "100"))
-FUZZY_THRESHOLD = float(os.getenv("SETTLEMENT_FUZZY_THRESHOLD", "0.58"))
-SEND_SUMMARY = os.getenv("SETTLEMENT_SEND_SUMMARY", "true").lower() in ("1", "true", "yes", "on")
-DEBUG_MISSES = int(os.getenv("SETTLEMENT_DEBUG_MISSES", "10"))
-
-TELEGRAM_STATS = os.getenv("TELEGRAM_GROUP_STATS") or os.getenv("TELEGRAM_CHAT_ID", "")
-
-FOOTBALL_DATA_KEYS = []
-for name in ("FOOTBALL_DATA_API_KEYS", "FOOTBALL_DATA_API_KEY"):
-    raw = os.getenv(name, "")
-    for x in raw.replace("\n", ",").replace(";", ",").split(","):
-        x = x.strip()
-        if x and x not in FOOTBALL_DATA_KEYS:
-            FOOTBALL_DATA_KEYS.append(x)
-
-HEADERS_SB = {
-    "apikey": SUPABASE_KEY,
-    "Authorization": f"Bearer {SUPABASE_KEY}",
-    "Content-Type": "application/json",
+SUPABASE_URL=(os.getenv("SUPABASE_URL") or "").rstrip("/")
+SUPABASE_KEY=os.getenv("SUPABASE_SERVICE_ROLE_KEY") or os.getenv("SUPABASE_KEY") or ""
+TG_TOKEN=os.getenv("TELEGRAM_TOKEN") or os.getenv("TELEGRAM_BOT_TOKEN") or ""
+TG_DEFAULT=os.getenv("TELEGRAM_CHAT_ID") or ""
+DAYS=int(os.getenv("SETTLEMENT_DAYS","7"))
+LIMIT=int(os.getenv("SETTLEMENT_LIMIT","1000"))
+NOW=datetime.now(timezone.utc)
+TODAY=NOW.date()
+GROUPS={
+ "btts":os.getenv("TELEGRAM_GROUP_BTTS") or TG_DEFAULT,
+ "over25":os.getenv("TELEGRAM_GROUP_OVER25") or TG_DEFAULT,
+ "combo":os.getenv("TELEGRAM_GROUP_COMBO") or TG_DEFAULT,
+ "btts_ht":os.getenv("TELEGRAM_GROUP_BTTS_HT") or TG_DEFAULT,
+ "over15_ht":os.getenv("TELEGRAM_GROUP_STATS") or TG_DEFAULT,
+ "builder":os.getenv("TELEGRAM_GROUP_BUILDER") or os.getenv("TELEGRAM_GROUP_PROPS") or TG_DEFAULT,
+ "props":os.getenv("TELEGRAM_GROUP_PROPS") or TG_DEFAULT,
+ "corners":os.getenv("TELEGRAM_GROUP_CORNERS") or os.getenv("TELEGRAM_GROUP_STATS") or TG_DEFAULT,
+ "stats":os.getenv("TELEGRAM_GROUP_STATS") or TG_DEFAULT,
+ "default":TG_DEFAULT,
 }
 
-START = time.time()
-DATE_RESULTS: Dict[str, List[Dict[str, Any]]] = {}
-TABLE_COLUMNS_CACHE: Dict[str, set] = {}
-
-ALIASES = {
-    "turkiye": "turkey",
-    "türkiye": "turkey",
-    "usa": "united states",
-    "u s a": "united states",
-    "us": "united states",
-    "netherlands": "holland",
-    "deutschland": "germany",
-    "espana": "spain",
-    "brasil": "brazil",
-    "man utd": "manchester united",
-    "man united": "manchester united",
-    "man city": "manchester city",
-    "inter": "internazionale",
-    "psg": "paris saint germain",
-    "sydney ii": "sydney fc npl",
-    "sydney fc ii": "sydney fc npl",
-    "sydney united": "sydney united 58",
-    "melbourne city npl": "melbourne city ii",
-    "adelaide united ii": "adelaide united youth",
-    "hammarby talang": "hammarby tff",
-    "sjk akatemia": "sjk akatemia",
-    "gremio novorizontino": "novorizontino",
-}
-
-STOPWORDS = {
-    "fc", "cf", "sc", "afc", "ac", "club", "football", "soccer",
-    "u19", "u20", "u21", "u23", "ii", "iii", "b", "reserves",
-    "women", "woman", "w", "ladies", "youth", "academy",
-    "de", "the", "fk", "if", "bk", "sk", "nk", "cd", "sd", "ud",
-}
-
-
-def log(msg: str, level: str = "INFO"):
-    print(f"[{datetime.now().strftime('%H:%M:%S')}] [{level}] {msg}", flush=True)
-
-
-def timed_out() -> bool:
-    return time.time() - START > TIMEOUT_SECONDS
-
-
-def base_norm(s: Any) -> str:
-    s = str(s or "").lower().strip()
-    replacements = {
-        "&": " and ", "ø": "o", "ö": "o", "ó": "o", "ò": "o",
-        "ä": "a", "á": "a", "à": "a", "ü": "u", "ú": "u",
-        "é": "e", "è": "e", "ê": "e", "ı": "i", "ş": "s",
-        "ğ": "g", "ç": "c",
-    }
-    for a, b in replacements.items():
-        s = s.replace(a, b)
-    s = re.sub(r"[^a-z0-9]+", " ", s)
-    s = re.sub(r"\s+", " ", s).strip()
-    return ALIASES.get(s, s)
-
-
-def norm(s: Any) -> str:
-    words = []
-    for w in base_norm(s).split():
-        if w not in STOPWORDS:
-            words.append(w)
-    return " ".join(words)
-
-
-def sim(a: str, b: str) -> float:
-    na, nb = norm(a), norm(b)
-    if not na or not nb:
-        return 0.0
-    if na == nb:
-        return 1.0
-    if na in nb or nb in na:
-        return 0.92
-    ta, tb = set(na.split()), set(nb.split())
-    jacc = len(ta & tb) / max(1, len(ta | tb)) if ta and tb else 0.0
-    seq = SequenceMatcher(None, na, nb).ratio()
-    return min(1.0, max(jacc, seq))
-
-
-def match_pair(home: str, away: str, res: Dict[str, Any]) -> Tuple[float, bool]:
-    rh, ra = res.get("home", ""), res.get("away", "")
-    direct = (sim(home, rh) + sim(away, ra)) / 2
-    swapped = (sim(home, ra) + sim(away, rh)) / 2
-    return (swapped, True) if swapped > direct else (direct, False)
-
-
-def send_telegram(text: str) -> bool:
-    if not TELEGRAM_TOKEN or not TELEGRAM_STATS:
-        return False
-    try:
-        r = requests.post(
-            f"https://api.telegram.org/bot{TELEGRAM_TOKEN}/sendMessage",
-            json={"chat_id": TELEGRAM_STATS, "text": text, "parse_mode": "HTML", "disable_web_page_preview": True},
-            timeout=10,
-        )
-        return r.ok
-    except Exception:
-        return False
-
-
-def sb_get(table: str, params: Dict[str, Any]) -> List[Dict[str, Any]]:
-    if not SUPABASE_URL or not SUPABASE_KEY:
-        raise RuntimeError("SUPABASE_URL/SUPABASE_KEY fehlt")
-    r = requests.get(f"{SUPABASE_URL}/rest/v1/{table}", headers=HEADERS_SB, params=params, timeout=25)
-    if not r.ok:
-        raise RuntimeError(f"Supabase GET {table} {r.status_code}: {r.text[:300]}")
-    return r.json()
-
-
-def get_table_columns(table: str) -> set:
-    if table in TABLE_COLUMNS_CACHE:
-        return TABLE_COLUMNS_CACHE[table]
-    try:
-        rows = sb_get(table, {"select": "*", "limit": "1"})
-        cols = set(rows[0].keys()) if rows else {"status", "result", "settled_at", "id", "tip_id"}
-    except Exception:
-        cols = {"status", "result", "settled_at", "id", "tip_id"}
-    TABLE_COLUMNS_CACHE[table] = cols
-    return cols
-
-
-def sb_patch_tip(tip: Dict[str, Any], data: Dict[str, Any]) -> bool:
-    if tip.get("id") is not None:
-        params = {"id": f"eq.{tip['id']}"}
-    elif tip.get("tip_id"):
-        params = {"tip_id": f"eq.{tip['tip_id']}"}
-    else:
-        return False
-
-    cols = get_table_columns("tips")
-    payload = {k: v for k, v in data.items() if k in cols}
-    if not payload:
-        return False
-
-    headers = dict(HEADERS_SB)
-    headers["Prefer"] = "return=minimal"
-    r = requests.patch(f"{SUPABASE_URL}/rest/v1/tips", headers=headers, params=params, json=payload, timeout=12)
-    if not r.ok:
-        log(f"PATCH Fehler {r.status_code}: {r.text[:150]}", "WARN")
-    return r.ok
-
-
-def tip_date(tip: Dict[str, Any]) -> str:
-    for k in ("date", "match_date", "kickoff_date", "kickoff_at", "created_at"):
-        v = str(tip.get(k) or "")
-        m = re.search(r"\d{4}-\d{2}-\d{2}", v)
-        if m:
-            return m.group(0)
-    return datetime.now(timezone.utc).date().isoformat()
-
-
-def parse_match(tip: Dict[str, Any]) -> Tuple[str, str]:
-    m = tip.get("match") or tip.get("fixture") or tip.get("game") or ""
-    for sep in (" vs ", " v ", " - "):
-        if sep in m:
-            a, b = m.split(sep, 1)
-            return a.strip(), b.strip()
-    return str(tip.get("home_team") or tip.get("home") or "").strip(), str(tip.get("away_team") or tip.get("away") or "").strip()
-
-
-def load_pending() -> List[Dict[str, Any]]:
-    since = (datetime.now(timezone.utc) - timedelta(days=DAYS_BACK)).date().isoformat()
-    rows = sb_get("tips", {
-        "select": "*",
-        "status": "eq.pending",
-        "date": f"gte.{since}",
-        "order": "date.asc",
-        "limit": str(LIMIT),
-    })
-    return rows[:LIMIT]
-
-
-def add_result(out: List[Dict[str, Any]], home: Any, away: Any, hg: Any, ag: Any, source: str, hth: Any = None, hta: Any = None):
-    try:
-        if home in (None, "") or away in (None, "") or hg in (None, "") or ag in (None, ""):
-            return
-        out.append({
-            "home": str(home),
-            "away": str(away),
-            "home_goals": int(hg),
-            "away_goals": int(ag),
-            "ht_home_goals": int(hth) if hth not in (None, "") else None,
-            "ht_away_goals": int(hta) if hta not in (None, "") else None,
-            "source": source,
-        })
-    except Exception:
-        return
-
-
-def source_thesportsdb_date(d: str) -> List[Dict[str, Any]]:
-    out = []
-    try:
-        r = requests.get("https://www.thesportsdb.com/api/v1/json/3/eventsday.php", params={"d": d, "s": "Soccer"}, timeout=12)
-        if r.ok:
-            for e in (r.json().get("events") or []):
-                add_result(out, e.get("strHomeTeam"), e.get("strAwayTeam"), e.get("intHomeScore"), e.get("intAwayScore"), "thesportsdb")
-    except Exception as e:
-        log(f"TheSportsDB skip: {e}", "WARN")
-    return out
-
-
-def source_espn_date(d: str) -> List[Dict[str, Any]]:
-    out = []
-    ymd = d.replace("-", "")
-    leagues = os.getenv("SETTLEMENT_ESPN_LEAGUES", "fifa.world,eng.1,esp.1,ita.1,ger.1,fra.1,usa.1,bra.1,arg.1,aus.1,swe.1,nor.1,fin.1,chn.1,jpn.1").split(",")
-    for league in [x.strip() for x in leagues if x.strip()]:
-        if timed_out():
-            break
-        try:
-            r = requests.get(f"https://site.api.espn.com/apis/site/v2/sports/soccer/{league}/scoreboard", params={"dates": ymd}, timeout=6)
-            if not r.ok:
-                continue
-            for ev in r.json().get("events", []):
-                comp = (ev.get("competitions") or [{}])[0]
-                if comp.get("status", {}).get("type", {}).get("completed") is not True:
-                    continue
-                home = away = None
-                for c in comp.get("competitors") or []:
-                    nm = (c.get("team") or {}).get("displayName") or (c.get("team") or {}).get("name") or ""
-                    sc = c.get("score")
-                    if c.get("homeAway") == "home":
-                        home = (nm, sc)
-                    elif c.get("homeAway") == "away":
-                        away = (nm, sc)
-                if home and away:
-                    add_result(out, home[0], away[0], home[1], away[1], f"espn:{league}")
-        except Exception:
-            continue
-    return out
-
-
-def source_football_data_date(d: str) -> List[Dict[str, Any]]:
-    out = []
-    if not FOOTBALL_DATA_KEYS:
-        return out
-    for api_key in FOOTBALL_DATA_KEYS[:2]:
-        try:
-            r = requests.get(
-                "https://api.football-data.org/v4/matches",
-                headers={"X-Auth-Token": api_key},
-                params={"dateFrom": d, "dateTo": d},
-                timeout=12,
-            )
-            if r.status_code in (401, 403, 429) or not r.ok:
-                continue
-            for m in r.json().get("matches", []):
-                ft = (m.get("score") or {}).get("fullTime") or {}
-                ht = (m.get("score") or {}).get("halfTime") or {}
-                add_result(
-                    out,
-                    (m.get("homeTeam") or {}).get("name", ""),
-                    (m.get("awayTeam") or {}).get("name", ""),
-                    ft.get("home"), ft.get("away"),
-                    "football-data",
-                    ht.get("home"), ht.get("away"),
-                )
-            if out:
-                return out
-        except Exception:
-            continue
-    return out
-
-
-def load_results_for_date(d: str) -> List[Dict[str, Any]]:
-    if d in DATE_RESULTS:
-        return DATE_RESULTS[d]
-    results = []
-    for name, fn in [("TheSportsDB", source_thesportsdb_date), ("ESPN", source_espn_date), ("FootballData", source_football_data_date)]:
-        if timed_out():
-            break
-        before = len(results)
-        results.extend(fn(d))
-        log(f"Quelle {name} {d}: +{len(results)-before}")
-
-    seen = set()
-    clean = []
-    for r in results:
-        key = (norm(r.get("home")), norm(r.get("away")), r.get("home_goals"), r.get("away_goals"))
-        if key in seen:
-            continue
-        seen.add(key)
-        clean.append(r)
-    DATE_RESULTS[d] = clean
-    log(f"Ergebnisse {d}: {len(clean)} total")
-    return clean
-
-
-def find_result(home: str, away: str, d: str) -> Tuple[Optional[Dict[str, Any]], float]:
-    best = None
-    best_score = 0.0
-    best_swapped = False
-    for r in load_results_for_date(d):
-        score, swapped = match_pair(home, away, r)
-        if score > best_score:
-            best_score = score
-            best = r
-            best_swapped = swapped
-
-    if best and best_score >= FUZZY_THRESHOLD:
-        if best_swapped:
-            b = dict(best)
-            b["home"], b["away"] = best["away"], best["home"]
-            b["home_goals"], b["away_goals"] = best["away_goals"], best["home_goals"]
-            b["ht_home_goals"], b["ht_away_goals"] = best.get("ht_away_goals"), best.get("ht_home_goals")
-            b["source"] = str(best.get("source", "")) + ":swapped"
-            best = b
-        return best, best_score
-    return None, best_score
-
-
-def settle_market(tip: Dict[str, Any], res: Dict[str, Any]) -> Optional[str]:
-    market = norm(tip.get("market") or tip.get("type") or tip.get("category") or "")
-    pick = norm(tip.get("tip") or tip.get("pick") or tip.get("selection") or "")
-    hg, ag = int(res["home_goals"]), int(res["away_goals"])
-    total = hg + ag
-    hth, hta = res.get("ht_home_goals"), res.get("ht_away_goals")
-
-    if "btts ht" in market or "btts_ht" in market:
-        if hth is None or hta is None:
-            return None
-        return "won" if hth > 0 and hta > 0 else "lost"
-    if "btts" in market:
-        yes = hg > 0 and ag > 0
-        if "no" in pick:
-            yes = not yes
-        return "won" if yes else "lost"
-    if "over15 ht" in market or "over1 5 ht" in market:
-        if hth is None or hta is None:
-            return None
-        return "won" if (hth + hta) > 1.5 else "lost"
-    if "over25" in market or "over 2 5" in market or "over2 5" in market:
-        return "won" if total > 2.5 else "lost"
-    if "combo" in market:
-        return "won" if (hg > 0 and ag > 0 and total > 2.5) else "lost"
-    return None
-
-
-def group_key(tip: Dict[str, Any]) -> str:
-    m = norm(tip.get("market") or tip.get("type") or tip.get("category") or "")
-    if "btts ht" in m or "btts_ht" in m:
-        return "BTTS HT"
-    if "over15 ht" in m or "over1 5 ht" in m:
-        return "Over HT"
-    if "over25" in m or "over 2 5" in m:
-        return "Over2.5"
-    if "combo" in m:
-        return "Combo"
-    if "corner" in m:
-        return "Corners"
-    return "BTTS"
-
-
-def send_summary(settled: List[Dict[str, Any]], skipped: int, debug: List[str]):
-    if not SEND_SUMMARY:
-        return
-    if not settled:
-        msg = f"📊 <b>Settlement V11</b>\nKeine Tipps ausgewertet.\nOffen/ohne Ergebnis: {skipped}"
-        if debug:
-            msg += "\n\n<pre>" + "\n".join(debug[:5])[:1200] + "</pre>"
-        send_telegram(msg)
-        return
-
-    by = {}
-    for x in settled:
-        by.setdefault(group_key(x), []).append(x)
-
-    lines = ["📊 <b>Settlement V11</b>"]
-    tw = tl = 0
-    for g, items in sorted(by.items()):
-        w = sum(1 for i in items if i["status"] == "won")
-        l = sum(1 for i in items if i["status"] == "lost")
-        tw += w
-        tl += l
-        hr = round(w / max(1, w + l) * 100, 1)
-        lines.append(f"{g}: ✅ {w} ❌ {l} · {hr}%")
-    lines.append(f"\nTotal: ✅ {tw} ❌ {tl} · <b>{round(tw / max(1, tw + tl) * 100, 1)}%</b>")
-    lines.append(f"Offen/ohne Ergebnis: {skipped}")
-    send_telegram("\n".join(lines))
-
-
+def log(x,l="INFO"): print(f"[{datetime.now().strftime('%H:%M:%S')}] [{l}] {x}",flush=True)
+def hsh(*x): return hashlib.sha1("||".join(str(v or "") for v in x).encode()).hexdigest()
+def norm(s):
+ s=str(s or "").lower().strip()
+ s=unicodedata.normalize("NFKD",s); s="".join(c for c in s if not unicodedata.combining(c))
+ s=re.sub(r"\b(fc|sc|cf|afc|fk|ac|club|de|the)\b"," ",s)
+ s=re.sub(r"[^a-z0-9]+"," ",s); return re.sub(r"\s+"," ",s).strip()
+def sim(a,b):
+ a=norm(a); b=norm(b)
+ if not a or not b: return 0
+ if a==b: return 1
+ if a in b or b in a: return .86
+ sa=set(a.split()); sb=set(b.split())
+ return len(sa&sb)/max(1,len(sa|sb))
+def anyv(r,ks,d=""):
+ for k in ks:
+  if k in r and r[k] not in (None,""): return r[k]
+ return d
+def dt(x):
+ if not x: return None
+ s=str(x).replace("Z","+00:00")
+ try:
+  d=datetime.fromisoformat(s); return d if d.tzinfo else d.replace(tzinfo=timezone.utc)
+ except: return None
+def tip_date(r):
+ for k in ["match_date","date","ko","kickoff","event_time","created_at"]:
+  d=dt(r.get(k))
+  if d: return d.date().isoformat()
+ return TODAY.isoformat()
+def headers(pref="return=representation"):
+ return {"apikey":SUPABASE_KEY,"Authorization":"Bearer "+SUPABASE_KEY,"Content-Type":"application/json","Prefer":pref}
+def get(table,params):
+ try:
+  r=requests.get(f"{SUPABASE_URL}/rest/v1/{table}",headers=headers(),params=params,timeout=25)
+  if r.status_code>=400: log(f"GET {table} {r.status_code}: {r.text[:140]}","WARN"); return []
+  return r.json() if r.text else []
+ except Exception as e: log(f"GET {table}: {e}","WARN"); return []
+def upsert(table,rows,conflict):
+ ok=0
+ for i in range(0,len(rows),200):
+  part=rows[i:i+200]
+  try:
+   r=requests.post(f"{SUPABASE_URL}/rest/v1/{table}",headers=headers("resolution=merge-duplicates,return=minimal"),params={"on_conflict":conflict},data=json.dumps(part,ensure_ascii=False,default=str),timeout=30)
+   if r.status_code in (200,201,204): ok+=len(part)
+   else: log(f"UPSERT {table} {r.status_code}: {r.text[:180]}","WARN")
+  except Exception as e: log(f"UPSERT {table}: {e}","WARN")
+ return ok
+def tg(chat,text):
+ if not TG_TOKEN or not chat: return False
+ try:
+  r=requests.post(f"https://api.telegram.org/bot{TG_TOKEN}/sendMessage",json={"chat_id":chat,"text":text[:3900],"parse_mode":"HTML","disable_web_page_preview":True},timeout=15)
+  if not r.ok: log(f"TG {r.status_code}: {r.text[:120]}","WARN")
+  return r.ok
+ except Exception as e: log(f"TG: {e}","WARN"); return False
+def market(r):
+ low=" ".join(str(anyv(r,[k],"")) for k in ["market","type","bet_type","category","group","channel","selection","pick"]).lower()
+ if any(x in low for x in ["builder","god","aystar","nate"]): return "builder"
+ if any(x in low for x in ["combo","multi","parlay"]): return "combo"
+ if any(x in low for x in ["corner","ecken"]): return "corners"
+ if any(x in low for x in ["player","booked","shot","foul","tackle","card"]): return "props"
+ if "btts_ht" in low or "btts ht" in low: return "btts_ht"
+ if "over 1.5 ht" in low or "over15_ht" in low: return "over15_ht"
+ if "over" in low and "2.5" in low: return "over25"
+ if "btts" in low or "both teams" in low: return "btts"
+ return "default"
+def tid(r): return str(anyv(r,["id","tip_id","pick_id","uuid"],"")) or hsh(anyv(r,["match","fixture","game"],""),anyv(r,["market","type"],""),anyv(r,["selection","pick"],""),tip_date(r))
+def match_parts(r):
+ h=str(anyv(r,["home_team","home","team_home"],"")); a=str(anyv(r,["away_team","away","team_away"],"")); m=str(anyv(r,["match","fixture","game","event","entity_name"],""))
+ if (not h or not a) and re.search(r"\s+v(s)?\s+",m,re.I):
+  p=re.split(r"\s+vs\s+|\s+v\s+",m,flags=re.I); h=p[0].strip(); a=p[1].strip() if len(p)>1 else ""
+ return h,a,m or (f"{h} vs {a}" if h and a else "")
+def load_tips():
+ tables=["tips","bet_tips","netrattler_tips","sent_tips","pending_tips","prop_picks","player_prop_db","value_signals"]
+ out=[]
+ for t in tables:
+  rows=get(t,{"select":"*","limit":str(LIMIT)})
+  for r in rows:
+   st=str(anyv(r,["status","result"],"pending")).lower()
+   if st in ("","pending","open","none","null"): r["_table"]=t; out.append(r)
+ seen=set(); res=[]
+ for r in out:
+  i=tid(r)
+  if i not in seen: seen.add(i); res.append(r)
+ log(f"Offene Tipps: {len(res)}"); return res[:LIMIT]
+def score_from_result(r):
+ p=r.get("payload") if isinstance(r.get("payload"),dict) else {}
+ raw=r.get("raw") if isinstance(r.get("raw"),dict) else {}
+ m={}; m.update(p); m.update(raw); m.update(r)
+ h,a,mm=match_parts(m)
+ hs=anyv(m,["home_score","home_goals","FTHG","intHomeScore","score_home"],None)
+ aw=anyv(m,["away_score","away_goals","FTAG","intAwayScore","score_away"],None)
+ try: hs=int(float(hs))
+ except: hs=None
+ try: aw=int(float(aw))
+ except: aw=None
+ return h,a,hs,aw
+def public_results(d):
+ out=[]
+ try:
+  js=requests.get("https://www.thesportsdb.com/api/v1/json/3/eventsday.php",params={"d":d,"s":"Soccer"},timeout=15).json()
+  for e in js.get("events") or []:
+   out.append({"home_team":e.get("strHomeTeam"),"away_team":e.get("strAwayTeam"),"home_score":e.get("intHomeScore"),"away_score":e.get("intAwayScore"),"match_date":d,"raw":e,"_result_table":"TheSportsDB"})
+ except: pass
+ return out
+def load_results(dates):
+ tables=["match_results","results","football_results","football_historical_matches","result_candidates","netrattler_data_lake_raw"]
+ out=[]
+ for d in dates:
+  for t in tables:
+   for col in ["date","match_date"]:
+    rows=get(t,{"select":"*",col:f"eq.{d}","limit":"1000"})
+    if rows:
+     for r in rows: r["_result_table"]=t
+     out+=rows; break
+  out+=public_results(d)
+ log(f"Result candidates: {len(out)}"); return out
+def find_res(tip,results):
+ th,ta,tm=match_parts(tip); td=tip_date(tip); best=None; bs=0
+ for r in results:
+  rh,ra,hs,aw=score_from_result(r)
+  if hs is None or aw is None: continue
+  s=max((sim(th,rh)+sim(ta,ra))/2 if th and ta else sim(tm,f"{rh} vs {ra}"), (sim(th,ra)+sim(ta,rh))/2 if th and ta else 0)
+  if str(anyv(r,["date","match_date"],td))[:10]==td: s+=.15
+  if s>bs: bs=s; best={"home":rh,"away":ra,"home_score":hs,"away_score":aw,"score":s,"raw":r}
+ return best if best and bs>=.68 else None
+def settle_single(t,res):
+ hs=res["home_score"]; aw=res["away_score"]; total=hs+aw
+ low=" ".join(str(anyv(t,[k],"")) for k in ["market","type","selection","pick","category"]).lower()
+ if "btts" in low or "both teams" in low: return ("win" if hs>0 and aw>0 else "loss",f"{hs}:{aw}")
+ if "over" in low:
+  m=re.search(r"over\s*([0-9]+(\.[0-9]+)?)",low); line=float(m.group(1)) if m else 2.5
+  return ("win" if total>line else "loss",f"{hs}:{aw} Tore={total} Over {line}")
+ if "under" in low:
+  m=re.search(r"under\s*([0-9]+(\.[0-9]+)?)",low); line=float(m.group(1)) if m else 2.5
+  return ("win" if total<line else "loss",f"{hs}:{aw} Tore={total} Under {line}")
+ if any(x in low for x in ["booked","card","shot","foul","tackle","corner","player"]): return "pending","Player/Corner Stats fehlen"
+ return "pending",f"{hs}:{aw} Markt nicht erkannt"
+def legs(t):
+ for k in ["legs","builder_legs","combo_legs","selections"]:
+  v=t.get(k)
+  if isinstance(v,list): return [x if isinstance(x,dict) else {"selection":str(x)} for x in v]
+  if isinstance(v,str) and v.strip().startswith("["):
+   try: return json.loads(v)
+   except: pass
+ txt=str(anyv(t,["message","text","tip_text","selection","pick"],""))
+ out=[]
+ for line in txt.splitlines():
+  if any(x in line.lower() for x in [" vs ","over","btts","booked","shot","foul","corner"]): out.append({"selection":line,"match":line})
+ return out
+def settle_tip(t,results):
+ g=market(t); i=tid(t); leg_payload=[]
+ if g in ("combo","builder"):
+  lg=legs(t); w=l=p=0
+  for le in lg:
+   fake=dict(t); fake.update(le if isinstance(le,dict) else {"selection":str(le)})
+   r=find_res(fake,results)
+   if not r: p+=1; leg_payload.append({"leg":le,"status":"pending"}); continue
+   st,why=settle_single(fake,r)
+   w+=st=="win"; l+=st=="loss"; p+=st=="pending"; leg_payload.append({"leg":le,"status":st,"reason":why})
+  status="loss" if l else "pending" if p else "win"; reason=f"{w}/{len(lg)} Legs · {l} lost · {p} offen"
+ else:
+  r=find_res(t,results)
+  if not r: status,reason="pending","kein Result gefunden"
+  else: status,reason=settle_single(t,r)
+ odds=anyv(t,["odds","quote","price","total_odds"],None)
+ try: odds=float(odds)
+ except: odds=None
+ profit=(odds-1) if status=="win" and odds else -1 if status=="loss" else 0
+ return {"settlement_id":hsh(i,status,reason),"tip_id":i,"source_table":t.get("_table",""),"market_group":g,"status":status,"result_label":"✅ WIN" if status=="win" else "❌ LOST" if status=="loss" else "⏳ PENDING","reason":reason,"odds":odds,"stake":1,"profit":round(profit,4),"tip_date":tip_date(t),"tip_payload":t,"legs_payload":leg_payload,"settled_at":NOW.isoformat()}
+def fmt(s):
+ p=s["tip_payload"]; h,a,m=match_parts(p); match=m or f"{h} vs {a}"
+ return f"{s['result_label']} <b>{s['market_group'].upper()}</b>\n{match}\n{anyv(p,['market','type','category'],'')}: {anyv(p,['selection','pick'],'')}\n{s['reason']}"
+def reports(settled):
+ by=defaultdict(list)
+ for s in settled:
+  if s["status"]!="pending": by[s["market_group"]].append(s)
+ for g,items in by.items():
+  chat=GROUPS.get(g) or GROUPS["default"]
+  msg=f"📊 <b>NETRATTLER AUSWERTUNG {g.upper()}</b>\n{TODAY}\n\n"
+  for s in items[:40]: msg+=fmt(s)+"\n\n"
+  tg(chat,msg)
+def stats(settled):
+ closed=[x for x in settled if x["status"] in ("win","loss")]
+ rows=[]; by=defaultdict(list)
+ for x in closed: by[x["market_group"]].append(x)
+ lines=[f"📈 <b>NETRATTLER HEUTE / MONAT / JAHR</b>\n{TODAY}"]
+ for g,it in sorted(by.items()):
+  w=sum(x["status"]=="win" for x in it); l=sum(x["status"]=="loss" for x in it); prof=sum(float(x["profit"]) for x in it); roi=100*prof/max(1,len(it))
+  rows.append({"stat_id":hsh("today",g,TODAY),"period":"today","market_group":g,"bets":len(it),"wins":w,"losses":l,"profit":round(prof,2),"roi":round(roi,2),"updated_at":NOW.isoformat()})
+  lines.append(f"{g.upper()}: {w}-{l} | ROI {roi:.1f}% | Profit {prof:.2f}")
+ upsert("netrattler_group_stats",rows,"stat_id")
+ tg(GROUPS.get("stats") or GROUPS["default"],"\n".join(lines))
 def main():
-    log("⚽ NETRATTLER Settlement V11 startet")
-    tips = load_pending()
-    log(f"Offene Tipps geladen: {len(tips)} | Limit={LIMIT} | Days={DAYS_BACK}")
-
-    dates = sorted({tip_date(t) for t in tips})[-MAX_DATES:]
-    log(f"Dates: {dates}")
-
-    for d in dates:
-        if timed_out():
-            break
-        load_results_for_date(d)
-
-    settled = []
-    skipped = 0
-    debug = []
-
-    for tip in tips:
-        if timed_out():
-            log("⏱️ Timeout-Limit erreicht, stoppe sauber", "WARN")
-            break
-
-        d = tip_date(tip)
-        if d not in dates:
-            skipped += 1
-            continue
-
-        home, away = parse_match(tip)
-        if not home or not away:
-            skipped += 1
-            continue
-
-        res, score = find_result(home, away, d)
-        if not res:
-            skipped += 1
-            if len(debug) < DEBUG_MISSES:
-                debug.append(f"MISS {home} vs {away} best={score:.2f}")
-            continue
-
-        status = settle_market(tip, res)
-        if not status:
-            skipped += 1
-            continue
-
-        data = {
-            "status": status,
-            "result": status,
-            "settled_at": datetime.now(timezone.utc).isoformat(),
-        }
-
-        if sb_patch_tip(tip, data):
-            item = dict(tip)
-            item["status"] = status
-            settled.append(item)
-
-    if debug:
-        log("Debug Misses:")
-        for x in debug[:DEBUG_MISSES]:
-            log("   " + x)
-
-    send_summary(settled, skipped, debug)
-    log(f"✅ Settlement V11 fertig: {len(settled)} ausgewertet, {skipped} offen/nicht auswertbar, Results={sum(len(v) for v in DATE_RESULTS.values())}")
-
-
-if __name__ == "__main__":
-    try:
-        main()
-    except Exception as e:
-        log(f"FATAL: {e}", "ERROR")
-        print(traceback.format_exc())
-        raise
+ log("⚽ NETRATTLER Settlement V16 FINAL startet")
+ tips=load_tips()
+ dates=sorted(set(tip_date(t) for t in tips)); log(f"Dates: {dates}")
+ results=load_results(dates)
+ settled=[settle_tip(t,results) for t in tips]
+ c=Counter(x["status"] for x in settled); log(f"Counts: {dict(c)}")
+ ok=upsert("netrattler_settlements",settled,"settlement_id"); log(f"Settlements gespeichert: {ok}")
+ reports(settled); stats(settled)
+ log("✅ Settlement V16 FINAL fertig")
+if __name__=="__main__": main()
