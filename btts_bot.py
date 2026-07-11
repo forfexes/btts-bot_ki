@@ -84,13 +84,16 @@ TELEGRAM_GROUPS = {
     "btts": env("TELEGRAM_GROUP_BTTS", TELEGRAM_CHAT_ID),
     "over25": env("TELEGRAM_GROUP_OVER25", TELEGRAM_CHAT_ID),
     "combo": env("TELEGRAM_GROUP_COMBO", TELEGRAM_CHAT_ID),
-    "combos": env("TELEGRAM_GROUP_COMBOS", TELEGRAM_CHAT_ID),
+    "combos": env("TELEGRAM_GROUP_COMBOS", env("TELEGRAM_GROUP_COMBO", TELEGRAM_CHAT_ID)),
     "btts_ht": env("TELEGRAM_GROUP_BTTS_HT", TELEGRAM_CHAT_ID),
-    "over15_ht": env("TELEGRAM_GROUP_BTTS_HT", TELEGRAM_CHAT_ID),
+    "over15_ht": env("TELEGRAM_GROUP_OVER15_HT", env("TELEGRAM_GROUP_BTTS_HT", TELEGRAM_CHAT_ID)),
     "stats": env("TELEGRAM_GROUP_STATS", TELEGRAM_CHAT_ID),
-    "hz_live": env("TELEGRAM_GROUP_HZ_LIVE", TELEGRAM_CHAT_ID),
+    "hz_live": env("TELEGRAM_GROUP_HZ_LIVE", env("TELEGRAM_GROUP_STATS", TELEGRAM_CHAT_ID)),
     "late_goals": env("TELEGRAM_GROUP_LATE_GOALS", TELEGRAM_CHAT_ID),
-    "advanced_props": env("TELEGRAM_GROUP_STATS", TELEGRAM_CHAT_ID),
+    "props": env("TELEGRAM_GROUP_PROPS", env("TELEGRAM_GROUP_STATS", TELEGRAM_CHAT_ID)),
+    "builder": env("TELEGRAM_GROUP_BUILDER", env("TELEGRAM_GROUP_PROPS", env("TELEGRAM_GROUP_STATS", TELEGRAM_CHAT_ID))),
+    "corners": env("TELEGRAM_GROUP_CORNERS", env("TELEGRAM_GROUP_STATS", TELEGRAM_CHAT_ID)),
+    "advanced_props": env("TELEGRAM_GROUP_PROPS", env("TELEGRAM_GROUP_STATS", TELEGRAM_CHAT_ID)),
 }
 
 
@@ -12666,6 +12669,287 @@ def build_inline_keyboard(odds_data, match_name):
     return {"inline_keyboard": buttons}
 
 
+
+# ============================================================
+# NETRATTLER FINAL — Live Performance Footer für jede Tipp-Gruppe
+# liest bevorzugt netrattler_group_stats / netrattler_settlements,
+# damit die Auswertung aus dem neuen Settlement direkt in neue Tipps kommt.
+# ============================================================
+_NTR_PERF_CACHE = {}
+
+def _ntr_float(x, default=0.0):
+    try:
+        return float(str(x).replace(",", "."))
+    except Exception:
+        return default
+
+def _ntr_group_from_chat(chat_id):
+    cid = str(chat_id or "")
+    mapping = {
+        "btts": "btts", "over25": "over25", "combo": "combo", "combos": "combo",
+        "btts_ht": "btts_ht", "over15_ht": "over15_ht", "props": "props",
+        "builder": "builder", "advanced_props": "props", "corners": "corners",
+        "hz_live": "corners", "late_goals": "props",
+    }
+    for key, group in mapping.items():
+        val = TELEGRAM_GROUPS.get(key) if isinstance(TELEGRAM_GROUPS, dict) else None
+        if val and str(val) == cid:
+            return group
+    return "default"
+
+def _ntr_get_group_perf(group):
+    """Return today/month/year performance for a group from Supabase."""
+    if not SUPABASE_URL or not SUPABASE_KEY or group in ("", "default", None):
+        return None
+    now = datetime.now(timezone.utc)
+    cache_key = f"{group}_{now.strftime('%Y%m%d%H%M')}"
+    if cache_key in _NTR_PERF_CACHE:
+        return _NTR_PERF_CACHE[cache_key]
+    hdr = {"apikey": SUPABASE_KEY, "Authorization": f"Bearer {SUPABASE_KEY}"}
+    try:
+        # 1) direkt aus aggregierter Tabelle
+        r = requests.get(
+            f"{SUPABASE_URL}/rest/v1/netrattler_group_stats",
+            headers=hdr,
+            params={"market_group": f"eq.{group}", "select": "*", "order": "updated_at.desc", "limit": "50"},
+            timeout=8,
+        )
+        rows = r.json() if r.ok and r.text else []
+        out = {"today": None, "month": None, "year": None}
+        if isinstance(rows, list):
+            for row in rows:
+                period = str(row.get("period", "")).lower()
+                if period in out and out[period] is None:
+                    out[period] = row
+        # 2) Fallback aus settlements berechnen
+        if not any(out.values()):
+            r2 = requests.get(
+                f"{SUPABASE_URL}/rest/v1/netrattler_settlements",
+                headers=hdr,
+                params={"market_group": f"eq.{group}", "status": "in.(win,loss,won,lost)", "select": "status,profit,tip_date,odds", "limit": "3000", "order": "tip_date.desc"},
+                timeout=10,
+            )
+            ss = r2.json() if r2.ok and r2.text else []
+            if isinstance(ss, list) and ss:
+                today_s = now.date().isoformat()
+                month_s = now.strftime("%Y-%m")
+                year_s = now.strftime("%Y")
+                def agg(period, rows2):
+                    bets=len(rows2); wins=sum(str(x.get("status")).lower() in ("win","won") for x in rows2); losses=bets-wins
+                    prof=sum(_ntr_float(x.get("profit"), 0) for x in rows2)
+                    return {"period": period, "bets": bets, "wins": wins, "losses": losses, "profit": round(prof,2), "roi": round(100*prof/max(1,bets),2)} if bets else None
+                out["today"] = agg("today", [x for x in ss if str(x.get("tip_date", ""))[:10] == today_s])
+                out["month"] = agg("month", [x for x in ss if str(x.get("tip_date", ""))[:7] == month_s])
+                out["year"] = agg("year", [x for x in ss if str(x.get("tip_date", ""))[:4] == year_s])
+        _NTR_PERF_CACHE[cache_key] = out
+        return out
+    except Exception:
+        return None
+
+def _ntr_perf_line(row, label):
+    if not row or int(row.get("bets") or 0) <= 0:
+        return None
+    bets=int(row.get("bets") or 0); wins=int(row.get("wins") or 0); losses=int(row.get("losses") or 0)
+    roi=_ntr_float(row.get("roi"), 0); prof=_ntr_float(row.get("profit"), 0)
+    em = "🟢" if prof >= 0 else "🔴"
+    return f"{label}: {wins}-{losses} / {bets} · ROI {roi:.1f}% · {prof:+.2f}U {em}"
+
+def _ntr_enhance_message_with_stats(text, chat_id):
+    """Append group ROI block directly under fresh tip messages."""
+    if str(env("ENABLE_TIP_PERFORMANCE_FOOTER", "true")).lower() not in ("1", "true", "yes", "on"):
+        return text
+    if not text or len(text) > 3300:
+        return text
+    upper = str(text).upper()
+    skip_words = ["AUSWERTUNG", "GESAMT-STATISTIK", "AI TIPP BOT - DAILY", "NETRATTLER HEUTE", "BACKTEST", "SELF TEST", "ÜBERSICHT HEUTE"]
+    if any(w in upper for w in skip_words):
+        return text
+    # Nur Tipp-Nachrichten anfassen, nicht technische Reports.
+    tip_words = ["TIPP", "TIP", "BTTS", "OVER", "CORNER", "PROP", "BUILDER", "SCORER", "COMBO", "QUOTE"]
+    if not any(w in upper for w in tip_words):
+        return text
+    group = _ntr_group_from_chat(chat_id)
+    perf = _ntr_get_group_perf(group)
+    if not perf:
+        return text
+    lines = []
+    for label, key in [("Heute", "today"), ("Monat", "month"), ("Jahr", "year")]:
+        line = _ntr_perf_line(perf.get(key), label)
+        if line:
+            lines.append(line)
+    if not lines:
+        return text
+    footer = "\n━━━━━━━━━━━━━━━━━━\n📊 <b>Performance dieser Gruppe</b>\n" + "\n".join(lines)
+    if len(text) + len(footer) > 3900:
+        return text
+    return text + footer
+
+def _ntr_market_stats_from_settlements(market_id):
+    """Modern stats shape compatible with _get_market_stats_from_supabase()."""
+    perf = _ntr_get_group_perf(market_id)
+    if not perf:
+        return None
+    year = perf.get("year") or perf.get("month") or perf.get("today")
+    month = perf.get("month")
+    if not year:
+        return None
+    total=int(year.get("bets") or 0); won=int(year.get("wins") or 0); lost=int(year.get("losses") or 0)
+    if total <= 0:
+        return None
+    m_total=int(month.get("bets") or 0) if month else 0
+    m_won=int(month.get("wins") or 0) if month else 0
+    m_lost=int(month.get("losses") or 0) if month else 0
+    month_names = ["","Januar","Februar","März","April","Mai","Juni","Juli","August","September","Oktober","November","Dezember"]
+    today = datetime.now(timezone.utc).date()
+    return {
+        "won": won, "lost": lost, "total": total,
+        "pct": round(won/total*100) if total else 0,
+        "roi": round(_ntr_float(year.get("profit"), 0), 1),
+        "month_name": month_names[today.month],
+        "month_won": m_won, "month_lost": m_lost,
+        "month_total": m_total,
+        "month_pct": round(m_won/m_total*100) if m_total else 0,
+        "month_roi": round(_ntr_float(month.get("profit"), 0) if month else 0, 1),
+        "top_leagues": [],
+    }
+
+
+
+# ============================================================
+# NETRATTLER V16 ML LIVE HOOK
+# ============================================================
+_NTR_ML_MODEL_CACHE = None
+_NTR_ML_MODEL_TS = 0
+
+def _ntr_ml_headers():
+    return {"apikey": SUPABASE_KEY, "Authorization": f"Bearer {SUPABASE_KEY}", "Content-Type": "application/json"}
+
+def _ntr_ml_load_model(force=False):
+    global _NTR_ML_MODEL_CACHE, _NTR_ML_MODEL_TS
+    try:
+        import time as _time
+        now = _time.time()
+        if _NTR_ML_MODEL_CACHE and not force and now - _NTR_ML_MODEL_TS < 300:
+            return _NTR_ML_MODEL_CACHE
+        if not SUPABASE_URL or not SUPABASE_KEY:
+            return None
+        r = requests.get(
+            f"{SUPABASE_URL}/rest/v1/netrattler_ml_models",
+            headers=_ntr_ml_headers(),
+            params={"model_name":"eq.netrattler_v16_ml","select":"*","limit":"1"},
+            timeout=12,
+        )
+        if not r.ok:
+            return None
+        rows = r.json() if r.text else []
+        if not rows:
+            return None
+        _NTR_ML_MODEL_CACHE = rows[0].get("model_json") or {}
+        _NTR_ML_MODEL_TS = now
+        return _NTR_ML_MODEL_CACHE
+    except Exception:
+        return None
+
+def _ntr_ml_norm(x):
+    try:
+        import unicodedata as _ud, re as _re
+        s = _ud.normalize("NFKD", str(x or "").lower().strip())
+        s = "".join(c for c in s if not _ud.combining(c))
+        s = _re.sub(r"[^a-z0-9]+", " ", s)
+        return _re.sub(r"\s+", " ", s).strip()
+    except Exception:
+        return str(x or "").lower().strip()
+
+def _ntr_ml_group_from_chat_or_text(chat_id, text):
+    t = str(text or "").lower()
+    try:
+        for k,v in (TELEGRAM_GROUPS or {}).items():
+            if str(v) == str(chat_id):
+                if k in ("combos",): return "combo"
+                if k in ("advanced_props",): return "props"
+                return k
+    except Exception:
+        pass
+    if "btts ht" in t or "btts_ht" in t: return "btts_ht"
+    if "over 1.5 ht" in t or "over15_ht" in t: return "over15_ht"
+    if "corner" in t or "ecken" in t: return "corners"
+    if "builder" in t or "nate" in t or "aystar" in t or "god" in t: return "builder"
+    if "combo" in t or "parlay" in t: return "combo"
+    if "shot" in t or "foul" in t or "card" in t or "tackle" in t or "booked" in t: return "props"
+    if "over 2.5" in t or "o2.5" in t: return "over25"
+    if "btts" in t or "both teams" in t: return "btts"
+    return "default"
+
+def _ntr_ml_extract_odds(text):
+    t = str(text or "")
+    for pat in [r"Quote\s*[:@]?\s*(\d+[\.,]\d+)", r"@\s*(\d+[\.,]\d+)", r"Odds\s*[:@]?\s*(\d+[\.,]\d+)"]:
+        m = re.search(pat, t, re.I)
+        if m:
+            try: return float(m.group(1).replace(",","."))
+            except Exception: pass
+    return None
+
+def _ntr_ml_odds_bucket(o):
+    try: o = float(o)
+    except Exception: return "odds:unknown"
+    if o < 1.50: return "odds:<1.50"
+    if o < 1.80: return "odds:1.50-1.79"
+    if o < 2.10: return "odds:1.80-2.09"
+    if o < 2.60: return "odds:2.10-2.59"
+    if o < 3.50: return "odds:2.60-3.49"
+    return "odds:3.50+"
+
+def _ntr_ml_predict_from_text(text, chat_id=None):
+    model = _ntr_ml_load_model(False)
+    if not model:
+        return {"score":0,"edge":0,"rec":"NO_MODEL","hits":0}
+    prior = float((model.get("prior") or {}).get("winrate") or 0.52)
+    stats = model.get("feature_stats") or {}
+    group = _ntr_ml_group_from_chat_or_text(chat_id, text)
+    odds = _ntr_ml_extract_odds(text)
+    feats = [f"group:{_ntr_ml_norm(group)}", _ntr_ml_odds_bucket(odds)]
+    weighted = prior
+    weight = 1.0
+    hits = 0
+    try:
+        import math as _math
+        for f in feats:
+            st = stats.get(f)
+            if not st: continue
+            bets = float(st.get("bets") or 0)
+            wr = float(st.get("winrate") or prior)
+            conf = float(st.get("confidence") or 0.2)
+            w = max(0.15, conf) * min(3.0, _math.log(bets + 1))
+            weighted += wr * w
+            weight += w
+            hits += 1
+    except Exception:
+        pass
+    prob = weighted / max(0.0001, weight)
+    implied = (1/odds) if odds and odds > 1 else 0
+    edge = (prob - implied) * 100 if implied else 0
+    score = round(prob*100, 1)
+    rec = "STRONG" if score >= 63 and edge >= 2 else "OK" if score >= 57 else "LEAN" if score >= 52 else "SKIP"
+    return {"score":score,"edge":round(edge,1),"rec":rec,"hits":hits,"group":group}
+
+def _ntr_ml_enhance_message(text, chat_id=None):
+    raw = str(text or "")
+    low = raw.lower()
+    # Reports/Settlement nicht mit ML-Footer vollkleben
+    if any(x in low for x in ["auswertung", "roi report", "settlement", "gruppen-auswertung", "performance dieser gruppe"]):
+        return text
+    if "ml_score" in low:
+        return text
+    p = _ntr_ml_predict_from_text(raw, chat_id)
+    if p.get("rec") == "NO_MODEL":
+        footer = "\n🤖 ML: Daten werden gesammelt"
+    else:
+        icon = {"STRONG":"🔥", "OK":"✅", "LEAN":"⚠️", "SKIP":"🚫"}.get(p.get("rec"), "🤖")
+        footer = f"\n🤖 ML_SCORE: <b>{p.get('score')}</b> · Edge {p.get('edge')}% · {icon} {p.get('rec')}"
+    if len(raw) + len(footer) > 3900:
+        return text
+    return raw + footer
+
 def send_telegram(text, chat_id=None, reply_markup=None):
     if not TELEGRAM_TOKEN:
         log("Telegram Token fehlt", "WARN")
@@ -12677,6 +12961,22 @@ def send_telegram(text, chat_id=None, reply_markup=None):
     if not chat_id:
         log("Telegram Chat ID fehlt", "WARN")
         return None
+
+    try:
+        text = _ntr_enhance_message_with_stats(text, chat_id)
+    except Exception as _ntr_e:
+        try:
+            log(f"Stats-Footer übersprungen: {str(_ntr_e)[:60]}", "WARN")
+        except Exception:
+            pass
+
+    try:
+        text = _ntr_ml_enhance_message(text, chat_id)
+    except Exception as _ntr_ml_e:
+        try:
+            log(f"ML-Footer übersprungen: {str(_ntr_ml_e)[:60]}", "WARN")
+        except Exception:
+            pass
 
     payload = {
         "chat_id": chat_id,
@@ -13221,6 +13521,12 @@ def _get_market_stats_from_supabase(market_id):
     if not SUPABASE_URL or not SUPABASE_KEY:
         return None
     try:
+        modern = _ntr_market_stats_from_settlements(market_id)
+        if modern and modern.get("total", 0) >= 1:
+            return modern
+    except Exception:
+        pass
+    try:
         from datetime import date as _date2
         today = _date2.today()
         month_start = today.replace(day=1).isoformat()
@@ -13335,7 +13641,10 @@ def _send_daily_auswertung_to_all_groups(stats=None):
         ("over25",  TELEGRAM_GROUPS.get("over25"),  "🎯 Over 2.5"),
         ("combo",   TELEGRAM_GROUPS.get("combo"),   "🔥 BTTS + Over 2.5"),
         ("btts_ht", TELEGRAM_GROUPS.get("btts_ht"), "🕐 BTTS Halbzeit"),
-        ("corners", TELEGRAM_GROUPS.get("hz_live"), "🔵 Corner Sniper"),
+        ("over15_ht", TELEGRAM_GROUPS.get("over15_ht"), "⏰ Over 1.5 HT"),
+        ("corners", TELEGRAM_GROUPS.get("corners"), "🔵 Corner Sniper"),
+        ("builder", TELEGRAM_GROUPS.get("builder"), "🧱 Prop Builder"),
+        ("props", TELEGRAM_GROUPS.get("props"), "🎯 Player Props"),
         ("scorer",  TELEGRAM_GROUPS.get("late_goals"), "⚽ Goal Hunter"),
     ]
 
@@ -18696,6 +19005,317 @@ def run_pinnacle_props_bot(win_start_utc=None, win_end_utc=None, ch_tz=None, top
         log(f"   SupabaseStats Builder-Props: {str(_e)[:80]}", "WARN")
 
 
+    # ── V6 ADAPTIVE PLAYER-STATS FALLBACK ───────────────────────────
+    # V5 hat gezeigt: player_avg_stats wurde geprüft, aber 0 Builder-Props ergänzt.
+    # Darum hier schema-flexibler Fallback über player_avg_stats / player_match_stats / player_stats.
+    # Zielmärkte für Nate/Aystar: Shots, SOT, Fouls Committed, Fouls Won, Tackles, Cards.
+    try:
+        import re as _re_adapt
+        from collections import defaultdict as _ADefaultDict
+
+        _adaptive_added = 0
+        _adaptive_rows_seen = 0
+        _adaptive_tables_ok = []
+
+        def _ad_norm(_s):
+            _s = str(_s or "").lower().strip()
+            _s = _re_adapt.sub(r"[^a-z0-9äöüßáéíóúàèìòùâêîôûãõñç\s-]", " ", _s)
+            _s = _re_adapt.sub(r"\s+", " ", _s).strip()
+            return _s
+
+        def _ad_float(_x, _default=0.0):
+            try:
+                if _x is None or _x == "":
+                    return _default
+                return float(_x)
+            except Exception:
+                return _default
+
+        def _ad_first(row, names, default=None):
+            for _n in names:
+                if _n in row and row.get(_n) not in (None, ""):
+                    return row.get(_n)
+            return default
+
+        def _ad_num(row, names, default=0.0):
+            return _ad_float(_ad_first(row, names, default), default)
+
+        def _ad_player(row):
+            return str(_ad_first(row, [
+                "player", "player_name", "name", "selection", "player_full_name",
+                "athlete", "athlete_name", "display_name"
+            ], "") or "").strip()
+
+        def _ad_stat_label(row):
+            return _ad_norm(_ad_first(row, [
+                "stat", "stat_type", "metric", "market", "market_name",
+                "prop", "category", "type", "event_type"
+            ], ""))
+
+        def _ad_ctx_for_player(player):
+            _n = _ad_norm(player)
+            return _adaptive_player_ctx.get(_n) or {
+                "team": "", "match": "Unknown Match", "league": "", "ko": ""
+            }
+
+        def _ad_add(player, ctx, market, cat, line, odds, hit, avg, games, source):
+            nonlocal _adaptive_added
+            player = (player or "").strip()
+            if not player or len(player) < 5 or len(player.split()) < 2:
+                return
+            # Keine Zufallsprops ohne Minimalbasis.
+            if games and games < 3:
+                return
+            if hit <= 0 and avg <= 0:
+                return
+
+            _key = (
+                _ad_norm(player),
+                _ad_norm(ctx.get("match")),
+                _ad_norm(market),
+                float(line),
+                source
+            )
+            if _key in _adaptive_seen:
+                return
+            _adaptive_seen.add(_key)
+
+            _mp = max(0.30, min(0.88, (hit / 100.0) if hit else {
+                "sot": 0.56, "shots": 0.56, "fouls": 0.54, "fouls_won": 0.54,
+                "tackles": 0.54, "yellow_cards": 0.32, "score": 0.40
+            }.get(cat, 0.50)))
+
+            _prop_db.append({
+                "player": player[:80],
+                "team": (ctx.get("team") or "")[:60],
+                "match": (ctx.get("match") or "Unknown Match")[:150],
+                "league": (ctx.get("league") or "")[:80],
+                "market": market[:150],
+                "category": cat,
+                "line": float(line),
+                "odds": float(odds),
+                "prob": int(round(_mp * 100)),
+                "model_prob": _mp,
+                "source": source,
+                "ko": ctx.get("ko") or "",
+                "icon": _CAT_ICONS.get(cat, "🎯"),
+                "hit_rate": int(round(hit)) if hit else "",
+                "games": int(games or 0),
+                "avg": round(float(avg or 0), 3),
+            })
+            _adaptive_added += 1
+
+        def _ad_emit_from_metric(player, ctx, metric, avg, hit, games, source):
+            # Erzeugt mehrere Ladder-Linien aus avg/hit_rate.
+            avg = _ad_float(avg)
+            hit = _ad_float(hit)
+            games = int(_ad_float(games, 0))
+            if metric == "sot":
+                if games >= 3 and (hit >= 55 or avg >= 0.65):
+                    _ad_add(player, ctx, "1+ Shot on Target", "sot", 1, 1.55, max(hit, 58), avg, games, source)
+                if games >= 3 and (hit >= 42 or avg >= 1.15):
+                    _ad_add(player, ctx, "2+ Shots on Target", "sot", 2, 2.20, max(hit, 44), avg, games, source)
+            elif metric == "shots":
+                if games >= 3 and (hit >= 58 or avg >= 1.50):
+                    _ad_add(player, ctx, "2+ Shots", "shots", 2, 1.55, max(hit, 60), avg, games, source)
+                if games >= 3 and (hit >= 48 or avg >= 2.30):
+                    _ad_add(player, ctx, "3+ Shots", "shots", 3, 2.05, max(hit, 50), avg, games, source)
+                if games >= 3 and (hit >= 38 or avg >= 3.20):
+                    _ad_add(player, ctx, "4+ Shots", "shots", 4, 3.00, max(hit, 40), avg, games, source)
+            elif metric == "fouls":
+                if games >= 3 and (hit >= 58 or avg >= 1.30):
+                    _ad_add(player, ctx, "2+ Fouls Committed", "fouls", 2, 1.75, max(hit, 58), avg, games, source)
+                if games >= 3 and (hit >= 42 or avg >= 2.10):
+                    _ad_add(player, ctx, "3+ Fouls Committed", "fouls", 3, 2.60, max(hit, 44), avg, games, source)
+            elif metric == "fouls_won":
+                if games >= 3 and (hit >= 58 or avg >= 0.80):
+                    _ad_add(player, ctx, "1+ Fouls Won", "fouls_won", 1, 1.45, max(hit, 60), avg, games, source)
+                if games >= 3 and (hit >= 48 or avg >= 1.55):
+                    _ad_add(player, ctx, "2+ Fouls Won", "fouls_won", 2, 1.95, max(hit, 50), avg, games, source)
+            elif metric == "tackles":
+                if games >= 3 and (hit >= 58 or avg >= 1.25):
+                    _ad_add(player, ctx, "2+ Tackles", "tackles", 2, 1.60, max(hit, 58), avg, games, source)
+                if games >= 3 and (hit >= 42 or avg >= 2.15):
+                    _ad_add(player, ctx, "3+ Tackles", "tackles", 3, 2.30, max(hit, 44), avg, games, source)
+            elif metric == "yellow_cards":
+                if games >= 5 and (hit >= 25 or avg >= 0.18):
+                    _ad_add(player, ctx, "Player To Be Booked", "yellow_cards", 1, 3.60, max(hit, 28), avg, games, source)
+
+        def _ad_metric_from_label(label):
+            l = _ad_norm(label)
+            if any(x in l for x in ["shot on target", "shots on target", "sot", "on target"]):
+                return "sot"
+            if any(x in l for x in ["total shots", "shots total", "shots", "shot attempts"]):
+                return "shots"
+            if any(x in l for x in ["fouls committed", "fouls commit", "commit foul", "foul committed", "fc"]):
+                return "fouls"
+            if any(x in l for x in ["fouls won", "fouls drawn", "to be fouled", "fouled", "draw foul"]):
+                return "fouls_won"
+            if "tackle" in l:
+                return "tackles"
+            if any(x in l for x in ["yellow card", "cards", "booked", "booking", "yc"]):
+                return "yellow_cards"
+            return ""
+
+        _adaptive_player_ctx = {}
+        for _p in _prop_db:
+            _pl = (_p.get("player") or "").strip()
+            if not _pl or len(_pl) < 5 or len(_pl.split()) < 2:
+                continue
+            _n = _ad_norm(_pl)
+            _adaptive_player_ctx.setdefault(_n, {
+                "team": _p.get("team", ""),
+                "match": _p.get("match", ""),
+                "league": _p.get("league", ""),
+                "ko": _p.get("ko", ""),
+            })
+        _adaptive_target_names = set(_adaptive_player_ctx.keys())
+        _adaptive_seen = set()
+
+        # A) Schema-flexible player_avg_stats / player_stats lesen.
+        _headers = {"apikey": SUPABASE_KEY, "Authorization": f"Bearer {SUPABASE_KEY}"} if SUPABASE_URL and SUPABASE_KEY else {}
+        _avg_tables = ["player_avg_stats", "player_stats"]
+        for _tbl in _avg_tables:
+            if not _headers:
+                continue
+            try:
+                _r = requests.get(f"{SUPABASE_URL}/rest/v1/{_tbl}",
+                                  headers=_headers,
+                                  params={"select": "*", "limit": "5000"},
+                                  timeout=25)
+                if not _r.ok:
+                    continue
+                _rows = _r.json() or []
+                if _rows:
+                    _adaptive_tables_ok.append(f"{_tbl}:{len(_rows)}")
+                for _row in _rows:
+                    _adaptive_rows_seen += 1
+                    _player = _ad_player(_row)
+                    if not _player:
+                        continue
+                    _pn = _ad_norm(_player)
+                    if _adaptive_target_names and _pn not in _adaptive_target_names:
+                        continue
+                    _ctx = _ad_ctx_for_player(_player)
+                    _label = _ad_stat_label(_row)
+                    _metric = _ad_metric_from_label(_label)
+
+                    # Long format: stat_type + avg/hit_rate/games.
+                    if _metric:
+                        _avg = _ad_num(_row, ["avg", "avg_value", "per_game", "value", "mean", "stat_avg", "avg_per_game"])
+                        _hit = _ad_num(_row, ["hit_rate", "hit_rate_pct", "rate", "success_rate", "over_rate"])
+                        _games = _ad_num(_row, ["games", "matches", "sample", "samples", "n", "count"])
+                        _ad_emit_from_metric(_player, _ctx, _metric, _avg, _hit, _games, f"SupabaseStatsAdaptive:{_tbl}")
+                        continue
+
+                    # Wide format: viele avg-Spalten in einer Zeile.
+                    _games = _ad_num(_row, ["games", "matches", "sample", "samples", "n", "count"], 8)
+                    _wide_specs = [
+                        ("sot",
+                         ["sot_avg", "avg_sot", "shots_on_target_avg", "avg_shots_on_target", "shot_on_target_avg", "sot_per_game", "shots_on_target_per_game"],
+                         ["sot_hit_rate", "shots_on_target_hit_rate", "hit_rate_sot", "sot_hit_rate_pct"]),
+                        ("shots",
+                         ["shots_avg", "avg_shots", "total_shots_avg", "avg_total_shots", "shots_per_game", "shot_avg"],
+                         ["shots_hit_rate", "total_shots_hit_rate", "hit_rate_shots", "shots_hit_rate_pct"]),
+                        ("fouls",
+                         ["fouls_committed_avg", "avg_fouls_committed", "fouls_avg", "fc_avg", "fouls_committed_per_game"],
+                         ["fouls_committed_hit_rate", "fc_hit_rate", "hit_rate_fouls_committed", "fouls_hit_rate"]),
+                        ("fouls_won",
+                         ["fouls_won_avg", "avg_fouls_won", "fouls_drawn_avg", "fd_avg", "fouled_avg"],
+                         ["fouls_won_hit_rate", "fouls_drawn_hit_rate", "fd_hit_rate", "hit_rate_fouls_won"]),
+                        ("tackles",
+                         ["tackles_avg", "avg_tackles", "tackles_won_avg", "tackles_per_game"],
+                         ["tackles_hit_rate", "hit_rate_tackles", "tackles_hit_rate_pct"]),
+                        ("yellow_cards",
+                         ["cards_avg", "yellow_cards_avg", "avg_yellow_cards", "yc_avg", "bookings_avg"],
+                         ["cards_hit_rate", "yellow_cards_hit_rate", "yc_hit_rate", "booking_hit_rate"]),
+                    ]
+                    for _m, _avg_names, _hit_names in _wide_specs:
+                        _avg = _ad_num(_row, _avg_names, 0)
+                        _hit = _ad_num(_row, _hit_names, 0)
+                        if _avg > 0 or _hit > 0:
+                            _ad_emit_from_metric(_player, _ctx, _m, _avg, _hit, _games, f"SupabaseStatsAdaptive:{_tbl}")
+            except Exception as _e:
+                log(f"   📊 AdaptiveStats {_tbl}: {str(_e)[:80]}", "WARN")
+
+        # B) Wenn AVG keine Ladders liefert: player_match_stats direkt aggregieren.
+        _before_match_add = _adaptive_added
+        if _headers and _adaptive_added == 0:
+            try:
+                _r = requests.get(f"{SUPABASE_URL}/rest/v1/player_match_stats",
+                                  headers=_headers,
+                                  params={"select": "*", "limit": "5000", "order": "date.desc"},
+                                  timeout=30)
+                if _r.ok:
+                    _rows = _r.json() or []
+                    if _rows:
+                        _adaptive_tables_ok.append(f"player_match_stats:{len(_rows)}")
+                    _agg = _ADefaultDict(lambda: {
+                        "games": 0,
+                        "sot": 0.0, "shots": 0.0, "fouls": 0.0,
+                        "fouls_won": 0.0, "tackles": 0.0, "yellow_cards": 0.0,
+                        "hit_sot1": 0, "hit_sot2": 0,
+                        "hit_shots2": 0, "hit_shots3": 0,
+                        "hit_fouls2": 0, "hit_fouls3": 0,
+                        "hit_fw1": 0, "hit_fw2": 0,
+                        "hit_tk2": 0, "hit_tk3": 0,
+                        "hit_yc1": 0,
+                    })
+                    _player_original = {}
+                    for _row in _rows:
+                        _player = _ad_player(_row)
+                        if not _player:
+                            continue
+                        _pn = _ad_norm(_player)
+                        if _adaptive_target_names and _pn not in _adaptive_target_names:
+                            continue
+                        _player_original[_pn] = _player
+                        _a = _agg[_pn]
+                        _a["games"] += 1
+
+                        _sot = _ad_num(_row, ["sot", "shots_on_target", "shot_on_target", "on_target"])
+                        _shots = _ad_num(_row, ["shots", "total_shots", "shot_total", "shot_attempts"])
+                        _fc = _ad_num(_row, ["fouls_committed", "fouls", "fc"])
+                        _fw = _ad_num(_row, ["fouls_won", "fouls_drawn", "fd", "fouled"])
+                        _tk = _ad_num(_row, ["tackles", "tackles_won"])
+                        _yc = _ad_num(_row, ["yellow_cards", "cards", "yc", "bookings"])
+
+                        _a["sot"] += _sot; _a["shots"] += _shots; _a["fouls"] += _fc
+                        _a["fouls_won"] += _fw; _a["tackles"] += _tk; _a["yellow_cards"] += _yc
+                        if _sot >= 1: _a["hit_sot1"] += 1
+                        if _sot >= 2: _a["hit_sot2"] += 1
+                        if _shots >= 2: _a["hit_shots2"] += 1
+                        if _shots >= 3: _a["hit_shots3"] += 1
+                        if _fc >= 2: _a["hit_fouls2"] += 1
+                        if _fc >= 3: _a["hit_fouls3"] += 1
+                        if _fw >= 1: _a["hit_fw1"] += 1
+                        if _fw >= 2: _a["hit_fw2"] += 1
+                        if _tk >= 2: _a["hit_tk2"] += 1
+                        if _tk >= 3: _a["hit_tk3"] += 1
+                        if _yc >= 1: _a["hit_yc1"] += 1
+
+                    for _pn, _a in _agg.items():
+                        _g = int(_a["games"] or 0)
+                        if _g < 3:
+                            continue
+                        _player = _player_original.get(_pn, _pn)
+                        _ctx = _adaptive_player_ctx.get(_pn, {"team": "", "match": "Unknown Match", "league": "", "ko": ""})
+                        _ad_emit_from_metric(_player, _ctx, "sot", _a["sot"]/_g, 100*_a["hit_sot1"]/_g, _g, "SupabaseMatchStats")
+                        _ad_emit_from_metric(_player, _ctx, "shots", _a["shots"]/_g, 100*_a["hit_shots2"]/_g, _g, "SupabaseMatchStats")
+                        _ad_emit_from_metric(_player, _ctx, "fouls", _a["fouls"]/_g, 100*_a["hit_fouls2"]/_g, _g, "SupabaseMatchStats")
+                        _ad_emit_from_metric(_player, _ctx, "fouls_won", _a["fouls_won"]/_g, 100*_a["hit_fw1"]/_g, _g, "SupabaseMatchStats")
+                        _ad_emit_from_metric(_player, _ctx, "tackles", _a["tackles"]/_g, 100*_a["hit_tk2"]/_g, _g, "SupabaseMatchStats")
+                        _ad_emit_from_metric(_player, _ctx, "yellow_cards", _a["yellow_cards"]/_g, 100*_a["hit_yc1"]/_g, _g, "SupabaseMatchStats")
+            except Exception as _e:
+                log(f"   📊 Adaptive player_match_stats: {str(_e)[:80]}", "WARN")
+
+        log(f"   📊 AdaptiveStats Tabellen: {_adaptive_tables_ok if _adaptive_tables_ok else 'keine'}")
+        log(f"   📊 AdaptiveStats Rows geprüft: {_adaptive_rows_seen}")
+        log(f"   📊 AdaptiveStats Builder-Props ergänzt: {_adaptive_added} (MatchStats +{_adaptive_added - _before_match_add if _before_match_add <= _adaptive_added else 0})")
+    except Exception as _e:
+        log(f"   📊 AdaptiveStats Fallback Fehler: {str(_e)[:120]}", "WARN")
+
+
     # ── FINAL ALL-SOURCE FUSION + FALLBACKS ─────────────────────────
     # Ziel: ALLE Quellen berücksichtigen, nicht nur Live-Pinnacle.
     # Quellen: Pinnacle, ScoutingStats, Statz.ai, Oddspedia, FootyMetrics,
@@ -18802,6 +19422,8 @@ def run_pinnacle_props_bot(win_start_utc=None, win_end_utc=None, ch_tz=None, top
 
         def _source_weight(_src):
             _s = str(_src or "")
+            if _s.startswith("SupabaseStatsAdaptive"): return 126
+            if _s.startswith("SupabaseMatchStats"): return 124
             if _s.startswith("SupabaseStats"): return 120
             if _s.startswith("Statz.ai"): return 115
             if _s.startswith("ScoutingStats"): return 110
@@ -19077,6 +19699,8 @@ def run_pinnacle_props_bot(win_start_utc=None, win_end_utc=None, ch_tz=None, top
         def _builder_source_bonus_final(_src):
             _s = str(_src or "").split(":")[0]
             return {
+                "SupabaseStatsAdaptive": 0.34,
+                "SupabaseMatchStats": 0.32,
                 "SupabaseStats": 0.30,
                 "Statz.ai": 0.25,
                 "ScoutingStats": 0.22,
@@ -19184,7 +19808,7 @@ def run_pinnacle_props_bot(win_start_utc=None, win_end_utc=None, ch_tz=None, top
         _yc_props = _by_cat_all.get("yellow_cards", [])
         # Priorisiere Quellen mit model_prob
         def _yc_score(p):
-            src_bonus = {"SupabaseStats": 0.30, "Statz.ai": 0.25, "ScoutingStats": 0.20, "Pinnacle": 0.15, "Oddspedia": 0.12, "FootyMetrics": 0.10}.get(str(p["source"]).split(":")[0], 0)
+            src_bonus = {"SupabaseStatsAdaptive": 0.34, "SupabaseMatchStats": 0.32, "SupabaseStats": 0.30, "Statz.ai": 0.25, "ScoutingStats": 0.20, "Pinnacle": 0.15, "Oddspedia": 0.12, "FootyMetrics": 0.10}.get(str(p["source"]).split(":")[0], 0)
             return (p["model_prob"] or p["prob"]/100) + src_bonus
         _yc_sorted = sorted(_yc_props, key=_yc_score, reverse=True)
         # Dedup: beste Quote pro Spieler
