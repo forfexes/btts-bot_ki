@@ -1,76 +1,101 @@
-name: NETRATTLER AI Tipp Bot V20
+name: NETRATTLER AI Tipp Bot
 
 on:
-  workflow_dispatch:
   schedule:
-    - cron: "0 7 * * *"
-    - cron: "0 11 * * *"
-    - cron: "0 17 * * *"
-    - cron: "0 21 * * *"
-
-concurrency:
-  group: netrattler-main-bot
-  cancel-in-progress: false
+    - cron: "0 7 * * *"   # 09:00 CH
+    - cron: "0 11 * * *"  # 13:00 CH
+    - cron: "0 17 * * *"  # 19:00 CH
+    - cron: "0 21 * * *"  # 23:00 CH
+  workflow_dispatch:
+    inputs:
+      mode:
+        description: "Run Mode"
+        required: false
+        default: "tips"
+        type: choice
+        options:
+          - tips
+          - settlement
+          - both
 
 jobs:
   run-bot:
     runs-on: ubuntu-latest
-    timeout-minutes: 45
+    timeout-minutes: 20
 
     steps:
-      - name: Checkout
+      - name: Checkout Repository
         uses: actions/checkout@v4
 
-      - name: Setup Python
+      - name: Setup Python 3.11
         uses: actions/setup-python@v5
         with:
           python-version: "3.11"
           cache: "pip"
 
-      - name: Install dependencies
+      - name: Install Dependencies
         run: |
-          python -m pip install --upgrade pip
-          pip install -r requirements.txt
+          pip install --upgrade pip
+          pip install \
+            requests \
+            python-dotenv \
+            playwright \
+            beautifulsoup4 \
+            lxml \
+            google-generativeai \
+            groq \
+            openai \
+            anthropic \
+            supabase \
+            xgboost \
+            cloudscraper \
+            numpy \
+            pandas \
+            scikit-learn
+          playwright install chromium --with-deps
 
-      - name: Compile NETRATTLER
-        run: |
-          python -m py_compile btts_bot.py netrattler_builder_engine.py
-
-      - name: Run NETRATTLER
+      - name: Run Tips Bot 🤖
         env:
-          GEMINI_API_KEYS: ${{ secrets.GEMINI_API_KEYS }}
-          GROQ_API_KEYS: ${{ secrets.GROQ_API_KEYS }}
-          OPENROUTER_API_KEYS: ${{ secrets.OPENROUTER_API_KEYS }}
-          ODDS_API_KEYS: ${{ secrets.ODDS_API_KEYS }}
-          FOOTBALL_DATA_API_KEYS: ${{ secrets.FOOTBALL_DATA_API_KEYS }}
-          API_FOOTBALL_KEYS: ${{ secrets.API_FOOTBALL_KEYS }}
-          TELEGRAM_TOKEN: ${{ secrets.TELEGRAM_TOKEN }}
-          TELEGRAM_CHAT_ID: ${{ secrets.TELEGRAM_CHAT_ID }}
-          TELEGRAM_GROUP_BTTS: ${{ secrets.TELEGRAM_GROUP_BTTS }}
-          TELEGRAM_GROUP_OVER25: ${{ secrets.TELEGRAM_GROUP_OVER25 }}
-          TELEGRAM_GROUP_COMBO: ${{ secrets.TELEGRAM_GROUP_COMBO }}
-          TELEGRAM_GROUP_COMBOS: ${{ secrets.TELEGRAM_GROUP_COMBOS }}
-          TELEGRAM_GROUP_BTTS_HT: ${{ secrets.TELEGRAM_GROUP_BTTS_HT }}
-          TELEGRAM_GROUP_OVER15_HT: ${{ secrets.TELEGRAM_GROUP_OVER15_HT }}
-          TELEGRAM_GROUP_STATS: ${{ secrets.TELEGRAM_GROUP_STATS }}
-          TELEGRAM_GROUP_BUILDER: ${{ secrets.TELEGRAM_GROUP_BUILDER }}
-          TELEGRAM_GROUP_PROPS: ${{ secrets.TELEGRAM_GROUP_PROPS }}
-          TELEGRAM_GROUP_CORNERS: ${{ secrets.TELEGRAM_GROUP_CORNERS }}
-          SUPABASE_URL: ${{ secrets.SUPABASE_URL }}
-          SUPABASE_KEY: ${{ secrets.SUPABASE_KEY }}
-          SUPABASE_SERVICE_ROLE_KEY: ${{ secrets.SUPABASE_SERVICE_ROLE_KEY }}
-          RUN_MODE: "tips"
-          ENABLE_SETTLEMENT: "false"
-          ENABLE_ADVANCED_PROPS: "true"
-          ENABLE_TIP_PERFORMANCE_FOOTER: "true"
-          SEND_EMPTY_PERFORMANCE_CARDS: "false"
-          SHOW_ML_LEARNING_FOOTER: "false"
-          ENABLE_LEGACY_BUILDERS: "false"
-          NETRATTLER_MAX_BUILDERS_PER_RUN: "14"
-          NETRATTLER_BUILDER_MIN_ODDS: "1.75"
-          NETRATTLER_BUILDER_MAX_ODDS: "80"
-          MAX_LEAGUES_PER_RUN: "0"
-          PARALLEL_WORKERS: "10"
-          AI_SLEEP_SECONDS: "0.1"
-          GROQ_SLEEP_SECONDS: "0.5"
+          # ── KI APIs ──
+          GEMINI_API_KEYS:            ${{ secrets.GEMINI_API_KEYS }}
+          GROQ_API_KEYS:              ${{ secrets.GROQ_API_KEYS }}
+          OPENROUTER_API_KEYS:        ${{ secrets.OPENROUTER_API_KEYS }}
+          MISTRAL_API_KEYS:           ${{ secrets.MISTRAL_API_KEYS }}
+          COHERE_API_KEY:             ${{ secrets.COHERE_API_KEY }}
+          HUGGINGFACE_API_KEY:        ${{ secrets.HUGGINGFACE_API_KEY }}
+          TAVILY_API_KEY:             ${{ secrets.TAVILY_API_KEY }}
+          # ── Daten APIs ──
+          ODDS_API_KEYS:              ${{ secrets.ODDS_API_KEYS }}
+          FOOTBALL_DATA_API_KEYS:     ${{ secrets.FOOTBALL_DATA_API_KEYS }}
+          API_FOOTBALL_KEYS:          ${{ secrets.API_FOOTBALL_KEYS }}
+          SPORTMONKS_API_KEY:         ${{ secrets.SPORTMONKS_API_KEY }}
+          SPORTDB_API_KEY:            ${{ secrets.SPORTDB_API_KEY }}
+          ALLSPORTS_API_KEY:          ${{ secrets.ALLSPORTS_API_KEY }}
+          FOOTYSTATS_API_KEY:         ${{ secrets.FOOTYSTATS_API_KEY }}
+          OPENWEATHER_API_KEY:        ${{ secrets.OPENWEATHER_API_KEY }}
+          THESTATSAPI_KEY:            ${{ secrets.THESTATSAPI_KEY }}
+          THESTATSAPI_KEYS:           ${{ secrets.THESTATSAPI_KEYS }}
+          API_NINJAS_KEY:             ${{ secrets.API_NINJAS_KEY }}
+          # ── Telegram ──
+          TELEGRAM_TOKEN:             ${{ secrets.TELEGRAM_TOKEN }}
+          TELEGRAM_CHAT_ID:           ${{ secrets.TELEGRAM_CHAT_ID }}
+          TELEGRAM_GROUP_BTTS:        ${{ secrets.TELEGRAM_GROUP_BTTS }}
+          TELEGRAM_GROUP_OVER25:      ${{ secrets.TELEGRAM_GROUP_OVER25 }}
+          TELEGRAM_GROUP_COMBO:       ${{ secrets.TELEGRAM_GROUP_COMBO }}
+          TELEGRAM_GROUP_COMBOS:      ${{ secrets.TELEGRAM_GROUP_COMBOS }}
+          TELEGRAM_GROUP_BTTS_HT:     ${{ secrets.TELEGRAM_GROUP_BTTS_HT }}
+          TELEGRAM_GROUP_HZ_LIVE:     ${{ secrets.TELEGRAM_GROUP_HZ_LIVE }}
+          TELEGRAM_GROUP_LATE_GOALS:  ${{ secrets.TELEGRAM_GROUP_LATE_GOALS }}
+          TELEGRAM_GROUP_STATS:       ${{ secrets.TELEGRAM_GROUP_STATS }}
+          # ── Supabase ──
+          SUPABASE_URL:               ${{ secrets.SUPABASE_URL }}
+          SUPABASE_KEY:               ${{ secrets.SUPABASE_KEY }}
+          # ── Bot Einstellungen ──
+          RUN_MODE:                   ${{ github.event.inputs.mode || 'tips' }}
+          ENABLE_SETTLEMENT:          "false"
+          ENABLE_ADVANCED_PROPS:      "true"
+          MAX_LEAGUES_PER_RUN:        "0"
+          PARALLEL_WORKERS:           "10"
+          AI_SLEEP_SECONDS:           "0.1"
+          GROQ_SLEEP_SECONDS:         "0.5"
         run: python btts_bot.py
