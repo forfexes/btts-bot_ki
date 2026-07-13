@@ -12715,7 +12715,7 @@ def _ntr_get_group_perf(group):
             timeout=8,
         )
         rows = r.json() if r.ok and r.text else []
-        out = {"today": None, "month": None, "year": None}
+        out = {"today": None, "week": None, "month": None, "year": None, "alltime": None}
         if isinstance(rows, list):
             for row in rows:
                 period = str(row.get("period", "")).lower()
@@ -12726,21 +12726,25 @@ def _ntr_get_group_perf(group):
             r2 = requests.get(
                 f"{SUPABASE_URL}/rest/v1/netrattler_settlements",
                 headers=hdr,
-                params={"market_group": f"eq.{group}", "status": "in.(win,loss,won,lost)", "select": "status,profit,tip_date,odds", "limit": "3000", "order": "tip_date.desc"},
+                params={"market_group": f"eq.{group}", "status": "in.(win,loss,won,lost)", "select": "status,profit,stake,tip_date,odds", "limit": "3000", "order": "tip_date.desc"},
                 timeout=10,
             )
             ss = r2.json() if r2.ok and r2.text else []
             if isinstance(ss, list) and ss:
                 today_s = now.date().isoformat()
+                week_s = (now.date() - timedelta(days=6)).isoformat()
                 month_s = now.strftime("%Y-%m")
                 year_s = now.strftime("%Y")
                 def agg(period, rows2):
                     bets=len(rows2); wins=sum(str(x.get("status")).lower() in ("win","won") for x in rows2); losses=bets-wins
                     prof=sum(_ntr_float(x.get("profit"), 0) for x in rows2)
-                    return {"period": period, "bets": bets, "wins": wins, "losses": losses, "profit": round(prof,2), "roi": round(100*prof/max(1,bets),2)} if bets else None
+                    stake=sum(max(0.0, _ntr_float(x.get("stake"), 1.0)) for x in rows2)
+                    return {"period": period, "bets": bets, "wins": wins, "losses": losses, "profit": round(prof,2), "stake": round(stake,2), "roi": round(100*prof/max(0.01,stake),2)} if bets else None
                 out["today"] = agg("today", [x for x in ss if str(x.get("tip_date", ""))[:10] == today_s])
+                out["week"] = agg("week", [x for x in ss if str(x.get("tip_date", ""))[:10] >= week_s])
                 out["month"] = agg("month", [x for x in ss if str(x.get("tip_date", ""))[:7] == month_s])
                 out["year"] = agg("year", [x for x in ss if str(x.get("tip_date", ""))[:4] == year_s])
+                out["alltime"] = agg("alltime", ss)
         _NTR_PERF_CACHE[cache_key] = out
         return out
     except Exception:
@@ -12755,34 +12759,42 @@ def _ntr_perf_line(row, label):
     return f"{label}: {wins}-{losses} / {bets} · ROI {roi:.1f}% · {prof:+.2f}U {em}"
 
 def _ntr_enhance_message_with_stats(text, chat_id):
-    """Append group ROI block directly under fresh tip messages."""
+    """Append one compact performance block only to real fresh tip messages."""
     if str(env("ENABLE_TIP_PERFORMANCE_FOOTER", "true")).lower() not in ("1", "true", "yes", "on"):
         return text
     if not text or len(text) > 3300:
         return text
-    upper = str(text).upper()
-    skip_words = ["AUSWERTUNG", "GESAMT-STATISTIK", "AI TIPP BOT - DAILY", "NETRATTLER HEUTE", "BACKTEST", "SELF TEST", "ÜBERSICHT HEUTE"]
+    raw = str(text)
+    upper = raw.upper()
+    # Never decorate reports, technical cards or a message already carrying performance.
+    skip_words = [
+        "AUSWERTUNG", "GESAMT-STATISTIK", "AI TIPP BOT - DAILY", "NETRATTLER HEUTE",
+        "BACKTEST", "SELF TEST", "ÜBERSICHT HEUTE", "PERFORMANCE DIESER GRUPPE",
+        "WINRATE:", "AUSGEWERTETE TIPPS", "DATEN WERDEN GESAMMELT", "ROI REPORT",
+    ]
     if any(w in upper for w in skip_words):
         return text
-    # Nur Tipp-Nachrichten anfassen, nicht technische Reports.
-    tip_words = ["TIPP", "TIP", "BTTS", "OVER", "CORNER", "PROP", "BUILDER", "SCORER", "COMBO", "QUOTE"]
-    if not any(w in upper for w in tip_words):
+    # A primary tip needs a price and a concrete selection/leg. This prevents the
+    # duplicate footer on the separate market-stat cards shown in Telegram.
+    has_price = any(w in upper for w in ["QUOTE:", "GESAMT-QUOTE:", " @ ", "BET BUILDER"])
+    has_pick = any(w in upper for w in ["TIPP:", "LEGS:", "PROP BUILDER", "BET BUILDER", "CORNER SNIPER"])
+    if not (has_price and has_pick):
         return text
     group = _ntr_group_from_chat(chat_id)
     perf = _ntr_get_group_perf(group)
     if not perf:
         return text
     lines = []
-    for label, key in [("Heute", "today"), ("Monat", "month"), ("Jahr", "year")]:
+    for label, key in [("Heute", "today"), ("7 Tage", "week"), ("Monat", "month"), ("Jahr", "year")]:
         line = _ntr_perf_line(perf.get(key), label)
         if line:
             lines.append(line)
     if not lines:
         return text
     footer = "\n━━━━━━━━━━━━━━━━━━\n📊 <b>Performance dieser Gruppe</b>\n" + "\n".join(lines)
-    if len(text) + len(footer) > 3900:
+    if len(raw) + len(footer) > 3900:
         return text
-    return text + footer
+    return raw + footer
 
 def _ntr_market_stats_from_settlements(market_id):
     """Modern stats shape compatible with _get_market_stats_from_supabase()."""
@@ -12942,7 +12954,9 @@ def _ntr_ml_enhance_message(text, chat_id=None):
         return text
     p = _ntr_ml_predict_from_text(raw, chat_id)
     if p.get("rec") == "NO_MODEL":
-        footer = "\n🤖 ML: Daten werden gesammelt"
+        if str(env("SHOW_ML_LEARNING_FOOTER", "false")).lower() not in ("1", "true", "yes", "on"):
+            return text
+        footer = "\n🧠 ML-Lernphase: Daten werden gesammelt"
     else:
         icon = {"STRONG":"🔥", "OK":"✅", "LEAN":"⚠️", "SKIP":"🚫"}.get(p.get("rec"), "🤖")
         footer = f"\n🤖 ML_SCORE: <b>{p.get('score')}</b> · Edge {p.get('edge')}% · {icon} {p.get('rec')}"
@@ -13686,6 +13700,8 @@ def _send_daily_auswertung_to_all_groups(stats=None):
                     medal = medals[i] if i < len(medals) else "•"
                     msg += f"{medal} {lg}: {w}/{tot} ({pct_lg}%) · {roi_s_lg}U{nl}"
         else:
+            if str(env("SEND_EMPTY_PERFORMANCE_CARDS", "false")).lower() not in ("1", "true", "yes", "on"):
+                continue
             msg += f"📊 Daten werden gesammelt...{nl}"
             msg += f"<i>Mindestens 3 ausgewertete Tipps nötig.</i>{nl}"
 
@@ -19727,6 +19743,48 @@ def run_pinnacle_props_bot(win_start_utc=None, win_end_utc=None, ch_tz=None, top
         log(f"   📊 Kategorien gefiltert: {dict(_fc.most_common(8))}")
         log(f"   📊 Quellen gefiltert: {dict(_fs)}")
 
+        # NETRATTLER MASTER BUILDER ENGINE
+        # Creates the requested multi-player 1+/2+/3+ shot ladders, underdog ladders,
+        # SOT/foul/tackle trios, mixed builders and player+corner fusion builders.
+        _master_builder_sent = 0
+        try:
+            from netrattler_builder_engine import run_builder_engine
+            _master_contexts = []
+            for _ctx in (top_btts_tips or []):
+                if isinstance(_ctx, dict):
+                    _master_contexts.append(_ctx)
+            if isinstance(fixtures_cache, dict):
+                for _ctx in fixtures_cache.values():
+                    if isinstance(_ctx, dict):
+                        _master_contexts.append(_ctx)
+                    elif isinstance(_ctx, list):
+                        _master_contexts.extend(x for x in _ctx if isinstance(x, dict))
+
+            def _master_send(_message):
+                return send_telegram(_message, chat_id=_pp_chat)
+
+            def _master_log(_message):
+                log(f"   🧠 {_message}")
+
+            _master_builder_sent, _master_picks = run_builder_engine(
+                _prop_db_filtered,
+                send_message=_master_send,
+                match_contexts=_master_contexts,
+                match_date=str(_pp_today),
+                supabase_url=SUPABASE_URL,
+                supabase_key=SUPABASE_KEY,
+                logger=_master_log,
+            )
+            _pp_total += _master_builder_sent
+            log(f"   🏗 MASTER Builder gesendet: {_master_builder_sent}")
+        except Exception as _master_e:
+            log(f"   MASTER Builder Engine: {str(_master_e)[:120]}", "WARN")
+
+        # Legacy builders are disabled by default to prevent duplicate/contradictory
+        # Nate/Aystar/GOD variants. They can be re-enabled temporarily through ENV.
+        if _master_builder_sent > 0 and str(env("ENABLE_LEGACY_BUILDERS", "false")).lower() not in ("1", "true", "yes", "on"):
+            _prop_db_filtered = []
+
         _by_match = _ddb(lambda: _ddb(lambda: _ddb(list)))
         _by_cat_all = _ddb(list)
         for _p in _prop_db_filtered:
@@ -20179,7 +20237,7 @@ def run_pinnacle_props_bot(win_start_utc=None, win_end_utc=None, ch_tz=None, top
     # ═══════════════════════════════════════
     # PROP BUILDER — beste Props kombinieren
     # ═══════════════════════════════════════
-    if _prop_candidates and _pp_chat:
+    if _prop_candidates and _pp_chat and locals().get("_master_builder_sent", 0) == 0:
         # Sortiere nach Confidence absteigend
         _prop_candidates.sort(key=lambda x: x["confidence"], reverse=True)
 
@@ -20239,7 +20297,7 @@ def run_pinnacle_props_bot(win_start_utc=None, win_end_utc=None, ch_tz=None, top
                 except Exception:
                     pass
 
-        if _prop_candidates and _pp_chat:
+        if _prop_candidates and _pp_chat and locals().get("_master_builder_sent", 0) == 0:
             _prop_candidates.sort(key=lambda x: x["confidence"], reverse=True)
             _used = set()
 
