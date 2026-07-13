@@ -2445,8 +2445,8 @@ def calculate_elo_btts_probability(home_elo, away_elo):
 # ============================================================
 ALLSPORTS_API_KEY = env("ALLSPORTS_API_KEY", "")
 FOOTBALLDATA_IO_API_KEY = env("FOOTBALLDATA_IO_API_KEY", "")
-THESTATSAPI_KEY = env("THESTATSAPI_KEY", "")  # 🆕 thestatsapi.com — Player Stats, Odds, xG, Lineups
-THESTATSAPI_KEYS = env_list("THESTATSAPI_KEYS")  # 🆕 Komma-getrennte Keys für Rotation
+THESTATSAPI_KEY = ""  # TheStatsAPI deaktiviert (kostenpflichtig) — andere Quellen ausreichend
+THESTATSAPI_KEYS = []  # TheStatsAPI deaktiviert
 if not THESTATSAPI_KEYS:
     THESTATSAPI_KEYS = [THESTATSAPI_KEY] if THESTATSAPI_KEY else []
 elif THESTATSAPI_KEYS and not THESTATSAPI_KEY:
@@ -9274,9 +9274,10 @@ FD_CO_UK_LEAGUE_CODES = {
 FD_CO_UK_CACHE = {}
 
 def _fd_co_uk_season_str():
-    """Aktuelle Saison im football-data.co.uk Format, z.B. '2526' für 2025/26."""
+    """Aktuelle Saison im football-data.co.uk Format, z.B. '2526' für 2025/26.
+    Saison startet im August — Juli noch zur alten Saison gehörig."""
     now = datetime.now(timezone.utc)
-    start_year = now.year if now.month >= 7 else now.year - 1
+    start_year = now.year if now.month >= 8 else now.year - 1
     return f"{str(start_year)[-2:]}{str(start_year + 1)[-2:]}"
 
 
@@ -9613,6 +9614,11 @@ def get_ml_prediction(home_team, away_team, league_name):
         fh["streak_win"], fa["streak_win"],
         # H2H
         h2h_btts, h2h_goals, h2h_norm,
+        # Schüsse/Ecken (0 = unbekannt für Nischenligen, kein Problem)
+        fh.get("avg_shots", 0.0), fa.get("avg_shots", 0.0),
+        fh.get("avg_shots", 0.0) + fa.get("avg_shots", 0.0),
+        fh.get("avg_corners", 0.0), fa.get("avg_corners", 0.0),
+        fh.get("avg_corners", 0.0) + fa.get("avg_corners", 0.0),
     ]
 
     import numpy as np
@@ -12081,7 +12087,13 @@ def fetch_odds_api_player_props(league_name: str, target_date) -> list:
 
                     # Beste Quote pro Spieler/Markt/Seite aus allen Buchmachern
                     best = {}
-                    for bm in r_p.json().get("bookmakers", []):
+                    _resp = r_p.json()
+                    # API gibt manchmal Liste zurück statt Dict
+                    if isinstance(_resp, list):
+                        _bookmakers = _resp
+                    else:
+                        _bookmakers = _resp.get("bookmakers", [])
+                    for bm in _bookmakers:
                         for market in bm.get("markets", []):
                             mkey = market.get("key", "")
                             for out in market.get("outcomes", []):
@@ -19569,7 +19581,6 @@ def check_config():
     log(f"   • AllSports API: {'✅ aktiv!' if ALLSPORTS_API_KEY else '❌ ALLSPORTS_API_KEY fehlt (optional)'}")
     log(f"   • Footballdata.io: {'✅ aktiv!' if FOOTBALLDATA_IO_API_KEY else '❌ FOOTBALLDATA_IO_API_KEY fehlt (optional, Settlement-Fallback)'}")
     log(f"   • OpenLigaDB: ✅ aktiv (kein Key, nur deutsche Ligen)")
-    log(f"   • TheStatsAPI: {'✅ ' + str(len(THESTATSAPI_KEYS)) + ' Keys aktiv! (Player Stats, xG, Lineups, Odds, Settlement)' if THESTATSAPI_KEYS else '❌ THESTATSAPI_KEYS fehlt (optional aber empfohlen)'}")
     log(f"   • Forebet: ✅ Scraping aktiv (kein Key)")
     log(f"   • ScoutingStats: ✅ Scraping aktiv (kein Key)")
     log(f"")
@@ -22551,6 +22562,7 @@ def main():
                 win_end_utc=_win_end_utc,
                 ch_tz=_ch_tz,
                 top_btts_tips=_top_btts_for_props,
+                fixtures_cache=_fixtures_cache,
             )
         except Exception as _ppe:
             log(f"🔑 Pinnacle Props übersprungen: {str(_ppe)[:60]}", "WARN")
