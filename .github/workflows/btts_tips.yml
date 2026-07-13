@@ -1,34 +1,41 @@
-name: NETRATTLER AI Tipp Bot
+name: NETRATTLER AI Tipp Bot V20
 
 on:
   workflow_dispatch:
-    inputs:
-      mode:
-        description: "Run Mode"
-        required: false
-        default: "tips"
-        type: choice
-        options: [tips, settlement, both]
   schedule:
     - cron: "0 7 * * *"
     - cron: "0 11 * * *"
     - cron: "0 17 * * *"
     - cron: "0 21 * * *"
 
+concurrency:
+  group: netrattler-main-bot
+  cancel-in-progress: false
+
 jobs:
   run-bot:
     runs-on: ubuntu-latest
-    timeout-minutes: 35
+    timeout-minutes: 45
+
     steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-python@v5
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Python
+        uses: actions/setup-python@v5
         with:
           python-version: "3.11"
           cache: "pip"
-      - name: Install Dependencies
+
+      - name: Install dependencies
         run: |
           python -m pip install --upgrade pip
-          pip install requests python-dotenv beautifulsoup4 lxml numpy pandas scikit-learn xgboost cloudscraper python-dateutil google-generativeai groq openai anthropic supabase
+          pip install -r requirements.txt
+
+      - name: Compile NETRATTLER
+        run: |
+          python -m py_compile btts_bot.py netrattler_builder_engine.py
+
       - name: Run NETRATTLER
         env:
           GEMINI_API_KEYS: ${{ secrets.GEMINI_API_KEYS }}
@@ -52,10 +59,16 @@ jobs:
           SUPABASE_URL: ${{ secrets.SUPABASE_URL }}
           SUPABASE_KEY: ${{ secrets.SUPABASE_KEY }}
           SUPABASE_SERVICE_ROLE_KEY: ${{ secrets.SUPABASE_SERVICE_ROLE_KEY }}
-          RUN_MODE: ${{ github.event.inputs.mode || 'tips' }}
+          RUN_MODE: "tips"
           ENABLE_SETTLEMENT: "false"
           ENABLE_ADVANCED_PROPS: "true"
           ENABLE_TIP_PERFORMANCE_FOOTER: "true"
+          SEND_EMPTY_PERFORMANCE_CARDS: "false"
+          SHOW_ML_LEARNING_FOOTER: "false"
+          ENABLE_LEGACY_BUILDERS: "false"
+          NETRATTLER_MAX_BUILDERS_PER_RUN: "14"
+          NETRATTLER_BUILDER_MIN_ODDS: "1.75"
+          NETRATTLER_BUILDER_MAX_ODDS: "80"
           MAX_LEAGUES_PER_RUN: "0"
           PARALLEL_WORKERS: "10"
           AI_SLEEP_SECONDS: "0.1"
