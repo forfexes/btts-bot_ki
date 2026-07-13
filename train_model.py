@@ -531,6 +531,14 @@ def compute_form_features(df, n=10):
         if col in df.columns:
             df[col] = pd.to_numeric(df[col], errors="coerce")
 
+    # 🆕 Shots/Ecken/Karten mit 0 füllen (openfootball/martj42 haben None → 0 = neutral/unbekannt)
+    # So werden alle 33.000+ Spiele genutzt statt nur die 148 mit FD.co.uk-Daten
+    for col in ["avg_shots_home", "avg_shots_away", "total_shots_exp",
+                "avg_corners_home", "avg_corners_away", "total_corners_exp",
+                "avg_cards_home", "avg_cards_away", "total_cards_exp"]:
+        if col in df.columns:
+            df[col] = df[col].fillna(0.0)
+
     return df
 
 
@@ -551,15 +559,16 @@ FEATURE_COLS = [
     # Halbzeit-Features
     "btts_ht_rate_home", "btts_ht_rate_away",
     "o15ht_rate_home", "o15ht_rate_away",
-    # Form-Punkte (W=3/D=1/L=0, aus bestehendem Feature-Engineering-Code)
+    # Form-Punkte (W=3/D=1/L=0)
     "form_pts_home", "form_pts_away", "form_pts_diff",
     "streak_win_home", "streak_win_away",
     # H2H-History
     "h2h_btts_rate", "h2h_avg_goals", "h2h_matches_norm",
-    # Schüsse/Ecken/Karten (aus football-data.co.uk)
+    # Schüsse/Ecken (nur football-data.co.uk — mit fillna 0 damit kein dropna-Problem)
     "avg_shots_home", "avg_shots_away", "total_shots_exp",
     "avg_corners_home", "avg_corners_away", "total_corners_exp",
-    "avg_cards_home", "avg_cards_away", "total_cards_exp",
+    # Karten BEWUSST NICHT in FEATURE_COLS — 99.2% NaN (nur FD.co.uk, openfootball/martj42 haben keine)
+    # Können später als Feature hinzukommen wenn Scraper player_match_stats befüllt ist
 ]
 
 
@@ -678,7 +687,7 @@ def save_model_to_supabase(model, meta):
         "apikey": SUPABASE_KEY,
         "Authorization": f"Bearer {SUPABASE_KEY}",
         "Content-Type": "application/json",
-        "Prefer": "resolution=merge-duplicates",
+        "Prefer": "resolution=merge-duplicates,return=minimal",
     }
     payload = {
         "model_name": meta["model_name"],
@@ -686,15 +695,17 @@ def save_model_to_supabase(model, meta):
         "meta": json.dumps(meta),
         "updated_at": datetime.now(timezone.utc).isoformat(),
     }
+    # 🆕 UPSERT via ?on_conflict=model_name (verhindert 409 bei wiederholtem Training)
     r = requests.post(
         f"{SUPABASE_URL}/rest/v1/ml_models",
         headers=headers,
+        params={"on_conflict": "model_name"},
         json=payload,
         timeout=30,
     )
     if r.ok:
         size_kb = len(model_b64) / 1024
-        print(f"   ✅ {meta['model_name']} in Supabase gespeichert ({size_kb:.0f} KB)")
+        print(f"   ✅ {meta['model_name']} in Supabase gespeichert/aktualisiert ({size_kb:.0f} KB)")
     else:
         print(f"   ❌ Supabase-Fehler {r.status_code}: {r.text[:200]}")
 
