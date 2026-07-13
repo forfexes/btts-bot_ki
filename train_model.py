@@ -143,6 +143,9 @@ def features(row:Dict[str,Any]) -> List[str]:
     weekday=str(anyv(p,['weekday','tip_weekday'],''))
     odds=anyv(row,['odds','quote','price','total_odds'], anyv(p,['odds','quote','price','oddsYes','total_odds'],''))
     mt=market_text(p)
+    builder_style=str(row.get('builder_style') or p.get('style') or p.get('builder_style') or '')
+    leg_count=anyv(row,['leg_count'], anyv(p,['leg_count','num_tips'],''))
+    estimated=str(anyv(p,['estimated_odds'],'')).lower()
     fs=[
         f'group:{norm(group)}',
         f'source:{norm(source)}',
@@ -150,6 +153,9 @@ def features(row:Dict[str,Any]) -> List[str]:
         f'league:{norm(league)}',
         f'market_text:{norm(mt)[:80]}',
     ]
+    if builder_style: fs.append(f'builder_style:{norm(builder_style)[:80]}')
+    if leg_count not in (None,''): fs.append(f'leg_count:{leg_count}')
+    if estimated in ('true','false'): fs.append(f'estimated_odds:{estimated}')
     if h: fs.append(f'home:{norm(h)[:80]}')
     if a: fs.append(f'away:{norm(a)[:80]}')
     if hour!='': fs.append(f'hour:{hour}')
@@ -187,7 +193,7 @@ def train(rows:List[Dict[str,Any]]) -> Dict[str,Any]:
 
     return {
         'model_name':MODEL_NAME,
-        'version':'v16_ml_statistical_bayes',
+        'version':'v20_builder_aware_bayes',
         'trained_at':NOW.isoformat(),
         'rows_total':len(rows),
         'rows_closed':total,
@@ -199,10 +205,19 @@ def train(rows:List[Dict[str,Any]]) -> Dict[str,Any]:
 
 def main():
     log('🤖 NETRATTLER V16 ML Trainer startet')
-    rows=sb_get('netrattler_settlements',{'select':'*','status':'in.(win,loss)','order':'tip_date.desc','limit':str(LIMIT)})
+    rows=sb_get('netrattler_settlements',{'select':'*','status':'in.(win,loss)','order':'settled_at.desc','limit':str(LIMIT)})
     log(f'Settlements geladen: {len(rows)}')
+    # Alte Settlement-Versionen konnten denselben Tipp mehrfach speichern.
+    # Für das Training zählt jeder tip_id nur einmal (neueste Row gewinnt).
+    dedup={}
+    for row in rows:
+        key=str(row.get('tip_id') or row.get('settlement_id') or '')
+        if key and key not in dedup:
+            dedup[key]=row
+    rows=list(dedup.values())
+    log(f'Settlements nach Tip-Dedup: {len(rows)}')
     model=train(rows)
-    ok=sb_upsert('netrattler_ml_models',[{'model_name':MODEL_NAME,'model_json':model,'rows_trained':model['rows_closed'],'trained_at':NOW.isoformat(),'note':'NETRATTLER V16 pure-python ML from settlements'}],'model_name')
+    ok=sb_upsert('netrattler_ml_models',[{'model_name':MODEL_NAME,'model_json':model,'rows_trained':model['rows_closed'],'trained_at':NOW.isoformat(),'note':'NETRATTLER V20 builder-aware pure-python ML from deduplicated settlements'}],'model_name')
     log(f'Model gespeichert: {ok}')
     log(f"Closed={model['rows_closed']} Winrate={model['prior']['winrate']} ROI={model['prior']['roi']} Features={len(model['feature_stats'])}")
     log('✅ NETRATTLER V16 ML Trainer fertig')
