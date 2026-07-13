@@ -84,16 +84,13 @@ TELEGRAM_GROUPS = {
     "btts": env("TELEGRAM_GROUP_BTTS", TELEGRAM_CHAT_ID),
     "over25": env("TELEGRAM_GROUP_OVER25", TELEGRAM_CHAT_ID),
     "combo": env("TELEGRAM_GROUP_COMBO", TELEGRAM_CHAT_ID),
-    "combos": env("TELEGRAM_GROUP_COMBOS", env("TELEGRAM_GROUP_COMBO", TELEGRAM_CHAT_ID)),
+    "combos": env("TELEGRAM_GROUP_COMBOS", TELEGRAM_CHAT_ID),
     "btts_ht": env("TELEGRAM_GROUP_BTTS_HT", TELEGRAM_CHAT_ID),
-    "over15_ht": env("TELEGRAM_GROUP_OVER15_HT", env("TELEGRAM_GROUP_BTTS_HT", TELEGRAM_CHAT_ID)),
+    "over15_ht": env("TELEGRAM_GROUP_BTTS_HT", TELEGRAM_CHAT_ID),
     "stats": env("TELEGRAM_GROUP_STATS", TELEGRAM_CHAT_ID),
-    "hz_live": env("TELEGRAM_GROUP_HZ_LIVE", env("TELEGRAM_GROUP_STATS", TELEGRAM_CHAT_ID)),
+    "hz_live": env("TELEGRAM_GROUP_HZ_LIVE", TELEGRAM_CHAT_ID),
     "late_goals": env("TELEGRAM_GROUP_LATE_GOALS", TELEGRAM_CHAT_ID),
-    "props": env("TELEGRAM_GROUP_PROPS", env("TELEGRAM_GROUP_STATS", TELEGRAM_CHAT_ID)),
-    "builder": env("TELEGRAM_GROUP_BUILDER", env("TELEGRAM_GROUP_PROPS", env("TELEGRAM_GROUP_STATS", TELEGRAM_CHAT_ID))),
-    "corners": env("TELEGRAM_GROUP_CORNERS", env("TELEGRAM_GROUP_STATS", TELEGRAM_CHAT_ID)),
-    "advanced_props": env("TELEGRAM_GROUP_PROPS", env("TELEGRAM_GROUP_STATS", TELEGRAM_CHAT_ID)),
+    "advanced_props": env("TELEGRAM_GROUP_STATS", TELEGRAM_CHAT_ID),
 }
 
 
@@ -2447,7 +2444,6 @@ def calculate_elo_btts_probability(home_elo, away_elo):
 # 🆕 ALLSPORTSAPI - 500+ Ligen weltweit (100 Calls/Tag gratis)
 # ============================================================
 ALLSPORTS_API_KEY = env("ALLSPORTS_API_KEY", "")
-ODDSAPIIO_KEY = env("ODDSAPIIO_KEY", "")
 FOOTBALLDATA_IO_API_KEY = env("FOOTBALLDATA_IO_API_KEY", "")
 THESTATSAPI_KEY = env("THESTATSAPI_KEY", "")  # 🆕 thestatsapi.com — Player Stats, Odds, xG, Lineups
 THESTATSAPI_KEYS = env_list("THESTATSAPI_KEYS")  # 🆕 Komma-getrennte Keys für Rotation
@@ -5963,6 +5959,2485 @@ _SB_MATCH_PROPS_CACHE = {}  # {(home, away): [prop_candidates]}
 
 _SUPABASE_PLAYER_STATS_CACHE = {}  # {player_name: {stat_name: avg_value}}
 
+
+# ============================================================
+# 🚀 NETRATTLER V20 — ML Live Hook + Performance Footer
+# ============================================================
+_NTR_PERF_CACHE = {}
+
+def _ntr_float(x, default=0.0):
+    try:
+        return float(str(x).replace(",", "."))
+    except Exception:
+        return default
+
+def _ntr_group_from_chat(chat_id):
+    cid = str(chat_id or "")
+    mapping = {
+        "btts": "btts", "over25": "over25", "combo": "combo", "combos": "combo",
+        "btts_ht": "btts_ht", "over15_ht": "over15_ht", "props": "props",
+        "builder": "builder", "advanced_props": "props", "corners": "corners",
+        "hz_live": "corners", "late_goals": "props",
+    }
+    for key, group in mapping.items():
+        val = TELEGRAM_GROUPS.get(key) if isinstance(TELEGRAM_GROUPS, dict) else None
+        if val and str(val) == cid:
+            return group
+    return "default"
+
+def _ntr_get_group_perf(group):
+    """Return today/month/year performance for a group from Supabase."""
+    if not SUPABASE_URL or not SUPABASE_KEY or group in ("", "default", None):
+        return None
+    now = datetime.now(timezone.utc)
+    cache_key = f"{group}_{now.strftime('%Y%m%d%H%M')}"
+    if cache_key in _NTR_PERF_CACHE:
+        return _NTR_PERF_CACHE[cache_key]
+    hdr = {"apikey": SUPABASE_KEY, "Authorization": f"Bearer {SUPABASE_KEY}"}
+    try:
+        # 1) direkt aus aggregierter Tabelle
+        r = requests.get(
+            f"{SUPABASE_URL}/rest/v1/netrattler_group_stats",
+            headers=hdr,
+            params={"market_group": f"eq.{group}", "select": "*", "order": "updated_at.desc", "limit": "50"},
+            timeout=8,
+        )
+        rows = r.json() if r.ok and r.text else []
+        out = {"today": None, "week": None, "month": None, "year": None, "alltime": None}
+        if isinstance(rows, list):
+            for row in rows:
+                period = str(row.get("period", "")).lower()
+                if period in out and out[period] is None:
+                    out[period] = row
+        # 2) Fallback aus settlements berechnen
+        if not any(out.values()):
+            r2 = requests.get(
+                f"{SUPABASE_URL}/rest/v1/netrattler_settlements",
+                headers=hdr,
+                params={"market_group": f"eq.{group}", "status": "in.(win,loss,won,lost)", "select": "status,profit,stake,tip_date,odds", "limit": "3000", "order": "tip_date.desc"},
+                timeout=10,
+            )
+            ss = r2.json() if r2.ok and r2.text else []
+            if isinstance(ss, list) and ss:
+                today_s = now.date().isoformat()
+                week_s = (now.date() - timedelta(days=6)).isoformat()
+                month_s = now.strftime("%Y-%m")
+                year_s = now.strftime("%Y")
+                def agg(period, rows2):
+                    bets=len(rows2); wins=sum(str(x.get("status")).lower() in ("win","won") for x in rows2); losses=bets-wins
+                    prof=sum(_ntr_float(x.get("profit"), 0) for x in rows2)
+                    stake=sum(max(0.0, _ntr_float(x.get("stake"), 1.0)) for x in rows2)
+                    return {"period": period, "bets": bets, "wins": wins, "losses": losses, "profit": round(prof,2), "stake": round(stake,2), "roi": round(100*prof/max(0.01,stake),2)} if bets else None
+                out["today"] = agg("today", [x for x in ss if str(x.get("tip_date", ""))[:10] == today_s])
+                out["week"] = agg("week", [x for x in ss if str(x.get("tip_date", ""))[:10] >= week_s])
+                out["month"] = agg("month", [x for x in ss if str(x.get("tip_date", ""))[:7] == month_s])
+                out["year"] = agg("year", [x for x in ss if str(x.get("tip_date", ""))[:4] == year_s])
+                out["alltime"] = agg("alltime", ss)
+        _NTR_PERF_CACHE[cache_key] = out
+        return out
+    except Exception:
+        return None
+
+def _ntr_perf_line(row, label):
+    if not row or int(row.get("bets") or 0) <= 0:
+        return None
+    bets=int(row.get("bets") or 0); wins=int(row.get("wins") or 0); losses=int(row.get("losses") or 0)
+    roi=_ntr_float(row.get("roi"), 0); prof=_ntr_float(row.get("profit"), 0)
+    em = "🟢" if prof >= 0 else "🔴"
+    return f"{label}: {wins}-{losses} / {bets} · ROI {roi:.1f}% · {prof:+.2f}U {em}"
+
+def _ntr_enhance_message_with_stats(text, chat_id):
+    """Append one compact performance block only to real fresh tip messages."""
+    if str(env("ENABLE_TIP_PERFORMANCE_FOOTER", "true")).lower() not in ("1", "true", "yes", "on"):
+        return text
+    if not text or len(text) > 3300:
+        return text
+    raw = str(text)
+    upper = raw.upper()
+    # Never decorate reports, technical cards or a message already carrying performance.
+    skip_words = [
+        "AUSWERTUNG", "GESAMT-STATISTIK", "AI TIPP BOT - DAILY", "NETRATTLER HEUTE",
+        "BACKTEST", "SELF TEST", "ÜBERSICHT HEUTE", "PERFORMANCE DIESER GRUPPE",
+        "WINRATE:", "AUSGEWERTETE TIPPS", "DATEN WERDEN GESAMMELT", "ROI REPORT",
+    ]
+    if any(w in upper for w in skip_words):
+        return text
+    # A primary tip needs a price and a concrete selection/leg. This prevents the
+    # duplicate footer on the separate market-stat cards shown in Telegram.
+    has_price = any(w in upper for w in ["QUOTE:", "GESAMT-QUOTE:", " @ ", "BET BUILDER"])
+    has_pick = any(w in upper for w in ["TIPP:", "LEGS:", "PROP BUILDER", "BET BUILDER", "CORNER SNIPER"])
+    if not (has_price and has_pick):
+        return text
+    group = _ntr_group_from_chat(chat_id)
+    perf = _ntr_get_group_perf(group)
+    if not perf:
+        return text
+    lines = []
+    for label, key in [("Heute", "today"), ("7 Tage", "week"), ("Monat", "month"), ("Jahr", "year")]:
+        line = _ntr_perf_line(perf.get(key), label)
+        if line:
+            lines.append(line)
+    if not lines:
+        return text
+    footer = "\n━━━━━━━━━━━━━━━━━━\n📊 <b>Performance dieser Gruppe</b>\n" + "\n".join(lines)
+    if len(raw) + len(footer) > 3900:
+        return text
+    return raw + footer
+
+def _ntr_market_stats_from_settlements(market_id):
+    """Modern stats shape compatible with _get_market_stats_from_supabase()."""
+    perf = _ntr_get_group_perf(market_id)
+    if not perf:
+        return None
+    year = perf.get("year") or perf.get("month") or perf.get("today")
+    month = perf.get("month")
+    if not year:
+        return None
+    total=int(year.get("bets") or 0); won=int(year.get("wins") or 0); lost=int(year.get("losses") or 0)
+    if total <= 0:
+        return None
+    m_total=int(month.get("bets") or 0) if month else 0
+    m_won=int(month.get("wins") or 0) if month else 0
+    m_lost=int(month.get("losses") or 0) if month else 0
+    month_names = ["","Januar","Februar","März","April","Mai","Juni","Juli","August","September","Oktober","November","Dezember"]
+    today = datetime.now(timezone.utc).date()
+    return {
+        "won": won, "lost": lost, "total": total,
+        "pct": round(won/total*100) if total else 0,
+        "roi": round(_ntr_float(year.get("profit"), 0), 1),
+        "month_name": month_names[today.month],
+        "month_won": m_won, "month_lost": m_lost,
+        "month_total": m_total,
+        "month_pct": round(m_won/m_total*100) if m_total else 0,
+        "month_roi": round(_ntr_float(month.get("profit"), 0) if month else 0, 1),
+        "top_leagues": [],
+    }
+
+
+
+# ============================================================
+# NETRATTLER V16 ML LIVE HOOK
+# ============================================================
+_NTR_ML_MODEL_CACHE = None
+_NTR_ML_MODEL_TS = 0
+
+def _ntr_ml_headers():
+    return {"apikey": SUPABASE_KEY, "Authorization": f"Bearer {SUPABASE_KEY}", "Content-Type": "application/json"}
+
+def _ntr_ml_load_model(force=False):
+    global _NTR_ML_MODEL_CACHE, _NTR_ML_MODEL_TS
+    try:
+        import time as _time
+        now = _time.time()
+        if _NTR_ML_MODEL_CACHE and not force and now - _NTR_ML_MODEL_TS < 300:
+            return _NTR_ML_MODEL_CACHE
+        if not SUPABASE_URL or not SUPABASE_KEY:
+            return None
+        r = requests.get(
+            f"{SUPABASE_URL}/rest/v1/netrattler_ml_models",
+            headers=_ntr_ml_headers(),
+            params={"model_name":"eq.netrattler_v16_ml","select":"*","limit":"1"},
+            timeout=12,
+        )
+        if not r.ok:
+            return None
+        rows = r.json() if r.text else []
+        if not rows:
+            return None
+        _NTR_ML_MODEL_CACHE = rows[0].get("model_json") or {}
+        _NTR_ML_MODEL_TS = now
+        return _NTR_ML_MODEL_CACHE
+    except Exception:
+        return None
+
+def _ntr_ml_norm(x):
+    try:
+        import unicodedata as _ud, re as _re
+        s = _ud.normalize("NFKD", str(x or "").lower().strip())
+        s = "".join(c for c in s if not _ud.combining(c))
+        s = _re.sub(r"[^a-z0-9]+", " ", s)
+        return _re.sub(r"\s+", " ", s).strip()
+    except Exception:
+        return str(x or "").lower().strip()
+
+def _ntr_ml_group_from_chat_or_text(chat_id, text):
+    t = str(text or "").lower()
+    try:
+        for k,v in (TELEGRAM_GROUPS or {}).items():
+            if str(v) == str(chat_id):
+                if k in ("combos",): return "combo"
+                if k in ("advanced_props",): return "props"
+                return k
+    except Exception:
+        pass
+    if "btts ht" in t or "btts_ht" in t: return "btts_ht"
+    if "over 1.5 ht" in t or "over15_ht" in t: return "over15_ht"
+    if "corner" in t or "ecken" in t: return "corners"
+    if "builder" in t or "nate" in t or "aystar" in t or "god" in t: return "builder"
+    if "combo" in t or "parlay" in t: return "combo"
+    if "shot" in t or "foul" in t or "card" in t or "tackle" in t or "booked" in t: return "props"
+    if "over 2.5" in t or "o2.5" in t: return "over25"
+    if "btts" in t or "both teams" in t: return "btts"
+    return "default"
+
+def _ntr_ml_extract_odds(text):
+    t = str(text or "")
+    for pat in [r"Quote\s*[:@]?\s*(\d+[\.,]\d+)", r"@\s*(\d+[\.,]\d+)", r"Odds\s*[:@]?\s*(\d+[\.,]\d+)"]:
+        m = re.search(pat, t, re.I)
+        if m:
+            try: return float(m.group(1).replace(",","."))
+            except Exception: pass
+    return None
+
+def _ntr_ml_odds_bucket(o):
+    try: o = float(o)
+    except Exception: return "odds:unknown"
+    if o < 1.50: return "odds:<1.50"
+    if o < 1.80: return "odds:1.50-1.79"
+    if o < 2.10: return "odds:1.80-2.09"
+    if o < 2.60: return "odds:2.10-2.59"
+    if o < 3.50: return "odds:2.60-3.49"
+    return "odds:3.50+"
+
+def _ntr_ml_predict_from_text(text, chat_id=None):
+    model = _ntr_ml_load_model(False)
+    if not model:
+        return {"score":0,"edge":0,"rec":"NO_MODEL","hits":0}
+    prior = float((model.get("prior") or {}).get("winrate") or 0.52)
+    stats = model.get("feature_stats") or {}
+    group = _ntr_ml_group_from_chat_or_text(chat_id, text)
+    odds = _ntr_ml_extract_odds(text)
+    feats = [f"group:{_ntr_ml_norm(group)}", _ntr_ml_odds_bucket(odds)]
+    weighted = prior
+    weight = 1.0
+    hits = 0
+    try:
+        import math as _math
+        for f in feats:
+            st = stats.get(f)
+            if not st: continue
+            bets = float(st.get("bets") or 0)
+            wr = float(st.get("winrate") or prior)
+            conf = float(st.get("confidence") or 0.2)
+            w = max(0.15, conf) * min(3.0, _math.log(bets + 1))
+            weighted += wr * w
+            weight += w
+            hits += 1
+    except Exception:
+        pass
+    prob = weighted / max(0.0001, weight)
+    implied = (1/odds) if odds and odds > 1 else 0
+    edge = (prob - implied) * 100 if implied else 0
+    score = round(prob*100, 1)
+    rec = "STRONG" if score >= 63 and edge >= 2 else "OK" if score >= 57 else "LEAN" if score >= 52 else "SKIP"
+    return {"score":score,"edge":round(edge,1),"rec":rec,"hits":hits,"group":group}
+
+def _ntr_ml_enhance_message(text, chat_id=None):
+    raw = str(text or "")
+    low = raw.lower()
+    # Reports/Settlement nicht mit ML-Footer vollkleben
+    if any(x in low for x in ["auswertung", "roi report", "settlement", "gruppen-auswertung", "performance dieser gruppe"]):
+        return text
+    if "ml_score" in low:
+        return text
+    p = _ntr_ml_predict_from_text(raw, chat_id)
+    if p.get("rec") == "NO_MODEL":
+        if str(env("SHOW_ML_LEARNING_FOOTER", "false")).lower() not in ("1", "true", "yes", "on"):
+            return text
+        footer = "\n🧠 ML-Lernphase: Daten werden gesammelt"
+    else:
+        icon = {"STRONG":"🔥", "OK":"✅", "LEAN":"⚠️", "SKIP":"🚫"}.get(p.get("rec"), "🤖")
+        footer = f"\n🤖 ML_SCORE: <b>{p.get('score')}</b> · Edge {p.get('edge')}% · {icon} {p.get('rec')}"
+    if len(raw) + len(footer) > 3900:
+        return text
+    return raw + footer
+
+def send_telegram(text, chat_id=None, reply_markup=None):
+    if not TELEGRAM_TOKEN:
+        log("Telegram Token fehlt", "WARN")
+        return None
+
+    if chat_id is None:
+        chat_id = TELEGRAM_CHAT_ID
+
+    if not chat_id:
+        log("Telegram Chat ID fehlt", "WARN")
+        return None
+
+    try:
+        text = _ntr_enhance_message_with_stats(text, chat_id)
+    except Exception as _ntr_e:
+        try:
+            log(f"Stats-Footer übersprungen: {str(_ntr_e)[:60]}", "WARN")
+        except Exception:
+            pass
+
+    try:
+        text = _ntr_ml_enhance_message(text, chat_id)
+    except Exception as _ntr_ml_e:
+        try:
+            log(f"ML-Footer übersprungen: {str(_ntr_ml_e)[:60]}", "WARN")
+        except Exception:
+            pass
+
+    payload = {
+        "chat_id": chat_id,
+        "text": text,
+        "parse_mode": "HTML",
+        "disable_web_page_preview": True,
+    }
+
+    # 🆕 Inline-Buttons hinzufügen wenn vorhanden
+    if reply_markup:
+        payload["reply_markup"] = json.dumps(reply_markup)
+
+    try:
+        r = requests.post(
+            f"https://api.telegram.org/bot{TELEGRAM_TOKEN}/sendMessage",
+            json=payload,
+            timeout=15,
+        )
+
+        if not r.ok:
+            # 🆕 Fallback: Wenn Channel fehlt (400 error) → Main Chat nutzen
+            if r.status_code == 400 and chat_id != TELEGRAM_CHAT_ID:
+                log(f"⚠️ Chat {chat_id} nicht gefunden - fallback zu Main Chat", "WARN")
+                payload["chat_id"] = TELEGRAM_CHAT_ID
+                r = requests.post(
+                    f"https://api.telegram.org/bot{TELEGRAM_TOKEN}/sendMessage",
+                    json=payload,
+                    timeout=15,
+                )
+            
+            # Fallback ohne HTML-Tags
+            payload["text"] = re.sub(r"<[^>]+>", "", text)
+            payload.pop("parse_mode", None)
+            r = requests.post(
+                f"https://api.telegram.org/bot{TELEGRAM_TOKEN}/sendMessage",
+                json=payload,
+                timeout=15,
+            )
+
+        if r.ok:
+            return r.json().get("result", {}).get("message_id")
+
+    except Exception:
+        pass
+
+    return None
+
+
+# In-Memory Duplikat Cache für diesen Run
+_SENT_TIPS_CACHE = set()
+
+def is_duplicate_tip(match, market, target_date):
+    """Prüft ob Tipp bereits gesendet wurde - nur In-Memory (Bulk preload beim Start)"""
+    global _SENT_TIPS_CACHE
+    match_norm = normalize_team_name(match)
+    cache_key = f"{match_norm[:50]}_{market}_{target_date}"
+    return cache_key in _SENT_TIPS_CACHE
+
+
+def _combo_signature(legs, prefix=""):
+    """
+    Erzeugt eine deterministische, kurze Signatur aus den Legs einer Kombi
+    (sortiert nach Match+Markt+Tipp) — identische Kombis ergeben immer
+    dieselbe Signatur, unabhängig vom Run-Zeitpunkt.
+    """
+    import hashlib
+    parts = sorted(
+        f"{l.get('match','?')}|{l.get('market', l.get('_cat',''))}|{l.get('tip', l.get('player_prop',''))}"
+        for l in legs
+    )
+    raw = prefix + "::" + "||".join(parts)
+    return hashlib.md5(raw.encode("utf-8")).hexdigest()[:12]
+
+
+def is_duplicate_combo(tip_id, target_date):
+    """
+    Prüft ob eine Kombi (Multi-Combo oder Bet Builder) mit dieser
+    deterministischen tip_id bereits heute gesendet wurde.
+    """
+    global _SENT_TIPS_CACHE
+    cache_key = f"combo_{tip_id}"
+    if cache_key in _SENT_TIPS_CACHE:
+        return True
+
+    if SUPABASE_URL and SUPABASE_KEY:
+        try:
+            r = requests.get(
+                f"{SUPABASE_URL}/rest/v1/tips",
+                headers={"apikey": SUPABASE_KEY, "Authorization": f"Bearer {SUPABASE_KEY}"},
+                params={
+                    "tip_id": f"eq.{tip_id}",
+                    "select": "id",
+                    "limit": "1",
+                },
+                timeout=5,
+            )
+            if r.ok and len(r.json()) > 0:
+                _SENT_TIPS_CACHE.add(cache_key)
+                return True
+        except Exception:
+            pass
+
+    return False
+
+
+def mark_tip_sent(match, market, target_date):
+    """Markiert Tipp als gesendet im In-Memory Cache"""
+    global _SENT_TIPS_CACHE
+    match_norm = normalize_team_name(match)
+    cache_key = f"{match_norm[:50]}_{market}_{target_date}"
+    _SENT_TIPS_CACHE.add(cache_key)
+
+
+def is_valid_tip(tip, target_date):
+    """
+    Prüft ob ein Tipp wirklich heute + in der Zukunft liegt.
+    """
+    tip_date = tip.get("date", "")
+    today_str = str(target_date)
+    if tip_date and tip_date != today_str:
+        log(f"   ⚠️ Falsches Datum: {tip_date} (erwartet {today_str})")
+        return False
+
+    # Tipps ohne echte Odds (martj42/FootyStats) → Zeit nicht prüfen
+    if tip.get("_no_real_odds"):
+        return True
+
+    time_str = tip.get("time", "")
+    if not is_future_game(time_str, target_date):
+        log(f"   ⚠️ Spiel bereits vorbei: {tip.get('match','')} um {time_str}")
+        return False
+
+    return True
+
+
+def log_tip_for_ml(tip: dict, market: str) -> bool:
+    """
+    Logged einen Tipp mit ML-Features in Supabase (Tabelle: ml_tips).
+    Für Feedback-Loop: Modell lernt aus eigenen Ergebnissen.
+    Silent-fail — niemals den normalen Bot-Flow unterbrechen.
+    """
+    if not SUPABASE_URL or not SUPABASE_KEY:
+        return False
+    try:
+        match = tip.get("match", "")
+        parts = match.split(" vs ") if " vs " in match else [match, ""]
+        home = parts[0].strip()
+        away = parts[1].strip() if len(parts) > 1 else ""
+
+        # ML-Features aus dem Tipp extrahieren (alles was wir haben)
+        features = {
+            "elo_home": tip.get("elo_home"),
+            "elo_away": tip.get("elo_away"),
+            "elo_diff": tip.get("elo_diff"),
+            "btts_rate_home": tip.get("btts_rate_home"),
+            "btts_rate_away": tip.get("btts_rate_away"),
+            "avg_goals_home": tip.get("avg_goals_home"),
+            "avg_goals_away": tip.get("avg_goals_away"),
+            "xg_home": tip.get("xg_home"),
+            "xg_away": tip.get("xg_away"),
+            "probability": tip.get("probability"),
+        }
+        # None-Werte raus
+        features = {k: v for k, v in features.items() if v is not None}
+
+        ml_data = {
+            "match_id": f"{home}_{away}_{tip.get('date', '')}_{market}".replace(" ", "_"),
+            "home_team": home,
+            "away_team": away,
+            "league": tip.get("league", ""),
+            "date": tip.get("date", ""),
+            "time": tip.get("time", ""),
+            "market": market,
+            "tip": tip.get("tip", ""),
+            "odds": tip.get("odds", 0.0),
+            "confidence": tip.get("confidence", 0),
+            "probability": tip.get("probability", 0.0),
+            "value_rating": tip.get("value_rating", ""),
+            "features": json.dumps(features),
+            "created_at": datetime.now(timezone.utc).isoformat(),
+            "bot_version": "3.0",
+            "result": None,
+            "settled": False,
+        }
+
+        r = requests.post(
+            f"{SUPABASE_URL}/rest/v1/ml_tips",
+            headers={
+                "apikey": SUPABASE_KEY,
+                "Authorization": f"Bearer {SUPABASE_KEY}",
+                "Content-Type": "application/json",
+                "Prefer": "return=minimal",
+            },
+            json=ml_data,
+            timeout=8,
+        )
+        return r.ok
+    except Exception:
+        return False  # silent fail
+
+
+def save_to_supabase(tip):
+    if not SUPABASE_URL or not SUPABASE_KEY:
+        return False
+
+    try:
+        # Nur bekannte Supabase Felder senden
+        SUPABASE_FIELDS = [
+            "tip_id", "date", "market", "market_name", "match", "league",
+            "tip", "odds", "probability", "confidence", "value_rating",
+            "fair_odds", "units", "bookie", "reasoning", "key_factor",
+            "home_form", "away_form", "time", "status",
+            "telegram_chat_id", "telegram_msg_id",
+            "weekday", "hour",
+            "xg_home", "xg_away", "xga_home", "xga_away",
+            "sharp_money", "line_movement",
+            "btts_rate_home", "btts_rate_away",
+            "avg_goals_home", "avg_goals_away",
+            # ML Features
+            "elo_home", "elo_away", "elo_diff",
+            "result_home", "result_away",
+            "result_ht_home", "result_ht_away",
+            "settled_at", "message_text",
+        ]
+        
+        clean_tip = {k: v for k, v in tip.items() 
+                     if k in SUPABASE_FIELDS and v is not None}
+
+        r = requests.post(
+            f"{SUPABASE_URL}/rest/v1/tips",
+            headers={
+                "apikey": SUPABASE_KEY,
+                "Authorization": f"Bearer {SUPABASE_KEY}",
+                "Content-Type": "application/json",
+                "Prefer": "return=representation",
+            },
+            json=clean_tip,
+            timeout=10,
+        )
+
+        if not r.ok:
+            # Falls 'message_text' Spalte fehlt → ohne erneut versuchen
+            if "message_text" in clean_tip and ("message_text" in r.text or r.status_code == 400):
+                clean_tip.pop("message_text", None)
+                r = requests.post(
+                    f"{SUPABASE_URL}/rest/v1/tips",
+                    headers={
+                        "apikey": SUPABASE_KEY,
+                        "Authorization": f"Bearer {SUPABASE_KEY}",
+                        "Content-Type": "application/json",
+                        "Prefer": "return=representation",
+                    },
+                    json=clean_tip,
+                    timeout=10,
+                )
+                if r.ok:
+                    # 🆕 ML-Logging (silent, nach erfolgreichem Save)
+                    log_tip_for_ml(tip, tip.get("market", ""))
+                    return True
+            log(f"   Supabase Error: {r.status_code} - {r.text[:100]}", "WARN")
+            return False
+
+        # 🆕 ML-Logging bei Erfolg
+        log_tip_for_ml(tip, tip.get("market", ""))
+        return True
+
+    except Exception as e:
+        log(f"   Supabase Exception: {str(e)[:60]}", "WARN")
+        return False
+
+
+def get_overall_stats():
+    if not SUPABASE_URL or not SUPABASE_KEY:
+        return None
+    try:
+        r = requests.get(
+            f"{SUPABASE_URL}/rest/v1/tips",
+            headers={"apikey": SUPABASE_KEY, "Authorization": f"Bearer {SUPABASE_KEY}"},
+            params={"select": "*", "order": "date.desc,id.desc"},
+            timeout=15,
+        )
+        if not r.ok:
+            return None
+        tips = r.json()
+        won = [t for t in tips if t.get("status") == "won"]
+        lost = [t for t in tips if t.get("status") == "lost"]
+        pending = [t for t in tips if t.get("status") == "pending"]
+        if not won and not lost:
+            return None
+        total = len(won) + len(lost)
+        quote_pct = round(len(won) / total * 100) if total else 0
+
+        units_won = 0.0
+        units_lost = 0.0
+        for t in won:
+            try:
+                u = float(t.get("units", 1.0) or 1.0)
+                odds = float(str(t.get("odds", "1")).replace(",", "."))
+                units_won += u * (odds - 1)
+            except:
+                units_won += 1.0
+        for t in lost:
+            try:
+                units_lost += float(t.get("units", 1.0) or 1.0)
+            except:
+                units_lost += 1.0
+        roi_units = round(units_won - units_lost, 2)
+
+        by_market = {
+            "btts": {"w": 0, "l": 0, "units": 0.0},
+            "over25": {"w": 0, "l": 0, "units": 0.0},
+            "combo": {"w": 0, "l": 0, "units": 0.0},
+            "btts_ht": {"w": 0, "l": 0, "units": 0.0},
+            "over15_ht": {"w": 0, "l": 0, "units": 0.0},
+        }
+        for t in won + lost:
+            m = t.get("market", "")
+            if m not in by_market:
+                continue
+            u = float(t.get("units", 1.0) or 1.0)
+            if t.get("status") == "won":
+                by_market[m]["w"] += 1
+                try:
+                    by_market[m]["units"] += u * (float(str(t.get("odds","1")).replace(",",".")) - 1)
+                except:
+                    pass
+            else:
+                by_market[m]["l"] += 1
+                by_market[m]["units"] -= u
+
+        from datetime import date as date_cls
+        today = date_cls.today()
+        month_start = today.replace(day=1).isoformat()
+        month_won = [t for t in won if t.get("date","") >= month_start]
+        month_lost = [t for t in lost if t.get("date","") >= month_start]
+        month_total = len(month_won) + len(month_lost)
+        month_pct = round(len(month_won)/month_total*100) if month_total else 0
+        month_units = 0.0
+        for t in month_won:
+            try:
+                u = float(t.get("units",1.0) or 1.0)
+                month_units += u * (float(str(t.get("odds","1")).replace(",",".")) - 1)
+            except:
+                month_units += 1.0
+        for t in month_lost:
+            try:
+                month_units -= float(t.get("units",1.0) or 1.0)
+            except:
+                month_units -= 1.0
+        month_names = ["","Januar","Februar","März","April","Mai","Juni",
+                       "Juli","August","September","Oktober","November","Dezember"]
+        month_name = month_names[today.month]
+
+        by_league = {}
+        for t in won + lost:
+            lg = t.get("league","?")
+            if lg not in by_league:
+                by_league[lg] = {"w":0,"l":0,"units":0.0}
+            u = float(t.get("units",1.0) or 1.0)
+            if t.get("status") == "won":
+                by_league[lg]["w"] += 1
+                try:
+                    by_league[lg]["units"] += u * (float(str(t.get("odds","1")).replace(",",".")) - 1)
+                except:
+                    by_league[lg]["units"] += 1.0
+            else:
+                by_league[lg]["l"] += 1
+                by_league[lg]["units"] -= u
+
+        top_leagues = []
+        for lg, s in by_league.items():
+            tot = s["w"] + s["l"]
+            if tot >= 2:
+                pct = round(s["w"]/tot*100)
+                top_leagues.append((lg, s["w"], tot, pct, round(s["units"],2)))
+        top_leagues.sort(key=lambda x: (-x[4], -x[3]))
+
+        return {
+            "won": len(won), "lost": len(lost), "pending": len(pending),
+            "total": total, "quote_pct": quote_pct,
+            "roi_units": roi_units,
+            "by_market": by_market,
+            "month": {
+                "name": month_name, "won": len(month_won), "lost": len(month_lost),
+                "total": month_total, "pct": month_pct, "units": round(month_units,2)
+            },
+            "top_leagues": top_leagues[:10],
+        }
+    except Exception:
+        return None
+
+
+def generate_multi_combo_bets(all_tips, num_tips=3):
+    """
+    🆕 Generiert automatisch Multi-Combos aus den besten Tipps.
+    num_tips: 3, 4, 5, 6, 7 oder 8 Tipps pro Combo
+    """
+    if not all_tips:
+        return None
+
+    # Alle Tipps normalisieren (oddsYes → odds)
+    normalized = []
+    for t in all_tips:
+        try:
+            odds = float(str(t.get("oddsYes", t.get("odds", 0)) or 0).replace(",", "."))
+            # 🆕 Fallback: wenn kein echter Odds, fairOdds aus Wahrscheinlichkeit nutzen
+            if odds < 1.40:
+                fair = float(str(t.get("fairOdds", 0) or 0).replace(",", "."))
+                prob = int(t.get("probability", 0) or 0)
+                if fair >= 1.40:
+                    odds = fair
+                elif prob >= 55:
+                    odds = round(100 / prob, 2)  # z.B. 67% → 1.49
+            if odds >= 1.40:
+                normalized.append({
+                    "match": t.get("match", ""),
+                    "league": t.get("league", ""),
+                    "market": t.get("market", "btts"),
+                    "tip": t.get("tip", "YES"),
+                    "odds": odds,
+                    "confidence": int(t.get("confidence", 0)),
+                    "value_rating": t.get("valueRating", "OK"),
+                    "probability": int(t.get("probability", 0)),
+                })
+        except Exception:
+            continue
+
+    if not normalized:
+        return None
+
+    # Sortiere nach Confidence + Probability
+    sorted_tips = sorted(
+        normalized,
+        key=lambda x: (x.get("confidence", 0), x.get("probability", 0)),
+        reverse=True
+    )
+
+    # Genug Tipps vorhanden?
+    if len(sorted_tips) < num_tips:
+        return None
+
+    # Beste N Tipps nehmen
+    selected = sorted_tips[:num_tips]
+
+    # Berechne Gesamt-Quote
+    total_odds = 1.0
+    for tip in selected:
+        total_odds *= tip.get("odds", 1.0)
+
+    avg_confidence = sum(t.get("confidence", 0) for t in selected) / len(selected)
+
+    # Combo Label basierend auf Anzahl
+    labels = {
+        3: ("🥉 COMBO 3", "Einsteiger-Kombi"),
+        4: ("🥈 COMBO 4", "Solide Kombi"),
+        5: ("🥇 COMBO 5", "Standard-Kombi"),
+        6: ("💎 COMBO 6", "Value-Kombi"),
+        7: ("🔥 COMBO 7", "High-Risk Kombi"),
+        8: ("🚀 COMBO 8", "Jackpot-Kombi"),
+        9: ("⚡ COMBO 9", "Mega-Kombi"),
+        10: ("🌟 COMBO 10", "Ultra-Kombi"),
+        11: ("👑 COMBO 11", "Maximal-Kombi"),
+    }
+    label, desc = labels.get(num_tips, (f"🎲 COMBO {num_tips}", "Multi-Kombi"))
+
+    # Stake Suggestion (weniger bei mehr Tipps)
+    stakes = {3: 5, 4: 4, 5: 3, 6: 2, 7: 2, 8: 1, 9: 0.75, 10: 0.5, 11: 0.5}
+    stake = stakes.get(num_tips, 1)
+
+    return {
+        "num_tips": num_tips,
+        "label": label,
+        "desc": desc,
+        "tips": selected,
+        "total_odds": round(total_odds, 2),
+        "expected_confidence": round(avg_confidence, 1),
+        "stake_suggestion": stake,
+    }
+
+
+def format_combo_telegram_message(combo):
+    """Formatiert Multi-Combo für Telegram — kompakt, eine Zeile pro Leg"""
+    if not combo:
+        return ""
+
+    total_odds = combo.get("total_odds", "?")
+    stake = combo.get("stake_suggestion", 0.5)
+    win = round(float(str(total_odds).replace(",",".")) * float(stake), 1) if str(total_odds).replace(".","").isdigit() else "?"
+    label = combo.get("label", "COMBO")
+
+    msg = f"<b>🎰 {label}</b>\n"
+    msg += "━━━━━━━━━━━━━━━━━━\n"
+    msg += f"🎯 Gesamt-Quote: <b>{total_odds}</b>\n"
+    msg += f"💵 Einsatz: {stake} Units · Gewinn: ~{win} Units\n\n"
+    msg += "<b>📋 Legs:</b>\n"
+
+    for i, tip in enumerate(combo.get("tips", []), 1):
+        _mk = tip.get("market", "")
+        market_emoji = {"btts": "⚽", "over25": "🎯", "combo": "🔥", "btts_ht": "🕐", "over15_ht": "⏰", "corners": "🔵"}.get(_mk, "💎")
+        market_label = {"btts": "BTTS", "over25": "Over 2.5", "combo": "BTTS+O2.5", "btts_ht": "BTTS HT", "over15_ht": "O1.5 HT", "corners": "Corners"}.get(_mk, _mk.upper())
+        odds_val = tip.get("odds", tip.get("oddsYes", "?"))
+        msg += f"{i}. {market_emoji} <b>{tip.get('match','?')}</b> · {market_label} @ {odds_val}\n"
+
+    msg += "\n━━━━━━━━━━━━━━━━━━\n"
+    msg += f"<i>💡 {combo.get('desc', 'Multi-Combo')}</i>"
+
+    return msg
+
+
+
+def _auto_void_old_pending():
+    """Bereinigt alte Pending Tipps automatisch (älter als 3 Tage)"""
+    if not SUPABASE_URL or not SUPABASE_KEY:
+        return
+    try:
+        from datetime import date, timedelta
+        cutoff = str(date.today() - timedelta(days=3))
+        r = requests.patch(
+            f"{SUPABASE_URL}/rest/v1/tips",
+            headers={
+                "apikey": SUPABASE_KEY,
+                "Authorization": f"Bearer {SUPABASE_KEY}",
+                "Content-Type": "application/json",
+                "Prefer": "return=minimal",
+            },
+            params={
+                "status": "eq.pending",
+                "date": f"lt.{cutoff}",
+            },
+            json={"status": "void"},
+            timeout=10,
+        )
+        if r.ok:
+            log("✅ Alte Pending Tipps bereinigt!")
+    except Exception as e:
+        log(f"Auto-void Error: {str(e)[:50]}", "WARN")
+
+
+
+def _get_market_stats_from_supabase(market_id):
+    """Holt Won/Lost/ROI + Monat + Top-3-Ligen für einen Markt aus Supabase."""
+    if not SUPABASE_URL or not SUPABASE_KEY:
+        return None
+    try:
+        modern = _ntr_market_stats_from_settlements(market_id)
+        if modern and modern.get("total", 0) >= 1:
+            return modern
+    except Exception:
+        pass
+    try:
+        from datetime import date as _date2
+        today = _date2.today()
+        month_start = today.replace(day=1).isoformat()
+
+        r = requests.get(
+            f"{SUPABASE_URL}/rest/v1/tips",
+            headers={"apikey": SUPABASE_KEY, "Authorization": f"Bearer {SUPABASE_KEY}"},
+            params={
+                "market": f"eq.{market_id}",
+                "status": "in.(won,lost)",
+                "select": "status,odds,units,date,league",
+                "order": "date.desc",
+                "limit": "2000",
+            },
+            timeout=15,
+        )
+        if not r.ok:
+            return None
+        tips = r.json()
+        if not tips:
+            return None
+
+        won  = [t for t in tips if t.get("status") == "won"]
+        lost = [t for t in tips if t.get("status") == "lost"]
+        total = len(won) + len(lost)
+        if total == 0:
+            return None
+
+        # ROI Gesamt
+        roi = 0.0
+        for t in won:
+            try:
+                roi += (float(str(t.get("odds","1.5")).replace(",",".")) - 1) * float(t.get("units",1.0) or 1.0)
+            except: roi += 1.0
+        for t in lost:
+            try: roi -= float(t.get("units",1.0) or 1.0)
+            except: roi -= 1.0
+
+        # Monat
+        m_won  = [t for t in won  if t.get("date","") >= month_start]
+        m_lost = [t for t in lost if t.get("date","") >= month_start]
+        m_total = len(m_won) + len(m_lost)
+        m_roi = 0.0
+        for t in m_won:
+            try: m_roi += (float(str(t.get("odds","1.5")).replace(",",".")) - 1) * float(t.get("units",1.0) or 1.0)
+            except: m_roi += 1.0
+        for t in m_lost:
+            try: m_roi -= float(t.get("units",1.0) or 1.0)
+            except: m_roi -= 1.0
+
+        # Top 3 Ligen
+        lg_stats = {}
+        for t in tips:
+            lg = t.get("league","?")
+            if not lg: continue
+            if lg not in lg_stats:
+                lg_stats[lg] = {"w":0,"l":0,"roi":0.0}
+            if t.get("status") == "won":
+                lg_stats[lg]["w"] += 1
+                try: lg_stats[lg]["roi"] += (float(str(t.get("odds","1.5")).replace(",",".")) - 1) * float(t.get("units",1.0) or 1.0)
+                except: lg_stats[lg]["roi"] += 1.0
+            else:
+                lg_stats[lg]["l"] += 1
+                try: lg_stats[lg]["roi"] -= float(t.get("units",1.0) or 1.0)
+                except: lg_stats[lg]["roi"] -= 1.0
+
+        top_leagues = []
+        for lg, s in lg_stats.items():
+            tot = s["w"] + s["l"]
+            if tot >= 3:
+                top_leagues.append((lg, s["w"], tot, round(s["roi"],1)))
+        top_leagues.sort(key=lambda x: (-x[3], -x[1]))
+
+        month_names = ["","Januar","Februar","März","April","Mai","Juni",
+                       "Juli","August","September","Oktober","November","Dezember"]
+        month_name = month_names[today.month]
+
+        return {
+            "won": len(won), "lost": len(lost), "total": total,
+            "pct": round(len(won)/total*100),
+            "roi": round(roi, 1),
+            "month_name": month_name,
+            "month_won": len(m_won), "month_lost": len(m_lost),
+            "month_total": m_total,
+            "month_pct": round(len(m_won)/m_total*100) if m_total else 0,
+            "month_roi": round(m_roi, 1),
+            "top_leagues": top_leagues[:3],
+        }
+    except Exception as e:
+        log(f"Market Stats Error ({market_id}): {str(e)[:60]}", "WARN")
+        return None
+
+
+def _send_daily_auswertung_to_all_groups(stats=None):
+    """
+    Sendet marktspezifische Stats in jede Gruppe im Screenshot-Format:
+    Winrate, ROI (Units), Gesamt-Tipps, Monat, Top-3-Ligen.
+    """
+    from datetime import datetime as _dt3, timezone as _tz3
+    now = _dt3.now(_tz3.utc)
+
+    # Saisonpause / WM-Hinweis
+    if now.month == 6 and now.day < 11:
+        pause_text = f"🏆 <i>WM 2026 startet in {11-now.day} Tagen! Ab 11. Juni täglich Tipps.</i>"
+    elif now.month in [6, 7]:
+        pause_text = "<i>🌍 WM 2026 läuft — täglich Tipps!</i>"
+    else:
+        pause_text = "<i>Heute spielfreier Tag — morgen wieder Tipps!</i>"
+
+    market_groups = [
+        ("btts",    TELEGRAM_GROUPS.get("btts"),    "⚽ BTTS"),
+        ("over25",  TELEGRAM_GROUPS.get("over25"),  "🎯 Over 2.5"),
+        ("combo",   TELEGRAM_GROUPS.get("combo"),   "🔥 BTTS + Over 2.5"),
+        ("btts_ht", TELEGRAM_GROUPS.get("btts_ht"), "🕐 BTTS Halbzeit"),
+        ("over15_ht", TELEGRAM_GROUPS.get("over15_ht"), "⏰ Over 1.5 HT"),
+        ("corners", TELEGRAM_GROUPS.get("corners"), "🔵 Corner Sniper"),
+        ("builder", TELEGRAM_GROUPS.get("builder"), "🧱 Prop Builder"),
+        ("props", TELEGRAM_GROUPS.get("props"), "🎯 Player Props"),
+        ("scorer",  TELEGRAM_GROUPS.get("late_goals"), "⚽ Goal Hunter"),
+    ]
+
+    medals = ["🥇","🥈","🥉"]
+    sent_to = set()
+
+    for market_id, chat_id, title in market_groups:
+        if not chat_id or chat_id in sent_to:
+            continue
+
+        ms = _get_market_stats_from_supabase(market_id)
+
+        nl = "\n"
+        msg = f"<b>{title}</b>{nl}"
+        msg += f"━━━━━━━━━━━━━━━━━━{nl}"
+
+        if ms and ms["total"] >= 3:
+            wr_e  = "🔥" if ms["pct"] >= 70 else "✅" if ms["pct"] >= 60 else "⚠️"
+            roi_e = "🟢" if ms["roi"] >= 0 else "🔴"
+            roi_s = f"+{ms['roi']}" if ms["roi"] >= 0 else str(ms["roi"])
+
+            msg += f"{wr_e} Winrate: <b>{ms['pct']}%</b> ({ms['won']}W / {ms['lost']}L){nl}"
+            msg += f"{roi_e} ROI: <b>{roi_s} Units</b>{nl}"
+            msg += f"📋 Gesamt: {ms['total']} ausgewertete Tipps{nl}"
+
+            # Monat
+            if ms.get("month_total", 0) > 0:
+                m_roi_e = "🟢" if ms["month_roi"] >= 0 else "🔴"
+                m_roi_s = f"+{ms['month_roi']}" if ms["month_roi"] >= 0 else str(ms["month_roi"])
+                msg += f"{nl}<b>{ms['month_name']}:</b>{nl}"
+                msg += f"{ms['month_won']}/{ms['month_total']} Tipps · {ms['month_pct']}% · {m_roi_s}U {m_roi_e}{nl}"
+
+            # Top 3 Ligen
+            if ms.get("top_leagues"):
+                msg += f"{nl}<b>🏆 Top Ligen:</b>{nl}"
+                for i, (lg, w, tot, roi_lg) in enumerate(ms["top_leagues"]):
+                    pct_lg   = round(w/tot*100) if tot else 0
+                    roi_s_lg = f"+{roi_lg}" if roi_lg >= 0 else str(roi_lg)
+                    medal = medals[i] if i < len(medals) else "•"
+                    msg += f"{medal} {lg}: {w}/{tot} ({pct_lg}%) · {roi_s_lg}U{nl}"
+        else:
+            if str(env("SEND_EMPTY_PERFORMANCE_CARDS", "false")).lower() not in ("1", "true", "yes", "on"):
+                continue
+            msg += f"📊 Daten werden gesammelt...{nl}"
+            msg += f"<i>Mindestens 3 ausgewertete Tipps nötig.</i>{nl}"
+
+        msg += f"━━━━━━━━━━━━━━━━━━{nl}"
+        msg += pause_text
+
+        send_telegram(msg, chat_id)
+        sent_to.add(chat_id)
+
+    log(f"✅ Gruppen-Auswertung gesendet ({len(sent_to)} Gruppen)")
+
+
+def send_top_tips(tips_by_market, target_date):
+    icons = {
+        "YES": "✅",
+        "NO": "❌",
+        "MAYBE": "⚠️",
+        "1": "🏠",
+        "X": "🤝",
+        "2": "✈️",
+    }
+
+    val_icons = {
+        "HIGH": "🔥",
+        "VALUE": "🟢",
+        "OK": "🟡",
+        "LOW": "🔴",
+    }
+
+    market_emoji = {
+        "btts": "⚽",
+        "over25": "🎯",
+        "combo": "🔥",
+        "btts_ht": "🕐",
+        "over15_ht": "⏰",
+        "1x2": "🏆",
+    }
+
+    total_tips = sum(len(t) for t in tips_by_market.values())
+
+    # ============================================================
+    # STATS NACHRICHT - Vollständig mit allen Märkten
+    # ============================================================
+    now_utc = datetime.now(timezone.utc)
+    month_name = now_utc.strftime("%B %Y")
+
+    stats_header = f"<b>🤖 AI TIPP BOT - DAILY</b>\n<i>{target_date}</i>\n" + "\n"
+
+    # Tagesübersicht - ALLE Märkte
+    stats_header += "📊 <b>Übersicht heute:</b>\n"
+    for m_id in MARKETS_TO_RUN:
+        count = len(tips_by_market.get(m_id, []))
+        stats_header += f"• {MARKET_INFO[m_id]['name']}: <b>{count}</b> Tipps" + "\n"
+
+    # Ecken + Scorer + Combos
+    corners_today = getattr(run_corners_and_scorer_bots, '_last_corners', 0)
+    scorer_today = getattr(run_corners_and_scorer_bots, '_last_scorer', 0)
+    stats_header += f"• 🔵 Ecken: <b>{corners_count if 'corners_count' in dir() else 0}</b> Tipps" + "\n"
+    stats_header += f"• 🎰 Combos: <b>{combos_sent if 'combos_sent' in dir() else 0}</b> generiert" + "\n"
+    stats_header += f"\n💎 <b>Total: {total_tips} Top-Tipps</b>"
+
+    stats = get_overall_stats()
+
+    if stats:
+        # Auto-void alte pendings
+        old_pending = stats.get("pending", 0)
+        
+        stats_header += "\n\n━━━━━━━━━━━━━━━━━━\n"
+        stats_header += "📈 <b>GESAMT-STATISTIK</b>\n"
+        stats_header += f"✅ Gewonnen: <b>{stats['won']}</b>" + "\n"
+        stats_header += f"❌ Verloren: <b>{stats['lost']}</b>" + "\n"
+        # Pending nur zeigen wenn sinnvoll (< 50)
+        if stats["pending"] and stats["pending"] < 50:
+            stats_header += f"⏳ Pending: <b>{stats['pending']}</b>" + "\n"
+        stats_header += f"🎯 Trefferquote: <b>{stats['quote_pct']}%</b>" + "\n"
+        roi_emoji = "🟢" if stats["roi_units"] >= 0 else "🔴"
+        stats_header += f"💰 ROI: <b>{'+' if stats['roi_units'] >= 0 else ''}{stats['roi_units']}</b> Units {roi_emoji}" + "\n"
+
+        # Monatsübersicht
+        if stats.get("month") and stats["month"]["total"] > 0:
+            m = stats["month"]
+            m_emoji = "🟢" if m["units"] >= 0 else "🔴"
+            stats_header += f"\n📅 <b>{m['name']}:</b> {m['won']}/{m['total']} ({m['pct']}%) · "
+            stats_header += f"<b>{'+' if m['units'] >= 0 else ''}{m['units']} Units</b> {m_emoji}" + "\n"
+
+        # Pro Markt - ALLE inkl Ecken
+        stats_header += f"\n<b>📊 Pro Markt:</b>" + "\n"
+        market_names = {
+            "btts": "⚽ BTTS",
+            "over25": "🎯 Over 2.5",
+            "combo": "🔥 BTTS+Over 2.5",
+            "btts_ht": "🕐 BTTS HT",
+            "over15_ht": "⏰ Over 1.5 HT",
+        }
+        for m_id in MARKETS_TO_RUN:
+            mb = stats["by_market"].get(m_id, {"w":0,"l":0,"units":0.0})
+            tot = mb["w"] + mb["l"]
+            if tot > 0:
+                pct = round(mb["w"]/tot*100)
+                emoji = "🟢" if pct >= 60 else "🟡" if pct >= 40 else "🔴"
+                u_str = f"+{round(mb['units'],2)}" if mb["units"] >= 0 else f"{round(mb['units'],2)}"
+                stats_header += f"{market_names.get(m_id,m_id)}: {mb['w']}/{tot} ({pct}%) · {u_str}U {emoji}" + "\n"
+
+        # Top Ligen
+        if stats.get("top_leagues"):
+            stats_header += f"\n<b>🏆 Top Ligen:</b>" + "\n"
+            medals = ["🥇","🥈","🥉","4️⃣","5️⃣","6️⃣","7️⃣","8️⃣","9️⃣","🔟"]
+            for i, (lg, w, tot, pct, units) in enumerate(stats["top_leagues"][:10]):
+                medal = medals[i] if i < len(medals) else "•"
+                u_str = f"+{units}" if units >= 0 else str(units)
+                stats_header += f"{medal} {lg}: {w}/{tot} ({pct}%) · {u_str}U" + "\n"
+
+    # Summary NUR in BTTS Kanal — nicht in Prop Builder / Stats
+    send_telegram(stats_header, TELEGRAM_GROUPS.get("btts", TELEGRAM_CHAT_ID))
+
+    # Auto-void alte Pending Tipps (älter als 3 Tage)
+    _auto_void_old_pending()
+
+    # Wenn keine Tipps → Auswertung in ALLE Gruppen senden
+    if total_tips == 0:
+        _send_daily_auswertung_to_all_groups(stats)
+        return
+
+    saved = 0
+
+    for market_id, tips in tips_by_market.items():
+        if not tips:
+            continue
+
+        target_chat = TELEGRAM_GROUPS.get(market_id, TELEGRAM_CHAT_ID)
+        market_name = MARKET_INFO[market_id]["name"]
+        emoji = market_emoji.get(market_id, "💎")
+
+        # Kein Header - direkt Tipps senden
+
+        for i, r in enumerate(tips, 1):
+            confidence = int(r.get("confidence", 0))
+            match_name = r.get("match", "?")
+
+            r["date"] = str(target_date)
+            if not is_valid_tip(r, target_date):
+                continue
+
+            if is_duplicate_tip(match_name, market_id, target_date):
+                log(f"   ⏭️ Duplikat übersprungen: {match_name} ({market_id})")
+                continue
+
+            # 🛡️ Safe Filter: schlechte Ligen ausfiltern
+            _tip_league = str(r.get("league","") or r.get("competition","") or r.get("league_name","") or "").lower()
+            _skip_kw = ["reserve","women","u20","u21","u19","u18","youth","frauen",
+                        "reserva","damen","feminine","femini","amateur","friendly"]
+            if any(_kw in _tip_league for _kw in _skip_kw):
+                log(f"   ⏭️ Liga gefiltert: {match_name} ({_tip_league[:25]})")
+                continue
+
+            # ✅ NEUES FORMAT - Variante 3
+            market_icons2 = {"btts": "⚽", "over25": "🎯", "combo": "🔥", "btts_ht": "🕐", "over15_ht": "⏰"}
+            market_names2 = {"btts": "BTTS", "over25": "OVER 2.5", "combo": "BTTS + OVER 2.5", "btts_ht": "BTTS HT", "over15_ht": "OVER 1.5 HT"}
+            val_icon = val_icons.get(r.get('valueRating', 'OK'), '🟡')
+            mkt_icon = market_icons2.get(market_id, "🎯")
+            mkt_name = market_names2.get(market_id, market_id.upper())
+
+            tip_time_raw = r.get('time', r.get('time_local', '')).strip()
+            if not tip_time_raw or tip_time_raw in ['TBD', 'N/A', '-', '']:
+                tip_time = "Heute"
+            else:
+                try:
+                    from datetime import datetime as _dt2, timezone as _tz2, timedelta as _td2
+                    if 'T' in tip_time_raw and ('Z' in tip_time_raw or '+' in tip_time_raw):
+                        _t2 = _dt2.fromisoformat(tip_time_raw.replace('Z', '+00:00'))
+                        _local2 = _t2.astimezone(_tz2(_td2(hours=2)))
+                        tip_time = _local2.strftime('%H:%M')
+                    else:
+                        tip_time = tip_time_raw
+                except Exception:
+                    tip_time = tip_time_raw
+
+            try:
+                odds_val = float(str(r.get('oddsYes', '1.5')).replace(',', '.'))
+                prob_val = int(r.get('probability', 60))
+                # Konservativerer Cap bei reiner Liga-Schätzung (kein echter Pinnacle-Quote-Confirm)
+                _no_real = r.get('_no_real_odds', True)
+                _max_u = 1.5 if _no_real else 3.0
+                units = calculate_kelly_units(prob_val, odds_val, max_units=_max_u)
+                units_emoji = "🔥" if units >= 2.5 else "💚" if units >= 1.5 else "🟡"
+            except:
+                units = 1.0
+                units_emoji = "💚"
+
+            # Wetter
+            weather_data = r.get("weather", {})
+            weather_line = ""
+            if weather_data and weather_data.get("temp"):
+                temp = weather_data.get("temp", "")
+                rain = weather_data.get("rain", 0)
+                wind = weather_data.get("wind", 0)
+                if rain > 1:
+                    weather_line = f"🌧️ {temp}°C · Regen {rain}mm"
+                elif wind > 30:
+                    weather_line = f"💨 {temp}°C · Wind {wind}km/h"
+                else:
+                    weather_line = f"🌤️ {temp}°C"
+
+            # Form
+            def fmt_form(fs):
+                if not fs or fs in ['N/A', '-', '?']:
+                    return ""
+                icons2 = {"W": "🟢", "D": "🟡", "L": "🔴"}
+                return " ".join([icons2.get(c, "⚪") for c in str(fs)[-5:]])
+
+            home_form = r.get('homeForm', r.get('home_form', '')).strip()
+            away_form = r.get('awayForm', r.get('away_form', '')).strip()
+
+            # Sharp Money
+            sharp = r.get('sharp_money', '')
+            sharp_line = ""
+            if sharp == "strong":
+                sharp_line = "📌 Starkes Sharp Money Signal!"
+            elif sharp:
+                sharp_line = "📌 Sharp Money aktiv"
+
+            # Opening Odds
+            opening = r.get('opening_odds', 0)
+            odds_move_line = ""
+            if opening and odds_val and opening != odds_val:
+                diff = round(odds_val - opening, 2)
+                arrow = "▼" if diff < 0 else "▲"
+                odds_move_line = f"📉 Opening: {opening} → {odds_val} {arrow}"
+
+            # Verletzungen
+            inj_home = r.get('injuries_home', '')
+            inj_away = r.get('injuries_away', '')
+
+            # Schiri mit Details
+            ref = r.get('referee', r.get('ref', ''))
+            ref_cards = r.get('ref_cards_per_game', 0)
+            ref_red = r.get('ref_red_per_game', 0)
+            ref_pen = r.get('ref_penalty_rate', 0)
+            ref_fouls = r.get('ref_fouls_per_game', 0)
+
+            # H2H
+            h2h_btts = r.get('h2h_btts', '')
+            h2h_goals = r.get('h2h_avg_goals', '')
+
+            # Build Message
+            msg = f"💎 <b>{match_name}</b>" + "\n"
+            msg += f"📍 {r.get('league', r.get('league_name', ''))} · ⏰ {tip_time}" + "\n"
+            if weather_line:
+                msg += f"{weather_line}" + "\n"
+            msg += f"━━━━━━━━━━━━━━━━━━" + "\n"
+            msg += f"{mkt_icon} <b>{mkt_name}</b>" + "\n"
+            msg += f"✅ Tipp: <b>{r.get('tip','YES')}</b>" + "\n"
+            msg += f"📈 Wahrscheinlichkeit: <b>{r.get('probability',0)}%</b>" + "\n"
+            msg += f"⭐ Confidence: {'⭐' * confidence}" + "\n"
+            msg += f"💰 Quote: <b>{r.get('oddsYes','-')}</b> · Fair: {r.get('fairOdds','-')} · {val_icon} {r.get('valueRating','OK')}" + "\n"
+            msg += f"{units_emoji} <b>{units} Units</b>"
+
+            # Stats
+            stats = []
+            if r.get('xg_home') and r.get('xg_away'):
+                stats.append(f"⚡ xG: {r['xg_home']} / {r['xg_away']}")
+            if r.get('btts_rate_home') and r.get('btts_rate_away'):
+                stats.append(f"📊 BTTS Rate: {r['btts_rate_home']}% / {r['btts_rate_away']}%")
+            if h2h_btts:
+                stats.append(f"🔄 H2H BTTS: {h2h_btts}")
+            if h2h_goals:
+                stats.append(f"⚽ H2H Ø Tore: {h2h_goals}")
+            if stats:
+                msg += f"\n━━━━━━━━━━━━━━━━━━"
+                msg += "\n".join(stats)
+
+            # Quoten Bewegung
+            if odds_move_line or sharp_line:
+                msg += f"\n━━━━━━━━━━━━━━━━━━" + "\n"
+                if odds_move_line:
+                    msg += f"{odds_move_line}" + "\n"
+                if sharp_line:
+                    msg += f"{sharp_line}" + "\n"
+
+            # Team Info
+            team_info = []
+            if inj_home:
+                team_info.append(f"🏥 Verletzt Heim: {inj_home}")
+            if inj_away:
+                team_info.append(f"🏥 Verletzt Gast: {inj_away}")
+            if ref:
+                team_info.append(f"👨‍⚖️ Schiri: {ref}")
+            if team_info or ref:
+                msg += f"\n━━━━━━━━━━━━━━━━━━" + "\n"
+                if team_info:
+                    msg += "\n".join(team_info) + "\n"
+                if ref:
+                    msg += f"👨‍⚖️ <b>{ref}</b>" + "\n"
+                    if ref_cards:
+                        msg += f"   🟡 {ref_cards} K/Sp"
+                    if ref_red:
+                        msg += f" · 🔴 {ref_red} R/Sp"
+                    if ref_pen:
+                        msg += f" · ⚽ {ref_pen} Elf/Sp"
+                    if ref_fouls:
+                        msg += f" · 📊 {ref_fouls} F/Sp"
+                    # Schiri Bewertung
+                    if ref_cards:
+                        if float(ref_cards) < 3.5:
+                            msg += "\n   ✅ Lässt Spiel laufen"
+                        elif float(ref_cards) > 5:
+                            msg += "\n   ⚠️ Strenger Schiri"
+                        else:
+                            msg += "\n   🟡 Durchschnittlich"
+                    msg += "\n"
+
+            # Form
+            hf = fmt_form(home_form)
+            af = fmt_form(away_form)
+            if hf or af:
+                msg += f"\n━━━━━━━━━━━━━━━━━━" + "\n"
+                home_name = match_name.split(" vs ")[0][:12] if " vs " in match_name else "Heim"
+                away_name = match_name.split(" vs ")[1][:12] if " vs " in match_name else "Gast"
+                if hf:
+                    msg += f"🏠 {home_name}: {hf}" + "\n"
+                if af:
+                    msg += f"✈️ {away_name}: {af}" + "\n"
+
+            # Key Factor + Reasoning
+            if r.get('keyFactor'):
+                msg += f"\n━━━━━━━━━━━━━━━━━━" + "\n"
+                msg += f"⚡ <i>{r.get('keyFactor')[:100]}</i>" + "\n"
+
+            reasoning = r.get('reasoning', '')
+            if reasoning:
+                if len(reasoning) > 150:
+                    reasoning = reasoning[:147] + "..."
+                msg += f"\n💭 <i>{reasoning}</i>"
+
+            msg += f"\n━━━━━━━━━━━━━━━━━━"
+
+            # Beste Quote Empfehlung
+            tip_odds_data = r.get("_odds_data", [])
+            inline_keyboard = build_inline_keyboard(tip_odds_data, match_name)
+
+            # Bookie Empfehlung
+            best_bookie = r.get("bookie", "")
+            best_odds = r.get("oddsYes", "")
+            if best_bookie and best_odds:
+                msg += f"\n🏆 Empfehlung: <b>{best_bookie}</b> · Quote {best_odds}"
+
+            # 🆕 V20: Performance Footer
+            try:
+                msg = _ntr_enhance_message_with_stats(msg, target_chat)
+            except Exception:
+                pass
+
+            msg_id = send_telegram(msg, target_chat)
+            mark_tip_sent(match_name, market_id, target_date)
+
+            # ============================================================
+            # ML Features sammeln (FIX: tip_league + tip_odds aus dem Tipp)
+            # ============================================================
+            try:
+                tip_hour = int(r.get("time", "00:00").split(":")[0])
+                tip_weekday = datetime.now().weekday()
+            except:
+                tip_hour = 0
+                tip_weekday = 0
+
+            # 🆕 FIX: League und Odds aus dem Tipp selbst holen
+            tip_league = r.get("league", "") or r.get("_source_league", "")
+            tip_odds_data = r.get("_odds_data", [])
+
+            # xG Daten
+            xg_home = xg_away = xga_home = xga_away = 0.0
+            if tip_league in UNDERSTAT_LEAGUES:
+                try:
+                    parts = match_name.split(" vs ")
+                    if len(parts) == 2:
+                        hxg = get_team_xg(parts[0].strip(), tip_league)
+                        axg = get_team_xg(parts[1].strip(), tip_league)
+                        if hxg:
+                            xg_home = float(hxg.get("xG", 0))
+                            xga_home = float(hxg.get("xGA", 0))
+                        if axg:
+                            xg_away = float(axg.get("xG", 0))
+                            xga_away = float(axg.get("xGA", 0))
+                except:
+                    pass
+
+            # Sharp Money + Line Movement
+            sharp = line_mov = 0.0
+            try:
+                parts = match_name.split(" vs ")
+                if len(parts) == 2 and tip_odds_data:
+                    signals = analyze_pinnacle_value(tip_odds_data, parts[0], parts[1])
+                    if signals:
+                        for sig in signals:
+                            if "+" in sig:
+                                m = re.search(r'\+(\d+\.?\d*)', sig)
+                                if m:
+                                    sharp = float(m.group(1))
+                            elif "-" in sig:
+                                m = re.search(r'(-\d+\.?\d*)', sig)
+                                if m:
+                                    sharp = float(m.group(1))
+                    lm_signals = analyze_line_movement(tip_odds_data, parts[0], parts[1])
+                    if lm_signals:
+                        for sig in lm_signals:
+                            m = re.search(r'([+-]\d+\.?\d*)%', sig)
+                            if m:
+                                line_mov = float(m.group(1))
+            except:
+                pass
+
+            # Historische BTTS Rate
+            btts_h = btts_a = avg_g_h = avg_g_a = 0.0
+            try:
+                parts = match_name.split(" vs ")
+                if len(parts) == 2 and tip_league:
+                    hist = get_historical_btts_rate(tip_league, parts[0], parts[1])
+                    if hist:
+                        if hist.get("home"):
+                            btts_h = hist["home"].get("btts_rate", 0)
+                            avg_g_h = hist["home"].get("avg_goals", 0)
+                        if hist.get("away"):
+                            btts_a = hist["away"].get("btts_rate", 0)
+                            avg_g_a = hist["away"].get("avg_goals", 0)
+            except:
+                pass
+
+            import time as _ts
+            tip_id = f"{market_id}_{target_date}_{abs(hash(match_name + market_id)) % 100000}"
+
+            try:
+                odds_val = float(str(r.get('oddsYes', '1.5')).replace(',', '.'))
+                prob_val = int(r.get('probability', 60))
+                tip_units = calculate_kelly_units(prob_val, odds_val)
+            except:
+                tip_units = 1.0
+
+            tip_data = {
+                "tip_id": tip_id,
+                "date": str(target_date),
+                "market": market_id,
+                "market_name": market_name,
+                "match": match_name,
+                "league": r.get("league", ""),
+                "time": r.get("time", ""),
+                "tip": r.get("tip", ""),
+                "probability": r.get("probability", 0),
+                "confidence": r.get("confidence", 0),
+                "odds": str(r.get("oddsYes", "0")),
+                "fair_odds": str(r.get("fairOdds", "0")),
+                "bookie": r.get("bookie", ""),
+                "value_rating": r.get("valueRating", "OK"),
+                "home_form": r.get("homeForm", ""),
+                "away_form": r.get("awayForm", ""),
+                "reasoning": r.get("reasoning", "")[:500],
+                "key_factor": r.get("keyFactor", "")[:200],
+                "telegram_chat_id": str(target_chat),
+                "telegram_msg_id": msg_id,
+                "message_text": msg[:3500],  # Für Ergebnis-Anhang beim Settlement
+                "units": tip_units,
+                "status": "pending",
+                # ML Features
+                "weekday": tip_weekday,
+                "hour": tip_hour,
+                "xg_home": xg_home,
+                "xg_away": xg_away,
+                "xga_home": xga_home,
+                "xga_away": xga_away,
+                "sharp_money": sharp,
+                "line_movement": line_mov,
+                "btts_rate_home": btts_h,
+                "btts_rate_away": btts_a,
+                "avg_goals_home": avg_g_h,
+                "avg_goals_away": avg_g_a,
+            }
+
+            # Prüfe ob bereits in Supabase
+            tip_id_check = tip_data.get("tip_id", "")
+            already_exists = False
+            if tip_id_check and SUPABASE_URL and SUPABASE_KEY:
+                try:
+                    r_check = requests.get(
+                        f"{SUPABASE_URL}/rest/v1/tips",
+                        headers={"apikey": SUPABASE_KEY, "Authorization": f"Bearer {SUPABASE_KEY}"},
+                        params={"tip_id": f"eq.{tip_id_check}", "select": "id", "limit": "1"},
+                        timeout=5,
+                    )
+                    if r_check.ok and r_check.json():
+                        already_exists = True
+                except Exception:
+                    pass
+
+            if already_exists:
+                log(f"   ⏭️ Supabase: bereits vorhanden {tip_data.get('match','?')}")
+            else:
+                save_result = save_to_supabase(tip_data)
+                # CLV Tracking
+                if NETRATTLER_PRO:
+                    try:
+                        log_tip_for_clv(tip_data)
+                    except Exception:
+                        pass
+                if save_result:
+                    saved += 1
+                else:
+                    log(f"   ⚠️ Supabase save fehlgeschlagen für {tip_data.get('match','?')}", "WARN")
+
+        value_count = sum(1 for r in tips if r.get("valueRating") == "HIGH")
+
+        # Kein Footer - direkt Tipps ohne Zusammenfassung
+
+    log(f"Gespeichert in Supabase: {saved}")
+    try:
+        _send_daily_auswertung_to_all_groups()
+    except Exception as _ae:
+        log(f"Auswertung Error: {str(_ae)[:50]}", "WARN")
+
+
+# ============================================================
+# AUTO LEAGUE SWITCH FUNKTIONEN
+# ============================================================
+
+def fetch_all_closed_tips_from_supabase():
+    """
+    Holt abgeschlossene Tipps aus Supabase.
+    """
+    if not SUPABASE_URL or not SUPABASE_KEY:
+        log("Auto Liga Switch: Supabase fehlt, alle Ligen bleiben aktiv.", "WARN")
+        return []
+
+    try:
+        since_date = (date.today() - timedelta(days=AUTO_LEAGUE_LOOKBACK_DAYS)).isoformat()
+
+        r = requests.get(
+            f"{SUPABASE_URL}/rest/v1/tips",
+            headers={
+                "apikey": SUPABASE_KEY,
+                "Authorization": f"Bearer {SUPABASE_KEY}",
+            },
+            params={
+                "select": "league,status,odds,date",
+                "status": "in.(won,lost)",
+                "date": f"gte.{since_date}",
+                "limit": "5000",
+            },
+            timeout=20,
+        )
+
+        if not r.ok:
+            log(f"Auto Liga Switch: Supabase Fehler {r.status_code}", "WARN")
+            return []
+
+        return r.json()
+
+    except Exception as e:
+        log(f"Auto Liga Switch Fehler: {e}", "WARN")
+        return []
+
+
+def calculate_league_performance(tips):
+    """
+    Berechnet pro Liga Performance-Metriken.
+    """
+    stats = {}
+    sorted_tips = sorted(tips, key=lambda t: t.get("date", ""), reverse=True)
+
+    for t in sorted_tips:
+        league = t.get("league") or "Unknown"
+        status = t.get("status")
+
+        if league not in stats:
+            stats[league] = {
+                "won": 0, "lost": 0, "total": 0,
+                "roi": 0.0, "winrate": 0.0,
+                "recent": {"won": 0, "lost": 0, "total": 0, "roi": 0.0, "winrate": 0.0}
+            }
+
+        if status == "won":
+            stats[league]["won"] += 1
+            try:
+                odds = float(str(t.get("odds", "1")).replace(",", "."))
+                stats[league]["roi"] += odds - 1
+                if stats[league]["total"] < 10:
+                    stats[league]["recent"]["won"] += 1
+                    stats[league]["recent"]["roi"] += odds - 1
+            except Exception:
+                pass
+        elif status == "lost":
+            stats[league]["lost"] += 1
+            stats[league]["roi"] -= 1
+            if stats[league]["total"] < 10:
+                stats[league]["recent"]["lost"] += 1
+                stats[league]["recent"]["roi"] -= 1
+        else:
+            continue
+
+        stats[league]["total"] += 1
+        if stats[league]["total"] <= 10:
+            stats[league]["recent"]["total"] += 1
+
+    for league, s in stats.items():
+        if s["total"] > 0:
+            s["winrate"] = round((s["won"] / s["total"]) * 100, 1)
+            s["roi"] = round(s["roi"], 2)
+        r = s["recent"]
+        if r["total"] > 0:
+            r["winrate"] = round((r["won"] / r["total"]) * 100, 1)
+            r["roi"] = round(r["roi"], 2)
+
+    return stats
+
+
+def should_run_league(league, league_stats):
+    """
+    Entscheidung ob Liga laufen soll.
+    """
+    if league in ALWAYS_OFF_LEAGUES:
+        return False, "ALWAYS_OFF"
+
+    if league in ALWAYS_ON_LEAGUES:
+        return True, "ALWAYS_ON"
+
+    s = league_stats.get(league)
+
+    if not s:
+        return True, "keine Daten"
+
+    if s["total"] < AUTO_LEAGUE_MIN_TIPS:
+        return True, f"zu wenig Daten ({s['total']}/{AUTO_LEAGUE_MIN_TIPS})"
+
+    winrate_bad = s["winrate"] < AUTO_LEAGUE_MIN_WINRATE
+    roi_bad = s["roi"] < AUTO_LEAGUE_MIN_ROI
+
+    if winrate_bad or roi_bad:
+        recent = s.get("recent", {})
+        recent_total = recent.get("total", 0)
+        recent_winrate = recent.get("winrate", 0)
+        recent_roi = recent.get("roi", 0)
+
+        if recent_total >= 5:
+            recent_good = (
+                recent_winrate >= AUTO_LEAGUE_MIN_WINRATE + 5 and
+                recent_roi >= AUTO_LEAGUE_MIN_ROI + 1.0
+            )
+            if recent_good:
+                return True, (
+                    f"🔄 REAKTIVIERT! Letzte {recent_total}: "
+                    f"{recent_winrate}% / ROI {recent_roi} "
+                    f"(Gesamt: {s['winrate']}% / ROI {s['roi']})"
+                )
+
+        reason = []
+        if winrate_bad:
+            reason.append(f"Winrate {s['winrate']}% < {AUTO_LEAGUE_MIN_WINRATE}%")
+        if roi_bad:
+            reason.append(f"ROI {s['roi']} < {AUTO_LEAGUE_MIN_ROI}")
+        return False, " · ".join(reason)
+
+    return True, f"OK ({s['winrate']}%, ROI {s['roi']})"
+
+
+def get_active_leagues():
+    """
+    Gibt ALLE Ligen zurück (global, 24/7).
+    Keine Zeit-Filterung mehr - der Bot checkt alle Ligen weltweit.
+    """
+    if not LEAGUE_ROTATION_ENABLED:
+        return list(LEAGUES_TO_RUN), {}
+    if ACTIVE_LEAGUES_OVERRIDE:
+        log(f"🎯 Override: {len(ACTIVE_LEAGUES_OVERRIDE)} Ligen")
+        return ACTIVE_LEAGUES_OVERRIDE, {}
+
+    log(f"🌍 Global Mode: alle {len(LEAGUES_TO_RUN)} Ligen aktiv (24/7)")
+
+    if not AUTO_LEAGUE_SWITCH:
+        log("Auto Liga Switch: AUS")
+        return LEAGUES_TO_RUN, {}
+
+    log("Auto Liga Switch: AN")
+    log(
+        f"Regeln: min. {AUTO_LEAGUE_MIN_TIPS} Tipps · "
+        f"Winrate ≥ {AUTO_LEAGUE_MIN_WINRATE}% · "
+        f"ROI ≥ {AUTO_LEAGUE_MIN_ROI} · "
+        f"Lookback {AUTO_LEAGUE_LOOKBACK_DAYS} Tage"
+    )
+
+    tips = fetch_all_closed_tips_from_supabase()
+    league_stats = calculate_league_performance(tips)
+
+    active = []
+    disabled = []
+
+    for league in LEAGUES_TO_RUN:
+        run, reason = should_run_league(league, league_stats)
+
+        if run:
+            active.append(league)
+        else:
+            disabled.append((league, reason))
+            log(f" ⛔ {league}: {reason}", "SKIP")
+
+    log(f"Auto Liga Switch: {len(active)} aktiv, {len(disabled)} pausiert")
+
+    return active, league_stats
+
+
+
+# ============================================================
+# 🏆 SETTLEMENT / CHECK SYSTEM - Post-Match Auswertung
+# ============================================================
+
+def check_tip_result(tip, result):
+    """
+    Prüft ob ein Tipp gewonnen oder verloren hat.
+    result: {'home_score': 2, 'away_score': 1, 'btts': True, 'over25': True, 'btts_ht': False}
+    """
+    if not result or not tip:
+        return None
+
+    market = tip.get("market", "btts")
+    tip_value = tip.get("tip", "YES")
+
+    won = False
+
+    if market == "btts":
+        won = result.get("btts", False) if tip_value == "YES" else not result.get("btts", False)
+    elif market == "over25":
+        won = result.get("over25", False) if tip_value == "YES" else not result.get("over25", False)
+    elif market == "combo":
+        won = result.get("btts", False) and result.get("over25", False) if tip_value == "YES" else not (result.get("btts", False) and result.get("over25", False))
+    elif market == "btts_ht":
+        won = result.get("btts_ht", False) if tip_value == "YES" else not result.get("btts_ht", False)
+
+    return "won" if won else "lost"
+
+
+_AF_FIXTURES_DAY_CACHE = {}  # {date_str: [fixtures]} — verhindert N Calls für N pending Tips am selben Tag
+
+def _af_fixtures_for_date(date_str):
+    """Holt alle FT-Fixtures für ein Datum, gecached pro Tag (1 Call statt N)."""
+    if date_str in _AF_FIXTURES_DAY_CACHE:
+        return _AF_FIXTURES_DAY_CACHE[date_str]
+    r = _af_request("/fixtures", {"date": date_str, "status": "FT"})
+    _AF_FIXTURES_DAY_CACHE[date_str] = r or []
+    return _AF_FIXTURES_DAY_CACHE[date_str]
+
+
+_SOFA_EVENTS_DAY_CACHE = {}  # {date_str: [events]} — wie API-Football Tages-Cache, aber kostenlos & ID-los
+
+def _sofascore_events_for_date(date_str):
+    """
+    Holt ALLE Fussball-Events eines Tages von SofaScore (kostenlos, kein Key, kein Match-ID nötig).
+    Gecacht pro Tag: 1 Call deckt alle pending Tips desselben Tages ab.
+    Fällt bei Cloudflare-Block auf Playwright zurück.
+    """
+    if date_str in _SOFA_EVENTS_DAY_CACHE:
+        return _SOFA_EVENTS_DAY_CACHE[date_str]
+
+    url = f"https://api.sofascore.com/api/v1/sport/football/scheduled-events/{date_str}"
+    events = []
+    _status = None
+    try:
+        r = requests.get(
+            url,
+            headers={
+                "User-Agent": "Mozilla/5.0 (iPhone; CPU iPhone OS 16_0 like Mac OS X) AppleWebKit/605.1.15",
+                "Accept": "application/json",
+                "Referer": "https://www.sofascore.com/",
+            },
+            timeout=15,
+        )
+        _status = r.status_code
+        if r.ok:
+            data = r.json()
+            events = data.get("events", [])
+    except Exception as _se:
+        _status = f"EXC:{str(_se)[:60]}"
+
+    log(f"   🔍 SOFA-DEBUG: {date_str} → HTTP {_status}, {len(events)} Events (direkt)")
+
+    if not events and PLAYWRIGHT_AVAILABLE:
+        try:
+            html = scrape_with_playwright(url, timeout=15000)
+            if html:
+                import re as _re
+                m = _re.search(r'(\{.*\})', html, _re.DOTALL)
+                if m:
+                    data = json.loads(m.group(1))
+                    events = data.get("events", [])
+            log(f"   🔍 SOFA-DEBUG: {date_str} → Playwright-Fallback: {len(events)} Events")
+        except Exception as _pe:
+            log(f"   🔍 SOFA-DEBUG: {date_str} → Playwright-Fallback Fehler: {str(_pe)[:80]}", "WARN")
+
+    finished_count = sum(1 for e in events if (e.get("status", {}) or {}).get("type") == "finished")
+    if events:
+        log(f"   🔍 SOFA-DEBUG: {date_str} → {len(events)} Events total, {finished_count} finished")
+
+    _SOFA_EVENTS_DAY_CACHE[date_str] = events
+    return events
+
+
+def _sofascore_find_result(home_team, away_team, tip_date):
+    """Sucht Ergebnis per Teamname+Datum in SofaScore-Tagesliste, mit ±1-Tag-Fallback."""
+    from datetime import timedelta as _td3
+
+    events = _sofascore_events_for_date(tip_date)
+    if not events:
+        try:
+            for _delta in [-1, 1]:
+                _d2 = str((datetime.strptime(tip_date, "%Y-%m-%d") + _td3(days=_delta)).date())
+                events = _sofascore_events_for_date(_d2)
+                if events:
+                    break
+        except Exception:
+            pass
+
+    if not events:
+        return None
+
+    h_target = home_team.lower()
+    a_target = away_team.lower()
+
+    for ev in events:
+        status = ev.get("status", {}).get("type", "")
+        if status != "finished":
+            continue
+        h = (ev.get("homeTeam") or {}).get("name", "")
+        a = (ev.get("awayTeam") or {}).get("name", "")
+        h_match = h.lower()[:6] in h_target or h_target[:6] in h.lower()
+        a_match = a.lower()[:6] in a_target or a_target[:6] in a.lower()
+        if h_match and a_match:
+            home_g = (ev.get("homeScore") or {}).get("current", 0) or 0
+            away_g = (ev.get("awayScore") or {}).get("current", 0) or 0
+            ht_home = (ev.get("homeScore") or {}).get("period1", 0) or 0
+            ht_away = (ev.get("awayScore") or {}).get("period1", 0) or 0
+            return {
+                "home_score": home_g,
+                "away_score": away_g,
+                "ht_home": ht_home,
+                "ht_away": ht_away,
+                "btts": home_g > 0 and away_g > 0,
+                "over25": (home_g + away_g) > 2,
+                "btts_ht": ht_home > 0 and ht_away > 0,
+                "total_goals": home_g + away_g,
+                "status": "finished",
+            }
+    return None
+
+
+_ALLSPORTS_DAY_CACHE = {}  # {date_str: [matches]} — globale Tagessuche, kein leagueId nötig
+
+def _allsports_events_for_date(date_str):
+    """
+    Holt ALLE Fussball-Fixtures eines Tages von AllSportsAPI, OHNE leagueId-Einschränkung.
+    Gecacht pro Tag, analog zu SofaScore/API-Football Tages-Cache.
+    """
+    if not ALLSPORTS_API_KEY:
+        return []
+    if date_str in _ALLSPORTS_DAY_CACHE:
+        return _ALLSPORTS_DAY_CACHE[date_str]
+
+    matches = []
+    _status = None
+    try:
+        r = requests.get(
+            "https://apiv2.allsportsapi.com/football/",
+            params={
+                "met": "Fixtures",
+                "APIkey": ALLSPORTS_API_KEY,
+                "from": date_str,
+                "to": date_str,
+            },
+            timeout=20,
+        )
+        _status = r.status_code
+        if r.ok:
+            data = r.json()
+            matches = data.get("result", []) or []
+    except Exception as _ae:
+        _status = f"EXC:{str(_ae)[:60]}"
+
+    log(f"   🔍 ALLSPORTS-DEBUG: {date_str} → HTTP {_status}, {len(matches)} Fixtures")
+    _ALLSPORTS_DAY_CACHE[date_str] = matches
+    return matches
+
+
+def _allsports_find_result(home_team, away_team, tip_date):
+    """Sucht Ergebnis per Teamname+Datum in AllSports-Tagesliste, mit ±1-Tag-Fallback."""
+    from datetime import timedelta as _td4
+
+    matches = _allsports_events_for_date(tip_date)
+    if not matches:
+        try:
+            for _delta in [-1, 1]:
+                _d2 = str((datetime.strptime(tip_date, "%Y-%m-%d") + _td4(days=_delta)).date())
+                matches = _allsports_events_for_date(_d2)
+                if matches:
+                    break
+        except Exception:
+            pass
+
+    if not matches:
+        return None
+
+    h_target = home_team.lower()
+    a_target = away_team.lower()
+
+    for m in matches:
+        status = m.get("event_status", "")
+        if status != "Finished":
+            continue
+        h = m.get("event_home_team", "")
+        a = m.get("event_away_team", "")
+        h_match = h.lower()[:6] in h_target or h_target[:6] in h.lower()
+        a_match = a.lower()[:6] in a_target or a_target[:6] in a.lower()
+        if h_match and a_match:
+            try:
+                home_g = int(m.get("event_final_result", "0-0").split("-")[0].strip() or 0)
+                away_g = int(m.get("event_final_result", "0-0").split("-")[1].strip() or 0)
+                ht = m.get("event_halftime_result", "0-0") or "0-0"
+                ht_home = int(ht.split("-")[0].strip() or 0)
+                ht_away = int(ht.split("-")[1].strip() or 0)
+            except Exception:
+                continue
+            return {
+                "home_score": home_g,
+                "away_score": away_g,
+                "ht_home": ht_home,
+                "ht_away": ht_away,
+                "btts": home_g > 0 and away_g > 0,
+                "over25": (home_g + away_g) > 2,
+                "btts_ht": ht_home > 0 and ht_away > 0,
+                "total_goals": home_g + away_g,
+                "status": "finished",
+            }
+    return None
+
+
+_FOOTBALLDATA_DAY_CACHE = {}  # {date_str: [matches]} — globale Tagessuche, alle Competitions des Keys
+
+def _footballdata_events_for_date(date_str):
+    """
+    Holt ALLE Matches eines Tages von football-data.org (globaler /v4/matches Endpoint,
+    deckt alle Competitions ab, zu denen der Key Zugriff hat — kein Liga-Code nötig).
+    Gecacht pro Tag, nutzt bestehende Key-Rotation (_FD_KEY_OFFSET / _FD_DEAD_KEYS).
+    """
+    global _FD_KEY_OFFSET
+    if not FOOTBALL_DATA_API_KEYS:
+        return []
+    if date_str in _FOOTBALLDATA_DAY_CACHE:
+        return _FOOTBALLDATA_DAY_CACHE[date_str]
+
+    matches = []
+    n = len(FOOTBALL_DATA_API_KEYS)
+    _status = None
+    for offset in range(n):
+        idx = (_FD_KEY_OFFSET + offset) % n
+        if idx in _FD_DEAD_KEYS:
+            continue
+        key = FOOTBALL_DATA_API_KEYS[idx]
+        try:
+            r = requests.get(
+                "https://api.football-data.org/v4/matches",
+                params={"dateFrom": date_str, "dateTo": date_str},
+                headers={"X-Auth-Token": key},
+                timeout=15,
+            )
+            _status = r.status_code
+            if r.status_code == 429:
+                _FD_DEAD_KEYS.add(idx)
+                continue
+            if r.status_code == 403:
+                _FD_DEAD_KEYS.add(idx)
+                continue
+            if r.ok:
+                data = r.json()
+                matches = data.get("matches", []) or []
+                _FD_KEY_OFFSET = (idx + 1) % n
+                break
+        except Exception as _fde:
+            _status = f"EXC:{str(_fde)[:60]}"
+            continue
+
+    log(f"   🔍 FOOTBALLDATA-DEBUG: {date_str} → HTTP {_status}, {len(matches)} Matches")
+    _FOOTBALLDATA_DAY_CACHE[date_str] = matches
+    return matches
+
+
+def _footballdata_find_result(home_team, away_team, tip_date):
+    """Sucht Ergebnis per Teamname+Datum in football-data.org-Tagesliste, mit ±1-Tag-Fallback."""
+    from datetime import timedelta as _td5
+
+    matches = _footballdata_events_for_date(tip_date)
+    if not matches:
+        try:
+            for _delta in [-1, 1]:
+                _d2 = str((datetime.strptime(tip_date, "%Y-%m-%d") + _td5(days=_delta)).date())
+                matches = _footballdata_events_for_date(_d2)
+                if matches:
+                    break
+        except Exception:
+            pass
+
+    if not matches:
+        return None
+
+    h_target = home_team.lower()
+    a_target = away_team.lower()
+
+    for m in matches:
+        status = m.get("status", "")
+        if status != "FINISHED":
+            continue
+        h = (m.get("homeTeam") or {}).get("name", "") or ""
+        a = (m.get("awayTeam") or {}).get("name", "") or ""
+        h_match = len(h) >= 4 and (h.lower()[:6] in h_target or h_target[:6] in h.lower())
+        a_match = len(a) >= 4 and (a.lower()[:6] in a_target or a_target[:6] in a.lower())
+        if h_match and a_match:
+            score = m.get("score", {}) or {}
+            ft = score.get("fullTime", {}) or {}
+            ht = score.get("halfTime", {}) or {}
+            home_g = ft.get("home", 0) or 0
+            away_g = ft.get("away", 0) or 0
+            ht_home = ht.get("home", 0) or 0
+            ht_away = ht.get("away", 0) or 0
+            return {
+                "home_score": home_g,
+                "away_score": away_g,
+                "ht_home": ht_home,
+                "ht_away": ht_away,
+                "btts": home_g > 0 and away_g > 0,
+                "over25": (home_g + away_g) > 2,
+                "btts_ht": ht_home > 0 and ht_away > 0,
+                "total_goals": home_g + away_g,
+                "status": "finished",
+            }
+    return None
+
+
+_OPENLIGADB_DAY_CACHE = {}  # German-fokussiert, aber komplett kostenlos & ohne Key
+
+def _openligadb_find_result(home_team, away_team, tip_date, league_name=""):
+    """
+    OpenLigaDB: kostenlose, keyless API für deutsche Wettbewerbe (Bundesliga, 2./3. Liga, DFB-Pokal).
+    Nur sinnvoll wenn die Liga deutsch ist — sonst überspringen (kein globaler Endpoint vorhanden).
+    """
+    _ln = league_name.lower()
+    _league_map = {
+        "bundesliga": "bl1", "2. bundesliga": "bl2", "3. liga": "bl3",
+        "dfb-pokal": "dfb", "dfb pokal": "dfb",
+    }
+    _shortcut = None
+    for key, code in _league_map.items():
+        if key in _ln:
+            _shortcut = code
+            break
+    if not _shortcut:
+        return None
+
+    try:
+        season = str(datetime.strptime(tip_date, "%Y-%m-%d").year)
+    except Exception:
+        return None
+
+    cache_key = f"{_shortcut}_{season}"
+    if cache_key not in _OPENLIGADB_DAY_CACHE:
+        try:
+            r = requests.get(
+                f"https://api.openligadb.de/getmatchdata/{_shortcut}/{season}",
+                timeout=15,
+            )
+            _OPENLIGADB_DAY_CACHE[cache_key] = r.json() if r.ok else []
+            log(f"   🔍 OPENLIGADB-DEBUG: {_shortcut}/{season} → {len(_OPENLIGADB_DAY_CACHE[cache_key])} Matches")
+        except Exception:
+            _OPENLIGADB_DAY_CACHE[cache_key] = []
+
+    matches = _OPENLIGADB_DAY_CACHE.get(cache_key, [])
+    h_target = home_team.lower()
+    a_target = away_team.lower()
+
+    for m in matches:
+        if not m.get("matchIsFinished"):
+            continue
+        h = (m.get("team1") or {}).get("teamName", "") or ""
+        a = (m.get("team2") or {}).get("teamName", "") or ""
+        h_match = len(h) >= 4 and (h.lower()[:6] in h_target or h_target[:6] in h.lower())
+        a_match = len(a) >= 4 and (a.lower()[:6] in a_target or a_target[:6] in a.lower())
+        if h_match and a_match:
+            results = m.get("matchResults", []) or []
+            ft = next((r for r in results if r.get("resultName") == "Endergebnis"), None)
+            ht = next((r for r in results if r.get("resultName") == "Halbzeitergebnis"), None)
+            if not ft:
+                continue
+            home_g = ft.get("pointsTeam1", 0) or 0
+            away_g = ft.get("pointsTeam2", 0) or 0
+            ht_home = ht.get("pointsTeam1", 0) if ht else 0
+            ht_away = ht.get("pointsTeam2", 0) if ht else 0
+            return {
+                "home_score": home_g,
+                "away_score": away_g,
+                "ht_home": ht_home,
+                "ht_away": ht_away,
+                "btts": home_g > 0 and away_g > 0,
+                "over25": (home_g + away_g) > 2,
+                "btts_ht": ht_home > 0 and ht_away > 0,
+                "total_goals": home_g + away_g,
+                "status": "finished",
+            }
+    return None
+
+
+_FOOTBALLDATAIO_DAY_CACHE = {}  # {date_str: [matches]}
+
+def _footballdataio_events_for_date(date_str):
+    """
+    Holt alle Matches eines Tages von footballdata.io (anderer Anbieter als football-data.org!).
+    Bestätigter Endpoint: GET /matches/date/{date}, Auth: Bearer Token.
+    Gecacht pro Tag.
+    """
+    if not FOOTBALLDATA_IO_API_KEY:
+        return []
+    if date_str in _FOOTBALLDATAIO_DAY_CACHE:
+        return _FOOTBALLDATAIO_DAY_CACHE[date_str]
+
+    matches = []
+    _status = None
+    try:
+        r = requests.get(
+            f"https://footballdata.io/api/v1/matches/date/{date_str}",
+            headers={"Authorization": f"Bearer {FOOTBALLDATA_IO_API_KEY}"},
+            timeout=15,
+        )
+        _status = r.status_code
+        if r.ok:
+            data = r.json()
+            # Antwortformat noch nicht live verifiziert — robust gegen beide üblichen Strukturen
+            matches = data.get("data") or data.get("matches") or (data if isinstance(data, list) else [])
+    except Exception as _fie:
+        _status = f"EXC:{str(_fie)[:60]}"
+
+    log(f"   🔍 FOOTBALLDATAIO-DEBUG: {date_str} → HTTP {_status}, {len(matches)} Matches")
+    _FOOTBALLDATAIO_DAY_CACHE[date_str] = matches
+    return matches
+
+
+def _footballdataio_find_result(home_team, away_team, tip_date):
+    """Sucht Ergebnis per Teamname+Datum in footballdata.io-Tagesliste, mit ±1-Tag-Fallback."""
+    from datetime import timedelta as _td6
+
+    matches = _footballdataio_events_for_date(tip_date)
+    if not matches:
+        try:
+            for _delta in [-1, 1]:
+                _d2 = str((datetime.strptime(tip_date, "%Y-%m-%d") + _td6(days=_delta)).date())
+                matches = _footballdataio_events_for_date(_d2)
+                if matches:
+                    break
+        except Exception:
+            pass
+
+    if not matches:
+        return None
+
+    h_target = home_team.lower()
+    a_target = away_team.lower()
+
+    for m in matches:
+        # Status-Feldname noch nicht live verifiziert — mehrere übliche Varianten abdecken
+        status = (m.get("status") or m.get("matchStatus") or "").upper()
+        if status not in ("FINISHED", "FT", "COMPLETED"):
+            continue
+        home_obj = m.get("homeTeam") or m.get("home_team") or {}
+        away_obj = m.get("awayTeam") or m.get("away_team") or {}
+        h = home_obj.get("name", "") if isinstance(home_obj, dict) else str(home_obj)
+        a = away_obj.get("name", "") if isinstance(away_obj, dict) else str(away_obj)
+        h_match = len(h) >= 4 and (h.lower()[:6] in h_target or h_target[:6] in h.lower())
+        a_match = len(a) >= 4 and (a.lower()[:6] in a_target or a_target[:6] in a.lower())
+        if h_match and a_match:
+            score = m.get("score", {}) or {}
+            home_g = score.get("home") or score.get("homeScore") or 0
+            away_g = score.get("away") or score.get("awayScore") or 0
+            ht = m.get("halfTimeScore") or {}
+            ht_home = ht.get("home", 0) if isinstance(ht, dict) else 0
+            ht_away = ht.get("away", 0) if isinstance(ht, dict) else 0
+            return {
+                "home_score": home_g,
+                "away_score": away_g,
+                "ht_home": ht_home,
+                "ht_away": ht_away,
+                "btts": home_g > 0 and away_g > 0,
+                "over25": (home_g + away_g) > 2,
+                "btts_ht": ht_home > 0 and ht_away > 0,
+                "total_goals": home_g + away_g,
+                "status": "finished",
+            }
+    return None
+
+    """
+    Versucht Spielergebnis von mehreren Quellen zu holen.
+    Priorität: SofaScore (Tages-Suche) → AllSports (Tages-Suche) → API-Football → ESPN/SofaScore/AllSports (per ID)
+    """
+    match_name = tip.get("match", "")
+    league = tip.get("league", "")
+    match_id = tip.get("telegram_msg_id", "")  # Wir brauchen die echte match_id
+
+    # 🆕 SofaScore Tages-Suche zuerst — kostenlos, kein Key, kein vorab gespeichertes ID nötig
+    if match_name and " vs " in match_name:
+        try:
+            parts = match_name.split(" vs ")
+            home_team = parts[0].strip()
+            away_team = parts[1].strip() if len(parts) > 1 else ""
+            tip_date = tip.get("date", str(datetime.now(timezone.utc).date()))
+            result = _sofascore_find_result(home_team, away_team, tip_date)
+            if result:
+                return result
+        except Exception:
+            pass
+
+    # 🆕 TheStatsAPI Settlement (primär — zuverlässigste Quelle wenn Key vorhanden)
+    if THESTATSAPI_KEYS and match_name and " vs " in match_name:
+        try:
+            _parts = match_name.split(" vs ")
+            _home = _parts[0].strip()
+            _away = _parts[1].strip() if len(_parts) > 1 else ""
+            _date = tip.get("date", str(datetime.now(timezone.utc).date()))
+            _res = tsa_find_match_result(_home, _away, _date)
+            if _res:
+                return _res
+        except Exception:
+            pass
+
+    # 🆕 AllSports Tages-Suche — eigener API-Key bereits aktiv, kein vorab gespeichertes ID nötig
+    if ALLSPORTS_API_KEY and match_name and " vs " in match_name:
+        try:
+            parts = match_name.split(" vs ")
+            home_team = parts[0].strip()
+            away_team = parts[1].strip() if len(parts) > 1 else ""
+            tip_date = tip.get("date", str(datetime.now(timezone.utc).date()))
+            result = _allsports_find_result(home_team, away_team, tip_date)
+            if result:
+                return result
+        except Exception:
+            pass
+
+    # 🆕 Football-Data.org Tages-Suche — bereits validierte Keys, globaler Endpoint
+    if FOOTBALL_DATA_API_KEYS and match_name and " vs " in match_name:
+        try:
+            parts = match_name.split(" vs ")
+            home_team = parts[0].strip()
+            away_team = parts[1].strip() if len(parts) > 1 else ""
+            tip_date = tip.get("date", str(datetime.now(timezone.utc).date()))
+            result = _footballdata_find_result(home_team, away_team, tip_date)
+            if result:
+                return result
+        except Exception:
+            pass
+
+    # 🆕 OpenLigaDB — kostenlos, kein Key, nur deutsche Wettbewerbe (Bundesliga etc.)
+    if match_name and " vs " in match_name:
+        try:
+            parts = match_name.split(" vs ")
+            home_team = parts[0].strip()
+            away_team = parts[1].strip() if len(parts) > 1 else ""
+            tip_date = tip.get("date", str(datetime.now(timezone.utc).date()))
+            result = _openligadb_find_result(home_team, away_team, tip_date, league)
+            if result:
+                return result
+        except Exception:
+            pass
+
+    # 🆕 footballdata.io Tages-Suche — anderer Anbieter als football-data.org
+    if FOOTBALLDATA_IO_API_KEY and match_name and " vs " in match_name:
+        try:
+            parts = match_name.split(" vs ")
+            home_team = parts[0].strip()
+            away_team = parts[1].strip() if len(parts) > 1 else ""
+            tip_date = tip.get("date", str(datetime.now(timezone.utc).date()))
+            result = _footballdataio_find_result(home_team, away_team, tip_date)
+            if result:
+                return result
+        except Exception:
+            pass
+
+    # SofaScore per ID (falls vorhanden, z.B. aus alten Live-Bot-Daten)
+    sofa_id = tip.get("sofa_match_id")
+    if sofa_id:
+        result = get_sofascore_match_result(sofa_id)
+        if result:
+            return result
+
+    # ESPN Fallback
+    espn_id = tip.get("espn_match_id")
+    if espn_id:
+        result = get_espn_result(espn_id, league)
+        if result:
+            return result
+
+    # AllSports Fallback
+    asp_id = tip.get("allsports_match_id")
+    if asp_id:
+        result = get_allsports_result(asp_id)
+        if result:
+            return result
+
+    # API-Football Fallback — Suche by Teamname + Datum
+    if API_FOOTBALL_KEYS and match_name and " vs " in match_name:
+        try:
+            parts = match_name.split(" vs ")
+            home_team = parts[0].strip()
+            away_team = parts[1].strip() if len(parts) > 1 else ""
+            tip_date = tip.get("date", str(datetime.now(timezone.utc).date()))
+            from datetime import timedelta as _td2
+
+            # API-Football /fixtures: "team" braucht eine numerische ID, KEIN Name!
+            # Daher: nur nach Datum + Status filtern, dann lokal nach Teamnamen matchen.
+            # Gecacht pro Tag: 1 API-Call deckt ALLE pending Tips desselben Tages ab
+            r = _af_fixtures_for_date(tip_date)
+
+            # Strategie 2: ±1 Tag (Zeitzone-Puffer), ebenfalls gecached
+            if not r:
+                for _delta in [-1, 1]:
+                    _d2 = str((datetime.strptime(tip_date, "%Y-%m-%d") + _td2(days=_delta)).date())
+                    r = _af_fixtures_for_date(_d2)
+                    if r:
+                        break
+
+            if r:
+                for fix in r:
+                    teams = fix.get("teams", {})
+                    h = teams.get("home", {}).get("name", "")
+                    a = teams.get("away", {}).get("name", "")
+                    # Fuzzy match: mindestens erste 4 Zeichen übereinstimmen
+                    h_match = h.lower()[:6] in home_team.lower() or home_team.lower()[:6] in h.lower()
+                    a_match = not away_team or a.lower()[:6] in away_team.lower() or away_team.lower()[:6] in a.lower()
+                    if h_match and a_match:
+                        goals = fix.get("goals", {})
+                        score = fix.get("score", {})
+                        home_g = goals.get("home", 0) or 0
+                        away_g = goals.get("away", 0) or 0
+                        ht_home = (score.get("halftime") or {}).get("home", 0) or 0
+                        ht_away = (score.get("halftime") or {}).get("away", 0) or 0
+                        return {
+                            "home_score": home_g,
+                            "away_score": away_g,
+                            "ht_home": ht_home,
+                            "ht_away": ht_away,
+                            "btts": home_g > 0 and away_g > 0,
+                            "over25": (home_g + away_g) > 2,
+                            "btts_ht": ht_home > 0 and ht_away > 0,
+                            "total_goals": home_g + away_g,
+                            "status": "finished",
+                        }
+        except Exception as e:
+            log(f"Settlement API-Football Error: {str(e)[:80]}", "WARN")
+
+    return None
+
+
+def edit_telegram_message(chat_id, message_id, new_text):
+    """
+    Editiert eine bestehende Telegram Nachricht mit dem Ergebnis.
+    """
+    if not TELEGRAM_TOKEN or not message_id:
+        return False
+
+    try:
+        r = requests.post(
+            f"https://api.telegram.org/bot{TELEGRAM_TOKEN}/editMessageText",
+            json={
+                "chat_id": chat_id,
+                "message_id": int(message_id),
+                "text": new_text,
+                "parse_mode": "HTML",
+                "disable_web_page_preview": True,
+            },
+            timeout=15,
+        )
+        return r.ok
+    except Exception:
+        return False
+
+
+def format_result_appendix(tip, result, status):
+    """
+    Liefert NUR den Ergebnis-Block, der an die Original-Tipp-Nachricht
+    angehängt wird (kein Match-Name, keine Wiederholung - steht schon oben).
+    """
+    odds = tip.get("odds", "?")
+    units = tip.get("units", 1.0)
+
+    home_s = result.get("home_score", "?")
+    away_s = result.get("away_score", "?")
+    ht_home = result.get("ht_home", "?")
+    ht_away = result.get("ht_away", "?")
+
+    status_emoji = "✅ GEWONNEN" if status == "won" else "❌ VERLOREN"
+    profit = round(float(str(odds).replace(",", ".")) * float(units or 1) - float(units or 1), 2) if status == "won" else -float(units or 1)
+    profit_str = f"+{profit}" if profit >= 0 else str(profit)
+    profit_emoji = "🟢" if status == "won" else "🔴"
+
+    nl = "\n"
+    msg = f"━━━━━━━━━━━━━━━━━━{nl}"
+    msg += f"<b>{status_emoji}</b>{nl}"
+    msg += f"⚽ Endstand: <b>{home_s} : {away_s}</b>"
+    if ht_home != "?" and ht_away != "?":
+        msg += f" (HZ: {ht_home}:{ht_away})"
+    msg += nl
+    msg += f"{profit_emoji} Profit: <b>{profit_str} Units</b>"
+
+    return msg
+
+
+def format_result_text(tip, result, status):
+    """Backwards-kompatibel: vollständiger Ergebnis-Text (für Kanäle ohne Original-Nachricht)."""
+    match = tip.get("match", "?")
+    market = tip.get("market", "btts")
+    tip_val = tip.get("tip", "YES")
+    odds = tip.get("odds", "?")
+    units = tip.get("units", 1.0)
+
+    home_s = result.get("home_score", "?")
+    away_s = result.get("away_score", "?")
+    ht_home = result.get("ht_home", "?")
+    ht_away = result.get("ht_away", "?")
+    total = result.get("total_goals", "?")
+
+    status_emoji = "✅ GEWONNEN" if status == "won" else "❌ VERLOREN"
+    profit = round(float(str(odds).replace(",", ".")) * float(units or 1) - float(units or 1), 2) if status == "won" else -float(units or 1)
+    profit_str = f"+{profit}" if profit >= 0 else str(profit)
+
+    nl = "\n"
+    msg = f"<b>{status_emoji}</b>{nl}"
+    msg += f"━━━━━━━━━━━━━━━━━━{nl}"
+    msg += f"<b>{match}</b>{nl}"
+    msg += f"⚽ Ergebnis: <b>{home_s} : {away_s}</b>"
+    if ht_home != "?" and ht_away != "?":
+        msg += f" (HZ: {ht_home}:{ht_away})"
+    msg += nl
+    msg += f"📊 Tore gesamt: {total}{nl}"
+    msg += f"🎯 Tipp: {tip_val} ({market.upper()}){nl}"
+    msg += f"💰 Quote: {odds} | Units: {units}{nl}"
+    profit_emoji = "🟢" if status == "won" else "🔴"
+    msg += f"{profit_emoji} Profit: <b>{profit_str} Units</b>{nl}"
+    msg += "━━━━━━━━━━━━━━━━━━"
+
+    return msg
+
+
 def get_supabase_player_avg_stats(player_name: str) -> dict:
     """
     Holt historische Spieler-Durchschnittswerte aus Supabase player_avg_stats View.
@@ -8247,7 +10722,7 @@ def _fotmob_find_team_id(team_name):
                 if team_id:
                     break
     except Exception as _fte:
-        pass
+        log(f"   🔍 FOTMOB-TEAM-DEBUG: '{team_name}' → Fehler {str(_fte)[:60]}", "WARN")
 
     FOTMOB_TEAM_ID_CACHE[cache_key] = team_id
     return team_id
@@ -8266,6 +10741,7 @@ def get_fotmob_player_season_stats(team_name):
     players = []
     team_id = _fotmob_find_team_id(team_name)
     if not team_id:
+        log(f"   🔍 FOTMOB-TEAM-DEBUG: keine Team-ID für '{team_name}' gefunden")
         FOTMOB_PLAYER_STATS_CACHE[cache_key] = players
         return players
 
@@ -9639,17 +12115,15 @@ def fetch_odds_api_player_props(league_name: str, target_date) -> list:
     return props
 
 
-def get_odds_api_player_prop_candidates(fixtures_cache, target_date) -> list:
+def get_odds_api_player_prop_candidates(fixtures_cache: dict, target_date) -> list:
     """
     Holt Player Props für alle Ligen mit Odds-API-Abdeckung.
     Gibt direkt verwendbare Prop-Builder-Kandidaten zurück.
     """
-    if isinstance(fixtures_cache, list):
-        fixtures_cache = {}
     candidates = []
     processed = set()
 
-    for league in list((fixtures_cache or {}).keys()):
+    for league in list(fixtures_cache or {}).keys():
         if league in processed or league not in LEAGUE_KEYS:
             continue
         processed.add(league)
@@ -12669,301 +15143,6 @@ def build_inline_keyboard(odds_data, match_name):
     return {"inline_keyboard": buttons}
 
 
-
-# ============================================================
-# NETRATTLER FINAL — Live Performance Footer für jede Tipp-Gruppe
-# liest bevorzugt netrattler_group_stats / netrattler_settlements,
-# damit die Auswertung aus dem neuen Settlement direkt in neue Tipps kommt.
-# ============================================================
-_NTR_PERF_CACHE = {}
-
-def _ntr_float(x, default=0.0):
-    try:
-        return float(str(x).replace(",", "."))
-    except Exception:
-        return default
-
-def _ntr_group_from_chat(chat_id):
-    cid = str(chat_id or "")
-    mapping = {
-        "btts": "btts", "over25": "over25", "combo": "combo", "combos": "combo",
-        "btts_ht": "btts_ht", "over15_ht": "over15_ht", "props": "props",
-        "builder": "builder", "advanced_props": "props", "corners": "corners",
-        "hz_live": "corners", "late_goals": "props",
-    }
-    for key, group in mapping.items():
-        val = TELEGRAM_GROUPS.get(key) if isinstance(TELEGRAM_GROUPS, dict) else None
-        if val and str(val) == cid:
-            return group
-    return "default"
-
-def _ntr_get_group_perf(group):
-    """Return today/month/year performance for a group from Supabase."""
-    if not SUPABASE_URL or not SUPABASE_KEY or group in ("", "default", None):
-        return None
-    now = datetime.now(timezone.utc)
-    cache_key = f"{group}_{now.strftime('%Y%m%d%H%M')}"
-    if cache_key in _NTR_PERF_CACHE:
-        return _NTR_PERF_CACHE[cache_key]
-    hdr = {"apikey": SUPABASE_KEY, "Authorization": f"Bearer {SUPABASE_KEY}"}
-    try:
-        # 1) direkt aus aggregierter Tabelle
-        r = requests.get(
-            f"{SUPABASE_URL}/rest/v1/netrattler_group_stats",
-            headers=hdr,
-            params={"market_group": f"eq.{group}", "select": "*", "order": "updated_at.desc", "limit": "50"},
-            timeout=8,
-        )
-        rows = r.json() if r.ok and r.text else []
-        out = {"today": None, "week": None, "month": None, "year": None, "alltime": None}
-        if isinstance(rows, list):
-            for row in rows:
-                period = str(row.get("period", "")).lower()
-                if period in out and out[period] is None:
-                    out[period] = row
-        # 2) Fallback aus settlements berechnen
-        if not any(out.values()):
-            r2 = requests.get(
-                f"{SUPABASE_URL}/rest/v1/netrattler_settlements",
-                headers=hdr,
-                params={"market_group": f"eq.{group}", "status": "in.(win,loss,won,lost)", "select": "status,profit,stake,tip_date,odds", "limit": "3000", "order": "tip_date.desc"},
-                timeout=10,
-            )
-            ss = r2.json() if r2.ok and r2.text else []
-            if isinstance(ss, list) and ss:
-                today_s = now.date().isoformat()
-                week_s = (now.date() - timedelta(days=6)).isoformat()
-                month_s = now.strftime("%Y-%m")
-                year_s = now.strftime("%Y")
-                def agg(period, rows2):
-                    bets=len(rows2); wins=sum(str(x.get("status")).lower() in ("win","won") for x in rows2); losses=bets-wins
-                    prof=sum(_ntr_float(x.get("profit"), 0) for x in rows2)
-                    stake=sum(max(0.0, _ntr_float(x.get("stake"), 1.0)) for x in rows2)
-                    return {"period": period, "bets": bets, "wins": wins, "losses": losses, "profit": round(prof,2), "stake": round(stake,2), "roi": round(100*prof/max(0.01,stake),2)} if bets else None
-                out["today"] = agg("today", [x for x in ss if str(x.get("tip_date", ""))[:10] == today_s])
-                out["week"] = agg("week", [x for x in ss if str(x.get("tip_date", ""))[:10] >= week_s])
-                out["month"] = agg("month", [x for x in ss if str(x.get("tip_date", ""))[:7] == month_s])
-                out["year"] = agg("year", [x for x in ss if str(x.get("tip_date", ""))[:4] == year_s])
-                out["alltime"] = agg("alltime", ss)
-        _NTR_PERF_CACHE[cache_key] = out
-        return out
-    except Exception:
-        return None
-
-def _ntr_perf_line(row, label):
-    if not row or int(row.get("bets") or 0) <= 0:
-        return None
-    bets=int(row.get("bets") or 0); wins=int(row.get("wins") or 0); losses=int(row.get("losses") or 0)
-    roi=_ntr_float(row.get("roi"), 0); prof=_ntr_float(row.get("profit"), 0)
-    em = "🟢" if prof >= 0 else "🔴"
-    return f"{label}: {wins}-{losses} / {bets} · ROI {roi:.1f}% · {prof:+.2f}U {em}"
-
-def _ntr_enhance_message_with_stats(text, chat_id):
-    """Append one compact performance block only to real fresh tip messages."""
-    if str(env("ENABLE_TIP_PERFORMANCE_FOOTER", "true")).lower() not in ("1", "true", "yes", "on"):
-        return text
-    if not text or len(text) > 3300:
-        return text
-    raw = str(text)
-    upper = raw.upper()
-    # Never decorate reports, technical cards or a message already carrying performance.
-    skip_words = [
-        "AUSWERTUNG", "GESAMT-STATISTIK", "AI TIPP BOT - DAILY", "NETRATTLER HEUTE",
-        "BACKTEST", "SELF TEST", "ÜBERSICHT HEUTE", "PERFORMANCE DIESER GRUPPE",
-        "WINRATE:", "AUSGEWERTETE TIPPS", "DATEN WERDEN GESAMMELT", "ROI REPORT",
-    ]
-    if any(w in upper for w in skip_words):
-        return text
-    # A primary tip needs a price and a concrete selection/leg. This prevents the
-    # duplicate footer on the separate market-stat cards shown in Telegram.
-    has_price = any(w in upper for w in ["QUOTE:", "GESAMT-QUOTE:", " @ ", "BET BUILDER"])
-    has_pick = any(w in upper for w in ["TIPP:", "LEGS:", "PROP BUILDER", "BET BUILDER", "CORNER SNIPER"])
-    if not (has_price and has_pick):
-        return text
-    group = _ntr_group_from_chat(chat_id)
-    perf = _ntr_get_group_perf(group)
-    if not perf:
-        return text
-    lines = []
-    for label, key in [("Heute", "today"), ("7 Tage", "week"), ("Monat", "month"), ("Jahr", "year")]:
-        line = _ntr_perf_line(perf.get(key), label)
-        if line:
-            lines.append(line)
-    if not lines:
-        return text
-    footer = "\n━━━━━━━━━━━━━━━━━━\n📊 <b>Performance dieser Gruppe</b>\n" + "\n".join(lines)
-    if len(raw) + len(footer) > 3900:
-        return text
-    return raw + footer
-
-def _ntr_market_stats_from_settlements(market_id):
-    """Modern stats shape compatible with _get_market_stats_from_supabase()."""
-    perf = _ntr_get_group_perf(market_id)
-    if not perf:
-        return None
-    year = perf.get("year") or perf.get("month") or perf.get("today")
-    month = perf.get("month")
-    if not year:
-        return None
-    total=int(year.get("bets") or 0); won=int(year.get("wins") or 0); lost=int(year.get("losses") or 0)
-    if total <= 0:
-        return None
-    m_total=int(month.get("bets") or 0) if month else 0
-    m_won=int(month.get("wins") or 0) if month else 0
-    m_lost=int(month.get("losses") or 0) if month else 0
-    month_names = ["","Januar","Februar","März","April","Mai","Juni","Juli","August","September","Oktober","November","Dezember"]
-    today = datetime.now(timezone.utc).date()
-    return {
-        "won": won, "lost": lost, "total": total,
-        "pct": round(won/total*100) if total else 0,
-        "roi": round(_ntr_float(year.get("profit"), 0), 1),
-        "month_name": month_names[today.month],
-        "month_won": m_won, "month_lost": m_lost,
-        "month_total": m_total,
-        "month_pct": round(m_won/m_total*100) if m_total else 0,
-        "month_roi": round(_ntr_float(month.get("profit"), 0) if month else 0, 1),
-        "top_leagues": [],
-    }
-
-
-
-# ============================================================
-# NETRATTLER V16 ML LIVE HOOK
-# ============================================================
-_NTR_ML_MODEL_CACHE = None
-_NTR_ML_MODEL_TS = 0
-
-def _ntr_ml_headers():
-    return {"apikey": SUPABASE_KEY, "Authorization": f"Bearer {SUPABASE_KEY}", "Content-Type": "application/json"}
-
-def _ntr_ml_load_model(force=False):
-    global _NTR_ML_MODEL_CACHE, _NTR_ML_MODEL_TS
-    try:
-        import time as _time
-        now = _time.time()
-        if _NTR_ML_MODEL_CACHE and not force and now - _NTR_ML_MODEL_TS < 300:
-            return _NTR_ML_MODEL_CACHE
-        if not SUPABASE_URL or not SUPABASE_KEY:
-            return None
-        r = requests.get(
-            f"{SUPABASE_URL}/rest/v1/netrattler_ml_models",
-            headers=_ntr_ml_headers(),
-            params={"model_name":"eq.netrattler_v16_ml","select":"*","limit":"1"},
-            timeout=12,
-        )
-        if not r.ok:
-            return None
-        rows = r.json() if r.text else []
-        if not rows:
-            return None
-        _NTR_ML_MODEL_CACHE = rows[0].get("model_json") or {}
-        _NTR_ML_MODEL_TS = now
-        return _NTR_ML_MODEL_CACHE
-    except Exception:
-        return None
-
-def _ntr_ml_norm(x):
-    try:
-        import unicodedata as _ud, re as _re
-        s = _ud.normalize("NFKD", str(x or "").lower().strip())
-        s = "".join(c for c in s if not _ud.combining(c))
-        s = _re.sub(r"[^a-z0-9]+", " ", s)
-        return _re.sub(r"\s+", " ", s).strip()
-    except Exception:
-        return str(x or "").lower().strip()
-
-def _ntr_ml_group_from_chat_or_text(chat_id, text):
-    t = str(text or "").lower()
-    try:
-        for k,v in (TELEGRAM_GROUPS or {}).items():
-            if str(v) == str(chat_id):
-                if k in ("combos",): return "combo"
-                if k in ("advanced_props",): return "props"
-                return k
-    except Exception:
-        pass
-    if "btts ht" in t or "btts_ht" in t: return "btts_ht"
-    if "over 1.5 ht" in t or "over15_ht" in t: return "over15_ht"
-    if "corner" in t or "ecken" in t: return "corners"
-    if "builder" in t or "nate" in t or "aystar" in t or "god" in t: return "builder"
-    if "combo" in t or "parlay" in t: return "combo"
-    if "shot" in t or "foul" in t or "card" in t or "tackle" in t or "booked" in t: return "props"
-    if "over 2.5" in t or "o2.5" in t: return "over25"
-    if "btts" in t or "both teams" in t: return "btts"
-    return "default"
-
-def _ntr_ml_extract_odds(text):
-    t = str(text or "")
-    for pat in [r"Quote\s*[:@]?\s*(\d+[\.,]\d+)", r"@\s*(\d+[\.,]\d+)", r"Odds\s*[:@]?\s*(\d+[\.,]\d+)"]:
-        m = re.search(pat, t, re.I)
-        if m:
-            try: return float(m.group(1).replace(",","."))
-            except Exception: pass
-    return None
-
-def _ntr_ml_odds_bucket(o):
-    try: o = float(o)
-    except Exception: return "odds:unknown"
-    if o < 1.50: return "odds:<1.50"
-    if o < 1.80: return "odds:1.50-1.79"
-    if o < 2.10: return "odds:1.80-2.09"
-    if o < 2.60: return "odds:2.10-2.59"
-    if o < 3.50: return "odds:2.60-3.49"
-    return "odds:3.50+"
-
-def _ntr_ml_predict_from_text(text, chat_id=None):
-    model = _ntr_ml_load_model(False)
-    if not model:
-        return {"score":0,"edge":0,"rec":"NO_MODEL","hits":0}
-    prior = float((model.get("prior") or {}).get("winrate") or 0.52)
-    stats = model.get("feature_stats") or {}
-    group = _ntr_ml_group_from_chat_or_text(chat_id, text)
-    odds = _ntr_ml_extract_odds(text)
-    feats = [f"group:{_ntr_ml_norm(group)}", _ntr_ml_odds_bucket(odds)]
-    weighted = prior
-    weight = 1.0
-    hits = 0
-    try:
-        import math as _math
-        for f in feats:
-            st = stats.get(f)
-            if not st: continue
-            bets = float(st.get("bets") or 0)
-            wr = float(st.get("winrate") or prior)
-            conf = float(st.get("confidence") or 0.2)
-            w = max(0.15, conf) * min(3.0, _math.log(bets + 1))
-            weighted += wr * w
-            weight += w
-            hits += 1
-    except Exception:
-        pass
-    prob = weighted / max(0.0001, weight)
-    implied = (1/odds) if odds and odds > 1 else 0
-    edge = (prob - implied) * 100 if implied else 0
-    score = round(prob*100, 1)
-    rec = "STRONG" if score >= 63 and edge >= 2 else "OK" if score >= 57 else "LEAN" if score >= 52 else "SKIP"
-    return {"score":score,"edge":round(edge,1),"rec":rec,"hits":hits,"group":group}
-
-def _ntr_ml_enhance_message(text, chat_id=None):
-    raw = str(text or "")
-    low = raw.lower()
-    # Reports/Settlement nicht mit ML-Footer vollkleben
-    if any(x in low for x in ["auswertung", "roi report", "settlement", "gruppen-auswertung", "performance dieser gruppe"]):
-        return text
-    if "ml_score" in low:
-        return text
-    p = _ntr_ml_predict_from_text(raw, chat_id)
-    if p.get("rec") == "NO_MODEL":
-        if str(env("SHOW_ML_LEARNING_FOOTER", "false")).lower() not in ("1", "true", "yes", "on"):
-            return text
-        footer = "\n🧠 ML-Lernphase: Daten werden gesammelt"
-    else:
-        icon = {"STRONG":"🔥", "OK":"✅", "LEAN":"⚠️", "SKIP":"🚫"}.get(p.get("rec"), "🤖")
-        footer = f"\n🤖 ML_SCORE: <b>{p.get('score')}</b> · Edge {p.get('edge')}% · {icon} {p.get('rec')}"
-    if len(raw) + len(footer) > 3900:
-        return text
-    return raw + footer
-
 def send_telegram(text, chat_id=None, reply_markup=None):
     if not TELEGRAM_TOKEN:
         log("Telegram Token fehlt", "WARN")
@@ -12975,22 +15154,6 @@ def send_telegram(text, chat_id=None, reply_markup=None):
     if not chat_id:
         log("Telegram Chat ID fehlt", "WARN")
         return None
-
-    try:
-        text = _ntr_enhance_message_with_stats(text, chat_id)
-    except Exception as _ntr_e:
-        try:
-            log(f"Stats-Footer übersprungen: {str(_ntr_e)[:60]}", "WARN")
-        except Exception:
-            pass
-
-    try:
-        text = _ntr_ml_enhance_message(text, chat_id)
-    except Exception as _ntr_ml_e:
-        try:
-            log(f"ML-Footer übersprungen: {str(_ntr_ml_e)[:60]}", "WARN")
-        except Exception:
-            pass
 
     payload = {
         "chat_id": chat_id,
@@ -13043,11 +15206,39 @@ def send_telegram(text, chat_id=None, reply_markup=None):
 _SENT_TIPS_CACHE = set()
 
 def is_duplicate_tip(match, market, target_date):
-    """Prüft ob Tipp bereits gesendet wurde - nur In-Memory (Bulk preload beim Start)"""
+    """Prüft ob Tipp bereits gesendet wurde - In-Memory + Supabase"""
     global _SENT_TIPS_CACHE
+
+    # Normalisiere Match-Name für Vergleich
     match_norm = normalize_team_name(match)
-    cache_key = f"{match_norm[:50]}_{market}_{target_date}"
-    return cache_key in _SENT_TIPS_CACHE
+    cache_key = f"{match_norm[:20]}_{market}_{target_date}"
+
+    # 1. In-Memory Check (schnell!)
+    if cache_key in _SENT_TIPS_CACHE:
+        return True
+
+    # 2. Supabase Check
+    if SUPABASE_URL and SUPABASE_KEY:
+        try:
+            r = requests.get(
+                f"{SUPABASE_URL}/rest/v1/tips",
+                headers={"apikey": SUPABASE_KEY, "Authorization": f"Bearer {SUPABASE_KEY}"},
+                params={
+                    "date": f"eq.{target_date}",
+                    "market": f"eq.{market}",
+                    "match": f"eq.{match}",
+                    "select": "id",
+                    "limit": "1",
+                },
+                timeout=5,
+            )
+            if r.ok and len(r.json()) > 0:
+                _SENT_TIPS_CACHE.add(cache_key)
+                return True
+        except Exception:
+            pass
+
+    return False
 
 
 def _combo_signature(legs, prefix=""):
@@ -13100,7 +15291,7 @@ def mark_tip_sent(match, market, target_date):
     """Markiert Tipp als gesendet im In-Memory Cache"""
     global _SENT_TIPS_CACHE
     match_norm = normalize_team_name(match)
-    cache_key = f"{match_norm[:50]}_{market}_{target_date}"
+    cache_key = f"{match_norm[:20]}_{market}_{target_date}"
     _SENT_TIPS_CACHE.add(cache_key)
 
 
@@ -13535,12 +15726,6 @@ def _get_market_stats_from_supabase(market_id):
     if not SUPABASE_URL or not SUPABASE_KEY:
         return None
     try:
-        modern = _ntr_market_stats_from_settlements(market_id)
-        if modern and modern.get("total", 0) >= 1:
-            return modern
-    except Exception:
-        pass
-    try:
         from datetime import date as _date2
         today = _date2.today()
         month_start = today.replace(day=1).isoformat()
@@ -13655,10 +15840,7 @@ def _send_daily_auswertung_to_all_groups(stats=None):
         ("over25",  TELEGRAM_GROUPS.get("over25"),  "🎯 Over 2.5"),
         ("combo",   TELEGRAM_GROUPS.get("combo"),   "🔥 BTTS + Over 2.5"),
         ("btts_ht", TELEGRAM_GROUPS.get("btts_ht"), "🕐 BTTS Halbzeit"),
-        ("over15_ht", TELEGRAM_GROUPS.get("over15_ht"), "⏰ Over 1.5 HT"),
-        ("corners", TELEGRAM_GROUPS.get("corners"), "🔵 Corner Sniper"),
-        ("builder", TELEGRAM_GROUPS.get("builder"), "🧱 Prop Builder"),
-        ("props", TELEGRAM_GROUPS.get("props"), "🎯 Player Props"),
+        ("corners", TELEGRAM_GROUPS.get("hz_live"), "🔵 Corner Sniper"),
         ("scorer",  TELEGRAM_GROUPS.get("late_goals"), "⚽ Goal Hunter"),
     ]
 
@@ -13700,8 +15882,6 @@ def _send_daily_auswertung_to_all_groups(stats=None):
                     medal = medals[i] if i < len(medals) else "•"
                     msg += f"{medal} {lg}: {w}/{tot} ({pct_lg}%) · {roi_s_lg}U{nl}"
         else:
-            if str(env("SEND_EMPTY_PERFORMANCE_CARDS", "false")).lower() not in ("1", "true", "yes", "on"):
-                continue
             msg += f"📊 Daten werden gesammelt...{nl}"
             msg += f"<i>Mindestens 3 ausgewertete Tipps nötig.</i>{nl}"
 
@@ -13847,14 +16027,6 @@ def send_top_tips(tips_by_market, target_date):
 
             if is_duplicate_tip(match_name, market_id, target_date):
                 log(f"   ⏭️ Duplikat übersprungen: {match_name} ({market_id})")
-                continue
-
-            # 🛡️ Safe Filter: schlechte Ligen ausfiltern
-            _tip_league = str(r.get("league","") or r.get("competition","") or r.get("league_name","") or "").lower()
-            _skip_kw = ["reserve","women","u20","u21","u19","u18","youth","frauen",
-                        "reserva","damen","feminine","femini","amateur","friendly"]
-            if any(_kw in _tip_league for _kw in _skip_kw):
-                log(f"   ⏭️ Liga gefiltert: {match_name} ({_tip_league[:25]})")
                 continue
 
             # ✅ NEUES FORMAT - Variante 3
@@ -14048,6 +16220,12 @@ def send_top_tips(tips_by_market, target_date):
             if best_bookie and best_odds:
                 msg += f"\n🏆 Empfehlung: <b>{best_bookie}</b> · Quote {best_odds}"
 
+            # 🆕 V20: Performance Footer
+            try:
+                msg = _ntr_enhance_message_with_stats(msg, target_chat)
+            except Exception:
+                pass
+
             msg_id = send_telegram(msg, target_chat)
             mark_tip_sent(match_name, market_id, target_date)
 
@@ -14208,10 +16386,6 @@ def send_top_tips(tips_by_market, target_date):
         # Kein Footer - direkt Tipps ohne Zusammenfassung
 
     log(f"Gespeichert in Supabase: {saved}")
-    try:
-        _send_daily_auswertung_to_all_groups()
-    except Exception as _ae:
-        log(f"Auswertung Error: {str(_ae)[:50]}", "WARN")
 
 
 # ============================================================
@@ -15142,53 +17316,6 @@ def format_result_text(tip, result, status):
     msg += "━━━━━━━━━━━━━━━━━━"
 
     return msg
-
-
-def get_match_result_from_sources(tip):
-    """Holt Spielergebnis aus SofaScore, AllSports, API-Football."""
-    match = tip.get("match", "")
-    tip_date = str(tip.get("date", ""))
-    if not match or " vs " not in match or not tip_date:
-        return None
-    parts = match.split(" vs ", 1)
-    if len(parts) != 2:
-        return None
-    home_team, away_team = parts[0].strip(), parts[1].strip()
-    # 1. SofaScore
-    try:
-        result = _sofascore_find_result(home_team, away_team, tip_date)
-        if result:
-            return result
-    except Exception:
-        pass
-    # 2. AllSports
-    try:
-        result = _allsports_find_result(home_team, away_team, tip_date)
-        if result:
-            return result
-    except Exception:
-        pass
-    # 3. API-Football
-    try:
-        fixtures = _af_fixtures_for_date(tip_date)
-        h_t = home_team.lower()
-        a_t = away_team.lower()
-        for fx in (fixtures or []):
-            fx_home = (fx.get("teams",{}).get("home",{}).get("name","") or "").lower()
-            fx_away = (fx.get("teams",{}).get("away",{}).get("name","") or "").lower()
-            if (h_t[:6] in fx_home or fx_home[:6] in h_t) and (a_t[:6] in fx_away or fx_away[:6] in a_t):
-                gs = fx.get("goals",{})
-                hs = int(gs.get("home") or 0)
-                as_ = int(gs.get("away") or 0)
-                ht = fx.get("score",{}).get("halftime",{})
-                ht_h = int(ht.get("home") or 0)
-                ht_a = int(ht.get("away") or 0)
-                return {"home_score":hs,"away_score":as_,"ht_home":ht_h,"ht_away":ht_a,
-                        "btts":hs>0 and as_>0,"over25":(hs+as_)>2,
-                        "btts_ht":ht_h>0 and ht_a>0,"total_goals":hs+as_,"status":"finished"}
-    except Exception:
-        pass
-    return None
 
 
 def run_settlement():
@@ -17440,11 +19567,6 @@ def check_config():
     log(f"   • DataHub.io: ✅ aktiv (kein Key!)")
     log(f"   • Tavily: {'✅ aktiv!' if TAVILY_API_KEY else '❌ TAVILY_API_KEY fehlt (optional)'}")
     log(f"   • AllSports API: {'✅ aktiv!' if ALLSPORTS_API_KEY else '❌ ALLSPORTS_API_KEY fehlt (optional)'}")
-    log(f"   • Odds-API.io: {'✅ aktiv!' if ODDSAPIIO_KEY else '❌ ODDSAPIIO_KEY fehlt (optional)'}")
-    log(f"   • FootyMetrics: ✅ Player Props (kostenlos)")
-    log(f"   • Oddspedia: ✅ WM Player Props (kostenlos)")
-    log(f"   • ScoutingStats: ✅ Player Props via API (kostenlos)")
-    log(f"   • Statz.ai: ✅ AI Prop Projections via Playwright (kostenlos)")
     log(f"   • Footballdata.io: {'✅ aktiv!' if FOOTBALLDATA_IO_API_KEY else '❌ FOOTBALLDATA_IO_API_KEY fehlt (optional, Settlement-Fallback)'}")
     log(f"   • OpenLigaDB: ✅ aktiv (kein Key, nur deutsche Ligen)")
     log(f"   • TheStatsAPI: {'✅ ' + str(len(THESTATSAPI_KEYS)) + ' Keys aktiv! (Player Stats, xG, Lineups, Odds, Settlement)' if THESTATSAPI_KEYS else '❌ THESTATSAPI_KEYS fehlt (optional aber empfohlen)'}")
@@ -17915,18 +20037,12 @@ def fetch_pinnacle_player_props() -> List[Dict]:
             if m.get("type") != "special":
                 continue
             sp = m.get("special", {}) or {}
+            # Kategorie-Feld kann je nach API-Version anders heissen — alle Varianten prüfen
             cat = (sp.get("category") or sp.get("categoryName") or sp.get("type") or "").lower()
             desc = sp.get("description", "") or sp.get("name", "")
-            desc_lower = desc.lower()
-            league_name = (m.get("league") or {}).get("name", "")
-            is_player_prop = (
-                "player" in cat
-                or "goal matchup" in cat
-                or any(k in desc_lower for k in [
-                    "to score", "to assist", "to be booked", "shots", "fouls",
-                    "tackles", "saves", "carded", "offside", "booking",
-                    "anytime scorer", "first scorer", "yellow card", "red card",
-                ])
+            # Breitere Erkennung: "player" im Kategorienamen ODER im Beschreibungstext
+            is_player_prop = "player" in cat or any(
+                k in desc.lower() for k in ["to score", "to assist", "to be booked", "shots", "fouls", "tackles", "saves", "carded"]
             )
             if not is_player_prop:
                 continue
@@ -17934,14 +20050,7 @@ def fetch_pinnacle_player_props() -> List[Dict]:
             pparts = parent.get("participants", [])
             ph = next((p.get("name","") for p in pparts if p.get("alignment")=="home"), "")
             pa = next((p.get("name","") for p in pparts if p.get("alignment")=="away"), "")
-            if not ph or not pa:
-                parent_name = parent.get("name", "") or m.get("parentName", "") or ""
-                for _sep in [" vs ", " v "]:
-                    if _sep in parent_name:
-                        _pts = parent_name.split(_sep, 1)
-                        ph = ph or _pts[0].strip()
-                        pa = pa or (_pts[1].strip() if len(_pts) > 1 else "")
-                        break
+            league_name = (m.get("league") or {}).get("name", "")
             starts = m.get("startTime", "") or parent.get("startTime", "")
             for part in m.get("participants", []):
                 price = prices_by_matchup.get((m.get("id"), part.get("id")))
@@ -17951,13 +20060,9 @@ def fetch_pinnacle_player_props() -> List[Dict]:
                 dec = _pin_american_to_decimal(price)
                 if dec <= 1.0:
                     continue
-                # Nur "Yes" Selections für Player Props
-                sel_name = part.get("name", "")
-                if sel_name.lower() == "no":
-                    continue
                 props.append({
                     "player_prop": desc,
-                    "selection": sel_name,
+                    "selection": part.get("name", ""),
                     "odds": dec,
                     "prob": int(100 / dec * 0.95) if dec > 1 else 0,
                     "match": f"{ph} vs {pa}" if ph else desc,
@@ -17981,17 +20086,15 @@ _SKIP_PROP_KEYWORDS = [
 
 # Leg-Kategorien für Bet Builder
 _LEG_CATEGORY = {
-    "score": ["to score", "anytime goalscorer", "first goalscorer", "last goalscorer",
-              "score or assist", "goal matchup", "first goal", "to get on scoresheet"],
+    "score": ["to score", "anytime goalscorer", "first goalscorer", "last goalscorer", "score or assist"],
     "assist": ["to assist", "score or assist"],
-    "booked": ["to be booked", "receive a card", "be carded", "yellow card", "booking"],
-    "shots": ["shots on target", "shots on goal", "shot on target"],
-    "fouls": ["fouls won", "to be fouled", "foul committed", "foul"],
+    "booked": ["to be booked", "receive a card", "be carded"],
+    "shots": ["shots on target", "shots on goal"],
+    "fouls": ["fouls won", "to be fouled", "foul"],
     "tackles": ["tackle", "tackles won"],
     "corners": ["corners", "corner kicks"],
     "saves": ["saves", "goalkeeper saves"],
     "offsides": ["offside"],
-    "cards": ["red card", "to be sent off"],
 }
 
 def _get_leg_category(prop_name):
@@ -18117,8 +20220,7 @@ def _send_stat_insight_fallback(match_name, legs):
         log(f"   📊 Stat-Analyse gesendet (statt Bet Builder): {match_name}")
 
 
-def run_pinnacle_props_bot(win_start_utc=None, win_end_utc=None, ch_tz=None, top_btts_tips=None, fixtures_cache=None) -> int:
-    fixtures_cache = fixtures_cache or {}
+def run_pinnacle_props_bot(win_start_utc=None, win_end_utc=None, ch_tz=None, top_btts_tips=None) -> int:
     """
     Pinnacle Player Props Bot.
     top_btts_tips: Beste BTTS-Tipps aus Hauptanalyse (als zusätzliche Bet-Builder-Legs).
@@ -18148,9 +20250,9 @@ def run_pinnacle_props_bot(win_start_utc=None, win_end_utc=None, ch_tz=None, top
             continue
         if match_name.lower() == prop_name:
             continue
-        if not (1.10 <= p["odds"] <= 6.00):
+        if not (1.15 <= p["odds"] <= 5.00):
             continue
-        if p["prob"] < 45:
+        if p["prob"] < 55:  # Legs dürfen etwas lockerer sein — Combo filtert
             continue
 
         # 🔍 FBref Cross-Check: unabhängige Wahrscheinlichkeit gegen Pinnacle-Quote prüfen
@@ -18301,8 +20403,8 @@ def run_pinnacle_props_bot(win_start_utc=None, win_end_utc=None, ch_tz=None, top
             continue
 
         combo_odds = _calc_combo_odds(selected)
-        _min_combo = 1.40 if _is_wc_match else 1.80
-        if combo_odds < _min_combo:
+        # Nur Builders mit sinnvoller Quote senden
+        if combo_odds < 1.80:
             _rejected_low_odds += 1
             if _is_wc_match:
                 log(f"   🌍 WM-Reject (Quote zu tief): {match_name} → {combo_odds}")
@@ -18341,8 +20443,7 @@ def run_pinnacle_props_bot(win_start_utc=None, win_end_utc=None, ch_tz=None, top
         for _n in range(2, min(len(selected) + 1, 7)):
             _legs_n = selected[:_n]
             _odds_n = _calc_combo_odds(_legs_n)
-            _min_n = 1.40 if _is_wc_match else 1.80
-            if _odds_n < _min_n:
+            if _odds_n < 1.80:
                 continue
             builders.append({
                 "match": match_name,
@@ -18370,11 +20471,7 @@ def run_pinnacle_props_bot(win_start_utc=None, win_end_utc=None, ch_tz=None, top
                 _pair_key = f"{t1['match']}_{t2['match']}"
                 if _pair_key in _btts_sent:
                     continue
-                _gk = f"btts_bb_{_pair_key}_{datetime.now(timezone.utc).date()}"
-                if _gk in _STAT_INSIGHT_SENT_TODAY:
-                    continue
                 _btts_sent.add(_pair_key)
-                _STAT_INSIGHT_SENT_TODAY.add(_gk)
 
                 # Fair-Quote berechnen
                 p1 = int(t1.get("probability", 67))
@@ -18445,1906 +20542,6 @@ def run_pinnacle_props_bot(win_start_utc=None, win_end_utc=None, ch_tz=None, top
                     _value_sent += 1
                     log(f"   🎯 Value Alert: {player} {value_info['market']} +{value_info['edge_pct']}%")
 
-    _pp_chat = TELEGRAM_GROUPS.get("advanced_props") or TELEGRAM_GROUPS.get("props")
-    _pp_dedup = set()
-    _pp_today = datetime.now(timezone.utc).date()
-    _pp_total = 0
-    try:
-        if SUPABASE_URL and SUPABASE_KEY:
-            _ex = requests.get(f"{SUPABASE_URL}/rest/v1/prop_picks",
-                headers={"apikey":SUPABASE_KEY,"Authorization":f"Bearer {SUPABASE_KEY}"},
-                params={"select":"dedup_key","sent_date":f"eq.{_pp_today}","limit":"500"},timeout=8)
-            for _row in (_ex.json() if _ex.ok else []):
-                _dk = _row.get("dedup_key","")
-                if _dk: _pp_dedup.add(_dk)
-                # NICHT in _STAT_INSIGHT_SENT_TODAY — Props können als Builder neu kombiniert werden
-            log(f"   Player Props Dedup: {len(_pp_dedup)} bereits heute gesendet (werden neu kombiniert)")
-    except Exception as _dde:
-        log(f"   Player Props Dedup: {str(_dde)[:50]}", "WARN")
-
-    # Props sammeln für Prop Builder
-    _prop_candidates = []  # [{player, market, match, odds_dec, source, icon, ko_s, confidence}]
-
-    _builder_sent_today = set()  # nur für Builder-Dedup
-
-    def _collect_prop(player, market, match, odds_dec, source, icon="🎯", ko_s="", extra="", confidence=0.6):
-        nonlocal _pp_total
-        if not player or not market: return False
-        _dk = f"pp_{match}_{player}_{market}_{_pp_today}"
-        if _dk in _builder_sent_today: return False  # nur Builder-Dedup, nicht Supabase-History
-        _pp_dedup.add(_dk); _STAT_INSIGHT_SENT_TODAY.add(_dk)
-        _prop_candidates.append({
-            "player": player, "market": market, "match": match,
-            "odds": float(odds_dec) if odds_dec and float(str(odds_dec).replace(",",".") or 0) > 1.0 else 1.65,
-            "source": source, "icon": icon, "ko_s": ko_s, "extra": extra,
-            "confidence": confidence, "dedup_key": _dk,
-        })
-        log(f"   Prop gesammelt: {player} | {market} | {source}")
-        return True
-
-    # Alias für Kompatibilität
-    _send_prop = _collect_prop
-
-    # ═══════════════════════════════════════════════════════════════════
-    # NETRATTLER PROP DATABASE — alle Quellen, alle Märkte
-    # ═══════════════════════════════════════════════════════════════════
-
-    _FULL_CAT_MAP = {
-        # Team-Props (GodTipsterr Style)
-        "team_shots":   ["home team shots","away team shots","team shots","total shots",
-                         "over 6.5 shots","over 7.5 shots","over 8.5 shots","over 9.5 shots",
-                         "over 10.5 shots","over 11.5 shots","over 12.5 shots","over 13.5 shots",
-                         "home team total shots","shots on target 3-way","over 2.5 shots on target"],
-        "team_corners": ["most corners","corner match","team corners","to win corners",
-                         "over 7 corners","over 8 corners","over 9 corners","over 10 corners",
-                         "over 11 corners","total corners","team total corners","over 0 corners",
-                         "1+ corners in half"],
-        "team_cards":   ["both teams to receive","teams to receive a card","team to receive",
-                         "most cards","team cards","both teams to receive a card"],
-        "throw_ins":    ["throw in","throw-in","total throw ins","over 32.5","over 30.5"],
-        "btts":         ["both teams to score","btts"],
-        "over_goals":   ["over 1 goal","over 2 goals","over 2.5","total goals 2","total goals 3",
-                         "home team total goals","over 0 goals","total goals 3-way"],
-        "ht_props":     ["to score in the 1st half","score in 1st half","1st half goals",
-                         "both teams to score 1st half","halftime"],
-        "fouls_won":    ["fouls won","1+ fouls won","to be fouled","alternative player to be fouled",
-                         "player to be fouled"],
-        # Spieler-Props
-        "score":        ["to score","anytime goalscorer","first goalscorer","last goalscorer",
-                         "anytime scorer","to get on scoresheet","goal matchup",
-                         "score a header","header goal"],
-        "assist":       ["to assist","1+ assist","2+ assist","3+ assist"],
-        "score_assist": ["score or assist","to score or assist","score and assist"],
-        "yellow_cards": ["to be booked","yellow card","receive a card","be carded",
-                         "booking","player cards","either player to be booked"],
-        "red_card":     ["red card","to be sent off","sent off"],
-        "sot":          ["shots on target","shot on target","shots on goal",
-                         "headed shots on target","shots on target outside box"],
-        "shots":        ["2+ shots","3+ shots","4+ shots","5+ shots","player shots",
-                         "shots in game","total shots"],
-        "tackles":      ["tackle","tackles won","total tackles","player tackles"],
-        "fouls":        ["fouls committed","foul committed","player fouls committed",
-                         "fouls won","foul won","to be fouled","player to be fouled"],
-        "saves":        ["saves","goalkeeper saves","goalie saves","keeper saves"],
-        "offsides":     ["offside","total offsides","player offside"],
-        "passes":       ["passes","player passes"],
-        "corners":      ["corners","corner kicks","total corners"],
-        "free_kicks":   ["free kick","free-kick"],
-        "throw_ins":    ["throw-in","throw in"],
-        "goal_kicks":   ["goal kick"],
-    }
-
-    _CAT_ICONS = {
-        "score":"⚽","assist":"🅰️","score_assist":"⚽🅰️","yellow_cards":"🟨",
-        "red_card":"🟥","sot":"🎯","shots":"💥","tackles":"🦵","fouls":"🦵",
-        "saves":"🧤","offsides":"🏃","passes":"📋","corners":"🔵",
-        "free_kicks":"🦶","throw_ins":"🤾","goal_kicks":"🥅",
-        "team_shots":"💥","team_corners":"🔵","team_cards":"🃏",
-        "btts":"⚽","over_goals":"⚽","ht_props":"⏱️",
-        "throw_ins":"🤾","fouls_won":"🦵",
-    }
-
-    # Builder-würdige Kategorien
-    _BUILDER_CATS = ["score","assist","score_assist","yellow_cards","sot","shots",
-                     "tackles","fouls","saves","offsides","passes","red_card",
-                     "team_shots","team_corners","team_cards","btts","over_goals",
-                     "ht_props","throw_ins","fouls_won"]
-
-    def _cat(market_name):
-        mn = market_name.lower()
-        for cat, kws in _FULL_CAT_MAP.items():
-            if any(k in mn for k in kws):
-                return cat
-        return "other"
-
-    def _line(market_name):
-        import re as _rl
-        m = _rl.search(r'(\d+(?:\.\d+)?)\+', market_name)
-        if m: return float(m.group(1))
-        m2 = _rl.search(r'over\s+(\d+(?:\.\d+)?)', market_name.lower())
-        if m2: return float(m2.group(1))
-        return 1.0
-
-    def _player_from_prop(prop_name):
-        import re as _rp
-        # "Ivan Perisic 3+ Tackles" → "Ivan Perisic"
-        result = _rp.sub(r'\s+\d+\+.*$', '', prop_name, flags=_rp.I).strip()
-        result = _rp.sub(r'\s+(to\s|anytime|first|last|player|either|over\s)\S.*$', '', result, flags=_rp.I).strip()
-        return result if len(result) >= 3 else prop_name.split(" ")[0]
-
-    _prop_db = []  # einheitliche DB aller Props
-
-    def _add(player, team, match, league, market, odds, prob=0, model_prob=0, source="", ko=""):
-        if not player or not market or not match: return
-        _skip_names = {"either team","player","both teams","team","yes","no",
-                       "either player","home team","away team","a player"}
-        if player.strip().lower() in _skip_names: return
-        if len(player.strip()) < 3: return
-        c = _cat(market)
-        if c == "other": return
-        # StatsBomb Hit Rate Lookup
-        _sb = _SB_HR.get(player.strip(), {})
-        _hr_map = {"fouls":"hr_foul","fouls_won":"hr_foul_won","sot":"hr_sot",
-                   "shots":"hr_sot","yellow_cards":"hr_yc","score":"hr_goal"}
-        _sb_prob = _sb.get(_hr_map.get(c,""), 0) / 100 if _sb else 0
-        _best_prob = max(float(model_prob) if model_prob else 0, _sb_prob)
-        _prop_db.append({
-            "player": player.strip()[:80],
-            "team": (team or "")[:60],
-            "match": match[:150],
-            "league": (league or "")[:80],
-            "market": market[:150],
-            "category": c,
-            "line": _line(market),
-            "odds": float(odds) if odds else 0.0,
-            "prob": int(_sb_prob*100) if _sb_prob else int(prob),
-            "model_prob": _best_prob,
-            "source": source,
-            "ko": ko,
-            "icon": _CAT_ICONS.get(c, "🎯"),
-            "sb_games": _sb.get("g", 0),
-            "hit_rate": int(_sb_prob*100) if _sb_prob else 0,
-        })
-
-    # ── STATSBOMB HIT RATES laden ──────────────────────────────
-    _SB_HR = {}  # {spielername: {hr_foul, hr_sot, hr_yc, hr_goal, ...}}
-    try:
-        import json as _jsb, math as _msb, requests as _rsb
-        _SB_TOURNAMENTS = [(43,106),(55,282),(223,282)]  # WM22, Euro24, Copa24
-        _sb_db = {}
-        def _sb_hr(n, g):
-            avg = n/g if g > 0 else 0
-            return round((1-_msb.exp(-avg))*100,1) if avg > 0 else 0
-        
-        # Versuche gecachte Datei zuerst
-        import os as _os
-        _sb_cache = "/tmp/sb_hit_rates.json"
-        if _os.path.exists(_sb_cache):
-            with open(_sb_cache) as _f:
-                _SB_HR = _jsb.load(_f)
-            log(f"   📊 StatsBomb HR Cache: {len(_SB_HR)} Spieler")
-        else:
-            from collections import defaultdict as _dd_sb
-            _pdb = _dd_sb(lambda: {"g":0,"shots":0,"sot":0,"fc":0,"fw":0,"yc":0,"goals":0})
-            for _cid, _sid in _SB_TOURNAMENTS:
-                try:
-                    _ms = _rsb.get(f"https://raw.githubusercontent.com/statsbomb/open-data/master/data/matches/{_cid}/{_sid}.json", timeout=10).json()
-                    for _m in _ms:
-                        _mid = _m["match_id"]
-                        try:
-                            _evs = _rsb.get(f"https://raw.githubusercontent.com/statsbomb/open-data/master/data/events/{_mid}.json", timeout=8).json()
-                            _seen = set()
-                            for _e in _evs:
-                                _p = (_e.get("player") or {}).get("name","")
-                                if not _p: continue
-                                _et = (_e.get("type") or {}).get("name","")
-                                if _p not in _seen: _pdb[_p]["g"]+=1; _seen.add(_p)
-                                if _et=="Shot":
-                                    _pdb[_p]["shots"]+=1
-                                    _o=(_e.get("shot") or {}).get("outcome",{}).get("name","")
-                                    if _o=="Goal": _pdb[_p]["goals"]+=1
-                                    if _o in ["Saved","Saved to Post","Blocked"]: _pdb[_p]["sot"]+=1
-                                elif _et=="Foul Committed": _pdb[_p]["fc"]+=1
-                                elif _et=="Foul Won": _pdb[_p]["fw"]+=1
-                                elif _et=="Bad Behaviour":
-                                    if "Yellow" in (_e.get("bad_behaviour") or {}).get("card",{}).get("name",""): _pdb[_p]["yc"]+=1
-                        except: pass
-                except: pass
-            for _p, _s in _pdb.items():
-                if _s["g"] < 2: continue
-                _SB_HR[_p] = {
-                    "g":_s["g"], "hr_foul":_sb_hr(_s["fc"],_s["g"]),
-                    "hr_sot":_sb_hr(_s["sot"],_s["g"]), "hr_yc":_sb_hr(_s["yc"],_s["g"]),
-                    "hr_goal":_sb_hr(_s["goals"],_s["g"]),
-                    "hr_foul_won":_sb_hr(_s["fw"],_s["g"]),
-                    "avg_shots":round(_s["shots"]/_s["g"],2) if _s["g"]>0 else 0,
-                }
-            with open(_sb_cache,"w") as _f: _jsb.dump(_SB_HR,_f)
-            log(f"   📊 StatsBomb HR geladen: {len(_SB_HR)} Spieler (WM22+Euro24+Copa24)")
-    except Exception as _esb:
-        log(f"   StatsBomb HR: {str(_esb)[:60]}", "WARN")
-
-    # ── QUELLE 1: PINNACLE ─────────────────────────────────────────
-    try:
-        _pin = fetch_pinnacle_player_props()
-        log(f"   📊 DB Pinnacle: {len(_pin)} Props")
-        # Debug: zeige erste Tackle/Foul Props
-        _pin_samples = [p for p in _pin if any(k in p.get("player_prop","").lower() 
-                        for k in ["tackle","foul","booked","shot"])][:3]
-        for _s in _pin_samples:
-            log(f"   DB PIN sample: prop={_s.get('player_prop','')} sel={_s.get('selection','')} odds={_s.get('odds',0)}")
-        for _p in _pin:
-            _pname = _p.get("player_prop","")  # z.B. "Ivan Perisic 3+ Tackles"
-            _sel = _p.get("selection","")       # z.B. "Ivan Perisic" oder "Yes"
-            _match = _p.get("match","")
-            _odds = float(_p.get("odds",0) or 0)
-            if _odds < 1.05 or _odds > 15.0: continue
-            if " vs " not in _match: continue
-            # Spielername: selection wenn nicht "Yes/No", sonst aus player_prop
-            if _sel and _sel.lower() not in ("yes","no","over","under"):
-                _player = _sel.strip()
-                _market = _pname
-            else:
-                _player = _player_from_prop(_pname)
-                _market = _pname
-            if not _player or len(_player) < 2: continue
-            # Kategorisiere: Team-Prop oder Spieler-Prop?
-            _pname_l = _pname.lower()
-            _is_team_prop = any(t in _pname_l for t in [
-                "both teams to score","btts","either team to score",
-                "total goals","over 2 goals","over 1 goal",
-                "home team shots","away team shots","total shots",
-                "most corners","corner match","both teams to receive",
-                "team to get most","team total",
-            ])
-            # Spieler-Props brauchen echten Namen (min 2 Wörter)
-            if not _is_team_prop and len(_player.split()) < 2: continue
-            # Team-Props: player = match oder team name
-            if _is_team_prop:
-                _pts = _match.split(" vs ", 1)
-                _player = _pts[0].strip() if _pts else _player  # Home Team als Player
-            _pts = _match.split(" vs ")
-            _team = ""
-            _add(_player, _team, _match, _p.get("league",""), _market,
-                 _odds, int(_p.get("prob",0) or 0), 0, "Pinnacle", str(_p.get("starts",""))[:5])
-    except Exception as _e:
-        log(f"   DB Pinnacle: {str(_e)[:60]}", "WARN")
-
-    # ── QUELLE 2: SCOUTINGSTATS ────────────────────────────────────
-    try:
-        import cloudscraper as _css_db
-        _ss = _css_db.create_scraper()
-        _ss_r = _ss.get("https://scoutingstats.ai/api/props/board", timeout=12,
-            headers={"Accept":"application/json","Referer":"https://scoutingstats.ai/"})
-        if _ss_r.ok:
-            _ss_raw = _ss_r.json()
-            _ss_items = _ss_raw if isinstance(_ss_raw,list) else (
-                _ss_raw.get("data") or _ss_raw.get("props") or _ss_raw.get("board") or
-                (list(_ss_raw.values())[0] if isinstance(_ss_raw,dict) and _ss_raw else []))
-            if not isinstance(_ss_items, list): _ss_items = []
-            log(f"   📊 DB ScoutingStats: {len(_ss_items)} Items")
-            if _ss_items: log(f"   SS keys: {list(_ss_items[0].keys())[:8]}")
-            _SS_MKT = {
-                "336":"1+ Shot on Target","337":"Anytime Goalscorer","338":"To Be Booked",
-                "339":"2+ Shots","340":"2+ Tackles","341":"2+ Fouls","342":"1+ Assist",
-                "343":"2+ Shots on Target","344":"3+ Tackles","345":"3+ Fouls",
-                "shots_on_target":"1+ Shot on Target","goals":"Anytime Goalscorer",
-                "yellow_cards":"To Be Booked","shots":"2+ Shots","tackles":"2+ Tackles",
-                "fouls":"2+ Fouls","assists":"1+ Assist","saves":"1+ Save",
-                "offsides":"1+ Offside","passes":"30+ Passes",
-            }
-            for _t in _ss_items:
-                _p = _t.get("player_name","")
-                _mid = str(_t.get("market_id",""))
-                _mkt = _SS_MKT.get(_mid, _SS_MKT.get(_mid.lower(), ""))
-                if not _mkt:
-                    _pos = _t.get("general_position","")
-                    _mkt = {"FWD":"Anytime Goalscorer","MID":"1+ Shot on Target",
-                            "DEF":"2+ Tackles","GK":"1+ Save"}.get(_pos, "")
-                _home = _t.get("home_team",""); _away = _t.get("away_team","")
-                _match = f"{_home} vs {_away}" if _home and _away else ""
-                _mp_raw = float(_t.get("model_p") or _t.get("confidence") or 0)
-                # confidence=82.7 → 82.7% → als Dezimal 0.827
-                _mp = _mp_raw / 100 if _mp_raw > 1.0 else _mp_raw
-                _fair = float(_t.get("fair_odds") or 0)
-                _ko = str(_t.get("kickoff",""))
-                _form = _t.get("form") or {}
-                _hr = float(_form.get("hit_rate") or 0) / 100 if _form else 0
-                _best_p = max(_mp, _hr)
-                if not _p or not _mkt or (_best_p > 0 and _best_p < 0.45): continue
-                _add(_p, "", _match, "", _mkt, _fair, int(_best_p*100), _best_p, "ScoutingStats", _ko[11:16])
-        else:
-            log(f"   DB ScoutingStats: {_ss_r.status_code}")
-    except Exception as _e:
-        log(f"   DB ScoutingStats: {str(_e)[:60]}", "WARN")
-
-    # ── QUELLE 3: STATZ.AI ─────────────────────────────────────────
-    try:
-        _sz_html = scrape_with_playwright("https://statz.ai/projections/player-props", timeout=20000)
-        if _sz_html:
-            import re as _re_sz, json as _json_sz, html as _html_sz
-            _sz_dp = _re_sz.search(r'data-page=["\'](\{.*?\})["\']', _sz_html, _re_sz.DOTALL)
-            if _sz_dp:
-                _sz_data = _json_sz.loads(_html_sz.unescape(_sz_dp.group(1)))
-                _sz_pp = _sz_data.get("props",{})
-                _sz_items = None
-                for _k in ["projections","props","playerProps","data","predictions","player_projections","results"]:
-                    _v = _sz_pp.get(_k)
-                    if isinstance(_v,list) and _v: _sz_items=_v; break
-                if not _sz_items:
-                    for _k,_v in _sz_pp.items():
-                        if isinstance(_v,list) and _v and isinstance(_v[0],dict):
-                            if any(kk in _v[0] for kk in ["player","name","player_name"]):
-                                _sz_items=_v; break
-                log(f"   📊 DB Statz.ai: {len(_sz_items) if _sz_items else 0} Items")
-                if _sz_items: log(f"   Statz keys: {list(_sz_items[0].keys())[:10]}")
-                _sz_seen = set()  # Dedup für Statz.ai
-                _SZ_MKT = {1:"Anytime Goalscorer",2:"2+ Shots",3:"1+ Shot on Target",
-                           4:"1+ Assist",5:"2+ Tackles",6:"2+ Fouls",7:"To Be Booked",
-                           8:"1+ Save",9:"1+ Offside",10:"30+ Passes"}
-                _SZ_POS = {"attacker":"Anytime Goalscorer","forward":"Anytime Goalscorer",
-                           "FWD":"Anytime Goalscorer","midfielder":"1+ Shot on Target",
-                           "MID":"1+ Shot on Target","defender":"2+ Tackles","DEF":"2+ Tackles",
-                           "goalkeeper":"1+ Save","GK":"1+ Save","ATT":"Anytime Goalscorer"}
-                for _t in (_sz_items or []):
-                    _p_r = _t.get("player") or {}
-                    _p = _p_r.get("name","") if isinstance(_p_r,dict) else str(_p_r)
-                    _h = _t.get("home_team") or {}; _a = _t.get("away_team") or {}
-                    _home = _h.get("name","") if isinstance(_h,dict) else str(_h)
-                    _away = _a.get("name","") if isinstance(_a,dict) else str(_a)
-                    _match = f"{_home} vs {_away}" if _home and _away else ""
-                    _fix = _t.get("fixture") or {}
-                    _ko = str(_fix.get("kickoff_iso","") if isinstance(_fix,dict) else "")
-                    _m_raw = _t.get("market")
-                    _m_name = _t.get("market_name","")  # direktes Markt-Feld!
-                    _pos_r = _t.get("position") or {}
-                    _pos_s = _pos_r.get("name","") if isinstance(_pos_r,dict) else str(_pos_r or "")
-                    if _m_name:  # market_name hat Vorrang
-                        _mkt = str(_m_name)
-                    elif isinstance(_m_raw,int): _mkt = _SZ_MKT.get(_m_raw,"")
-                    elif _m_raw: _mkt = str(_m_raw)
-                    else: _mkt = _SZ_POS.get(_pos_s,"")
-                    _prob = float(_t.get("probability") or _t.get("projection") or _t.get("score") or 0)
-                    if _prob > 1: _prob /= 100
-                    if not _p or not _mkt or (_prob > 0 and _prob < 0.40): continue
-                    _fair = round(1/_prob,2) if _prob > 0.1 else 0
-                    # Dedup: gleicher Spieler+Markt nur einmal
-                    _sz_dk = f"{_p}_{_mkt}_{_match}"
-                    if _sz_dk in _sz_seen: continue
-                    _sz_seen.add(_sz_dk)
-                    _add(_p,"",_match,"",_mkt,_fair,int(_prob*100),_prob,"Statz.ai",_ko[11:16])
-    except Exception as _e:
-        log(f"   DB Statz.ai: {str(_e)[:60]}", "WARN")
-
-    # ── QUELLE 4: ODDSPEDIA ────────────────────────────────────────
-    try:
-        _op_html = scrape_with_playwright(
-            "https://oddspedia.com/soccer/world/world-cup/player-props", timeout=15000)
-        if _op_html and len(_op_html) > 80000:
-            import re as _re_op
-            log(f"   📊 DB Oddspedia: {len(_op_html)} chars")
-            _OP_MKTS = [
-                "Anytime Goalscorer","First Goalscorer","Player Shots on Target",
-                "Player Shots","Player Fouls Committed","Player Tackles","To Be Booked",
-                "Player Offsides","Player Saves","Player Passes",
-                "Player to Score or Assist","Player Cards","Player Headed Shots on Target",
-            ]
-            for _mkt in _OP_MKTS:
-                _hits = _re_op.findall(
-                    r'([A-Z][a-z]+(?: (?:van |de |Von |Al |El |Da |dos |dos )?[A-Z][a-zA-Z\-\']+)+)'
-                    r'[^<]{0,400}?' + _re_op.escape(_mkt) + r'[^<]{0,300}?([+\-]\d{3,4})',
-                    _op_html, _re_op.DOTALL)
-                for _player, _us in _hits[:15]:
-                    try:
-                        _n = int(_us)
-                        _dec = round((_n/100)+1,2) if _n>0 else round((100/abs(_n))+1,2)
-                        if 1.05 <= _dec <= 15.0:
-                            _add(_player.strip(),"","WM 2026","FIFA World Cup",
-                                 _mkt,_dec,int(100/_dec*0.95),0,"Oddspedia","")
-                    except Exception: pass
-        else:
-            log(f"   DB Oddspedia: {len(_op_html) if _op_html else 0} chars (Cloudflare?)")
-    except Exception as _e:
-        log(f"   DB Oddspedia: {str(_e)[:60]}", "WARN")
-
-    # ── QUELLE 5: FOTMOB ───────────────────────────────────────────
-    try:
-        _fm_seen = set()
-        # Extrahiere Matches aus bereits geladenen Pinnacle Props
-        _fm_matches = list(set(_p2["match"] for _p2 in _prop_db if " vs " in _p2.get("match","")))[:15]
-        for _fix_str in _fm_matches:
-            _fix_parts = _fix_str.split(" vs ", 1)
-            if len(_fix_parts) < 2: continue
-            _fix = {"home": _fix_parts[0].strip(), "away": _fix_parts[1].strip()}
-        for _fix in [{"home": m.split(" vs ")[0], "away": m.split(" vs ")[1]} 
-                     for m in _fm_matches if " vs " in m]:
-            if not isinstance(_fix,dict): continue
-            _home = _fix.get("home",""); _away = _fix.get("away","")
-            if not _home or not _away: continue
-            _match = f"{_home} vs {_away}"
-            for _team in [_home, _away]:
-                if _team in _fm_seen: continue
-                _fm_seen.add(_team)
-                for _fp in (get_fotmob_player_season_stats(_team) or []):
-                    _pname = _fp.get("name","")
-                    if not _pname: continue
-                    _yc = float(_fp.get("yellow_cards") or 0)
-                    _goals = float(_fp.get("goals") or 0)
-                    if _yc >= 3:
-                        _add(_pname,_team,_match,"","To Be Booked",1.85,55,0.0,"FotMob","")
-                    if _goals >= 3:
-                        _add(_pname,_team,_match,"","Anytime Goalscorer",2.50,40,0.0,"FotMob","")
-    except Exception as _e:
-        log(f"   DB FotMob: {str(_e)[:60]}", "WARN")
-
-    # ── QUELLE 6: SUPABASE PLAYER AVG STATS → NATE/AYSTAR LADDERS ─────
-    # Baut die Builder aus unseren eigenen historischen Player-Stats:
-    # shots, sot, fouls_committed, fouls_won, tackles, cards.
-    # Das ist für Nate/Aystar-Style wichtig, weil Pinnacle oft nur Score/Card liefert.
-    try:
-        _stat_added = 0
-        _stat_players = {}
-        _stat_seen = set()
-
-        # Nur Spieler aus heutigen Pinnacle/Prop-Matches nehmen, damit keine Random-Spieler kommen.
-        for _base in _prop_db:
-            _pn = (_base.get("player") or "").strip()
-            if not _pn or len(_pn.split()) < 2 or len(_pn) < 5:
-                continue
-            if _pn.lower() in {"either team", "both teams", "home team", "away team"}:
-                continue
-            if _pn not in _stat_players:
-                _stat_players[_pn] = {
-                    "team": _base.get("team", ""),
-                    "match": _base.get("match", ""),
-                    "league": _base.get("league", ""),
-                    "ko": _base.get("ko", ""),
-                }
-            if len(_stat_players) >= 450:
-                break
-
-        def _stat_obj(_stats, *_names):
-            for _n in _names:
-                if _n in _stats and isinstance(_stats[_n], dict):
-                    return _stats[_n]
-            return {}
-
-        def _sf_float(_x, _default=0.0):
-            try:
-                if _x is None:
-                    return _default
-                return float(_x)
-            except Exception:
-                return _default
-
-        def _add_stat_prop(_player, _ctx, _market, _cat, _line, _odds, _hit, _avg, _games):
-            nonlocal _stat_added
-            if _hit < 45 and _avg <= 0:
-                return
-            _key = f"{_player}|{_ctx.get('match','')}|{_market}"
-            if _key in _stat_seen:
-                return
-            _stat_seen.add(_key)
-
-            # Hit Rate bestimmt Model-Prob, Odds sind konservative Builder-Preise.
-            _mp = max(0.35, min(0.88, _hit / 100.0 if _hit else 0.50))
-            _prop_db.append({
-                "player": _player[:80],
-                "team": (_ctx.get("team") or "")[:60],
-                "match": (_ctx.get("match") or "Unknown Match")[:150],
-                "league": (_ctx.get("league") or "")[:80],
-                "market": _market[:150],
-                "category": _cat,
-                "line": float(_line),
-                "odds": float(_odds),
-                "prob": int(round(_mp * 100)),
-                "model_prob": _mp,
-                "source": "SupabaseStats",
-                "ko": _ctx.get("ko") or "",
-                "icon": _CAT_ICONS.get(_cat, "🎯"),
-                "hit_rate": int(round(_hit)) if _hit else "",
-                "games": int(_games) if _games else 0,
-            })
-            _stat_added += 1
-
-        for _player, _ctx in list(_stat_players.items()):
-            try:
-                _stats = get_supabase_player_avg_stats(_player) or {}
-            except Exception:
-                _stats = {}
-            if not _stats:
-                continue
-
-            _sot = _stat_obj(_stats, "sot", "shots_on_target", "shot_on_target", "games_sot")
-            _shots = _stat_obj(_stats, "shots", "total_shots", "games_shot")
-            _fc = _stat_obj(_stats, "fouls_committed", "fouls", "games_foul")
-            _fw = _stat_obj(_stats, "fouls_won", "fouls_drawn", "player_to_be_fouled")
-            _tk = _stat_obj(_stats, "tackles", "tackles_won", "games_tackle")
-            _yc = _stat_obj(_stats, "cards", "yellow_cards", "games_card")
-
-            # SOT / Shots
-            _avg = _sf_float(_sot.get("avg") or _sot.get("avg_value"))
-            _hr = _sf_float(_sot.get("hit_rate") or _sot.get("hit_rate_pct"))
-            _g = _sf_float(_sot.get("games"))
-            if _g >= 3 and (_hr >= 55 or _avg >= 0.8):
-                _add_stat_prop(_player, _ctx, "1+ Shot on Target", "sot", 1, 1.55, max(_hr, 58), _avg, _g)
-            if _g >= 3 and (_hr >= 45 or _avg >= 1.4):
-                _add_stat_prop(_player, _ctx, "2+ Shots on Target", "sot", 2, 2.20, max(_hr, 46), _avg, _g)
-
-            _avg = _sf_float(_shots.get("avg") or _shots.get("avg_value"))
-            _hr = _sf_float(_shots.get("hit_rate") or _shots.get("hit_rate_pct"))
-            _g = _sf_float(_shots.get("games"))
-            if _g >= 3 and (_hr >= 60 or _avg >= 1.7):
-                _add_stat_prop(_player, _ctx, "2+ Shots", "shots", 2, 1.55, max(_hr, 62), _avg, _g)
-            if _g >= 3 and (_hr >= 50 or _avg >= 2.6):
-                _add_stat_prop(_player, _ctx, "3+ Shots", "shots", 3, 2.05, max(_hr, 52), _avg, _g)
-            if _g >= 3 and (_hr >= 42 or _avg >= 3.4):
-                _add_stat_prop(_player, _ctx, "4+ Shots", "shots", 4, 3.00, max(_hr, 44), _avg, _g)
-
-            # Fouls committed / fouls won
-            _avg = _sf_float(_fc.get("avg") or _fc.get("avg_value"))
-            _hr = _sf_float(_fc.get("hit_rate") or _fc.get("hit_rate_pct"))
-            _g = _sf_float(_fc.get("games"))
-            if _g >= 3 and (_hr >= 60 or _avg >= 1.5):
-                _add_stat_prop(_player, _ctx, "2+ Fouls Committed", "fouls", 2, 1.75, max(_hr, 60), _avg, _g)
-            if _g >= 3 and (_hr >= 45 or _avg >= 2.4):
-                _add_stat_prop(_player, _ctx, "3+ Fouls Committed", "fouls", 3, 2.60, max(_hr, 46), _avg, _g)
-
-            _avg = _sf_float(_fw.get("avg") or _fw.get("avg_value"))
-            _hr = _sf_float(_fw.get("hit_rate") or _fw.get("hit_rate_pct"))
-            _g = _sf_float(_fw.get("games"))
-            if _g >= 3 and (_hr >= 60 or _avg >= 0.9):
-                _add_stat_prop(_player, _ctx, "1+ Fouls Won", "fouls_won", 1, 1.45, max(_hr, 62), _avg, _g)
-            if _g >= 3 and (_hr >= 50 or _avg >= 1.8):
-                _add_stat_prop(_player, _ctx, "2+ Fouls Won", "fouls_won", 2, 1.95, max(_hr, 52), _avg, _g)
-
-            # Tackles
-            _avg = _sf_float(_tk.get("avg") or _tk.get("avg_value"))
-            _hr = _sf_float(_tk.get("hit_rate") or _tk.get("hit_rate_pct"))
-            _g = _sf_float(_tk.get("games"))
-            if _g >= 3 and (_hr >= 60 or _avg >= 1.5):
-                _add_stat_prop(_player, _ctx, "2+ Tackles", "tackles", 2, 1.60, max(_hr, 60), _avg, _g)
-            if _g >= 3 and (_hr >= 45 or _avg >= 2.5):
-                _add_stat_prop(_player, _ctx, "3+ Tackles", "tackles", 3, 2.30, max(_hr, 46), _avg, _g)
-
-            # Karten aus Stats nur als Backup. Pinnacle-To-Be-Booked bleibt bevorzugt.
-            _avg = _sf_float(_yc.get("avg") or _yc.get("avg_value"))
-            _hr = _sf_float(_yc.get("hit_rate") or _yc.get("hit_rate_pct"))
-            _g = _sf_float(_yc.get("games"))
-            if _g >= 5 and (_hr >= 28 or _avg >= 0.22):
-                _add_stat_prop(_player, _ctx, "Player To Be Booked", "yellow_cards", 1, 3.60, max(_hr, 30), _avg, _g)
-
-        if _stat_players:
-            log(f"   📊 SupabaseStats geprüft: {len(_stat_players)} Spieler")
-        log(f"   📊 SupabaseStats Builder-Props ergänzt: {_stat_added}")
-    except Exception as _e:
-        log(f"   SupabaseStats Builder-Props: {str(_e)[:80]}", "WARN")
-
-
-    # ── V6 ADAPTIVE PLAYER-STATS FALLBACK ───────────────────────────
-    # V5 hat gezeigt: player_avg_stats wurde geprüft, aber 0 Builder-Props ergänzt.
-    # Darum hier schema-flexibler Fallback über player_avg_stats / player_match_stats / player_stats.
-    # Zielmärkte für Nate/Aystar: Shots, SOT, Fouls Committed, Fouls Won, Tackles, Cards.
-    try:
-        import re as _re_adapt
-        from collections import defaultdict as _ADefaultDict
-
-        _adaptive_added = 0
-        _adaptive_rows_seen = 0
-        _adaptive_tables_ok = []
-
-        def _ad_norm(_s):
-            _s = str(_s or "").lower().strip()
-            _s = _re_adapt.sub(r"[^a-z0-9äöüßáéíóúàèìòùâêîôûãõñç\s-]", " ", _s)
-            _s = _re_adapt.sub(r"\s+", " ", _s).strip()
-            return _s
-
-        def _ad_float(_x, _default=0.0):
-            try:
-                if _x is None or _x == "":
-                    return _default
-                return float(_x)
-            except Exception:
-                return _default
-
-        def _ad_first(row, names, default=None):
-            for _n in names:
-                if _n in row and row.get(_n) not in (None, ""):
-                    return row.get(_n)
-            return default
-
-        def _ad_num(row, names, default=0.0):
-            return _ad_float(_ad_first(row, names, default), default)
-
-        def _ad_player(row):
-            return str(_ad_first(row, [
-                "player", "player_name", "name", "selection", "player_full_name",
-                "athlete", "athlete_name", "display_name"
-            ], "") or "").strip()
-
-        def _ad_stat_label(row):
-            return _ad_norm(_ad_first(row, [
-                "stat", "stat_type", "metric", "market", "market_name",
-                "prop", "category", "type", "event_type"
-            ], ""))
-
-        def _ad_ctx_for_player(player):
-            _n = _ad_norm(player)
-            return _adaptive_player_ctx.get(_n) or {
-                "team": "", "match": "Unknown Match", "league": "", "ko": ""
-            }
-
-        def _ad_add(player, ctx, market, cat, line, odds, hit, avg, games, source):
-            nonlocal _adaptive_added
-            player = (player or "").strip()
-            if not player or len(player) < 5 or len(player.split()) < 2:
-                return
-            # Keine Zufallsprops ohne Minimalbasis.
-            if games and games < 3:
-                return
-            if hit <= 0 and avg <= 0:
-                return
-
-            _key = (
-                _ad_norm(player),
-                _ad_norm(ctx.get("match")),
-                _ad_norm(market),
-                float(line),
-                source
-            )
-            if _key in _adaptive_seen:
-                return
-            _adaptive_seen.add(_key)
-
-            _mp = max(0.30, min(0.88, (hit / 100.0) if hit else {
-                "sot": 0.56, "shots": 0.56, "fouls": 0.54, "fouls_won": 0.54,
-                "tackles": 0.54, "yellow_cards": 0.32, "score": 0.40
-            }.get(cat, 0.50)))
-
-            _prop_db.append({
-                "player": player[:80],
-                "team": (ctx.get("team") or "")[:60],
-                "match": (ctx.get("match") or "Unknown Match")[:150],
-                "league": (ctx.get("league") or "")[:80],
-                "market": market[:150],
-                "category": cat,
-                "line": float(line),
-                "odds": float(odds),
-                "prob": int(round(_mp * 100)),
-                "model_prob": _mp,
-                "source": source,
-                "ko": ctx.get("ko") or "",
-                "icon": _CAT_ICONS.get(cat, "🎯"),
-                "hit_rate": int(round(hit)) if hit else "",
-                "games": int(games or 0),
-                "avg": round(float(avg or 0), 3),
-            })
-            _adaptive_added += 1
-
-        def _ad_emit_from_metric(player, ctx, metric, avg, hit, games, source):
-            # Erzeugt mehrere Ladder-Linien aus avg/hit_rate.
-            avg = _ad_float(avg)
-            hit = _ad_float(hit)
-            games = int(_ad_float(games, 0))
-            if metric == "sot":
-                if games >= 3 and (hit >= 55 or avg >= 0.65):
-                    _ad_add(player, ctx, "1+ Shot on Target", "sot", 1, 1.55, max(hit, 58), avg, games, source)
-                if games >= 3 and (hit >= 42 or avg >= 1.15):
-                    _ad_add(player, ctx, "2+ Shots on Target", "sot", 2, 2.20, max(hit, 44), avg, games, source)
-            elif metric == "shots":
-                if games >= 3 and (hit >= 58 or avg >= 1.50):
-                    _ad_add(player, ctx, "2+ Shots", "shots", 2, 1.55, max(hit, 60), avg, games, source)
-                if games >= 3 and (hit >= 48 or avg >= 2.30):
-                    _ad_add(player, ctx, "3+ Shots", "shots", 3, 2.05, max(hit, 50), avg, games, source)
-                if games >= 3 and (hit >= 38 or avg >= 3.20):
-                    _ad_add(player, ctx, "4+ Shots", "shots", 4, 3.00, max(hit, 40), avg, games, source)
-            elif metric == "fouls":
-                if games >= 3 and (hit >= 58 or avg >= 1.30):
-                    _ad_add(player, ctx, "2+ Fouls Committed", "fouls", 2, 1.75, max(hit, 58), avg, games, source)
-                if games >= 3 and (hit >= 42 or avg >= 2.10):
-                    _ad_add(player, ctx, "3+ Fouls Committed", "fouls", 3, 2.60, max(hit, 44), avg, games, source)
-            elif metric == "fouls_won":
-                if games >= 3 and (hit >= 58 or avg >= 0.80):
-                    _ad_add(player, ctx, "1+ Fouls Won", "fouls_won", 1, 1.45, max(hit, 60), avg, games, source)
-                if games >= 3 and (hit >= 48 or avg >= 1.55):
-                    _ad_add(player, ctx, "2+ Fouls Won", "fouls_won", 2, 1.95, max(hit, 50), avg, games, source)
-            elif metric == "tackles":
-                if games >= 3 and (hit >= 58 or avg >= 1.25):
-                    _ad_add(player, ctx, "2+ Tackles", "tackles", 2, 1.60, max(hit, 58), avg, games, source)
-                if games >= 3 and (hit >= 42 or avg >= 2.15):
-                    _ad_add(player, ctx, "3+ Tackles", "tackles", 3, 2.30, max(hit, 44), avg, games, source)
-            elif metric == "yellow_cards":
-                if games >= 5 and (hit >= 25 or avg >= 0.18):
-                    _ad_add(player, ctx, "Player To Be Booked", "yellow_cards", 1, 3.60, max(hit, 28), avg, games, source)
-
-        def _ad_metric_from_label(label):
-            l = _ad_norm(label)
-            if any(x in l for x in ["shot on target", "shots on target", "sot", "on target"]):
-                return "sot"
-            if any(x in l for x in ["total shots", "shots total", "shots", "shot attempts"]):
-                return "shots"
-            if any(x in l for x in ["fouls committed", "fouls commit", "commit foul", "foul committed", "fc"]):
-                return "fouls"
-            if any(x in l for x in ["fouls won", "fouls drawn", "to be fouled", "fouled", "draw foul"]):
-                return "fouls_won"
-            if "tackle" in l:
-                return "tackles"
-            if any(x in l for x in ["yellow card", "cards", "booked", "booking", "yc"]):
-                return "yellow_cards"
-            return ""
-
-        _adaptive_player_ctx = {}
-        for _p in _prop_db:
-            _pl = (_p.get("player") or "").strip()
-            if not _pl or len(_pl) < 5 or len(_pl.split()) < 2:
-                continue
-            _n = _ad_norm(_pl)
-            _adaptive_player_ctx.setdefault(_n, {
-                "team": _p.get("team", ""),
-                "match": _p.get("match", ""),
-                "league": _p.get("league", ""),
-                "ko": _p.get("ko", ""),
-            })
-        _adaptive_target_names = set(_adaptive_player_ctx.keys())
-        _adaptive_seen = set()
-
-        # A) Schema-flexible player_avg_stats / player_stats lesen.
-        _headers = {"apikey": SUPABASE_KEY, "Authorization": f"Bearer {SUPABASE_KEY}"} if SUPABASE_URL and SUPABASE_KEY else {}
-        _avg_tables = ["player_avg_stats", "player_stats"]
-        for _tbl in _avg_tables:
-            if not _headers:
-                continue
-            try:
-                _r = requests.get(f"{SUPABASE_URL}/rest/v1/{_tbl}",
-                                  headers=_headers,
-                                  params={"select": "*", "limit": "5000"},
-                                  timeout=25)
-                if not _r.ok:
-                    continue
-                _rows = _r.json() or []
-                if _rows:
-                    _adaptive_tables_ok.append(f"{_tbl}:{len(_rows)}")
-                for _row in _rows:
-                    _adaptive_rows_seen += 1
-                    _player = _ad_player(_row)
-                    if not _player:
-                        continue
-                    _pn = _ad_norm(_player)
-                    if _adaptive_target_names and _pn not in _adaptive_target_names:
-                        continue
-                    _ctx = _ad_ctx_for_player(_player)
-                    _label = _ad_stat_label(_row)
-                    _metric = _ad_metric_from_label(_label)
-
-                    # Long format: stat_type + avg/hit_rate/games.
-                    if _metric:
-                        _avg = _ad_num(_row, ["avg", "avg_value", "per_game", "value", "mean", "stat_avg", "avg_per_game"])
-                        _hit = _ad_num(_row, ["hit_rate", "hit_rate_pct", "rate", "success_rate", "over_rate"])
-                        _games = _ad_num(_row, ["games", "matches", "sample", "samples", "n", "count"])
-                        _ad_emit_from_metric(_player, _ctx, _metric, _avg, _hit, _games, f"SupabaseStatsAdaptive:{_tbl}")
-                        continue
-
-                    # Wide format: viele avg-Spalten in einer Zeile.
-                    _games = _ad_num(_row, ["games", "matches", "sample", "samples", "n", "count"], 8)
-                    _wide_specs = [
-                        ("sot",
-                         ["sot_avg", "avg_sot", "shots_on_target_avg", "avg_shots_on_target", "shot_on_target_avg", "sot_per_game", "shots_on_target_per_game"],
-                         ["sot_hit_rate", "shots_on_target_hit_rate", "hit_rate_sot", "sot_hit_rate_pct"]),
-                        ("shots",
-                         ["shots_avg", "avg_shots", "total_shots_avg", "avg_total_shots", "shots_per_game", "shot_avg"],
-                         ["shots_hit_rate", "total_shots_hit_rate", "hit_rate_shots", "shots_hit_rate_pct"]),
-                        ("fouls",
-                         ["fouls_committed_avg", "avg_fouls_committed", "fouls_avg", "fc_avg", "fouls_committed_per_game"],
-                         ["fouls_committed_hit_rate", "fc_hit_rate", "hit_rate_fouls_committed", "fouls_hit_rate"]),
-                        ("fouls_won",
-                         ["fouls_won_avg", "avg_fouls_won", "fouls_drawn_avg", "fd_avg", "fouled_avg"],
-                         ["fouls_won_hit_rate", "fouls_drawn_hit_rate", "fd_hit_rate", "hit_rate_fouls_won"]),
-                        ("tackles",
-                         ["tackles_avg", "avg_tackles", "tackles_won_avg", "tackles_per_game"],
-                         ["tackles_hit_rate", "hit_rate_tackles", "tackles_hit_rate_pct"]),
-                        ("yellow_cards",
-                         ["cards_avg", "yellow_cards_avg", "avg_yellow_cards", "yc_avg", "bookings_avg"],
-                         ["cards_hit_rate", "yellow_cards_hit_rate", "yc_hit_rate", "booking_hit_rate"]),
-                    ]
-                    for _m, _avg_names, _hit_names in _wide_specs:
-                        _avg = _ad_num(_row, _avg_names, 0)
-                        _hit = _ad_num(_row, _hit_names, 0)
-                        if _avg > 0 or _hit > 0:
-                            _ad_emit_from_metric(_player, _ctx, _m, _avg, _hit, _games, f"SupabaseStatsAdaptive:{_tbl}")
-            except Exception as _e:
-                log(f"   📊 AdaptiveStats {_tbl}: {str(_e)[:80]}", "WARN")
-
-        # B) Wenn AVG keine Ladders liefert: player_match_stats direkt aggregieren.
-        _before_match_add = _adaptive_added
-        if _headers and _adaptive_added == 0:
-            try:
-                _r = requests.get(f"{SUPABASE_URL}/rest/v1/player_match_stats",
-                                  headers=_headers,
-                                  params={"select": "*", "limit": "5000", "order": "date.desc"},
-                                  timeout=30)
-                if _r.ok:
-                    _rows = _r.json() or []
-                    if _rows:
-                        _adaptive_tables_ok.append(f"player_match_stats:{len(_rows)}")
-                    _agg = _ADefaultDict(lambda: {
-                        "games": 0,
-                        "sot": 0.0, "shots": 0.0, "fouls": 0.0,
-                        "fouls_won": 0.0, "tackles": 0.0, "yellow_cards": 0.0,
-                        "hit_sot1": 0, "hit_sot2": 0,
-                        "hit_shots2": 0, "hit_shots3": 0,
-                        "hit_fouls2": 0, "hit_fouls3": 0,
-                        "hit_fw1": 0, "hit_fw2": 0,
-                        "hit_tk2": 0, "hit_tk3": 0,
-                        "hit_yc1": 0,
-                    })
-                    _player_original = {}
-                    for _row in _rows:
-                        _player = _ad_player(_row)
-                        if not _player:
-                            continue
-                        _pn = _ad_norm(_player)
-                        if _adaptive_target_names and _pn not in _adaptive_target_names:
-                            continue
-                        _player_original[_pn] = _player
-                        _a = _agg[_pn]
-                        _a["games"] += 1
-
-                        _sot = _ad_num(_row, ["sot", "shots_on_target", "shot_on_target", "on_target"])
-                        _shots = _ad_num(_row, ["shots", "total_shots", "shot_total", "shot_attempts"])
-                        _fc = _ad_num(_row, ["fouls_committed", "fouls", "fc"])
-                        _fw = _ad_num(_row, ["fouls_won", "fouls_drawn", "fd", "fouled"])
-                        _tk = _ad_num(_row, ["tackles", "tackles_won"])
-                        _yc = _ad_num(_row, ["yellow_cards", "cards", "yc", "bookings"])
-
-                        _a["sot"] += _sot; _a["shots"] += _shots; _a["fouls"] += _fc
-                        _a["fouls_won"] += _fw; _a["tackles"] += _tk; _a["yellow_cards"] += _yc
-                        if _sot >= 1: _a["hit_sot1"] += 1
-                        if _sot >= 2: _a["hit_sot2"] += 1
-                        if _shots >= 2: _a["hit_shots2"] += 1
-                        if _shots >= 3: _a["hit_shots3"] += 1
-                        if _fc >= 2: _a["hit_fouls2"] += 1
-                        if _fc >= 3: _a["hit_fouls3"] += 1
-                        if _fw >= 1: _a["hit_fw1"] += 1
-                        if _fw >= 2: _a["hit_fw2"] += 1
-                        if _tk >= 2: _a["hit_tk2"] += 1
-                        if _tk >= 3: _a["hit_tk3"] += 1
-                        if _yc >= 1: _a["hit_yc1"] += 1
-
-                    for _pn, _a in _agg.items():
-                        _g = int(_a["games"] or 0)
-                        if _g < 3:
-                            continue
-                        _player = _player_original.get(_pn, _pn)
-                        _ctx = _adaptive_player_ctx.get(_pn, {"team": "", "match": "Unknown Match", "league": "", "ko": ""})
-                        _ad_emit_from_metric(_player, _ctx, "sot", _a["sot"]/_g, 100*_a["hit_sot1"]/_g, _g, "SupabaseMatchStats")
-                        _ad_emit_from_metric(_player, _ctx, "shots", _a["shots"]/_g, 100*_a["hit_shots2"]/_g, _g, "SupabaseMatchStats")
-                        _ad_emit_from_metric(_player, _ctx, "fouls", _a["fouls"]/_g, 100*_a["hit_fouls2"]/_g, _g, "SupabaseMatchStats")
-                        _ad_emit_from_metric(_player, _ctx, "fouls_won", _a["fouls_won"]/_g, 100*_a["hit_fw1"]/_g, _g, "SupabaseMatchStats")
-                        _ad_emit_from_metric(_player, _ctx, "tackles", _a["tackles"]/_g, 100*_a["hit_tk2"]/_g, _g, "SupabaseMatchStats")
-                        _ad_emit_from_metric(_player, _ctx, "yellow_cards", _a["yellow_cards"]/_g, 100*_a["hit_yc1"]/_g, _g, "SupabaseMatchStats")
-            except Exception as _e:
-                log(f"   📊 Adaptive player_match_stats: {str(_e)[:80]}", "WARN")
-
-        log(f"   📊 AdaptiveStats Tabellen: {_adaptive_tables_ok if _adaptive_tables_ok else 'keine'}")
-        log(f"   📊 AdaptiveStats Rows geprüft: {_adaptive_rows_seen}")
-        log(f"   📊 AdaptiveStats Builder-Props ergänzt: {_adaptive_added} (MatchStats +{_adaptive_added - _before_match_add if _before_match_add <= _adaptive_added else 0})")
-    except Exception as _e:
-        log(f"   📊 AdaptiveStats Fallback Fehler: {str(_e)[:120]}", "WARN")
-
-
-    # ── FINAL ALL-SOURCE FUSION + FALLBACKS ─────────────────────────
-    # Ziel: ALLE Quellen berücksichtigen, nicht nur Live-Pinnacle.
-    # Quellen: Pinnacle, ScoutingStats, Statz.ai, Oddspedia, FootyMetrics,
-    # SupabaseStats, Supabase player_prop_db, TheStatsAPI/FBref/StatsBomb wenn vorhanden.
-    try:
-        from collections import Counter as _AllCtr
-
-        _all_sources_before = _AllCtr(str(p.get("source", "unknown")) for p in _prop_db)
-        _all_cats_before = _AllCtr(str(p.get("category", "unknown")) for p in _prop_db)
-        log(f"   🧩 ALL-SOURCE vor Fallback: Quellen={dict(_all_sources_before)}")
-        log(f"   🧩 ALL-SOURCE vor Fallback: Kategorien={dict(_all_cats_before.most_common(12))}")
-
-        def _as_float(_x, _default=0.0):
-            try:
-                if _x is None or _x == "":
-                    return _default
-                return float(_x)
-            except Exception:
-                return _default
-
-        def _norm_txt(_s):
-            import re as _re_norm
-            _s = str(_s or "").lower().strip()
-            _s = _re_norm.sub(r"[^a-z0-9äöüßáéíóúàèìòùâêîôûãõñç\s+.-]", " ", _s)
-            _s = _re_norm.sub(r"\s+", " ", _s).strip()
-            return _s
-
-        def _detect_cat(_market, _fallback=""):
-            _m = _norm_txt(_market)
-            _f = _norm_txt(_fallback)
-            _x = f"{_m} {_f}"
-            if "shot on target" in _x or "sot" in _x:
-                return "sot"
-            if "shots" in _x or "shot total" in _x or "total shots" in _x:
-                return "shots"
-            if "fouls committed" in _x or "player fouls" in _x or "to commit" in _x:
-                return "fouls"
-            if "fouls won" in _x or "fouled" in _x or "drawn" in _x:
-                return "fouls_won"
-            if "tackle" in _x:
-                return "tackles"
-            if "booked" in _x or "yellow card" in _x or "card" in _x or "booking" in _x:
-                return "yellow_cards"
-            if "goalscorer" in _x or "to score" in _x or "score or assist" in _x:
-                return "score"
-            return _fallback or "misc"
-
-        def _safe_prop(_row, _source_prefix="SupabaseDB"):
-            _player = (_row.get("player") or _row.get("player_name") or _row.get("selection") or "").strip()
-            _match = (_row.get("match") or _row.get("fixture") or _row.get("game") or "").strip()
-            _market = (_row.get("market") or _row.get("market_name") or _row.get("prop") or "").strip()
-            if not _player or not _market:
-                return None
-            if len(_player.split()) < 2 or len(_player) < 5:
-                return None
-
-            _src0 = (_row.get("source") or "").strip()
-            _src = f"{_source_prefix}:{_src0}" if _src0 and not str(_src0).startswith(_source_prefix) else (_src0 or _source_prefix)
-            _cat = _detect_cat(_market, _row.get("category") or "")
-            _odds = _as_float(_row.get("odds") or _row.get("pinnacle_odds") or _row.get("fair_odds") or _row.get("price") or 0)
-            if _odds <= 1.01:
-                # konservative Fallback-Preise je Markt, damit Builder nicht wegen fehlender Quote stirbt
-                _odds = {
-                    "sot": 1.55, "shots": 1.70, "fouls": 1.85, "fouls_won": 1.70,
-                    "tackles": 1.70, "yellow_cards": 3.60, "score": 2.20
-                }.get(_cat, 1.70)
-
-            _mp = _as_float(_row.get("model_prob") or 0)
-            if _mp > 1.0:
-                _mp = _mp / 100.0
-            _prob = _as_float(_row.get("prob") or _row.get("pinnacle_prob") or 0)
-            if _prob <= 1 and _mp > 0:
-                _prob = int(round(_mp * 100))
-            elif _prob <= 0:
-                _prob = int(round({
-                    "sot": 58, "shots": 56, "fouls": 54, "fouls_won": 54,
-                    "tackles": 54, "yellow_cards": 32, "score": 40
-                }.get(_cat, 50)))
-
-            _line = _as_float(_row.get("line") or 0)
-            if _line <= 0:
-                if "4+" in _market: _line = 4
-                elif "3+" in _market: _line = 3
-                elif "2+" in _market: _line = 2
-                else: _line = 1
-
-            return {
-                "player": _player[:80],
-                "team": (_row.get("team") or "")[:60],
-                "match": (_match or "Unknown Match")[:150],
-                "league": (_row.get("league") or "")[:80],
-                "market": _market[:150],
-                "category": _cat,
-                "line": float(_line),
-                "odds": float(_odds),
-                "prob": int(round(_prob)),
-                "model_prob": _mp if _mp > 0 else max(0.30, min(0.88, float(_prob) / 100.0)),
-                "source": _src,
-                "ko": _row.get("ko") or "",
-                "icon": _CAT_ICONS.get(_cat, "🎯"),
-                "hit_rate": _row.get("hit_rate") or "",
-                "games": int(_as_float(_row.get("games") or 0)),
-            }
-
-        def _source_weight(_src):
-            _s = str(_src or "")
-            if _s.startswith("SupabaseStatsAdaptive"): return 126
-            if _s.startswith("SupabaseMatchStats"): return 124
-            if _s.startswith("SupabaseStats"): return 120
-            if _s.startswith("Statz.ai"): return 115
-            if _s.startswith("ScoutingStats"): return 110
-            if _s.startswith("Pinnacle"): return 105
-            if _s.startswith("SupabaseDB:Pinnacle"): return 104
-            if _s.startswith("SupabaseDB:Statz.ai"): return 103
-            if _s.startswith("SupabaseDB:ScoutingStats"): return 102
-            if _s.startswith("Oddspedia"): return 95
-            if _s.startswith("FootyMetrics"): return 92
-            if _s.startswith("StatsBomb"): return 90
-            if _s.startswith("SupabaseDB"): return 88
-            return 70
-
-        # Fallback A: Supabase player_prop_db von heute/letzten Runs laden.
-        _db_added = 0
-        _known_matches = set(_norm_txt(p.get("match")) for p in _prop_db if p.get("match"))
-        _known_players = set(_norm_txt(p.get("player")) for p in _prop_db if p.get("player"))
-        if SUPABASE_URL and SUPABASE_KEY:
-            _db_rows = []
-            _headers = {"apikey": SUPABASE_KEY, "Authorization": f"Bearer {SUPABASE_KEY}"}
-            _select = "player,team,match,league,market,category,line,source,date,pinnacle_odds,pinnacle_prob,model_prob,fair_odds"
-            for _params in (
-                {"select": _select, "date": f"eq.{_pp_today}", "limit": "1200"},
-                {"select": _select, "order": "date.desc", "limit": "1200"},
-            ):
-                try:
-                    _r = requests.get(f"{SUPABASE_URL}/rest/v1/player_prop_db", headers=_headers, params=_params, timeout=12)
-                    if _r.ok and _r.text:
-                        _db_rows.extend(_r.json() or [])
-                except Exception as _e_db:
-                    log(f"   🧩 SupabaseDB Fallback: {str(_e_db)[:70]}", "WARN")
-            _seen_db = set()
-            for _r in _db_rows:
-                _pr = _safe_prop(_r, "SupabaseDB")
-                if not _pr:
-                    continue
-                _mk = _norm_txt(_pr.get("match"))
-                _pn = _norm_txt(_pr.get("player"))
-                # Priorität: heutige Spiele/Spieler. Fallback trotzdem erlaubt, wenn Match leer/Unknown.
-                if _known_matches and _mk and _mk not in _known_matches and _pn not in _known_players:
-                    continue
-                _key = (_pn, _mk, _norm_txt(_pr.get("market")), _pr.get("line"))
-                if _key in _seen_db:
-                    continue
-                _seen_db.add(_key)
-                _prop_db.append(_pr)
-                _db_added += 1
-        log(f"   🧩 SupabaseDB Fallback ergänzt: {_db_added}")
-
-        # Fallback B: Mindest-Coverage prüfen. Kein Stop, nur klares Log.
-        _need_cats = ["shots", "sot", "fouls", "fouls_won", "tackles", "yellow_cards", "score"]
-        _cat_now = _AllCtr(str(p.get("category", "unknown")) for p in _prop_db)
-        _src_now = _AllCtr(str(p.get("source", "unknown")) for p in _prop_db)
-        _missing_cats = [c for c in _need_cats if _cat_now.get(c, 0) == 0]
-        if _missing_cats:
-            log(f"   🧩 ALL-SOURCE Warnung: fehlende Kategorien {', '.join(_missing_cats)}", "WARN")
-        else:
-            log("   🧩 ALL-SOURCE Coverage: Shots/SOT/Fouls/Fouled/Tackles/Cards/Score vorhanden")
-
-        # Final-Dedup: gleiche Spieler/Match/Markt/Line aus allen Quellen → beste Quelle/Prob/Quote behalten.
-        _dedup = {}
-        for _p in _prop_db:
-            try:
-                _key = (
-                    _norm_txt(_p.get("player")),
-                    _norm_txt(_p.get("match")),
-                    _norm_txt(_p.get("market")),
-                    float(_p.get("line") or 0),
-                )
-                if not _key[0] or not _key[2]:
-                    continue
-                _score = (
-                    _source_weight(_p.get("source"))
-                    + (_as_float(_p.get("model_prob")) * 30.0)
-                    + (_as_float(_p.get("prob")) / 10.0)
-                    + min(5.0, _as_float(_p.get("games")) / 10.0)
-                )
-                _old = _dedup.get(_key)
-                if not _old or _score > _old[0]:
-                    _dedup[_key] = (_score, _p)
-            except Exception:
-                continue
-        _before_dedup = len(_prop_db)
-        _prop_db[:] = [v[1] for v in _dedup.values()]
-        log(f"   🧩 ALL-SOURCE Final Dedup: {_before_dedup} → {len(_prop_db)}")
-
-        _src_final = _AllCtr(str(p.get("source", "unknown")) for p in _prop_db)
-        _cat_final = _AllCtr(str(p.get("category", "unknown")) for p in _prop_db)
-        log(f"   🧩 ALL-SOURCE final Quellen: {dict(_src_final)}")
-        log(f"   🧩 ALL-SOURCE final Kategorien: {dict(_cat_final.most_common(12))}")
-    except Exception as _e:
-        log(f"   🧩 ALL-SOURCE Fusion/Fallback Fehler: {str(_e)[:120]}", "WARN")
-
-
-    # ── STATISTIK ──────────────────────────────────────────────────
-    log(f"   📊 PROP DB: {len(_prop_db)} Props total")
-    if _prop_db:
-        from collections import Counter as _Ctr
-        _cc = _Ctr(p["category"] for p in _prop_db)
-        _sc = _Ctr(p["source"] for p in _prop_db)
-        log(f"   📊 Kategorien: {dict(_cc.most_common(10))}")
-        log(f"   📊 Quellen: {dict(_sc)}")
-
-    # ── SUPABASE SPEICHERN ─────────────────────────────────────────
-    try:
-        if SUPABASE_URL and SUPABASE_KEY and _prop_db:
-            _saved = 0
-            for _row in _prop_db[:300]:
-                try:
-                    requests.post(
-                        f"{SUPABASE_URL}/rest/v1/player_prop_db",
-                        headers={"apikey":SUPABASE_KEY,"Authorization":f"Bearer {SUPABASE_KEY}",
-                                 "Content-Type":"application/json","Prefer":"resolution=merge-duplicates"},
-                        json={"player":_row["player"],"team":_row["team"],"match":_row["match"],
-                              "league":_row["league"],"market":_row["market"],"category":_row["category"],
-                              "line":_row["line"],"source":_row["source"],"date":str(_pp_today),
-                              "pinnacle_odds":_row["odds"] if _row["source"]=="Pinnacle" else None,
-                              "pinnacle_prob":_row["prob"] if _row["source"]=="Pinnacle" else None,
-                              "model_prob":_row["model_prob"] or None,
-                              "fair_odds":_row["odds"] if _row["source"]!="Pinnacle" else None},
-                        timeout=2)
-                    _saved += 1
-                except Exception: pass
-            log(f"   📊 DB Supabase: {_saved} Props gespeichert")
-    except Exception as _e:
-        log(f"   DB Supabase: {str(_e)[:60]}", "WARN")
-
-    # ════════════════════════════════════════════════════════════════
-    # BUILDER LOGIK — Nate Style + Aystar Style
-    # ════════════════════════════════════════════════════════════════
-    if not _prop_db or not _pp_chat:
-        log("   Prop DB: leer oder kein Kanal")
-    else:
-        from collections import defaultdict as _ddb
-
-        NL = chr(10); SEP = chr(0x2501) * 18
-
-        def _tod(legs):
-            """Gesamtquote berechnen."""
-            t = 1.0
-            for l in legs:
-                if l["odds"] > 1.0: t *= l["odds"]
-            return round(t, 2)
-
-        def _norm_builder_player_name(_s):
-            """Robuste Spieler-Normalisierung für Builder-Filter."""
-            import re as _re_bpn
-            _s = (_s or "").lower().strip()
-            _s = _re_bpn.sub(r"[^a-z0-9äöüßáéíóúàèìòùâêîôûãõñç\s-]", " ", _s)
-            _s = _re_bpn.sub(r"\s+", " ", _s).strip()
-            return _s
-
-        def _is_score_card_same_player_combo(legs):
-            """
-            Verwirft nur Low-Probability-Kombis:
-            gleicher Spieler trifft / Score-or-Assist UND bekommt Karte.
-            Beispiel: Kane Anytime Goalscorer + Kane To Be Booked.
-            Andere Nate/Aystar/GOD Builder bleiben erlaubt.
-            """
-            _by_player = {}
-            for _l in legs:
-                _player = _norm_builder_player_name(_l.get("player", ""))
-                if not _player or len(_player) < 4:
-                    continue
-                _cat = str(_l.get("category", "")).lower()
-                _market = str(_l.get("market", "")).lower()
-
-                _is_score = (
-                    _cat in {"score", "goal", "goals", "score_assist", "anytime_goalscorer"}
-                    or "goalscorer" in _market
-                    or "to score" in _market
-                    or "score or assist" in _market
-                    or "goal scorer" in _market
-                )
-                _is_card = (
-                    _cat in {"yellow_cards", "cards", "booking", "bookings"}
-                    or "to be booked" in _market
-                    or "booked" in _market
-                    or "yellow card" in _market
-                    or "card" in _market
-                )
-
-                _state = _by_player.setdefault(_player, {"score": False, "card": False})
-                _state["score"] = _state["score"] or _is_score
-                _state["card"] = _state["card"] or _is_card
-
-            return any(_v["score"] and _v["card"] for _v in _by_player.values())
-
-        def _send_builder(legs, style="", variant="", high_roller=False):
-            nonlocal _pp_total
-            t = _tod(legs)
-
-            # NETRATTLER HARD PROP-BUILDER ODDS GUARD
-            # Ziel: keine schwachen Builder mehr wie @2.59 / @3.08 / @4.03.
-            _style_u = (style or "").upper()
-            _legs_n = len(legs)
-
-            # Kein Low-Probability Quatsch: gleicher Spieler Score + Karte.
-            # Wichtig: KEIN Mengen-Cap für Nate/Aystar/GOD, nur diese Kombi wird geblockt.
-            if _is_score_card_same_player_combo(legs):
-                log(f"   ⏭️ Builder verworfen: gleicher Spieler Score+Karte ({style})")
-                return False
-
-            if high_roller:
-                _min = 50.0
-                _max = 600.0
-            elif "AYSTAR BOOKING" in _style_u:
-                _min = 12.0
-                _max = 50.0
-            elif "GOD" in _style_u:
-                _min = 10.0 if _legs_n >= 3 else 5.0
-                _max = 50.0
-            elif "MIX" in _style_u:
-                _min = 8.0
-                _max = 50.0
-            elif "MULTI-MKT" in _style_u:
-                _min = 8.0
-                _max = 50.0
-            elif "CROSS-MATCH" in _style_u:
-                _min = 8.0
-                _max = 50.0
-            elif "CAT YELLOW_CARDS" in _style_u:
-                _min = 10.0
-                _max = 50.0
-            elif "CAT SOT" in _style_u:
-                _min = 5.0
-                _max = 50.0
-            elif _style_u.startswith("CAT "):
-                _min = 5.0
-                _max = 50.0
-            elif "NATE" in _style_u:
-                _min = 5.0
-                _max = 50.0
-            else:
-                _min = 5.0
-                _max = 50.0
-
-            if t < _min or t > _max:
-                return False
-            srcs = list(dict.fromkeys(l["source"] for l in legs))
-            cats = list(dict.fromkeys(l["category"] for l in legs))
-            icons = "".join(dict.fromkeys(_CAT_ICONS.get(c,"🎯") for c in cats))
-            var_s = f" <i>({variant})</i>" if variant else ""
-            _frac = f"{int(round(t-1))}/1" if t >= 2.0 and t == int(round(t)) else f"{t:.2f}"
-            _hr_tag = " \U0001f680 <b>HIGH ROLLER</b>" if high_roller else ""
-            _stake = "0.25u 🎲" if high_roller else "0.5u"
-            msg = (f"\U0001f3d7\ufe0f <b>BET BUILDER {_frac}</b>{_hr_tag} {icons}{var_s}{NL}{SEP}{NL}")
-            for i, l in enumerate(legs, 1):
-                o = f" @ {l['odds']:.2f}" if l["odds"]>1.0 else ""
-                conf = ""
-                if l.get("model_prob",0)>0: conf = f" ({l['model_prob']*100:.0f}%)"
-                elif l.get("prob",0)>0: conf = f" ({l['prob']}%)"
-                hr_str = f" · L5: {l.get('hit_rate','')}%" if l.get("hit_rate") else ""
-                match_line = f"   \u26bd {l['match']}{NL}" if len(set(x["match"] for x in legs))>1 else ""
-                msg += f"{i}. {l['icon']} <b>{l['player']}</b>{NL}"
-                msg += f"   {l['market']}{o}{conf}{hr_str}{NL}"
-                msg += match_line
-            if len(set(x["match"] for x in legs)) == 1:
-                msg += f"\u26bd <b>{legs[0]['match']}</b>{NL}"
-            msg += f"{SEP}{NL}\U0001f4b0 @ <b>{_frac}</b> \u00b7 {_stake}{NL}"
-            msg += f"<i>\U0001f4ca {' + '.join(srcs)}</i>"
-            send_telegram(msg, chat_id=_pp_chat)
-            _pp_total += 1
-            _builder_icon = "🚀" if high_roller else "🏗"
-            log(f"   {_builder_icon} {style} {len(legs)}L @ {t:.2f}")
-            return True
-
-        # Props gruppieren
-        # Quellen-Gewichtung: Statz.ai/ScoutingStats bevorzugen (haben model_prob)
-        # Pinnacle: nur wenn Spielername bekannt (min 2 Wörter)
-        _prop_db_filtered = []
-
-        def _builder_source_bonus_final(_src):
-            _s = str(_src or "").split(":")[0]
-            return {
-                "SupabaseStatsAdaptive": 0.34,
-                "SupabaseMatchStats": 0.32,
-                "SupabaseStats": 0.30,
-                "Statz.ai": 0.25,
-                "ScoutingStats": 0.22,
-                "Pinnacle": 0.18,
-                "Oddspedia": 0.12,
-                "FootyMetrics": 0.10,
-                "StatsBomb": 0.08,
-                "SupabaseDB": 0.06,
-            }.get(_s, 0.0)
-
-        for _p in _prop_db:
-            _pn = _p.get("player","").strip()
-            # Pinnacle Team-Props noch mal filtern
-            if _p["source"] == "Pinnacle":
-                if len(_pn.split()) < 2: continue
-                _pm = _p.get("market","").lower()
-                if any(t in _pm for t in ["to score?","both teams","either","1st half","btts","over ","under ","match"]): continue
-            _prop_db_filtered.append(_p)
-
-        log(f"   📊 DB nach Filter: {len(_prop_db_filtered)} Props (von {len(_prop_db)})")
-        from collections import Counter as _Ctr2
-        _fc = _Ctr2(p["category"] for p in _prop_db_filtered)
-        _fs = _Ctr2(p["source"] for p in _prop_db_filtered)
-        log(f"   📊 Kategorien gefiltert: {dict(_fc.most_common(8))}")
-        log(f"   📊 Quellen gefiltert: {dict(_fs)}")
-
-        # NETRATTLER MASTER BUILDER ENGINE
-        # Creates the requested multi-player 1+/2+/3+ shot ladders, underdog ladders,
-        # SOT/foul/tackle trios, mixed builders and player+corner fusion builders.
-        _master_builder_sent = 0
-        try:
-            from netrattler_builder_engine import run_builder_engine
-            _master_contexts = []
-            for _ctx in (top_btts_tips or []):
-                if isinstance(_ctx, dict):
-                    _master_contexts.append(_ctx)
-            if isinstance(fixtures_cache, dict):
-                for _ctx in fixtures_cache.values():
-                    if isinstance(_ctx, dict):
-                        _master_contexts.append(_ctx)
-                    elif isinstance(_ctx, list):
-                        _master_contexts.extend(x for x in _ctx if isinstance(x, dict))
-
-            def _master_send(_message):
-                return send_telegram(_message, chat_id=_pp_chat)
-
-            def _master_log(_message):
-                log(f"   🧠 {_message}")
-
-            _master_builder_sent, _master_picks = run_builder_engine(
-                _prop_db_filtered,
-                send_message=_master_send,
-                match_contexts=_master_contexts,
-                match_date=str(_pp_today),
-                supabase_url=SUPABASE_URL,
-                supabase_key=SUPABASE_KEY,
-                logger=_master_log,
-            )
-            _pp_total += _master_builder_sent
-            log(f"   🏗 MASTER Builder gesendet: {_master_builder_sent}")
-        except Exception as _master_e:
-            log(f"   MASTER Builder Engine: {str(_master_e)[:120]}", "WARN")
-
-        # Legacy builders are disabled by default to prevent duplicate/contradictory
-        # Nate/Aystar/GOD variants. They can be re-enabled temporarily through ENV.
-        if _master_builder_sent > 0 and str(env("ENABLE_LEGACY_BUILDERS", "false")).lower() not in ("1", "true", "yes", "on"):
-            _prop_db_filtered = []
-
-        _by_match = _ddb(lambda: _ddb(lambda: _ddb(list)))
-        _by_cat_all = _ddb(list)
-        for _p in _prop_db_filtered:
-            if _p["category"] not in _BUILDER_CATS: continue
-            if _p["odds"] < 1.05 or _p["odds"] > 10.0: continue
-            _by_match[_p["match"]][_p["player"]][_p["category"]].append(_p)
-            _by_cat_all[_p["category"]].append(_p)
-
-        # ── NATE STYLE: LADDER ─────────────────────────────────────
-        # Gleicher Spieler + gleiche Kategorie, steigende Linien → Varianten
-        # z.B. Perisic 3+ Tackles, 2+ Tackles, 1+ Tackles @ 375/1, 160/1, 70/1
-        log(f"   🎯 Nate Ladder Builder...")
-        _ladder_candidates = sum(1 for _m, _pls in _by_match.items() 
-                                  for _pl, _cats in _pls.items() 
-                                  for _c, _props in _cats.items() if len(_props) >= 2)
-        log(f"   Ladder Kandidaten: {_ladder_candidates} (Spieler mit 2+ Linien)")
-        # Debug: zeige Tackle/Foul Props
-        _debug_cats = [p for p in _prop_db_filtered if p["category"] in ["tackles","fouls","yellow_cards"]][:5]
-        for _dp in _debug_cats:
-            log(f"   DB sample: {_dp['player']} | {_dp['market']} | {_dp['odds']} | {_dp['source']}")
-        for _match, _players in list(_by_match.items())[:30]:
-            for _player, _cats in list(_players.items()):
-                for _c, _props in list(_cats.items()):
-                    if len(_props) < 2: continue
-                    _gk = f"NL_{_player[:15]}_{_match[:20]}_{_c}_{_pp_today}"
-                    if _gk in _builder_sent_today: continue
-                    # Dedup nach Line
-                    _seen_l = {}
-                    for _pp2 in _props:
-                        ln = _pp2["line"]
-                        if ln not in _seen_l or _pp2["odds"] < _seen_l[ln]["odds"]:
-                            _seen_l[ln] = _pp2
-                    _deduped = sorted(_seen_l.values(), key=lambda x: x["line"], reverse=True)
-                    # Nur wenn echte Ladder: Linien müssen sich unterscheiden UND Odds variieren
-                    if len(set(p["line"] for p in _deduped)) < 2: continue
-                    if len(_deduped) < 2: continue
-                    # Mehrere Varianten wie Nate (hohe→mittlere→niedrige Linie)
-                    _built = False
-                    for _sz in range(min(len(_deduped), 5), 1, -1):
-                        legs = _deduped[:_sz]
-                        if _send_builder(legs, "NATE LADDER", f"{_player} {_c}"):
-                            _built = True
-                    if _built:
-                        _builder_sent_today.add(_gk)
-
-        # ── GODTIPSTERR STYLE: EIN SPIELER, ALLE KATEGORIEN ─────
-        # Haaland: Score 2+ + 4+ SOT + 2+ Fouls Won (verschiedene Märkte, ein Spieler)
-        log(f"   ⚡ GodTipsterr Builder...")
-        for _match, _players in list(_by_match.items())[:25]:
-            for _player, _cats in list(_players.items()):
-                # Nur wenn Spieler in 2+ verschiedenen Kategorien vorkommt
-                _avail_cats = [(c, ps) for c, ps in _cats.items() 
-                               if c in _BUILDER_CATS and any(p["odds"] <= 8.0 for p in ps)]
-                if len(_avail_cats) < 2: continue
-                _gk = f"GOD_{_player[:15]}_{_match[:20]}_{_pp_today}"
-                if _gk in _builder_sent_today: continue
-
-                # Beste Prop pro Kategorie
-                _god_legs = []
-                for _c, _props in sorted(_avail_cats, 
-                                          key=lambda x: max((p["model_prob"] or p["prob"]/100) + _builder_source_bonus_final(p.get("source")) for p in x[1]), 
-                                          reverse=True)[:5]:
-                    _best = sorted(_props, key=lambda x: (x["model_prob"] or x["prob"]/100) + _builder_source_bonus_final(x.get("source")), reverse=True)[0]
-                    if _best["odds"] <= 8.0:
-                        _god_legs.append(_best)
-
-                if len(_god_legs) < 2: continue
-
-                # Varianten 5→4→3→2 Legs
-                for _sz in range(min(len(_god_legs), 5), 1, -1):
-                    if _send_builder(_god_legs[:_sz], "GOD", f"{_player}"):
-                        _builder_sent_today.add(_gk)
-                        _STAT_INSIGHT_SENT_TODAY.add(_gk)
-                        break
-
-        # ── AYSTAR STYLE: BOOKING BUILDER ──────────────────────────
-        # Mehrere Spieler To Be Booked, verschiedene Spiele, Quote 13-61
-        log(f"   🟨 Aystar Booking Builder...")
-        _yc_props = _by_cat_all.get("yellow_cards", [])
-        # Priorisiere Quellen mit model_prob
-        def _yc_score(p):
-            src_bonus = {"SupabaseStatsAdaptive": 0.34, "SupabaseMatchStats": 0.32, "SupabaseStats": 0.30, "Statz.ai": 0.25, "ScoutingStats": 0.20, "Pinnacle": 0.15, "Oddspedia": 0.12, "FootyMetrics": 0.10}.get(str(p["source"]).split(":")[0], 0)
-            return (p["model_prob"] or p["prob"]/100) + src_bonus
-        _yc_sorted = sorted(_yc_props, key=_yc_score, reverse=True)
-        # Dedup: beste Quote pro Spieler
-        _yc_best = {}
-        for _p in _yc_sorted:
-            # Nur echte Spielernamen (min 2 Wörter)
-            _pn = _p["player"].strip()
-            if len(_pn.split()) < 2 or len(_pn) < 5: continue
-            _k = f"{_pn}_{_p['match']}"
-            if _k not in _yc_best or _p["odds"] < _yc_best[_k]["odds"]:
-                _yc_best[_k] = _p
-        _yc_unique = list(_yc_best.values())
-
-        # Baue verschiedene Größen: 6→5→4→3 Legs
-        _gk_yc = f"AY_YC_{_pp_today}"
-        if _gk_yc in _STAT_INSIGHT_SENT_TODAY:
-            log("   🟨 Aystar Booking: bereits heute gesendet")
-        elif _gk_yc not in _builder_sent_today and len(_yc_unique) >= 3:
-            _used_yc_p = set()
-            _yc_legs = []
-            for _yp in _yc_unique:
-                if _yp["player"] in _used_yc_p: continue
-                _yc_legs.append(_yp)
-                _used_yc_p.add(_yp["player"])
-                if len(_yc_legs) >= 6: break
-
-            # Standard: 3L, Ziel 12-50/1
-            _std_sent = False
-            for _sz in range(3, min(len(_yc_legs)+1, 5)):
-                legs = _yc_legs[:_sz]
-                t = _tod(legs)
-                if 12.0 <= t <= 50.0:
-                    if _send_builder(legs, "AYSTAR BOOKING"):
-                        _std_sent = True
-                        break
-
-            # High Roller: 5-6L, Ziel 50-500/1
-            _gk_yc_hr = f"AY_YC_HR_{_pp_today}"
-            if _gk_yc_hr not in _STAT_INSIGHT_SENT_TODAY and len(_yc_legs) >= 4:
-                for _sz in range(min(len(_yc_legs), 6), 3, -1):
-                    legs = _yc_legs[:_sz]
-                    if _send_builder(legs, "AYSTAR BOOKING HR", high_roller=True):
-                        _STAT_INSIGHT_SENT_TODAY.add(_gk_yc_hr)
-                        break
-
-            _builder_sent_today.add(_gk_yc)
-            _STAT_INSIGHT_SENT_TODAY.add(_gk_yc)
-
-        # ── AYSTAR MIX: SCORE/ASSIST + BOOKING ─────────────────────
-        # Score or Assist + To Be Booked gemischt
-        log(f"   🎯 Aystar Mix Builder...")
-        for _match, _players in list(_by_match.items())[:20]:
-            _gk_mix = f"AY_MIX_{_match[:30]}_{_pp_today}"
-            if _gk_mix in _builder_sent_today: continue
-
-            _mix_legs = []
-            _used_mp = set(); _used_mc = set()
-            # Alle Props dieses Spiels nach Confidence
-            _all_mp = []
-            for _pl, _cats in _players.items():
-                for _c, _props in _cats.items():
-                    if _c not in ["score","assist","score_assist","yellow_cards","sot","fouls","tackles"]:
-                        continue
-                    _best = sorted(_props, key=lambda x: x["model_prob"] or x["prob"]/100, reverse=True)[0]
-                    if _best["odds"] <= 8.0:
-                        _all_mp.append(_best)
-            _all_mp.sort(key=lambda x: x["model_prob"] or x["prob"]/100, reverse=True)
-
-            for _ap in _all_mp:
-                if _ap["player"] in _used_mp: continue
-                if _ap["category"] in _used_mc: continue
-                _mix_legs.append(_ap)
-                _used_mp.add(_ap["player"])
-                _used_mc.add(_ap["category"])
-                if len(_mix_legs) >= 5: break
-
-            if len(_mix_legs) < 3: continue
-            for _sz in range(min(len(_mix_legs), 5), 2, -1):
-                if _send_builder(_mix_legs[:_sz], "MIX"):
-                    _builder_sent_today.add(_gk_mix); break
-
-        # ── MULTI-MARKET BUILDER (GodTipsterr Mix) ──────────────
-        # BTTS + Over Goals + Team Shots + Player Props kombiniert
-        # Nutze Pinnacle Props + BTTS Tips zusammen
-        _gk_mm = f"MM_{_pp_today}"
-        if _gk_mm not in _builder_sent_today:
-            _mm_legs = []
-            _mm_used_m = set()
-            _mm_used_c = set()
-
-            # Priorität: YC > Score > SOT > Team Props > Tackles
-            for _cat_prio in ["yellow_cards","score","sot","team_shots","team_corners",
-                              "team_cards","btts","over_goals","ht_props","tackles",
-                              "fouls","fouls_won","saves"]:
-                _cprops = _by_cat_all.get(_cat_prio, [])
-                if not _cprops: continue
-                _best = sorted(_cprops, key=lambda x: x["model_prob"] or x["prob"]/100, reverse=True)
-                for _bp in _best:
-                    if _bp["match"] in _mm_used_m and _cat_prio not in ["yellow_cards"]: continue
-                    if _bp["category"] in _mm_used_c: continue
-                    if _bp["odds"] > 7.0: continue
-                    if len(_bp["player"].split()) < 2: continue  # echte Spielernamen
-                    _mm_legs.append(_bp)
-                    _mm_used_c.add(_bp["category"])
-                    _mm_used_m.add(_bp["match"])
-                    if len(_mm_legs) >= 5: break
-                if len(_mm_legs) >= 5: break
-
-            if len(_mm_legs) >= 3:
-                for _sz in range(min(len(_mm_legs),5), 2, -1):
-                    _t = _tod(_mm_legs[:_sz])
-                    if 8.0 <= _t <= 50.0:
-                        if _send_builder(_mm_legs[:_sz], "MULTI-MKT"):
-                            _builder_sent_today.add(_gk_mm)
-                            _STAT_INSIGHT_SENT_TODAY.add(_gk_mm)
-                            break
-
-        # ── CROSS-MATCH BUILDER ────────────────────────────────────
-        # Beste Props aus verschiedenen Spielen (Aystar macht das auch)
-        _gk_cross = f"CROSS_{_pp_today}"
-        if _gk_cross not in _builder_sent_today:
-            _cross = []
-            _used_xm = set(); _used_xp = set()
-            # Fokus auf Yellow Cards + Score/Assist für Aystar-Style
-            for _cat_prio in ["yellow_cards", "score", "assist", "sot", "tackles", "fouls"]:
-                for _p in sorted(_by_cat_all.get(_cat_prio, []),
-                                 key=lambda x: x["model_prob"] or x["prob"]/100, reverse=True):
-                    if _p["match"] in _used_xm: continue
-                    if _p["player"] in _used_xp: continue
-                    if _p["odds"] > 8.0: continue
-                    _cross.append(_p)
-                    _used_xm.add(_p["match"])
-                    _used_xp.add(_p["player"])
-                    if len(_cross) >= 5: break
-                if len(_cross) >= 5: break
-
-            if len(_cross) >= 3:
-                for _sz in range(min(len(_cross), 5), 2, -1):
-                    _t = _tod(_cross[:_sz])
-                    if 8.0 <= _t <= 50.0:  # hart: min 8 / max 50
-                        if _send_builder(_cross[:_sz], "CROSS-MATCH"):
-                            _builder_sent_today.add(_gk_cross)
-                            _STAT_INSIGHT_SENT_TODAY.add(_gk_cross)
-                            # High Roller: mehr Legs
-                            _gk_cross_hr = f"CROSS_HR_{_pp_today}"
-                            if _gk_cross_hr not in _STAT_INSIGHT_SENT_TODAY and len(_cross) > _sz:
-                                if _send_builder(_cross[:min(len(_cross),6)],
-                                                 "CROSS-MATCH HR", high_roller=True):
-                                    _STAT_INSIGHT_SENT_TODAY.add(_gk_cross_hr)
-                            break
-
-        # ── CATEGORY BUILDERS ──────────────────────────────────────
-        # Shots on Target Builder, Tackles Builder etc.
-        for _c in ["sot", "tackles", "fouls", "saves", "offsides", "fouls_won", "yellow_cards"]:
-            _gk_c = f"CAT_{_c}_{_pp_today}"
-            if _gk_c in _builder_sent_today: continue
-            _cprops = _by_cat_all.get(_c, [])
-            if len(_cprops) < 3: continue
-            _cprops.sort(key=lambda x: x["model_prob"] or x["prob"]/100, reverse=True)
-            _clegs = []
-            _cup = set()
-            for _cp in _cprops:
-                if _cp["player"] in _cup: continue
-                if _cp["odds"] > 7.0: continue
-                _clegs.append(_cp)
-                _cup.add(_cp["player"])
-                if len(_clegs) >= 5: break
-            if len(_clegs) < 3: continue
-            for _sz in range(min(len(_clegs), 5), 2, -1):
-                t = _tod(_clegs[:_sz])
-                _cat_min_total = 10.0 if _c == "yellow_cards" else 5.0
-                if t >= _cat_min_total:
-                    if _send_builder(_clegs[:_sz], f"CAT {_c.upper()}"):
-                        _builder_sent_today.add(_gk_c)
-                        _STAT_INSIGHT_SENT_TODAY.add(_gk_c)
-                        break
-
-        log(f"   \U0001f3d7 Builder gesamt: {_pp_total} gesendet")
-
-
-
-
-    # Prüfe ob DB Builder schon gesendet hat
-    _db_builders_done = len(_builder_sent_today)
-    log(f"   DB Builder fertig: {_db_builders_done} gesendet")
-
-    if PLAYWRIGHT_AVAILABLE:
-        import re as _re_pp, json as _json_pp
-        # 1. ODDSPEDIA — oft Cloudflare geblockt, kurzes Timeout
-        try:
-            _op_html = scrape_with_playwright("https://oddspedia.com/soccer/world/world-cup/player-props",timeout=12000)
-            log(f"   Oddspedia HTML: {len(_op_html) if _op_html else 0} chars")
-            if _op_html and len(_op_html) > 80000:
-                _op_icons = {"Anytime Goalscorer":"⚽","First Goalscorer":"⚽","Player Shots on Target":"🎯",
-                             "Player Shots":"💥","Player Fouls Committed":"🦵","Player Tackles":"🦵","To Be Booked":"🟨"}
-                _op_hits = _re_pp.findall(
-                    r'([A-Z][a-z]+(?: (?:van |de |Von |Al |El )?[A-Z][a-zA-Z\-]+)+)'
-                    r'[^<]{0,300}?(Anytime Goalscorer|Player Shots on Target|Player Shots|'
-                    r'First Goalscorer|Player Fouls Committed|Player Tackles|To Be Booked)'
-                    r'[^<]{0,200}?([+\-]\d{3,4})', _op_html, _re_pp.DOTALL)
-                log(f"   Oddspedia Props: {len(_op_hits)}")
-                for _player, _market, _us in _op_hits[:25]:
-                    try:
-                        _n = int(_us)
-                        _dec = round((_n/100)+1,2) if _n > 0 else round((100/abs(_n))+1,2)
-                    except Exception: continue
-                    if not (1.20 <= _dec <= 20.0): continue
-                    _send_prop(_player.strip(), _market, "WM 2026", _dec, "Oddspedia", _op_icons.get(_market,"🎯"))
-        except Exception as _e: log(f"   Oddspedia Error: {str(_e)[:60]}", "WARN")
-
-        # 2. FOOTYMETRICS — tRPC Endpunkte alle 404, übersprungen
-        # if _pp_total < 30:  # deaktiviert bis neue Endpunkte gefunden
-        if False:
-            try:
-                import cloudscraper as _css_fm
-                _fm_cs = _css_fm.create_scraper()
-                _fm_markets = [("player-shots-on-target","1+ Shot on Target","🎯"),
-                               ("player-goals","Anytime Goalscorer","⚽"),("player-cards","To Be Booked","🟨"),
-                               ("player-shots","2+ Shots","💥"),("player-fouls-committed","2+ Fouls","🦵"),
-                               ("player-tackles","2+ Tackles","🦵")]
-                for _slug, _name, _icon in _fm_markets:
-                    if _pp_total >= 30: break
-                    for _fu in [f"https://www.footymetrics.com/api/trpc/trend.getPlayerTrends?input=%7B%22market%22%3A%22{_slug}%22%7D",
-                                f"https://www.footymetrics.com/_next/data/latest/trends/{_slug}.json"]:
-                        try:
-                            _fr = _fm_cs.get(_fu, timeout=10, headers={"Accept":"application/json","Referer":"https://www.footymetrics.com/"})
-                            log(f"   FootyMetrics {_slug}: {_fr.status_code}")
-                            if _fr.ok and _fr.text.strip().startswith(('[','{')):
-                                _fd = _fr.json()
-                                _fi = _fd.get("result",{}).get("data",[]) or _fd.get("data",[]) or (_fd if isinstance(_fd,list) else [])
-                                for _t in (_fi or [])[:8]:
-                                    _p = _t.get("playerName") or _t.get("player","")
-                                    _m = _t.get("fixture") or _t.get("match","")
-                                    if isinstance(_m,dict): _m = f"{_m.get('home','')} vs {_m.get('away','')}"
-                                    _hr = float(_t.get("hitRate") or 0)
-                                    if not _p or _hr < 70: continue
-                                    _send_prop(_p, _name, str(_m) or "Upcoming", 0, "FootyMetrics", _icon, "", f"Hit Rate: {_hr:.0f}%")
-                                break
-                        except Exception: pass
-            except Exception as _e: log(f"   FootyMetrics Error: {str(_e)[:60]}", "WARN")
-
-        # 3. SCOUTINGSTATS
-        if _pp_total < 30:
-            try:
-                import cloudscraper as _css2
-                _ss_cs = _css2.create_scraper()
-                _ss_r = _ss_cs.get("https://scoutingstats.ai/api/props/board", timeout=12,
-                    headers={"Accept":"application/json","Referer":"https://scoutingstats.ai/"})
-                log(f"   ScoutingStats: {_ss_r.status_code} / {len(_ss_r.text)} chars")
-                if _ss_r.ok:
-                    try:
-                        _ss_raw = _ss_r.json()
-                        if isinstance(_ss_raw, list):
-                            _ss_items = _ss_raw
-                        elif isinstance(_ss_raw, dict):
-                            _ss_items = (_ss_raw.get("data") or _ss_raw.get("props") or
-                                        _ss_raw.get("board") or _ss_raw.get("results") or
-                                        list(_ss_raw.values())[0] if _ss_raw else [])
-                            if not isinstance(_ss_items, list): _ss_items = []
-                        else:
-                            _ss_items = []
-                        log(f"   ScoutingStats items: {len(_ss_items)}")
-                        if _ss_items:
-                            log(f"   ScoutingStats keys: {list(_ss_items[0].keys())[:8]}")
-                            log(f"   ScoutingStats sample: {str(_ss_items[0])[:300]}")
-                    except Exception as _ss_pe:
-                        log(f"   ScoutingStats parse: {str(_ss_pe)[:60]}", "WARN")
-                        _ss_items = []
-                if _ss_r.ok and _ss_items:
-                    _ss_mkt = {"shots_on_target":"1+ Shot on Target","goals":"Anytime Goalscorer",
-                               "yellow_cards":"To Be Booked","shots":"2+ Shots","tackles":"2+ Tackles",
-                               "fouls":"2+ Fouls","assists":"1+ Assist","336":"1+ Shot on Target",
-                               "337":"Anytime Goalscorer","338":"To Be Booked","339":"2+ Shots","340":"2+ Tackles"}
-                    _ss_icn = {"goals":"⚽","337":"⚽","shots_on_target":"🎯","336":"🎯",
-                               "yellow_cards":"🟨","338":"🟨","shots":"💥","339":"💥","tackles":"🦵","340":"🦵"}
-                    for _t in (_ss_items if isinstance(_ss_items,list) else [])[:20]:
-                        _p = _t.get("player_name","")
-                        _mid = str(_t.get("market_id",""))
-                        _home = _t.get("home_team",""); _away = _t.get("away_team","")
-                        _match = f"{_home} vs {_away}" if _home and _away else ""
-                        _pos = _t.get("general_position","")
-                        _m = _ss_mkt.get(_mid.lower(), _ss_mkt.get(_mid, _pos or f"Prop({_mid})"))
-                        _icon2 = _ss_icn.get(_mid, "📊")
-                        _mp = float(_t.get("model_p") or _t.get("confidence") or 0)
-                        _fair2 = float(_t.get("fair_odds") or 0)
-                        _ko2 = str(_t.get("kickoff",""))
-                        _ko_s2 = _ko2[11:16] if len(_ko2) > 11 else ""
-                        if not _p: continue
-                        if _mp > 0 and _mp < 0.50: continue  # nur filtern wenn model_p gesetzt
-                        _fair_use = _fair2 if _fair2 > 1.0 else (round(1/_mp,2) if _mp > 0 else 0)
-                        _send_prop(_p, _m, _match or "Upcoming", _fair_use, "ScoutingStats", _icon2, _ko_s2,
-                                   extra=f"Model: {_mp*100:.0f}%")
-            except Exception as _e: log(f"   ScoutingStats Error: {str(_e)[:60]}", "WARN")
-
-        # 4. STATZ.AI
-        if _pp_total < 30:
-            try:
-                _sz_html = scrape_with_playwright("https://statz.ai/projections/player-props", timeout=25000)
-                if _sz_html:
-                    _sz_dp = _re_pp.search(r'data-page=["\'](\{.*?\})["\']', _sz_html, _re_pp.DOTALL)
-                    if _sz_dp:
-                        import html as _html_mod
-                        _sz_json = _json_pp.loads(_html_mod.unescape(_sz_dp.group(1)))
-                        log(f"   Statz.ai page keys: {list(_sz_json.keys())[:8]}")
-                        _sz_props = _sz_json.get("props",{})
-                        log(f"   Statz.ai props keys: {list(_sz_props.keys())[:8]}")
-                        _sz_items = None
-                        # Suche Player Props: muss player Feld haben
-                        for _k in ["projections","props","playerProps","data","predictions",
-                                   "player_projections","results","picks","tips","players"]:
-                            _v = _sz_props.get(_k)
-                            if isinstance(_v, list) and len(_v) > 0 and isinstance(_v[0], dict):
-                                if any(kk in _v[0] for kk in ["player","player_name","playerName","market_name"]):
-                                    _sz_items = _v
-                                    _sz_mkts = set(str(i.get("market_name","") or i.get("market","")) for i in _v[:20])
-                                    log(f"   Statz.ai key '{_k}': {len(_v)} items, markets: {list(_sz_mkts)[:5]}")
-                                    break
-                        if not _sz_items:
-                            # Rekursiv suchen
-                            def _find_sz(d, depth=0):
-                                if depth > 5: return None
-                                if isinstance(d, list) and len(d) > 0 and isinstance(d[0], dict):
-                                    if any(kk in d[0] for kk in ["player","player_name","market_name"]):
-                                        return d
-                                if isinstance(d, dict):
-                                    for v in d.values():
-                                        r = _find_sz(v, depth+1)
-                                        if r: return r
-                                return None
-                            _sz_items = _find_sz(_sz_data)
-                            if _sz_items:
-                                log(f"   Statz.ai deep: {len(_sz_items)} items, keys: {list(_sz_items[0].keys())[:6]}")
-                        log(f"   Statz.ai items: {len(_sz_items) if _sz_items else 0}")
-                        if _sz_items:
-                            log(f"   Statz.ai keys: {list(_sz_items[0].keys())[:10]}")
-                        _sz_mkt = {1:"Anytime Goalscorer",2:"2+ Shots",3:"1+ Shot on Target",
-                                   4:"1+ Assist",5:"2+ Tackles",6:"2+ Fouls",7:"To Be Booked"}
-                        _sz_pos = {"attacker":"Anytime Goalscorer","forward":"Anytime Goalscorer",
-                                   "midfielder":"1+ Shot on Target","defender":"2+ Tackles",
-                                   "FWD":"Anytime Goalscorer","MID":"1+ Shot on Target","DEF":"2+ Tackles"}
-                        _sz_icn = {1:"⚽",2:"💥",3:"🎯",4:"🅰️",5:"🦵",6:"🦵",7:"🟨"}
-                        for _t in (_sz_items if isinstance(_sz_items,list) else [])[:20]:
-                            _p_raw = _t.get("player") or {}
-                            _p = _p_raw.get("name","") if isinstance(_p_raw,dict) else str(_p_raw)
-                            _h_raw = _t.get("home_team") or {}; _a_raw = _t.get("away_team") or {}
-                            _home = _h_raw.get("name","") if isinstance(_h_raw,dict) else str(_h_raw)
-                            _away = _a_raw.get("name","") if isinstance(_a_raw,dict) else str(_a_raw)
-                            _match = f"{_home} vs {_away}" if _home and _away else ""
-                            _fix = _t.get("fixture") or {}
-                            _ko = str(_fix.get("kickoff_iso","") if isinstance(_fix,dict) else "")
-                            _ko_s = _ko[11:16] if len(_ko) > 11 else ""
-                            _m_raw = _t.get("market")
-                            _pos_raw = _t.get("position") or {}
-                            _pos_str = _pos_raw.get("name","") if isinstance(_pos_raw,dict) else str(_pos_raw or "")
-                            if _m_raw and isinstance(_m_raw,int): _m = _sz_mkt.get(_m_raw, f"Prop {_m_raw}")
-                            elif _m_raw: _m = str(_m_raw)
-                            else: _m = _sz_pos.get(_pos_str, "Player Prop")
-                            _icon = _sz_icn.get(_m_raw if isinstance(_m_raw,int) else 0, "🤖")
-                            _prob = float(_t.get("probability") or _t.get("projection") or _t.get("score") or 0)
-                            if _prob > 1: _prob /= 100
-                            if not _p: continue
-                            if _prob > 0 and _prob < 0.45: continue  # niedrigere Schwelle
-                            _fair = round(1/_prob,2) if _prob > 0.1 else 0
-                            _send_prop(_p, _m, _match or "WM", _fair, "Statz.ai", _icon, _ko_s,
-                                       extra=f"AI: {_prob*100:.0f}%" if _prob > 0 else "")
-            except Exception as _e: log(f"   Statz.ai Error: {str(_e)[:60]}", "WARN")
-
-    # ═══════════════════════════════════════
-    # PROP BUILDER — beste Props kombinieren
-    # ═══════════════════════════════════════
-    if _prop_candidates and _pp_chat and locals().get("_master_builder_sent", 0) == 0:
-        # Sortiere nach Confidence absteigend
-        _prop_candidates.sort(key=lambda x: x["confidence"], reverse=True)
-
-        # ═══════════════════════════════════════
-        # PROP BUILDER — 3 bis 5 Legs, mit Ladder
-        # ═══════════════════════════════════════
-        NL = "\n"
-        SEP = "\u2501" * 18
-
-        # Ladder: gleicher Spieler mit steigenden Lines
-        # z.B. Embolo 1+ Shot, 2+ Shots, 3+ Shots
-        _LADDER_MARKETS = [
-            ["1+ Shot on Target", "2+ Shots on Target", "3+ Shots on Target"],
-            ["1+ Shot on Target", "2+ Shots"],
-            ["Anytime Goalscorer", "2+ Goals"],
-            ["1+ Assist", "2+ Assists"],
-            ["2+ Tackles", "3+ Tackles", "4+ Tackles"],
-            ["2+ Fouls", "3+ Fouls"],
-            ["To Be Booked", "2+ Yellow Cards"],
-        ]
-
-        def _is_ladder_pair(m1, m2):
-            for _ladder in _LADDER_MARKETS:
-                if m1 in _ladder and m2 in _ladder and _ladder.index(m1) < _ladder.index(m2):
-                    return True
-            return False
-
-        def _build_and_send(legs, label=""):
-            nonlocal _pp_total
-            if not legs: return
-            _total = round(__import__("functools").reduce(lambda a,b: a*b, [l["odds"] for l in legs if l.get("odds",0)>1.0] or [1.0]), 2)
-            if _total < 2.50: return  # min 2.50 für Prop Builder
-            _bmsg = "\U0001f3d7\ufe0f <b>PROP BUILDER " + str(len(legs)) + " LEGS</b>"
-            if label: _bmsg += " (" + label + ")"
-            _bmsg += NL + SEP + NL
-            for _i, _leg in enumerate(legs, 1):
-                _ko2 = (" \u23f0 " + _leg["ko_s"]) if _leg["ko_s"] else ""
-                _bmsg += (str(_i) + ". " + _leg["icon"] + " <b>" + _leg["player"] +
-                          "</b> \u2014 " + _leg["market"] + _ko2 + NL +
-                          "   \u26bd " + _leg["match"] + NL)
-            _bmsg += (SEP + NL + "\U0001f4b0 @ <b>" + str(_total) + "</b> \u00b7 0.5u" + NL +
-                      "<i>\U0001f4ca ScoutingStats + Statz.ai</i>")
-            send_telegram(_bmsg, chat_id=_pp_chat)
-            _pp_total += 1
-            log(f"   \U0001f3d7 Prop Builder {len(legs)} Legs @ {_total}" + (f" [{label}]" if label else ""))
-            for _leg in legs:
-                _leg_dk = "pp_" + _leg["match"] + "_" + _leg["player"] + "_" + _leg["market"] + "_" + str(_pp_today)
-                _builder_sent_today.add(_leg_dk)
-                try:
-                    if SUPABASE_URL and SUPABASE_KEY:
-                        requests.post(SUPABASE_URL + "/rest/v1/prop_picks",
-                            headers={"apikey":SUPABASE_KEY,"Authorization":"Bearer " + SUPABASE_KEY,
-                                     "Content-Type":"application/json","Prefer":"resolution=merge-duplicates"},
-                            json={"dedup_key":_leg_dk,"player":str(_leg["player"])[:100],
-                                  "market":str(_leg["market"])[:100],"match":str(_leg["match"])[:200],
-                                  "source":_leg["source"],"sent_date":str(_pp_today)},timeout=5)
-                except Exception:
-                    pass
-
-        if _prop_candidates and _pp_chat and locals().get("_master_builder_sent", 0) == 0:
-            _prop_candidates.sort(key=lambda x: x["confidence"], reverse=True)
-            _used = set()
-
-            # 1. Ladder Builders: gleicher Spieler, steigende Lines
-            _player_props = {}
-            for _pc in _prop_candidates:
-                _pname = _pc["player"]
-                if _pname not in _player_props:
-                    _player_props[_pname] = []
-                _player_props[_pname].append(_pc)
-
-            for _pname, _pprops in _player_props.items():
-                if len(_pprops) < 2: continue
-                _ladder_legs = []
-                for _i, _p1 in enumerate(_pprops):
-                    for _p2 in _pprops[_i+1:]:
-                        if _is_ladder_pair(_p1["market"], _p2["market"]):
-                            if _p1 not in _ladder_legs: _ladder_legs.append(_p1)
-                            if _p2 not in _ladder_legs: _ladder_legs.append(_p2)
-                if len(_ladder_legs) >= 2:
-                    # Fülle mit anderen Props auf bis 3-5 Legs
-                    _extra = [p for p in _prop_candidates if p not in _ladder_legs and p["player"] not in _used]
-                    _combined = _ladder_legs + _extra[:max(0, 3-len(_ladder_legs))]
-                    if len(_combined) >= 3:
-                        _build_and_send(_combined[:5], f"Ladder {_pname}")
-                        for _p in _combined: _used.add(_p["player"])
-
-            # 2. Standard Builder 5 Legs (beste Confidence)
-            _avail = [p for p in _prop_candidates if p["player"] not in _used]
-            if len(_avail) >= 5:
-                _build_and_send(_avail[:5])
-                for _p in _avail[:5]: _used.add(_p["player"])
-                _avail = [p for p in _prop_candidates if p["player"] not in _used]
-
-            # 3. Standard Builder 4 Legs
-            _avail = [p for p in _prop_candidates if p["player"] not in _used]
-            if len(_avail) >= 4:
-                _build_and_send(_avail[:4])
-                for _p in _avail[:4]: _used.add(_p["player"])
-                _avail = [p for p in _prop_candidates if p["player"] not in _used]
-
-            # 4. Standard Builder 3 Legs (Rest)
-            _avail = [p for p in _prop_candidates if p["player"] not in _used]
-            if len(_avail) >= 3:
-                _build_and_send(_avail[:3])
-
-    log(f"   Player Props total: {_pp_total} gesendet")
     log("🔑 Pinnacle Props: keine Bet Builder zusammengestellt")
     return 0
 
@@ -21758,27 +21955,6 @@ def main():
     # Tips Mode
     log(f"🎯 Tips Mode - suche Spiele...")
 
-    global _SENT_TIPS_CACHE
-    if SUPABASE_URL and SUPABASE_KEY:
-        try:
-            _preload_r = requests.get(
-                f"{SUPABASE_URL}/rest/v1/tips",
-                headers={"apikey": SUPABASE_KEY, "Authorization": f"Bearer {SUPABASE_KEY}"},
-                params={"date": f"eq.{target_date}", "select": "match,market", "limit": "1000"},
-                timeout=8,
-            )
-            if _preload_r.ok:
-                _preload_count = 0
-                for _row in (_preload_r.json() or []):
-                    _m = normalize_team_name(_row.get("match",""))
-                    _mk = _row.get("market","")
-                    _ck = f"{_m[:50]}_{_mk}_{target_date}"
-                    _SENT_TIPS_CACHE.add(_ck)
-                    _preload_count += 1
-                log(f"   📋 Cache vorgeladen: {_preload_count} heutige Tips aus Supabase")
-        except Exception as _pre:
-            log(f"   Cache preload: {str(_pre)[:50]}", "WARN")
-
     log(f"🗓️  Datum (Target): {target_date}")
     log(f"Märkte: {[MARKET_INFO[m]['name'] for m in MARKETS_TO_RUN]}")
     active_leagues, league_stats = get_active_leagues()
@@ -22370,18 +22546,63 @@ def main():
                 key=lambda x: int(x.get("probability", 0)),
                 reverse=True
             )[:20]
-            from datetime import timedelta as _td_props
-            _props_start = datetime.now(timezone.utc)
-            _props_end   = _props_start + _td_props(hours=24)
             run_pinnacle_props_bot(
-                win_start_utc=_props_start,
-                win_end_utc=_props_end,
+                win_start_utc=_win_start_utc,
+                win_end_utc=_win_end_utc,
                 ch_tz=_ch_tz,
                 top_btts_tips=_top_btts_for_props,
-                fixtures_cache=_fixtures_cache,
             )
         except Exception as _ppe:
             log(f"🔑 Pinnacle Props übersprungen: {str(_ppe)[:60]}", "WARN")
+
+    # 🆕 NETRATTLER BUILDER ENGINE V20 — Shot Ladders, SOT Trios, Corner Fusion
+    try:
+        from netrattler_builder_engine import run_builder_engine, build_builder_picks
+        _builder_prop_pool = []
+
+        # Kandidaten aus allen Quellen sammeln (Prop Builder Pool)
+        for _mk, _tips in tips_by_market.items():
+            for _t in _tips:
+                _match_n = _t.get("match", "")
+                _parts = _match_n.split(" vs ") if " vs " in _match_n else [_match_n, ""]
+                _builder_prop_pool.append({
+                    "player": _t.get("tip", ""),
+                    "team": _t.get("team", _parts[0] if "home" in _mk else _parts[1] if len(_parts) > 1 else ""),
+                    "match": _match_n,
+                    "league": _t.get("league", ""),
+                    "market": _t.get("market_name", _mk),
+                    "category": {
+                        "btts": "btts", "over25": "over_goals",
+                        "corners": "team_corners", "btts_ht": "btts",
+                    }.get(_mk, "shots"),
+                    "line": 0.5,
+                    "odds": _t.get("odds", _t.get("oddsYes", 0)),
+                    "model_prob": _t.get("probability", 0),
+                    "source": _t.get("_source", "pinnacle"),
+                    "ko": str(_t.get("_kickoff", "")),
+                    "games": 10,
+                })
+
+        if len(_builder_prop_pool) >= 3:
+            _builder_chat = TELEGRAM_GROUPS.get("advanced_props") or TELEGRAM_GROUPS.get("props")
+            if _builder_chat:
+                def _send_builder(msg):
+                    enhanced = _ntr_enhance_message_with_stats(msg, _builder_chat)
+                    send_telegram(enhanced, chat_id=_builder_chat)
+
+                _sent_n, _picks = run_builder_engine(
+                    raw_props=_builder_prop_pool,
+                    send_message=_send_builder,
+                    match_date=str(target_date),
+                    supabase_url=SUPABASE_URL,
+                    supabase_key=SUPABASE_KEY,
+                    logger=lambda m: log(f"   🏗️ {m}"),
+                )
+                log(f"   🏗️ Builder Engine: {_sent_n} Builder aus {len(_builder_prop_pool)} Props gesendet")
+    except ImportError:
+        log("   🏗️ netrattler_builder_engine nicht gefunden — skip", "WARN")
+    except Exception as _be:
+        log(f"   🏗️ Builder Engine Error: {str(_be)[:80]}", "WARN")
 
     # 🆕 MULTI-COMBO SYSTEM (3,4,5,6,7,8 Tipps)
     all_tips_flat = []
