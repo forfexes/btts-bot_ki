@@ -12135,7 +12135,10 @@ def get_odds_api_player_prop_candidates(fixtures_cache: dict, target_date) -> li
     candidates = []
     processed = set()
 
-    for league in list(fixtures_cache or {}).keys():
+    # Robuster gegen Liste statt Dict (kann passieren wenn falsch übergeben)
+    if isinstance(fixtures_cache, list):
+        fixtures_cache = {}
+    for league in list((fixtures_cache or {}).keys()):
         if league in processed or league not in LEAGUE_KEYS:
             continue
         processed.add(league)
@@ -20231,7 +20234,7 @@ def _send_stat_insight_fallback(match_name, legs):
         log(f"   📊 Stat-Analyse gesendet (statt Bet Builder): {match_name}")
 
 
-def run_pinnacle_props_bot(win_start_utc=None, win_end_utc=None, ch_tz=None, top_btts_tips=None) -> int:
+def run_pinnacle_props_bot(win_start_utc=None, win_end_utc=None, ch_tz=None, top_btts_tips=None, fixtures_cache=None) -> int:
     """
     Pinnacle Player Props Bot.
     top_btts_tips: Beste BTTS-Tipps aus Hauptanalyse (als zusätzliche Bet-Builder-Legs).
