@@ -1,76 +1,1023 @@
-name: NETRATTLER AI Tipp Bot V20
+#!/usr/bin/env python3
+"""
+NETRATTLER Settlement FINAL V20
+===============================
 
-on:
-  workflow_dispatch:
-  schedule:
-    - cron: "0 7 * * *"
-    - cron: "0 11 * * *"
-    - cron: "0 17 * * *"
-    - cron: "0 21 * * *"
+Dateiname bleibt absichtlich stabil: netrattler_settlement_v16_final.py
 
-concurrency:
-  group: netrattler-main-bot
-  cancel-in-progress: false
+Wesentliche Fixes:
+- stabile Settlement-ID pro Tipp (kein neues Duplikat bei jedem Run)
+- wertet eine Combo/Builder als EINEN Tipp aus, Legs nur intern
+- lädt echte Builder aus netrattler_builder_picks
+- flexible Player-Stats-Auswertung: Shots, SOT, Fouls, Fouls Won,
+  Tackles, Karten, Tore, Assists und Corners
+- korrekter Profit/ROI auf Basis des Einsatzes
+- Reports nur für neu abgeschlossene Tipps, nicht bei jedem Run erneut
+- Gruppe für Gruppe: Heute, 7 Tage, Monat, Jahr, All Time
+- dedupliziert historische Alt-Settlements nach tip_id
+"""
+from __future__ import annotations
 
-jobs:
-  run-bot:
-    runs-on: ubuntu-latest
-    timeout-minutes: 45
+import hashlib
+import json
+import math
+import os
+import re
+import unicodedata
+from collections import Counter, defaultdict
+from datetime import date, datetime, timedelta, timezone
+from typing import Any, Dict, Iterable, List, Optional, Sequence, Tuple
 
-    steps:
-      - name: Checkout
-        uses: actions/checkout@v4
+import requests
 
-      - name: Setup Python
-        uses: actions/setup-python@v5
-        with:
-          python-version: "3.11"
-          cache: "pip"
+SUPABASE_URL = (os.getenv("SUPABASE_URL") or "").rstrip("/")
+SUPABASE_KEY = os.getenv("SUPABASE_SERVICE_ROLE_KEY") or os.getenv("SUPABASE_KEY") or ""
+TG_TOKEN = os.getenv("TELEGRAM_TOKEN") or os.getenv("TELEGRAM_BOT_TOKEN") or ""
+TG_DEFAULT = os.getenv("TELEGRAM_CHAT_ID") or ""
+DAYS = int(os.getenv("SETTLEMENT_DAYS", "14"))
+LIMIT = int(os.getenv("SETTLEMENT_LIMIT", "2500"))
+UPDATE_SOURCE_TIPS = os.getenv("UPDATE_SOURCE_TIPS", "true").lower() not in {"0", "false", "no"}
+SEND_PENDING_SUMMARY = os.getenv("SEND_PENDING_SUMMARY", "false").lower() in {"1", "true", "yes"}
+NOW = datetime.now(timezone.utc)
+TODAY = NOW.date()
+TODAY_S = TODAY.isoformat()
 
-      - name: Install dependencies
-        run: |
-          python -m pip install --upgrade pip
-          pip install -r requirements.txt
+GROUPS = {
+    "btts": os.getenv("TELEGRAM_GROUP_BTTS") or TG_DEFAULT,
+    "over25": os.getenv("TELEGRAM_GROUP_OVER25") or TG_DEFAULT,
+    "combo": os.getenv("TELEGRAM_GROUP_COMBO") or os.getenv("TELEGRAM_GROUP_COMBOS") or TG_DEFAULT,
+    "btts_ht": os.getenv("TELEGRAM_GROUP_BTTS_HT") or TG_DEFAULT,
+    "over15_ht": os.getenv("TELEGRAM_GROUP_OVER15_HT") or os.getenv("TELEGRAM_GROUP_STATS") or TG_DEFAULT,
+    "builder": os.getenv("TELEGRAM_GROUP_BUILDER") or os.getenv("TELEGRAM_GROUP_PROPS") or TG_DEFAULT,
+    "props": os.getenv("TELEGRAM_GROUP_PROPS") or TG_DEFAULT,
+    "corners": os.getenv("TELEGRAM_GROUP_CORNERS") or os.getenv("TELEGRAM_GROUP_STATS") or TG_DEFAULT,
+    "stats": os.getenv("TELEGRAM_GROUP_STATS") or TG_DEFAULT,
+    "default": TG_DEFAULT,
+}
 
-      - name: Compile NETRATTLER
-        run: |
-          python -m py_compile btts_bot.py netrattler_builder_engine.py
+GROUP_ORDER = ["btts", "over25", "combo", "btts_ht", "over15_ht", "builder", "props", "corners"]
 
-      - name: Run NETRATTLER
-        env:
-          GEMINI_API_KEYS: ${{ secrets.GEMINI_API_KEYS }}
-          GROQ_API_KEYS: ${{ secrets.GROQ_API_KEYS }}
-          OPENROUTER_API_KEYS: ${{ secrets.OPENROUTER_API_KEYS }}
-          ODDS_API_KEYS: ${{ secrets.ODDS_API_KEYS }}
-          FOOTBALL_DATA_API_KEYS: ${{ secrets.FOOTBALL_DATA_API_KEYS }}
-          API_FOOTBALL_KEYS: ${{ secrets.API_FOOTBALL_KEYS }}
-          TELEGRAM_TOKEN: ${{ secrets.TELEGRAM_TOKEN }}
-          TELEGRAM_CHAT_ID: ${{ secrets.TELEGRAM_CHAT_ID }}
-          TELEGRAM_GROUP_BTTS: ${{ secrets.TELEGRAM_GROUP_BTTS }}
-          TELEGRAM_GROUP_OVER25: ${{ secrets.TELEGRAM_GROUP_OVER25 }}
-          TELEGRAM_GROUP_COMBO: ${{ secrets.TELEGRAM_GROUP_COMBO }}
-          TELEGRAM_GROUP_COMBOS: ${{ secrets.TELEGRAM_GROUP_COMBOS }}
-          TELEGRAM_GROUP_BTTS_HT: ${{ secrets.TELEGRAM_GROUP_BTTS_HT }}
-          TELEGRAM_GROUP_OVER15_HT: ${{ secrets.TELEGRAM_GROUP_OVER15_HT }}
-          TELEGRAM_GROUP_STATS: ${{ secrets.TELEGRAM_GROUP_STATS }}
-          TELEGRAM_GROUP_BUILDER: ${{ secrets.TELEGRAM_GROUP_BUILDER }}
-          TELEGRAM_GROUP_PROPS: ${{ secrets.TELEGRAM_GROUP_PROPS }}
-          TELEGRAM_GROUP_CORNERS: ${{ secrets.TELEGRAM_GROUP_CORNERS }}
-          SUPABASE_URL: ${{ secrets.SUPABASE_URL }}
-          SUPABASE_KEY: ${{ secrets.SUPABASE_KEY }}
-          SUPABASE_SERVICE_ROLE_KEY: ${{ secrets.SUPABASE_SERVICE_ROLE_KEY }}
-          RUN_MODE: "tips"
-          ENABLE_SETTLEMENT: "false"
-          ENABLE_ADVANCED_PROPS: "true"
-          ENABLE_TIP_PERFORMANCE_FOOTER: "true"
-          SEND_EMPTY_PERFORMANCE_CARDS: "false"
-          SHOW_ML_LEARNING_FOOTER: "false"
-          ENABLE_LEGACY_BUILDERS: "false"
-          NETRATTLER_MAX_BUILDERS_PER_RUN: "14"
-          NETRATTLER_BUILDER_MIN_ODDS: "1.75"
-          NETRATTLER_BUILDER_MAX_ODDS: "80"
-          MAX_LEAGUES_PER_RUN: "0"
-          PARALLEL_WORKERS: "10"
-          AI_SLEEP_SECONDS: "0.1"
-          GROQ_SLEEP_SECONDS: "0.5"
-        run: python btts_bot.py
+# Nur tatsächlich gesendete Tipps. player_prop_db ist ein Kandidaten-/Datenpool und
+# wird absichtlich NICHT komplett als Tipp ausgewertet.
+TIP_TABLES = ["tips", "ml_tips", "prop_picks", "netrattler_builder_picks"]
+RESULT_TABLES = {
+    "international_results": ["date", "match_date", "Date", "game_date", "event_date"],
+    "football_historical_matches": ["match_date", "Date", "game_date", "utc_date", "event_date"],
+    "netrattler_data_lake_raw": ["match_date", "Date", "game_date", "event_date", "created_at"],
+    "result_candidates": ["match_date", "date", "event_date"],
+}
+PLAYER_STATS_TABLES = {
+    "player_match_stats": ["match_date", "date", "event_date", "created_at"],
+    "sofascore_player_match_stats": ["match_date", "date", "event_date", "created_at"],
+}
+
+
+def log(message: str, level: str = "INFO") -> None:
+    print(f"[{datetime.now().strftime('%H:%M:%S')}] [{level}] {message}", flush=True)
+
+
+def hsh(*parts: Any) -> str:
+    return hashlib.sha1("||".join(str(x or "") for x in parts).encode("utf-8")).hexdigest()
+
+
+def norm(value: Any) -> str:
+    text = unicodedata.normalize("NFKD", str(value or "").lower().strip())
+    text = "".join(c for c in text if not unicodedata.combining(c))
+    text = text.replace("&", " and ")
+    text = re.sub(r"\b(fc|sc|cf|afc|fk|ac|club|de|the|team|women|wfc)\b", " ", text)
+    text = re.sub(r"[^a-z0-9]+", " ", text)
+    return re.sub(r"\s+", " ", text).strip()
+
+
+def similarity(a: Any, b: Any) -> float:
+    x, y = norm(a), norm(b)
+    if not x or not y:
+        return 0.0
+    if x == y:
+        return 1.0
+    if x in y or y in x:
+        return 0.88
+    sx, sy = set(x.split()), set(y.split())
+    return len(sx & sy) / max(1, len(sx | sy))
+
+
+def as_float(value: Any, default: float = 0.0) -> float:
+    try:
+        return float(str(value).replace(",", "."))
+    except (TypeError, ValueError):
+        return default
+
+
+def as_int(value: Any, default: int = 0) -> int:
+    try:
+        return int(float(value))
+    except (TypeError, ValueError):
+        return default
+
+
+def anyv(row: Dict[str, Any], keys: Sequence[str], default: Any = "") -> Any:
+    if not isinstance(row, dict):
+        return default
+    for key in keys:
+        if row.get(key) not in (None, ""):
+            return row[key]
+    return default
+
+
+def unpack(row: Dict[str, Any]) -> Dict[str, Any]:
+    output: Dict[str, Any] = {}
+    if not isinstance(row, dict):
+        return output
+    for key in ("tip_payload", "payload", "raw", "data"):
+        value = row.get(key)
+        if isinstance(value, dict):
+            output.update(value)
+    output.update(row)
+    return output
+
+
+def parse_dt(value: Any) -> Optional[datetime]:
+    if not value:
+        return None
+    text = str(value).strip().replace("Z", "+00:00")
+    try:
+        parsed = datetime.fromisoformat(text)
+        return parsed if parsed.tzinfo else parsed.replace(tzinfo=timezone.utc)
+    except ValueError:
+        pass
+    for fmt in ("%Y-%m-%d", "%d/%m/%Y", "%d.%m.%Y", "%Y/%m/%d"):
+        try:
+            return datetime.strptime(text[:10], fmt).replace(tzinfo=timezone.utc)
+        except ValueError:
+            pass
+    return None
+
+
+def row_date(row: Dict[str, Any]) -> str:
+    data = unpack(row)
+    for key in (
+        "match_date", "date", "Date", "game_date", "event_date", "sent_date",
+        "ko", "kickoff", "kickoff_at", "event_time", "commence_time", "created_at",
+    ):
+        parsed = parse_dt(data.get(key))
+        if parsed:
+            return parsed.date().isoformat()
+    return TODAY_S
+
+
+def headers(prefer: str = "return=representation") -> Dict[str, str]:
+    return {
+        "apikey": SUPABASE_KEY,
+        "Authorization": f"Bearer {SUPABASE_KEY}",
+        "Content-Type": "application/json",
+        "Prefer": prefer,
+    }
+
+
+def sb_get(table: str, params: Dict[str, str], quiet: bool = True) -> List[Dict[str, Any]]:
+    if not SUPABASE_URL or not SUPABASE_KEY:
+        return []
+    try:
+        response = requests.get(
+            f"{SUPABASE_URL}/rest/v1/{table}", headers=headers(), params=params, timeout=30
+        )
+        if response.status_code >= 400:
+            if not quiet:
+                log(f"GET {table} {response.status_code}: {response.text[:180]}", "WARN")
+            return []
+        return response.json() if response.text else []
+    except Exception as exc:
+        if not quiet:
+            log(f"GET {table}: {exc}", "WARN")
+        return []
+
+
+def sb_upsert(table: str, rows: Sequence[Dict[str, Any]], conflict: str) -> int:
+    if not rows:
+        return 0
+    saved = 0
+    for start in range(0, len(rows), 150):
+        part = list(rows[start : start + 150])
+        try:
+            response = requests.post(
+                f"{SUPABASE_URL}/rest/v1/{table}",
+                headers=headers("resolution=merge-duplicates,return=minimal"),
+                params={"on_conflict": conflict},
+                data=json.dumps(part, ensure_ascii=False, default=str),
+                timeout=35,
+            )
+            if response.status_code in (200, 201, 204):
+                saved += len(part)
+            else:
+                log(f"UPSERT {table} {response.status_code}: {response.text[:220]}", "WARN")
+        except Exception as exc:
+            log(f"UPSERT {table}: {exc}", "WARN")
+    return saved
+
+
+def sb_patch(table: str, column: str, value: Any, payload: Dict[str, Any]) -> bool:
+    if not value:
+        return False
+    try:
+        response = requests.patch(
+            f"{SUPABASE_URL}/rest/v1/{table}",
+            headers=headers("return=minimal"),
+            params={column: f"eq.{value}"},
+            data=json.dumps(payload, ensure_ascii=False, default=str),
+            timeout=20,
+        )
+        return response.status_code in (200, 204)
+    except Exception:
+        return False
+
+
+def telegram(chat_id: str, text: str) -> bool:
+    if not TG_TOKEN or not chat_id:
+        return False
+    try:
+        response = requests.post(
+            f"https://api.telegram.org/bot{TG_TOKEN}/sendMessage",
+            json={
+                "chat_id": chat_id,
+                "text": text[:3900],
+                "parse_mode": "HTML",
+                "disable_web_page_preview": True,
+            },
+            timeout=20,
+        )
+        if not response.ok:
+            log(f"TG {response.status_code}: {response.text[:180]}", "WARN")
+        return response.ok
+    except Exception as exc:
+        log(f"TG: {exc}", "WARN")
+        return False
+
+
+def market_text(row: Dict[str, Any]) -> str:
+    data = unpack(row)
+    values: List[str] = []
+    for key in ("selection", "pick", "bet", "tip", "market", "type", "bet_type", "category"):
+        value = data.get(key)
+        if value not in (None, ""):
+            text = str(value).strip()
+            if text and text.lower() not in {"none", "null", "nan"}:
+                values.append(text)
+    return " / ".join(dict.fromkeys(values)).strip() or "Market nicht erkannt"
+
+
+def group_of(row: Dict[str, Any]) -> str:
+    data = unpack(row)
+    explicit = str(data.get("market_group") or "").lower().strip()
+    if explicit in GROUP_ORDER:
+        return explicit
+    low = " ".join(
+        str(anyv(data, [key], ""))
+        for key in ("market", "type", "bet_type", "category", "group", "channel", "selection", "pick", "message", "text", "tip_text", "title", "style")
+    ).lower()
+    if any(x in low for x in ("builder", "shot ladder", "sot trio", "foul press", "tackle wall", "corner fusion")):
+        return "builder"
+    if any(x in low for x in ("combo", "multi", "parlay", "acca", "same game")):
+        return "combo"
+    if "btts_ht" in low or "btts ht" in low or "both teams to score ht" in low:
+        return "btts_ht"
+    if "over15_ht" in low or "over 1.5 ht" in low or "over 1.5 first half" in low:
+        return "over15_ht"
+    if any(x in low for x in ("corner", "corners", "ecken")):
+        return "corners"
+    if any(x in low for x in ("player", "booked", "carded", "shot", "sot", "foul", "tackle")):
+        return "props"
+    if ("over" in low and "2.5" in low) or "over25" in low:
+        return "over25"
+    if "btts" in low or "both teams" in low:
+        return "btts"
+    return "default"
+
+
+def match_parts(row: Dict[str, Any]) -> Tuple[str, str, str]:
+    data = unpack(row)
+    home = str(anyv(data, ["home_team", "home", "team_home", "HomeTeam", "strHomeTeam", "home_name", "homeTeamName"], ""))
+    away = str(anyv(data, ["away_team", "away", "team_away", "AwayTeam", "strAwayTeam", "away_name", "awayTeamName"], ""))
+    if isinstance(data.get("homeTeam"), dict):
+        home = home or str(anyv(data["homeTeam"], ["name", "shortName", "displayName"], ""))
+    if isinstance(data.get("awayTeam"), dict):
+        away = away or str(anyv(data["awayTeam"], ["name", "shortName", "displayName"], ""))
+    match = str(anyv(data, ["match", "fixture", "game", "event", "entity_name", "name", "title"], ""))
+    if (not home or not away) and re.search(r"\s+v(s)?\.?\s+", match, re.I):
+        parts = re.split(r"\s+vs\.?\s+|\s+v\.?\s+", match, flags=re.I)
+        if len(parts) >= 2:
+            home, away = parts[0].strip(), parts[1].strip()
+    if not match and home and away:
+        match = f"{home} vs {away}"
+    return home, away, match
+
+
+def tip_id(row: Dict[str, Any]) -> str:
+    data = unpack(row)
+    for key in ("builder_id", "tip_id", "pick_id", "uuid", "id", "dedup_key"):
+        if data.get(key) not in (None, ""):
+            return str(data[key])
+    home, away, match = match_parts(row)
+    legs = legs_of(row)
+    leg_signature = json.dumps(legs, ensure_ascii=False, sort_keys=True, default=str) if legs else ""
+    return hsh(row_date(row), match, home, away, market_text(row), leg_signature)
+
+
+def stable_settlement_id(row: Dict[str, Any]) -> str:
+    return hsh("netrattler-settlement-v20", row.get("_table", ""), tip_id(row))
+
+
+def source_key(row: Dict[str, Any]) -> Tuple[str, Any]:
+    data = unpack(row)
+    for key in ("builder_id", "tip_id", "pick_id", "uuid", "id", "dedup_key"):
+        if data.get(key) not in (None, ""):
+            return key, data[key]
+    return "", ""
+
+
+def normalized_status(value: Any) -> str:
+    status = str(value or "").lower().strip()
+    if status in {"win", "won", "green"}:
+        return "win"
+    if status in {"loss", "lost", "red"}:
+        return "loss"
+    if status in {"void", "push", "cancelled", "canceled"}:
+        return "void"
+    return "pending"
+
+
+def include_tip(row: Dict[str, Any]) -> bool:
+    data = unpack(row)
+    if normalized_status(anyv(data, ["status", "result", "settlement_status"], "pending")) != "pending":
+        return False
+    return row_date(row) >= (TODAY - timedelta(days=DAYS)).isoformat()
+
+
+def load_tips() -> List[Dict[str, Any]]:
+    output: List[Dict[str, Any]] = []
+    for table in TIP_TABLES:
+        rows = sb_get(table, {"select": "*", "limit": str(LIMIT)}, quiet=True)
+        if rows:
+            log(f"Tip-Tabelle {table}: {len(rows)} Rows geladen")
+        for row in rows:
+            if include_tip(row):
+                item = dict(row)
+                item["_table"] = table
+                output.append(item)
+    seen = set()
+    clean = []
+    for row in output:
+        key = (row.get("_table"), tip_id(row))
+        if key not in seen:
+            seen.add(key)
+            clean.append(row)
+    clean = clean[:LIMIT]
+    log(f"Offene Tipps total: {len(clean)}")
+    log(f"Offene Tipps nach Gruppen: {dict(Counter(group_of(x) for x in clean))}")
+    return clean
+
+
+def score_row(row: Dict[str, Any]) -> Tuple[str, str, Optional[int], Optional[int]]:
+    data = unpack(row)
+    home, away, _ = match_parts(data)
+    home_score = anyv(data, ["home_score", "home_goals", "FTHG", "intHomeScore", "score_home", "homeScore", "home_goals_ft", "homeGoals"], None)
+    away_score = anyv(data, ["away_score", "away_goals", "FTAG", "intAwayScore", "score_away", "awayScore", "away_goals_ft", "awayGoals"], None)
+    for key in ("score", "result", "ft_score", "full_time_score"):
+        if home_score in (None, "") and isinstance(data.get(key), str):
+            nums = re.findall(r"\d+", data[key])
+            if len(nums) >= 2:
+                home_score, away_score = nums[0], nums[1]
+                break
+    try:
+        home_score = int(float(home_score))
+    except (TypeError, ValueError):
+        home_score = None
+    try:
+        away_score = int(float(away_score))
+    except (TypeError, ValueError):
+        away_score = None
+    return home, away, home_score, away_score
+
+
+def public_results(day: str) -> List[Dict[str, Any]]:
+    output = []
+    try:
+        response = requests.get(
+            "https://www.thesportsdb.com/api/v1/json/3/eventsday.php",
+            params={"d": day, "s": "Soccer"},
+            timeout=20,
+        ).json()
+        for event in response.get("events") or []:
+            output.append({
+                "home_team": event.get("strHomeTeam"),
+                "away_team": event.get("strAwayTeam"),
+                "home_score": event.get("intHomeScore"),
+                "away_score": event.get("intAwayScore"),
+                "match_date": day,
+                "raw": event,
+                "_result_table": "TheSportsDB",
+            })
+    except Exception:
+        pass
+    return output
+
+
+def load_results(dates: Sequence[str]) -> List[Dict[str, Any]]:
+    output: List[Dict[str, Any]] = []
+    for day in dates:
+        for table, columns in RESULT_TABLES.items():
+            for column in columns:
+                rows = sb_get(table, {"select": "*", column: f"eq.{day}", "limit": "4000"}, quiet=True)
+                if rows:
+                    for row in rows:
+                        row["_result_table"] = table
+                    output.extend(rows)
+                    log(f"Results {table} {day} via {column}: {len(rows)}")
+                    break
+        public = public_results(day)
+        if public:
+            output.extend(public)
+            log(f"Results TheSportsDB {day}: {len(public)}")
+    seen = set()
+    clean = []
+    for row in output:
+        home, away, hs, aw = score_row(row)
+        if hs is None or aw is None:
+            continue
+        key = (norm(home), norm(away), hs, aw, row_date(row))
+        if key not in seen:
+            seen.add(key)
+            clean.append(row)
+    log(f"Result candidates mit Score: {len(clean)}")
+    return clean
+
+
+def load_player_stats(dates: Sequence[str]) -> List[Dict[str, Any]]:
+    output: List[Dict[str, Any]] = []
+    for day in dates:
+        for table, columns in PLAYER_STATS_TABLES.items():
+            for column in columns:
+                rows = sb_get(table, {"select": "*", column: f"eq.{day}", "limit": "10000"}, quiet=True)
+                if rows:
+                    for row in rows:
+                        row["_stats_table"] = table
+                    output.extend(rows)
+                    log(f"Player Stats {table} {day} via {column}: {len(rows)}")
+                    break
+    # Flexible dedup by date/player/match/source.
+    best: Dict[Tuple[str, str, str], Dict[str, Any]] = {}
+    for row in output:
+        data = unpack(row)
+        player = norm(anyv(data, ["player_name", "player", "name", "athlete_name"], ""))
+        match = norm(anyv(data, ["match", "fixture", "event", "match_name"], ""))
+        key = (row_date(row), player, match)
+        if player:
+            best[key] = row
+    clean = list(best.values())
+    log(f"Player Stats candidates: {len(clean)}")
+    return clean
+
+
+def find_result(tip: Dict[str, Any], results: Sequence[Dict[str, Any]]) -> Optional[Dict[str, Any]]:
+    tip_home, tip_away, tip_match = match_parts(tip)
+    tip_day = row_date(tip)
+    best, best_score = None, 0.0
+    for row in results:
+        home, away, hs, aw = score_row(row)
+        if hs is None or aw is None:
+            continue
+        direct = (similarity(tip_home, home) + similarity(tip_away, away)) / 2 if tip_home and tip_away else similarity(tip_match, f"{home} vs {away}")
+        reverse = (similarity(tip_home, away) + similarity(tip_away, home)) / 2 if tip_home and tip_away else 0.0
+        score = max(direct, reverse)
+        if row_date(row) == tip_day:
+            score += 0.15
+        if score > best_score:
+            best_score = score
+            best = {"home": home, "away": away, "home_score": hs, "away_score": aw, "raw": row, "match_score": score}
+    return best if best and best_score >= 0.66 else None
+
+
+def player_name(row: Dict[str, Any]) -> str:
+    return str(anyv(unpack(row), ["player_name", "player", "name", "athlete", "athlete_name", "selection"], ""))
+
+
+def player_stats_values(row: Dict[str, Any]) -> Dict[str, float]:
+    data = unpack(row)
+    return {
+        "shots": as_float(anyv(data, ["shots", "total_shots", "shot_total", "shot_attempts"], 0)),
+        "sot": as_float(anyv(data, ["sot", "shots_on_target", "shot_on_target", "on_target"], 0)),
+        "fouls": as_float(anyv(data, ["fouls_committed", "fouls", "fouls_made", "fc"], 0)),
+        "fouls_won": as_float(anyv(data, ["fouls_won", "fouls_drawn", "fouled", "fd"], 0)),
+        "tackles": as_float(anyv(data, ["tackles", "tackles_won", "total_tackles"], 0)),
+        "yellow_cards": as_float(anyv(data, ["yellow_cards", "cards", "yc", "bookings"], 0)),
+        "goals": as_float(anyv(data, ["goals", "goal", "goals_scored"], 0)),
+        "assists": as_float(anyv(data, ["assists", "assist"], 0)),
+        "corners": as_float(anyv(data, ["corners", "corner_kicks"], 0)),
+    }
+
+
+def find_player_stat(leg: Dict[str, Any], stats: Sequence[Dict[str, Any]]) -> Optional[Dict[str, Any]]:
+    data = unpack(leg)
+    wanted_player = str(anyv(data, ["player", "player_name", "selection"], ""))
+    _, _, wanted_match = match_parts(leg)
+    wanted_day = row_date(leg)
+    best, best_score = None, 0.0
+    for row in stats:
+        p_score = similarity(wanted_player, player_name(row))
+        if p_score < 0.55:
+            continue
+        _, _, candidate_match = match_parts(row)
+        m_score = similarity(wanted_match, candidate_match) if wanted_match and candidate_match else 0.45
+        d_score = 1.0 if row_date(row) == wanted_day else 0.0
+        score = p_score * 0.68 + m_score * 0.22 + d_score * 0.10
+        if score > best_score:
+            best_score, best = score, row
+    return best if best and best_score >= 0.66 else None
+
+
+def market_line(text: str, default: float = 1.0) -> float:
+    plus = re.search(r"(\d+(?:\.\d+)?)\s*\+", str(text))
+    if plus:
+        return as_float(plus.group(1), default)
+    over = re.search(r"over\s*(\d+(?:\.\d+)?)", str(text), re.I)
+    if over:
+        return math.floor(as_float(over.group(1), default)) + 1
+    return default
+
+
+def category_of(row: Dict[str, Any]) -> str:
+    data = unpack(row)
+    explicit = str(data.get("category") or "").lower().strip()
+    aliases = {
+        "shots_on_target": "sot", "shot_on_target": "sot", "cards": "yellow_cards",
+        "booked": "yellow_cards", "fouls_committed": "fouls", "fouls_drawn": "fouls_won",
+        "goalscorer": "score", "corners": "corners",
+    }
+    explicit = aliases.get(explicit, explicit)
+    if explicit:
+        return explicit
+    low = market_text(row).lower()
+    if "score or assist" in low:
+        return "score_assist"
+    if "assist" in low:
+        return "assist"
+    if "goalscorer" in low or "to score" in low:
+        return "score"
+    if "shot on target" in low or "shots on target" in low or "sot" in low:
+        return "sot"
+    if "shot" in low:
+        return "shots"
+    if "foul won" in low or "to be fouled" in low:
+        return "fouls_won"
+    if "foul" in low:
+        return "fouls"
+    if "tackle" in low:
+        return "tackles"
+    if "booked" in low or "carded" in low or "yellow card" in low:
+        return "yellow_cards"
+    if "corner" in low or "ecken" in low:
+        return "corners"
+    return ""
+
+
+def settle_score_market(tip: Dict[str, Any], result: Dict[str, Any]) -> Tuple[str, str]:
+    hs, aw = int(result["home_score"]), int(result["away_score"])
+    total = hs + aw
+    low = (market_text(tip) + " " + str(anyv(unpack(tip), ["message", "text", "tip_text"], ""))).lower()
+
+    if "btts ht" in low or "btts_ht" in low:
+        raw = unpack(result.get("raw") or {})
+        hth = as_int(anyv(raw, ["HTHG", "home_score_ht", "halftime_home", "intHomeScoreHT"], -1), -1)
+        hta = as_int(anyv(raw, ["HTAG", "away_score_ht", "halftime_away", "intAwayScoreHT"], -1), -1)
+        if hth < 0 or hta < 0:
+            return "pending", "Halbzeit-Resultat fehlt"
+        return ("win" if hth > 0 and hta > 0 else "loss", f"HT {hth}:{hta}")
+
+    if "over 1.5 ht" in low or "over15_ht" in low:
+        raw = unpack(result.get("raw") or {})
+        hth = as_int(anyv(raw, ["HTHG", "home_score_ht", "halftime_home", "intHomeScoreHT"], -1), -1)
+        hta = as_int(anyv(raw, ["HTAG", "away_score_ht", "halftime_away", "intAwayScoreHT"], -1), -1)
+        if hth < 0 or hta < 0:
+            return "pending", "Halbzeit-Resultat fehlt"
+        return ("win" if hth + hta > 1.5 else "loss", f"HT {hth}:{hta}")
+
+    if "btts" in low or "both teams" in low:
+        return ("win" if hs > 0 and aw > 0 else "loss", f"{hs}:{aw}")
+    if "over" in low:
+        match = re.search(r"over\s*([0-9]+(?:\.[0-9]+)?)", low)
+        line = as_float(match.group(1), 2.5) if match else 2.5
+        return ("win" if total > line else "loss", f"{hs}:{aw} · Tore {total} · Over {line}")
+    if "under" in low:
+        match = re.search(r"under\s*([0-9]+(?:\.[0-9]+)?)", low)
+        line = as_float(match.group(1), 2.5) if match else 2.5
+        return ("win" if total < line else "loss", f"{hs}:{aw} · Tore {total} · Under {line}")
+    return "pending", f"{hs}:{aw} · Markt nicht erkannt"
+
+
+def team_corner_value(leg: Dict[str, Any], result: Dict[str, Any]) -> Optional[float]:
+    raw = unpack(result.get("raw") or {})
+    home_corners = anyv(raw, ["home_corners", "corners_home", "HC", "homeCorners"], None)
+    away_corners = anyv(raw, ["away_corners", "corners_away", "AC", "awayCorners"], None)
+    if home_corners in (None, "") or away_corners in (None, ""):
+        return None
+    home_corners, away_corners = as_float(home_corners), as_float(away_corners)
+    data = unpack(leg)
+    team = str(anyv(data, ["team", "selection_team"], ""))
+    home, away, _ = match_parts(leg)
+    if team and similarity(team, home) >= 0.75:
+        return home_corners
+    if team and similarity(team, away) >= 0.75:
+        return away_corners
+    return home_corners + away_corners
+
+
+def settle_player_market(leg: Dict[str, Any], stats: Sequence[Dict[str, Any]], result: Optional[Dict[str, Any]]) -> Tuple[str, str]:
+    category = category_of(leg)
+    text = market_text(leg)
+    line = as_float(anyv(unpack(leg), ["line"], 0), 0) or market_line(text, 1.0)
+
+    if category in {"corners", "team_corners"}:
+        if not result:
+            return "pending", "Match-Resultat für Corners fehlt"
+        value = team_corner_value(leg, result)
+        if value is None:
+            return "pending", "Corner-Stats fehlen"
+        return ("win" if value >= line else "loss", f"Corners {value:g} · Linie {line:g}")
+
+    row = find_player_stat(leg, stats)
+    if not row:
+        return "pending", "Player-Stats fehlen"
+    values = player_stats_values(row)
+    if category == "score_assist":
+        value = values["goals"] + values["assists"]
+        line = max(1.0, line)
+    elif category == "score":
+        value = values["goals"]
+        line = max(1.0, line)
+    elif category == "assist":
+        value = values["assists"]
+        line = max(1.0, line)
+    elif category in values:
+        value = values[category]
+        line = max(1.0, line)
+    else:
+        return "pending", f"Player-Markt {category or text} nicht unterstützt"
+    status = "win" if value >= line else "loss"
+    return status, f"{player_name(row)} · {category} {value:g} · Linie {line:g}"
+
+
+def legs_of(tip: Dict[str, Any]) -> List[Dict[str, Any]]:
+    data = unpack(tip)
+    for key in ("legs", "builder_legs", "combo_legs", "selections", "legs_payload"):
+        value = data.get(key)
+        if isinstance(value, list):
+            return [x if isinstance(x, dict) else {"selection": str(x)} for x in value]
+        if isinstance(value, str) and value.strip().startswith("["):
+            try:
+                parsed = json.loads(value)
+                if isinstance(parsed, list):
+                    return [x if isinstance(x, dict) else {"selection": str(x)} for x in parsed]
+            except json.JSONDecodeError:
+                pass
+    return []
+
+
+def odds_of(row: Dict[str, Any]) -> Optional[float]:
+    value = anyv(unpack(row), ["total_odds", "odds", "quote", "price", "decimal_odds"], None)
+    odds = as_float(value, 0)
+    return odds if odds > 1 else None
+
+
+def stake_of(row: Dict[str, Any]) -> float:
+    return max(0.01, as_float(anyv(unpack(row), ["stake", "units", "unit", "stake_units"], 1.0), 1.0))
+
+
+def settle_tip(tip: Dict[str, Any], results: Sequence[Dict[str, Any]], player_stats: Sequence[Dict[str, Any]]) -> Dict[str, Any]:
+    group = group_of(tip)
+    tid = tip_id(tip)
+    result = find_result(tip, results)
+    leg_payload: List[Dict[str, Any]] = []
+
+    if group in {"combo", "builder"}:
+        legs = legs_of(tip)
+        if not legs:
+            legs = [tip]
+        wins = losses = pending = 0
+        for leg in legs:
+            merged = dict(tip)
+            merged.update(leg)
+            leg_result = find_result(merged, results) or result
+            category = category_of(merged)
+            if category or group == "builder":
+                status, reason = settle_player_market(merged, player_stats, leg_result)
+                if status == "pending" and category in {"btts", "over_goals", ""} and leg_result:
+                    status, reason = settle_score_market(merged, leg_result)
+            elif leg_result:
+                status, reason = settle_score_market(merged, leg_result)
+            else:
+                status, reason = "pending", "kein Result gefunden"
+            wins += status == "win"
+            losses += status == "loss"
+            pending += status == "pending"
+            leg_payload.append({"leg": leg, "status": status, "reason": reason})
+        status = "loss" if losses else "pending" if pending else "win"
+        reason = f"{wins}/{len(legs)} Legs gewonnen · {losses} verloren · {pending} offen"
+    else:
+        category = category_of(tip)
+        if category and group in {"props", "corners"}:
+            status, reason = settle_player_market(tip, player_stats, result)
+        elif result:
+            status, reason = settle_score_market(tip, result)
+        else:
+            status, reason = "pending", "kein Result gefunden"
+
+    odds = odds_of(tip)
+    stake = stake_of(tip)
+    if status == "win":
+        profit = (odds - 1.0) * stake if odds else stake
+    elif status == "loss":
+        profit = -stake
+    else:
+        profit = 0.0
+
+    data = unpack(tip)
+    return {
+        "settlement_id": stable_settlement_id(tip),
+        "tip_id": tid,
+        "source_table": tip.get("_table", ""),
+        "market_group": group,
+        "builder_style": str(data.get("style") or data.get("builder_style") or "")[:80],
+        "leg_count": len(legs_of(tip)) if group in {"combo", "builder"} else 1,
+        "status": status,
+        "result_label": "✅ WIN" if status == "win" else "❌ LOST" if status == "loss" else "⏳ PENDING",
+        "reason": reason,
+        "odds": odds,
+        "stake": round(stake, 4),
+        "profit": round(profit, 4),
+        "tip_date": row_date(tip),
+        "tip_payload": tip,
+        "legs_payload": leg_payload,
+        "settled_at": NOW.isoformat(),
+    }
+
+
+def existing_settlements() -> List[Dict[str, Any]]:
+    return sb_get(
+        "netrattler_settlements",
+        {"select": "*", "order": "settled_at.desc", "limit": "10000"},
+        quiet=True,
+    )
+
+
+def existing_status_map(rows: Sequence[Dict[str, Any]]) -> Dict[str, str]:
+    output: Dict[str, str] = {}
+    for row in rows:
+        tid = str(row.get("tip_id") or "")
+        if tid and tid not in output:
+            output[tid] = normalized_status(row.get("status"))
+    return output
+
+
+def update_source_tip(settlement: Dict[str, Any]) -> None:
+    if not UPDATE_SOURCE_TIPS or settlement["status"] not in {"win", "loss"}:
+        return
+    payload = settlement.get("tip_payload") or {}
+    table = settlement.get("source_table") or payload.get("_table") or ""
+    column, value = source_key(payload)
+    if not table or not column:
+        return
+    variants = [
+        {"status": settlement["status"], "result": settlement["status"], "settled_at": NOW.isoformat(), "profit": settlement["profit"]},
+        {"status": settlement["status"], "settled_at": NOW.isoformat()},
+        {"result": settlement["status"]},
+    ]
+    for variant in variants:
+        if sb_patch(table, column, value, variant):
+            return
+
+
+def dedup_history(rows: Iterable[Dict[str, Any]]) -> List[Dict[str, Any]]:
+    # One historical bet per tip_id. Newest settlement wins.
+    best: Dict[str, Dict[str, Any]] = {}
+    for row in rows:
+        tid = str(row.get("tip_id") or row.get("settlement_id") or "")
+        if not tid:
+            continue
+        current = best.get(tid)
+        current_ts = str(current.get("settled_at") or "") if current else ""
+        row_ts = str(row.get("settled_at") or "")
+        if current is None or row_ts >= current_ts:
+            best[tid] = row
+    return list(best.values())
+
+
+def period_start(period: str) -> str:
+    if period == "today":
+        return TODAY_S
+    if period == "week":
+        return (TODAY - timedelta(days=6)).isoformat()
+    if period == "month":
+        return TODAY.replace(day=1).isoformat()
+    if period == "year":
+        return TODAY.replace(month=1, day=1).isoformat()
+    return "1900-01-01"
+
+
+def summary(rows: Sequence[Dict[str, Any]], group: str, period: str, style: str = "", leg_count: int = 0) -> Dict[str, Any]:
+    start = period_start(period)
+    selected = []
+    for row in dedup_history(rows):
+        if group and row.get("market_group") != group:
+            continue
+        if style and str(row.get("builder_style") or "") != style:
+            continue
+        if leg_count and as_int(row.get("leg_count")) != leg_count:
+            continue
+        status = normalized_status(row.get("status"))
+        if status not in {"win", "loss"}:
+            continue
+        if str(row.get("tip_date") or "")[:10] < start:
+            continue
+        item = dict(row)
+        item["status"] = status
+        selected.append(item)
+    bets = len(selected)
+    wins = sum(x["status"] == "win" for x in selected)
+    losses = bets - wins
+    stake = sum(max(0.01, as_float(x.get("stake"), 1.0)) for x in selected)
+    profit = sum(as_float(x.get("profit"), 0.0) for x in selected)
+    roi = 100.0 * profit / max(0.01, stake)
+    return {
+        "bets": bets,
+        "wins": wins,
+        "losses": losses,
+        "stake": round(stake, 2),
+        "profit": round(profit, 2),
+        "roi": round(roi, 1),
+        "winrate": round(100.0 * wins / bets, 1) if bets else 0.0,
+    }
+
+
+def save_group_stats(history: Sequence[Dict[str, Any]]) -> None:
+    rows = []
+    for group in GROUP_ORDER:
+        for period in ("today", "week", "month", "year", "alltime"):
+            stats = summary(history, group, period)
+            rows.append({
+                "stat_id": hsh("group", period, group),
+                "period": period,
+                "market_group": group,
+                **stats,
+                "updated_at": NOW.isoformat(),
+            })
+    log(f"Gruppenstats gespeichert: {sb_upsert('netrattler_group_stats', rows, 'stat_id')}")
+
+
+def save_dimension_stats(history: Sequence[Dict[str, Any]]) -> None:
+    rows: List[Dict[str, Any]] = []
+    closed = [x for x in dedup_history(history) if normalized_status(x.get("status")) in {"win", "loss"}]
+    styles = sorted({str(x.get("builder_style") or "") for x in closed if x.get("builder_style")})
+    leg_counts = sorted({as_int(x.get("leg_count")) for x in closed if as_int(x.get("leg_count")) >= 2})
+    for period in ("month", "year", "alltime"):
+        for style in styles:
+            stats = summary(closed, "builder", period, style=style)
+            rows.append({
+                "stat_id": hsh("builder_style", period, style),
+                "period": period,
+                "dimension_type": "builder_style",
+                "dimension_value": style,
+                **stats,
+                "updated_at": NOW.isoformat(),
+            })
+        for count in leg_counts:
+            stats = summary(closed, "", period, leg_count=count)
+            rows.append({
+                "stat_id": hsh("leg_count", period, count),
+                "period": period,
+                "dimension_type": "leg_count",
+                "dimension_value": str(count),
+                **stats,
+                "updated_at": NOW.isoformat(),
+            })
+    if rows:
+        log(f"Dimensionstats gespeichert: {sb_upsert('netrattler_performance_stats', rows, 'stat_id')}")
+
+
+def match_label(settlement: Dict[str, Any]) -> str:
+    payload = settlement.get("tip_payload") or {}
+    home, away, match = match_parts(payload)
+    return match or f"{home} vs {away}".strip(" vs") or "Unbekanntes Spiel"
+
+
+def format_settlement(settlement: Dict[str, Any]) -> str:
+    payload = settlement.get("tip_payload") or {}
+    return (
+        f"{settlement['result_label']} <b>{settlement['market_group'].upper()}</b>\n"
+        f"{match_label(settlement)}\n"
+        f"{market_text(payload)}\n"
+        f"{settlement.get('reason', '')}\n"
+        f"Profit: {as_float(settlement.get('profit')):+.2f}U"
+    )
+
+
+def performance_lines(history: Sequence[Dict[str, Any]], group: str) -> List[str]:
+    labels = [("Heute", "today"), ("7 Tage", "week"), ("Monat", "month"), ("Jahr", "year"), ("All Time", "alltime")]
+    lines = []
+    for label, period in labels:
+        stats = summary(history, group, period)
+        if stats["bets"]:
+            icon = "🟢" if stats["profit"] >= 0 else "🔴"
+            lines.append(
+                f"{label}: <b>{stats['wins']}-{stats['losses']}</b> / {stats['bets']} · "
+                f"ROI <b>{stats['roi']:+.1f}%</b> · {stats['profit']:+.2f}U {icon}"
+            )
+    return lines
+
+
+def send_group_reports(newly_closed: Sequence[Dict[str, Any]], current: Sequence[Dict[str, Any]], history: Sequence[Dict[str, Any]]) -> None:
+    by_group: Dict[str, List[Dict[str, Any]]] = defaultdict(list)
+    for settlement in newly_closed:
+        by_group[settlement.get("market_group", "default")].append(settlement)
+    pending_counts = Counter(x.get("market_group", "default") for x in current if x.get("status") == "pending")
+
+    statuses = []
+    for group in GROUP_ORDER:
+        items = by_group.get(group, [])
+        if not items and not (SEND_PENDING_SUMMARY and pending_counts[group]):
+            continue
+        chat = GROUPS.get(group) or GROUPS.get("default")
+        if not chat:
+            continue
+        lines = [f"📊 <b>NETRATTLER AUSWERTUNG {group.upper()}</b>", TODAY_S, ""]
+        lines.extend(performance_lines(history, group))
+        if items:
+            lines.extend(["", "✅❌ <b>Neu abgeschlossen</b>", ""])
+            for item in items[:30]:
+                block = format_settlement(item)
+                if len("\n".join(lines)) + len(block) > 3650:
+                    break
+                lines.extend([block, ""])
+        if SEND_PENDING_SUMMARY and pending_counts[group]:
+            lines.append(f"⏳ Noch offen: {pending_counts[group]}")
+        ok = telegram(chat, "\n".join(lines))
+        statuses.append(f"{group}:{'OK' if ok else 'FAIL'}")
+    log("Gruppenreports: " + (", ".join(statuses) if statuses else "keine neuen Abschlüsse"))
+
+
+def send_roi_report(history: Sequence[Dict[str, Any]]) -> None:
+    chat = GROUPS.get("stats") or GROUPS.get("default")
+    if not chat:
+        return
+    lines = [f"📈 <b>NETRATTLER ROI REPORT</b>", TODAY_S, ""]
+    for group in GROUP_ORDER:
+        month = summary(history, group, "month")
+        year = summary(history, group, "year")
+        if not month["bets"] and not year["bets"]:
+            continue
+        lines.append(
+            f"<b>{group.upper()}</b>\n"
+            f"Monat: {month['wins']}-{month['losses']} · ROI {month['roi']:+.1f}% · {month['profit']:+.2f}U\n"
+            f"Jahr: {year['wins']}-{year['losses']} · ROI {year['roi']:+.1f}% · {year['profit']:+.2f}U"
+        )
+    if len(lines) > 3:
+        telegram(chat, "\n\n".join(lines))
+
+
+def main() -> None:
+    log("⚽ NETRATTLER Settlement FINAL V20 startet")
+    if not SUPABASE_URL or not SUPABASE_KEY:
+        log("SUPABASE_URL oder SUPABASE_KEY fehlt", "ERROR")
+        raise SystemExit(2)
+
+    existing = existing_settlements()
+    previous = existing_status_map(existing)
+    tips = load_tips()
+    dates = sorted({row_date(tip) for tip in tips})
+    log(f"Dates: {dates}")
+    results = load_results(dates)
+    player_stats = load_player_stats(dates)
+
+    settled = [settle_tip(tip, results, player_stats) for tip in tips]
+    log(f"Counts: {dict(Counter(x['status'] for x in settled))}")
+    log(f"Nach Gruppen: {dict(Counter(x['market_group'] for x in settled))}")
+
+    newly_closed = [
+        row for row in settled
+        if row["status"] in {"win", "loss"} and previous.get(str(row["tip_id"])) not in {"win", "loss"}
+    ]
+    log(f"Neu abgeschlossen: {len(newly_closed)}")
+
+    saved = sb_upsert("netrattler_settlements", settled, "settlement_id")
+    log(f"Settlements gespeichert: {saved}")
+    for row in newly_closed:
+        update_source_tip(row)
+
+    history = dedup_history(existing + settled)
+    save_group_stats(history)
+    save_dimension_stats(history)
+    send_group_reports(newly_closed, settled, history)
+    send_roi_report(history)
+    log("✅ NETRATTLER Settlement FINAL V20 fertig")
+
+
+if __name__ == "__main__":
+    main()
