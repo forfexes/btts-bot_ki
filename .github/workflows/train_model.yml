@@ -1,31 +1,63 @@
-name: NETRATTLER ML Train V16
+name: NETRATTLER Player Stats Scraper V13
 
 on:
-  workflow_dispatch:
   schedule:
-    - cron: "45 7 * * *"
-    - cron: "45 13 * * *"
-    - cron: "45 20 * * *"
-    - cron: "45 23 * * *"
+    - cron: "10 4 * * *"
+  workflow_dispatch:
+    inputs:
+      date:
+        description: "Datum YYYY-MM-DD (leer = gestern)"
+        required: false
+        default: ""
+      source:
+        description: "all | statsbomb | fotmob | espn | fpl | sofascore | fbref | understat | fdcouk | xgabora | wm2026 | weather | referee | clubelo | martj42"
+        required: false
+        default: "all"
+      rebuild_only:
+        description: "Nur player_avg_stats + Hit Rates neu berechnen (true/false)"
+        required: false
+        default: "false"
 
 jobs:
-  train:
+  scrape-player-stats:
     runs-on: ubuntu-latest
-    timeout-minutes: 15
+    timeout-minutes: 30
+
     steps:
       - uses: actions/checkout@v4
+
       - uses: actions/setup-python@v5
         with:
           python-version: "3.11"
-      - run: |
+          cache: "pip"
+
+      - name: Install dependencies
+        run: |
           python -m pip install --upgrade pip
-          pip install -r requirements.txt || pip install requests python-dateutil
-      - name: Train NETRATTLER V16 ML
+          pip install -r requirements.txt
+
+      - name: Compile scraper
+        run: python -m py_compile scrape_player_stats.py
+
+      - name: Run Player Stats Scraper V13
         env:
           SUPABASE_URL: ${{ secrets.SUPABASE_URL }}
           SUPABASE_KEY: ${{ secrets.SUPABASE_KEY }}
-          SUPABASE_SERVICE_ROLE_KEY: ${{ secrets.SUPABASE_SERVICE_ROLE_KEY }}
-          NETRATTLER_ML_MODEL: "netrattler_v16_ml"
-          ML_TRAIN_LIMIT: "5000"
-          ML_MIN_FEATURE_BETS: "2"
-        run: python netrattler_train_model.py
+          THESTATSAPI_KEY: ${{ secrets.THESTATSAPI_KEY }}
+          FOOTBALL_DATA_API_KEYS: ${{ secrets.FOOTBALL_DATA_API_KEYS }}
+          FOOTBALL_DATA_API_KEY: ${{ secrets.FOOTBALL_DATA_API_KEY }}
+          SPORTMONKS_API_KEY: ${{ secrets.SPORTMONKS_KEY }}
+          STATSBOMB_MAX_MATCHES: "120"
+          SOFASCORE_MAX_EVENTS: "30"
+        run: |
+          DATE="${{ github.event.inputs.date }}"
+          SOURCE="${{ github.event.inputs.source }}"
+          REBUILD="${{ github.event.inputs.rebuild_only }}"
+          if [ -z "$SOURCE" ]; then SOURCE="all"; fi
+          if [ "$REBUILD" = "true" ]; then
+            python scrape_player_stats.py --rebuild-only
+          elif [ -n "$DATE" ]; then
+            python scrape_player_stats.py --date "$DATE" --source "$SOURCE"
+          else
+            python scrape_player_stats.py --source "$SOURCE"
+          fi
