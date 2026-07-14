@@ -68,6 +68,7 @@ GROUP_ORDER = ["btts", "over25", "combo", "btts_ht", "over15_ht", "builder", "pr
 # wird absichtlich NICHT komplett als Tipp ausgewertet.
 TIP_TABLES = ["tips", "ml_tips", "prop_picks", "netrattler_builder_picks"]
 RESULT_TABLES = {
+    "match_results": ["match_date"],  # 🆕 Primär: SofaScore post-match (alle Ligen!)
     "international_results": ["date", "match_date", "Date", "game_date", "event_date"],
     "football_historical_matches": ["match_date", "Date", "game_date", "utc_date", "event_date"],
     "netrattler_data_lake_raw": ["match_date", "Date", "game_date", "event_date", "created_at"],
