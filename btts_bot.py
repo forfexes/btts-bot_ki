@@ -7759,6 +7759,7 @@ def _rr_supabase(home, away, date_str) -> dict:
     headers = {"apikey": SUPABASE_KEY, "Authorization": f"Bearer {SUPABASE_KEY}"}
 
     for table, h_col, a_col, hs_col, as_col, ht_h, ht_a in [
+        ("match_results", "home_team", "away_team", "home_score", "away_score", "ht_home", "ht_away"),
         ("international_results", "home_team", "away_team", "home_score", "away_score", None, None),
         ("football_historical_matches", "home_team", "away_team", "home_score", "away_score", "ht_home_score", "ht_away_score"),
     ]:
