@@ -1,4 +1,4 @@
-name: NETRATTLER Settlement Final V20
+name: NETRATTLER Settlement Final V21
 
 on:
   workflow_dispatch:
@@ -8,34 +8,23 @@ on:
     - cron: "20 20 * * *"
     - cron: "20 23 * * *"
 
-concurrency:
-  group: netrattler-settlement
-  cancel-in-progress: false
-
 jobs:
   settlement:
     runs-on: ubuntu-latest
-    timeout-minutes: 35
-
+    timeout-minutes: 30
     steps:
-      - name: Checkout
-        uses: actions/checkout@v4
-
-      - name: Setup Python
-        uses: actions/setup-python@v5
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
         with:
           python-version: "3.11"
           cache: "pip"
-
       - name: Install dependencies
         run: |
           python -m pip install --upgrade pip
-          pip install -r requirements.txt
-
+          pip install requests python-dateutil
       - name: Compile settlement
         run: python -m py_compile netrattler_settlement_v16_final.py
-
-      - name: Run settlement
+      - name: Run Settlement V21
         env:
           SUPABASE_URL: ${{ secrets.SUPABASE_URL }}
           SUPABASE_KEY: ${{ secrets.SUPABASE_KEY }}
@@ -53,11 +42,13 @@ jobs:
           TELEGRAM_GROUP_BUILDER: ${{ secrets.TELEGRAM_GROUP_BUILDER }}
           TELEGRAM_GROUP_PROPS: ${{ secrets.TELEGRAM_GROUP_PROPS }}
           TELEGRAM_GROUP_CORNERS: ${{ secrets.TELEGRAM_GROUP_CORNERS }}
-          SETTLEMENT_DAYS: "14"
-          SETTLEMENT_LIMIT: "2500"
-          UPDATE_SOURCE_TIPS: "true"
-          SEND_PENDING_SUMMARY: "false"
           ALLSPORTS_API_KEY: ${{ secrets.ALLSPORTS_API_KEY }}
           FOOTBALL_DATA_API_KEYS: ${{ secrets.FOOTBALL_DATA_API_KEYS }}
           FOOTBALL_DATA_API_KEY: ${{ secrets.FOOTBALL_DATA_API_KEY }}
+          FOOTBALLDATA_IO_API_KEY: ${{ secrets.FOOTBALLDATA_IO_API_KEY }}
+          SETTLEMENT_DAYS: "14"
+          SETTLEMENT_LIMIT: "2500"
+          RESULT_USE_SOFASCORE: "true"
+          RESULT_USE_ESPN: "true"
+          RESULT_USE_OPENLIGADB: "true"
         run: python netrattler_settlement_v16_final.py
