@@ -7697,50 +7697,284 @@ def get_active_leagues():
 
 
 
-def get_match_result_from_sources(tip):
-    """Holt Spielergebnis aus SofaScore, AllSports, API-Football."""
-    match = tip.get("match", "")
-    tip_date = str(tip.get("date", ""))
-    if not match or " vs " not in match or not tip_date:
+# ============================================================
+# 🎯 RESULT RESOLVER — Vollständige Fallback-Kette für Settlement
+# ============================================================
+# Priorität: Supabase → Football-Data.org → OpenLigaDB →
+#             TheSportsDB → AllSports → ESPN → OpenFootball → API-Football
+
+_RR_DAY_CACHE = {}       # {date_str: [result_dicts]} — vereinter Tages-Cache
+_RR_ESPN_CACHE = {}      # ESPN Scoreboard Cache
+_RR_OFB_CACHE = {}       # OpenFootball Cache
+
+
+def _rr_make_result(home_score, away_score, ht_home=0, ht_away=0, source="unknown") -> dict:
+    """Einheitliches Ergebnis-Format für alle Quellen."""
+    hs, as_ = int(home_score or 0), int(away_score or 0)
+    hh, ha  = int(ht_home or 0), int(ht_away or 0)
+    return {
+        "home_score": hs, "away_score": as_,
+        "ht_home": hh, "ht_away": ha,
+        "btts": hs > 0 and as_ > 0,
+        "over25": (hs + as_) > 2,
+        "btts_ht": hh > 0 and ha > 0,
+        "total_goals": hs + as_,
+        "status": "finished",
+        "_source": source,
+    }
+
+
+def _rr_team_match(a: str, b: str) -> bool:
+    """Fuzzy Team-Name-Vergleich."""
+    a, b = a.lower().strip(), b.lower().strip()
+    if a == b:
+        return True
+    # Kürze auf 6 Zeichen (reicht für die meisten Namen)
+    return a[:6] in b or b[:6] in a
+
+
+def _rr_find_in_list(rows, home, away, home_field="home_team", away_field="away_team",
+                     hs_field="home_score", as_field="away_score",
+                     ht_h_field=None, ht_a_field=None, source="unknown") -> dict:
+    """Sucht in einer Liste von Dicts nach dem passenden Match."""
+    for row in rows:
+        rh = str(row.get(home_field) or "")
+        ra = str(row.get(away_field) or "")
+        if _rr_team_match(home, rh) and _rr_team_match(away, ra):
+            hs  = row.get(hs_field)
+            as_ = row.get(as_field)
+            if hs is None or as_ is None:
+                continue
+            hh = row.get(ht_h_field, 0) if ht_h_field else 0
+            ha = row.get(ht_a_field, 0) if ht_a_field else 0
+            return _rr_make_result(hs, as_, hh, ha, source)
+    return {}
+
+
+# ── 1. Supabase eigene Tabellen ──────────────────────────────────────────────
+
+def _rr_supabase(home, away, date_str) -> dict:
+    if not SUPABASE_URL or not SUPABASE_KEY:
+        return {}
+    headers = {"apikey": SUPABASE_KEY, "Authorization": f"Bearer {SUPABASE_KEY}"}
+
+    for table, h_col, a_col, hs_col, as_col, ht_h, ht_a in [
+        ("international_results", "home_team", "away_team", "home_score", "away_score", None, None),
+        ("football_historical_matches", "home_team", "away_team", "home_score", "away_score", "ht_home_score", "ht_away_score"),
+    ]:
+        try:
+            r = requests.get(
+                f"{SUPABASE_URL}/rest/v1/{table}",
+                headers=headers,
+                params={"date": f"eq.{date_str}", "select": "*", "limit": "500"},
+                timeout=8,
+            )
+            if r.ok:
+                res = _rr_find_in_list(r.json(), home, away,
+                                       h_col, a_col, hs_col, as_col,
+                                       ht_h, ht_a, f"supabase_{table}")
+                if res:
+                    return res
+        except Exception:
+            continue
+    return {}
+
+
+# ── 2. ESPN Scoreboard ────────────────────────────────────────────────────────
+
+def _rr_espn(home, away, date_str) -> dict:
+    cache_key = f"espn_{date_str}"
+    if cache_key in _RR_ESPN_CACHE:
+        rows = _RR_ESPN_CACHE[cache_key]
+    else:
+        rows = []
+        espn_date = date_str.replace("-", "")  # "20260714"
+        urls = [
+            f"https://site.api.espn.com/apis/site/v2/sports/soccer/all/scoreboard?dates={espn_date}",
+            f"https://site.api.espn.com/apis/site/v2/sports/soccer/fifa.world/scoreboard?dates={espn_date}",
+        ]
+        for url in urls:
+            try:
+                r = requests.get(url, headers={"User-Agent": "Mozilla/5.0"}, timeout=10)
+                if r.ok:
+                    for ev in r.json().get("events", []):
+                        comp = ev.get("competitions", [{}])[0]
+                        teams = {t["homeAway"]: t for t in comp.get("competitors", [])}
+                        h = teams.get("home", {})
+                        a = teams.get("away", {})
+                        status = comp.get("status", {}).get("type", {}).get("completed")
+                        if not status:
+                            continue
+                        rows.append({
+                            "home_team": h.get("team", {}).get("displayName", ""),
+                            "away_team": a.get("team", {}).get("displayName", ""),
+                            "home_score": h.get("score"),
+                            "away_score": a.get("score"),
+                        })
+            except Exception:
+                continue
+        _RR_ESPN_CACHE[cache_key] = rows
+
+    return _rr_find_in_list(rows, home, away, source="espn")
+
+
+# ── 3. OpenFootball (GitHub) ──────────────────────────────────────────────────
+
+def _rr_openfootball(home, away, date_str) -> dict:
+    """Sucht in openfootball JSON-Dateien (bereits als Cache in Supabase, aber auch direkt)."""
+    try:
+        year = date_str[:4]
+        season = f"{int(year)-1}-{year[-2:]}"
+        # Nutze bereits geladene FD.co.uk / openfootball CSV-Daten
+        league_guesses = [
+            f"https://raw.githubusercontent.com/openfootball/football.json/master/{season}/de.1.json",
+            f"https://raw.githubusercontent.com/openfootball/football.json/master/{season}/en.1.json",
+        ]
+        for url in league_guesses:
+            if url in _RR_OFB_CACHE:
+                matches = _RR_OFB_CACHE[url]
+            else:
+                r = requests.get(url, timeout=8)
+                if not r.ok:
+                    continue
+                data = r.json()
+                matches = [m for m in data.get("matches", []) if m.get("score")]
+                _RR_OFB_CACHE[url] = matches
+
+            for m in matches:
+                if m.get("date", "") != date_str:
+                    continue
+                if _rr_team_match(home, m.get("team1", "")) and _rr_team_match(away, m.get("team2", "")):
+                    ft = m.get("score", {}).get("ft", [])
+                    ht = m.get("score", {}).get("ht", [])
+                    if len(ft) >= 2:
+                        return _rr_make_result(ft[0], ft[1],
+                                               ht[0] if len(ht) >= 2 else 0,
+                                               ht[1] if len(ht) >= 2 else 0,
+                                               "openfootball")
+    except Exception:
+        pass
+    return {}
+
+
+# ── Haupt-Resolver ────────────────────────────────────────────────────────────
+
+RESULT_SOURCE_PRIORITY = [
+    "supabase", "football_data_org", "openligadb",
+    "thesportsdb", "allsports", "espn", "openfootball", "api_football",
+]
+
+
+def get_match_result_from_sources(tip) -> dict:
+    """
+    Zentraler ResultResolver — probiert alle Quellen in Prioritäts-Reihenfolge.
+    Gibt einheitliches Ergebnis-Dict zurück oder None.
+    """
+    match_name = tip.get("match", "")
+    league     = tip.get("league", "")
+    tip_date   = str(tip.get("date", ""))
+
+    if not match_name or " vs " not in match_name or not tip_date:
         return None
-    parts = match.split(" vs ", 1)
+
+    # Combo-Match: nur ersten nehmen
+    if " / " in match_name:
+        match_name = match_name.split(" / ")[0].strip()
+
+    parts = match_name.split(" vs ", 1)
     if len(parts) != 2:
         return None
-    home_team, away_team = parts[0].strip(), parts[1].strip()
-    # 1. SofaScore
+    home, away = parts[0].strip(), parts[1].strip()
+
+    # 1. Supabase eigene Tabellen (schnellste Quelle)
+    res = _rr_supabase(home, away, tip_date)
+    if res:
+        return res
+
+    # 2. Football-Data.org (4 Keys, Top-Ligen)
     try:
-        result = _sofascore_find_result(home_team, away_team, tip_date)
-        if result:
-            return result
+        res = _footballdata_find_result(home, away, tip_date)
+        if res:
+            return res
     except Exception:
         pass
-    # 2. AllSports
+
+    # 3. OpenLigaDB (deutsche Ligen, kostenlos)
     try:
-        result = _allsports_find_result(home_team, away_team, tip_date)
-        if result:
-            return result
+        res = _openligadb_find_result(home, away, tip_date, league)
+        if res:
+            return res
     except Exception:
         pass
-    # 3. API-Football
+
+    # 4. TheSportsDB (crowdsourced, breite Abdeckung)
+    try:
+        from_existing = _ALLSPORTS_DAY_CACHE.get(f"thesportsdb_{tip_date}", [])
+        if not from_existing:
+            r = requests.get(
+                "https://www.thesportsdb.com/api/v1/json/3/eventsday.php",
+                params={"d": tip_date, "s": "Soccer"}, timeout=12,
+            )
+            if r.ok:
+                from_existing = r.json().get("events") or []
+                _ALLSPORTS_DAY_CACHE[f"thesportsdb_{tip_date}"] = from_existing
+        res = _rr_find_in_list(from_existing, home, away,
+                                "strHomeTeam", "strAwayTeam",
+                                "intHomeScore", "intAwayScore",
+                                source="thesportsdb")
+        if res:
+            return res
+    except Exception:
+        pass
+
+    # 5. AllSports
+    try:
+        res = _allsports_find_result(home, away, tip_date)
+        if res:
+            return res
+    except Exception:
+        pass
+
+    # 6. ESPN Scoreboard (inoffiziell, aber gut für viele Ligen)
+    try:
+        res = _rr_espn(home, away, tip_date)
+        if res:
+            return res
+    except Exception:
+        pass
+
+    # 7. OpenFootball (GitHub, historisch)
+    try:
+        res = _rr_openfootball(home, away, tip_date)
+        if res:
+            return res
+    except Exception:
+        pass
+
+    # 8. Footballdata.io
+    try:
+        if FOOTBALLDATA_IO_API_KEY:
+            res = _footballdataio_find_result(home, away, tip_date)
+            if res:
+                return res
+    except Exception:
+        pass
+
+    # 9. API-Football (oft suspended)
     try:
         fixtures = _af_fixtures_for_date(tip_date)
-        h_t = home_team.lower()
-        a_t = away_team.lower()
         for fx in (fixtures or []):
-            fx_home = (fx.get("teams",{}).get("home",{}).get("name","") or "").lower()
-            fx_away = (fx.get("teams",{}).get("away",{}).get("name","") or "").lower()
-            if (h_t[:6] in fx_home or fx_home[:6] in h_t) and (a_t[:6] in fx_away or fx_away[:6] in a_t):
-                gs = fx.get("goals",{})
-                hs = int(gs.get("home") or 0)
-                as_ = int(gs.get("away") or 0)
-                ht = fx.get("score",{}).get("halftime",{})
-                ht_h = int(ht.get("home") or 0)
-                ht_a = int(ht.get("away") or 0)
-                return {"home_score":hs,"away_score":as_,"ht_home":ht_h,"ht_away":ht_a,
-                        "btts":hs>0 and as_>0,"over25":(hs+as_)>2,
-                        "btts_ht":ht_h>0 and ht_a>0,"total_goals":hs+as_,"status":"finished"}
+            fx_home = (fx.get("teams", {}).get("home", {}).get("name", "") or "").lower()
+            fx_away = (fx.get("teams", {}).get("away", {}).get("name", "") or "").lower()
+            if _rr_team_match(home, fx_home) and _rr_team_match(away, fx_away):
+                gs  = fx.get("goals", {})
+                ht  = fx.get("score", {}).get("halftime", {})
+                return _rr_make_result(gs.get("home", 0), gs.get("away", 0),
+                                       ht.get("home", 0), ht.get("away", 0),
+                                       "api_football")
     except Exception:
         pass
+
     return None
 
 
