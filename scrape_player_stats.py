@@ -111,6 +111,41 @@ def sb_upsert(rows: list) -> int:
     return total
 
 
+def sb_upsert_results(results: list) -> int:
+    """Speichert Match-Ergebnisse in match_results Tabelle (Settlement-Quelle)."""
+    if not results or not SUPABASE_URL or not SUPABASE_KEY:
+        return 0
+
+    allowed = {"source","match_date","home_team","away_team","home_score",
+               "away_score","ht_home","ht_away","league","country","status",
+               "event_id","raw"}
+    cleaned = [{k: v for k, v in r.items() if k in allowed} for r in results]
+
+    headers = {
+        "apikey": SUPABASE_KEY,
+        "Authorization": f"Bearer {SUPABASE_KEY}",
+        "Content-Type": "application/json",
+        "Prefer": "resolution=merge-duplicates,return=minimal",
+    }
+    total = 0
+    for i in range(0, len(cleaned), 500):
+        chunk = cleaned[i:i+500]
+        r = requests.post(
+            f"{SUPABASE_URL}/rest/v1/match_results",
+            headers=headers,
+            params={"on_conflict": "source,event_id"},
+            json=chunk,
+            timeout=30,
+        )
+        if r.ok:
+            total += len(chunk)
+        else:
+            print(f"  ⚠️  match_results Error {r.status_code}: {r.text[:100]}")
+    if total:
+        print(f"  ✅ {total} Match-Ergebnisse in Supabase gespeichert")
+    return total
+
+
 def send_telegram(text: str):
     if not TELEGRAM_TOKEN or not TELEGRAM_CHAT_ID:
         return
@@ -241,9 +276,10 @@ def scrape_statsbomb() -> List[dict]:
 # ── Auto-Datum: alle beendeten Spiele scrapen ─────────────────────────────────
 
 def scrape_date(date_str: str):
-    print(f"\n📅 Scrape Player Stats für {date_str}")
+    print(f"\n📅 Scrape Player Stats + Ergebnisse für {date_str}")
     url = f"https://api.sofascore.com/api/v1/sport/football/scheduled-events/{date_str}"
-    events = (get_json(url) or {}).get("events", [])
+    data = get_json(url) or {}
+    events = data.get("events", [])
 
     finished = [
         e for e in events
@@ -253,10 +289,37 @@ def scrape_date(date_str: str):
     print(f"  → {len(events)} Events total, {len(finished)} beendet")
 
     all_rows = []
+    all_results = []
+
     for ev in finished:
-        ev_id    = str(ev.get("id", ""))
-        home     = ev.get("homeTeam", {}).get("name", "")
-        away     = ev.get("awayTeam", {}).get("name", "")
+        ev_id   = str(ev.get("id", ""))
+        home    = ev.get("homeTeam", {}).get("name", "")
+        away    = ev.get("awayTeam", {}).get("name", "")
+        league  = ev.get("tournament", {}).get("name", "")
+        country = ev.get("tournament", {}).get("category", {}).get("name", "")
+        hs      = (ev.get("homeScore") or {}).get("current")
+        as_     = (ev.get("awayScore") or {}).get("current")
+        ht_h    = (ev.get("homeScore") or {}).get("period1")
+        ht_a    = (ev.get("awayScore") or {}).get("period1")
+
+        # Ergebnis speichern (für Settlement aller Ligen)
+        if hs is not None and as_ is not None:
+            all_results.append({
+                "source": "sofascore",
+                "event_id": ev_id,
+                "match_date": date_str,
+                "home_team": home,
+                "away_team": away,
+                "home_score": int(hs),
+                "away_score": int(as_),
+                "ht_home": int(ht_h) if ht_h is not None else None,
+                "ht_away": int(ht_a) if ht_a is not None else None,
+                "league": league,
+                "country": country,
+                "status": "finished",
+            })
+
+        # Player Stats scrapen
         print(f"  ⚽ {home} vs {away} (ID: {ev_id})")
         try:
             rows = scrape_sofascore(ev_id)
@@ -264,15 +327,20 @@ def scrape_date(date_str: str):
         except Exception as e:
             print(f"    ⚠️  {e}")
 
+    # Ergebnisse speichern (für Settlement)
+    results_saved = sb_upsert_results(all_results)
+
+    # Player Stats speichern
     total = sb_upsert(all_rows)
 
     report = (
-        f"📊 <b>NETRATTLER Player Stats</b>\n\n"
+        f"📊 <b>NETRATTLER Stats + Ergebnisse</b>\n\n"
         f"Datum: <b>{date_str}</b>\n"
         f"Spiele: <b>{len(finished)}</b>\n"
-        f"Rows gespeichert: <b>{total}</b>"
+        f"Ergebnisse: <b>{results_saved}</b>\n"
+        f"Stats-Rows: <b>{total}</b>"
     )
-    print(f"\n{report}")
+    print(f"\n{report.replace('<b>','').replace('</b>','')}")
     send_telegram(report)
 
 
