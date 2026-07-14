@@ -7697,6 +7697,54 @@ def get_active_leagues():
 
 
 
+def get_match_result_from_sources(tip):
+    """Holt Spielergebnis aus SofaScore, AllSports, API-Football."""
+    match = tip.get("match", "")
+    tip_date = str(tip.get("date", ""))
+    if not match or " vs " not in match or not tip_date:
+        return None
+    parts = match.split(" vs ", 1)
+    if len(parts) != 2:
+        return None
+    home_team, away_team = parts[0].strip(), parts[1].strip()
+    # 1. SofaScore
+    try:
+        result = _sofascore_find_result(home_team, away_team, tip_date)
+        if result:
+            return result
+    except Exception:
+        pass
+    # 2. AllSports
+    try:
+        result = _allsports_find_result(home_team, away_team, tip_date)
+        if result:
+            return result
+    except Exception:
+        pass
+    # 3. API-Football
+    try:
+        fixtures = _af_fixtures_for_date(tip_date)
+        h_t = home_team.lower()
+        a_t = away_team.lower()
+        for fx in (fixtures or []):
+            fx_home = (fx.get("teams",{}).get("home",{}).get("name","") or "").lower()
+            fx_away = (fx.get("teams",{}).get("away",{}).get("name","") or "").lower()
+            if (h_t[:6] in fx_home or fx_home[:6] in h_t) and (a_t[:6] in fx_away or fx_away[:6] in a_t):
+                gs = fx.get("goals",{})
+                hs = int(gs.get("home") or 0)
+                as_ = int(gs.get("away") or 0)
+                ht = fx.get("score",{}).get("halftime",{})
+                ht_h = int(ht.get("home") or 0)
+                ht_a = int(ht.get("away") or 0)
+                return {"home_score":hs,"away_score":as_,"ht_home":ht_h,"ht_away":ht_a,
+                        "btts":hs>0 and as_>0,"over25":(hs+as_)>2,
+                        "btts_ht":ht_h>0 and ht_a>0,"total_goals":hs+as_,"status":"finished"}
+    except Exception:
+        pass
+    return None
+
+
+
 # ============================================================
 # 🏆 SETTLEMENT / CHECK SYSTEM - Post-Match Auswertung
 # ============================================================
@@ -16591,10 +16639,6 @@ def get_active_leagues():
     return active, league_stats
 
 
-
-# ============================================================
-# 🏆 SETTLEMENT / CHECK SYSTEM - Post-Match Auswertung
-# ============================================================
 
 def check_tip_result(tip, result):
     """
