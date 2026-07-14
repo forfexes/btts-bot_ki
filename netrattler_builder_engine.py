@@ -548,6 +548,11 @@ def format_builder_message(pick: BuilderPick) -> str:
         f"<b>{pick.variant}</b>",
         sep,
     ]
+    MARKET_LABELS = {
+        "btts": "BTTS YES", "over25": "Over 2.5 Tore", "combo": "BTTS + Over 2.5",
+        "btts_ht": "BTTS HT", "over15_ht": "Over 1.5 HT", "corners": "Ecken",
+        "shots": "Schüsse", "cards": "Karte", "goals": "Tor",
+    }
     same_match = len({x.match for x in pick.legs}) == 1
     if same_match and pick.legs:
         lines.append(f"⚽ <b>{pick.legs[0].match}</b>")
@@ -555,7 +560,10 @@ def format_builder_message(pick: BuilderPick) -> str:
         icon = CATEGORY_ICON.get(leg.category, "🎯")
         match_suffix = "" if same_match else f" · {leg.match}"
         source_note = " ~" if leg.estimated else ""
-        lines.append(f"{index}. {icon} <b>{leg.player}</b>: {leg.market}{source_note}{match_suffix}")
+        # Zeige nur den lesbaren Namen, nicht die market_id
+        market_label = MARKET_LABELS.get(leg.market, leg.market)
+        display_name = leg.player if leg.player and leg.player != leg.market else market_label
+        lines.append(f"{index}. {icon} <b>{display_name}</b>{source_note}{match_suffix}")
     lines.extend([
         sep,
         f"💰 Gesamt-Quote: <b>{pick.total_odds:.2f}</b>{estimate}",
