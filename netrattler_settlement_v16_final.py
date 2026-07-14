@@ -34,6 +34,8 @@ SUPABASE_URL = (os.getenv("SUPABASE_URL") or "").rstrip("/")
 SUPABASE_KEY = os.getenv("SUPABASE_SERVICE_ROLE_KEY") or os.getenv("SUPABASE_KEY") or ""
 TG_TOKEN = os.getenv("TELEGRAM_TOKEN") or os.getenv("TELEGRAM_BOT_TOKEN") or ""
 TG_DEFAULT = os.getenv("TELEGRAM_CHAT_ID") or ""
+ALLSPORTS_API_KEY = os.getenv("ALLSPORTS_API_KEY") or ""
+FOOTBALL_DATA_API_KEYS = [k.strip() for k in (os.getenv("FOOTBALL_DATA_API_KEYS") or os.getenv("FOOTBALL_DATA_API_KEY") or "").split(",") if k.strip()]
 DAYS = int(os.getenv("SETTLEMENT_DAYS", "14"))
 LIMIT = int(os.getenv("SETTLEMENT_LIMIT", "2500"))
 UPDATE_SOURCE_TIPS = os.getenv("UPDATE_SOURCE_TIPS", "true").lower() not in {"0", "false", "no"}
@@ -400,6 +402,8 @@ def score_row(row: Dict[str, Any]) -> Tuple[str, str, Optional[int], Optional[in
 
 def public_results(day: str) -> List[Dict[str, Any]]:
     output = []
+
+    # 1. TheSportsDB (kostenlos, aber nur grosse Ligen)
     try:
         response = requests.get(
             "https://www.thesportsdb.com/api/v1/json/3/eventsday.php",
@@ -407,17 +411,81 @@ def public_results(day: str) -> List[Dict[str, Any]]:
             timeout=20,
         ).json()
         for event in response.get("events") or []:
+            hs = event.get("intHomeScore")
+            as_ = event.get("intAwayScore")
+            if hs is None or as_ is None:
+                continue
             output.append({
                 "home_team": event.get("strHomeTeam"),
                 "away_team": event.get("strAwayTeam"),
-                "home_score": event.get("intHomeScore"),
-                "away_score": event.get("intAwayScore"),
+                "home_score": hs,
+                "away_score": as_,
                 "match_date": day,
                 "raw": event,
                 "_result_table": "TheSportsDB",
             })
     except Exception:
         pass
+
+    # 2. AllSports API (deckt 1000+ Ligen ab inkl. Nischenligen)
+    if ALLSPORTS_API_KEY:
+        try:
+            r = requests.get(
+                "https://apiv2.allsportsapi.com/football/",
+                params={"met": "Fixtures", "APIkey": ALLSPORTS_API_KEY,
+                        "from": day, "to": day},
+                timeout=15,
+            )
+            if r.ok:
+                for m in (r.json().get("result") or []):
+                    status = m.get("event_status", "")
+                    if status not in ("Finished", "FT", "After Extra Time", "After Penalties"):
+                        continue
+                    try:
+                        raw_score = m.get("event_final_result", "0-0") or "0-0"
+                        hs, as_ = raw_score.split("-")
+                        output.append({
+                            "home_team": m.get("event_home_team"),
+                            "away_team": m.get("event_away_team"),
+                            "home_score": int(hs.strip()),
+                            "away_score": int(as_.strip()),
+                            "match_date": day,
+                            "_result_table": "AllSports",
+                        })
+                    except Exception:
+                        continue
+        except Exception:
+            pass
+
+    # 3. Football-Data.org (Top-Ligen mit guter Abdeckung)
+    if FOOTBALL_DATA_API_KEYS:
+        try:
+            r = requests.get(
+                "https://api.football-data.org/v4/matches",
+                params={"dateFrom": day, "dateTo": day},
+                headers={"X-Auth-Token": FOOTBALL_DATA_API_KEYS[0]},
+                timeout=15,
+            )
+            if r.ok:
+                for m in (r.json().get("matches") or []):
+                    if m.get("status") != "FINISHED":
+                        continue
+                    ft = (m.get("score") or {}).get("fullTime") or {}
+                    hs = ft.get("home")
+                    as_ = ft.get("away")
+                    if hs is None or as_ is None:
+                        continue
+                    output.append({
+                        "home_team": (m.get("homeTeam") or {}).get("name"),
+                        "away_team": (m.get("awayTeam") or {}).get("name"),
+                        "home_score": hs,
+                        "away_score": as_,
+                        "match_date": day,
+                        "_result_table": "FootballDataOrg",
+                    })
+        except Exception:
+            pass
+
     return output
 
 
@@ -1006,7 +1074,7 @@ def main() -> None:
     ]
     log(f"Neu abgeschlossen: {len(newly_closed)}")
 
-    saved = sb_upsert("netrattler_settlements", settled, "settlement_id")
+    saved = sb_upsert("netrattler_settlements", settled, "source_table,tip_id")
     log(f"Settlements gespeichert: {saved}")
     for row in newly_closed:
         update_source_tip(row)
