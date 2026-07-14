@@ -57,4 +57,7 @@ jobs:
           SETTLEMENT_LIMIT: "2500"
           UPDATE_SOURCE_TIPS: "true"
           SEND_PENDING_SUMMARY: "false"
+          ALLSPORTS_API_KEY: ${{ secrets.ALLSPORTS_API_KEY }}
+          FOOTBALL_DATA_API_KEYS: ${{ secrets.FOOTBALL_DATA_API_KEYS }}
+          FOOTBALL_DATA_API_KEY: ${{ secrets.FOOTBALL_DATA_API_KEY }}
         run: python netrattler_settlement_v16_final.py
