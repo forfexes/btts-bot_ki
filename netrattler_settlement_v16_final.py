@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """
-NETRATTLER Settlement FINAL V20
+NETRATTLER Settlement FINAL V21
 ===============================
 
 Dateiname bleibt absichtlich stabil: netrattler_settlement_v16_final.py
@@ -36,6 +36,11 @@ TG_TOKEN = os.getenv("TELEGRAM_TOKEN") or os.getenv("TELEGRAM_BOT_TOKEN") or ""
 TG_DEFAULT = os.getenv("TELEGRAM_CHAT_ID") or ""
 ALLSPORTS_API_KEY = os.getenv("ALLSPORTS_API_KEY") or ""
 FOOTBALL_DATA_API_KEYS = [k.strip() for k in (os.getenv("FOOTBALL_DATA_API_KEYS") or os.getenv("FOOTBALL_DATA_API_KEY") or "").split(",") if k.strip()]
+FOOTBALLDATA_IO_API_KEY = os.getenv("FOOTBALLDATA_IO_API_KEY") or ""
+RESULT_HTTP_TIMEOUT = int(os.getenv("RESULT_HTTP_TIMEOUT", "18"))
+RESULT_USE_SOFASCORE = os.getenv("RESULT_USE_SOFASCORE", "true").lower() not in {"0", "false", "no"}
+RESULT_USE_ESPN = os.getenv("RESULT_USE_ESPN", "true").lower() not in {"0", "false", "no"}
+RESULT_USE_OPENLIGADB = os.getenv("RESULT_USE_OPENLIGADB", "true").lower() not in {"0", "false", "no"}
 DAYS = int(os.getenv("SETTLEMENT_DAYS", "14"))
 LIMIT = int(os.getenv("SETTLEMENT_LIMIT", "2500"))
 UPDATE_SOURCE_TIPS = os.getenv("UPDATE_SOURCE_TIPS", "true").lower() not in {"0", "false", "no"}
@@ -86,6 +91,9 @@ def norm(value: Any) -> str:
     text = unicodedata.normalize("NFKD", str(value or "").lower().strip())
     text = "".join(c for c in text if not unicodedata.combining(c))
     text = text.replace("&", " and ")
+    aliases = {"munchen": "munich", "koln": "cologne", "praha": "prague", "wien": "vienna", "moskva": "moscow"}
+    for source, target in aliases.items():
+        text = re.sub(rf"\b{source}\b", target, text)
     text = re.sub(r"\b(fc|sc|cf|afc|fk|ac|club|de|the|team|women|wfc)\b", " ", text)
     text = re.sub(r"[^a-z0-9]+", " ", text)
     return re.sub(r"\s+", " ", text).strip()
@@ -325,7 +333,7 @@ def tip_id(row: Dict[str, Any]) -> str:
 
 
 def stable_settlement_id(row: Dict[str, Any]) -> str:
-    return hsh("netrattler-settlement-v20", row.get("_table", ""), tip_id(row))
+    return hsh("netrattler-settlement-v21", row.get("_table", ""), tip_id(row))
 
 
 def source_key(row: Dict[str, Any]) -> Tuple[str, Any]:
@@ -400,92 +408,192 @@ def score_row(row: Dict[str, Any]) -> Tuple[str, str, Optional[int], Optional[in
     return home, away, home_score, away_score
 
 
-def public_results(day: str) -> List[Dict[str, Any]]:
-    output = []
-
-    # 1. TheSportsDB (kostenlos, aber nur grosse Ligen)
+def _append_result(output: List[Dict[str, Any]], source: str, day: str, home: Any, away: Any,
+                   home_score: Any, away_score: Any, raw: Optional[Dict[str, Any]] = None,
+                   ht_home: Any = None, ht_away: Any = None) -> None:
+    """Normalisiert ein fertiges Resultat. Ungültige/ungeklärte Scores werden verworfen."""
+    if not home or not away or home_score in (None, "") or away_score in (None, ""):
+        return
     try:
-        response = requests.get(
-            "https://www.thesportsdb.com/api/v1/json/3/eventsday.php",
-            params={"d": day, "s": "Soccer"},
-            timeout=20,
-        ).json()
-        for event in response.get("events") or []:
-            hs = event.get("intHomeScore")
-            as_ = event.get("intAwayScore")
-            if hs is None or as_ is None:
-                continue
-            output.append({
-                "home_team": event.get("strHomeTeam"),
-                "away_team": event.get("strAwayTeam"),
-                "home_score": hs,
-                "away_score": as_,
-                "match_date": day,
-                "raw": event,
-                "_result_table": "TheSportsDB",
-            })
-    except Exception:
-        pass
+        hs, aw = int(float(home_score)), int(float(away_score))
+    except (TypeError, ValueError):
+        return
+    row: Dict[str, Any] = {
+        "home_team": str(home), "away_team": str(away),
+        "home_score": hs, "away_score": aw, "match_date": day,
+        "raw": raw or {}, "_result_table": source,
+    }
+    if ht_home not in (None, "") and ht_away not in (None, ""):
+        row["home_score_ht"] = as_int(ht_home, -1)
+        row["away_score_ht"] = as_int(ht_away, -1)
+    output.append(row)
 
-    # 2. AllSports API (deckt 1000+ Ligen ab inkl. Nischenligen)
+
+def _sofascore_results(day: str) -> List[Dict[str, Any]]:
+    if not RESULT_USE_SOFASCORE:
+        return []
+    output: List[Dict[str, Any]] = []
+    try:
+        r = requests.get(
+            f"https://www.sofascore.com/api/v1/sport/football/scheduled-events/{day}",
+            headers={"User-Agent": "Mozilla/5.0", "Accept": "application/json"},
+            timeout=RESULT_HTTP_TIMEOUT,
+        )
+        if not r.ok:
+            log(f"SofaScore {day}: HTTP {r.status_code}", "WARN")
+            return []
+        for event in r.json().get("events") or []:
+            if str((event.get("status") or {}).get("type") or "").lower() != "finished":
+                continue
+            hs = (event.get("homeScore") or {}).get("current")
+            aw = (event.get("awayScore") or {}).get("current")
+            _append_result(output, "SofaScore", day,
+                (event.get("homeTeam") or {}).get("name"),
+                (event.get("awayTeam") or {}).get("name"), hs, aw, event,
+                (event.get("homeScore") or {}).get("period1"),
+                (event.get("awayScore") or {}).get("period1"))
+    except Exception as exc:
+        log(f"SofaScore {day}: {str(exc)[:100]}", "WARN")
+    return output
+
+
+def _espn_results(day: str) -> List[Dict[str, Any]]:
+    if not RESULT_USE_ESPN:
+        return []
+    output: List[Dict[str, Any]] = []
+    try:
+        dates = day.replace("-", "")
+        r = requests.get(
+            "https://site.api.espn.com/apis/site/v2/sports/soccer/all/scoreboard",
+            params={"dates": dates, "limit": "1000"}, timeout=RESULT_HTTP_TIMEOUT,
+            headers={"User-Agent": "Mozilla/5.0", "Accept": "application/json"},
+        )
+        if not r.ok:
+            log(f"ESPN {day}: HTTP {r.status_code}", "WARN")
+            return []
+        for event in r.json().get("events") or []:
+            comp = ((event.get("competitions") or [{}])[0])
+            status = ((comp.get("status") or {}).get("type") or {})
+            if not (status.get("completed") or str(status.get("state") or "").lower() == "post"):
+                continue
+            home = away = None; hs = aw = None
+            for c in comp.get("competitors") or []:
+                team = (c.get("team") or {}).get("displayName") or (c.get("team") or {}).get("name")
+                if c.get("homeAway") == "home": home, hs = team, c.get("score")
+                elif c.get("homeAway") == "away": away, aw = team, c.get("score")
+            _append_result(output, "ESPN", day, home, away, hs, aw, event)
+    except Exception as exc:
+        log(f"ESPN {day}: {str(exc)[:100]}", "WARN")
+    return output
+
+
+def _openligadb_results(day: str) -> List[Dict[str, Any]]:
+    if not RESULT_USE_OPENLIGADB:
+        return []
+    output: List[Dict[str, Any]] = []
+    try:
+        r = requests.get(f"https://api.openligadb.de/getmatchdata/{day}", timeout=RESULT_HTTP_TIMEOUT)
+        if not r.ok:
+            return []
+        for match in r.json() if isinstance(r.json(), list) else []:
+            if not match.get("matchIsFinished"):
+                continue
+            results = match.get("matchResults") or []
+            final = None
+            for item in results:
+                if item.get("resultTypeID") == 2 or str(item.get("resultName") or "").lower() in {"endresult", "endergebnis"}:
+                    final = item
+                    break
+            final = final or (results[-1] if results else {})
+            _append_result(output, "OpenLigaDB", day,
+                (match.get("team1") or {}).get("teamName"),
+                (match.get("team2") or {}).get("teamName"),
+                final.get("pointsTeam1"), final.get("pointsTeam2"), match)
+    except Exception as exc:
+        log(f"OpenLigaDB {day}: {str(exc)[:100]}", "WARN")
+    return output
+
+
+def public_results(day: str) -> List[Dict[str, Any]]:
+    """Key-freie + Key-basierte Resultat-Fallbacks. Keine einzelne Quelle darf den Run stoppen."""
+    output: List[Dict[str, Any]] = []
+    source_counts: Counter = Counter()
+
+    for getter in (_sofascore_results, _espn_results, _openligadb_results):
+        rows = getter(day)
+        output.extend(rows)
+
+    # TheSportsDB
+    try:
+        r = requests.get("https://www.thesportsdb.com/api/v1/json/3/eventsday.php",
+                         params={"d": day, "s": "Soccer"}, timeout=RESULT_HTTP_TIMEOUT)
+        if r.ok:
+            for event in r.json().get("events") or []:
+                _append_result(output, "TheSportsDB", day, event.get("strHomeTeam"), event.get("strAwayTeam"),
+                               event.get("intHomeScore"), event.get("intAwayScore"), event,
+                               event.get("intHomeScoreHT"), event.get("intAwayScoreHT"))
+    except Exception as exc:
+        log(f"TheSportsDB {day}: {str(exc)[:100]}", "WARN")
+
+    # AllSports
     if ALLSPORTS_API_KEY:
         try:
-            r = requests.get(
-                "https://apiv2.allsportsapi.com/football/",
-                params={"met": "Fixtures", "APIkey": ALLSPORTS_API_KEY,
-                        "from": day, "to": day},
-                timeout=15,
-            )
+            r = requests.get("https://apiv2.allsportsapi.com/football/",
+                params={"met": "Fixtures", "APIkey": ALLSPORTS_API_KEY, "from": day, "to": day},
+                timeout=RESULT_HTTP_TIMEOUT)
             if r.ok:
-                for m in (r.json().get("result") or []):
-                    status = m.get("event_status", "")
-                    if status not in ("Finished", "FT", "After Extra Time", "After Penalties"):
+                for m in r.json().get("result") or []:
+                    if str(m.get("event_status") or "").lower() not in {"finished", "ft", "after extra time", "after penalties"}:
                         continue
-                    try:
-                        raw_score = m.get("event_final_result", "0-0") or "0-0"
-                        hs, as_ = raw_score.split("-")
-                        output.append({
-                            "home_team": m.get("event_home_team"),
-                            "away_team": m.get("event_away_team"),
-                            "home_score": int(hs.strip()),
-                            "away_score": int(as_.strip()),
-                            "match_date": day,
-                            "_result_table": "AllSports",
-                        })
-                    except Exception:
-                        continue
-        except Exception:
-            pass
+                    score = re.findall(r"\d+", str(m.get("event_final_result") or ""))
+                    half = re.findall(r"\d+", str(m.get("event_halftime_result") or ""))
+                    if len(score) >= 2:
+                        _append_result(output, "AllSports", day, m.get("event_home_team"), m.get("event_away_team"),
+                                       score[0], score[1], m, half[0] if len(half)>=2 else None, half[1] if len(half)>=2 else None)
+            else:
+                log(f"AllSports {day}: HTTP {r.status_code}", "WARN")
+        except Exception as exc:
+            log(f"AllSports {day}: {str(exc)[:100]}", "WARN")
 
-    # 3. Football-Data.org (Top-Ligen mit guter Abdeckung)
-    if FOOTBALL_DATA_API_KEYS:
+    # Football-Data.org with key rotation
+    for key in FOOTBALL_DATA_API_KEYS:
         try:
-            r = requests.get(
-                "https://api.football-data.org/v4/matches",
-                params={"dateFrom": day, "dateTo": day},
-                headers={"X-Auth-Token": FOOTBALL_DATA_API_KEYS[0]},
-                timeout=15,
-            )
+            r = requests.get("https://api.football-data.org/v4/matches",
+                params={"dateFrom": day, "dateTo": day}, headers={"X-Auth-Token": key}, timeout=RESULT_HTTP_TIMEOUT)
+            if r.status_code in (403, 429):
+                continue
             if r.ok:
-                for m in (r.json().get("matches") or []):
+                for m in r.json().get("matches") or []:
                     if m.get("status") != "FINISHED":
                         continue
-                    ft = (m.get("score") or {}).get("fullTime") or {}
-                    hs = ft.get("home")
-                    as_ = ft.get("away")
-                    if hs is None or as_ is None:
-                        continue
-                    output.append({
-                        "home_team": (m.get("homeTeam") or {}).get("name"),
-                        "away_team": (m.get("awayTeam") or {}).get("name"),
-                        "home_score": hs,
-                        "away_score": as_,
-                        "match_date": day,
-                        "_result_table": "FootballDataOrg",
-                    })
+                    score = m.get("score") or {}; ft = score.get("fullTime") or {}; ht = score.get("halfTime") or {}
+                    _append_result(output, "FootballDataOrg", day,
+                        (m.get("homeTeam") or {}).get("name"), (m.get("awayTeam") or {}).get("name"),
+                        ft.get("home"), ft.get("away"), m, ht.get("home"), ht.get("away"))
+                break
         except Exception:
-            pass
+            continue
 
+    # Optional footballdata.io
+    if FOOTBALLDATA_IO_API_KEY:
+        try:
+            r = requests.get(f"https://footballdata.io/api/v1/matches/date/{day}",
+                headers={"Authorization": f"Bearer {FOOTBALLDATA_IO_API_KEY}"}, timeout=RESULT_HTTP_TIMEOUT)
+            if r.ok:
+                payload = r.json(); matches = payload.get("data") or payload.get("matches") or (payload if isinstance(payload, list) else [])
+                for m in matches:
+                    if str(m.get("status") or m.get("matchStatus") or "").upper() not in {"FINISHED", "FT", "COMPLETED"}:
+                        continue
+                    ho=m.get("homeTeam") or m.get("home_team") or {}; ao=m.get("awayTeam") or m.get("away_team") or {}; sc=m.get("score") or {}
+                    home=ho.get("name") if isinstance(ho,dict) else ho; away=ao.get("name") if isinstance(ao,dict) else ao
+                    _append_result(output, "FootballDataIO", day, home, away,
+                        sc.get("home") or sc.get("homeScore"), sc.get("away") or sc.get("awayScore"), m)
+        except Exception as exc:
+            log(f"FootballDataIO {day}: {str(exc)[:100]}", "WARN")
+
+    for row in output:
+        source_counts[row.get("_result_table", "unknown")] += 1
+    log(f"Externe Results {day}: {dict(source_counts)}")
     return output
 
 
@@ -1051,7 +1159,7 @@ def send_roi_report(history: Sequence[Dict[str, Any]]) -> None:
 
 
 def main() -> None:
-    log("⚽ NETRATTLER Settlement FINAL V20 startet")
+    log("⚽ NETRATTLER Settlement FINAL V21 startet")
     if not SUPABASE_URL or not SUPABASE_KEY:
         log("SUPABASE_URL oder SUPABASE_KEY fehlt", "ERROR")
         raise SystemExit(2)
@@ -1074,7 +1182,7 @@ def main() -> None:
     ]
     log(f"Neu abgeschlossen: {len(newly_closed)}")
 
-    saved = sb_upsert("netrattler_settlements", settled, "source_table,tip_id")
+    saved = sb_upsert("netrattler_settlements", settled, "settlement_id")
     log(f"Settlements gespeichert: {saved}")
     for row in newly_closed:
         update_source_tip(row)
@@ -1084,7 +1192,7 @@ def main() -> None:
     save_dimension_stats(history)
     send_group_reports(newly_closed, settled, history)
     send_roi_report(history)
-    log("✅ NETRATTLER Settlement FINAL V20 fertig")
+    log("✅ NETRATTLER Settlement FINAL V21 fertig")
 
 
 if __name__ == "__main__":
