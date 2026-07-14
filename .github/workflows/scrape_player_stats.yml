@@ -53,11 +53,11 @@ jobs:
           DATE="${{ github.event.inputs.date }}"
           SOURCE="${{ github.event.inputs.source }}"
           REBUILD="${{ github.event.inputs.rebuild_only }}"
-          if [ -z "$SOURCE" ]; then SOURCE="all"; fi
+          if [ -z "$SOURCE" ]; then SOURCE="auto"; fi
           if [ "$REBUILD" = "true" ]; then
-            python scrape_player_stats.py --rebuild-only
+            python scrape_player_stats.py --yesterday
           elif [ -n "$DATE" ]; then
-            python scrape_player_stats.py --date "$DATE" --source "$SOURCE"
+            python scrape_player_stats.py --date "$DATE"
           else
-            python scrape_player_stats.py --source "$SOURCE"
+            python scrape_player_stats.py --yesterday
           fi
