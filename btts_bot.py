@@ -90,7 +90,9 @@ TELEGRAM_GROUPS = {
     "stats": env("TELEGRAM_GROUP_STATS", TELEGRAM_CHAT_ID),
     "hz_live": env("TELEGRAM_GROUP_HZ_LIVE", TELEGRAM_CHAT_ID),
     "late_goals": env("TELEGRAM_GROUP_LATE_GOALS", TELEGRAM_CHAT_ID),
-    "advanced_props": env("TELEGRAM_GROUP_STATS", TELEGRAM_CHAT_ID),
+    "advanced_props": env("TELEGRAM_GROUP_PLAYER_PROPS", env("TELEGRAM_GROUP_STATS", TELEGRAM_CHAT_ID)),
+    "props": env("TELEGRAM_GROUP_PLAYER_PROPS", env("TELEGRAM_GROUP_STATS", TELEGRAM_CHAT_ID)),
+    "builder": env("TELEGRAM_GROUP_BUILDER", env("TELEGRAM_GROUP_PLAYER_PROPS", env("TELEGRAM_GROUP_STATS", TELEGRAM_CHAT_ID))),
 }
 
 
@@ -16876,16 +16878,12 @@ def get_active_leagues():
 
 
 def check_tip_result(tip, result):
-    """
-    Prüft ob ein Tipp gewonnen oder verloren hat.
-    result: {'home_score': 2, 'away_score': 1, 'btts': True, 'over25': True, 'btts_ht': False}
-    """
+    """Bewertet klassische Märkte. Player Props/Builder werden separat gesettelt."""
     if not result or not tip:
         return None
 
-    market = tip.get("market", "btts")
-    tip_value = tip.get("tip", "YES")
-
+    market = str(tip.get("market", "btts") or "btts").lower()
+    tip_value = str(tip.get("tip", "YES") or "YES").upper()
     won = False
 
     if market == "btts":
@@ -16893,9 +16891,15 @@ def check_tip_result(tip, result):
     elif market == "over25":
         won = result.get("over25", False) if tip_value == "YES" else not result.get("over25", False)
     elif market == "combo":
-        won = result.get("btts", False) and result.get("over25", False) if tip_value == "YES" else not (result.get("btts", False) and result.get("over25", False))
+        combo_hit = result.get("btts", False) and result.get("over25", False)
+        won = combo_hit if tip_value == "YES" else not combo_hit
     elif market == "btts_ht":
         won = result.get("btts_ht", False) if tip_value == "YES" else not result.get("btts_ht", False)
+    elif market == "over15_ht":
+        ht_total = (result.get("ht_home") or 0) + (result.get("ht_away") or 0)
+        won = ht_total >= 2 if tip_value != "NO" else ht_total < 2
+    else:
+        return None
 
     return "won" if won else "lost"
 
@@ -17612,6 +17616,260 @@ def format_result_text(tip, result, status):
     return msg
 
 
+
+# ============================================================
+# NETRATTLER PLAYER PROPS + GRUPPEN-SETTLEMENT
+# ============================================================
+_NTR_PROP_STAT_MAP = {
+    "shots": "shots", "shot": "shots",
+    "sot": "shots_on_target", "shots_on_target": "shots_on_target",
+    "goals": "goals", "goal": "goals", "score": "goals",
+    "assists": "assists", "assist": "assists",
+    "passes": "passes", "pass": "passes",
+    "tackles": "tackles", "tackle": "tackles",
+    "fouls": "fouls_committed", "fouls_committed": "fouls_committed",
+    "fouls_won": "fouls_won", "fouled": "fouls_won",
+    "cards": "cards", "booked": "cards", "yellow_cards": "yellow_cards",
+    "saves": "saves", "save": "saves",
+    "interceptions": "interceptions", "clearances": "clearances",
+    "offsides": "offsides", "offside": "offsides",
+    "key_passes": "key_passes", "duels": "duels", "duels_won": "duels_won",
+    "touches": "touches", "crosses": "crosses",
+}
+
+
+def _ntr_group_key(tip):
+    explicit = str(tip.get("group_key") or "").strip().lower()
+    if explicit:
+        return explicit
+    market = str(tip.get("market") or "").lower()
+    if market in {"advanced_props", "player_prop", "player_props", "prop"}:
+        return "props"
+    if "builder" in market or market in {"combo_multi", "multi_combo"}:
+        return "builder" if "builder" in market else "combos"
+    return {
+        "btts": "btts", "over25": "over25", "combo": "combo",
+        "btts_ht": "btts_ht", "over15_ht": "over15_ht",
+        "corners": "stats", "cards": "stats", "scorer": "stats",
+    }.get(market, "stats")
+
+
+def _ntr_profit_units(tip, status):
+    try:
+        odds = float(str(tip.get("odds_taken") or tip.get("odds") or 1).replace(",", "."))
+    except Exception:
+        odds = 1.0
+    try:
+        units = float(tip.get("units") or 1.0)
+    except Exception:
+        units = 1.0
+    if status == "won":
+        return round((odds - 1.0) * units, 2)
+    if status == "void":
+        return 0.0
+    return round(-units, 2)
+
+
+def _ntr_parse_prop_leg(leg):
+    raw = str(leg.get("player_prop") or leg.get("market") or leg.get("tip") or "").strip()
+    player = str(leg.get("selection") or leg.get("player") or "").strip()
+    low = raw.lower()
+    category = str(leg.get("_cat") or leg.get("category") or "").lower()
+
+    stat = None
+    if "shot" in low and ("target" in low or "on goal" in low):
+        stat = "shots_on_target"
+    elif "shot" in low:
+        stat = "shots"
+    elif "assist" in low:
+        stat = "assists"
+    elif "score" in low or "goalscorer" in low or "goal" in low:
+        stat = "goals"
+    elif "fouled" in low or "fouls won" in low:
+        stat = "fouls_won"
+    elif "foul" in low:
+        stat = "fouls_committed"
+    elif "tackle" in low:
+        stat = "tackles"
+    elif "save" in low:
+        stat = "saves"
+    elif "offside" in low:
+        stat = "offsides"
+    elif "pass" in low:
+        stat = "passes"
+    elif "interception" in low:
+        stat = "interceptions"
+    elif "clearance" in low:
+        stat = "clearances"
+    elif "card" in low or "booked" in low:
+        stat = "cards"
+    elif category:
+        stat = _NTR_PROP_STAT_MAP.get(category)
+
+    side = str(leg.get("side") or "over").lower()
+    if " under " in f" {low} ":
+        side = "under"
+    elif " over " in f" {low} ":
+        side = "over"
+
+    line = leg.get("line")
+    try:
+        line = float(line) if line not in (None, "") else None
+    except Exception:
+        line = None
+    if line is None:
+        m_plus = re.search(r"(\d+(?:\.\d+)?)\s*\+", raw)
+        m_ou = re.search(r"(?:over|under)\s*(\d+(?:\.\d+)?)", low)
+        if m_plus:
+            line = float(m_plus.group(1)) - 0.001
+            side = "over"
+        elif m_ou:
+            line = float(m_ou.group(1))
+        elif any(x in low for x in ["to be booked", "be carded", "to score", "to assist"]):
+            line = 0.5
+            side = "over"
+
+    return {"player": player, "stat": stat, "line": line, "side": side, "raw": raw}
+
+
+def _ntr_get_player_actual(player, stat, tip_date, match_name=""):
+    if not SUPABASE_URL or not SUPABASE_KEY or not player or not stat:
+        return None
+    stat = _NTR_PROP_STAT_MAP.get(stat, stat)
+    headers = {"apikey": SUPABASE_KEY, "Authorization": f"Bearer {SUPABASE_KEY}"}
+    params = {
+        "select": "player_name,player,match,home_team,away_team,date,match_date,stat_name,stat_value,shots,shots_on_target,sot,goals,assists,passes,tackles,fouls_committed,fouls_won,cards,yellow_cards,red_cards,saves,interceptions,clearances,offsides,key_passes,duels,duels_won,touches,crosses,minutes",
+        "or": f"(player_name.ilike.*{player}*,player.ilike.*{player}*)",
+        "order": "match_date.desc.nullslast,collected_at.desc.nullslast",
+        "limit": "20",
+    }
+    try:
+        r = requests.get(f"{SUPABASE_URL}/rest/v1/player_match_stats", headers=headers, params=params, timeout=15)
+        if not r.ok:
+            return None
+        rows = r.json() or []
+    except Exception:
+        return None
+
+    def _date_ok(row):
+        rd = str(row.get("date") or row.get("match_date") or "")[:10]
+        return not tip_date or rd == str(tip_date)[:10]
+
+    candidates = [row for row in rows if _date_ok(row)]
+    if match_name:
+        match_low = match_name.lower()
+        matched = []
+        for row in candidates:
+            row_match = str(row.get("match") or f"{row.get('home_team','')} vs {row.get('away_team','')}").lower()
+            if any(tok in row_match for tok in [t for t in normalize_team_name(match_low).split() if len(t) > 3]):
+                matched.append(row)
+        if matched:
+            candidates = matched
+    if not candidates:
+        return None
+
+    row = candidates[0]
+    direct_keys = [stat]
+    if stat == "shots_on_target":
+        direct_keys += ["sot"]
+    if stat == "cards":
+        direct_keys += ["yellow_cards"]
+    for key in direct_keys:
+        val = row.get(key)
+        if val is not None:
+            try:
+                return float(val)
+            except Exception:
+                pass
+    if str(row.get("stat_name") or "").lower() in {stat.lower(), stat.replace("_", " ").lower()}:
+        try:
+            return float(row.get("stat_value"))
+        except Exception:
+            return None
+    return None
+
+
+def _ntr_eval_actual(actual, line, side="over"):
+    if actual is None or line is None:
+        return None
+    return "won" if (actual < line if side == "under" else actual > line) else "lost"
+
+
+def _ntr_settle_player_tip(tip):
+    parsed = {
+        "player": tip.get("player_name") or tip.get("player"),
+        "stat": tip.get("prop_market"),
+        "line": tip.get("prop_line"),
+        "side": tip.get("prop_side") or "over",
+        "raw": tip.get("tip") or "",
+    }
+    if not parsed["stat"] or parsed["line"] is None:
+        fallback = _ntr_parse_prop_leg({
+            "player": parsed["player"], "selection": parsed["player"],
+            "player_prop": parsed["raw"], "line": parsed["line"], "side": parsed["side"],
+        })
+        parsed.update({k: v for k, v in fallback.items() if v not in (None, "")})
+    actual = _ntr_get_player_actual(parsed.get("player"), parsed.get("stat"), tip.get("date"), tip.get("match", ""))
+    status = _ntr_eval_actual(actual, parsed.get("line"), parsed.get("side", "over"))
+    if not status:
+        return None
+    return {"status": status, "actual_value": actual, "parsed": parsed}
+
+
+def _ntr_settle_builder_tip(tip):
+    legs = tip.get("builder_legs") or []
+    if isinstance(legs, str):
+        try:
+            legs = json.loads(legs)
+        except Exception:
+            legs = []
+    if not isinstance(legs, list) or not legs:
+        return None
+    settled = []
+    for leg in legs:
+        parsed = _ntr_parse_prop_leg(leg if isinstance(leg, dict) else {"player_prop": str(leg)})
+        actual = _ntr_get_player_actual(parsed.get("player"), parsed.get("stat"), tip.get("date"), leg.get("match", tip.get("match", "")) if isinstance(leg, dict) else tip.get("match", ""))
+        status = _ntr_eval_actual(actual, parsed.get("line"), parsed.get("side", "over"))
+        if status is None:
+            return None
+        settled.append({**parsed, "actual": actual, "status": status})
+    won = sum(1 for leg in settled if leg["status"] == "won")
+    return {"status": "won" if won == len(settled) else "lost", "legs": settled, "won_legs": won}
+
+
+def _ntr_group_stats(group_key, tip_date=None):
+    if not SUPABASE_URL or not SUPABASE_KEY:
+        return None
+    headers = {"apikey": SUPABASE_KEY, "Authorization": f"Bearer {SUPABASE_KEY}"}
+    params = {"select": "status,odds,odds_taken,units,profit_units,group_key,market", "status": "in.(won,lost,void)", "limit": "1000"}
+    if tip_date:
+        params["date"] = f"eq.{str(tip_date)[:10]}"
+    try:
+        r = requests.get(f"{SUPABASE_URL}/rest/v1/tips", headers=headers, params=params, timeout=12)
+        rows = r.json() if r.ok else []
+    except Exception:
+        rows = []
+    rows = [row for row in rows if _ntr_group_key(row) == group_key]
+    if not rows:
+        return {"w": 0, "l": 0, "v": 0, "profit": 0.0, "staked": 0.0, "roi": 0.0, "winrate": 0.0}
+    w = sum(1 for r in rows if r.get("status") == "won")
+    l = sum(1 for r in rows if r.get("status") == "lost")
+    v = sum(1 for r in rows if r.get("status") == "void")
+    profit = sum(float(r.get("profit_units")) if r.get("profit_units") is not None else _ntr_profit_units(r, r.get("status")) for r in rows)
+    staked = sum(float(r.get("units") or 1.0) for r in rows if r.get("status") in {"won", "lost"})
+    total = w + l
+    return {"w": w, "l": l, "v": v, "profit": round(profit, 2), "staked": round(staked, 2), "roi": round(profit / staked * 100, 1) if staked else 0.0, "winrate": round(w / total * 100, 1) if total else 0.0}
+
+
+def _ntr_group_summary_text(group_key, tip_date=None):
+    s = _ntr_group_stats(group_key, tip_date)
+    if not s:
+        return ""
+    pe = "🟢" if s["profit"] >= 0 else "🔴"
+    ps = f"+{s['profit']:.2f}" if s["profit"] >= 0 else f"{s['profit']:.2f}"
+    return f"📊 Gruppe heute: <b>{s['w']}W/{s['l']}L</b> · {s['winrate']:.1f}% · {pe}<b>{ps}u</b> · ROI {s['roi']:.1f}%"
+
+
 def run_settlement():
     """
     Hauptfunktion für Check/Settlement Bot.
@@ -17666,17 +17924,30 @@ def run_settlement():
                     _mn = tip.get("match", "")
                     log(f"Settlement DEBUG: match_name={_mn!r}, has_vs={' vs ' in _mn}, date={tip.get('date')!r}")
                     _debug_logged = True
-                # Ergebnis holen
-                result = get_match_result_from_sources(tip)
+                # Player Props/Builder zuerst über player_match_stats auswerten.
+                _market_lower = str(tip.get("market") or "").lower()
+                _special = None
+                result = None
+                if _market_lower in {"advanced_props", "player_prop", "player_props", "prop"} or tip.get("prop_market"):
+                    _special = _ntr_settle_player_tip(tip)
+                elif "builder" in _market_lower or tip.get("builder_legs"):
+                    _special = _ntr_settle_builder_tip(tip)
 
-                if not result:
-                    not_found += 1
-                    continue
-
-                # Tipp auswerten
-                status = check_tip_result(tip, result)
-                if not status:
-                    continue
+                if _special:
+                    status = _special["status"]
+                    result = {
+                        "home_score": "?", "away_score": "?", "ht_home": "?", "ht_away": "?",
+                        "actual_value": _special.get("actual_value"), "builder_legs": _special.get("legs", []),
+                    }
+                else:
+                    result = get_match_result_from_sources(tip)
+                    if not result:
+                        not_found += 1
+                        continue
+                    status = check_tip_result(tip, result)
+                    if not status:
+                        not_found += 1
+                        continue
 
                 if status == "won":
                     won_count += 1
@@ -17684,14 +17955,20 @@ def run_settlement():
                     lost_count += 1
 
                 # Supabase updaten
+                _profit_units = _ntr_profit_units(tip, status)
                 update_data = {
                     "status": status,
-                    "result_home": result.get("home_score"),
-                    "result_away": result.get("away_score"),
-                    "result_ht_home": result.get("ht_home"),
-                    "result_ht_away": result.get("ht_away"),
+                    "result_home": result.get("home_score") if isinstance(result.get("home_score"), int) else None,
+                    "result_away": result.get("away_score") if isinstance(result.get("away_score"), int) else None,
+                    "result_ht_home": result.get("ht_home") if isinstance(result.get("ht_home"), int) else None,
+                    "result_ht_away": result.get("ht_away") if isinstance(result.get("ht_away"), int) else None,
+                    "actual_value": result.get("actual_value"),
+                    "builder_won_legs": _special.get("won_legs") if _special else None,
+                    "profit_units": _profit_units,
+                    "group_key": _ntr_group_key(tip),
                     "settled_at": datetime.now(timezone.utc).isoformat(),
                 }
+                update_data = {k: v for k, v in update_data.items() if v is not None}
 
                 requests.patch(
                     f"{SUPABASE_URL}/rest/v1/tips",
@@ -17741,15 +18018,28 @@ def run_settlement():
                 original_text = tip.get("message_text", "")
 
                 appendix = format_result_appendix(tip, result, status)
-                log(f"   {'✅' if status == 'won' else '❌'} {tip.get('match', '?')} → {status.upper()}: {result.get('home_score')}-{result.get('away_score')}")
+                _gkey = _ntr_group_key(tip)
+                _group_line = _ntr_group_summary_text(_gkey, tip.get("date"))
+                if _group_line:
+                    appendix += "\n" + _group_line
+                if _special and _special.get("legs"):
+                    appendix += "\n<b>Leg-Auswertung:</b>"
+                    for _leg in _special["legs"]:
+                        _em = "✅" if _leg.get("status") == "won" else "❌"
+                        appendix += f"\n{_em} {_leg.get('raw','Prop')} → {_leg.get('actual','?')}"
+                elif _special and _special.get("actual_value") is not None:
+                    appendix += f"\n📈 Tatsächlicher Wert: <b>{_special.get('actual_value')}</b>"
+                log(f"   {'✅' if status == 'won' else '❌'} {tip.get('match', '?')} → {status.upper()}")
 
                 if msg_id and chat_id:
                     try:
                         if original_text:
-                            edit_telegram_message(chat_id, msg_id, original_text + "\n" + appendix)
+                            _edited = original_text + "\n" + appendix
+                            if len(_edited) > 4090:
+                                _edited = original_text[:max(500, 4090-len(appendix)-2)] + "…\n" + appendix
+                            edit_telegram_message(chat_id, msg_id, _edited)
                         else:
-                            # Fallback: kein Original-Text gespeichert (alter Tipp) → vollen Text nutzen
-                            edit_telegram_message(chat_id, msg_id, format_result_text(tip, result, status))
+                            edit_telegram_message(chat_id, msg_id, format_result_text(tip, result, status) + ("\n" + _group_line if _group_line else ""))
                     except Exception:
                         pass
 
@@ -17817,25 +18107,38 @@ def run_settlement():
             except Exception:
                 pass
 
-            # An ALLE Kanäle senden (jeder Kanal kriegt die Auswertung)
+            # Gruppe-für-Gruppe: jeder Kanal erhält ausschließlich seine eigene Bilanz.
             _sent_chats = set()
-            for _grp_key in ["btts", "over25", "combo", "btts_ht", "over15_ht",
-                             "combos", "stats", "hz_live", "late_goals",
-                             "advanced_props"]:
+            for _grp_key in ["btts", "over25", "combo", "btts_ht", "over15_ht", "combos", "stats", "props", "builder", "advanced_props"]:
                 _cid = TELEGRAM_GROUPS.get(_grp_key)
-                if _cid and str(_cid) not in _sent_chats:
-                    try:
-                        send_telegram(msg, _cid)
-                        _sent_chats.add(str(_cid))
-                        log(f"   📊 Auswertung → {_grp_key}")
-                    except Exception as _se:
-                        log(f"   ⚠️ Auswertung {_grp_key}: {str(_se)[:40]}", "WARN")
-            # Fallback: immer mindestens an TELEGRAM_CHAT_ID
-            if not _sent_chats:
+                if not _cid or str(_cid) in _sent_chats:
+                    continue
+                _canonical = "props" if _grp_key == "advanced_props" else _grp_key
+                _gs = _ntr_group_stats(_canonical, today)
+                if not _gs or (_gs["w"] + _gs["l"] + _gs["v"] == 0):
+                    continue
+                _pe = "🟢" if _gs["profit"] >= 0 else "🔴"
+                _ps = f"+{_gs['profit']:.2f}" if _gs["profit"] >= 0 else f"{_gs['profit']:.2f}"
+                _title = {
+                    "btts":"BTTS", "over25":"OVER 2.5", "combo":"BTTS + OVER",
+                    "btts_ht":"BTTS HT", "over15_ht":"OVER 1.5 HT", "combos":"MULTI-COMBOS",
+                    "stats":"STATS / ECKEN / KARTEN", "props":"PLAYER PROPS", "builder":"BET BUILDER",
+                }.get(_canonical, _canonical.upper())
+                _gmsg = (
+                    f"🏆 <b>AUSWERTUNG — {_title}</b>\n"
+                    f"━━━━━━━━━━━━━━━━━━\n"
+                    f"✅ Gewonnen: <b>{_gs['w']}</b>  ❌ Verloren: <b>{_gs['l']}</b>"
+                    + (f"  ↩️ Void: <b>{_gs['v']}</b>" if _gs['v'] else "") + "\n"
+                    f"🎯 Trefferquote: <b>{_gs['winrate']:.1f}%</b>\n"
+                    f"{_pe} Profit: <b>{_ps} Units</b>\n"
+                    f"📊 ROI: <b>{_gs['roi']:.1f}%</b>"
+                )
                 try:
-                    send_telegram(msg, TELEGRAM_CHAT_ID)
-                except Exception:
-                    pass
+                    send_telegram(_gmsg, _cid)
+                    _sent_chats.add(str(_cid))
+                    log(f"   📊 Gruppen-Auswertung → {_grp_key}")
+                except Exception as _se:
+                    log(f"   ⚠️ Auswertung {_grp_key}: {str(_se)[:40]}", "WARN")
 
     except Exception as e:
         log(f"Settlement Fatal: {e}", "ERROR")
@@ -20946,7 +21249,12 @@ def run_pinnacle_props_bot(win_start_utc=None, win_end_utc=None, ch_tz=None, top
                 _either = " 🔀" if leg.get("_is_either") else ""
                 msg += f"{_cat_icons.get(leg['_cat'],'○')} {leg['player_prop']}{_fbref}{_either}\n"
 
-        msg += f"\n💰 @ <b>{b['odds']}</b> · 0.5u ✅"
+        _avg_prob = int(sum(float(l.get("prob", 0) or 0) for l in b["legs"]) / max(1, len(b["legs"])))
+        _risk = "SAFE" if _avg_prob >= 72 and float(b["odds"]) <= 3.5 else "VALUE" if _avg_prob >= 62 else "HIGH ODDS"
+        _nate_score = max(1, min(10, round((_avg_prob - 45) / 5 + (1 if float(b["odds"]) >= 2 else 0))))
+        msg += f"\n💰 @ <b>{b['odds']}</b> · 0.5u"
+        msg += f"\n🧠 <b>NATE READ:</b> {_risk} · Score {_nate_score}/10"
+        msg += "\n<i>Korrelierte Legs nur bei gemeinsamem Match-Script; hohe Quote wird klein gespielt.</i>"
 
         _mid = send_telegram(msg, chat_id=prop_chat)
         sent += 1
@@ -20965,6 +21273,21 @@ def run_pinnacle_props_bot(win_start_utc=None, win_end_utc=None, ch_tz=None, top
                 "probability": int(sum(l["prob"] for l in b["legs"]) / len(b["legs"])),
                 "confidence": 3,
                 "status": "pending",
+                "group_key": "builder",
+                "pick_type": "builder",
+                "builder_id": _builder_tip_id,
+                "builder_total_legs": len(b["legs"]),
+                "builder_legs": [
+                    {
+                        "player": l.get("selection", ""), "selection": l.get("selection", ""),
+                        "player_prop": l.get("player_prop", ""), "market": l.get("player_prop", ""),
+                        "category": l.get("_cat", ""), "line": l.get("line"), "side": l.get("side", "over"),
+                        "odds": l.get("odds"), "prob": l.get("prob"), "match": l.get("_match", b["match"]),
+                        "source": l.get("source", "pinnacle"),
+                    } for l in b["legs"]
+                ],
+                "nate_score": _nate_score,
+                "source": "pinnacle",
                 "telegram_chat_id": str(prop_chat),
                 "telegram_msg_id": _mid,
                 "message_text": msg[:3500],
