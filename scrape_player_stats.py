@@ -40,6 +40,15 @@ Python
 aber die andere habe ich nicht
 Eingefügter Text(46).txt
 Dokument
+Run if [ -n "" ]; then
+  File "/home/runner/work/btts-bot_ki/btts-bot_ki/scrape_player_stats.py", line 2
+    🚀 NETRATTLER Scraper — 2026-07-14
+    ^
+SyntaxError: invalid character '🚀' (U+1F680)
+Error: Process completed with exit code 1.
+
+waru kein test vorher
+
 
 Du hast völlig recht. Der Test hätte genau diesen Fehler erkennen müssen.
 
@@ -156,6 +165,33 @@ Datei aus ZIP extrahiert und kompiliert: ✅
 ZIP enthält nur: scrape_player_stats.py
 
 Ersetze im Repo die kaputte Datei vollständig durch die Datei aus diesem ZIP. 
+
+so und jetzt
+
+Jetzt nur noch:
+
+Im GitHub-Repo die bisherige scrape_player_stats.py vollständig löschen.
+Die Datei aus dem ZIP hochladen.
+Committen.
+NETRATTLER Player Stats + Results erneut starten.
+
+Achte darauf, dass GitHub die Datei wirklich so nennt:
+
+scrape_player_stats.py
+
+Nicht:
+
+scrape_player_stats_FIXED.py
+
+Im nächsten Log darf am Anfang kein SyntaxError mehr kommen. Danach schauen wir nur noch auf:
+
+SofaScore
+FotMob
+StatsBomb
+FBref
+gespeicherte Player-Stat-Rows
+
+Schick danach wieder den kompletten Run-Log.
 
 Bibliothek
 /
