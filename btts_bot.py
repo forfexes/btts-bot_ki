@@ -6342,15 +6342,20 @@ def is_duplicate_tip(match, market, target_date):
 
 def _combo_signature(legs, prefix=""):
     """
-    Erzeugt eine deterministische, kurze Signatur aus den Legs einer Kombi
-    (sortiert nach Match+Markt+Tipp) — identische Kombis ergeben immer
-    dieselbe Signatur, unabhängig vom Run-Zeitpunkt.
+    Deterministische Signatur. Akzeptiert Dictionaries UND Strings.
     """
     import hashlib
-    parts = sorted(
-        f"{l.get('match','?')}|{l.get('market', l.get('_cat',''))}|{l.get('tip', l.get('player_prop',''))}"
-        for l in legs
-    )
+
+    def _part(leg):
+        if isinstance(leg, dict):
+            return (
+                f"{leg.get('match', leg.get('_match', '?'))}|"
+                f"{leg.get('market', leg.get('_cat', ''))}|"
+                f"{leg.get('tip', leg.get('player_prop', leg.get('selection', '')))}"
+            )
+        return str(leg)
+
+    parts = sorted(_part(leg) for leg in (legs or []))
     raw = prefix + "::" + "||".join(parts)
     return hashlib.md5(raw.encode("utf-8")).hexdigest()[:12]
 
@@ -15543,15 +15548,20 @@ def is_duplicate_tip(match, market, target_date):
 
 def _combo_signature(legs, prefix=""):
     """
-    Erzeugt eine deterministische, kurze Signatur aus den Legs einer Kombi
-    (sortiert nach Match+Markt+Tipp) — identische Kombis ergeben immer
-    dieselbe Signatur, unabhängig vom Run-Zeitpunkt.
+    Deterministische Signatur. Akzeptiert Dictionaries UND Strings.
     """
     import hashlib
-    parts = sorted(
-        f"{l.get('match','?')}|{l.get('market', l.get('_cat',''))}|{l.get('tip', l.get('player_prop',''))}"
-        for l in legs
-    )
+
+    def _part(leg):
+        if isinstance(leg, dict):
+            return (
+                f"{leg.get('match', leg.get('_match', '?'))}|"
+                f"{leg.get('market', leg.get('_cat', ''))}|"
+                f"{leg.get('tip', leg.get('player_prop', leg.get('selection', '')))}"
+            )
+        return str(leg)
+
+    parts = sorted(_part(leg) for leg in (legs or []))
     raw = prefix + "::" + "||".join(parts)
     return hashlib.md5(raw.encode("utf-8")).hexdigest()[:12]
 
@@ -20981,8 +20991,12 @@ def run_pinnacle_props_bot(win_start_utc=None, win_end_utc=None, ch_tz=None, top
     valid = []
     _fbref_checked = 0
     _fbref_confirmed = 0
+    _invalid_prop_rows = 0
     for p in props:
-        sel = p["selection"].lower()
+        if not isinstance(p, dict):
+            _invalid_prop_rows += 1
+            continue
+        sel = str(p.get("selection") or "").lower()
         prop_name = p.get("player_prop", "").lower()
         match_name = p.get("match", "")
 
@@ -21047,6 +21061,8 @@ def run_pinnacle_props_bot(win_start_utc=None, win_end_utc=None, ch_tz=None, top
             games=0,
         )
 
+    if _invalid_prop_rows:
+        log(f"   ⚠️ Pinnacle Props: {_invalid_prop_rows} ungültige Rows ignoriert")
     if _fbref_checked > 0:
         log(f"   🔍 FBref Cross-Check: {_fbref_checked} Props mit Stats abgeglichen, {_fbref_confirmed} bestätigt")
 
@@ -21306,6 +21322,12 @@ def run_pinnacle_props_bot(win_start_utc=None, win_end_utc=None, ch_tz=None, top
     if not builders:
         log("🔑 Pinnacle Props: keine Same-Match-Builder aus Pinnacle-Specials")
 
+    # Nur valide Builder-Dictionaries weiterverarbeiten.
+    _invalid_builders = sum(1 for item in builders if not isinstance(item, dict))
+    if _invalid_builders:
+        log(f"   ⚠️ Pinnacle Builder: {_invalid_builders} ungültige Einträge verworfen")
+    builders = [item for item in builders if isinstance(item, dict)]
+
     # Sortierung nach Anstosszeit
     builders.sort(key=lambda x: x.get("_ko") or _dt2.max.replace(tzinfo=timezone.utc))
 
@@ -21341,7 +21363,7 @@ def run_pinnacle_props_bot(win_start_utc=None, win_end_utc=None, ch_tz=None, top
             if _mm_odds < 1.80:
                 continue
 
-            _sig = _combo_signature([l.get("selection","") for l in _mm_legs], prefix="mm")
+            _sig = _combo_signature(_mm_legs, prefix="mm")
             _dup_id = f"mm_builder_{_bdate}_{_sig}".replace(" ", "_")
             if is_duplicate_combo(_dup_id, _bdate):
                 continue
@@ -23338,7 +23360,12 @@ def main():
                 fixtures_cache=_fixtures_cache,
             )
         except Exception as _ppe:
-            log(f"🔑 Pinnacle Props übersprungen: {str(_ppe)[:60]}", "WARN")
+            log(
+                f"🔑 Pinnacle Props Error: {type(_ppe).__name__}: {str(_ppe)[:140]}",
+                "WARN",
+            )
+            if env("DEBUG_PROP_TRACEBACK", "false").lower() in ["1", "true", "yes"]:
+                traceback.print_exc()
 
     # 🆕 NETRATTLER BUILDER ENGINE V20 — Shot Ladders, SOT Trios, Corner Fusion
     try:
@@ -23385,9 +23412,32 @@ def main():
                         "away_odds": _fx.get("away_odds", 0),
                     })
 
+        _pool_categories = {}
+        _pool_matches = {}
+        for _row in _NTR_BUILDER_PROP_POOL:
+            if not isinstance(_row, dict):
+                continue
+            _cat = str(_row.get("category") or "other")
+            _mat = str(_row.get("match") or "?")
+            _pool_categories[_cat] = _pool_categories.get(_cat, 0) + 1
+            _pool_matches[_mat] = _pool_matches.get(_mat, 0) + 1
+
         log(
             f"   🏗️ Builder-Pool: {len(_builder_prop_pool)} Legs "
             f"({len(_NTR_BUILDER_PROP_POOL)} echte Player-Props)"
+        )
+        log(
+            "   🏗️ Player-Prop Kategorien: "
+            + ", ".join(
+                f"{k}={v}" for k, v in sorted(
+                    _pool_categories.items(), key=lambda item: item[1], reverse=True
+                )[:12]
+            )
+        )
+        log(
+            f"   🏗️ Matches mit echten Props: {len(_pool_matches)} · "
+            f"≥2 Legs: {sum(1 for v in _pool_matches.values() if v >= 2)} · "
+            f"≥3 Legs: {sum(1 for v in _pool_matches.values() if v >= 3)}"
         )
 
         if len(_builder_prop_pool) >= 3:
