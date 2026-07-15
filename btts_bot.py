@@ -19664,6 +19664,127 @@ class AdvancedPropsManager:
 # Globale Instanz
 _advanced_props_manager = AdvancedPropsManager()
 
+# Gemeinsamer Pool für die aktive Prop- und Builder-Engine.
+# Enthält nur normalisierte Legs und wird pro Bot-Run geleert.
+_NTR_BUILDER_PROP_POOL = []
+
+
+def _ntr_market_line(text, default=1.0):
+    raw = str(text or "")
+    m = re.search(r"(\d+(?:\.\d+)?)\s*\+", raw)
+    if m:
+        return float(m.group(1))
+    m = re.search(r"over\s*(\d+(?:\.\d+)?)", raw, re.I)
+    if m:
+        return float(int(float(m.group(1))) + 1)
+    return float(default)
+
+
+def _ntr_prop_category(text):
+    low = str(text or "").lower()
+    if "shots on target from outside" in low or "shot on target from outside" in low:
+        return "sot_outside_box"
+    if "outside the box" in low and "shot" in low:
+        return "shots_outside_box"
+    if "shots on target" in low or "shot on target" in low:
+        return "sot"
+    if "shot" in low:
+        return "shots"
+    if "tackles received" in low or "tackled" in low:
+        return "tackles_received"
+    if "tackles committed" in low or "tackles made" in low or "player tackles" in low:
+        return "tackles_committed"
+    if "tackle" in low:
+        return "tackles_committed"
+    if "fouls won" in low or "to be fouled" in low:
+        return "fouls_won"
+    if "foul" in low:
+        return "fouls"
+    if "booked" in low or "receive a card" in low or "carded" in low:
+        return "yellow_cards"
+    if "first goalscorer" in low or "first goal scorer" in low:
+        return "first_scorer"
+    if "last goalscorer" in low or "last goal scorer" in low:
+        return "last_scorer"
+    if "to score" in low or "anytime goalscorer" in low:
+        return "score"
+    if "assist" in low:
+        return "assist"
+    if "to qualify" in low or "qualify" in low:
+        return "result"
+    if "both teams to receive a card" in low:
+        return "team_cards"
+    if "both teams to score" in low:
+        return "btts"
+    if "corner" in low:
+        return "team_corners"
+    if "save" in low:
+        return "saves"
+    if "offside" in low:
+        return "offsides"
+    return "other"
+
+
+def _ntr_extract_player(description, selection=""):
+    generic = {"yes", "no", "over", "under", "home", "away"}
+    selected = str(selection or "").strip()
+    if selected and selected.lower() not in generic and len(selected) > 2:
+        return selected
+    desc = str(description or "").strip()
+    for sep in (":", " - ", " to score", " to be booked", " to assist"):
+        if sep in desc.lower():
+            idx = desc.lower().find(sep)
+            candidate = desc[:idx].strip()
+            if candidate:
+                return candidate
+    return selected or desc[:100]
+
+
+def _ntr_collect_prop(player, team, match_name, league, market, category=None,
+                      line=None, odds=0, probability=0, source="unknown",
+                      kickoff="", hit_rate=0, games=0):
+    category = category or _ntr_prop_category(market)
+    if category == "other" or not match_name or " vs " not in match_name:
+        return
+    row = {
+        "player": str(player or market)[:100],
+        "team": str(team or "")[:100],
+        "match": str(match_name)[:180],
+        "league": str(league or "")[:100],
+        "market": str(market)[:160],
+        "category": category,
+        "line": float(line if line is not None else _ntr_market_line(market, 1)),
+        "odds": float(odds or 0),
+        "probability": float(probability or 0),
+        "source": str(source or "unknown"),
+        "kickoff": str(kickoff or ""),
+        "hit_rate": float(hit_rate or 0),
+        "games": int(games or 0),
+    }
+    key = (
+        normalize_team_name(row["match"]),
+        normalize_team_name(row["player"]),
+        row["category"],
+        row["line"],
+    )
+    for old in _NTR_BUILDER_PROP_POOL:
+        old_key = (
+            normalize_team_name(old.get("match")),
+            normalize_team_name(old.get("player")),
+            old.get("category"),
+            float(old.get("line", 0)),
+        )
+        if old_key == key:
+            # Prefer real odds and stronger probability.
+            if row["odds"] > 1:
+                old["odds"] = row["odds"]
+                old["source"] = row["source"]
+            old["probability"] = max(float(old.get("probability", 0)), row["probability"])
+            old["hit_rate"] = max(float(old.get("hit_rate", 0)), row["hit_rate"])
+            old["games"] = max(int(old.get("games", 0)), row["games"])
+            return
+    _NTR_BUILDER_PROP_POOL.append(row)
+
 
 def run_advanced_props_bot(active_leagues: list, fixtures_cache: dict, target_date) -> None:
     """
@@ -19733,6 +19854,24 @@ def run_advanced_props_bot(active_leagues: list, fixtures_cache: dict, target_da
             "market": market, "market_type": mtype,
             "stat_per90": stat_val, "score": score,
         })
+        _category = {
+            "shots": "sot" if "target" in str(market).lower() else "shots",
+            "foul": "fouls",
+            "foul_won": "fouls_won",
+            "booking": "yellow_cards",
+            "tackles": "tackles_committed",
+            "tackles_received": "tackles_received",
+        }.get(mtype, _ntr_prop_category(market))
+        _ntr_collect_prop(
+            player, team, match_name, league, market,
+            category=_category,
+            line=_ntr_market_line(market, 1),
+            probability=min(90, max(35, 45 + float(score or 0) * 5)),
+            source="advanced_props",
+            kickoff=kickoff,
+            hit_rate=min(95, max(0, float(stat_val or 0) * 30)),
+            games=10,
+        )
 
     for league in active_leagues:
         fixtures = fixtures_cache.get(league, [])
@@ -20677,17 +20816,26 @@ def fetch_pinnacle_player_props() -> List[Dict]:
 # Prop-Typen die Skip werden (tournament-weite Specials, nicht match-gebunden)
 _SKIP_PROP_KEYWORDS = [
     "head to head", "most goals", "most assists", "top scorer", "golden boot",
-    "golden ball", "tournament", "group stage", "advance", "qualify",
+    "golden ball", "tournament winner", "group winner",
 ]
 
 # Leg-Kategorien für Bet Builder
 _LEG_CATEGORY = {
-    "score": ["to score", "anytime goalscorer", "first goalscorer", "last goalscorer", "score or assist"],
+    "first_scorer": ["first goalscorer", "first goal scorer"],
+    "last_scorer": ["last goalscorer", "last goal scorer"],
+    "score": ["to score", "anytime goalscorer", "score or assist"],
     "assist": ["to assist", "score or assist"],
     "booked": ["to be booked", "receive a card", "be carded"],
-    "shots": ["shots on target", "shots on goal"],
-    "fouls": ["fouls won", "to be fouled", "foul"],
-    "tackles": ["tackle", "tackles won"],
+    "sot_outside_box": ["shots on target from outside", "shot on target from outside"],
+    "shots_outside_box": ["shots from outside", "shot from outside"],
+    "sot": ["shots on target", "shot on target"],
+    "shots": ["shots", "shots on goal"],
+    "fouls_won": ["fouls won", "to be fouled"],
+    "fouls": ["fouls committed", "foul committed", "foul"],
+    "tackles_received": ["tackles received", "to be tackled"],
+    "tackles_committed": ["tackles committed", "tackles made", "player tackles", "tackle"],
+    "team_cards": ["both teams to receive a card"],
+    "result": ["to qualify", "qualify"],
     "corners": ["corners", "corner kicks"],
     "saves": ["saves", "goalkeeper saves"],
     "offsides": ["offside"],
@@ -20881,6 +21029,23 @@ def run_pinnacle_props_bot(win_start_utc=None, win_end_utc=None, ch_tz=None, top
         p["_cat"] = _get_leg_category(prop_name)
         p["_is_either"] = _is_either_market(prop_name)
         valid.append(p)
+
+        _desc = p.get("player_prop", "")
+        _player = _ntr_extract_player(_desc, p.get("selection", ""))
+        _category = {
+            "booked": "yellow_cards",
+            "tackles": "tackles_committed",
+        }.get(p["_cat"], p["_cat"])
+        _ntr_collect_prop(
+            _player, "", p.get("match", ""), p.get("league", ""), _desc,
+            category=_category,
+            line=_ntr_market_line(_desc, 1),
+            odds=p.get("odds", 0),
+            probability=p.get("prob", 0),
+            source="pinnacle",
+            kickoff=p.get("starts", ""),
+            games=0,
+        )
 
     if _fbref_checked > 0:
         log(f"   🔍 FBref Cross-Check: {_fbref_checked} Props mit Stats abgeglichen, {_fbref_confirmed} bestätigt")
@@ -21138,8 +21303,8 @@ def run_pinnacle_props_bot(win_start_utc=None, win_end_utc=None, ch_tz=None, top
                     _value_sent += 1
                     log(f"   🎯 Value Alert: {player} {value_info['market']} +{value_info['edge_pct']}%")
 
-    log("🔑 Pinnacle Props: keine Bet Builder zusammengestellt")
-    return 0
+    if not builders:
+        log("🔑 Pinnacle Props: keine Same-Match-Builder aus Pinnacle-Specials")
 
     # Sortierung nach Anstosszeit
     builders.sort(key=lambda x: x.get("_ko") or _dt2.max.replace(tzinfo=timezone.utc))
@@ -23138,6 +23303,9 @@ def main():
         if _injected:
             log(f"🎰 {_injected} Pinnacle-Matches als Fixtures für Props/Corners injiziert")
 
+    # Builder-Pool pro Run zurücksetzen, damit keine alten Legs erneut erscheinen.
+    _NTR_BUILDER_PROP_POOL.clear()
+
     # 🔵⚽ Ecken + Scorer Bots
     if env("ENABLE_CORNERS_SCORER", "true").lower() in ["1", "true", "yes"]:
         run_corners_and_scorer_bots(
@@ -23200,6 +23368,28 @@ def main():
                     "games": 10,
                 })
 
+        # Echte Player-Props aus Advanced Props + Pinnacle hinzufügen.
+        _builder_prop_pool.extend(_NTR_BUILDER_PROP_POOL)
+
+        # Match-Kontexte für Same-Match-/Underdog-/Narrative-Builder.
+        _builder_contexts = []
+        for _lg, _fixs in (_fixtures_cache or {}).items():
+            for _fx in (_fixs or []):
+                _home = _fx.get("home", "")
+                _away = _fx.get("away", "")
+                if _home and _away:
+                    _builder_contexts.append({
+                        "match": f"{_home} vs {_away}",
+                        "league": _lg,
+                        "home_odds": _fx.get("home_odds", 0),
+                        "away_odds": _fx.get("away_odds", 0),
+                    })
+
+        log(
+            f"   🏗️ Builder-Pool: {len(_builder_prop_pool)} Legs "
+            f"({len(_NTR_BUILDER_PROP_POOL)} echte Player-Props)"
+        )
+
         if len(_builder_prop_pool) >= 3:
             _builder_chat = TELEGRAM_GROUPS.get("advanced_props") or TELEGRAM_GROUPS.get("props")
             if _builder_chat:
@@ -23211,6 +23401,7 @@ def main():
                     raw_props=_builder_prop_pool,
                     send_message=_send_builder,
                     match_date=str(target_date),
+                    match_contexts=_builder_contexts,
                     supabase_url=SUPABASE_URL,
                     supabase_key=SUPABASE_KEY,
                     logger=lambda m: log(f"   🏗️ {m}"),
