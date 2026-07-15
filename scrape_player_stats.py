@@ -9,7 +9,8 @@ Täglich nach Spielende:
 Läuft täglich 02:00 UTC via scrape_player_stats.yml
 """
 
-import argparse, json, os, re, time
+import argparse, json, os, re, time, hashlib
+from collections import defaultdict
 from datetime import datetime, timezone, timedelta
 from typing import Any, Dict, List, Optional
 import requests
@@ -26,107 +27,169 @@ HEADERS = {
 }
 
 
+USE_SOFASCORE = os.environ.get("USE_SOFASCORE", "true").lower() in ("1", "true", "yes", "on")
+USE_FOTMOB = os.environ.get("USE_FOTMOB", "true").lower() in ("1", "true", "yes", "on")
+USE_STATSBOMB = os.environ.get("USE_STATSBOMB", "true").lower() in ("1", "true", "yes", "on")
+USE_FBREF = os.environ.get("USE_FBREF", "true").lower() in ("1", "true", "yes", "on")
+USE_SOCCERDATA = os.environ.get("USE_SOCCERDATA", "true").lower() in ("1", "true", "yes", "on")
+SOURCE_MAX_EVENTS = int(os.environ.get("SOURCE_MAX_EVENTS", "80"))
+SOURCE_SLEEP = float(os.environ.get("SOURCE_SLEEP", "0.35"))
+
+
+def _playwright_get(url: str, timeout_ms: int = 60000) -> Optional[str]:
+    """Letzter Browser-Fallback für blockierte HTML-/JSON-Endpunkte."""
+    try:
+        from playwright.sync_api import sync_playwright
+        with sync_playwright() as p:
+            browser = p.chromium.launch(
+                headless=True,
+                args=["--no-sandbox", "--disable-dev-shm-usage"],
+            )
+            page = browser.new_page(
+                user_agent=HEADERS["User-Agent"],
+                extra_http_headers={
+                    "Accept": HEADERS["Accept"],
+                    "Accept-Language": "en-US,en;q=0.9",
+                },
+            )
+            response = page.goto(url, wait_until="domcontentloaded", timeout=timeout_ms)
+            page.wait_for_timeout(2500)
+            body = page.locator("body").inner_text(timeout=10000)
+            html = page.content()
+            status = response.status if response else 0
+            browser.close()
+            if status and status >= 400:
+                return None
+            # JSON-Endpunkte werden im Browser meist als Body-Text angezeigt.
+            stripped = body.strip()
+            if stripped.startswith(("{", "[")):
+                return stripped
+            return html
+    except Exception as exc:
+        print(f"  ⚠️  Playwright Fallback: {str(exc)[:120]}")
+        return None
+
+
+def _fetch_text(url: str, *, params: Optional[dict] = None,
+                timeout: int = 20, allow_playwright: bool = True) -> Optional[str]:
+    """requests → cloudscraper → Playwright."""
+    try:
+        r = requests.get(url, params=params, headers=HEADERS, timeout=timeout)
+        if r.ok and r.text:
+            return r.text
+        first_status = r.status_code
+    except Exception:
+        first_status = 0
+
+    try:
+        import cloudscraper
+        scraper = cloudscraper.create_scraper(
+            browser={"browser": "chrome", "platform": "windows", "mobile": False}
+        )
+        r = scraper.get(url, params=params, headers=HEADERS, timeout=timeout)
+        if r.ok and r.text:
+            return r.text
+        second_status = r.status_code
+    except Exception:
+        second_status = 0
+
+    if allow_playwright:
+        full_url = requests.Request("GET", url, params=params).prepare().url
+        value = _playwright_get(full_url)
+        if value:
+            return value
+
+    print(f"  ⚠️  Quelle nicht erreichbar: {url[:70]} ({first_status}/{second_status})")
+    return None
+
+
+def _fetch_json(url: str, *, params: Optional[dict] = None,
+                timeout: int = 20, allow_playwright: bool = True) -> Optional[Any]:
+    raw = _fetch_text(
+        url, params=params, timeout=timeout, allow_playwright=allow_playwright
+    )
+    if not raw:
+        return None
+    try:
+        return json.loads(raw)
+    except Exception:
+        # Browser-HTML kann JSON in <pre> enthalten.
+        match = re.search(r"<pre[^>]*>(.*?)</pre>", raw, re.I | re.S)
+        if match:
+            import html as _html
+            try:
+                return json.loads(_html.unescape(match.group(1)))
+            except Exception:
+                return None
+        return None
+
+
 # ── Supabase ──────────────────────────────────────────────────────────────────
 
 def _dedupe_rows(rows: list, conflict: str = None) -> list:
-    """Entfernt interne Batch-Duplikate anhand der Konfliktspalten."""
     if not rows:
         return []
-
-    valid_rows = [row for row in rows if isinstance(row, dict)]
+    valid = [row for row in rows if isinstance(row, dict)]
     if not conflict:
-        return valid_rows
+        return valid
 
-    keys = [key.strip() for key in conflict.split(",") if key.strip()]
-    unique = {}
-    passthrough = []
-
-    for row in valid_rows:
+    keys = [x.strip() for x in conflict.split(",") if x.strip()]
+    unique, passthrough = {}, []
+    for row in valid:
         values = tuple(str(row.get(key) or "").strip() for key in keys)
-
-        # Unvollständige Schlüssel nicht versehentlich zusammenführen.
         if any(not value for value in values):
             passthrough.append(row)
-            continue
-
-        unique[values] = row
-
+        else:
+            unique[values] = row
     return list(unique.values()) + passthrough
 
 
 def _sb_post(table: str, rows: list, conflict: str = None) -> int:
-    """
-    Supabase Batch-Upsert mit Deduplizierung und Einzelrow-Fallback.
-    """
+    """Batch-Upsert mit Deduplizierung und Einzelrow-Fallback."""
     if not rows or not SUPABASE_URL or not SUPABASE_KEY:
         return 0
 
     clean_rows = _dedupe_rows(rows, conflict)
-    if not clean_rows:
-        return 0
-
     headers = {
         "apikey": SUPABASE_KEY,
         "Authorization": f"Bearer {SUPABASE_KEY}",
         "Content-Type": "application/json",
         "Prefer": "resolution=merge-duplicates,return=minimal",
     }
-
-    params = {}
-    if conflict:
-        params["on_conflict"] = conflict
-
+    params = {"on_conflict": conflict} if conflict else {}
     endpoint = f"{SUPABASE_URL.rstrip('/')}/rest/v1/{table}"
     total = 0
 
     for i in range(0, len(clean_rows), 500):
         chunk = clean_rows[i:i + 500]
-
         try:
-            response = requests.post(
-                endpoint,
-                headers=headers,
-                params=params,
-                json=chunk,
-                timeout=90,
+            r = requests.post(
+                endpoint, headers=headers, params=params, json=chunk, timeout=90
             )
         except requests.RequestException as exc:
-            print(f"  ⚠️  Supabase {table} Upload-Fehler: {exc}")
+            print(f"  ⚠️  Supabase {table}: {exc}")
             continue
 
-        if response.ok:
+        if r.ok:
             total += len(chunk)
             continue
 
-        print(
-            f"  ⚠️  Supabase {table} {response.status_code}: "
-            f"{response.text[:300]}"
-        )
-
-        # Einzelrow-Fallback: eine fehlerhafte Row blockiert nicht den ganzen Batch.
+        print(f"  ⚠️  Supabase {table} {r.status_code}: {r.text[:300]}")
         for row in chunk:
             try:
-                single = requests.post(
-                    endpoint,
-                    headers=headers,
-                    params=params,
-                    json=[row],
-                    timeout=30,
+                one = requests.post(
+                    endpoint, headers=headers, params=params, json=[row], timeout=30
                 )
-            except requests.RequestException as exc:
-                print(f"     ❌ Einzel-Upload Fehler: {exc}")
+                if one.ok:
+                    total += 1
+                else:
+                    print(
+                        f"     ❌ {row.get('source')} / {row.get('event_id')} / "
+                        f"{row.get('player_id')} / {row.get('stat_name')}: "
+                        f"{one.status_code} {one.text[:140]}"
+                    )
+            except requests.RequestException:
                 continue
-
-            if single.ok:
-                total += 1
-            else:
-                print(
-                    f"     ❌ Row fehlgeschlagen "
-                    f"{row.get('source')} / {row.get('event_id')} / "
-                    f"{row.get('player_id')} / {row.get('stat_name')}: "
-                    f"{single.status_code} {single.text[:180]}"
-                )
-
     return total
 
 
@@ -404,62 +467,379 @@ def _make_stat_row(source, event_id, player_id, player_name, stat_name, stat_val
 
 
 def scrape_statsbomb_league(league_name: str) -> List[Dict]:
-    """StatsBomb Open Data — immer erreichbar via GitHub raw."""
+    """
+    StatsBomb Open Data. Aggregiert Ereignisse zuerst pro Spieler/Spiel.
+    Dadurch wird aus 5 Schuss-Events wirklich stat_value=5 statt fünf kollidierenden Rows.
+    """
     comp = _SB_LEAGUE_MAP.get(league_name)
     if not comp:
         return []
+
     comp_id, season_id = comp
     rows = []
-    try:
-        r = requests.get(f"{_SB_BASE}/matches/{comp_id}/{season_id}.json", timeout=10)
-        if not r.ok:
-            return []
-        matches = r.json()[-5:]  # letzte 5 Spiele
-        for match in matches:
-            mid = match.get("match_id")
-            home = match.get("home_team", {}).get("home_team_name", "")
-            away = match.get("away_team", {}).get("away_team_name", "")
-            mdate = match.get("match_date", "")
-            try:
-                re2 = requests.get(f"{_SB_BASE}/events/{mid}.json", timeout=10)
-                if not re2.ok:
-                    continue
-                for ev in re2.json():
-                    ev_type = (ev.get("type") or {}).get("name", "")
-                    player = (ev.get("player") or {}).get("name", "")
-                    pid = (ev.get("player") or {}).get("id", "")
-                    team = (ev.get("team") or {}).get("name", "")
-                    if not player:
-                        continue
-                    if ev_type == "Shot":
-                        outcome = (ev.get("shot") or {}).get("outcome", {}).get("name", "")
-                        if outcome in ("Goal", "Saved", "Saved To Post"):
-                            rows.append(_make_stat_row("statsbomb", mid, pid, player, "shotsOnTarget", 1,
-                                                        team=team, league=league_name, home_team=home, away_team=away, match_date=mdate))
-                        if outcome == "Goal":
-                            rows.append(_make_stat_row("statsbomb", mid, pid, player, "goals", 1,
-                                                        team=team, league=league_name, home_team=home, away_team=away, match_date=mdate))
-                        rows.append(_make_stat_row("statsbomb", mid, pid, player, "totalShots", 1,
-                                                    team=team, league=league_name, home_team=home, away_team=away, match_date=mdate))
-                    elif ev_type == "Foul Committed":
-                        rows.append(_make_stat_row("statsbomb", mid, pid, player, "foulsCommitted", 1,
-                                                    team=team, league=league_name, home_team=home, away_team=away, match_date=mdate))
-                    elif ev_type == "Bad Behaviour":
-                        card = (ev.get("bad_behaviour") or {}).get("card", {}).get("name", "")
-                        if "Yellow" in card:
-                            rows.append(_make_stat_row("statsbomb", mid, pid, player, "yellowCards", 1,
-                                                        team=team, league=league_name, home_team=home, away_team=away, match_date=mdate))
-                    elif ev_type == "Pass":
-                        if (ev.get("pass") or {}).get("goal_assist"):
-                            rows.append(_make_stat_row("statsbomb", mid, pid, player, "goalAssist", 1,
-                                                        team=team, league=league_name, home_team=home, away_team=away, match_date=mdate))
-                time.sleep(1)
-            except Exception:
+    matches = _fetch_json(
+        f"{_SB_BASE}/matches/{comp_id}/{season_id}.json",
+        allow_playwright=False,
+    )
+    if not isinstance(matches, list):
+        return []
+
+    for match in matches[-8:]:
+        mid = match.get("match_id")
+        home = (match.get("home_team") or {}).get("home_team_name", "")
+        away = (match.get("away_team") or {}).get("away_team_name", "")
+        mdate = match.get("match_date", "")
+        events = _fetch_json(f"{_SB_BASE}/events/{mid}.json", allow_playwright=False)
+        if not isinstance(events, list):
+            continue
+
+        totals = defaultdict(lambda: defaultdict(float))
+        meta = {}
+
+        for ev in events:
+            player_obj = ev.get("player") or {}
+            player = player_obj.get("name", "")
+            pid = player_obj.get("id", "")
+            team = (ev.get("team") or {}).get("name", "")
+            if not player:
                 continue
-    except Exception as e:
-        print(f"  ⚠️  StatsBomb {league_name}: {e}")
+
+            key = (str(pid or player), player)
+            meta[key] = team
+            ev_type = (ev.get("type") or {}).get("name", "")
+
+            if ev_type == "Shot":
+                totals[key]["totalShots"] += 1
+                shot = ev.get("shot") or {}
+                outcome = (shot.get("outcome") or {}).get("name", "")
+                totals[key]["xg"] += float(shot.get("statsbomb_xg") or 0)
+                if outcome in ("Goal", "Saved", "Saved To Post"):
+                    totals[key]["shotsOnTarget"] += 1
+                if outcome == "Goal":
+                    totals[key]["goals"] += 1
+            elif ev_type == "Pass":
+                totals[key]["passes"] += 1
+                p = ev.get("pass") or {}
+                if p.get("goal_assist"):
+                    totals[key]["goalAssist"] += 1
+                if p.get("shot_assist"):
+                    totals[key]["keyPasses"] += 1
+            elif ev_type == "Foul Committed":
+                totals[key]["foulsCommitted"] += 1
+                card = ((ev.get("foul_committed") or {}).get("card") or {}).get("name", "")
+                if "Yellow" in card:
+                    totals[key]["yellowCards"] += 1
+                if "Red" in card:
+                    totals[key]["redCards"] += 1
+            elif ev_type == "Foul Won":
+                totals[key]["foulsWon"] += 1
+            elif ev_type in ("Duel", "Ball Recovery"):
+                totals[key]["duels"] += 1
+            elif ev_type == "Interception":
+                totals[key]["interceptions"] += 1
+            elif ev_type == "Clearance":
+                totals[key]["clearances"] += 1
+            elif ev_type == "Offside":
+                totals[key]["offsides"] += 1
+            elif ev_type == "Goal Keeper":
+                gk_type = ((ev.get("goalkeeper") or {}).get("type") or {}).get("name", "")
+                if gk_type in ("Shot Saved", "Shot Saved To Post", "Penalty Saved"):
+                    totals[key]["saves"] += 1
+            elif ev_type == "Bad Behaviour":
+                card = ((ev.get("bad_behaviour") or {}).get("card") or {}).get("name", "")
+                if "Yellow" in card:
+                    totals[key]["yellowCards"] += 1
+                if "Red" in card:
+                    totals[key]["redCards"] += 1
+
+        for (pid, player), stat_map in totals.items():
+            for stat_name, stat_value in stat_map.items():
+                rows.append(_make_stat_row(
+                    "statsbomb", mid, pid, player, stat_name, stat_value,
+                    team=meta.get((pid, player), ""), league=league_name,
+                    home_team=home, away_team=away, match_date=mdate,
+                ))
+        time.sleep(SOURCE_SLEEP)
+
     return rows
 
+
+
+_STAT_ALIASES = {
+    "minutesPlayed": "minutes",
+    "minutes": "minutes",
+    "totalShots": "totalShots",
+    "shots": "totalShots",
+    "shotsOnTarget": "shotsOnTarget",
+    "goals": "goals",
+    "goalAssist": "goalAssist",
+    "assists": "goalAssist",
+    "accuratePass": "passes",
+    "totalPass": "passes",
+    "passes": "passes",
+    "tackles": "tackles",
+    "totalTackle": "tackles",
+    "interceptions": "interceptions",
+    "clearance": "clearances",
+    "clearances": "clearances",
+    "fouls": "foulsCommitted",
+    "foulsCommitted": "foulsCommitted",
+    "wasFouled": "foulsWon",
+    "foulsWon": "foulsWon",
+    "yellowCards": "yellowCards",
+    "yellowCard": "yellowCards",
+    "redCards": "redCards",
+    "redCard": "redCards",
+    "saves": "saves",
+    "keeperSaves": "saves",
+    "offsides": "offsides",
+    "keyPass": "keyPasses",
+    "keyPasses": "keyPasses",
+    "duelWon": "duelsWon",
+    "duelsWon": "duelsWon",
+    "totalDuel": "duels",
+    "duels": "duels",
+    "touches": "touches",
+    "xG": "xg",
+    "expectedGoals": "xg",
+    "xA": "xa",
+    "expectedAssists": "xa",
+}
+
+
+def _numeric(value: Any) -> Optional[float]:
+    if isinstance(value, bool) or value is None:
+        return None
+    if isinstance(value, (int, float)):
+        return float(value)
+    raw = str(value).strip().replace("%", "")
+    if "/" in raw:
+        raw = raw.split("/", 1)[0]
+    try:
+        return float(raw)
+    except Exception:
+        return None
+
+
+def _stats_to_rows(source: str, event_id: Any, player: dict, stats: dict,
+                   *, team: str, league: str, home: str, away: str,
+                   match_date: str) -> List[Dict]:
+    player_id = player.get("id") or player.get("playerId") or player.get("uid")
+    player_name = (
+        player.get("name") or player.get("shortName") or
+        player.get("displayName") or "Unknown"
+    )
+    result = []
+    for raw_name, value in (stats or {}).items():
+        stat_name = _STAT_ALIASES.get(str(raw_name))
+        stat_value = _numeric(value)
+        if not stat_name or stat_value is None:
+            continue
+        result.append(_make_stat_row(
+            source, event_id, player_id or player_name, player_name,
+            stat_name, stat_value, team=team, league=league,
+            home_team=home, away_team=away, match_date=match_date,
+        ))
+    return result
+
+
+def scrape_sofascore_date(date_str: str) -> List[Dict]:
+    """SofaScore Tagesereignisse + fertige Lineup-Spielerstatistiken."""
+    if not USE_SOFASCORE:
+        return []
+
+    data = _fetch_json(
+        f"https://www.sofascore.com/api/v1/sport/football/scheduled-events/{date_str}"
+    )
+    events = data.get("events", []) if isinstance(data, dict) else []
+    rows = []
+
+    finished = [
+        ev for ev in events
+        if str((ev.get("status") or {}).get("type", "")).lower()
+        in ("finished", "afterpenalties", "afterextratime")
+    ][:SOURCE_MAX_EVENTS]
+
+    for ev in finished:
+        event_id = ev.get("id")
+        detail = _fetch_json(f"https://www.sofascore.com/api/v1/event/{event_id}/lineups")
+        if not isinstance(detail, dict):
+            continue
+
+        home = (ev.get("homeTeam") or {}).get("name", "")
+        away = (ev.get("awayTeam") or {}).get("name", "")
+        tournament = ((ev.get("tournament") or {}).get("uniqueTournament") or {}).get("name", "")
+        ts = ev.get("startTimestamp")
+        mdate = datetime.fromtimestamp(ts, tz=timezone.utc).isoformat() if ts else date_str
+
+        for side, team_name in (("home", home), ("away", away)):
+            side_data = detail.get(side) or {}
+            players = side_data.get("players") or []
+            for entry in players:
+                player = entry.get("player") or {}
+                stats = entry.get("statistics") or {}
+                rows.extend(_stats_to_rows(
+                    "sofascore", event_id, player, stats, team=team_name,
+                    league=tournament, home=home, away=away, match_date=mdate,
+                ))
+        time.sleep(SOURCE_SLEEP)
+
+    print(f"  ✅ SofaScore: {len(rows)} Player-Stat-Rows aus {len(finished)} Spielen")
+    return rows
+
+
+def _walk_fotmob_players(node: Any):
+    """Findet rekursiv FotMob-Spielerobjekte mit eingebetteten stats."""
+    if isinstance(node, dict):
+        if (
+            isinstance(node.get("stats"), dict)
+            and (node.get("id") or node.get("playerId"))
+            and (node.get("name") or node.get("displayName"))
+        ):
+            yield node
+        for value in node.values():
+            yield from _walk_fotmob_players(value)
+    elif isinstance(node, list):
+        for value in node:
+            yield from _walk_fotmob_players(value)
+
+
+def scrape_fotmob_date(date_str: str) -> List[Dict]:
+    """FotMob Tagesliste + MatchDetails; JSON, danach Browser-Fallback."""
+    if not USE_FOTMOB:
+        return []
+
+    compact = date_str.replace("-", "")
+    data = _fetch_json("https://www.fotmob.com/api/matches", params={"date": compact})
+    leagues = data.get("leagues", []) if isinstance(data, dict) else []
+    matches = []
+    for league in leagues:
+        league_name = league.get("name", "")
+        for match in league.get("matches") or []:
+            status = str((match.get("status") or {}).get("finished", "")).lower()
+            if status in ("true", "1") or match.get("status", {}).get("finished") is True:
+                matches.append((league_name, match))
+    matches = matches[:SOURCE_MAX_EVENTS]
+
+    rows = []
+    for league_name, match in matches:
+        match_id = match.get("id")
+        detail = _fetch_json(
+            "https://www.fotmob.com/api/matchDetails",
+            params={"matchId": match_id},
+        )
+        if not isinstance(detail, dict):
+            continue
+
+        general = detail.get("general") or {}
+        home = ((general.get("homeTeam") or {}).get("name")
+                or (match.get("home") or {}).get("name") or "")
+        away = ((general.get("awayTeam") or {}).get("name")
+                or (match.get("away") or {}).get("name") or "")
+
+        seen = set()
+        for obj in _walk_fotmob_players(detail.get("content") or detail):
+            player = {
+                "id": obj.get("id") or obj.get("playerId"),
+                "name": obj.get("name") or obj.get("displayName"),
+            }
+            player_key = str(player["id"])
+            stats = obj.get("stats") or {}
+            team_name = obj.get("teamName") or obj.get("team") or ""
+            dedupe_key = (player_key, json.dumps(stats, sort_keys=True, default=str))
+            if dedupe_key in seen:
+                continue
+            seen.add(dedupe_key)
+            rows.extend(_stats_to_rows(
+                "fotmob", match_id, player, stats, team=str(team_name),
+                league=league_name, home=home, away=away, match_date=date_str,
+            ))
+        time.sleep(SOURCE_SLEEP)
+
+    print(f"  ✅ FotMob: {len(rows)} Player-Stat-Rows aus {len(matches)} Spielen")
+    return rows
+
+
+def scrape_soccerdata_fallback(date_str: str) -> List[Dict]:
+    """
+    Optionaler Open-Source-Fallback. Nutzt soccerdata/Understat für Top-5-Ligen.
+    Nur Daten des gewünschten Datums werden übernommen.
+    """
+    if not USE_SOCCERDATA:
+        return []
+    try:
+        import soccerdata as sd
+    except Exception:
+        print("  ℹ️  soccerdata nicht verfügbar — nächster Fallback")
+        return []
+
+    year = int(date_str[:4])
+    season = year if int(date_str[5:7]) >= 7 else year - 1
+    league_map = {
+        "ENG-Premier League": "Premier League",
+        "ESP-La Liga": "La Liga",
+        "GER-Bundesliga": "Bundesliga",
+        "ITA-Serie A": "Serie A",
+        "FRA-Ligue 1": "Ligue 1",
+    }
+    rows = []
+
+    for league_id, league_name in league_map.items():
+        try:
+            reader = sd.Understat(
+                leagues=league_id, seasons=season, no_cache=True, no_store=True
+            )
+            schedule = reader.read_schedule(force_cache=False)
+            if schedule is None or schedule.empty:
+                continue
+
+            # Index/Spalten flexibel behandeln.
+            frame = schedule.reset_index()
+            date_col = next(
+                (c for c in frame.columns if str(c).lower() in ("date", "game_date")),
+                None,
+            )
+            id_col = next(
+                (c for c in frame.columns if "game_id" in str(c).lower()
+                 or "match_id" in str(c).lower()),
+                None,
+            )
+            if date_col is None or id_col is None:
+                continue
+
+            frame[date_col] = frame[date_col].astype(str).str[:10]
+            ids = frame.loc[frame[date_col] == date_str, id_col].tolist()
+            for match_id in ids[:10]:
+                df = reader.read_player_match_stats(match_id=match_id)
+                if df is None or df.empty:
+                    continue
+                for _, record in df.reset_index().iterrows():
+                    d = record.to_dict()
+                    player_name = str(
+                        d.get("player") or d.get("player_name") or d.get("player_id") or ""
+                    )
+                    if not player_name:
+                        continue
+                    player = {"id": d.get("player_id") or player_name, "name": player_name}
+                    normalized = {
+                        "minutes": d.get("minutes"),
+                        "shots": d.get("shots"),
+                        "goals": d.get("goals"),
+                        "assists": d.get("assists"),
+                        "xG": d.get("xG") or d.get("xg"),
+                        "xA": d.get("xA") or d.get("xa"),
+                    }
+                    rows.extend(_stats_to_rows(
+                        "understat_soccerdata", match_id, player, normalized,
+                        team=str(d.get("team") or ""), league=league_name,
+                        home=str(d.get("home_team") or ""),
+                        away=str(d.get("away_team") or ""), match_date=date_str,
+                    ))
+        except Exception as exc:
+            print(f"  ⚠️  soccerdata {league_name}: {str(exc)[:100]}")
+
+    print(f"  ✅ soccerdata/Understat: {len(rows)} Player-Stat-Rows")
+    return rows
 
 def scrape_fbref_csv() -> List[Dict]:
     """FBref CSV-Downloads — leichtgewichtig, kein Playwright nötig."""
@@ -514,80 +894,130 @@ def scrape_fbref_csv() -> List[Dict]:
 
 
 def scrape_fbref_playwright(league: str = "Big5") -> List[Dict]:
-    """FBref Player Stats via Playwright — bestätigt auf GitHub Actions."""
+    """
+    FBref: requests → cloudscraper → Playwright. Parst auch auskommentierte Tabellen.
+    FBref liefert Saisonwerte; Quelle bleibt als fbref_season gekennzeichnet.
+    """
+    if not USE_FBREF:
+        return []
+
+    urls = {
+        "Big5": "https://fbref.com/en/comps/Big5/shooting/players/Big-5-European-Leagues-Stats",
+        "Bundesliga": "https://fbref.com/en/comps/20/shooting/Bundesliga-Stats",
+    }
+    url = urls.get(league, urls["Big5"])
+    raw = _fetch_text(url, timeout=25, allow_playwright=True)
+    if not raw:
+        return []
+
+    raw = raw.replace("<!--", "").replace("-->", "")
     rows = []
     try:
-        from playwright.sync_api import sync_playwright
-        urls = {
-            "Big5": "https://fbref.com/en/comps/Big5/shooting/players/Big-5-European-Leagues-Stats",
-            "Bundesliga": "https://fbref.com/en/comps/20/shooting/Bundesliga-Stats",
-        }
-        url = urls.get(league, urls["Big5"])
-        with sync_playwright() as p:
-            browser = p.chromium.launch(headless=True)
-            page = browser.new_page()
-            page.set_extra_http_headers({"User-Agent": "Mozilla/5.0 Chrome/122.0"})
-            page.goto(url, wait_until="networkidle", timeout=30000)
-            time.sleep(3)
+        import pandas as pd
+        from io import StringIO
+        tables = pd.read_html(StringIO(raw))
+    except Exception as exc:
+        print(f"  ⚠️  FBref Parse: {str(exc)[:100]}")
+        return []
 
-            # Tabelle parsen
-            tables = page.query_selector_all("table.stats_table")
-            for table in tables[:2]:
-                rows_html = table.query_selector_all("tbody tr")
-                for row_el in rows_html:
-                    cells = row_el.query_selector_all("td, th")
-                    if not cells:
-                        continue
-                    try:
-                        player_el = row_el.query_selector("td[data-stat='player'] a")
-                        if not player_el:
-                            continue
-                        player_name = player_el.inner_text().strip()
-                        team_el = row_el.query_selector("td[data-stat='team_name']")
-                        team = team_el.inner_text().strip() if team_el else ""
+    stat_candidates = {
+        "Sh": "totalShots",
+        "SoT": "shotsOnTarget",
+        "Gls": "goals",
+        "Ast": "goalAssist",
+        "xG": "xg",
+        "npxG": "npxg",
+    }
 
-                        for stat_name in ["shots", "shots_on_target", "goals", "npxg", "xg"]:
-                            el = row_el.query_selector(f"td[data-stat='{stat_name}']")
-                            if el:
-                                val = el.inner_text().strip()
-                                try:
-                                    rows.append(_make_stat_row(
-                                        "fbref", f"fbref_{player_name}_{stat_name}",
-                                        None, player_name, stat_name, float(val),
-                                        team=team, league=league
-                                    ))
-                                except ValueError:
-                                    pass
-                    except Exception:
-                        continue
-            browser.close()
-        print(f"  ✅ FBref Playwright: {len(rows)} Stat-Rows für {league}")
-    except ImportError:
-        print("  ⚠️  Playwright nicht installiert")
-    except Exception as e:
-        print(f"  ⚠️  FBref Playwright Error: {str(e)[:80]}")
+    for df in tables:
+        if df.empty:
+            continue
+        df.columns = [
+            "_".join(str(x) for x in col).strip() if isinstance(col, tuple)
+            else str(col)
+            for col in df.columns
+        ]
+        player_col = next((c for c in df.columns if c.endswith("_Player") or c == "Player"), None)
+        if not player_col:
+            continue
+        team_col = next((c for c in df.columns if c.endswith("_Squad") or c == "Squad"), None)
+
+        for _, rec in df.iterrows():
+            player_name = str(rec.get(player_col, "")).strip()
+            if not player_name or player_name == "Player":
+                continue
+            team = str(rec.get(team_col, "")).strip() if team_col else ""
+            player_id = hashlib.sha1(player_name.encode("utf-8")).hexdigest()[:16]
+
+            for token, normalized in stat_candidates.items():
+                col = next(
+                    (c for c in df.columns
+                     if c.endswith(f"_{token}") or c == token),
+                    None,
+                )
+                if not col:
+                    continue
+                value = _numeric(rec.get(col))
+                if value is None:
+                    continue
+                rows.append(_make_stat_row(
+                    "fbref_season", f"fbref_{league}_{player_id}", player_id,
+                    player_name, normalized, value, team=team, league=league,
+                    match_date=datetime.now(timezone.utc).date().isoformat(),
+                ))
+        if rows:
+            break
+
+    print(f"  ✅ FBref Fallback-Kette: {len(rows)} Saison-Stat-Rows")
     return rows
 
 
 def scrape_player_stats(date_str: str) -> int:
-    """Sammelt Player Stats aus StatsBomb + FBref."""
+    """Multi-Source Player-Data Engine mit unabhängigen Fallbacks."""
     print(f"\n📊 Scrape Player Stats für {date_str}")
-    all_rows = []
+    all_rows: List[Dict] = []
+    source_counts = {}
 
-    # StatsBomb (immer erreichbar)
-    for league in ["Bundesliga", "La Liga", "FIFA World Cup", "Copa America"]:
-        rows = scrape_statsbomb_league(league)
+    def add_source(name: str, fn):
+        try:
+            rows = fn() or []
+        except Exception as exc:
+            print(f"  ⚠️  {name}: {str(exc)[:120]}")
+            rows = []
         all_rows.extend(rows)
-        if rows:
-            print(f"  ✅ StatsBomb {league}: {len(rows)} Rows")
-        time.sleep(3)  # Rate limit zwischen Ligen
+        source_counts[name] = len(rows)
 
-    # FBref via Playwright
-    fbref_rows = scrape_fbref_playwright("Big5")
-    all_rows.extend(fbref_rows)
+    # Aktuelle Matchdaten zuerst
+    add_source("SofaScore", lambda: scrape_sofascore_date(date_str))
+    add_source("FotMob", lambda: scrape_fotmob_date(date_str))
 
-    saved = _sb_post("player_match_stats", all_rows, conflict="source,event_id,player_id,stat_name")
-    print(f"  💾 {saved} Player-Stat-Rows gespeichert")
+    # Historisches Open Data als Modell-/Fallbackbasis
+    if USE_STATSBOMB:
+        for league in ["Bundesliga", "La Liga", "FIFA World Cup", "Copa America"]:
+            add_source(
+                f"StatsBomb {league}",
+                lambda league=league: scrape_statsbomb_league(league),
+            )
+
+    # Saisonwerte und Open-Source-Library als letzte Fallbacks
+    add_source("FBref", lambda: scrape_fbref_playwright("Big5"))
+    add_source("soccerdata", lambda: scrape_soccerdata_fallback(date_str))
+
+    clean = _dedupe_rows(
+        all_rows, "source,event_id,player_id,stat_name"
+    )
+    saved = _sb_post(
+        "player_match_stats",
+        clean,
+        conflict="source,event_id,player_id,stat_name",
+    )
+
+    print("  ── Quellenübersicht ──")
+    for name, count in source_counts.items():
+        icon = "✅" if count else "⚪"
+        print(f"  {icon} {name}: {count}")
+    print(f"  🧹 {len(all_rows)} Roh-Rows → {len(clean)} eindeutige Rows")
+    print(f"  💾 {saved} Player-Stat-Rows gespeichert/aktualisiert")
     return saved
 
 
