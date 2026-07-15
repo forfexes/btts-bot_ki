@@ -611,9 +611,12 @@ def collect_statsbomb_open_data() -> None:
     ok, fail = sb_insert("player_match_stats", match_stat_rows, on_conflict="data_hash")
     log(f"player_match_stats StatsBomb: {ok} ok / {fail} fail")
 
+    # player_avg_stats is a Supabase VIEW in this repo, not a writable table.
+    # The view recalculates averages from player_match_stats automatically.
+    # Do not insert here, otherwise Supabase returns PGRST204 if the view schema
+    # does not contain legacy columns such as "avg".
     avg_rows = avg_rows_from_match_stats(match_stat_rows, "StatsBombOpenData")
-    ok, fail = sb_insert("player_avg_stats", avg_rows, on_conflict="data_hash")
-    log(f"player_avg_stats StatsBomb: {ok} ok / {fail} fail")
+    log(f"player_avg_stats StatsBomb: view-only — {len(avg_rows)} averages skipped, calculated by DB view")
 
 
 # ─────────────────────────────────────────────────────────────
