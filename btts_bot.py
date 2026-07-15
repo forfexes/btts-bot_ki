@@ -20358,12 +20358,15 @@ def run_advanced_props_bot(active_leagues: list, fixtures_cache: dict, target_da
 
             while _offset < _max_rows:
                 _params = {
+                    # Nur Spalten abfragen, die in deiner bestehenden Tabelle sicher vorhanden sind.
+                    # tackles_committed / tackles_received sind KEINE physischen Spalten bei dir,
+                    # sondern werden aus stat_name/stat_value oder "tackles" normalisiert.
                     "select": (
-                        "player_id,player_name,player,team,team_name,league,"
+                        "player_id,player_name,player,team,league,home_team,away_team,"
                         "match_date,date,stat_name,stat_value,minutes,shots,"
                         "shots_on_target,sot,fouls_committed,fouls_won,cards,"
-                        "yellow_cards,tackles,tackles_committed,tackles_received,"
-                        "goals,assists,saves,offsides,interceptions,clearances"
+                        "yellow_cards,red_cards,tackles,goals,assists,passes,"
+                        "corners,xg,xa"
                     ),
                     "order": "match_date.desc.nullslast",
                 }
@@ -20379,9 +20382,10 @@ def run_advanced_props_bot(active_leagues: list, fixtures_cache: dict, target_da
                 if not _response.ok:
                     log(
                         f"🔑 Supabase Player Stats HTTP {_response.status_code}: "
-                        f"{_response.text[:120]}",
+                        f"{_response.text[:180]}",
                         "WARN",
                     )
+                    log("🔑 Supabase Select nutzt nur bestehende Basis-Spalten; prüfe player_match_stats Schema falls weiterhin 400.", "WARN")
                     break
                 _batch = _response.json() or []
                 _rows.extend(_batch)
