@@ -54,6 +54,15 @@ jobs:
             scikit-learn
           playwright install chromium --with-deps
 
+      - name: Compile and core tests
+
+        run: |
+
+          python -m py_compile btts_bot.py netrattler_builder_engine.py netrattler_settlement_v16_final.py
+
+          python test_netrattler_core.py
+
+
       - name: Run Tips Bot 🤖
         env:
           # ── KI APIs ──
