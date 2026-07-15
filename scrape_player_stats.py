@@ -15,6 +15,11 @@ from datetime import datetime, timezone, timedelta
 from typing import Any, Dict, List, Optional
 import requests
 
+try:
+    from netrattler_identity_hub import teams_match as identity_teams_match
+except Exception:
+    identity_teams_match = None
+
 SUPABASE_URL  = os.environ.get("SUPABASE_URL", "")
 SUPABASE_KEY  = (os.environ.get("SUPABASE_SERVICE_ROLE_KEY")
                  or os.environ.get("SUPABASE_KEY", ""))
@@ -423,6 +428,15 @@ def scrape_results(date_str: str) -> int:
     all_results.extend(fetch_thesportsdb_results(date_str))
     all_results.extend(fetch_openfootball_results(date_str))
     all_results.extend(fetch_fifa_results(date_str))  # FIFA WM/Turniere
+    try:
+        from netrattler_source_hub import public_result_fallbacks, persist_source_health
+        hub_results = public_result_fallbacks(date_str)
+        if hub_results:
+            print(f"  ✅ SourceHub/OpenFootball+: {len(hub_results)} Ergebnisse für {date_str}")
+            all_results.extend(hub_results)
+        persist_source_health()
+    except Exception as e:
+        print(f"  ⚠️  SourceHub Results: {str(e)[:120]}")
 
     # Deduplizieren (ESPN hat Vorrang weil vollständiger)
     seen = set()
