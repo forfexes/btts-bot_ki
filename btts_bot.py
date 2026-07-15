@@ -6346,16 +6346,115 @@ def send_telegram(text, chat_id=None, reply_markup=None):
     return None
 
 
+
 # In-Memory Duplikat Cache für diesen Run
 _SENT_TIPS_CACHE = set()
+_PREFETCHED_DUP_DATES = set()
+
+def _dup_cache_key(match, market, target_date):
+    match_norm = normalize_team_name(match)
+    return f"{match_norm[:20]}_{market}_{target_date}"
+
+def prefetch_sent_tips_for_date(target_date):
+    """
+    Speed-Fix:
+    Lädt bereits gesendete Tipps/Combos für den Tag einmalig in den Cache.
+    Danach macht is_duplicate_tip/is_duplicate_combo keine Supabase-Abfrage mehr pro Tipp.
+    """
+    global _SENT_TIPS_CACHE, _PREFETCHED_DUP_DATES
+    day = str(target_date)
+    if day in _PREFETCHED_DUP_DATES:
+        return
+
+    _PREFETCHED_DUP_DATES.add(day)
+
+    if not (SUPABASE_URL and SUPABASE_KEY):
+        return
+
+    headers = {"apikey": SUPABASE_KEY, "Authorization": f"Bearer {SUPABASE_KEY}"}
+    page = 0
+    loaded = 0
+
+    while page < 8:  # max 8000 Rows, mehr brauchen wir für einen Tag nicht
+        start = page * 1000
+        end = start + 999
+        try:
+            r = requests.get(
+                f"{SUPABASE_URL}/rest/v1/tips",
+                headers={**headers, "Range": f"{start}-{end}"},
+                params={
+                    "date": f"eq.{day}",
+                    "select": "match,market,tip_id",
+                    "limit": "1000",
+                    "order": "created_at.desc.nullslast",
+                },
+                timeout=8,
+            )
+            if not r.ok:
+                break
+            rows = r.json() if r.text else []
+            if not isinstance(rows, list) or not rows:
+                break
+
+            for row in rows:
+                match = row.get("match")
+                market = row.get("market")
+                tip_id = row.get("tip_id")
+                if match and market:
+                    _SENT_TIPS_CACHE.add(_dup_cache_key(match, market, day))
+                if tip_id:
+                    _SENT_TIPS_CACHE.add(f"combo_{tip_id}")
+
+            loaded += len(rows)
+            if len(rows) < 1000:
+                break
+            page += 1
+        except Exception:
+            break
+
+    try:
+        log(f"   ⚡ Duplikat-Cache vorgeladen: {loaded} Tipps für {day}")
+    except Exception:
+        pass
 
 def is_duplicate_tip(match, market, target_date):
-    """Prüft ob Tipp bereits gesendet wurde - nur In-Memory (Bulk preload beim Start)"""
+    """Prüft ob Tipp bereits gesendet wurde - FAST Cache + Supabase Fallback"""
     global _SENT_TIPS_CACHE
-    match_norm = normalize_team_name(match)
-    cache_key = f"{match_norm[:50]}_{market}_{target_date}"
-    return cache_key in _SENT_TIPS_CACHE
 
+    day = str(target_date)
+    cache_key = _dup_cache_key(match, market, day)
+
+    # 1. In-Memory Check
+    if cache_key in _SENT_TIPS_CACHE:
+        return True
+
+    # 2. Wenn Tag vorgeladen wurde, ist 'nicht im Cache' = kein Duplikat.
+    # Spart 100+ einzelne Supabase Calls.
+    if day in _PREFETCHED_DUP_DATES:
+        return False
+
+    # 3. Fallback nur falls Prefetch nicht lief
+    if SUPABASE_URL and SUPABASE_KEY:
+        try:
+            r = requests.get(
+                f"{SUPABASE_URL}/rest/v1/tips",
+                headers={"apikey": SUPABASE_KEY, "Authorization": f"Bearer {SUPABASE_KEY}"},
+                params={
+                    "date": f"eq.{day}",
+                    "market": f"eq.{market}",
+                    "match": f"eq.{match}",
+                    "select": "id",
+                    "limit": "1",
+                },
+                timeout=5,
+            )
+            if r.ok and len(r.json()) > 0:
+                _SENT_TIPS_CACHE.add(cache_key)
+                return True
+        except Exception:
+            pass
+
+    return False
 
 def _combo_signature(legs, prefix=""):
     """
@@ -6376,16 +6475,20 @@ def _combo_signature(legs, prefix=""):
     raw = prefix + "::" + "||".join(parts)
     return hashlib.md5(raw.encode("utf-8")).hexdigest()[:12]
 
-
 def is_duplicate_combo(tip_id, target_date):
     """
-    Prüft ob eine Kombi (Multi-Combo oder Bet Builder) mit dieser
-    deterministischen tip_id bereits heute gesendet wurde.
+    Prüft ob eine Kombi/Builder mit dieser deterministischen tip_id bereits heute gesendet wurde.
+    FAST: nutzt vorgeladenen Tagescache.
     """
     global _SENT_TIPS_CACHE
+    day = str(target_date)
     cache_key = f"combo_{tip_id}"
+
     if cache_key in _SENT_TIPS_CACHE:
         return True
+
+    if day in _PREFETCHED_DUP_DATES:
+        return False
 
     if SUPABASE_URL and SUPABASE_KEY:
         try:
@@ -6407,13 +6510,10 @@ def is_duplicate_combo(tip_id, target_date):
 
     return False
 
-
 def mark_tip_sent(match, market, target_date):
     """Markiert Tipp als gesendet im In-Memory Cache"""
     global _SENT_TIPS_CACHE
-    match_norm = normalize_team_name(match)
-    cache_key = f"{match_norm[:50]}_{market}_{target_date}"
-    _SENT_TIPS_CACHE.add(cache_key)
+    _SENT_TIPS_CACHE.add(_dup_cache_key(match, market, str(target_date)))
 
 
 def is_valid_tip(tip, target_date):
@@ -7259,6 +7359,7 @@ def send_top_tips(tips_by_market, target_date):
         return
 
     saved = 0
+    prefetch_sent_tips_for_date(target_date)
 
     for market_id, tips in tips_by_market.items():
         if not tips:
@@ -15739,29 +15840,101 @@ def send_telegram(text, chat_id=None, reply_markup=None):
     return None
 
 
+
 # In-Memory Duplikat Cache für diesen Run
 _SENT_TIPS_CACHE = set()
+_PREFETCHED_DUP_DATES = set()
+
+def _dup_cache_key(match, market, target_date):
+    match_norm = normalize_team_name(match)
+    return f"{match_norm[:20]}_{market}_{target_date}"
+
+def prefetch_sent_tips_for_date(target_date):
+    """
+    Speed-Fix:
+    Lädt bereits gesendete Tipps/Combos für den Tag einmalig in den Cache.
+    Danach macht is_duplicate_tip/is_duplicate_combo keine Supabase-Abfrage mehr pro Tipp.
+    """
+    global _SENT_TIPS_CACHE, _PREFETCHED_DUP_DATES
+    day = str(target_date)
+    if day in _PREFETCHED_DUP_DATES:
+        return
+
+    _PREFETCHED_DUP_DATES.add(day)
+
+    if not (SUPABASE_URL and SUPABASE_KEY):
+        return
+
+    headers = {"apikey": SUPABASE_KEY, "Authorization": f"Bearer {SUPABASE_KEY}"}
+    page = 0
+    loaded = 0
+
+    while page < 8:  # max 8000 Rows, mehr brauchen wir für einen Tag nicht
+        start = page * 1000
+        end = start + 999
+        try:
+            r = requests.get(
+                f"{SUPABASE_URL}/rest/v1/tips",
+                headers={**headers, "Range": f"{start}-{end}"},
+                params={
+                    "date": f"eq.{day}",
+                    "select": "match,market,tip_id",
+                    "limit": "1000",
+                    "order": "created_at.desc.nullslast",
+                },
+                timeout=8,
+            )
+            if not r.ok:
+                break
+            rows = r.json() if r.text else []
+            if not isinstance(rows, list) or not rows:
+                break
+
+            for row in rows:
+                match = row.get("match")
+                market = row.get("market")
+                tip_id = row.get("tip_id")
+                if match and market:
+                    _SENT_TIPS_CACHE.add(_dup_cache_key(match, market, day))
+                if tip_id:
+                    _SENT_TIPS_CACHE.add(f"combo_{tip_id}")
+
+            loaded += len(rows)
+            if len(rows) < 1000:
+                break
+            page += 1
+        except Exception:
+            break
+
+    try:
+        log(f"   ⚡ Duplikat-Cache vorgeladen: {loaded} Tipps für {day}")
+    except Exception:
+        pass
 
 def is_duplicate_tip(match, market, target_date):
-    """Prüft ob Tipp bereits gesendet wurde - In-Memory + Supabase"""
+    """Prüft ob Tipp bereits gesendet wurde - FAST Cache + Supabase Fallback"""
     global _SENT_TIPS_CACHE
 
-    # Normalisiere Match-Name für Vergleich
-    match_norm = normalize_team_name(match)
-    cache_key = f"{match_norm[:20]}_{market}_{target_date}"
+    day = str(target_date)
+    cache_key = _dup_cache_key(match, market, day)
 
-    # 1. In-Memory Check (schnell!)
+    # 1. In-Memory Check
     if cache_key in _SENT_TIPS_CACHE:
         return True
 
-    # 2. Supabase Check
+    # 2. Wenn Tag vorgeladen wurde, ist 'nicht im Cache' = kein Duplikat.
+    # Spart 100+ einzelne Supabase Calls.
+    if day in _PREFETCHED_DUP_DATES:
+        return False
+
+    # 3. Fallback nur falls Prefetch nicht lief
     if SUPABASE_URL and SUPABASE_KEY:
         try:
             r = requests.get(
                 f"{SUPABASE_URL}/rest/v1/tips",
                 headers={"apikey": SUPABASE_KEY, "Authorization": f"Bearer {SUPABASE_KEY}"},
                 params={
-                    "date": f"eq.{target_date}",
+                    "date": f"eq.{day}",
                     "market": f"eq.{market}",
                     "match": f"eq.{match}",
                     "select": "id",
@@ -15776,7 +15949,6 @@ def is_duplicate_tip(match, market, target_date):
             pass
 
     return False
-
 
 def _combo_signature(legs, prefix=""):
     """
@@ -15797,16 +15969,20 @@ def _combo_signature(legs, prefix=""):
     raw = prefix + "::" + "||".join(parts)
     return hashlib.md5(raw.encode("utf-8")).hexdigest()[:12]
 
-
 def is_duplicate_combo(tip_id, target_date):
     """
-    Prüft ob eine Kombi (Multi-Combo oder Bet Builder) mit dieser
-    deterministischen tip_id bereits heute gesendet wurde.
+    Prüft ob eine Kombi/Builder mit dieser deterministischen tip_id bereits heute gesendet wurde.
+    FAST: nutzt vorgeladenen Tagescache.
     """
     global _SENT_TIPS_CACHE
+    day = str(target_date)
     cache_key = f"combo_{tip_id}"
+
     if cache_key in _SENT_TIPS_CACHE:
         return True
+
+    if day in _PREFETCHED_DUP_DATES:
+        return False
 
     if SUPABASE_URL and SUPABASE_KEY:
         try:
@@ -15828,13 +16004,10 @@ def is_duplicate_combo(tip_id, target_date):
 
     return False
 
-
 def mark_tip_sent(match, market, target_date):
     """Markiert Tipp als gesendet im In-Memory Cache"""
     global _SENT_TIPS_CACHE
-    match_norm = normalize_team_name(match)
-    cache_key = f"{match_norm[:20]}_{market}_{target_date}"
-    _SENT_TIPS_CACHE.add(cache_key)
+    _SENT_TIPS_CACHE.add(_dup_cache_key(match, market, str(target_date)))
 
 
 def is_valid_tip(tip, target_date):
@@ -16553,6 +16726,7 @@ def send_top_tips(tips_by_market, target_date):
         return
 
     saved = 0
+    prefetch_sent_tips_for_date(target_date)
 
     for market_id, tips in tips_by_market.items():
         if not tips:
@@ -19534,6 +19708,10 @@ def run_corners_and_scorer_bots(target_date, active_leagues, odds_data_cache, fi
         log("Corners/Scorer: Keine Gruppen konfiguriert", "INFO")
         return
 
+    try:
+        prefetch_sent_tips_for_date(target_date)
+    except Exception:
+        pass
     log("🔵⚽ Corners + Scorer Bot startet...")
 
     corners_count = 0
@@ -20452,6 +20630,10 @@ def run_advanced_props_bot(active_leagues: list, fixtures_cache: dict, target_da
     if not props_chat:
         return
 
+    try:
+        prefetch_sent_tips_for_date(target_date)
+    except Exception:
+        pass
     log("🔑 Prop Builder Bot startet...")
 
     manager = _advanced_props_manager
