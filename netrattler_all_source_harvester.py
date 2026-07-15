@@ -1,4 +1,4 @@
-#!/usr/bin/env python3
+!/usr/bin/env python3
 """
 NETRATTLER ALL SOURCE HARVESTER — DATA LAKE + PLAYER STATS + SOURCE DISCOVERY
 ============================================================================
@@ -896,6 +896,19 @@ def write_local_summary() -> None:
 
 
 # ─────────────────────────────────────────────────────────────
+# V30 Source Hub addon
+# ─────────────────────────────────────────────────────────────
+def run_source_hub_v30() -> None:
+    try:
+        from netrattler_source_hub import write_summary, persist_source_health
+        write_summary("netrattler_source_hub_summary.json")
+        saved = persist_source_health(SUPABASE_URL, SUPABASE_KEY)
+        log(f"V30 Source Hub health saved={saved}")
+    except Exception as exc:
+        log(f"V30 Source Hub addon failed: {str(exc)[:120]}", "WARN")
+
+
+# ─────────────────────────────────────────────────────────────
 # MAIN
 # ─────────────────────────────────────────────────────────────
 
@@ -926,6 +939,7 @@ def main() -> int:
             log(f"{name} HARD FAIL: {str(e)[:240]}", "ERROR")
 
     write_local_summary()
+    run_source_hub_v30()
     log("Fertig.")
     return 0
 
