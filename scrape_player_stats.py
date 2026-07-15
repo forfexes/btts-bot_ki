@@ -28,27 +28,105 @@ HEADERS = {
 
 # ── Supabase ──────────────────────────────────────────────────────────────────
 
+def _dedupe_rows(rows: list, conflict: str = None) -> list:
+    """Entfernt interne Batch-Duplikate anhand der Konfliktspalten."""
+    if not rows:
+        return []
+
+    valid_rows = [row for row in rows if isinstance(row, dict)]
+    if not conflict:
+        return valid_rows
+
+    keys = [key.strip() for key in conflict.split(",") if key.strip()]
+    unique = {}
+    passthrough = []
+
+    for row in valid_rows:
+        values = tuple(str(row.get(key) or "").strip() for key in keys)
+
+        # Unvollständige Schlüssel nicht versehentlich zusammenführen.
+        if any(not value for value in values):
+            passthrough.append(row)
+            continue
+
+        unique[values] = row
+
+    return list(unique.values()) + passthrough
+
+
 def _sb_post(table: str, rows: list, conflict: str = None) -> int:
+    """
+    Supabase Batch-Upsert mit Deduplizierung und Einzelrow-Fallback.
+    """
     if not rows or not SUPABASE_URL or not SUPABASE_KEY:
         return 0
+
+    clean_rows = _dedupe_rows(rows, conflict)
+    if not clean_rows:
+        return 0
+
     headers = {
         "apikey": SUPABASE_KEY,
         "Authorization": f"Bearer {SUPABASE_KEY}",
         "Content-Type": "application/json",
         "Prefer": "resolution=merge-duplicates,return=minimal",
     }
+
     params = {}
     if conflict:
         params["on_conflict"] = conflict
+
+    endpoint = f"{SUPABASE_URL.rstrip('/')}/rest/v1/{table}"
     total = 0
-    for i in range(0, len(rows), 500):
-        chunk = rows[i:i+500]
-        r = requests.post(f"{SUPABASE_URL}/rest/v1/{table}",
-                          headers=headers, params=params, json=chunk, timeout=30)
-        if r.ok:
+
+    for i in range(0, len(clean_rows), 500):
+        chunk = clean_rows[i:i + 500]
+
+        try:
+            response = requests.post(
+                endpoint,
+                headers=headers,
+                params=params,
+                json=chunk,
+                timeout=90,
+            )
+        except requests.RequestException as exc:
+            print(f"  ⚠️  Supabase {table} Upload-Fehler: {exc}")
+            continue
+
+        if response.ok:
             total += len(chunk)
-        else:
-            print(f"  ⚠️  Supabase {table} {r.status_code}: {r.text[:100]}")
+            continue
+
+        print(
+            f"  ⚠️  Supabase {table} {response.status_code}: "
+            f"{response.text[:300]}"
+        )
+
+        # Einzelrow-Fallback: eine fehlerhafte Row blockiert nicht den ganzen Batch.
+        for row in chunk:
+            try:
+                single = requests.post(
+                    endpoint,
+                    headers=headers,
+                    params=params,
+                    json=[row],
+                    timeout=30,
+                )
+            except requests.RequestException as exc:
+                print(f"     ❌ Einzel-Upload Fehler: {exc}")
+                continue
+
+            if single.ok:
+                total += 1
+            else:
+                print(
+                    f"     ❌ Row fehlgeschlagen "
+                    f"{row.get('source')} / {row.get('event_id')} / "
+                    f"{row.get('player_id')} / {row.get('stat_name')}: "
+                    f"{single.status_code} {single.text[:180]}"
+                )
+
     return total
 
 
@@ -508,7 +586,7 @@ def scrape_player_stats(date_str: str) -> int:
     fbref_rows = scrape_fbref_playwright("Big5")
     all_rows.extend(fbref_rows)
 
-    saved = _sb_post("player_match_stats", all_rows)
+    saved = _sb_post("player_match_stats", all_rows, conflict="source,event_id,player_id,stat_name")
     print(f"  💾 {saved} Player-Stat-Rows gespeichert")
     return saved
 
