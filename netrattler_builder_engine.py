@@ -1071,6 +1071,103 @@ def _goalscorer_combo_builder(
     return builders
 
 
+
+
+def _player_prop_mix_builders(
+    props: Sequence[PropLeg], match_date: str
+) -> List[BuilderPick]:
+    """
+    Real Player Prop Mix:
+    gebaut für genau solche Kombis:
+    - Harry Kane 2+ SOT
+    - Messi To Score
+    - Otamendi To Be Carded
+
+    Nimmt bevorzugt echte Pinnacle-Player-Props und kombiniert Scorer/SOT/Card/Foul/Tackle.
+    Same-Match wird bevorzugt, Cross-Match ist erlaubt, wenn ein einzelnes Match nicht genug echte Spielerprops hat.
+    """
+    builders: List[BuilderPick] = []
+    player_cats = {"score", "first_scorer", "last_scorer", "sot", "shots", "yellow_cards", "fouls", "fouls_won", "tackles_committed", "tackles_received"}
+    real_player_props = [
+        l for l in props
+        if l.category in player_cats
+        and "pinnacle" in norm(l.source)
+        and norm(l.player) not in {"yes", "no", "over", "under", "home", "away", "draw"}
+    ]
+
+    by_match: Dict[str, List[PropLeg]] = {}
+    for leg in real_player_props:
+        by_match.setdefault(leg.match, []).append(leg)
+
+    templates = [
+        ("PLAYER PROP MIX", "SCORE + SOT + CARD", ["score", "first_scorer", "sot", "shots", "yellow_cards"], 3),
+        ("PLAYER PROP MIX", "ATTACK + DISCIPLINE", ["score", "sot", "shots", "fouls", "yellow_cards"], 4),
+        ("PLAYER PROP MIX", "SHOT + CARD MIX", ["sot", "shots", "yellow_cards", "fouls", "tackles_committed"], 3),
+    ]
+
+    for match, candidates in by_match.items():
+        if len(candidates) < 2:
+            continue
+        for style, variant, cats, max_legs in templates:
+            selected: List[PropLeg] = []
+            used_players = set()
+            used_categories = set()
+            for cat in cats:
+                pool = sorted(
+                    [x for x in candidates if x.category == cat],
+                    key=lambda x: (not x.estimated, x.quality, x.probability, x.odds),
+                    reverse=True,
+                )
+                for leg in pool:
+                    pkey = norm(leg.player)
+                    if pkey in used_players and leg.category not in {"fouls", "tackles_committed", "tackles_received"}:
+                        continue
+                    if leg.category in used_categories and leg.category not in {"sot", "shots"}:
+                        continue
+                    selected.append(leg)
+                    used_players.add(pkey)
+                    used_categories.add(leg.category)
+                    break
+                if len(selected) >= max_legs:
+                    break
+            if len(selected) >= 2:
+                pick = _make_builder(style, f"SAME MATCH {len(selected)}L", selected, match_date, 0.5 if len(selected) <= 3 else 0.25)
+                if pick:
+                    builders.append(pick)
+
+    # Cross-Match Mix: bester Scorer + bester SOT/Shot + beste Card/Foul/Tackle aus verschiedenen Spielen
+    buckets = [
+        ("SCORER", [x for x in real_player_props if x.category in {"score", "first_scorer", "last_scorer"}]),
+        ("SOT", [x for x in real_player_props if x.category in {"sot", "shots"}]),
+        ("CARD", [x for x in real_player_props if x.category in {"yellow_cards", "fouls", "tackles_committed", "tackles_received"}]),
+    ]
+    selected = []
+    used_players = set()
+    used_matches = set()
+    for _, bucket in buckets:
+        for leg in sorted(bucket, key=lambda x: (not x.estimated, x.quality, x.probability, x.odds), reverse=True):
+            pkey = norm(leg.player)
+            if pkey in used_players:
+                continue
+            selected.append(leg)
+            used_players.add(pkey)
+            used_matches.add(norm(leg.match))
+            break
+    if len(selected) >= 3:
+        pick = _make_builder("PLAYER PROP MIX", "CROSS MATCH STAR MIX 3L", selected, match_date, 0.25)
+        if pick:
+            builders.append(pick)
+
+    # Zusätzlicher 2-Leg Fallback, wenn nur Scorer+Card oder SOT+Card vorhanden sind.
+    if len(selected) >= 2:
+        pick = _make_builder("PLAYER PROP MIX", "CROSS MATCH 2L", selected[:2], match_date, 0.5)
+        if pick:
+            builders.append(pick)
+
+    return builders
+
+
+
 def build_builder_picks(
     raw_props: Sequence[Dict[str, Any]],
     match_contexts: Optional[Sequence[Dict[str, Any]]] = None,
@@ -1082,6 +1179,8 @@ def build_builder_picks(
     max_count = max_builders or as_int(os.getenv("NETRATTLER_MAX_BUILDERS_PER_RUN", "30"), 30)
 
     candidates: List[BuilderPick] = []
+    # Real Player Prop Mix zuerst sichern, damit echte Spielerprops nicht von Team-Märkten verdrängt werden.
+    candidates.extend(_player_prop_mix_builders(props, run_date))
     candidates.extend(_shot_ladders(props, match_contexts or [], run_date))
     candidates.extend(_category_trios(props, run_date))
     candidates.extend(_mixed_builders(props, run_date))
@@ -1163,6 +1262,16 @@ def format_builder_message(pick: BuilderPick) -> str:
         sep,
     ]
     MARKET_LABELS = {
+        "score": "Anytime Goalscorer",
+        "first_scorer": "First Goalscorer",
+        "last_scorer": "Last Goalscorer",
+        "sot": "Shots on Target",
+        "shots": "Shots",
+        "yellow_cards": "To Be Carded",
+        "fouls": "Fouls Committed",
+        "fouls_won": "Fouls Won",
+        "tackles_committed": "Tackles Committed",
+        "tackles_received": "Tackles Received",
         "btts": "BTTS YES", "over25": "Over 2.5 Tore", "combo": "BTTS + Over 2.5",
         "btts_ht": "BTTS HT", "match_goals": "Team trifft", "over15_ht": "Over 1.5 HT", "corners": "Ecken",
         "shots": "Schüsse", "cards": "Karte", "goals": "Tor",
