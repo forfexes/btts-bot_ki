@@ -3,7 +3,7 @@ import pathlib
 import unittest
 from unittest.mock import patch
 
-MODULE_PATH = pathlib.Path(__file__).resolve().parents[1] / "netrattler_settlement_v16_final.py"
+MODULE_PATH = pathlib.Path(__file__).resolve().parent / "netrattler_settlement_v16_final.py"
 spec = importlib.util.spec_from_file_location("settlement_v21", MODULE_PATH)
 mod = importlib.util.module_from_spec(spec)
 spec.loader.exec_module(mod)
