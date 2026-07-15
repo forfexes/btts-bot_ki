@@ -83,15 +83,29 @@ TELEGRAM_CHAT_ID = env("TELEGRAM_CHAT_ID")
 TELEGRAM_GROUPS = {
     "btts": env("TELEGRAM_GROUP_BTTS", TELEGRAM_CHAT_ID),
     "over25": env("TELEGRAM_GROUP_OVER25", TELEGRAM_CHAT_ID),
+
+    # bestehende Secrets bleiben unverändert:
+    # TELEGRAM_GROUP_COMBO  = BTTS +2.5
+    # TELEGRAM_GROUP_COMBOS = Combos / Kombis
     "combo": env("TELEGRAM_GROUP_COMBO", TELEGRAM_CHAT_ID),
     "combos": env("TELEGRAM_GROUP_COMBOS", TELEGRAM_CHAT_ID),
+
     "btts_ht": env("TELEGRAM_GROUP_BTTS_HT", TELEGRAM_CHAT_ID),
     "over15_ht": env("TELEGRAM_GROUP_BTTS_HT", TELEGRAM_CHAT_ID),
-    "stats": env("TELEGRAM_GROUP_STATS", TELEGRAM_CHAT_ID),
+
+    # Deine bestehenden Secret-Namen:
+    # TELEGRAM_GROUP_HZ_LIVE    = NETRATTLER CORNER SNIPER
+    # TELEGRAM_GROUP_LATE_GOALS = NETRATTLER GOAL HUNTER
+    "corners": env("TELEGRAM_GROUP_HZ_LIVE", TELEGRAM_CHAT_ID),
     "hz_live": env("TELEGRAM_GROUP_HZ_LIVE", TELEGRAM_CHAT_ID),
+    "scorer": env("TELEGRAM_GROUP_LATE_GOALS", TELEGRAM_CHAT_ID),
+    "goal_hunter": env("TELEGRAM_GROUP_LATE_GOALS", TELEGRAM_CHAT_ID),
     "late_goals": env("TELEGRAM_GROUP_LATE_GOALS", TELEGRAM_CHAT_ID),
-    "advanced_props": env("TELEGRAM_GROUP_PLAYER_PROPS", env("TELEGRAM_GROUP_STATS", TELEGRAM_CHAT_ID)),
-    "props": env("TELEGRAM_GROUP_PLAYER_PROPS", env("TELEGRAM_GROUP_STATS", TELEGRAM_CHAT_ID)),
+
+    "stats": env("TELEGRAM_GROUP_STATS", TELEGRAM_CHAT_ID),
+
+    "advanced_props": env("TELEGRAM_GROUP_PLAYER_PROPS", env("TELEGRAM_GROUP_BUILDER", env("TELEGRAM_GROUP_STATS", TELEGRAM_CHAT_ID))),
+    "props": env("TELEGRAM_GROUP_PLAYER_PROPS", env("TELEGRAM_GROUP_BUILDER", env("TELEGRAM_GROUP_STATS", TELEGRAM_CHAT_ID))),
     "builder": env("TELEGRAM_GROUP_BUILDER", env("TELEGRAM_GROUP_PLAYER_PROPS", env("TELEGRAM_GROUP_STATS", TELEGRAM_CHAT_ID))),
 }
 
@@ -5981,10 +5995,11 @@ def _ntr_float(x, default=0.0):
 def _ntr_group_from_chat(chat_id):
     cid = str(chat_id or "")
     mapping = {
-        "btts": "btts", "over25": "over25", "combo": "combo", "combos": "combo",
+        "btts": "btts", "over25": "over25", "combo": "combo", "combos": "combos",
         "btts_ht": "btts_ht", "over15_ht": "over15_ht", "props": "props",
-        "builder": "builder", "advanced_props": "props", "corners": "corners",
-        "hz_live": "corners", "late_goals": "props",
+        "builder": "builder", "advanced_props": "builder", "corners": "corners",
+        "hz_live": "corners", "late_goals": "scorer", "scorer": "scorer",
+        "goal_hunter": "scorer", "stats": "stats",
     }
     for key, group in mapping.items():
         val = TELEGRAM_GROUPS.get(key) if isinstance(TELEGRAM_GROUPS, dict) else None
@@ -6079,14 +6094,9 @@ def _ntr_enhance_message_with_stats(text, chat_id):
     perf = _ntr_get_group_perf(group)
     if not perf:
         return text
-    lines = []
-    for label, key in [("Heute", "today"), ("7 Tage", "week"), ("Monat", "month"), ("Jahr", "year")]:
-        line = _ntr_perf_line(perf.get(key), label)
-        if line:
-            lines.append(line)
-    if not lines:
+    footer = _ntr_group_performance_footer(group, None, include_title=True)
+    if not footer:
         return text
-    footer = "\n━━━━━━━━━━━━━━━━━━\n📊 <b>Performance dieser Gruppe</b>\n" + "\n".join(lines)
     if len(raw) + len(footer) > 3900:
         return text
     return raw + footer
@@ -6959,7 +6969,7 @@ def _send_daily_auswertung_to_all_groups(stats=None):
         ("corners", TELEGRAM_GROUPS.get("corners"), "🔵 Corner Sniper"),
         ("builder", TELEGRAM_GROUPS.get("builder"), "🧱 Prop Builder"),
         ("props", TELEGRAM_GROUPS.get("props"), "🎯 Player Props"),
-        ("scorer",  TELEGRAM_GROUPS.get("late_goals"), "⚽ Goal Hunter"),
+        ("scorer",  TELEGRAM_GROUPS.get("scorer", TELEGRAM_GROUPS.get("late_goals")), "⚽ Goal Hunter"),
     ]
 
     medals = ["🥇","🥈","🥉"]
@@ -7012,6 +7022,122 @@ def _send_daily_auswertung_to_all_groups(stats=None):
         sent_to.add(chat_id)
 
     log(f"✅ Gruppen-Auswertung gesendet ({len(sent_to)} Gruppen)")
+
+
+
+# ============================================================
+# V30 HOTFIX — getrennte Gruppen-Übersicht statt Gesamtbericht in BTTS
+# ============================================================
+
+def _ntr_explicit_stats_group_chat():
+    """
+    Gesamt-Statistik nur in eine wirklich konfigurierte Stats-Gruppe senden.
+    Wichtig: TELEGRAM_GROUP_STATS defaultet im Config-Block auf TELEGRAM_CHAT_ID.
+    Deshalb hier absichtlich os.environ direkt lesen, damit keine Gesamt-Auswertung
+    versehentlich in BTTS/Main landet.
+    """
+    chat = os.getenv("TELEGRAM_GROUP_STATS", "").strip()
+    if not chat:
+        return ""
+    allow_same = str(env("ALLOW_GLOBAL_STATS_IN_TIP_GROUP", "false")).lower() in ("1", "true", "yes", "on")
+    if allow_same:
+        return chat
+    market_keys = [
+        "btts", "over25", "combo", "combos", "btts_ht", "over15_ht",
+        "hz_live", "late_goals", "props", "advanced_props", "builder", "corners", "scorer", "goal_hunter", "scorer", "goal_hunter",
+    ]
+    for key in market_keys:
+        val = str(TELEGRAM_GROUPS.get(key, "") or "")
+        if val and val == chat:
+            return ""
+    # Raw-secret safety: Goal Hunter used to be Stats for this repo.
+    if chat and chat == str(os.getenv("TELEGRAM_GROUP_LATE_GOALS", "") or ""):
+        return ""
+    if chat and chat == str(os.getenv("TELEGRAM_GROUP_HZ_LIVE", "") or ""):
+        return ""
+    return chat
+
+
+def _ntr_market_daily_card(market_id, title, target_date, today_count):
+    """Erstellt eine kurze Tages-/Gruppenkarte nur für diesen Markt."""
+    nl = "\n"
+    msg = f"<b>{title} — DAILY</b>{nl}"
+    msg += f"<i>{target_date}</i>{nl}"
+    msg += f"━━━━━━━━━━━━━━━━━━{nl}"
+    msg += f"📊 Heute in dieser Gruppe: <b>{today_count}</b> Tipps{nl}"
+
+    ms = _get_market_stats_from_supabase(market_id)
+    if ms and ms.get("total", 0) >= 3:
+        roi = float(ms.get("roi", 0) or 0)
+        roi_s = f"+{roi:g}" if roi >= 0 else f"{roi:g}"
+        pct = int(ms.get("pct", 0) or 0)
+        e = "🟢" if roi >= 0 else "🔴"
+        msg += f"🎯 Markt-Bewertung: <b>{ms.get('won',0)}/{ms.get('total',0)}</b> ({pct}%) · {roi_s}U {e}{nl}"
+
+        if ms.get("month_total", 0):
+            mroi = float(ms.get("month_roi", 0) or 0)
+            mroi_s = f"+{mroi:g}" if mroi >= 0 else f"{mroi:g}"
+            me = "🟢" if mroi >= 0 else "🔴"
+            msg += f"📅 {ms.get('month_name','Monat')}: {ms.get('month_won',0)}/{ms.get('month_total',0)} ({ms.get('month_pct',0)}%) · {mroi_s}U {me}{nl}"
+
+        if ms.get("top_leagues"):
+            msg += f"{nl}<b>🏆 Top Ligen dieser Gruppe:</b>{nl}"
+            medals = ["🥇", "🥈", "🥉"]
+            for i, (lg, w, tot, roi_lg) in enumerate(ms.get("top_leagues", [])[:3]):
+                pct_lg = round(w / tot * 100) if tot else 0
+                roi_lg_s = f"+{roi_lg}" if roi_lg >= 0 else str(roi_lg)
+                medal = medals[i] if i < len(medals) else "•"
+                msg += f"{medal} {lg}: {w}/{tot} ({pct_lg}%) · {roi_lg_s}U{nl}"
+    else:
+        msg += "📈 Bewertung: Daten werden gesammelt. Mindestens 3 ausgewertete Tipps nötig." + nl
+
+    msg += "━━━━━━━━━━━━━━━━━━"
+    return msg
+
+
+def _send_market_daily_cards_to_own_groups(tips_by_market, target_date, stats=None):
+    """
+    Sendet keine Gesamt-Statistik in BTTS.
+    Jede Tipp-Gruppe bekommt nur ihre eigene Tages-/Markt-Bewertung.
+    """
+    market_cards = [
+        ("btts", "⚽ BTTS", TELEGRAM_GROUPS.get("btts"), len(tips_by_market.get("btts", []))),
+        ("over25", "🎯 Over 2.5", TELEGRAM_GROUPS.get("over25"), len(tips_by_market.get("over25", []))),
+        ("combo", "🔥 BTTS + Over 2.5", TELEGRAM_GROUPS.get("combo"), len(tips_by_market.get("combo", []))),
+        ("btts_ht", "🕐 BTTS HT", TELEGRAM_GROUPS.get("btts_ht"), len(tips_by_market.get("btts_ht", []))),
+        ("over15_ht", "⏰ Over 1.5 HT", TELEGRAM_GROUPS.get("over15_ht"), len(tips_by_market.get("over15_ht", []))),
+        ("combos", "🎰 Combos", TELEGRAM_GROUPS.get("combos"), len(tips_by_market.get("combo_multi", []))),
+        ("corners", "🔵 Corner Sniper", TELEGRAM_GROUPS.get("corners"), len(tips_by_market.get("corners", []))),
+        ("scorer", "🏆 Goal Hunter", TELEGRAM_GROUPS.get("scorer") or TELEGRAM_GROUPS.get("goal_hunter") or TELEGRAM_GROUPS.get("late_goals"), len(tips_by_market.get("scorer", []))),
+        ("builder", "🧱 Prop Builder", TELEGRAM_GROUPS.get("builder") or TELEGRAM_GROUPS.get("advanced_props"), len(tips_by_market.get("builder", []))),
+    ]
+
+    sent = set()
+    for market_id, title, chat_id, today_count in market_cards:
+        if not chat_id or str(chat_id) in sent:
+            continue
+        # keine leere Tageskarte, wenn es auch noch keine Historie gibt
+        ms = _get_market_stats_from_supabase(market_id)
+        if today_count <= 0 and not (ms and ms.get("total", 0) >= 3):
+            continue
+        msg = _ntr_group_daily_card_v31(market_id, title, target_date, today_count)
+        send_telegram(msg, chat_id)
+        sent.add(str(chat_id))
+
+    log(f"✅ Tages-Bewertung getrennt gesendet ({len(sent)} Gruppen)")
+
+
+def _send_global_daily_stats_only_to_stats_group(stats_header):
+    """
+    Gesamtbericht nur in TELEGRAM_GROUP_STATS senden, falls diese Gruppe explizit
+    gesetzt und nicht identisch mit einer Tipp-Gruppe ist.
+    """
+    stats_chat = _ntr_explicit_stats_group_chat()
+    if not stats_chat:
+        log("ℹ️ Gesamt-Statistik nicht in Tipp-Gruppe gesendet (kein separates TELEGRAM_GROUP_STATS)")
+        return
+    send_telegram(stats_header, stats_chat)
+    log("✅ Gesamt-Statistik nur in Stats-Gruppe gesendet")
 
 
 def send_top_tips(tips_by_market, target_date):
@@ -7114,8 +7240,10 @@ def send_top_tips(tips_by_market, target_date):
                 u_str = f"+{units}" if units >= 0 else str(units)
                 stats_header += f"{medal} {lg}: {w}/{tot} ({pct}%) · {u_str}U" + "\n"
 
-    # Summary NUR in BTTS Kanal — nicht in Prop Builder / Stats
-    send_telegram(stats_header, TELEGRAM_GROUPS.get("btts", TELEGRAM_CHAT_ID))
+    # V30 HOTFIX: Keine Gesamt-Statistik mehr in eine Tipp-Gruppe.
+    # Jede Gruppe bekommt ihre eigene Markt-Bewertung; Gesamt nur in separate Stats-Gruppe.
+    _send_market_daily_cards_to_own_groups(tips_by_market, target_date, stats)
+    _send_global_daily_stats_only_to_stats_group(stats_header)
 
     # Auto-void alte Pending Tipps (älter als 3 Tage)
     _auto_void_old_pending()
@@ -8680,7 +8808,7 @@ def format_result_appendix(tip, result, status):
     ht_home = result.get("ht_home", "?")
     ht_away = result.get("ht_away", "?")
 
-    status_emoji = "✅ GEWONNEN" if status == "won" else "❌ VERLOREN"
+    status_emoji = "✅ V GEWONNEN" if status == "won" else "❌ X VERLOREN"
     profit = round(float(str(odds).replace(",", ".")) * float(units or 1) - float(units or 1), 2) if status == "won" else -float(units or 1)
     profit_str = f"+{profit}" if profit >= 0 else str(profit)
     profit_emoji = "🟢" if status == "won" else "🔴"
@@ -8688,6 +8816,7 @@ def format_result_appendix(tip, result, status):
     nl = "\n"
     msg = f"━━━━━━━━━━━━━━━━━━{nl}"
     msg += f"<b>{status_emoji}</b>{nl}"
+    msg += f"📌 Tipp-Bewertung: <b>{'✅ V' if status == 'won' else '❌ X'}</b>{nl}"
     msg += f"⚽ Endstand: <b>{home_s} : {away_s}</b>"
     if ht_home != "?" and ht_away != "?":
         msg += f" (HZ: {ht_home}:{ht_away})"
@@ -8711,7 +8840,7 @@ def format_result_text(tip, result, status):
     ht_away = result.get("ht_away", "?")
     total = result.get("total_goals", "?")
 
-    status_emoji = "✅ GEWONNEN" if status == "won" else "❌ VERLOREN"
+    status_emoji = "✅ V GEWONNEN" if status == "won" else "❌ X VERLOREN"
     profit = round(float(str(odds).replace(",", ".")) * float(units or 1) - float(units or 1), 2) if status == "won" else -float(units or 1)
     profit_str = f"+{profit}" if profit >= 0 else str(profit)
 
@@ -15465,6 +15594,14 @@ def send_telegram(text, chat_id=None, reply_markup=None):
         log("Telegram Chat ID fehlt", "WARN")
         return None
 
+    try:
+        text = _ntr_enhance_message_with_stats(text, chat_id)
+    except Exception as _ntr_e:
+        try:
+            log(f"Stats-Footer übersprungen: {str(_ntr_e)[:60]}", "WARN")
+        except Exception:
+            pass
+
     payload = {
         "chat_id": chat_id,
         "text": text,
@@ -16155,8 +16292,8 @@ def _send_daily_auswertung_to_all_groups(stats=None):
         ("over25",  TELEGRAM_GROUPS.get("over25"),  "🎯 Over 2.5"),
         ("combo",   TELEGRAM_GROUPS.get("combo"),   "🔥 BTTS + Over 2.5"),
         ("btts_ht", TELEGRAM_GROUPS.get("btts_ht"), "🕐 BTTS Halbzeit"),
-        ("corners", TELEGRAM_GROUPS.get("hz_live"), "🔵 Corner Sniper"),
-        ("scorer",  TELEGRAM_GROUPS.get("late_goals"), "⚽ Goal Hunter"),
+        ("corners", TELEGRAM_GROUPS.get("corners", TELEGRAM_GROUPS.get("hz_live")), "🔵 Corner Sniper"),
+        ("scorer",  TELEGRAM_GROUPS.get("scorer", TELEGRAM_GROUPS.get("late_goals")), "⚽ Goal Hunter"),
     ]
 
     medals = ["🥇","🥈","🥉"]
@@ -16309,8 +16446,10 @@ def send_top_tips(tips_by_market, target_date):
                 u_str = f"+{units}" if units >= 0 else str(units)
                 stats_header += f"{medal} {lg}: {w}/{tot} ({pct}%) · {u_str}U" + "\n"
 
-    # Summary NUR in BTTS Kanal — nicht in Prop Builder / Stats
-    send_telegram(stats_header, TELEGRAM_GROUPS.get("btts", TELEGRAM_CHAT_ID))
+    # V30 HOTFIX: Keine Gesamt-Statistik mehr in eine Tipp-Gruppe.
+    # Jede Gruppe bekommt ihre eigene Markt-Bewertung; Gesamt nur in separate Stats-Gruppe.
+    _send_market_daily_cards_to_own_groups(tips_by_market, target_date, stats)
+    _send_global_daily_stats_only_to_stats_group(stats_header)
 
     # Auto-void alte Pending Tipps (älter als 3 Tage)
     _auto_void_old_pending()
@@ -17578,7 +17717,7 @@ def format_result_appendix(tip, result, status):
     ht_home = result.get("ht_home", "?")
     ht_away = result.get("ht_away", "?")
 
-    status_emoji = "✅ GEWONNEN" if status == "won" else "❌ VERLOREN"
+    status_emoji = "✅ V GEWONNEN" if status == "won" else "❌ X VERLOREN"
     profit = round(float(str(odds).replace(",", ".")) * float(units or 1) - float(units or 1), 2) if status == "won" else -float(units or 1)
     profit_str = f"+{profit}" if profit >= 0 else str(profit)
     profit_emoji = "🟢" if status == "won" else "🔴"
@@ -17586,6 +17725,7 @@ def format_result_appendix(tip, result, status):
     nl = "\n"
     msg = f"━━━━━━━━━━━━━━━━━━{nl}"
     msg += f"<b>{status_emoji}</b>{nl}"
+    msg += f"📌 Tipp-Bewertung: <b>{'✅ V' if status == 'won' else '❌ X'}</b>{nl}"
     msg += f"⚽ Endstand: <b>{home_s} : {away_s}</b>"
     if ht_home != "?" and ht_away != "?":
         msg += f" (HZ: {ht_home}:{ht_away})"
@@ -17609,7 +17749,7 @@ def format_result_text(tip, result, status):
     ht_away = result.get("ht_away", "?")
     total = result.get("total_goals", "?")
 
-    status_emoji = "✅ GEWONNEN" if status == "won" else "❌ VERLOREN"
+    status_emoji = "✅ V GEWONNEN" if status == "won" else "❌ X VERLOREN"
     profit = round(float(str(odds).replace(",", ".")) * float(units or 1) - float(units or 1), 2) if status == "won" else -float(units or 1)
     profit_str = f"+{profit}" if profit >= 0 else str(profit)
 
@@ -17660,12 +17800,16 @@ def _ntr_group_key(tip):
     market = str(tip.get("market") or "").lower()
     if market in {"advanced_props", "player_prop", "player_props", "prop"}:
         return "props"
-    if "builder" in market or market in {"combo_multi", "multi_combo"}:
-        return "builder" if "builder" in market else "combos"
+    if "builder" in market:
+        return "builder"
+    if market in {"combo_multi", "multi_combo", "combos"}:
+        return "combos"
     return {
         "btts": "btts", "over25": "over25", "combo": "combo",
         "btts_ht": "btts_ht", "over15_ht": "over15_ht",
-        "corners": "stats", "cards": "stats", "scorer": "stats",
+        "corners": "corners", "corner": "corners", "cards": "stats",
+        "scorer": "scorer", "goal_hunter": "scorer", "late_goals": "scorer",
+        "advanced_props": "builder", "props": "builder",
     }.get(market, "stats")
 
 
@@ -17883,6 +18027,125 @@ def _ntr_group_summary_text(group_key, tip_date=None):
     pe = "🟢" if s["profit"] >= 0 else "🔴"
     ps = f"+{s['profit']:.2f}" if s["profit"] >= 0 else f"{s['profit']:.2f}"
     return f"📊 Gruppe heute: <b>{s['w']}W/{s['l']}L</b> · {s['winrate']:.1f}% · {pe}<b>{ps}u</b> · ROI {s['roi']:.1f}%"
+
+
+# ============================================================
+# V31 HOTFIX — jede Gruppe: Tag / Monat / ROI / Profit / Ligaranking
+# ============================================================
+
+def _ntr_fetch_tip_rows_for_group(group_key, start_date=None, exact_date=None, limit=3000):
+    """Fetch settled tips and filter by our canonical group key in Python."""
+    if not SUPABASE_URL or not SUPABASE_KEY:
+        return []
+    headers = {"apikey": SUPABASE_KEY, "Authorization": f"Bearer {SUPABASE_KEY}"}
+    params = {
+        "select": "status,odds,odds_taken,units,profit_units,group_key,market,league,date",
+        "status": "in.(won,lost,void)",
+        "limit": str(limit),
+        "order": "date.desc",
+    }
+    if exact_date:
+        params["date"] = f"eq.{str(exact_date)[:10]}"
+    elif start_date:
+        params["date"] = f"gte.{str(start_date)[:10]}"
+    try:
+        r = requests.get(f"{SUPABASE_URL}/rest/v1/tips", headers=headers, params=params, timeout=12)
+        rows = r.json() if r.ok and r.text else []
+    except Exception:
+        rows = []
+    if not isinstance(rows, list):
+        return []
+    return [row for row in rows if _ntr_group_key(row) == group_key]
+
+
+def _ntr_calc_stats_from_rows(rows):
+    w = sum(1 for r in rows if str(r.get("status")).lower() == "won")
+    l = sum(1 for r in rows if str(r.get("status")).lower() == "lost")
+    v = sum(1 for r in rows if str(r.get("status")).lower() == "void")
+    profit = sum(
+        float(r.get("profit_units")) if r.get("profit_units") is not None
+        else _ntr_profit_units(r, str(r.get("status")).lower())
+        for r in rows
+    )
+    staked = sum(float(r.get("units") or 1.0) for r in rows if str(r.get("status")).lower() in {"won", "lost"})
+    settled = w + l
+    return {
+        "w": w, "l": l, "v": v, "settled": settled,
+        "profit": round(profit, 2),
+        "staked": round(staked, 2),
+        "roi": round(profit / staked * 100, 1) if staked else 0.0,
+        "winrate": round(w / settled * 100, 1) if settled else 0.0,
+    }
+
+
+def _ntr_league_ranking_from_rows(rows, min_bets=1, limit=5):
+    by_lg = {}
+    for r in rows:
+        lg = str(r.get("league") or "?").strip() or "?"
+        if lg not in by_lg:
+            by_lg[lg] = []
+        by_lg[lg].append(r)
+    ranking = []
+    for lg, lg_rows in by_lg.items():
+        st = _ntr_calc_stats_from_rows(lg_rows)
+        if st["settled"] + st["v"] >= min_bets:
+            ranking.append((lg, st))
+    ranking.sort(key=lambda x: (x[1]["profit"], x[1]["roi"], x[1]["w"]), reverse=True)
+    return ranking[:limit]
+
+
+def _ntr_group_performance_footer(group_key, ref_date=None, include_title=True):
+    """Compact block used inside every tip/combo/builder message."""
+    try:
+        ref = datetime.now(timezone.utc).date()
+        if ref_date:
+            ref = datetime.fromisoformat(str(ref_date)[:10]).date()
+    except Exception:
+        ref = datetime.now(timezone.utc).date()
+
+    month_start = ref.replace(day=1)
+    today_rows = _ntr_fetch_tip_rows_for_group(group_key, exact_date=ref.isoformat(), limit=1500)
+    month_rows = _ntr_fetch_tip_rows_for_group(group_key, start_date=month_start.isoformat(), limit=3000)
+
+    today_stats = _ntr_calc_stats_from_rows(today_rows)
+    month_stats = _ntr_calc_stats_from_rows(month_rows)
+    leagues = _ntr_league_ranking_from_rows(month_rows, min_bets=1, limit=3)
+
+    if today_stats["settled"] + month_stats["settled"] <= 0:
+        return ""
+
+    def line(label, st):
+        pe = "🟢" if st["profit"] >= 0 else "🔴"
+        ps = f"+{st['profit']:.2f}" if st["profit"] >= 0 else f"{st['profit']:.2f}"
+        return f"{label}: {st['w']}W/{st['l']}L · WR {st['winrate']:.1f}% · ROI {st['roi']:.1f}% · {pe}{ps}U"
+
+    nl = "\n"
+    out = f"{nl}━━━━━━━━━━━━━━━━━━{nl}"
+    if include_title:
+        out += "📊 <b>Bewertung dieser Gruppe</b>" + nl
+    out += line("📅 Tag", today_stats) + nl
+    out += line("🗓️ Monat", month_stats)
+    if leagues:
+        out += nl + "🏆 Ligaranking Monat:"
+        medals = ["🥇", "🥈", "🥉"]
+        for i, (lg, st) in enumerate(leagues):
+            ps = f"+{st['profit']:.1f}" if st["profit"] >= 0 else f"{st['profit']:.1f}"
+            out += nl + f"{medals[i] if i < 3 else '•'} {lg}: {st['w']}/{st['settled']} · ROI {st['roi']:.1f}% · {ps}U"
+    return out
+
+
+def _ntr_group_daily_card_v31(group_key, title, target_date, today_count=0):
+    """Daily card per Telegram group: only this group's Tag/Monat/ROI/Profit/Ligaranking."""
+    nl = "\n"
+    msg = f"<b>{title} — DAILY</b>{nl}<i>{target_date}</i>{nl}━━━━━━━━━━━━━━━━━━{nl}"
+    msg += f"📨 Heute gesendet: <b>{today_count}</b> Tipps{nl}"
+    footer = _ntr_group_performance_footer(group_key, target_date, include_title=False)
+    if footer:
+        msg += footer.replace("\n━━━━━━━━━━━━━━━━━━\n", "")
+    else:
+        msg += "📈 Bewertung: Daten werden gesammelt. Mindestens 1 ausgewerteter Tipp nötig."
+    msg += nl + "━━━━━━━━━━━━━━━━━━"
+    return msg
 
 
 def run_settlement():
@@ -18124,11 +18387,11 @@ def run_settlement():
 
             # Gruppe-für-Gruppe: jeder Kanal erhält ausschließlich seine eigene Bilanz.
             _sent_chats = set()
-            for _grp_key in ["btts", "over25", "combo", "btts_ht", "over15_ht", "combos", "stats", "props", "builder", "advanced_props"]:
+            for _grp_key in ["btts", "over25", "combo", "btts_ht", "over15_ht", "combos", "corners", "scorer", "goal_hunter", "builder", "advanced_props"]:
                 _cid = TELEGRAM_GROUPS.get(_grp_key)
                 if not _cid or str(_cid) in _sent_chats:
                     continue
-                _canonical = "props" if _grp_key == "advanced_props" else _grp_key
+                _canonical = "builder" if _grp_key == "advanced_props" else ("scorer" if _grp_key == "goal_hunter" else _grp_key)
                 _gs = _ntr_group_stats(_canonical, today)
                 if not _gs or (_gs["w"] + _gs["l"] + _gs["v"] == 0):
                     continue
@@ -18137,7 +18400,7 @@ def run_settlement():
                 _title = {
                     "btts":"BTTS", "over25":"OVER 2.5", "combo":"BTTS + OVER",
                     "btts_ht":"BTTS HT", "over15_ht":"OVER 1.5 HT", "combos":"MULTI-COMBOS",
-                    "stats":"STATS / ECKEN / KARTEN", "props":"PLAYER PROPS", "builder":"BET BUILDER",
+                    "corners":"CORNER SNIPER", "scorer":"GOAL HUNTER", "builder":"PROP BUILDER",
                 }.get(_canonical, _canonical.upper())
                 _gmsg = (
                     f"🏆 <b>AUSWERTUNG — {_title}</b>\n"
@@ -23819,6 +24082,10 @@ def main():
                 log(f"   {combo['label']}: Quote {combo['total_odds']}")
                 msg = format_combo_telegram_message(combo)
                 if msg:
+                    try:
+                        msg = _ntr_enhance_message_with_stats(msg, combo_chat)
+                    except Exception:
+                        pass
                     _combo_mid = send_telegram(msg, combo_chat)
                     generated += 1
                     try:
