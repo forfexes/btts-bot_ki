@@ -1210,35 +1210,40 @@ def extract_json_array(text):
 def normalize_team_name(name):
     if not name:
         return ""
-
-    n = name.lower().strip()
-    remove = [
-        " fc", " cf", " ac", " sc", " sv", " 1.",
-        "fc ", "ac ", "sc ", "sv ", "1. ",
-        " e.v.", " ev",
-    ]
-
-    for x in remove:
-        n = n.replace(x, " ")
-
+    import unicodedata as _ud
+    n = _ud.normalize("NFKD", str(name).lower().strip())
+    n = "".join(c for c in n if not _ud.combining(c))
+    replacements = {
+        "england national team": "england",
+        "argentina national team": "argentina",
+        "england men": "england",
+        "argentina men": "argentina",
+        "new england revolution 2": "new england revolution ii",
+        "new england rev ii": "new england revolution ii",
+        "columbus crew 2": "columbus crew ii",
+    }
+    n = replacements.get(n, n)
+    n = re.sub(r"\\b(fc|cf|ac|sc|sv|afc|cfc|club de futbol|football club)\\b", " ", n)
+    n = re.sub(r"\\b(u[- ]?21|u[- ]?20|u[- ]?19|u[- ]?18|women|w|reserves?)\\b", " ", n)
+    n = re.sub(r"[^a-z0-9]+", " ", n)
     return " ".join(n.split())
 
 
 def teams_match(name1, name2):
-    n1 = normalize_team_name(name1)
-    n2 = normalize_team_name(name2)
-
-    if not n1 or not n2:
-        return False
-
-    if n1 == n2 or n1 in n2 or n2 in n1:
-        return True
-
-    w1 = [w for w in n1.split() if len(w) > 3]
-    w2 = [w for w in n2.split() if len(w) > 3]
-
-    return any(w in n2 for w in w1) or any(w in n1 for w in w2)
-
+    # National teams must match exactly (Identity Hub guard).
+    try:
+        from netrattler_identity_hub import teams_match as _identity_teams_match
+        return _identity_teams_match(name1, name2)
+    except Exception:
+        n1 = normalize_team_name(name1)
+        n2 = normalize_team_name(name2)
+        if not n1 or not n2:
+            return False
+        if n1 == n2:
+            return True
+        if n1 in {"england", "argentina"} or n2 in {"england", "argentina"}:
+            return n1 == n2
+        return (len(n1) >= 8 and n1 in n2) or (len(n2) >= 8 and n2 in n1)
 
 def parse_odds(val):
     try:
@@ -19692,6 +19697,21 @@ def _ntr_market_line(text, default=1.0):
 
 def _ntr_prop_category(text):
     low = str(text or "").lower()
+    if "either team to score? 1st half" in low or "both teams to score 1st half" in low:
+        return "btts_ht"
+    if "both teams to receive a card" in low:
+        return "team_cards"
+    if " to score?" in low or "team to score" in low:
+        return "match_goals"
+
+    # Team-/Matchmärkte zuerst, damit "receive a card" nicht als Player Booking endet.
+    if "both teams to receive a card" in low or "both teams carded" in low:
+        return "team_cards"
+    if "both teams to score" in low or "either team to score" in low:
+        return "btts"
+    if "to qualify" in low or "qualify" in low:
+        return "result"
+
     if "shots on target from outside" in low or "shot on target from outside" in low:
         return "sot_outside_box"
     if "outside the box" in low and "shot" in low:
@@ -19700,15 +19720,20 @@ def _ntr_prop_category(text):
         return "sot"
     if "shot" in low:
         return "shots"
-    if "tackles received" in low or "tackled" in low:
+    if "tackles received" in low or "times tackled" in low or "to be tackled" in low:
         return "tackles_received"
-    if "tackles committed" in low or "tackles made" in low or "player tackles" in low:
+    if (
+        "tackles committed" in low
+        or "tackles made" in low
+        or "player tackles" in low
+        or "tackles won" in low
+    ):
         return "tackles_committed"
     if "tackle" in low:
         return "tackles_committed"
     if "fouls won" in low or "to be fouled" in low:
         return "fouls_won"
-    if "foul" in low:
+    if "fouls committed" in low or "foul committed" in low or "foul" in low:
         return "fouls"
     if "booked" in low or "receive a card" in low or "carded" in low:
         return "yellow_cards"
@@ -19716,16 +19741,10 @@ def _ntr_prop_category(text):
         return "first_scorer"
     if "last goalscorer" in low or "last goal scorer" in low:
         return "last_scorer"
-    if "to score" in low or "anytime goalscorer" in low:
+    if "anytime goalscorer" in low or "player to score" in low:
         return "score"
     if "assist" in low:
         return "assist"
-    if "to qualify" in low or "qualify" in low:
-        return "result"
-    if "both teams to receive a card" in low:
-        return "team_cards"
-    if "both teams to score" in low:
-        return "btts"
     if "corner" in low:
         return "team_corners"
     if "save" in low:
@@ -20012,6 +20031,237 @@ def run_advanced_props_bot(active_leagues: list, fixtures_cache: dict, target_da
                 log(f"🔑 Kandidaten nach OddsAPI: {len(foul_candidates)} Fouls/Tackles · {len(booking_candidates)} Bookings · {len(shot_candidates)} Shots/Goals")
         except Exception as _oae:
             log(f"🔑 OddsAPI Props Error: {str(_oae)[:60]}", "WARN")
+
+    # Direktverbindung zum täglichen Player-Stats-Scraper.
+    total = len(foul_candidates) + len(booking_candidates) + len(shot_candidates)
+    if total < 4 and SUPABASE_URL and SUPABASE_KEY:
+        log("🔑 Lade Player-Stats aus Supabase...")
+
+        try:
+            _headers = {
+                "apikey": SUPABASE_KEY,
+                "Authorization": f"Bearer {SUPABASE_KEY}",
+            }
+
+            _contexts = []
+            for _league_name, _league_fixtures in (fixtures_cache or {}).items():
+                for _fixture in (_league_fixtures or []):
+                    _home = str(_fixture.get("home") or "").strip()
+                    _away = str(_fixture.get("away") or "").strip()
+                    if not _home or not _away:
+                        continue
+                    _contexts.append({
+                        "league": _league_name,
+                        "home": _home,
+                        "away": _away,
+                        "match": f"{_home} vs {_away}",
+                        "kickoff": _fixture.get("time") or _fixture.get("time_local") or "TBD",
+                    })
+
+            _aliases = {
+                "totalshots": "shots",
+                "shots": "shots",
+                "shotsontarget": "sot",
+                "shots_on_target": "sot",
+                "sot": "sot",
+                "foulscommitted": "fouls",
+                "fouls_committed": "fouls",
+                "foulswon": "fouls_won",
+                "fouls_won": "fouls_won",
+                "yellowcards": "cards",
+                "yellow_cards": "cards",
+                "cards": "cards",
+                "tackles": "tackles_committed",
+                "tacklescommitted": "tackles_committed",
+                "tackles_committed": "tackles_committed",
+                "tacklesreceived": "tackles_received",
+                "tackles_received": "tackles_received",
+                "timestackled": "tackles_received",
+                "times_tackled": "tackles_received",
+                "goals": "goals",
+                "goalassist": "assists",
+                "assists": "assists",
+                "saves": "saves",
+                "offsides": "offsides",
+                "interceptions": "interceptions",
+                "clearances": "clearances",
+            }
+
+            _wanted_stats = ",".join(sorted(set(_aliases.keys())))
+            _rows = []
+            _page_size = 1000
+            _max_rows = int(os.environ.get("PROP_STATS_MAX_ROWS", "12000"))
+            _offset = 0
+
+            while _offset < _max_rows:
+                _params = {
+                    "select": (
+                        "player_id,player_name,player,team,team_name,league,"
+                        "match_date,date,stat_name,stat_value,minutes,shots,"
+                        "shots_on_target,sot,fouls_committed,fouls_won,cards,"
+                        "yellow_cards,tackles,tackles_committed,tackles_received,"
+                        "goals,assists,saves,offsides,interceptions,clearances"
+                    ),
+                    "order": "match_date.desc.nullslast",
+                }
+                _range_headers = dict(_headers)
+                _range_headers["Range"] = f"{_offset}-{_offset + _page_size - 1}"
+                _range_headers["Prefer"] = "count=exact"
+                _response = requests.get(
+                    f"{SUPABASE_URL.rstrip('/')}/rest/v1/player_match_stats",
+                    headers=_range_headers,
+                    params=_params,
+                    timeout=30,
+                )
+                if not _response.ok:
+                    log(
+                        f"🔑 Supabase Player Stats HTTP {_response.status_code}: "
+                        f"{_response.text[:120]}",
+                        "WARN",
+                    )
+                    break
+                _batch = _response.json() or []
+                _rows.extend(_batch)
+                _content_range = _response.headers.get("Content-Range", "")
+                log(f"🔑 Supabase Page {_offset // _page_size + 1}: {len(_batch)} Rows · Range={_content_range}")
+                if len(_batch) < _page_size:
+                    break
+                _offset += _page_size
+
+            # Neueste Werte pro Spieler/Team/Stat sammeln.
+            _aggregated = {}
+            _wide_columns = {
+                "shots": "shots", "shots_on_target": "sot", "sot": "sot",
+                "fouls_committed": "fouls", "fouls_won": "fouls_won",
+                "cards": "cards", "yellow_cards": "cards",
+                "tackles": "tackles_committed",
+                "tackles_committed": "tackles_committed",
+                "tackles_received": "tackles_received",
+                "goals": "goals", "assists": "assists", "saves": "saves",
+                "offsides": "offsides", "interceptions": "interceptions",
+                "clearances": "clearances",
+            }
+
+            def _append_value(_row, _canonical, _raw_value):
+                try:
+                    _value = float(_raw_value)
+                except Exception:
+                    return
+                _player_name = str(_row.get("player_name") or _row.get("player") or "").strip()
+                _team_name = str(_row.get("team") or _row.get("team_name") or "").strip()
+                if not _player_name or not _team_name:
+                    return
+                _key = (
+                    normalize_team_name(_team_name), _player_name, _team_name,
+                    str(_row.get("league") or ""), _canonical,
+                )
+                _aggregated.setdefault(_key, []).append(_value)
+
+            for _row in _rows:
+                if not isinstance(_row, dict):
+                    continue
+                _raw_stat = str(_row.get("stat_name") or "").strip()
+                _stat_key = _raw_stat.lower().replace(" ", "").replace("-", "_")
+                _canonical = _aliases.get(_stat_key)
+                if _canonical and _row.get("stat_value") is not None:
+                    _append_value(_row, _canonical, _row.get("stat_value"))
+                for _column, _canonical in _wide_columns.items():
+                    _raw_value = _row.get(_column)
+                    if _raw_value is not None and str(_raw_value) not in {"", "0", "0.0"}:
+                        _append_value(_row, _canonical, _raw_value)
+
+            _before = total
+            _matched_players = set()
+
+            for (_team_norm, _player_name, _team_name, _db_league, _stat), _values in _aggregated.items():
+                if not _values:
+                    continue
+
+                _ctx = None
+                for _candidate_ctx in _contexts:
+                    if teams_match(_team_name, _candidate_ctx["home"]) or teams_match(
+                        _team_name, _candidate_ctx["away"]
+                    ):
+                        _ctx = _candidate_ctx
+                        break
+                if not _ctx:
+                    continue
+
+                _recent = _values[:10]
+                _avg = sum(_recent) / len(_recent)
+                _games = len(_recent)
+                if _games < 3:
+                    continue
+
+                _match_name = _ctx["match"]
+                _league_name = _ctx["league"] or _db_league
+                _kickoff = _ctx["kickoff"]
+                _matched_players.add((_player_name, _match_name))
+
+                if _stat == "shots" and _avg >= 1.5:
+                    _market = "3+ Shots" if _avg >= 2.8 else "2+ Shots"
+                    _add(
+                        shot_candidates, _player_name, _team_name, _match_name,
+                        _league_name, _kickoff, _market, round(_avg, 2), "shots"
+                    )
+                elif _stat == "sot" and _avg >= 0.65:
+                    _market = "2+ Shots on Target" if _avg >= 1.45 else "1+ Shot on Target"
+                    _add(
+                        shot_candidates, _player_name, _team_name, _match_name,
+                        _league_name, _kickoff, _market, round(_avg, 2), "shots"
+                    )
+                elif _stat == "goals" and _avg >= 0.30:
+                    _add(
+                        shot_candidates, _player_name, _team_name, _match_name,
+                        _league_name, _kickoff, "Anytime Goalscorer",
+                        round(_avg, 2), "shots"
+                    )
+                elif _stat == "fouls" and _avg >= 1.15:
+                    _market = "2+ Fouls Committed" if _avg >= 1.70 else "1+ Foul Committed"
+                    _add(
+                        foul_candidates, _player_name, _team_name, _match_name,
+                        _league_name, _kickoff, _market, round(_avg, 2), "foul"
+                    )
+                elif _stat == "fouls_won" and _avg >= 1.15:
+                    _market = "2+ Fouls Won" if _avg >= 1.70 else "1+ Foul Won"
+                    _add(
+                        foul_candidates, _player_name, _team_name, _match_name,
+                        _league_name, _kickoff, _market, round(_avg, 2), "foul_won"
+                    )
+                elif _stat == "tackles_committed" and _avg >= 1.25:
+                    _market = "3+ Tackles Committed" if _avg >= 2.65 else "2+ Tackles Committed"
+                    _add(
+                        foul_candidates, _player_name, _team_name, _match_name,
+                        _league_name, _kickoff, _market, round(_avg, 2), "tackles"
+                    )
+                elif _stat == "tackles_received" and _avg >= 1.25:
+                    _market = "3+ Tackles Received" if _avg >= 2.65 else "2+ Tackles Received"
+                    _add(
+                        foul_candidates, _player_name, _team_name, _match_name,
+                        _league_name, _kickoff, _market, round(_avg, 2),
+                        "tackles_received"
+                    )
+                elif _stat == "cards" and _avg >= 0.18:
+                    _add(
+                        booking_candidates, _player_name, _team_name, _match_name,
+                        _league_name, _kickoff, "Player to be Booked",
+                        round(_avg, 3), "booking"
+                    )
+
+            total = len(foul_candidates) + len(booking_candidates) + len(shot_candidates)
+            log(
+                f"🔑 Supabase Stats: {len(_rows)} Rows geladen · "
+                f"{len(_matched_players)} Spieler heutigen Teams zugeordnet · "
+                f"{total - _before} Kandidaten ergänzt"
+            )
+
+        except Exception as _supabase_prop_error:
+            log(
+                f"🔑 Supabase Player-Stats Error: "
+                f"{type(_supabase_prop_error).__name__}: "
+                f"{str(_supabase_prop_error)[:140]}",
+                "WARN",
+            )
 
     total = len(foul_candidates) + len(booking_candidates) + len(shot_candidates)
     log(f"🔑 Kandidaten: {len(foul_candidates)} Fouls · {len(booking_candidates)} Bookings · {len(shot_candidates)} Shots")
@@ -20785,16 +21035,33 @@ def fetch_pinnacle_player_props() -> List[Dict]:
             # Kategorie-Feld kann je nach API-Version anders heissen — alle Varianten prüfen
             cat = (sp.get("category") or sp.get("categoryName") or sp.get("type") or "").lower()
             desc = sp.get("description", "") or sp.get("name", "")
-            # Breitere Erkennung: "player" im Kategorienamen ODER im Beschreibungstext
-            is_player_prop = "player" in cat or any(
-                k in desc.lower() for k in ["to score", "to assist", "to be booked", "shots", "fouls", "tackles", "saves", "carded"]
-            )
-            if not is_player_prop:
-                continue
             parent = m.get("parent") or {}
             pparts = parent.get("participants", [])
             ph = next((p.get("name","") for p in pparts if p.get("alignment")=="home"), "")
             pa = next((p.get("name","") for p in pparts if p.get("alignment")=="away"), "")
+
+            desc_low = desc.lower()
+            player_keywords = [
+                "anytime goalscorer", "first goalscorer", "last goalscorer",
+                "player to score", "to assist", "to be booked", "shots",
+                "shot on target", "fouls committed", "fouls won", "tackles",
+                "saves", "offsides", "passes", "interceptions", "clearances",
+            ]
+            team_builder_keywords = [
+                "either team to score", "both teams to score", "team to score",
+                " to score?", "both teams to receive a card", "to qualify",
+                "to reach the final", "1st half goals", "2nd half goals",
+            ]
+            is_player_category = "player" in cat
+            is_team_category = "team" in cat or "reach the final" in cat
+            is_player_description = any(k in desc_low for k in player_keywords)
+            is_team_builder_description = any(k in desc_low for k in team_builder_keywords)
+
+            if not (
+                is_player_category or is_team_category
+                or is_player_description or is_team_builder_description
+            ):
+                continue
             league_name = (m.get("league") or {}).get("name", "")
             starts = m.get("startTime", "") or parent.get("startTime", "")
             for part in m.get("participants", []):
@@ -20813,6 +21080,8 @@ def fetch_pinnacle_player_props() -> List[Dict]:
                     "match": f"{ph} vs {pa}" if ph else desc,
                     "league": league_name,
                     "starts": starts,
+                    "special_category": cat,
+                    "is_team_market": bool(is_team_category or is_team_builder_description),
                 })
         if skipped_no_price:
             log(f"   🔑 Pinnacle Props: {skipped_no_price} Props ohne Preis übersprungen")
@@ -20831,54 +21100,43 @@ _SKIP_PROP_KEYWORDS = [
 
 # Leg-Kategorien für Bet Builder
 _LEG_CATEGORY = {
-    # Spezifische Schuss-Typen ZUERST (vor allg. "shots")
-    "sot_outside_box": ["shots on target from outside", "shot on target from outside", "sot from outside"],
-    "shots_outside_box": ["shots from outside the box", "shot from outside the box"],
-    "sot": ["shots on target", "shot on target", "shots on goal"],
-    "shots": ["total shots", "player shots", "number of shots"],
-    # Tackle-Typen spezifisch zuerst
-    "tackles_received": ["tackles received", "to be tackled", "tackled by"],
-    "tackles_committed": ["tackles committed", "tackles made", "player tackles", "number of tackles"],
-    # Fouls
-    "fouls_won": ["fouls won", "to be fouled", "fouled"],
-    "fouls": ["fouls committed", "foul committed", "number of fouls"],
-    # Karten
-    "booked": ["to be booked", "receive a card", "be carded", "yellow card"],
-    "team_cards": ["both teams to receive a card", "team to receive a card"],
-    # Tore/Scorer
-    "first_scorer": ["first goalscorer", "first goal scorer", "first player to score"],
-    "last_scorer":  ["last goalscorer", "last goal scorer"],
-    "assist":       ["to assist", "score or assist", "provide an assist"],
-    "score":        ["anytime goalscorer", "anytime scorer", "to score anytime"],
-    # Extras
-    "saves":    ["goalkeeper saves", "player saves", "number of saves"],
-    "offsides": ["to be caught offside", "offside"],
-    "passes":   ["number of passes", "pass completions"],
-    "corners":  ["corners", "corner kicks"],
-    "result":   ["to qualify", "qualify", "to win"],
+    "btts_ht": ["either team to score? 1st half", "both teams to score 1st half", "btts 1st half", "btts ht"],
+    "half_goals_1st": ["over 1.5 goals 1st half", "over 2 goals 1st half", "1st half goals"],
+    "half_goals_2nd": ["over 1.5 goals 2nd half", "over 2 goals 2nd half", "2nd half goals"],
+    "team_cards": ["both teams to receive a card", "both teams carded"],
+    "btts": ["both teams to score", "either team to score"],
+    "result": ["to qualify", "qualify", "to reach the final"],
+    "first_scorer": ["first goalscorer", "first goal scorer"],
+    "last_scorer": ["last goalscorer", "last goal scorer"],
+    "score": ["anytime goalscorer", "player to score", "score or assist"],
+    "match_goals": ["team to score", " to score?", "total goals"],
+    "assist": ["to assist", "score or assist"],
+    "booked": ["to be booked", "receive a card", "be carded"],
+    "sot_outside_box": ["shots on target from outside", "shot on target from outside"],
+    "shots_outside_box": ["shots from outside", "shot from outside"],
+    "sot": ["shots on target", "shot on target"],
+    "shots": ["shots", "shots on goal"],
+    "fouls_won": ["fouls won", "to be fouled"],
+    "fouls": ["fouls committed", "foul committed", "foul"],
+    "tackles_received": ["tackles received", "times tackled", "to be tackled"],
+    "tackles_committed": ["tackles committed", "tackles made", "player tackles", "tackles won", "tackle"],
+    "corners": ["corners", "corner kicks"],
+    "saves": ["saves", "goalkeeper saves"],
+    "offsides": ["offside"],
 }
 
-# Team-Props die NICHT als Player Props zählen
-_TEAM_PROP_EXCLUDES = [
-    "to score?", "team to score", "either team to score",
-    "both teams to score", "clean sheet",
-    "first team to score", "last team to score",
-    "england to score", "argentina to score", "germany to score",
-    "france to score", "brazil to score", "spain to score",
-]
-
 def _get_leg_category(prop_name):
-    pn = prop_name.lower()
-    # 🆕 "Oder"-Substitute-Märkte erkennen (z.B. "Player A or Player B to be Booked")
-    # — höhere Trefferwahrscheinlichkeit, da zwei Spieler statt einem abgedeckt sind.
-    if " or " in pn and " to " in pn:
-        for cat, keywords in _LEG_CATEGORY.items():
-            if any(k in pn for k in keywords):
-                return cat  # gleiche Kategorie, _is_either wird separat markiert
+    pn = str(prop_name or "").lower()
+    matches = []
     for cat, keywords in _LEG_CATEGORY.items():
-        if any(k in pn for k in keywords):
-            return cat
-    return "other"
+        for keyword in keywords:
+            if keyword in pn:
+                matches.append((len(keyword), cat))
+    if not matches:
+        return "other"
+    # Spezifischster/längster Ausdruck gewinnt.
+    matches.sort(reverse=True)
+    return matches[0][1]
 
 
 def _is_either_market(prop_name):
@@ -21003,69 +21261,28 @@ def run_pinnacle_props_bot(win_start_utc=None, win_end_utc=None, ch_tz=None, top
         log("🔑 Pinnacle Props: keine Specials verfügbar")
         return 0
 
-    # 🆕 Supabase player_match_stats laden — ergänzt Pinnacle mit historischen Stats
-    _supabase_stat_rows = []
-    if SUPABASE_URL and SUPABASE_KEY:
-        try:
-            log("🔑 Lade Player-Stats aus Supabase...")
-            _sb_h = {"apikey": SUPABASE_KEY, "Authorization": f"Bearer {SUPABASE_KEY}"}
-            _sb_r = requests.get(
-                f"{SUPABASE_URL}/rest/v1/player_match_stats",
-                headers=_sb_h,
-                params={"select": "player_name,team,stat_name,stat_value,league,match_date",
-                        "limit": "5000", "order": "match_date.desc"},
-                timeout=12,
-            )
-            if _sb_r.ok:
-                _supabase_stat_rows = _sb_r.json() or []
-                # Spieler-Avg berechnen
-                _player_avgs = {}
-                for row in _supabase_stat_rows:
-                    pn = row.get("player_name", "")
-                    sn = row.get("stat_name", "")
-                    sv = row.get("stat_value")
-                    if pn and sn and sv is not None:
-                        key = (pn, sn)
-                        if key not in _player_avgs:
-                            _player_avgs[key] = []
-                        _player_avgs[key].append(float(sv))
-                # Kandidaten aus Stats erstellen
-                _stats_candidates = 0
-                for (pn, sn), vals in _player_avgs.items():
-                    avg = sum(vals) / len(vals)
-                    # Schüsse → shots
-                    if sn in ("totalShots", "shots") and avg >= 1.5:
-                        props.append({"player_prop": f"{pn} 1+ Shots", "selection": f"{pn} Over",
-                                      "odds": 1.60, "prob": 60, "match": "", "league": "",
-                                      "starts": "", "_from_supabase": True, "_stat_avg": avg})
-                        _stats_candidates += 1
-                    # SOT
-                    elif sn in ("shotsOnTarget", "shotsOnGoal") and avg >= 1.0:
-                        props.append({"player_prop": f"{pn} 1+ Shots on Target", "selection": f"{pn} Over",
-                                      "odds": 1.80, "prob": 55, "match": "", "league": "",
-                                      "starts": "", "_from_supabase": True, "_stat_avg": avg})
-                        _stats_candidates += 1
-                    # Fouls
-                    elif sn in ("foulsCommitted", "fouls") and avg >= 1.5:
-                        props.append({"player_prop": f"{pn} 2+ Fouls Committed", "selection": f"{pn} Over",
-                                      "odds": 1.90, "prob": 55, "match": "", "league": "",
-                                      "starts": "", "_from_supabase": True, "_stat_avg": avg})
-                        _stats_candidates += 1
-                    # Tackles
-                    elif sn in ("totalTackles", "tackles") and avg >= 2.0:
-                        props.append({"player_prop": f"{pn} 2+ Tackles Committed", "selection": f"{pn} Over",
-                                      "odds": 1.85, "prob": 55, "match": "", "league": "",
-                                      "starts": "", "_from_supabase": True, "_stat_avg": avg})
-                        _stats_candidates += 1
-                    # Yellow Cards (nur wenn regelmäßig)
-                    elif sn == "yellowCards" and avg >= 0.25 and len(vals) >= 5:
-                        props.append({"player_prop": f"{pn} To Be Booked", "selection": f"{pn} Yes",
-                                      "odds": 3.50, "prob": 28, "match": "", "league": "",
-                                      "starts": "", "_from_supabase": True, "_stat_avg": avg})
-                        _stats_candidates += 1
-                log(f"🔑 Supabase Stats: {len(_supabase_stat_rows)} Rows geladen · {_stats_candidates} Kandidaten ergänzt")
-        except Exception as _sbe:
-            log(f"🔑 Supabase Stats Error: {str(_sbe)[:60]}", "WARN")
+    # Diagnose der tatsächlich angebotenen Special-Märkte.
+    _raw_category_counts = {}
+    for _raw_prop in props:
+        if not isinstance(_raw_prop, dict):
+            continue
+        _text = (
+            f"{_raw_prop.get('special_category', '')} "
+            f"{_raw_prop.get('player_prop', '')} "
+            f"{_raw_prop.get('selection', '')}"
+        )
+        _category = _get_leg_category(_text)
+        _raw_category_counts[_category] = _raw_category_counts.get(_category, 0) + 1
+    log(
+        "   🔑 Pinnacle Roh-Kategorien: "
+        + ", ".join(
+            f"{key}={value}" for key, value in sorted(
+                _raw_category_counts.items(),
+                key=lambda item: item[1],
+                reverse=True,
+            )[:12]
+        )
+    )
 
     # Alle validen Props sammeln
     valid = []
@@ -21084,8 +21301,6 @@ def run_pinnacle_props_bot(win_start_utc=None, win_end_utc=None, ch_tz=None, top
             continue
         if any(kw in prop_name for kw in _SKIP_PROP_KEYWORDS):
             continue
-        if any(kw in prop_name for kw in _TEAM_PROP_EXCLUDES):
-            continue  # Team-Props (z.B. "England To Score?") nicht als Player Prop werten
         if not match_name or "vs" not in match_name.lower():
             continue
         if match_name.lower() == prop_name:
@@ -21097,6 +21312,8 @@ def run_pinnacle_props_bot(win_start_utc=None, win_end_utc=None, ch_tz=None, top
 
         # 🔍 FBref Cross-Check: unabhängige Wahrscheinlichkeit gegen Pinnacle-Quote prüfen
         try:
+            if p.get("is_team_market"):
+                raise LookupError("team market")
             adj_prob, has_data, confirmed = _fbref_prop_edge_check(
                 p["selection"], p.get("league", ""), prop_name, p["prob"]
             )
@@ -21116,22 +21333,37 @@ def run_pinnacle_props_bot(win_start_utc=None, win_end_utc=None, ch_tz=None, top
                 if "+" not in s[10:] and s[10:].count("-") == 0:
                     s += "+00:00"
                 md = _dt2.fromisoformat(s)
-                if md < win_start_utc or md >= win_end_utc:
+                _grace = timedelta(minutes=90)
+                if md < (win_start_utc - _grace) or md >= (win_end_utc + _grace):
                     continue
                 p["_ko"] = md
             except Exception:
                 continue
 
-        p["_cat"] = _get_leg_category(prop_name)
-        p["_is_either"] = _is_either_market(prop_name)
+        _classification_text = (
+            f"{p.get('special_category', '')} "
+            f"{p.get('player_prop', '')} "
+            f"{p.get('selection', '')}"
+        )
+        p["_cat"] = _get_leg_category(_classification_text)
+        p["_is_either"] = _is_either_market(_classification_text)
+
+        # Unklassifizierbare Specials nicht als echte Player-Legs ausgeben.
+        if p["_cat"] == "other":
+            continue
+
         valid.append(p)
 
         _desc = p.get("player_prop", "")
-        _player = _ntr_extract_player(_desc, p.get("selection", ""))
         _category = {
             "booked": "yellow_cards",
             "tackles": "tackles_committed",
+            "corners": "team_corners",
         }.get(p["_cat"], p["_cat"])
+        _player = (
+            _desc.rstrip("?") if p.get("is_team_market")
+            else _ntr_extract_player(_desc, p.get("selection", ""))
+        )
         _ntr_collect_prop(
             _player, "", p.get("match", ""), p.get("league", ""), _desc,
             category=_category,
@@ -21153,13 +21385,7 @@ def run_pinnacle_props_bot(win_start_utc=None, win_end_utc=None, ch_tz=None, top
         return 0
 
     # 🌍 WM-Diagnose: wie viele valide Props/Matches sind World Cup?
-    # Nur echte Player Props (keine Team-Props wie "England To Score")
-    _TEAM_PROP_KEYWORDS = ["to score?", "either team", "team to score", "both teams", "clean sheet", "draw"]
-    _wc_props = [
-        p for p in valid
-        if ("world cup" in p.get("league", "").lower() or "fifa" in p.get("league", "").lower())
-        and not any(kw in p.get("player_prop", "").lower() for kw in _TEAM_PROP_KEYWORDS)
-    ]
+    _wc_props = [p for p in valid if "world cup" in p.get("league", "").lower() or "fifa" in p.get("league", "").lower()]
     _wc_matches = set(p.get("match", "?") for p in _wc_props)
     log(f"   🌍 WM-Diagnose: {len(_wc_props)} valide Props aus {len(_wc_matches)} WM-Spielen")
     if _wc_matches:
@@ -21419,6 +21645,9 @@ def run_pinnacle_props_bot(win_start_utc=None, win_end_utc=None, ch_tz=None, top
     # Sortierung nach Anstosszeit
     builders.sort(key=lambda x: x.get("_ko") or _dt2.max.replace(tzinfo=timezone.utc))
 
+    # Datum muss vor Multi-Match-Dedupe gesetzt sein.
+    _bdate = str(datetime.now(timezone.utc).date())
+
     # 🆕 MULTI-MATCH BET BUILDER (wie Nate VIP — 2-3 Spiele gemischt)
     # Nimmt das beste Leg aus 2-3 verschiedenen Matches und kombiniert sie
     _match_best = {}  # {match_name: [sorted legs]}
@@ -21451,7 +21680,6 @@ def run_pinnacle_props_bot(win_start_utc=None, win_end_utc=None, ch_tz=None, top
             if _mm_odds < 1.80:
                 continue
 
-            _bdate = str(datetime.now(timezone.utc).date())
             _sig = _combo_signature(_mm_legs, prefix="mm")
             _dup_id = f"mm_builder_{_bdate}_{_sig}".replace(" ", "_")
             if is_duplicate_combo(_dup_id, _bdate):
@@ -21486,7 +21714,6 @@ def run_pinnacle_props_bot(win_start_utc=None, win_end_utc=None, ch_tz=None, top
             pass
 
         # Deterministische Signatur — identischer Builder (gleiche Legs) wird nicht erneut gesendet
-        _bdate = str(datetime.now(timezone.utc).date())
         _sig = _combo_signature(b["legs"], prefix=f"builder_{b['match']}")
         _builder_tip_id = f"builder_{_bdate}_{_sig}".replace(" ", "_")
         if is_duplicate_combo(_builder_tip_id, _bdate):
@@ -23474,7 +23701,7 @@ def main():
                     "market": _t.get("market_name", _mk),
                     "category": {
                         "btts": "btts", "over25": "over_goals",
-                        "corners": "team_corners", "btts_ht": "btts",
+                        "corners": "team_corners", "btts_ht": "btts_ht", "over15_ht": "half_goals_1st",
                     }.get(_mk, "shots"),
                     "line": 0.5,
                     "odds": _t.get("odds", _t.get("oddsYes", 0)),
@@ -23488,6 +23715,13 @@ def main():
         _builder_prop_pool.extend(_NTR_BUILDER_PROP_POOL)
 
         # Match-Kontexte für Same-Match-/Underdog-/Narrative-Builder.
+        try:
+            from netrattler_source_hub import source_health_snapshot
+            _enabled_sources = [s for s in source_health_snapshot() if s.get("enabled")]
+            log("   🌐 Source Hub V30 aktiv: " + ", ".join(s["source"] for s in _enabled_sources[:10]) + ("..." if len(_enabled_sources) > 10 else ""))
+        except Exception as _sh_exc:
+            log(f"   🌐 Source Hub V30 Diagnose übersprungen: {str(_sh_exc)[:80]}", "WARN")
+
         _builder_contexts = []
         for _lg, _fixs in (_fixtures_cache or {}).items():
             for _fx in (_fixs or []):
