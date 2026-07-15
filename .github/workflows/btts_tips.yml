@@ -58,7 +58,7 @@ jobs:
 
         run: |
 
-          python -m py_compile btts_bot.py netrattler_builder_engine.py netrattler_settlement_v16_final.py
+          python -m py_compile btts_bot.py netrattler_builder_engine.py netrattler_settlement_v16_final.py netrattler_source_hub.py netrattler_identity_hub.py netrattler_feature_hub.py
 
           python test_netrattler_core.py
 
