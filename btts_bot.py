@@ -6355,6 +6355,17 @@ def _dup_cache_key(match, market, target_date):
     match_norm = normalize_team_name(match)
     return f"{match_norm[:20]}_{market}_{target_date}"
 
+
+_DUP_LOG_COUNTS = {}
+
+def _ntr_log_duplicate(label, key="default", max_visible=3):
+    cnt = _DUP_LOG_COUNTS.get(key, 0) + 1
+    _DUP_LOG_COUNTS[key] = cnt
+    if cnt <= max_visible:
+        log(label)
+    elif cnt == max_visible + 1:
+        log(f"   ⏭️ weitere Duplikate für {key} werden im Log gebündelt ...")
+
 def prefetch_sent_tips_for_date(target_date):
     """
     Speed-Fix:
@@ -7380,7 +7391,7 @@ def send_top_tips(tips_by_market, target_date):
                 continue
 
             if is_duplicate_tip(match_name, market_id, target_date):
-                log(f"   ⏭️ Duplikat übersprungen: {match_name} ({market_id})")
+                _ntr_log_duplicate(f"   ⏭️ Duplikat übersprungen: {match_name} ({market_id})", key=f"{market_id}")
                 continue
 
             # 🛡️ Safe Filter: schlechte Ligen ausfiltern
@@ -9118,19 +9129,23 @@ _CLUBELO_CACHE = {}  # {date_str: {team_norm: elo}}
 def get_clubelo_ratings(target_date=None) -> dict:
     """
     Holt ClubElo-Ratings für alle Teams (http://api.clubelo.com/YYYY-MM-DD).
-    Gibt {team_name_lower: elo_rating} zurück.
-    Kein Key nötig. Fällt silent zurück wenn geblockt.
+    TURBO: standardmässig AUS, weil api.clubelo.com im GitHub Runner oft 10s timeoutet.
+    Aktivieren mit Secret/Env ENABLE_CLUBELO=1.
     """
     date_str = str(target_date or datetime.now(timezone.utc).date())
     if date_str in _CLUBELO_CACHE:
         return _CLUBELO_CACHE[date_str]
+
+    if str(os.getenv("ENABLE_CLUBELO", "0")).lower() not in {"1", "true", "yes", "on"}:
+        _CLUBELO_CACHE[date_str] = {}
+        return {}
 
     ratings = {}
     try:
         r = requests.get(
             f"http://api.clubelo.com/{date_str}",
             headers={"User-Agent": "Mozilla/5.0 Chrome/122.0.0.0"},
-            timeout=10,
+            timeout=2,
         )
         if r.ok and r.text:
             import csv as _csv, io as _io
@@ -16747,7 +16762,7 @@ def send_top_tips(tips_by_market, target_date):
                 continue
 
             if is_duplicate_tip(match_name, market_id, target_date):
-                log(f"   ⏭️ Duplikat übersprungen: {match_name} ({market_id})")
+                _ntr_log_duplicate(f"   ⏭️ Duplikat übersprungen: {match_name} ({market_id})", key=f"{market_id}")
                 continue
 
             # ✅ NEUES FORMAT - Variante 3
@@ -19745,7 +19760,7 @@ def run_corners_and_scorer_bots(target_date, active_leagues, odds_data_cache, fi
                     # 🆕 Duplikat zwischen Runs prüfen!
                     match_name = f"{fixture.get('home','')} vs {fixture.get('away','')}"
                     if is_duplicate_tip(match_name, "corners", target_date):
-                        log(f"   ⏭️ Ecken Duplikat: {match_name}")
+                        _ntr_log_duplicate(f"   ⏭️ Ecken Duplikat: {match_name}", key="corners")
                         continue
 
                     tip = analyze_corners_tip_simple(fixture, league)
@@ -20838,7 +20853,10 @@ def run_advanced_props_bot(active_leagues: list, fixtures_cache: dict, target_da
 
     # Direktverbindung zum täglichen Player-Stats-Scraper.
     total = len(foul_candidates) + len(booking_candidates) + len(shot_candidates)
-    if total < 4 and SUPABASE_URL and SUPABASE_KEY:
+    _enable_supabase_prop_stats = str(os.getenv("ENABLE_SUPABASE_PROP_STATS", "0")).lower() in {"1", "true", "yes", "on"}
+    if total < 4 and (not _enable_supabase_prop_stats):
+        log("🔑 Supabase Player-Stats übersprungen (Turbo). Pinnacle Props sind Hauptquelle. Aktivieren: ENABLE_SUPABASE_PROP_STATS=1")
+    if total < 4 and _enable_supabase_prop_stats and SUPABASE_URL and SUPABASE_KEY:
         log("🔑 Lade Player-Stats aus Supabase...")
 
         try:
@@ -21074,8 +21092,12 @@ def run_advanced_props_bot(active_leagues: list, fixtures_cache: dict, target_da
     total = len(foul_candidates) + len(booking_candidates) + len(shot_candidates)
     log(f"🔑 Kandidaten: {len(foul_candidates)} Fouls · {len(booking_candidates)} Bookings · {len(shot_candidates)} Shots")
 
+    # FBref/StatsBomb direkt nur opt-in; Pinnacle Props kommen danach und sind schneller/besser.
+    _enable_slow_prop_fallbacks = str(os.getenv("ENABLE_SLOW_PROP_FALLBACKS", "0")).lower() in {"1", "true", "yes", "on"}
+    if total < 4 and not _enable_slow_prop_fallbacks:
+        log("🔑 Langsame FBref/StatsBomb Prop-Fallbacks übersprungen (Turbo). Aktivieren: ENABLE_SLOW_PROP_FALLBACKS=1")
     # FBref direkt wenn zu wenig Kandidaten
-    if total < 4:
+    if total < 4 and _enable_slow_prop_fallbacks:
         log("🔑 Versuche FBref direkt für alle Fixtures...")
         for league, fixtures in (fixtures_cache or {}).items():
             for fix in (fixtures or [])[:3]:
@@ -21110,7 +21132,7 @@ def run_advanced_props_bot(active_leagues: list, fixtures_cache: dict, target_da
         log(f"🔑 Kandidaten nach FBref: {len(foul_candidates)} Fouls · {len(booking_candidates)} Bookings · {len(shot_candidates)} Shots")
 
     # 🆕 StatsBomb direkt — funktioniert für WM, Bundesliga, La Liga, Ligue 1, Copa America, UEFA Euro
-    if total < 4:
+    if total < 4 and _enable_slow_prop_fallbacks:
         log("🔑 Versuche StatsBomb für Player Props...")
         _sb_fixtures = list((fixtures_cache or {}).items())
         # Auch Pinnacle-Matches direkt nutzen
@@ -22679,7 +22701,7 @@ def run_pinnacle_props_bot(win_start_utc=None, win_end_utc=None, ch_tz=None, top
         _sig = _combo_signature(b["legs"], prefix=f"builder_{b['match']}")
         _builder_tip_id = f"builder_{_bdate}_{_sig}".replace(" ", "_")
         if is_duplicate_combo(_builder_tip_id, _bdate):
-            log(f"   ⏭️ Bet Builder Duplikat übersprungen: {b['match']}")
+            _ntr_log_duplicate(f"   ⏭️ Bet Builder Duplikat übersprungen: {b['match']}", key="bet_builder")
             continue
 
         _cat_icons = {"score":"⚽","first_scorer":"🥇⚽","last_scorer":"🏁⚽","assist":"🎯",
@@ -22744,21 +22766,24 @@ def run_pinnacle_props_bot(win_start_utc=None, win_end_utc=None, ch_tz=None, top
                 "builder_total_legs": len(b["legs"]),
                 "builder_legs": [
                     {
-                        "player": l.get("selection", ""), "selection": l.get("selection", ""),
+                        "player": _ntr_builder_player_name(l), "selection": l.get("selection", ""),
                         "player_prop": l.get("player_prop", ""), "market": l.get("player_prop", ""),
                         "category": l.get("_cat", ""), "line": l.get("line"), "side": l.get("side", "over"),
                         "odds": l.get("odds"), "prob": l.get("prob"), "match": l.get("_match", b["match"]),
                         "source": l.get("source", "pinnacle"),
                     } for l in b["legs"]
                 ],
-                "nate_score": _nate_score,
+                "nate_score": _builder_score,
                 "source": "pinnacle",
                 "telegram_chat_id": str(prop_chat),
                 "telegram_msg_id": _mid,
                 "message_text": msg[:3500],
             })
-        except Exception:
-            pass
+        except Exception as _save_err:
+            try:
+                log(f"   ⚠️ Bet Builder DB-Save fehlgeschlagen: {str(_save_err)[:160]}", "WARN")
+            except Exception:
+                pass
 
     log(f"🏗️ Bet Builder: {sent} Builder gesendet ({len(builders)} generiert)")
     return sent
@@ -24833,6 +24858,7 @@ def main():
         send_daily_report()
         log("📊 Daily Report gesendet!")
 
+    log("⚡ Duplikat-Zusammenfassung: " + ", ".join(f"{k}={v}" for k, v in sorted(_DUP_LOG_COUNTS.items())) if _DUP_LOG_COUNTS else "⚡ Duplikat-Zusammenfassung: keine")
     log("Fertig!")
 
 
