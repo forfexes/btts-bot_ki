@@ -438,66 +438,84 @@ def _shot_ladders(props: Sequence[PropLeg], contexts: Sequence[Dict[str, Any]], 
 
 
 def _category_trios(props: Sequence[PropLeg], match_date: str) -> List[BuilderPick]:
+    """
+    Same-Match Ladders als PAIR oder TRIO.
+    Zwei reale Legs reichen bereits; drei werden bevorzugt.
+    """
     builders: List[BuilderPick] = []
     styles = {
-        "sot": ("SOT TRIO", 1, "1+ Shot on Target", 0.56),
+        "sot": ("SOT LADDER", 1, "1+ Shot on Target", 0.56),
         "sot_outside_box": ("OUTSIDE BOX SOT", 1, "1+ SOT Outside the Box", 0.30),
         "fouls": ("FOUL PRESS", 1, "1+ Foul Committed", 0.64),
         "fouls_won": ("FOUL MAGNET", 1, "1+ Foul Won", 0.62),
-        "tackles": ("TACKLE WALL", 1, "1+ Tackle Committed", 0.65),
+        "tackles": ("TACKLES COMMITTED", 1, "1+ Tackle Committed", 0.65),
         "tackles_committed": ("TACKLES COMMITTED", 1, "1+ Tackle Committed", 0.65),
         "tackles_received": ("TACKLES RECEIVED", 1, "1+ Tackle Received", 0.62),
-        "yellow_cards": ("BOOKING TRIO", 1, "Player to be Booked", 0.28),
+        "yellow_cards": ("BOOKING LADDER", 1, "Player to be Booked", 0.28),
+        "shots": ("SHOT LADDER", 1, "1+ Shot", 0.70),
     }
-    by_match_cat: Dict[Tuple[str, str], List[PropLeg]] = {}
+    by_match_category: Dict[Tuple[str, str], List[PropLeg]] = {}
     for leg in props:
         if leg.category in styles:
-            by_match_cat.setdefault((leg.match, leg.category), []).append(leg)
+            by_match_category.setdefault((leg.match, leg.category), []).append(leg)
 
-    for (match, category), candidates in by_match_cat.items():
-        style, safe_line, market_name, floor = styles[category]
+    ladder_markets = {
+        "fouls": ("2+ Fouls Committed", "3+ Fouls Committed"),
+        "fouls_won": ("2+ Fouls Won", "3+ Fouls Won"),
+        "tackles": ("2+ Tackles Committed", "3+ Tackles Committed"),
+        "tackles_committed": ("2+ Tackles Committed", "3+ Tackles Committed"),
+        "tackles_received": ("2+ Tackles Received", "3+ Tackles Received"),
+        "yellow_cards": ("Player to be Booked", "Player to be Booked"),
+        "sot": ("1+ Shot on Target", "2+ Shots on Target"),
+        "sot_outside_box": ("1+ SOT Outside the Box", "1+ SOT Outside the Box"),
+        "shots": ("2+ Shots", "3+ Shots"),
+    }
+
+    for (match, category), candidates in by_match_category.items():
+        style, safe_line, safe_market, safe_floor = styles[category]
         base = _best_distinct_players(candidates, 3)
-        if len(base) < 3:
+        if len(base) < 2:
             continue
-        safe = [_derive_lower_line(x, safe_line, market_name, floor) for x in base]
-        pick = _make_builder(style, "SAFE", safe, match_date, 0.5)
-        if pick:
-            builders.append(pick)
 
-        ladder_markets = {
-            "fouls": ("2+ Fouls Committed", "3+ Fouls Committed"),
-            "fouls_won": ("2+ Fouls Won", "3+ Fouls Won"),
-            "tackles": ("2+ Tackles Committed", "3+ Tackles Committed"),
-            "tackles_committed": ("2+ Tackles Committed", "3+ Tackles Committed"),
-            "tackles_received": ("2+ Tackles Received", "3+ Tackles Received"),
-            "yellow_cards": ("Player to be Booked", "Player to be Booked"),
-            "sot": ("1+ Shot on Target", "2+ Shots on Target"),
-            "sot_outside_box": ("1+ SOT Outside the Box", "1+ SOT Outside the Box"),
-        }
-        if category in ladder_markets:
+        sizes = [2] if len(base) == 2 else [2, 3]
+        for size in sizes:
+            safe = [
+                _derive_lower_line(x, safe_line, safe_market, safe_floor)
+                for x in base[:size]
+            ]
+            pick = _make_builder(style, f"SAFE {size}L", safe, match_date, 0.75)
+            if pick:
+                builders.append(pick)
+
             value_market, high_market = ladder_markets[category]
             value_line = 1 if category in {"yellow_cards", "sot", "sot_outside_box"} else 2
-            high_line = 1 if category in {"yellow_cards", "sot_outside_box"} else 2 if category == "sot" else 3
+            high_line = (
+                1 if category in {"yellow_cards", "sot_outside_box"}
+                else 2 if category == "sot"
+                else 3
+            )
 
             value = [
-                _derive_lower_line(x, value_line, value_market, 0.46)
-                for x in base if x.line >= value_line or x.probability >= 0.48
+                _derive_lower_line(x, value_line, value_market, 0.44)
+                for x in base[:size]
+                if x.line >= value_line or x.probability >= 0.46
             ]
-            if len(value) == 3:
-                pick = _make_builder(style, "VALUE", value, match_date, 0.5)
+            if len(value) >= 2:
+                pick = _make_builder(style, f"VALUE {len(value)}L", value, match_date, 0.5)
                 if pick:
                     builders.append(pick)
 
             high = [
-                _derive_lower_line(x, high_line, high_market, 0.27)
-                for x in base if x.line >= high_line or x.probability >= 0.36
+                _derive_lower_line(x, high_line, high_market, 0.25)
+                for x in base[:size]
+                if x.line >= high_line or x.probability >= 0.34
             ]
-            if len(high) == 3:
-                pick = _make_builder(style, "HIGH ODDS", high, match_date, 0.1)
+            if len(high) >= 2:
+                pick = _make_builder(style, f"HIGH ODDS {len(high)}L", high, match_date, 0.1)
                 if pick:
                     builders.append(pick)
-    return builders
 
+    return builders
 
 def _mixed_builders(props: Sequence[PropLeg], match_date: str) -> List[BuilderPick]:
     builders: List[BuilderPick] = []
@@ -549,6 +567,79 @@ def _mixed_builders(props: Sequence[PropLeg], match_date: str) -> List[BuilderPi
 
 
 
+
+def _same_match_available_builders(
+    props: Sequence[PropLeg], match_date: str
+) -> List[BuilderPick]:
+    """
+    Baut aus jedem Match mit mindestens zwei echten Props einen kompakten
+    Same-Match-Builder. Bevorzugt Marktvielfalt und echte Quoten.
+    """
+    builders: List[BuilderPick] = []
+    by_match: Dict[str, List[PropLeg]] = {}
+    for leg in props:
+        by_match.setdefault(leg.match, []).append(leg)
+
+    for match, candidates in by_match.items():
+        if len(candidates) < 2:
+            continue
+
+        ordered = sorted(
+            candidates,
+            key=lambda x: (not x.estimated, x.quality, x.probability),
+            reverse=True,
+        )
+        selected: List[PropLeg] = []
+        used_keys = set()
+        used_categories = set()
+
+        # Erst Marktvielfalt.
+        for leg in ordered:
+            key = (norm(leg.player), leg.category)
+            if key in used_keys:
+                continue
+            if leg.category in used_categories:
+                continue
+            if len(selected) >= 1 and not valid_builder(selected + [leg], min_legs=2):
+                continue
+            selected.append(leg)
+            used_keys.add(key)
+            used_categories.add(leg.category)
+            if len(selected) >= 5:
+                break
+
+        # Danach bei Bedarf weitere Player Legs.
+        if len(selected) < 2:
+            for leg in ordered:
+                key = (norm(leg.player), leg.category)
+                if key in used_keys:
+                    continue
+                if len(selected) >= 1 and not valid_builder(selected + [leg], min_legs=2):
+                    continue
+                selected.append(leg)
+                used_keys.add(key)
+                if len(selected) >= 4:
+                    break
+
+        if len(selected) < 2:
+            continue
+
+        for size in range(2, min(5, len(selected)) + 1):
+            legs = selected[:size]
+            pick = _make_builder(
+                "SAME MATCH AVAILABLE",
+                f"{size} REAL LEGS",
+                legs,
+                match_date,
+                0.5 if size <= 3 else 0.25,
+            )
+            if pick:
+                builders.append(pick)
+
+    return builders
+
+
+
 def _same_game_narratives(props: Sequence[PropLeg], match_date: str) -> List[BuilderPick]:
     """JK/NATE-artige Same-Game-Builder mit einer klaren Match-Hypothese."""
     builders: List[BuilderPick] = []
@@ -584,8 +675,14 @@ def _same_game_narratives(props: Sequence[PropLeg], match_date: str) -> List[Bui
                     break
                 if len(selected) >= max_legs:
                     break
-            if len(selected) >= 3:
-                pick = _make_builder(style, "SAME GAME", selected, match_date, 0.5)
+            if len(selected) >= 2:
+                pick = _make_builder(
+                    style,
+                    f"SAME GAME {len(selected)}L",
+                    selected,
+                    match_date,
+                    0.5 if len(selected) <= 3 else 0.25,
+                )
                 if pick:
                     builders.append(pick)
     return builders
@@ -621,12 +718,13 @@ def build_builder_picks(
 ) -> List[BuilderPick]:
     props = deduplicate_props(raw_props)
     run_date = match_date or date.today().isoformat()
-    max_count = max_builders or as_int(os.getenv("NETRATTLER_MAX_BUILDERS_PER_RUN", "14"), 14)
+    max_count = max_builders or as_int(os.getenv("NETRATTLER_MAX_BUILDERS_PER_RUN", "30"), 30)
 
     candidates: List[BuilderPick] = []
     candidates.extend(_shot_ladders(props, match_contexts or [], run_date))
     candidates.extend(_category_trios(props, run_date))
     candidates.extend(_mixed_builders(props, run_date))
+    candidates.extend(_same_match_available_builders(props, run_date))
     candidates.extend(_same_game_narratives(props, run_date))
     candidates.extend(_cross_match_builder(props, run_date))
 
@@ -647,7 +745,43 @@ def build_builder_picks(
         return (avg_quality - odds_penalty, avg_prob, -pick.total_odds)
 
     unique.sort(key=rank, reverse=True)
-    return unique[:max_count]
+
+    diversified: List[BuilderPick] = []
+    style_counts: Dict[str, int] = {}
+    match_counts: Dict[str, int] = {}
+    selected_ids = set()
+
+    def _try_add(pick: BuilderPick, force_style: bool = False) -> bool:
+        if pick.builder_id in selected_ids:
+            return False
+        match_key = pick.legs[0].match if len({x.match for x in pick.legs}) == 1 else "CROSS"
+        if not force_style and style_counts.get(pick.style, 0) >= 8:
+            return False
+        if match_key != "CROSS" and match_counts.get(match_key, 0) >= 20:
+            return False
+        diversified.append(pick)
+        selected_ids.add(pick.builder_id)
+        style_counts[pick.style] = style_counts.get(pick.style, 0) + 1
+        match_counts[match_key] = match_counts.get(match_key, 0) + 1
+        return True
+
+    # Pass 1: Mindestens einen Builder pro tatsächlich vorhandener Stilart sichern.
+    seen_styles = set()
+    for pick in unique:
+        if pick.style in seen_styles:
+            continue
+        if _try_add(pick, force_style=True):
+            seen_styles.add(pick.style)
+        if len(diversified) >= max_count:
+            return diversified
+
+    # Pass 2: Restliche Plätze nach Ranking auffüllen.
+    for pick in unique:
+        _try_add(pick)
+        if len(diversified) >= max_count:
+            break
+
+    return diversified
 
 
 def format_builder_message(pick: BuilderPick) -> str:
@@ -730,7 +864,28 @@ def run_builder_engine(
     supabase_key: str = "",
     logger: Optional[Callable[[str], Any]] = None,
 ) -> Tuple[int, List[BuilderPick]]:
+    normalized = deduplicate_props(raw_props)
     picks = build_builder_picks(raw_props, match_contexts, match_date)
+    if logger:
+        category_counts: Dict[str, int] = {}
+        match_counts: Dict[str, int] = {}
+        for leg in normalized:
+            category_counts[leg.category] = category_counts.get(leg.category, 0) + 1
+            match_counts[leg.match] = match_counts.get(leg.match, 0) + 1
+        logger(
+            "MASTER BUILDER normalized="
+            f"{len(normalized)} · matches={len(match_counts)} · "
+            f"same-match≥2={sum(1 for v in match_counts.values() if v >= 2)} · "
+            f"generated={len(picks)}"
+        )
+        logger(
+            "MASTER BUILDER categories: "
+            + ", ".join(
+                f"{k}={v}" for k, v in sorted(
+                    category_counts.items(), key=lambda item: item[1], reverse=True
+                )[:12]
+            )
+        )
     sent = 0
     for pick in picks:
         persisted = persist_builder_pick(pick, supabase_url, supabase_key)
