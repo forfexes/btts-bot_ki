@@ -45,5 +45,7 @@ jobs:
         if: always()
         with:
           name: netrattler-all-source-summary
-          path: netrattler_all_source_summary.json
+          path: |
+            netrattler_all_source_summary.json
+            netrattler_source_hub_summary.json
           if-no-files-found: ignore
