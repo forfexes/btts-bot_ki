@@ -684,7 +684,9 @@ def player_stats_values(row: Dict[str, Any]) -> Dict[str, float]:
         "sot": as_float(anyv(data, ["sot", "shots_on_target", "shot_on_target", "on_target"], 0)),
         "fouls": as_float(anyv(data, ["fouls_committed", "fouls", "fouls_made", "fc"], 0)),
         "fouls_won": as_float(anyv(data, ["fouls_won", "fouls_drawn", "fouled", "fd"], 0)),
-        "tackles": as_float(anyv(data, ["tackles", "tackles_won", "total_tackles"], 0)),
+        "tackles": as_float(anyv(data, ["tackles", "tackles_won", "total_tackles", "tackles_committed"], 0)),
+        "tackles_committed": as_float(anyv(data, ["tackles_committed", "tackles", "tackles_won", "total_tackles"], 0)),
+        "tackles_received": as_float(anyv(data, ["tackles_received", "times_tackled", "tackled"], 0)),
         "yellow_cards": as_float(anyv(data, ["yellow_cards", "cards", "yc", "bookings"], 0)),
         "goals": as_float(anyv(data, ["goals", "goal", "goals_scored"], 0)),
         "assists": as_float(anyv(data, ["assists", "assist"], 0)),
@@ -727,7 +729,8 @@ def category_of(row: Dict[str, Any]) -> str:
     aliases = {
         "shots_on_target": "sot", "shot_on_target": "sot", "cards": "yellow_cards",
         "booked": "yellow_cards", "fouls_committed": "fouls", "fouls_drawn": "fouls_won",
-        "goalscorer": "score", "corners": "corners",
+        "tackles": "tackles_committed", "tackles_made": "tackles_committed",
+        "tackled": "tackles_received", "goalscorer": "score", "corners": "corners",
     }
     explicit = aliases.get(explicit, explicit)
     if explicit:
@@ -747,8 +750,10 @@ def category_of(row: Dict[str, Any]) -> str:
         return "fouls_won"
     if "foul" in low:
         return "fouls"
+    if "tackles received" in low or "to be tackled" in low:
+        return "tackles_received"
     if "tackle" in low:
-        return "tackles"
+        return "tackles_committed"
     if "booked" in low or "carded" in low or "yellow card" in low:
         return "yellow_cards"
     if "corner" in low or "ecken" in low:
