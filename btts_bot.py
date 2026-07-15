@@ -20831,25 +20831,41 @@ _SKIP_PROP_KEYWORDS = [
 
 # Leg-Kategorien für Bet Builder
 _LEG_CATEGORY = {
-    "first_scorer": ["first goalscorer", "first goal scorer"],
-    "last_scorer": ["last goalscorer", "last goal scorer"],
-    "score": ["to score", "anytime goalscorer", "score or assist"],
-    "assist": ["to assist", "score or assist"],
-    "booked": ["to be booked", "receive a card", "be carded"],
-    "sot_outside_box": ["shots on target from outside", "shot on target from outside"],
-    "shots_outside_box": ["shots from outside", "shot from outside"],
-    "sot": ["shots on target", "shot on target"],
-    "shots": ["shots", "shots on goal"],
-    "fouls_won": ["fouls won", "to be fouled"],
-    "fouls": ["fouls committed", "foul committed", "foul"],
-    "tackles_received": ["tackles received", "to be tackled"],
-    "tackles_committed": ["tackles committed", "tackles made", "player tackles", "tackle"],
-    "team_cards": ["both teams to receive a card"],
-    "result": ["to qualify", "qualify"],
-    "corners": ["corners", "corner kicks"],
-    "saves": ["saves", "goalkeeper saves"],
-    "offsides": ["offside"],
+    # Spezifische Schuss-Typen ZUERST (vor allg. "shots")
+    "sot_outside_box": ["shots on target from outside", "shot on target from outside", "sot from outside"],
+    "shots_outside_box": ["shots from outside the box", "shot from outside the box"],
+    "sot": ["shots on target", "shot on target", "shots on goal"],
+    "shots": ["total shots", "player shots", "number of shots"],
+    # Tackle-Typen spezifisch zuerst
+    "tackles_received": ["tackles received", "to be tackled", "tackled by"],
+    "tackles_committed": ["tackles committed", "tackles made", "player tackles", "number of tackles"],
+    # Fouls
+    "fouls_won": ["fouls won", "to be fouled", "fouled"],
+    "fouls": ["fouls committed", "foul committed", "number of fouls"],
+    # Karten
+    "booked": ["to be booked", "receive a card", "be carded", "yellow card"],
+    "team_cards": ["both teams to receive a card", "team to receive a card"],
+    # Tore/Scorer
+    "first_scorer": ["first goalscorer", "first goal scorer", "first player to score"],
+    "last_scorer":  ["last goalscorer", "last goal scorer"],
+    "assist":       ["to assist", "score or assist", "provide an assist"],
+    "score":        ["anytime goalscorer", "anytime scorer", "to score anytime"],
+    # Extras
+    "saves":    ["goalkeeper saves", "player saves", "number of saves"],
+    "offsides": ["to be caught offside", "offside"],
+    "passes":   ["number of passes", "pass completions"],
+    "corners":  ["corners", "corner kicks"],
+    "result":   ["to qualify", "qualify", "to win"],
 }
+
+# Team-Props die NICHT als Player Props zählen
+_TEAM_PROP_EXCLUDES = [
+    "to score?", "team to score", "either team to score",
+    "both teams to score", "clean sheet",
+    "first team to score", "last team to score",
+    "england to score", "argentina to score", "germany to score",
+    "france to score", "brazil to score", "spain to score",
+]
 
 def _get_leg_category(prop_name):
     pn = prop_name.lower()
@@ -20987,6 +21003,70 @@ def run_pinnacle_props_bot(win_start_utc=None, win_end_utc=None, ch_tz=None, top
         log("🔑 Pinnacle Props: keine Specials verfügbar")
         return 0
 
+    # 🆕 Supabase player_match_stats laden — ergänzt Pinnacle mit historischen Stats
+    _supabase_stat_rows = []
+    if SUPABASE_URL and SUPABASE_KEY:
+        try:
+            log("🔑 Lade Player-Stats aus Supabase...")
+            _sb_h = {"apikey": SUPABASE_KEY, "Authorization": f"Bearer {SUPABASE_KEY}"}
+            _sb_r = requests.get(
+                f"{SUPABASE_URL}/rest/v1/player_match_stats",
+                headers=_sb_h,
+                params={"select": "player_name,team,stat_name,stat_value,league,match_date",
+                        "limit": "5000", "order": "match_date.desc"},
+                timeout=12,
+            )
+            if _sb_r.ok:
+                _supabase_stat_rows = _sb_r.json() or []
+                # Spieler-Avg berechnen
+                _player_avgs = {}
+                for row in _supabase_stat_rows:
+                    pn = row.get("player_name", "")
+                    sn = row.get("stat_name", "")
+                    sv = row.get("stat_value")
+                    if pn and sn and sv is not None:
+                        key = (pn, sn)
+                        if key not in _player_avgs:
+                            _player_avgs[key] = []
+                        _player_avgs[key].append(float(sv))
+                # Kandidaten aus Stats erstellen
+                _stats_candidates = 0
+                for (pn, sn), vals in _player_avgs.items():
+                    avg = sum(vals) / len(vals)
+                    # Schüsse → shots
+                    if sn in ("totalShots", "shots") and avg >= 1.5:
+                        props.append({"player_prop": f"{pn} 1+ Shots", "selection": f"{pn} Over",
+                                      "odds": 1.60, "prob": 60, "match": "", "league": "",
+                                      "starts": "", "_from_supabase": True, "_stat_avg": avg})
+                        _stats_candidates += 1
+                    # SOT
+                    elif sn in ("shotsOnTarget", "shotsOnGoal") and avg >= 1.0:
+                        props.append({"player_prop": f"{pn} 1+ Shots on Target", "selection": f"{pn} Over",
+                                      "odds": 1.80, "prob": 55, "match": "", "league": "",
+                                      "starts": "", "_from_supabase": True, "_stat_avg": avg})
+                        _stats_candidates += 1
+                    # Fouls
+                    elif sn in ("foulsCommitted", "fouls") and avg >= 1.5:
+                        props.append({"player_prop": f"{pn} 2+ Fouls Committed", "selection": f"{pn} Over",
+                                      "odds": 1.90, "prob": 55, "match": "", "league": "",
+                                      "starts": "", "_from_supabase": True, "_stat_avg": avg})
+                        _stats_candidates += 1
+                    # Tackles
+                    elif sn in ("totalTackles", "tackles") and avg >= 2.0:
+                        props.append({"player_prop": f"{pn} 2+ Tackles Committed", "selection": f"{pn} Over",
+                                      "odds": 1.85, "prob": 55, "match": "", "league": "",
+                                      "starts": "", "_from_supabase": True, "_stat_avg": avg})
+                        _stats_candidates += 1
+                    # Yellow Cards (nur wenn regelmäßig)
+                    elif sn == "yellowCards" and avg >= 0.25 and len(vals) >= 5:
+                        props.append({"player_prop": f"{pn} To Be Booked", "selection": f"{pn} Yes",
+                                      "odds": 3.50, "prob": 28, "match": "", "league": "",
+                                      "starts": "", "_from_supabase": True, "_stat_avg": avg})
+                        _stats_candidates += 1
+                log(f"🔑 Supabase Stats: {len(_supabase_stat_rows)} Rows geladen · {_stats_candidates} Kandidaten ergänzt")
+        except Exception as _sbe:
+            log(f"🔑 Supabase Stats Error: {str(_sbe)[:60]}", "WARN")
+
     # Alle validen Props sammeln
     valid = []
     _fbref_checked = 0
@@ -21004,6 +21084,8 @@ def run_pinnacle_props_bot(win_start_utc=None, win_end_utc=None, ch_tz=None, top
             continue
         if any(kw in prop_name for kw in _SKIP_PROP_KEYWORDS):
             continue
+        if any(kw in prop_name for kw in _TEAM_PROP_EXCLUDES):
+            continue  # Team-Props (z.B. "England To Score?") nicht als Player Prop werten
         if not match_name or "vs" not in match_name.lower():
             continue
         if match_name.lower() == prop_name:
@@ -21071,7 +21153,13 @@ def run_pinnacle_props_bot(win_start_utc=None, win_end_utc=None, ch_tz=None, top
         return 0
 
     # 🌍 WM-Diagnose: wie viele valide Props/Matches sind World Cup?
-    _wc_props = [p for p in valid if "world cup" in p.get("league", "").lower() or "fifa" in p.get("league", "").lower()]
+    # Nur echte Player Props (keine Team-Props wie "England To Score")
+    _TEAM_PROP_KEYWORDS = ["to score?", "either team", "team to score", "both teams", "clean sheet", "draw"]
+    _wc_props = [
+        p for p in valid
+        if ("world cup" in p.get("league", "").lower() or "fifa" in p.get("league", "").lower())
+        and not any(kw in p.get("player_prop", "").lower() for kw in _TEAM_PROP_KEYWORDS)
+    ]
     _wc_matches = set(p.get("match", "?") for p in _wc_props)
     log(f"   🌍 WM-Diagnose: {len(_wc_props)} valide Props aus {len(_wc_matches)} WM-Spielen")
     if _wc_matches:
@@ -21363,6 +21451,7 @@ def run_pinnacle_props_bot(win_start_utc=None, win_end_utc=None, ch_tz=None, top
             if _mm_odds < 1.80:
                 continue
 
+            _bdate = str(datetime.now(timezone.utc).date())
             _sig = _combo_signature(_mm_legs, prefix="mm")
             _dup_id = f"mm_builder_{_bdate}_{_sig}".replace(" ", "_")
             if is_duplicate_combo(_dup_id, _bdate):
