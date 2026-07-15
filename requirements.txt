@@ -9,4 +9,3 @@ cloudscraper
 scikit-learn
 joblib
 playwright
-soccerdata>=1.9.0
