@@ -52,7 +52,14 @@ CATEGORY_ICON = {
     "fouls": "👊",
     "fouls_won": "🧲",
     "tackles": "🛡️",
+    "tackles_committed": "🛡️",
+    "tackles_received": "🎯🛡️",
     "yellow_cards": "🟨",
+    "sot_outside_box": "🎯",
+    "shots_outside_box": "💥",
+    "first_scorer": "🥇⚽",
+    "last_scorer": "🏁⚽",
+    "result": "🏆",
     "score": "⚽",
     "assist": "🅰️",
     "score_assist": "⚽🅰️",
@@ -65,8 +72,10 @@ CATEGORY_ICON = {
 }
 
 PLAYER_CATEGORIES = {
-    "shots", "sot", "fouls", "fouls_won", "tackles",
-    "yellow_cards", "score", "assist", "score_assist",
+    "shots", "sot", "sot_outside_box", "shots_outside_box",
+    "fouls", "fouls_won", "tackles", "tackles_committed",
+    "tackles_received", "yellow_cards", "score", "first_scorer",
+    "last_scorer", "assist", "score_assist", "result",
 }
 
 TEAM_CATEGORIES = {"team_corners", "corners", "team_shots", "team_cards", "btts", "over_goals"}
@@ -211,6 +220,15 @@ def normalize_prop(row: Dict[str, Any]) -> Optional[PropLeg]:
     match = str(row.get("match") or row.get("fixture") or "").strip()
     market = str(row.get("market") or row.get("type") or "").strip()
     category = str(row.get("category") or "").strip().lower()
+    category = {
+        "booked": "yellow_cards",
+        "cards": "yellow_cards",
+        "fouls_committed": "fouls",
+        "fouls_drawn": "fouls_won",
+        "tackles_made": "tackles_committed",
+        "tackles_won": "tackles_committed",
+        "tackled": "tackles_received",
+    }.get(category, category)
     if not player or not match or not market or not category:
         return None
     if category not in PLAYER_CATEGORIES | TEAM_CATEGORIES:
@@ -372,9 +390,12 @@ def _make_builder(style: str, variant: str, legs: List[PropLeg], match_date: str
         return None
     odds = total_odds(legs)
     min_odds = as_float(os.getenv("NETRATTLER_BUILDER_MIN_ODDS", "1.75"), 1.75)
-    max_odds = as_float(os.getenv("NETRATTLER_BUILDER_MAX_ODDS", "80"), 80.0)
+    max_odds = as_float(os.getenv("NETRATTLER_BUILDER_MAX_ODDS", "150"), 150.0)
     if odds < min_odds or odds > max_odds:
         return None
+    # Einsatz automatisch nach Risikostufe. Explizit kleinere Stakes bleiben erhalten.
+    auto_stake = 0.75 if odds <= 3.5 else 0.50 if odds <= 10 else 0.25 if odds <= 25 else 0.10
+    stake = min(stake, auto_stake) if stake else auto_stake
     return BuilderPick(
         builder_id=builder_signature(style + variant, legs, match_date),
         style=style,
@@ -420,9 +441,13 @@ def _category_trios(props: Sequence[PropLeg], match_date: str) -> List[BuilderPi
     builders: List[BuilderPick] = []
     styles = {
         "sot": ("SOT TRIO", 1, "1+ Shot on Target", 0.56),
+        "sot_outside_box": ("OUTSIDE BOX SOT", 1, "1+ SOT Outside the Box", 0.30),
         "fouls": ("FOUL PRESS", 1, "1+ Foul Committed", 0.64),
         "fouls_won": ("FOUL MAGNET", 1, "1+ Foul Won", 0.62),
-        "tackles": ("TACKLE WALL", 1, "1+ Tackle", 0.65),
+        "tackles": ("TACKLE WALL", 1, "1+ Tackle Committed", 0.65),
+        "tackles_committed": ("TACKLES COMMITTED", 1, "1+ Tackle Committed", 0.65),
+        "tackles_received": ("TACKLES RECEIVED", 1, "1+ Tackle Received", 0.62),
+        "yellow_cards": ("BOOKING TRIO", 1, "Player to be Booked", 0.28),
     }
     by_match_cat: Dict[Tuple[str, str], List[PropLeg]] = {}
     for leg in props:
@@ -439,11 +464,36 @@ def _category_trios(props: Sequence[PropLeg], match_date: str) -> List[BuilderPi
         if pick:
             builders.append(pick)
 
-        if category in {"fouls", "tackles"}:
-            market = "2+ Fouls Committed" if category == "fouls" else "2+ Tackles"
-            value = [_derive_lower_line(x, 2, market, 0.48) for x in base if x.line >= 2 or x.probability >= 0.50]
+        ladder_markets = {
+            "fouls": ("2+ Fouls Committed", "3+ Fouls Committed"),
+            "fouls_won": ("2+ Fouls Won", "3+ Fouls Won"),
+            "tackles": ("2+ Tackles Committed", "3+ Tackles Committed"),
+            "tackles_committed": ("2+ Tackles Committed", "3+ Tackles Committed"),
+            "tackles_received": ("2+ Tackles Received", "3+ Tackles Received"),
+            "yellow_cards": ("Player to be Booked", "Player to be Booked"),
+            "sot": ("1+ Shot on Target", "2+ Shots on Target"),
+            "sot_outside_box": ("1+ SOT Outside the Box", "1+ SOT Outside the Box"),
+        }
+        if category in ladder_markets:
+            value_market, high_market = ladder_markets[category]
+            value_line = 1 if category in {"yellow_cards", "sot", "sot_outside_box"} else 2
+            high_line = 1 if category in {"yellow_cards", "sot_outside_box"} else 2 if category == "sot" else 3
+
+            value = [
+                _derive_lower_line(x, value_line, value_market, 0.46)
+                for x in base if x.line >= value_line or x.probability >= 0.48
+            ]
             if len(value) == 3:
-                pick = _make_builder(style, "VALUE 2+", value, match_date, 0.5)
+                pick = _make_builder(style, "VALUE", value, match_date, 0.5)
+                if pick:
+                    builders.append(pick)
+
+            high = [
+                _derive_lower_line(x, high_line, high_market, 0.27)
+                for x in base if x.line >= high_line or x.probability >= 0.36
+            ]
+            if len(high) == 3:
+                pick = _make_builder(style, "HIGH ODDS", high, match_date, 0.1)
                 if pick:
                     builders.append(pick)
     return builders
@@ -457,14 +507,20 @@ def _mixed_builders(props: Sequence[PropLeg], match_date: str) -> List[BuilderPi
 
     for match, candidates in by_match.items():
         # One strong leg per category, distinct players where possible.
-        ordered_categories = ["shots", "sot", "fouls", "tackles", "score_assist", "yellow_cards"]
+        ordered_categories = [
+            "result", "score", "first_scorer", "shots", "sot",
+            "fouls", "tackles_committed", "tackles_received",
+            "team_cards", "yellow_cards", "score_assist"
+        ]
         selected: List[PropLeg] = []
         used_players = set()
         for category in ordered_categories:
             pool = sorted((x for x in candidates if x.category == category), key=lambda x: x.quality, reverse=True)
             for leg in pool:
                 player_key = norm(leg.player)
-                if player_key in used_players and category not in {"fouls", "tackles"}:
+                if player_key in used_players and category not in {
+                    "fouls", "tackles", "tackles_committed", "tackles_received"
+                }:
                     continue
                 selected.append(leg)
                 used_players.add(player_key)
@@ -478,7 +534,12 @@ def _mixed_builders(props: Sequence[PropLeg], match_date: str) -> List[BuilderPi
 
         # Corner fusion: 2-3 player legs + exactly one team/corner leg.
         corner = next(iter(sorted((x for x in candidates if x.category in {"team_corners", "corners"}), key=lambda x: x.quality, reverse=True)), None)
-        player_legs = _best_distinct_players([x for x in candidates if x.category in {"shots", "sot", "fouls", "tackles"}], 3)
+        player_legs = _best_distinct_players([
+            x for x in candidates if x.category in {
+                "shots", "sot", "fouls", "fouls_won",
+                "tackles", "tackles_committed", "tackles_received"
+            }
+        ], 3)
         if corner and len(player_legs) >= 2:
             fusion_legs = player_legs[:3] + [corner]
             pick = _make_builder("CORNER FUSION", "PLAYER + CORNERS", fusion_legs, match_date, 0.5)
@@ -487,10 +548,58 @@ def _mixed_builders(props: Sequence[PropLeg], match_date: str) -> List[BuilderPi
     return builders
 
 
+
+def _same_game_narratives(props: Sequence[PropLeg], match_date: str) -> List[BuilderPick]:
+    """JK/NATE-artige Same-Game-Builder mit einer klaren Match-Hypothese."""
+    builders: List[BuilderPick] = []
+    by_match: Dict[str, List[PropLeg]] = {}
+    for leg in props:
+        by_match.setdefault(leg.match, []).append(leg)
+
+    templates = [
+        ("FAVORITE SCRIPT", ["result", "score", "shots", "sot"], 3),
+        ("INTENSITY SCRIPT", ["team_cards", "yellow_cards", "fouls", "tackles_committed", "tackles_received"], 4),
+        ("ATTACK SCRIPT", ["score", "shots", "sot", "sot_outside_box", "assist"], 4),
+        ("MIDFIELD BATTLE", ["fouls", "fouls_won", "tackles_committed", "tackles_received", "yellow_cards"], 4),
+    ]
+
+    for match, candidates in by_match.items():
+        for style, categories, max_legs in templates:
+            selected: List[PropLeg] = []
+            used_players = set()
+            for category in categories:
+                pool = sorted(
+                    (x for x in candidates if x.category == category),
+                    key=lambda x: (x.quality, x.probability, not x.estimated),
+                    reverse=True,
+                )
+                for leg in pool:
+                    pkey = norm(leg.player)
+                    if pkey in used_players and category not in {
+                        "fouls", "fouls_won", "tackles_committed", "tackles_received"
+                    }:
+                        continue
+                    selected.append(leg)
+                    used_players.add(pkey)
+                    break
+                if len(selected) >= max_legs:
+                    break
+            if len(selected) >= 3:
+                pick = _make_builder(style, "SAME GAME", selected, match_date, 0.5)
+                if pick:
+                    builders.append(pick)
+    return builders
+
+
+
 def _cross_match_builder(props: Sequence[PropLeg], match_date: str) -> List[BuilderPick]:
     best_by_match: Dict[str, PropLeg] = {}
     for leg in sorted(props, key=lambda x: (x.quality, x.probability), reverse=True):
-        if leg.category not in {"shots", "sot", "fouls", "tackles", "score_assist"}:
+        if leg.category not in {
+            "shots", "sot", "fouls", "fouls_won", "tackles",
+            "tackles_committed", "tackles_received", "score",
+            "first_scorer", "score_assist"
+        }:
             continue
         if leg.match not in best_by_match:
             best_by_match[leg.match] = leg
@@ -518,6 +627,7 @@ def build_builder_picks(
     candidates.extend(_shot_ladders(props, match_contexts or [], run_date))
     candidates.extend(_category_trios(props, run_date))
     candidates.extend(_mixed_builders(props, run_date))
+    candidates.extend(_same_game_narratives(props, run_date))
     candidates.extend(_cross_match_builder(props, run_date))
 
     # Stable dedup, then rank safe/high-quality builders first.
@@ -563,7 +673,10 @@ def format_builder_message(pick: BuilderPick) -> str:
         # Zeige nur den lesbaren Namen, nicht die market_id
         market_label = MARKET_LABELS.get(leg.market, leg.market)
         display_name = leg.player if leg.player and leg.player != leg.market else market_label
-        lines.append(f"{index}. {icon} <b>{display_name}</b>{source_note}{match_suffix}")
+        lines.append(
+            f"{index}. {icon} <b>{display_name}</b> — {market_label}"
+            f"{source_note}{match_suffix}"
+        )
     lines.extend([
         sep,
         f"💰 Gesamt-Quote: <b>{pick.total_odds:.2f}</b>{estimate}",
