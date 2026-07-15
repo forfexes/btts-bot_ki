@@ -20018,18 +20018,80 @@ def _ntr_prop_category(text):
 
 
 def _ntr_extract_player(description, selection=""):
-    generic = {"yes", "no", "over", "under", "home", "away"}
+    """
+    Pinnacle benutzt je nach Markt entweder:
+    - selection = Spielername  (Messi, Otamendi)
+    - selection = Over 1.5 / Yes / No und Spielername steckt in description
+    Darum Selection nur nehmen, wenn sie wirklich wie ein Spielername aussieht.
+    """
     selected = str(selection or "").strip()
-    if selected and selected.lower() not in generic and len(selected) > 2:
-        return selected
+    sl = selected.lower().strip()
+    if selected and len(selected) > 2:
+        bad = (
+            sl in {"yes", "no", "home", "away", "draw", "odd", "even"}
+            or sl.startswith(("over", "under"))
+            or re.fullmatch(r"[ou]\s*\d+(?:\.\d+)?", sl) is not None
+            or re.fullmatch(r"\d+(?:\.\d+)?\+?", sl) is not None
+        )
+        if not bad:
+            return selected[:100]
+
     desc = str(description or "").strip()
-    for sep in (":", " - ", " to score", " to be booked", " to assist"):
-        if sep in desc.lower():
-            idx = desc.lower().find(sep)
-            candidate = desc[:idx].strip()
-            if candidate:
-                return candidate
-    return selected or desc[:100]
+    dl = desc.lower().strip()
+
+    def _clean_candidate(value):
+        cand = str(value or "").strip(" -:|")
+        cand = re.sub(r"\b(over|under)\s*\d+(?:\.\d+)?\b", "", cand, flags=re.I).strip(" -:|")
+        # offensichtliche Markttexte nicht als Spielername nehmen
+        bad_words = [
+            "shots", "shot", "goalscorer", "goal scorer", "to score", "score?",
+            "booked", "carded", "receive a card", "assist", "fouls", "tackles",
+            "saves", "offsides", "total goals", "both teams", "either team",
+        ]
+        if not cand or len(cand) < 3:
+            return ""
+        if any(w in cand.lower() for w in bad_words):
+            return ""
+        return cand[:100]
+
+    # "Harry Kane - Shots on Target" / "Harry Kane: Over 1.5 SOT"
+    for sep in (":", " - ", " – ", " — "):
+        if sep in desc:
+            left, right = desc.split(sep, 1)
+            cand = _clean_candidate(left)
+            if cand:
+                return cand
+            cand = _clean_candidate(right)
+            if cand:
+                return cand
+
+    # "Harry Kane Shots on Target", "Otamendi To Be Booked", "Messi Anytime Goalscorer"
+    m = re.search(
+        r"^(.+?)\s+(?:over\s*\d+(?:\.\d+)?\s*)?"
+        r"(?:shots?\s+on\s+target|shots?|anytime\s+goalscorer|first\s+goalscorer|last\s+goalscorer|"
+        r"to\s+score|to\s+be\s+booked|receive\s+a\s+card|be\s+carded|to\s+assist|"
+        r"fouls?\s+committed|fouls?\s+won|tackles?\s+committed|tackles?\s+received|saves?|offsides?)\b",
+        desc,
+        flags=re.I,
+    )
+    if m:
+        cand = _clean_candidate(m.group(1))
+        if cand:
+            return cand
+
+    # "Shots on Target - Harry Kane"
+    m = re.search(
+        r"(?:shots?\s+on\s+target|shots?|anytime\s+goalscorer|to\s+be\s+booked|to\s+assist|"
+        r"fouls?\s+committed|tackles?)\s*[-:]\s*(.+)$",
+        desc,
+        flags=re.I,
+    )
+    if m:
+        cand = _clean_candidate(m.group(1))
+        if cand:
+            return cand
+
+    return selected[:100] if selected else desc[:100]
 
 
 def _ntr_collect_prop(player, team, match_name, league, market, category=None,
@@ -21366,6 +21428,13 @@ _SKIP_PROP_KEYWORDS = [
 ]
 
 # Leg-Kategorien für Bet Builder
+_REAL_PLAYER_BUILDER_CATS = {
+    "score", "first_scorer", "last_scorer", "assist",
+    "booked", "yellow_cards", "sot", "shots", "sot_outside_box", "shots_outside_box",
+    "fouls", "fouls_won", "tackles_committed", "tackles_received",
+    "saves", "offsides",
+}
+
 _LEG_CATEGORY = {
     "btts_ht": ["either team to score? 1st half", "both teams to score 1st half", "btts 1st half", "btts ht"],
     "half_goals_1st": ["over 1.5 goals 1st half", "over 2 goals 1st half", "1st half goals"],
@@ -21556,6 +21625,8 @@ def run_pinnacle_props_bot(win_start_utc=None, win_end_utc=None, ch_tz=None, top
     _fbref_checked = 0
     _fbref_confirmed = 0
     _invalid_prop_rows = 0
+    _builder_player_prop_count = 0
+    _builder_player_prop_cats = {}
     for p in props:
         if not isinstance(p, dict):
             _invalid_prop_rows += 1
@@ -21572,10 +21643,29 @@ def run_pinnacle_props_bot(win_start_utc=None, win_end_utc=None, ch_tz=None, top
             continue
         if match_name.lower() == prop_name:
             continue
-        if not (1.15 <= p["odds"] <= 5.00):
+        _classification_text = (
+            f"{p.get('special_category', '')} "
+            f"{p.get('player_prop', '')} "
+            f"{p.get('selection', '')}"
+        )
+        p["_cat"] = _get_leg_category(_classification_text)
+        p["_is_either"] = _is_either_market(_classification_text)
+        if p["_cat"] == "other":
             continue
-        if p["prob"] < 55:  # Legs dürfen etwas lockerer sein — Combo filtert
-            continue
+
+        _is_real_player_builder_leg = p["_cat"] in _REAL_PLAYER_BUILDER_CATS and not p.get("is_team_market")
+        # Spielerprops wie Kane 2+ SOT / Messi Tor / Otamendi Karte haben oft hohe Quoten
+        # und dadurch niedrige implizite Prob. Diese dürfen für Builder rein.
+        if _is_real_player_builder_leg:
+            if not (1.15 <= float(p.get("odds", 0) or 0) <= 25.00):
+                continue
+            if int(p.get("prob", 0) or 0) < 15:
+                continue
+        else:
+            if not (1.15 <= float(p.get("odds", 0) or 0) <= 5.00):
+                continue
+            if int(p.get("prob", 0) or 0) < 55:
+                continue
 
         # 🔍 FBref Cross-Check: unabhängige Wahrscheinlichkeit gegen Pinnacle-Quote prüfen
         try:
@@ -21607,16 +21697,8 @@ def run_pinnacle_props_bot(win_start_utc=None, win_end_utc=None, ch_tz=None, top
             except Exception:
                 continue
 
-        _classification_text = (
-            f"{p.get('special_category', '')} "
-            f"{p.get('player_prop', '')} "
-            f"{p.get('selection', '')}"
-        )
-        p["_cat"] = _get_leg_category(_classification_text)
-        p["_is_either"] = _is_either_market(_classification_text)
-
-        # Unklassifizierbare Specials nicht als echte Player-Legs ausgeben.
-        if p["_cat"] == "other":
+        # Kategorie wurde vor dem Odds/Prob-Filter gesetzt. Hier nur final sammeln.
+        if p.get("_cat") == "other":
             continue
 
         valid.append(p)
@@ -21631,6 +21713,7 @@ def run_pinnacle_props_bot(win_start_utc=None, win_end_utc=None, ch_tz=None, top
             _desc.rstrip("?") if p.get("is_team_market")
             else _ntr_extract_player(_desc, p.get("selection", ""))
         )
+        _before_pool = len(_NTR_BUILDER_PROP_POOL)
         _ntr_collect_prop(
             _player, "", p.get("match", ""), p.get("league", ""), _desc,
             category=_category,
@@ -21641,11 +21724,25 @@ def run_pinnacle_props_bot(win_start_utc=None, win_end_utc=None, ch_tz=None, top
             kickoff=p.get("starts", ""),
             games=0,
         )
+        if len(_NTR_BUILDER_PROP_POOL) > _before_pool and p.get("_cat") in _REAL_PLAYER_BUILDER_CATS:
+            try:
+                _builder_player_prop_count += 1
+                _builder_player_prop_cats[_category] = _builder_player_prop_cats.get(_category, 0) + 1
+            except NameError:
+                _builder_player_prop_count = 1
+                _builder_player_prop_cats = {_category: 1}
 
     if _invalid_prop_rows:
         log(f"   ⚠️ Pinnacle Props: {_invalid_prop_rows} ungültige Rows ignoriert")
     if _fbref_checked > 0:
         log(f"   🔍 FBref Cross-Check: {_fbref_checked} Props mit Stats abgeglichen, {_fbref_confirmed} bestätigt")
+    if _builder_player_prop_count:
+        log(
+            "   🔥 Echte Spieler-Props für Builder: "
+            + str(_builder_player_prop_count)
+            + " Legs · "
+            + ", ".join(f"{k}={v}" for k, v in sorted(_builder_player_prop_cats.items(), key=lambda item: item[1], reverse=True)[:10])
+        )
 
     if not valid:
         log("🔑 Pinnacle Props: keine Props im Zeitfenster")
@@ -21987,8 +22084,10 @@ def run_pinnacle_props_bot(win_start_utc=None, win_end_utc=None, ch_tz=None, top
             log(f"   ⏭️ Bet Builder Duplikat übersprungen: {b['match']}")
             continue
 
-        _cat_icons = {"score":"⚽","assist":"🎯","booked":"🟨","shots":"🥅",
-                      "fouls":"👊","tackles":"🦵","corners":"🔵","saves":"🧤",
+        _cat_icons = {"score":"⚽","first_scorer":"🥇⚽","last_scorer":"🏁⚽","assist":"🎯",
+                      "booked":"🟨","yellow_cards":"🟨","sot":"🎯","shots":"🥅",
+                      "fouls":"👊","fouls_won":"🧲","tackles_committed":"🦵","tackles_received":"🎯🦵",
+                      "tackles":"🦵","corners":"🔵","team_cards":"🟨","saves":"🧤",
                       "offsides":"🚩","result":"🏆","other":"○"}
 
         msg = f"{b.get('label', '🏗️ BET BUILDER')}  {b['odds']}\n"
