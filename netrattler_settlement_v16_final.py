@@ -30,6 +30,11 @@ from typing import Any, Dict, Iterable, List, Optional, Sequence, Tuple
 
 import requests
 
+try:
+    from netrattler_identity_hub import teams_match as _identity_teams_match
+except Exception:
+    _identity_teams_match = None
+
 SUPABASE_URL = (os.getenv("SUPABASE_URL") or "").rstrip("/")
 SUPABASE_KEY = os.getenv("SUPABASE_SERVICE_ROLE_KEY") or os.getenv("SUPABASE_KEY") or ""
 TG_TOKEN = os.getenv("TELEGRAM_TOKEN") or os.getenv("TELEGRAM_BOT_TOKEN") or ""
@@ -575,6 +580,17 @@ def public_results(day: str) -> List[Dict[str, Any]]:
         except Exception:
             continue
 
+    # Source Hub V30: OpenFootball worldcup/south-america/europe/champions/internationals + guarded Livescore.
+    try:
+        from netrattler_source_hub import public_result_fallbacks, rows_to_settlement_results, persist_source_health
+        hub_rows = rows_to_settlement_results(public_result_fallbacks(day))
+        if hub_rows:
+            output.extend(hub_rows)
+            log(f"SourceHub V30 {day}: {len(hub_rows)}", "INFO")
+        persist_source_health()
+    except Exception as exc:
+        log(f"SourceHub V30 {day}: {str(exc)[:100]}", "WARN")
+
     # Optional footballdata.io
     if FOOTBALLDATA_IO_API_KEY:
         try:
@@ -664,6 +680,11 @@ def find_result(tip: Dict[str, Any], results: Sequence[Dict[str, Any]]) -> Optio
             continue
         direct = (similarity(tip_home, home) + similarity(tip_away, away)) / 2 if tip_home and tip_away else similarity(tip_match, f"{home} vs {away}")
         reverse = (similarity(tip_home, away) + similarity(tip_away, home)) / 2 if tip_home and tip_away else 0.0
+        if _identity_teams_match and tip_home and tip_away:
+            if _identity_teams_match(tip_home, home) and _identity_teams_match(tip_away, away):
+                direct = max(direct, 0.98)
+            if _identity_teams_match(tip_home, away) and _identity_teams_match(tip_away, home):
+                reverse = max(reverse, 0.98)
         score = max(direct, reverse)
         if row_date(row) == tip_day:
             score += 0.15
