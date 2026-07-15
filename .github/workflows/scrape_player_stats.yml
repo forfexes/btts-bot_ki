@@ -1,25 +1,21 @@
-name: NETRATTLER Player Stats Scraper V13
+name: NETRATTLER Player Stats + Results Scraper
 
 on:
   schedule:
-    - cron: "10 4 * * *"
+    - cron: "0 2 * * *"   # Täglich 02:00 UTC (nach Ende der meisten Abendspiele)
   workflow_dispatch:
     inputs:
       date:
-        description: "Datum YYYY-MM-DD (leer = gestern)"
+        description: "Datum (YYYY-MM-DD), leer = gestern"
         required: false
         default: ""
-      source:
-        description: "all | statsbomb | fotmob | espn | fpl | sofascore | fbref | understat | fdcouk | xgabora | wm2026 | weather | referee | clubelo | martj42"
-        required: false
-        default: "all"
-      rebuild_only:
-        description: "Nur player_avg_stats + Hit Rates neu berechnen (true/false)"
+      results_only:
+        description: "Nur Ergebnisse scrapen (true/false)"
         required: false
         default: "false"
 
 jobs:
-  scrape-player-stats:
+  scrape:
     runs-on: ubuntu-latest
     timeout-minutes: 30
 
@@ -31,33 +27,26 @@ jobs:
           python-version: "3.11"
           cache: "pip"
 
-      - name: Install dependencies
+      - name: Install Dependencies
         run: |
-          python -m pip install --upgrade pip
-          pip install -r requirements.txt
+          pip install -r requirements.txt || pip install requests cloudscraper supabase python-dotenv
+          pip install playwright
+          playwright install chromium --with-deps
 
-      - name: Compile scraper
-        run: python -m py_compile scrape_player_stats.py
-
-      - name: Run Player Stats Scraper V13
+      - name: Run Scraper
         env:
           SUPABASE_URL: ${{ secrets.SUPABASE_URL }}
           SUPABASE_KEY: ${{ secrets.SUPABASE_KEY }}
-          THESTATSAPI_KEY: ${{ secrets.THESTATSAPI_KEY }}
-          FOOTBALL_DATA_API_KEYS: ${{ secrets.FOOTBALL_DATA_API_KEYS }}
-          FOOTBALL_DATA_API_KEY: ${{ secrets.FOOTBALL_DATA_API_KEY }}
-          SPORTMONKS_API_KEY: ${{ secrets.SPORTMONKS_KEY }}
-          STATSBOMB_MAX_MATCHES: "120"
-          SOFASCORE_MAX_EVENTS: "30"
+          SUPABASE_SERVICE_ROLE_KEY: ${{ secrets.SUPABASE_SERVICE_ROLE_KEY }}
+          TELEGRAM_TOKEN: ${{ secrets.TELEGRAM_TOKEN }}
+          TELEGRAM_GROUP_STATS: ${{ secrets.TELEGRAM_GROUP_STATS }}
         run: |
-          DATE="${{ github.event.inputs.date }}"
-          SOURCE="${{ github.event.inputs.source }}"
-          REBUILD="${{ github.event.inputs.rebuild_only }}"
-          if [ -z "$SOURCE" ]; then SOURCE="auto"; fi
-          if [ "$REBUILD" = "true" ]; then
-            python scrape_player_stats.py --yesterday
-          elif [ -n "$DATE" ]; then
-            python scrape_player_stats.py --date "$DATE"
+          if [ -n "${{ github.event.inputs.date }}" ]; then
+            ARGS="--date ${{ github.event.inputs.date }}"
           else
-            python scrape_player_stats.py --yesterday
+            ARGS="--yesterday"
           fi
+          if [ "${{ github.event.inputs.results_only }}" = "true" ]; then
+            ARGS="$ARGS --results-only"
+          fi
+          python scrape_player_stats.py $ARGS
