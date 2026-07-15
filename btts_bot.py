@@ -6251,6 +6251,8 @@ def _ntr_ml_predict_from_text(text, chat_id=None):
 
 def _ntr_ml_enhance_message(text, chat_id=None):
     raw = str(text or "")
+    if "📊 <b>Bewertung dieser Gruppe</b>" in raw or "📊 Bewertung dieser Gruppe" in raw:
+        return text
     low = raw.lower()
     # Reports/Settlement nicht mit ML-Footer vollkleben
     if any(x in low for x in ["auswertung", "roi report", "settlement", "gruppen-auswertung", "performance dieser gruppe"]):
@@ -6524,6 +6526,9 @@ def save_to_supabase(tip):
             "result_home", "result_away",
             "result_ht_home", "result_ht_away",
             "settled_at", "message_text",
+            "group_key", "pick_type", "source",
+            "builder_id", "builder_total_legs", "builder_legs", "builder_won_legs",
+            "profit_units", "actual_value",
         ]
         
         clean_tip = {k: v for k, v in tip.items() 
@@ -8797,11 +8802,78 @@ def edit_telegram_message(chat_id, message_id, new_text):
 
 def format_result_appendix(tip, result, status):
     """
-    Liefert NUR den Ergebnis-Block, der an die Original-Tipp-Nachricht
-    angehängt wird (kein Match-Name, keine Wiederholung - steht schon oben).
+    Ergebnis direkt an den ORIGINAL-TIPP anhängen.
+    Für normale Tipps, Combos, Ecken und Builder.
     """
+    market = str(tip.get("market") or "").lower()
+    group = _ntr_group_key(tip)
     odds = tip.get("odds", "?")
     units = tip.get("units", 1.0)
+
+    home_s = result.get("home_score", "?")
+    away_s = result.get("away_score", "?")
+    ht_home = result.get("ht_home", "?")
+    ht_away = result.get("ht_away", "?")
+
+    hit_line = "✅ Hit" if status == "won" else "❌ Miss"
+    vx_line = "✅ V" if status == "won" else "❌ X"
+
+    try:
+        profit = round(float(str(odds).replace(",", ".")) * float(units or 1) - float(units or 1), 2) if status == "won" else -float(units or 1)
+    except Exception:
+        profit = 0.0
+    profit_str = f"+{profit}" if profit >= 0 else str(profit)
+    profit_emoji = "🟢" if status == "won" else "🔴"
+
+    title = "Match Summary"
+    if group == "combos" or "combo_multi" in market:
+        title = "Combo Summary"
+    elif group == "corners" or "corner" in market:
+        title = "Corner Summary"
+    elif group == "builder" or "builder" in market:
+        title = "Builder Summary"
+
+    nl = "\n"
+    msg = f"⸻⸻ <b>{title}</b> ⸻⸻{nl}"
+    if ht_home != "?" and ht_away != "?":
+        msg += f"Half-Time Score: <b>{ht_home}-{ht_away}</b>{nl}"
+    if home_s != "?" or away_s != "?":
+        msg += f"Full-Time Score: <b>{home_s}-{away_s}</b>{nl}"
+    if result.get("actual_value") is not None:
+        msg += f"Auswertung: <b>{result.get('actual_value')}</b>{nl}"
+    if result.get("total_corners") is not None or result.get("corners_total") is not None:
+        msg += f"Corners: <b>{result.get('total_corners') or result.get('corners_total')}</b>{nl}"
+    msg += f"{hit_line}  <b>{vx_line}</b>{nl}"
+    msg += f"{profit_emoji} Profit: <b>{profit_str} Units</b>"
+    return msg
+
+
+
+    home_s = result.get("home_score", "?")
+    away_s = result.get("away_score", "?")
+    ht_home = result.get("ht_home", "?")
+    ht_away = result.get("ht_away", "?")
+
+    hit_line = "✅ Hit" if status == "won" else "❌ Miss"
+    vx_line = "✅ V" if status == "won" else "❌ X"
+
+    try:
+        profit = round(float(str(odds).replace(",", ".")) * float(units or 1) - float(units or 1), 2) if status == "won" else -float(units or 1)
+    except Exception:
+        profit = 0.0
+    profit_str = f"+{profit}" if profit >= 0 else str(profit)
+    profit_emoji = "🟢" if status == "won" else "🔴"
+
+    nl = "\n"
+    msg = f"⸻⸻ <b>Match Summary</b> ⸻⸻{nl}"
+    if ht_home != "?" and ht_away != "?":
+        msg += f"Half-Time Score: <b>{ht_home}-{ht_away}</b>{nl}"
+    msg += f"Full-Time Score: <b>{home_s}-{away_s}</b>{nl}"
+    msg += f"{hit_line}  <b>{vx_line}</b>{nl}"
+    msg += f"{profit_emoji} Profit: <b>{profit_str} Units</b>"
+    return msg
+
+
 
     home_s = result.get("home_score", "?")
     away_s = result.get("away_score", "?")
@@ -8827,12 +8899,30 @@ def format_result_appendix(tip, result, status):
 
 
 def format_result_text(tip, result, status):
-    """Backwards-kompatibel: vollständiger Ergebnis-Text (für Kanäle ohne Original-Nachricht)."""
+    """Fallback, falls Original-Telegram-Nachricht nicht mehr editierbar ist."""
     match = tip.get("match", "?")
     market = tip.get("market", "btts")
     tip_val = tip.get("tip", "YES")
-    odds = tip.get("odds", "?")
-    units = tip.get("units", 1.0)
+
+    home_s = result.get("home_score", "?")
+    away_s = result.get("away_score", "?")
+    ht_home = result.get("ht_home", "?")
+    ht_away = result.get("ht_away", "?")
+
+    hit_line = "✅ Hit" if status == "won" else "❌ Miss"
+    vx_line = "✅ V" if status == "won" else "❌ X"
+
+    nl = "\n"
+    msg = f"<b>{match}</b>{nl}"
+    msg += f"🎯 Tipp: {tip_val} ({str(market).upper()}){nl}"
+    msg += f"⸻⸻ <b>Match Summary</b> ⸻⸻{nl}"
+    if ht_home != "?" and ht_away != "?":
+        msg += f"Half-Time Score: <b>{ht_home}-{ht_away}</b>{nl}"
+    msg += f"Full-Time Score: <b>{home_s}-{away_s}</b>{nl}"
+    msg += f"{hit_line}  <b>{vx_line}</b>"
+    return msg
+
+
 
     home_s = result.get("home_score", "?")
     away_s = result.get("away_score", "?")
@@ -15857,6 +15947,9 @@ def save_to_supabase(tip):
             "result_home", "result_away",
             "result_ht_home", "result_ht_away",
             "settled_at", "message_text",
+            "group_key", "pick_type", "source",
+            "builder_id", "builder_total_legs", "builder_legs", "builder_won_legs",
+            "profit_units", "actual_value",
         ]
         
         clean_tip = {k: v for k, v in tip.items() 
@@ -17052,6 +17145,23 @@ def check_tip_result(tip, result):
     elif market == "over15_ht":
         ht_total = (result.get("ht_home") or 0) + (result.get("ht_away") or 0)
         won = ht_total >= 2 if tip_value != "NO" else ht_total < 2
+    elif market == "corners":
+        total_corners = (
+            result.get("total_corners")
+            or result.get("corners_total")
+            or (
+                (result.get("home_corners") or 0) + (result.get("away_corners") or 0)
+                if result.get("home_corners") is not None and result.get("away_corners") is not None
+                else None
+            )
+        )
+        if total_corners is None:
+            return None
+        line = tip.get("line") or tip.get("corner_line") or 8.5
+        try:
+            won = float(total_corners) > float(line)
+        except Exception:
+            return None
     else:
         return None
 
@@ -17706,11 +17816,78 @@ def edit_telegram_message(chat_id, message_id, new_text):
 
 def format_result_appendix(tip, result, status):
     """
-    Liefert NUR den Ergebnis-Block, der an die Original-Tipp-Nachricht
-    angehängt wird (kein Match-Name, keine Wiederholung - steht schon oben).
+    Ergebnis direkt an den ORIGINAL-TIPP anhängen.
+    Für normale Tipps, Combos, Ecken und Builder.
     """
+    market = str(tip.get("market") or "").lower()
+    group = _ntr_group_key(tip)
     odds = tip.get("odds", "?")
     units = tip.get("units", 1.0)
+
+    home_s = result.get("home_score", "?")
+    away_s = result.get("away_score", "?")
+    ht_home = result.get("ht_home", "?")
+    ht_away = result.get("ht_away", "?")
+
+    hit_line = "✅ Hit" if status == "won" else "❌ Miss"
+    vx_line = "✅ V" if status == "won" else "❌ X"
+
+    try:
+        profit = round(float(str(odds).replace(",", ".")) * float(units or 1) - float(units or 1), 2) if status == "won" else -float(units or 1)
+    except Exception:
+        profit = 0.0
+    profit_str = f"+{profit}" if profit >= 0 else str(profit)
+    profit_emoji = "🟢" if status == "won" else "🔴"
+
+    title = "Match Summary"
+    if group == "combos" or "combo_multi" in market:
+        title = "Combo Summary"
+    elif group == "corners" or "corner" in market:
+        title = "Corner Summary"
+    elif group == "builder" or "builder" in market:
+        title = "Builder Summary"
+
+    nl = "\n"
+    msg = f"⸻⸻ <b>{title}</b> ⸻⸻{nl}"
+    if ht_home != "?" and ht_away != "?":
+        msg += f"Half-Time Score: <b>{ht_home}-{ht_away}</b>{nl}"
+    if home_s != "?" or away_s != "?":
+        msg += f"Full-Time Score: <b>{home_s}-{away_s}</b>{nl}"
+    if result.get("actual_value") is not None:
+        msg += f"Auswertung: <b>{result.get('actual_value')}</b>{nl}"
+    if result.get("total_corners") is not None or result.get("corners_total") is not None:
+        msg += f"Corners: <b>{result.get('total_corners') or result.get('corners_total')}</b>{nl}"
+    msg += f"{hit_line}  <b>{vx_line}</b>{nl}"
+    msg += f"{profit_emoji} Profit: <b>{profit_str} Units</b>"
+    return msg
+
+
+
+    home_s = result.get("home_score", "?")
+    away_s = result.get("away_score", "?")
+    ht_home = result.get("ht_home", "?")
+    ht_away = result.get("ht_away", "?")
+
+    hit_line = "✅ Hit" if status == "won" else "❌ Miss"
+    vx_line = "✅ V" if status == "won" else "❌ X"
+
+    try:
+        profit = round(float(str(odds).replace(",", ".")) * float(units or 1) - float(units or 1), 2) if status == "won" else -float(units or 1)
+    except Exception:
+        profit = 0.0
+    profit_str = f"+{profit}" if profit >= 0 else str(profit)
+    profit_emoji = "🟢" if status == "won" else "🔴"
+
+    nl = "\n"
+    msg = f"⸻⸻ <b>Match Summary</b> ⸻⸻{nl}"
+    if ht_home != "?" and ht_away != "?":
+        msg += f"Half-Time Score: <b>{ht_home}-{ht_away}</b>{nl}"
+    msg += f"Full-Time Score: <b>{home_s}-{away_s}</b>{nl}"
+    msg += f"{hit_line}  <b>{vx_line}</b>{nl}"
+    msg += f"{profit_emoji} Profit: <b>{profit_str} Units</b>"
+    return msg
+
+
 
     home_s = result.get("home_score", "?")
     away_s = result.get("away_score", "?")
@@ -17736,12 +17913,30 @@ def format_result_appendix(tip, result, status):
 
 
 def format_result_text(tip, result, status):
-    """Backwards-kompatibel: vollständiger Ergebnis-Text (für Kanäle ohne Original-Nachricht)."""
+    """Fallback, falls Original-Telegram-Nachricht nicht mehr editierbar ist."""
     match = tip.get("match", "?")
     market = tip.get("market", "btts")
     tip_val = tip.get("tip", "YES")
-    odds = tip.get("odds", "?")
-    units = tip.get("units", 1.0)
+
+    home_s = result.get("home_score", "?")
+    away_s = result.get("away_score", "?")
+    ht_home = result.get("ht_home", "?")
+    ht_away = result.get("ht_away", "?")
+
+    hit_line = "✅ Hit" if status == "won" else "❌ Miss"
+    vx_line = "✅ V" if status == "won" else "❌ X"
+
+    nl = "\n"
+    msg = f"<b>{match}</b>{nl}"
+    msg += f"🎯 Tipp: {tip_val} ({str(market).upper()}){nl}"
+    msg += f"⸻⸻ <b>Match Summary</b> ⸻⸻{nl}"
+    if ht_home != "?" and ht_away != "?":
+        msg += f"Half-Time Score: <b>{ht_home}-{ht_away}</b>{nl}"
+    msg += f"Full-Time Score: <b>{home_s}-{away_s}</b>{nl}"
+    msg += f"{hit_line}  <b>{vx_line}</b>"
+    return msg
+
+
 
     home_s = result.get("home_score", "?")
     away_s = result.get("away_score", "?")
@@ -17975,7 +18170,73 @@ def _ntr_settle_player_tip(tip):
     return {"status": status, "actual_value": actual, "parsed": parsed}
 
 
+def _ntr_settle_match_leg(leg, parent_tip):
+    """Settle normal team/match legs inside combos/builders: BTTS, Over, HT, Corners."""
+    if not isinstance(leg, dict):
+        return None
+    market = str(leg.get("market") or leg.get("category") or leg.get("raw") or "").lower()
+    tip_value = str(leg.get("tip") or leg.get("selection") or leg.get("side") or "YES").upper()
+    match = leg.get("match") or parent_tip.get("match", "")
+    if not match or " vs " not in str(match):
+        return None
+
+    fake_tip = dict(parent_tip)
+    fake_tip["match"] = match
+    fake_tip["market"] = (
+        "btts_ht" if "btts_ht" in market or "btts ht" in market else
+        "over15_ht" if "over15" in market or "1.5 ht" in market or "half_goals_1st" in market else
+        "over25" if "over25" in market or "over 2.5" in market or "over_goals" in market else
+        "combo" if "combo" in market and "multi" not in market else
+        "corners" if "corner" in market or "ecken" in market else
+        "btts" if "btts" in market or "both teams" in market else
+        ""
+    )
+    fake_tip["tip"] = tip_value
+
+    result = get_match_result_from_sources(fake_tip)
+    if not result:
+        return None
+
+    # Corners brauchen eine Quelle mit corner_total/home_corners/away_corners.
+    if fake_tip["market"] == "corners":
+        total_corners = (
+            result.get("total_corners")
+            or result.get("corners_total")
+            or (
+                (result.get("home_corners") or 0) + (result.get("away_corners") or 0)
+                if result.get("home_corners") is not None and result.get("away_corners") is not None
+                else None
+            )
+        )
+        if total_corners is None:
+            return None
+        line = leg.get("line") or parent_tip.get("line") or parent_tip.get("corner_line") or 8.5
+        try:
+            line = float(line)
+            actual = float(total_corners)
+        except Exception:
+            return None
+        status = "won" if actual > line else "lost"
+        return {**leg, "actual": actual, "status": status, "raw": leg.get("raw") or f"Corners Over {line}"}
+
+    status = check_tip_result(fake_tip, result)
+    if not status:
+        return None
+    return {
+        **leg,
+        "actual": f"{result.get('home_score','?')}-{result.get('away_score','?')}",
+        "status": status,
+        "raw": leg.get("raw") or f"{fake_tip['market']} {tip_value}",
+    }
+
+
 def _ntr_settle_builder_tip(tip):
+    """
+    Universal Settlement:
+    - Player-Prop Builder: Spielerwert über player_match_stats
+    - Team/Match Builder: Ergebnis über ResultResolver
+    - Multi-Combos: jedes gespeicherte Leg einzeln
+    """
     legs = tip.get("builder_legs") or []
     if isinstance(legs, str):
         try:
@@ -17984,16 +18245,47 @@ def _ntr_settle_builder_tip(tip):
             legs = []
     if not isinstance(legs, list) or not legs:
         return None
+
     settled = []
     for leg in legs:
-        parsed = _ntr_parse_prop_leg(leg if isinstance(leg, dict) else {"player_prop": str(leg)})
-        actual = _ntr_get_player_actual(parsed.get("player"), parsed.get("stat"), tip.get("date"), leg.get("match", tip.get("match", "")) if isinstance(leg, dict) else tip.get("match", ""))
-        status = _ntr_eval_actual(actual, parsed.get("line"), parsed.get("side", "over"))
-        if status is None:
-            return None
-        settled.append({**parsed, "actual": actual, "status": status})
-    won = sum(1 for leg in settled if leg["status"] == "won")
-    return {"status": "won" if won == len(settled) else "lost", "legs": settled, "won_legs": won}
+        if not isinstance(leg, dict):
+            leg = {"player_prop": str(leg), "raw": str(leg)}
+
+        # 1) Player props zuerst
+        parsed = _ntr_parse_prop_leg(leg)
+        actual = None
+        status = None
+        if parsed.get("stat") and parsed.get("line") is not None and parsed.get("player"):
+            actual = _ntr_get_player_actual(
+                parsed.get("player"),
+                parsed.get("stat"),
+                tip.get("date"),
+                leg.get("match", tip.get("match", "")),
+            )
+            status = _ntr_eval_actual(actual, parsed.get("line"), parsed.get("side", "over"))
+
+        if status is not None:
+            settled.append({**parsed, "actual": actual, "status": status, "raw": leg.get("raw") or leg.get("player_prop") or leg.get("market") or "Prop"})
+            continue
+
+        # 2) Team/Match legs: BTTS, Over, HT, Corners usw.
+        match_leg = _ntr_settle_match_leg(leg, tip)
+        if match_leg is not None:
+            settled.append(match_leg)
+            continue
+
+        # Wenn ein Leg nicht auswertbar ist, noch nicht settlen.
+        return None
+
+    won = sum(1 for leg in settled if leg.get("status") == "won")
+    return {
+        "status": "won" if won == len(settled) else "lost",
+        "legs": settled,
+        "won_legs": won,
+        "actual_value": f"{won}/{len(settled)} Legs",
+    }
+
+
 
 
 def _ntr_group_stats(group_key, tip_date=None):
@@ -18208,7 +18500,7 @@ def run_settlement():
                 result = None
                 if _market_lower in {"advanced_props", "player_prop", "player_props", "prop"} or tip.get("prop_market"):
                     _special = _ntr_settle_player_tip(tip)
-                elif "builder" in _market_lower or tip.get("builder_legs"):
+                elif "builder" in _market_lower or "combo_multi" in _market_lower or tip.get("builder_legs"):
                     _special = _ntr_settle_builder_tip(tip)
 
                 if _special:
@@ -18312,9 +18604,12 @@ def run_settlement():
                 if msg_id and chat_id:
                     try:
                         if original_text:
-                            _edited = original_text + "\n" + appendix
+                            # Settlement direkt im Original-Tipp. Bei Re-Run alten Match-Summary-Block ersetzen,
+                            # damit der Tipp nicht mehrfach mit Ergebnis aufgeblasen wird.
+                            _base = re.split(r"\n?⸻⸻\s*<b>(?:Match|Combo|Corner|Builder) Summary</b>\s*⸻⸻", original_text, maxsplit=1)[0].rstrip()
+                            _edited = _base + "\n" + appendix
                             if len(_edited) > 4090:
-                                _edited = original_text[:max(500, 4090-len(appendix)-2)] + "…\n" + appendix
+                                _edited = _base[:max(500, 4090-len(appendix)-2)] + "…\n" + appendix
                             edit_telegram_message(chat_id, msg_id, _edited)
                         else:
                             edit_telegram_message(chat_id, msg_id, format_result_text(tip, result, status) + ("\n" + _group_line if _group_line else ""))
@@ -19354,6 +19649,8 @@ def run_corners_and_scorer_bots(target_date, active_leagues, odds_data_cache, fi
                     "date": str(target_date),
                     "market": "corners",
                     "status": "pending",
+                    "group_key": "corners",
+                    "pick_type": "corners",
                     "telegram_chat_id": str(group_hz),
                     "telegram_msg_id": _cmid,
                     "message_text": _cmsg[:3500],
@@ -21584,6 +21881,125 @@ def _send_stat_insight_fallback(match_name, legs):
         log(f"   📊 Stat-Analyse gesendet (statt Bet Builder): {match_name}")
 
 
+
+def _ntr_builder_stake_for_odds(odds, legs=None):
+    try:
+        o = float(odds or 0)
+    except Exception:
+        o = 0.0
+    if o >= 100:
+        return 0.05
+    if o >= 50:
+        return 0.10
+    if o >= 20:
+        return 0.15
+    if o >= 8:
+        return 0.25
+    if o >= 3.5:
+        return 0.35
+    return 0.50
+
+def _ntr_builder_read(prob, odds):
+    try:
+        p = float(prob or 0)
+        o = float(odds or 0)
+    except Exception:
+        p, o = 0.0, 0.0
+    if o >= 50:
+        return "LOTTERY", max(1, min(10, round((p - 35) / 6)))
+    if o >= 12:
+        return "HIGH ODDS", max(1, min(10, round((p - 40) / 5)))
+    if p >= 68 and o <= 4:
+        return "SAFE/VALUE", max(1, min(10, round((p - 45) / 5)))
+    if p >= 55:
+        return "VALUE", max(1, min(10, round((p - 42) / 5)))
+    return "SPECULATIVE", max(1, min(10, round((p - 35) / 6)))
+
+
+def _ntr_is_generic_builder_selection(value):
+    v = str(value or "").strip().lower()
+    if not v:
+        return True
+    if v in {"yes", "no", "home", "away", "draw", "odd", "even", "over", "under"}:
+        return True
+    if v.startswith(("over ", "under ")):
+        return True
+    if re.fullmatch(r"[ou]\s*\d+(?:\.\d+)?", v):
+        return True
+    if re.fullmatch(r"\d+(?:\.\d+)?\+?", v):
+        return True
+    return False
+
+def _ntr_builder_player_name(leg):
+    desc = str(leg.get("player_prop") or leg.get("market") or "").strip()
+    sel = str(leg.get("selection") or leg.get("player") or "").strip()
+    if sel and not _ntr_is_generic_builder_selection(sel):
+        return sel[:100]
+    try:
+        p = _ntr_extract_player(desc, sel)
+        if p and not _ntr_is_generic_builder_selection(p):
+            return p[:100]
+    except Exception:
+        pass
+    m = re.search(
+        r"^(.+?)\s+(?:anytime\s+goalscorer|first\s+goalscorer|last\s+goalscorer|"
+        r"to\s+be\s+booked|player\s+to\s+be\s+booked|to\s+score|shots?\s+on\s+target|shots?)\b",
+        desc,
+        flags=re.I,
+    )
+    if m:
+        p = m.group(1).strip(" -:|")
+        if p and not _ntr_is_generic_builder_selection(p):
+            return p[:100]
+    return ""
+
+def _ntr_builder_market_label(leg):
+    desc = str(leg.get("player_prop") or leg.get("market") or "").strip()
+    cat = str(leg.get("_cat") or leg.get("category") or "").strip()
+    line = leg.get("line", None)
+    try:
+        line_f = float(line) if line is not None and str(line) != "" else None
+    except Exception:
+        line_f = None
+    if cat in {"booked", "yellow_cards"}:
+        return "To Be Booked"
+    if cat == "score":
+        return "Anytime Goalscorer"
+    if cat == "first_scorer":
+        return "First Goalscorer"
+    if cat == "last_scorer":
+        return "Last Goalscorer"
+    if cat == "sot":
+        return f"Over {line_f:g} Shots on Target" if line_f and line_f > 1 else "1+ Shot on Target"
+    if cat == "shots":
+        return f"Over {line_f:g} Shots" if line_f and line_f > 1 else "1+ Shot"
+    if cat in {"fouls", "fouls_committed"}:
+        return f"Over {line_f:g} Fouls Committed" if line_f and line_f > 1 else "1+ Foul Committed"
+    if cat == "fouls_won":
+        return f"Over {line_f:g} Fouls Won" if line_f and line_f > 1 else "1+ Foul Won"
+    if cat == "tackles_committed":
+        return f"Over {line_f:g} Tackles Committed" if line_f and line_f > 1 else "1+ Tackle Committed"
+    if cat == "tackles_received":
+        return f"Over {line_f:g} Tackles Received" if line_f and line_f > 1 else "1+ Tackle Received"
+    return desc or str(leg.get("selection") or "").strip() or "Market"
+
+def _ntr_builder_leg_line(leg, icons, indent=""):
+    cat = str(leg.get("_cat") or leg.get("category") or "other")
+    icon = icons.get(cat, "○")
+    player = _ntr_builder_player_name(leg)
+    label = _ntr_builder_market_label(leg)
+    fbref = " 🔍" if leg.get("_fbref_confirmed") else ""
+    either = " 🔀" if leg.get("_is_either") else ""
+    player_cats = {
+        "score", "first_scorer", "last_scorer", "assist",
+        "booked", "yellow_cards", "sot", "shots",
+        "fouls", "fouls_committed", "fouls_won",
+        "tackles_committed", "tackles_received", "saves", "offsides",
+    }
+    if player and cat in player_cats:
+        return f"{indent}{icon} <b>{player}</b> — {label}{fbref}{either}"
+    return f"{indent}{icon} {label}{fbref}{either}"
+
 def run_pinnacle_props_bot(win_start_utc=None, win_end_utc=None, ch_tz=None, top_btts_tips=None, fixtures_cache=None) -> int:
     """
     Pinnacle Player Props Bot.
@@ -22106,7 +22522,7 @@ def run_pinnacle_props_bot(win_start_utc=None, win_end_utc=None, ch_tz=None, top
                     _ko_str = ""
                 msg += f"\n⚽ <b>{_mn}</b>{_ko_str}\n"
                 for leg in _mlegs:
-                    msg += f"   {_cat_icons.get(leg['_cat'],'○')} {leg['player_prop']}\n"
+                    msg += _ntr_builder_leg_line(leg, _cat_icons, indent="   ") + "\n"
         else:
             # Single-Match
             msg += f"⚽ <b>{b['match']}</b>"
@@ -22114,16 +22530,14 @@ def run_pinnacle_props_bot(win_start_utc=None, win_end_utc=None, ch_tz=None, top
                 msg += " · ⏰ " + tstr
             msg += "\n"
             for leg in b["legs"]:
-                _fbref = " 🔍" if leg.get("_fbref_confirmed") else ""
-                _either = " 🔀" if leg.get("_is_either") else ""
-                msg += f"{_cat_icons.get(leg['_cat'],'○')} {leg['player_prop']}{_fbref}{_either}\n"
+                msg += _ntr_builder_leg_line(leg, _cat_icons, indent="") + "\n"
 
         _avg_prob = int(sum(float(l.get("prob", 0) or 0) for l in b["legs"]) / max(1, len(b["legs"])))
-        _risk = "SAFE" if _avg_prob >= 72 and float(b["odds"]) <= 3.5 else "VALUE" if _avg_prob >= 62 else "HIGH ODDS"
-        _nate_score = max(1, min(10, round((_avg_prob - 45) / 5 + (1 if float(b["odds"]) >= 2 else 0))))
-        msg += f"\n💰 @ <b>{b['odds']}</b> · 0.5u"
-        msg += f"\n🧠 <b>NATE READ:</b> {_risk} · Score {_nate_score}/10"
-        msg += "\n<i>Korrelierte Legs nur bei gemeinsamem Match-Script; hohe Quote wird klein gespielt.</i>"
+        _risk, _builder_score = _ntr_builder_read(_avg_prob, b["odds"])
+        _stake = _ntr_builder_stake_for_odds(b["odds"], b["legs"])
+        msg += f"\n💰 @ <b>{b['odds']}</b> · {_stake:.2f}u"
+        msg += f"\n🧠 <b>PROP BUILDER READ:</b> {_risk} · Score {_builder_score}/10"
+        msg += "\n<i>Player-, Team- und Match-Props werden klein gespielt, wenn die Gesamtquote hoch ist.</i>"
 
         _mid = send_telegram(msg, chat_id=prop_chat)
         sent += 1
@@ -22138,9 +22552,9 @@ def run_pinnacle_props_bot(win_start_utc=None, win_end_utc=None, ch_tz=None, top
                 "match": b["match"],
                 "tip": " + ".join(l["player_prop"] for l in b["legs"]),
                 "odds": str(b["odds"]),
-                "units": 0.5,
+                "units": _stake,
                 "probability": int(sum(l["prob"] for l in b["legs"]) / len(b["legs"])),
-                "confidence": 3,
+                "confidence": max(1, min(5, int(round(_builder_score / 2)))),
                 "status": "pending",
                 "group_key": "builder",
                 "pick_type": "builder",
@@ -24204,6 +24618,20 @@ def main():
                             "probability": int(combo.get("expected_confidence", 3) / 5 * 100),
                             "confidence": 3,
                             "status": "pending",
+                            "group_key": "combos",
+                            "pick_type": "combo_multi",
+                            "builder_total_legs": n,
+                            "builder_legs": [
+                                {
+                                    "match": t.get("match", ""),
+                                    "market": t.get("market", ""),
+                                    "tip": t.get("tip", t.get("selection", "YES")),
+                                    "category": t.get("market", ""),
+                                    "line": 2.5 if t.get("market") in {"over25", "combo"} else (1.5 if t.get("market") == "over15_ht" else None),
+                                    "side": "over",
+                                    "raw": f"{t.get('market','')} {t.get('tip', t.get('selection','YES'))}",
+                                } for t in combo.get("tips", [])
+                            ],
                             "telegram_chat_id": str(combo_chat),
                             "telegram_msg_id": _combo_mid,
                             "message_text": msg[:3500],
