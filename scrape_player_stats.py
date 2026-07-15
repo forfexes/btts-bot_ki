@@ -420,6 +420,91 @@ def fetch_openfootball_results(date_str: str) -> List[Dict]:
     return results
 
 
+
+
+# ============================================================
+# V30 HOTFIX — match_results: alle Row-Keys identisch machen
+# Supabase/PostgREST wirft sonst PGRST102: "All object keys must match".
+# ============================================================
+
+_MATCH_RESULT_COLUMNS = [
+    "source", "event_id", "match_date",
+    "home_team", "away_team",
+    "home_score", "away_score",
+    "ht_home", "ht_away",
+    "league", "country", "status",
+]
+
+
+def _as_int_or_none(value):
+    try:
+        if value is None or value == "":
+            return None
+        return int(float(value))
+    except Exception:
+        return None
+
+
+def _normalize_match_result(row, fallback_date=None):
+    if not isinstance(row, dict):
+        return None
+
+    home = (
+        row.get("home_team") or row.get("home") or row.get("team1")
+        or row.get("homeTeam") or row.get("home_name") or ""
+    )
+    away = (
+        row.get("away_team") or row.get("away") or row.get("team2")
+        or row.get("awayTeam") or row.get("away_name") or ""
+    )
+
+    match_date = (
+        row.get("match_date") or row.get("date") or row.get("game_date")
+        or row.get("kickoff_date") or fallback_date or ""
+    )
+    match_date = str(match_date)[:10]
+
+    source = str(row.get("source") or "unknown").strip() or "unknown"
+    event_id = str(
+        row.get("event_id") or row.get("id") or row.get("game_id")
+        or row.get("match_id") or ""
+    ).strip()
+    if not event_id:
+        event_id = f"{source}_{home}_{away}_{match_date}".lower()
+        event_id = re.sub(r"[^a-z0-9]+", "_", event_id).strip("_")
+
+    clean = {
+        "source": source,
+        "event_id": event_id,
+        "match_date": match_date,
+        "home_team": str(home or "").strip(),
+        "away_team": str(away or "").strip(),
+        "home_score": _as_int_or_none(row.get("home_score", row.get("score_home", row.get("homeGoals")))),
+        "away_score": _as_int_or_none(row.get("away_score", row.get("score_away", row.get("awayGoals")))),
+        "ht_home": _as_int_or_none(row.get("ht_home", row.get("home_score_ht", row.get("half_home")))),
+        "ht_away": _as_int_or_none(row.get("ht_away", row.get("away_score_ht", row.get("half_away")))),
+        "league": str(row.get("league") or row.get("competition") or row.get("tournament") or "").strip(),
+        "country": str(row.get("country") or "").strip(),
+        "status": str(row.get("status") or "finished").strip().lower(),
+    }
+
+    if not clean["home_team"] or not clean["away_team"]:
+        return None
+    if clean["home_score"] is None or clean["away_score"] is None:
+        return None
+    return clean
+
+
+def _normalize_match_result_rows(rows, fallback_date=None):
+    out = []
+    for row in rows or []:
+        clean = _normalize_match_result(row, fallback_date=fallback_date)
+        if clean:
+            # exakt gleiche Key-Reihenfolge für alle Rows
+            out.append({key: clean.get(key) for key in _MATCH_RESULT_COLUMNS})
+    return out
+
+
 def scrape_results(date_str: str) -> int:
     """Holt Ergebnisse aus allen Quellen und speichert in match_results."""
     print(f"\n📅 Scrape Ergebnisse für {date_str}")
@@ -438,14 +523,23 @@ def scrape_results(date_str: str) -> int:
     except Exception as e:
         print(f"  ⚠️  SourceHub Results: {str(e)[:120]}")
 
-    # Deduplizieren (ESPN hat Vorrang weil vollständiger)
+    # Supabase/PostgREST verlangt im Bulk-Upsert identische Keys in allen Objekten.
+    # SourceHub/OpenFootball+/ESPN liefern teils unterschiedliche Zusatzfelder.
+    # Darum vor dem Dedupe hart auf das match_results-Schema normalisieren.
+    normalized = _normalize_match_result_rows(all_results, fallback_date=date_str)
+
+    # Deduplizieren (ESPN hat Vorrang, weil vollständiger)
     seen = set()
     unique = []
-    for r in all_results:
-        key = r["event_id"]
+    for r in normalized:
+        key = (r.get("source"), r.get("event_id"))
         if key not in seen:
             seen.add(key)
             unique.append(r)
+
+    if unique:
+        key_sets = {tuple(sorted(row.keys())) for row in unique}
+        print(f"  🧩 match_results normalisiert: {len(unique)} Rows / {len(key_sets)} Keyset")
 
     saved = _sb_post("match_results", unique, conflict="source,event_id")
     print(f"  💾 {saved} Ergebnisse in Supabase gespeichert")
