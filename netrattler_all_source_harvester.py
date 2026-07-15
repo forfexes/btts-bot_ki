@@ -1,4 +1,4 @@
-!/usr/bin/env python3
+#!/usr/bin/env python3
 """
 NETRATTLER ALL SOURCE HARVESTER — DATA LAKE + PLAYER STATS + SOURCE DISCOVERY
 ============================================================================
