@@ -1,15 +1,11 @@
 #!/usr/bin/env python3
-from netrattler_builder_engine import (
-    build_builder_picks, deduplicate_props, market_line
-)
+from netrattler_builder_engine import build_builder_picks, deduplicate_props, market_line
 
-MATCH = "France vs Spain"
-
-def row(player, market, category, line, odds, prob=68):
+def row(player, match, market, category, line, odds, prob=68):
     return {
         "player": player,
-        "team": "France",
-        "match": MATCH,
+        "team": match.split(" vs ")[0],
+        "match": match,
         "league": "FIFA World Cup",
         "market": market,
         "category": category,
@@ -21,40 +17,37 @@ def row(player, market, category, line, odds, prob=68):
         "hit_rate": prob,
     }
 
+m1 = "France vs Spain"
+m2 = "England vs Argentina"
 rows = [
-    row("Player A", "1+ Tackles Committed", "tackles_committed", 1, 1.35, 76),
-    row("Player B", "1+ Tackles Committed", "tackles_committed", 1, 1.40, 73),
-    row("Player C", "1+ Tackles Committed", "tackles_committed", 1, 1.45, 70),
-    row("Player D", "2+ Tackles Received", "tackles_received", 2, 1.70, 62),
-    row("Player E", "2+ Tackles Received", "tackles_received", 2, 1.75, 60),
-    row("Player F", "2+ Tackles Received", "tackles_received", 2, 1.80, 58),
-    row("Player G", "Player to be Booked", "yellow_cards", 1, 2.40, 42),
-    row("Player H", "Player to be Booked", "yellow_cards", 1, 2.50, 40),
-    row("Player I", "Player to be Booked", "yellow_cards", 1, 2.60, 38),
-    row("Player J", "1+ Shot on Target", "sot", 1, 1.55, 67),
-    row("Player K", "1+ Shot on Target", "sot", 1, 1.60, 64),
-    row("Player L", "1+ Shot on Target", "sot", 1, 1.65, 62),
-    row("France", "France to Qualify", "result", 1, 1.50, 70),
-    row("Player M", "Anytime Goalscorer", "score", 1, 2.20, 48),
-    row("Both Teams", "Both Teams to Receive a Card", "team_cards", 1, 1.50, 68),
+    row("A", m1, "1+ Tackles Committed", "tackles_committed", 1, 1.35, 76),
+    row("B", m1, "1+ Tackles Committed", "tackles_committed", 1, 1.40, 73),
+    row("C", m1, "2+ Tackles Received", "tackles_received", 2, 1.70, 62),
+    row("D", m1, "2+ Tackles Received", "tackles_received", 2, 1.75, 60),
+    row("E", m1, "Player to be Booked", "yellow_cards", 1, 2.40, 42),
+    row("F", m1, "Player to be Booked", "yellow_cards", 1, 2.50, 40),
+    row("G", m1, "1+ Shot on Target", "sot", 1, 1.55, 67),
+    row("H", m1, "1+ Shot on Target", "sot", 1, 1.60, 64),
+    row("England", m2, "England to Qualify", "result", 1, 1.55, 68),
+    row("Kane", m2, "Anytime Goalscorer", "score", 1, 2.20, 48),
+    row("Bellingham", m2, "1+ Shot on Target", "sot", 1, 1.65, 63),
 ]
 
 assert market_line("3+ Tackles") == 3
 props = deduplicate_props(rows)
-cats = {x.category for x in props}
-assert "tackles_committed" in cats
-assert "tackles_received" in cats
+assert "tackles_committed" in {x.category for x in props}
+assert "tackles_received" in {x.category for x in props}
 
 picks = build_builder_picks(rows, match_date="2026-07-15", max_builders=50)
-assert picks, "No builders generated"
+assert len(picks) >= 10, len(picks)
 styles = {p.style for p in picks}
 assert "TACKLES COMMITTED" in styles, styles
 assert "TACKLES RECEIVED" in styles, styles
-assert "BOOKING TRIO" in styles, styles
-assert any(p.variant == "HIGH ODDS" for p in picks), [(p.style, p.variant) for p in picks]
-assert any(p.style in {"FAVORITE SCRIPT", "INTENSITY SCRIPT", "ATTACK SCRIPT", "MIDFIELD BATTLE"} for p in picks)
+assert "BOOKING LADDER" in styles, styles
+assert "SAME MATCH AVAILABLE" in styles, styles
+assert any(len({x.match for x in p.legs}) == 1 for p in picks)
+assert any(len(p.legs) == 2 for p in picks)
 assert all(2 <= len(p.legs) <= 6 for p in picks)
-assert any(p.variant == "HIGH ODDS" and abs(p.stake - 0.1) < 1e-9 for p in picks)
 
 print(f"OK: {len(picks)} builders")
 print("Styles:", sorted(styles))
