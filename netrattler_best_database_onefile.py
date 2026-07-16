@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 # -*- coding: utf-8 -*-
 """
-NETRATTLER BEST DATABASE SIMPLE — ONEFILE V30 BOOSTER
+NETRATTLER BEST DATABASE SIMPLE — ONEFILE V31 SCHEMA-SAFE
 
 Ziel:
 - Registry/Health/Trust/GitHub-Open-Source sauber auffüllen
@@ -198,6 +198,7 @@ def upsert_github():
     rows = []
     for repo, tag, url in GITHUB_ROWS:
         rows.append({
+            "repo_full_name": repo,
             "repo": repo,
             "name": repo,
             "tag": tag,
@@ -208,7 +209,7 @@ def upsert_github():
             "notes": f"NETRATTLER V30 source hub: {tag}",
             "updated_at": NOW,
         })
-    print("netrattler_github_open_source_sources", post("netrattler_github_open_source_sources", rows, conflict="repo"))
+    print("netrattler_github_open_source_sources", post("netrattler_github_open_source_sources", rows, conflict="repo_full_name"))
 
 
 def upsert_learning_and_roi():
@@ -240,7 +241,7 @@ def upsert_learning_and_roi():
 
 
 def main():
-    print("NETRATTLER BEST DATABASE SIMPLE — ONEFILE V30 BOOSTER")
+    print("NETRATTLER BEST DATABASE SIMPLE — ONEFILE V31 SCHEMA-SAFE")
     if not ok():
         print("❌ SUPABASE_URL/SUPABASE_KEY fehlt")
         return
