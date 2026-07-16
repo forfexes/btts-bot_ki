@@ -1,38 +1,32 @@
-name: NETRATTLER ML Train V21
+name: NETRATTLER ML Train V34 All Sources
 
 on:
   workflow_dispatch:
   schedule:
-    - cron: "20 2 * * *"
+    - cron: "20 5 * * *"
 
 jobs:
   train:
     runs-on: ubuntu-latest
-    timeout-minutes: 25
-
+    timeout-minutes: 90
     steps:
-      - name: Checkout
-        uses: actions/checkout@v4
-
-      - name: Setup Python
-        uses: actions/setup-python@v5
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
         with:
           python-version: "3.11"
           cache: "pip"
-
       - name: Install train dependencies
         run: |
           python -m pip install --upgrade pip
           pip install -r requirements_train.txt
-
-      - name: Compile train file
+      - name: Compile
         run: python -m py_compile train_model.py
-
-      - name: Run training
+      - name: Train from all normalized source tables and bookmaker odds
         env:
           SUPABASE_URL: ${{ secrets.SUPABASE_URL }}
           SUPABASE_KEY: ${{ secrets.SUPABASE_KEY }}
           SUPABASE_SERVICE_ROLE_KEY: ${{ secrets.SUPABASE_SERVICE_ROLE_KEY }}
           TELEGRAM_BOT_TOKEN: ${{ secrets.TELEGRAM_BOT_TOKEN }}
           TELEGRAM_CHAT_ID: ${{ secrets.TELEGRAM_CHAT_ID }}
+          FD_START_YEAR: "2010"
         run: python train_model.py
