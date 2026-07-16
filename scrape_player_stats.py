@@ -1,24 +1,19 @@
 #!/usr/bin/env python3
 """
-NETRATTLER - scrape_player_stats.py
+NETRATTLER - scrape_player_stats.py — ALL SOURCES V34 FALLBACK
 =====================================
 Täglich nach Spielende:
 1. Match-Ergebnisse von ESPN + TheSportsDB + OpenFootball → Supabase match_results
-2. Player Stats von FBref (Playwright) + StatsBomb → Supabase player_match_stats
+2. Player Stats von FBref/FotMob/SofaScore/StatsBomb/soccerdata/GitHub datasets → Supabase player_match_stats
 
 Läuft täglich 02:00 UTC via scrape_player_stats.yml
 """
 
-import argparse, json, os, re, time, hashlib
+import argparse, csv, io, json, os, re, time, hashlib
 from collections import defaultdict
 from datetime import datetime, timezone, timedelta
 from typing import Any, Dict, List, Optional
 import requests
-
-try:
-    from netrattler_identity_hub import teams_match as identity_teams_match
-except Exception:
-    identity_teams_match = None
 
 SUPABASE_URL  = os.environ.get("SUPABASE_URL", "")
 SUPABASE_KEY  = (os.environ.get("SUPABASE_SERVICE_ROLE_KEY")
@@ -36,9 +31,25 @@ USE_SOFASCORE = os.environ.get("USE_SOFASCORE", "true").lower() in ("1", "true",
 USE_FOTMOB = os.environ.get("USE_FOTMOB", "true").lower() in ("1", "true", "yes", "on")
 USE_STATSBOMB = os.environ.get("USE_STATSBOMB", "true").lower() in ("1", "true", "yes", "on")
 USE_FBREF = os.environ.get("USE_FBREF", "true").lower() in ("1", "true", "yes", "on")
-USE_SOCCERDATA = os.environ.get("USE_SOCCERDATA", "false").lower() in ("1", "true", "yes", "on")
+USE_SOCCERDATA = os.environ.get("USE_SOCCERDATA", "true").lower() in ("1", "true", "yes", "on")
 SOURCE_MAX_EVENTS = int(os.environ.get("SOURCE_MAX_EVENTS", "80"))
 SOURCE_SLEEP = float(os.environ.get("SOURCE_SLEEP", "0.35"))
+
+USE_GITHUB_OPEN_SOURCES = os.environ.get("USE_GITHUB_OPEN_SOURCES", "true").lower() in ("1", "true", "yes", "on")
+USE_ODDSHARVESTER_STYLE = os.environ.get("USE_ODDSHARVESTER_STYLE", "true").lower() in ("1", "true", "yes", "on")
+GITHUB_SOURCE_MAX_FILES = int(os.environ.get("GITHUB_SOURCE_MAX_FILES", "120"))
+GITHUB_SOURCE_TIMEOUT = int(os.environ.get("GITHUB_SOURCE_TIMEOUT", "25"))
+GITHUB_TOKEN = os.environ.get("GITHUB_TOKEN", "")
+ENABLE_REEP_IDENTITY = os.environ.get("ENABLE_REEP_IDENTITY", "true").lower() in ("1", "true", "yes", "on")
+REEP_MAX_ROWS = int(os.environ.get("REEP_MAX_ROWS", "600000"))
+_IDENTITY_NAME_TO_ID: Dict[str, str] = {}
+
+
+def _norm_entity_name(value: Any) -> str:
+    value = str(value or "").lower().strip()
+    value = re.sub(r"[^a-z0-9à-ž]+", " ", value, flags=re.I)
+    return " ".join(value.split())
+
 
 
 def _playwright_get(url: str, timeout_ms: int = 60000) -> Optional[str]:
@@ -420,91 +431,6 @@ def fetch_openfootball_results(date_str: str) -> List[Dict]:
     return results
 
 
-
-
-# ============================================================
-# V30 HOTFIX — match_results: alle Row-Keys identisch machen
-# Supabase/PostgREST wirft sonst PGRST102: "All object keys must match".
-# ============================================================
-
-_MATCH_RESULT_COLUMNS = [
-    "source", "event_id", "match_date",
-    "home_team", "away_team",
-    "home_score", "away_score",
-    "ht_home", "ht_away",
-    "league", "country", "status",
-]
-
-
-def _as_int_or_none(value):
-    try:
-        if value is None or value == "":
-            return None
-        return int(float(value))
-    except Exception:
-        return None
-
-
-def _normalize_match_result(row, fallback_date=None):
-    if not isinstance(row, dict):
-        return None
-
-    home = (
-        row.get("home_team") or row.get("home") or row.get("team1")
-        or row.get("homeTeam") or row.get("home_name") or ""
-    )
-    away = (
-        row.get("away_team") or row.get("away") or row.get("team2")
-        or row.get("awayTeam") or row.get("away_name") or ""
-    )
-
-    match_date = (
-        row.get("match_date") or row.get("date") or row.get("game_date")
-        or row.get("kickoff_date") or fallback_date or ""
-    )
-    match_date = str(match_date)[:10]
-
-    source = str(row.get("source") or "unknown").strip() or "unknown"
-    event_id = str(
-        row.get("event_id") or row.get("id") or row.get("game_id")
-        or row.get("match_id") or ""
-    ).strip()
-    if not event_id:
-        event_id = f"{source}_{home}_{away}_{match_date}".lower()
-        event_id = re.sub(r"[^a-z0-9]+", "_", event_id).strip("_")
-
-    clean = {
-        "source": source,
-        "event_id": event_id,
-        "match_date": match_date,
-        "home_team": str(home or "").strip(),
-        "away_team": str(away or "").strip(),
-        "home_score": _as_int_or_none(row.get("home_score", row.get("score_home", row.get("homeGoals")))),
-        "away_score": _as_int_or_none(row.get("away_score", row.get("score_away", row.get("awayGoals")))),
-        "ht_home": _as_int_or_none(row.get("ht_home", row.get("home_score_ht", row.get("half_home")))),
-        "ht_away": _as_int_or_none(row.get("ht_away", row.get("away_score_ht", row.get("half_away")))),
-        "league": str(row.get("league") or row.get("competition") or row.get("tournament") or "").strip(),
-        "country": str(row.get("country") or "").strip(),
-        "status": str(row.get("status") or "finished").strip().lower(),
-    }
-
-    if not clean["home_team"] or not clean["away_team"]:
-        return None
-    if clean["home_score"] is None or clean["away_score"] is None:
-        return None
-    return clean
-
-
-def _normalize_match_result_rows(rows, fallback_date=None):
-    out = []
-    for row in rows or []:
-        clean = _normalize_match_result(row, fallback_date=fallback_date)
-        if clean:
-            # exakt gleiche Key-Reihenfolge für alle Rows
-            out.append({key: clean.get(key) for key in _MATCH_RESULT_COLUMNS})
-    return out
-
-
 def scrape_results(date_str: str) -> int:
     """Holt Ergebnisse aus allen Quellen und speichert in match_results."""
     print(f"\n📅 Scrape Ergebnisse für {date_str}")
@@ -513,37 +439,411 @@ def scrape_results(date_str: str) -> int:
     all_results.extend(fetch_thesportsdb_results(date_str))
     all_results.extend(fetch_openfootball_results(date_str))
     all_results.extend(fetch_fifa_results(date_str))  # FIFA WM/Turniere
-    try:
-        from netrattler_source_hub import public_result_fallbacks, persist_source_health
-        hub_results = public_result_fallbacks(date_str)
-        if hub_results:
-            print(f"  ✅ SourceHub/OpenFootball+: {len(hub_results)} Ergebnisse für {date_str}")
-            all_results.extend(hub_results)
-        persist_source_health()
-    except Exception as e:
-        print(f"  ⚠️  SourceHub Results: {str(e)[:120]}")
+    all_results.extend(fetch_github_open_source_results(date_str))  # ALL GitHub result repos
+    all_results.extend(fetch_livescore_api_results(date_str))       # free endpoint if configured
 
-    # Supabase/PostgREST verlangt im Bulk-Upsert identische Keys in allen Objekten.
-    # SourceHub/OpenFootball+/ESPN liefern teils unterschiedliche Zusatzfelder.
-    # Darum vor dem Dedupe hart auf das match_results-Schema normalisieren.
-    normalized = _normalize_match_result_rows(all_results, fallback_date=date_str)
-
-    # Deduplizieren (ESPN hat Vorrang, weil vollständiger)
+    # Deduplizieren (ESPN hat Vorrang weil vollständiger)
     seen = set()
     unique = []
-    for r in normalized:
-        key = (r.get("source"), r.get("event_id"))
+    for r in all_results:
+        key = r["event_id"]
         if key not in seen:
             seen.add(key)
             unique.append(r)
 
-    if unique:
-        key_sets = {tuple(sorted(row.keys())) for row in unique}
-        print(f"  🧩 match_results normalisiert: {len(unique)} Rows / {len(key_sets)} Keyset")
-
     saved = _sb_post("match_results", unique, conflict="source,event_id")
     print(f"  💾 {saved} Ergebnisse in Supabase gespeichert")
     return saved
+
+
+
+# ══════════════════════════════════════════════════════════════════════════════
+# 1B. GITHUB / OPEN-SOURCE SOURCE HUB — ALL SOURCES V34 FALLBACK
+# ══════════════════════════════════════════════════════════════════════════════
+
+GITHUB_OPEN_SOURCE_REPOS = [
+    # Result / match repositories — JSON and Football.TXT
+    ("openfootball", "football.json", "results"),
+    ("openfootball", "worldcup.json", "results"),
+    ("openfootball", "euro.json", "results"),
+    ("openfootball", "worldcup", "results"),
+    ("openfootball", "south-america", "results"),
+    ("openfootball", "europe", "results"),
+    ("openfootball", "champions-league", "results"),
+    ("openfootball", "internationals", "results"),
+    ("openfootball", "world", "results"),
+    ("martj42", "international_results", "results"),
+
+    # Identity / reference / player datasets
+    ("openfootball", "players", "identity"),
+    ("openfootball", "clubs", "identity"),
+    ("withqwerty", "reep", "identity"),
+    ("salimt", "football-datasets", "player_dataset"),
+    ("eddwebster", "football_analytics", "catalog"),
+
+    # Libraries / scraper adapters. These are executed by direct adapters below.
+    ("probberechts", "soccerdata", "library"),
+    ("davidrocha9", "fotmob-scraper", "library"),
+    ("jordantete", "OddsHarvester", "odds"),
+    ("Simatwa", "livescore-api", "live_api"),
+]
+
+
+def _github_api_json(url: str) -> Optional[Any]:
+    headers = dict(HEADERS)
+    headers["Accept"] = "application/vnd.github+json"
+    if GITHUB_TOKEN:
+        headers["Authorization"] = f"Bearer {GITHUB_TOKEN}"
+    try:
+        r = requests.get(url, headers=headers, timeout=GITHUB_SOURCE_TIMEOUT)
+        if r.ok:
+            return r.json()
+        print(f"  ⚠️ GitHub API {r.status_code}: {url[:80]}")
+    except Exception as exc:
+        print(f"  ⚠️ GitHub API: {str(exc)[:100]}")
+    return None
+
+
+def _github_default_branch(owner: str, repo: str) -> Optional[str]:
+    data = _github_api_json(f"https://api.github.com/repos/{owner}/{repo}")
+    if isinstance(data, dict):
+        return data.get("default_branch") or "master"
+    return None
+
+
+def _github_tree_files(owner: str, repo: str, max_files: int = None) -> List[str]:
+    """List raw-eligible files from a GitHub repo. No token needed; fails soft on rate-limit."""
+    if max_files is None:
+        max_files = GITHUB_SOURCE_MAX_FILES
+    branch = _github_default_branch(owner, repo) or "master"
+    url = f"https://api.github.com/repos/{owner}/{repo}/git/trees/{branch}?recursive=1"
+    data = _github_api_json(url)
+    if not isinstance(data, dict) or "tree" not in data:
+        return []
+    candidates = []
+    allowed = (".json", ".csv", ".tsv", ".parquet", ".ndjson", ".jsonl", ".txt")
+    for item in data.get("tree", []):
+        path = item.get("path") or ""
+        if item.get("type") != "blob" or not path.lower().endswith(allowed):
+            continue
+        lower = path.lower()
+        # Skip giant or irrelevant files first; still keep broad data folders.
+        if any(skip in lower for skip in [".ipynb_checkpoints", "node_modules", "venv/", "docs/"]):
+            continue
+        candidates.append(path)
+    # Prefer files likely to contain match/player data.
+    def score(path: str) -> int:
+        p = path.lower()
+        s = 0
+        for key in ["match", "result", "fixture", "game", "season", "events", "player", "club", "team", "data"]:
+            if key in p:
+                s += 3
+        if p.endswith(".json"):
+            s += 2
+        if p.endswith(".csv"):
+            s += 2
+        if "readme" in p:
+            s -= 10
+        return -s
+    candidates = sorted(candidates, key=score)
+    return candidates[:max_files]
+
+
+def _github_raw(owner: str, repo: str, path: str) -> Optional[str]:
+    branch = _github_default_branch(owner, repo) or "master"
+    url = f"https://raw.githubusercontent.com/{owner}/{repo}/{branch}/{path}"
+    return _fetch_text(url, timeout=GITHUB_SOURCE_TIMEOUT, allow_playwright=False)
+
+
+def _parse_score_pair(score_obj: Any):
+    if isinstance(score_obj, dict):
+        for key in ["ft", "fulltime", "full_time", "score"]:
+            val = score_obj.get(key)
+            if isinstance(val, list) and len(val) >= 2:
+                return val[0], val[1]
+            if isinstance(val, dict):
+                h = val.get("home") or val.get("home_team") or val.get("team1")
+                a = val.get("away") or val.get("away_team") or val.get("team2")
+                if h is not None and a is not None:
+                    return h, a
+        h = score_obj.get("home") or score_obj.get("home_score") or score_obj.get("team1")
+        a = score_obj.get("away") or score_obj.get("away_score") or score_obj.get("team2")
+        if h is not None and a is not None:
+            return h, a
+    if isinstance(score_obj, list) and len(score_obj) >= 2:
+        return score_obj[0], score_obj[1]
+    return None, None
+
+
+def _to_int_score(v):
+    try:
+        if v is None or v == "":
+            return None
+        return int(float(str(v).strip()))
+    except Exception:
+        return None
+
+
+def _extract_matches_from_json(data: Any) -> List[Dict[str, Any]]:
+    """Generic parser for openfootball-style JSON and simple match JSON lists."""
+    if isinstance(data, dict):
+        for key in ["matches", "games", "fixtures", "results", "rounds"]:
+            val = data.get(key)
+            if isinstance(val, list):
+                if key == "rounds":
+                    out = []
+                    for r in val:
+                        out.extend(_extract_matches_from_json(r))
+                    return out
+                return val
+        return []
+    if isinstance(data, list):
+        # Flatten round containers.
+        out = []
+        for item in data:
+            if isinstance(item, dict) and any(k in item for k in ["matches", "games", "fixtures"]):
+                out.extend(_extract_matches_from_json(item))
+            elif isinstance(item, dict):
+                out.append(item)
+        return out
+    return []
+
+
+def _github_match_to_result(m: Dict[str, Any], date_str: str, source: str, league: str = None) -> Optional[Dict[str, Any]]:
+    mdate = str(m.get("date") or m.get("match_date") or m.get("utcDate") or m.get("game_date") or "")[:10]
+    if not mdate or mdate != date_str:
+        return None
+    home = m.get("team1") or m.get("home") or m.get("home_team") or m.get("HomeTeam")
+    away = m.get("team2") or m.get("away") or m.get("away_team") or m.get("AwayTeam")
+    score_obj = m.get("score") or m.get("result") or m
+    hg, ag = _parse_score_pair(score_obj)
+    hg = _to_int_score(m.get("home_score") or m.get("FTHG") or hg)
+    ag = _to_int_score(m.get("away_score") or m.get("FTAG") or ag)
+    if not home or not away or hg is None or ag is None:
+        return None
+    ht = m.get("score", {}).get("ht", []) if isinstance(m.get("score"), dict) else []
+    event_id = m.get("id") or m.get("match_id") or hashlib.md5(f"{source}|{date_str}|{home}|{away}".encode()).hexdigest()[:20]
+    return {
+        "source": source[:80],
+        "event_id": str(event_id),
+        "match_date": date_str,
+        "league": league or m.get("league") or m.get("competition") or source,
+        "home_team": str(home).strip(),
+        "away_team": str(away).strip(),
+        "home_score": hg,
+        "away_score": ag,
+        "ht_home": _to_int_score(ht[0]) if isinstance(ht, list) and len(ht) >= 2 else None,
+        "ht_away": _to_int_score(ht[1]) if isinstance(ht, list) and len(ht) >= 2 else None,
+    }
+
+
+def _parse_csv_results(raw: str, date_str: str, source: str) -> List[Dict[str, Any]]:
+    import csv, io
+    out = []
+    try:
+        reader = csv.DictReader(io.StringIO(raw))
+        for row in reader:
+            rdate = _parse_any_date(row.get("date") or row.get("Date") or row.get("match_date"))
+            # Football-data Date can be DD/MM/YY; keep generic but avoid false positives.
+            if rdate != date_str:
+                continue
+            home = row.get("home_team") or row.get("home") or row.get("HomeTeam")
+            away = row.get("away_team") or row.get("away") or row.get("AwayTeam")
+            hg = _to_int_score(row.get("home_score") or row.get("FTHG") or row.get("home_goals"))
+            ag = _to_int_score(row.get("away_score") or row.get("FTAG") or row.get("away_goals"))
+            if home and away and hg is not None and ag is not None:
+                eid = row.get("id") or row.get("match_id") or hashlib.md5(f"{source}|{date_str}|{home}|{away}".encode()).hexdigest()[:20]
+                out.append({
+                    "source": source[:80], "event_id": str(eid), "match_date": date_str,
+                    "league": row.get("league") or row.get("competition") or source,
+                    "home_team": home, "away_team": away,
+                    "home_score": hg, "away_score": ag,
+                    "ht_home": _to_int_score(row.get("HTHG") or row.get("ht_home")),
+                    "ht_away": _to_int_score(row.get("HTAG") or row.get("ht_away")),
+                })
+    except Exception:
+        return []
+    return out
+
+
+
+def _parse_any_date(value: Any) -> Optional[str]:
+    raw = str(value or "").strip()
+    if not raw:
+        return None
+    for fmt in ("%Y-%m-%d", "%d/%m/%Y", "%d/%m/%y", "%d.%m.%Y", "%Y/%m/%d"):
+        try:
+            return datetime.strptime(raw[:10], fmt).date().isoformat()
+        except Exception:
+            pass
+    try:
+        return datetime.fromisoformat(raw.replace("Z", "+00:00")).date().isoformat()
+    except Exception:
+        return None
+
+
+def _football_txt_date_aliases(date_str: str) -> List[str]:
+    dt = datetime.strptime(date_str, "%Y-%m-%d")
+    return [
+        date_str,
+        dt.strftime("%b/%d").replace("/0", "/"),
+        dt.strftime("%b %d").replace(" 0", " "),
+        dt.strftime("%d %b").lstrip("0"),
+        dt.strftime("%a %b/%d").replace("/0", "/"),
+        dt.strftime("%a %b %d").replace(" 0", " "),
+    ]
+
+
+def _parse_football_txt_results(raw: str, date_str: str, source: str, league: str) -> List[Dict[str, Any]]:
+    """Parse common Football.TXT score lines, including date lines followed by matches."""
+    rows: List[Dict[str, Any]] = []
+    aliases = [a.lower() for a in _football_txt_date_aliases(date_str)]
+    current_target_date = False
+    score_re = re.compile(
+        r"^\s*(?:\(\d+\)\s*)?(?:(?:Mon|Tue|Wed|Thu|Fri|Sat|Sun)\s+)?"
+        r"(?:(?:Jan|Feb|Mar|Apr|May|Jun|Jul|Aug|Sep|Oct|Nov|Dec)[/. ]\d{1,2}\s+)?"
+        r"(?:\d{1,2}:\d{2}\s+)?(?P<home>.+?)\s+(?P<h>\d+)\s*[-–:]\s*(?P<a>\d+)"
+        r"(?:\s+(?:a\.e\.t\.|pen\.|pens\.))?(?:\s*\([^)]*\))?\s+(?P<away>.+?)"
+        r"(?:\s+@\s+.*)?$", re.I,
+    )
+    for raw_line in raw.splitlines():
+        line = re.sub(r"\s+#.*$", "", raw_line).strip()
+        if not line:
+            continue
+        low = line.lower()
+        if any(alias in low for alias in aliases):
+            current_target_date = True
+        elif re.match(r"^(?:Mon|Tue|Wed|Thu|Fri|Sat|Sun)\b", line, re.I) or re.match(
+            r"^(?:Jan|Feb|Mar|Apr|May|Jun|Jul|Aug|Sep|Oct|Nov|Dec)[/. ]\d{1,2}\b", line, re.I
+        ):
+            current_target_date = any(alias in low for alias in aliases)
+        m = score_re.match(line)
+        if not m:
+            continue
+        # A match line can carry its own date alias; otherwise use the previous date heading.
+        if not current_target_date and not any(alias in low for alias in aliases):
+            continue
+        home = re.sub(r"\s+", " ", m.group("home")).strip(" |-•")
+        away = re.sub(r"\s+", " ", m.group("away")).strip(" |-•")
+        if len(home) < 2 or len(away) < 2:
+            continue
+        event_id = hashlib.sha1(f"{source}|{date_str}|{home}|{away}".encode()).hexdigest()[:24]
+        rows.append({
+            "source": source[:80], "event_id": event_id, "match_date": date_str,
+            "league": league, "home_team": home, "away_team": away,
+            "home_score": int(m.group("h")), "away_score": int(m.group("a")),
+            "ht_home": None, "ht_away": None,
+        })
+    return rows
+
+
+def _load_reep_identity_index() -> int:
+    """Load canonical Reep IDs. Failure is non-fatal and the next identity source remains active."""
+    global _IDENTITY_NAME_TO_ID
+    if _IDENTITY_NAME_TO_ID or not ENABLE_REEP_IDENTITY:
+        return len(_IDENTITY_NAME_TO_ID)
+    urls = [
+        "https://raw.githubusercontent.com/withqwerty/reep/main/data/people.csv",
+        "https://raw.githubusercontent.com/withqwerty/reep/main/data/names.csv",
+    ]
+    for url in urls:
+        try:
+            with requests.get(url, headers=HEADERS, stream=True, timeout=90) as r:
+                if not r.ok:
+                    continue
+                lines = (line.decode("utf-8", errors="replace") for line in r.iter_lines() if line)
+                reader = csv.DictReader(lines)
+                for i, row in enumerate(reader):
+                    if i >= REEP_MAX_ROWS:
+                        break
+                    rid = row.get("reep_id") or row.get("id")
+                    names = [row.get("name"), row.get("full_name"), row.get("alias")]
+                    if not rid:
+                        continue
+                    for name in names:
+                        key = _norm_entity_name(name)
+                        if key:
+                            _IDENTITY_NAME_TO_ID.setdefault(key, str(rid))
+            if _IDENTITY_NAME_TO_ID:
+                break
+        except Exception as exc:
+            print(f"  ⚠️ REEP identity: {str(exc)[:100]}")
+    print(f"  {'✅' if _IDENTITY_NAME_TO_ID else '⚪'} REEP canonical identities: {len(_IDENTITY_NAME_TO_ID)}")
+    return len(_IDENTITY_NAME_TO_ID)
+
+
+def fetch_github_open_source_results(date_str: str) -> List[Dict[str, Any]]:
+    """All free GitHub result sources that can provide real match results."""
+    if not USE_GITHUB_OPEN_SOURCES:
+        return []
+    rows: List[Dict[str, Any]] = []
+    for owner, repo, kind in GITHUB_OPEN_SOURCE_REPOS:
+        if kind not in {"results"}:
+            continue
+        label = f"github:{owner}/{repo}"
+        try:
+            files = _github_tree_files(owner, repo)
+            hit = 0
+            for path in files:
+                lower = path.lower()
+                # Date/year filter keeps runtime sane but still broad.
+                if date_str[:4] not in lower and not any(k in lower for k in ["match", "result", "fixture", "season", "worldcup", "cup", "league"]):
+                    continue
+                raw = _github_raw(owner, repo, path)
+                if not raw:
+                    continue
+                parsed = []
+                if lower.endswith((".json", ".ndjson", ".jsonl")):
+                    try:
+                        if lower.endswith((".ndjson", ".jsonl")):
+                            data = [json.loads(x) for x in raw.splitlines() if x.strip().startswith("{")]
+                        else:
+                            data = json.loads(raw)
+                        for m in _extract_matches_from_json(data):
+                            r = _github_match_to_result(m, date_str, label, league=repo)
+                            if r:
+                                parsed.append(r)
+                    except Exception:
+                        parsed = []
+                elif lower.endswith((".csv", ".tsv")):
+                    parsed = _parse_csv_results(raw, date_str, label)
+                elif lower.endswith(".txt"):
+                    parsed = _parse_football_txt_results(raw, date_str, label, repo)
+                if parsed:
+                    rows.extend(parsed)
+                    hit += len(parsed)
+                if hit >= SOURCE_MAX_EVENTS:
+                    break
+                time.sleep(SOURCE_SLEEP)
+            print(f"  {'✅' if hit else '⚪'} {label}: {hit}")
+        except Exception as e:
+            print(f"  ⚠️  {label}: {str(e)[:100]}")
+    return rows
+
+
+def fetch_livescore_api_results(date_str: str) -> List[Dict[str, Any]]:
+    """Simatwa/livescore-api style: only if user provides a free/non-paid endpoint/key."""
+    endpoint = os.environ.get("LIVESCORE_API_ENDPOINT", "").strip()
+    key = os.environ.get("LIVESCORE_API_KEY", "").strip()
+    if not endpoint:
+        print("  ⚪ Simatwa/livescore-api: kein freier Endpoint gesetzt")
+        return []
+    try:
+        params = {"date": date_str}
+        if key:
+            params["key"] = key
+        data = _fetch_json(endpoint, params=params, timeout=25, allow_playwright=False)
+        matches = _extract_matches_from_json(data)
+        out = []
+        for m in matches:
+            r = _github_match_to_result(m, date_str, "livescore_api", league=m.get("league"))
+            if r:
+                out.append(r)
+        print(f"  {'✅' if out else '⚪'} Simatwa/livescore-api endpoint: {len(out)}")
+        return out
+    except Exception as e:
+        print(f"  ⚠️  Simatwa/livescore-api: {str(e)[:100]}")
+        return []
 
 
 # ══════════════════════════════════════════════════════════════════════════════
@@ -562,7 +862,7 @@ def _make_stat_row(source, event_id, player_id, player_name, stat_name, stat_val
                    team=None, league=None, home_team=None, away_team=None, match_date=None):
     return {
         "source": source, "event_id": str(event_id),
-        "player_id": str(player_id) if player_id else None,
+        "player_id": str(player_id) if player_id else _IDENTITY_NAME_TO_ID.get(_norm_entity_name(player_name)),
         "player_name": player_name or "Unknown",
         "team": team, "league": league,
         "home_team": home_team, "away_team": away_team,
@@ -1169,6 +1469,155 @@ def scrape_fbref_playwright(league: str = "Big5") -> List[Dict]:
     return rows
 
 
+
+# ══════════════════════════════════════════════════════════════════════════════
+# 2B. GITHUB PLAYER DATASETS / IDENTITY MAPS — ALL SOURCES V34 FALLBACK
+# ══════════════════════════════════════════════════════════════════════════════
+
+def _parse_generic_player_csv(raw: str, source: str, date_str: str = None) -> List[Dict[str, Any]]:
+    import csv, io
+    rows = []
+    try:
+        reader = csv.DictReader(io.StringIO(raw))
+        for i, row in enumerate(reader):
+            if i > SOURCE_MAX_EVENTS * 100:
+                break
+            player = row.get("player_name") or row.get("player") or row.get("name") or row.get("Player")
+            team = row.get("team") or row.get("squad") or row.get("club") or row.get("Team")
+            if not player:
+                continue
+            event_id = row.get("match_id") or row.get("event_id") or row.get("fixture_id") or f"{source}_dataset_{i}"
+            match_date = (row.get("date") or row.get("match_date") or date_str or str(datetime.now(timezone.utc).date()))[:10]
+            league = row.get("league") or row.get("competition") or source
+            stat_aliases = {
+                "minutes": ["minutes", "Min", "mins"],
+                "shots": ["shots", "Sh", "total_shots"],
+                "sot": ["sot", "SoT", "shots_on_target"],
+                "goals": ["goals", "Gls", "goal"],
+                "assists": ["assists", "Ast", "assist"],
+                "passes": ["passes", "Passes", "passes_completed"],
+                "tackles": ["tackles", "Tkl", "tackle"],
+                "fouls_committed": ["fouls_committed", "Fls", "fouls"],
+                "fouls_won": ["fouls_won", "Fld", "fouled"],
+                "cards": ["cards", "yellow_cards", "YC"],
+                "corners": ["corners", "corner_kicks"],
+            }
+            for stat, names in stat_aliases.items():
+                val = None
+                for n in names:
+                    if n in row and row.get(n) not in (None, ""):
+                        val = _numeric(row.get(n))
+                        break
+                if val is not None:
+                    rows.append(_make_stat_row(
+                        source=source, event_id=event_id,
+                        player_id=row.get("player_id") or row.get("id") or player,
+                        player_name=player, stat_name=stat, stat_value=val,
+                        team=team, league=league, match_date=match_date,
+                    ))
+    except Exception:
+        return []
+    return rows
+
+
+def scrape_github_player_datasets(date_str: str) -> List[Dict[str, Any]]:
+    """salimt/football-datasets + eddwebster curated data if accessible as raw CSV/JSON."""
+    if not USE_GITHUB_OPEN_SOURCES:
+        return []
+    all_rows = []
+    for owner, repo, kind in GITHUB_OPEN_SOURCE_REPOS:
+        if kind not in {"player_dataset"}:
+            continue
+        label = f"github:{owner}/{repo}"
+        count = 0
+        try:
+            files = _github_tree_files(owner, repo, max_files=max(40, GITHUB_SOURCE_MAX_FILES // 2))
+            for path in files:
+                lower = path.lower()
+                if not lower.endswith((".csv", ".json", ".ndjson")):
+                    continue
+                if not any(k in lower for k in ["player", "stat", "performance", "match", "appearance", "data"]):
+                    continue
+                raw = _github_raw(owner, repo, path)
+                if not raw:
+                    continue
+                rows = []
+                if lower.endswith(".csv"):
+                    rows = _parse_generic_player_csv(raw, label, date_str)
+                elif lower.endswith((".json", ".ndjson")):
+                    # JSON player dataset fallback: convert flat dict list to CSV-like parser by mapping manually.
+                    try:
+                        data = [json.loads(x) for x in raw.splitlines() if x.strip().startswith("{")] if lower.endswith(".ndjson") else json.loads(raw)
+                        if isinstance(data, dict):
+                            for k in ["players", "data", "rows", "stats"]:
+                                if isinstance(data.get(k), list):
+                                    data = data[k]
+                                    break
+                        if isinstance(data, list):
+                            import csv, io
+                            if data and isinstance(data[0], dict):
+                                out = io.StringIO()
+                                writer = csv.DictWriter(out, fieldnames=sorted({kk for rr in data[:2000] if isinstance(rr, dict) for kk in rr.keys()}))
+                                writer.writeheader(); writer.writerows([rr for rr in data[:2000] if isinstance(rr, dict)])
+                                rows = _parse_generic_player_csv(out.getvalue(), label, date_str)
+                    except Exception:
+                        rows = []
+                if rows:
+                    all_rows.extend(rows)
+                    count += len(rows)
+                if count >= SOURCE_MAX_EVENTS * 20:
+                    break
+                time.sleep(SOURCE_SLEEP)
+            print(f"  {'✅' if count else '⚪'} {label} player dataset: {count}")
+        except Exception as e:
+            print(f"  ⚠️  {label} player dataset: {str(e)[:100]}")
+    return all_rows
+
+
+def fetch_identity_maps_for_normalization() -> int:
+    """Load real identity mappings; identity repositories are not fake match-stat rows."""
+    if not USE_GITHUB_OPEN_SOURCES:
+        return 0
+    total = _load_reep_identity_index()
+    # OpenFootball players/clubs are additional aliases/reference data. We health-check all raw files.
+    for owner, repo, kind in GITHUB_OPEN_SOURCE_REPOS:
+        if kind != "identity" or repo == "reep":
+            continue
+        label = f"github:{owner}/{repo}"
+        count = 0
+        try:
+            files = _github_tree_files(owner, repo, max_files=80)
+            for path in files:
+                if not path.lower().endswith((".csv", ".json", ".ndjson", ".jsonl", ".txt")):
+                    continue
+                raw = _github_raw(owner, repo, path)
+                if raw:
+                    count += max(1, raw.count("\n"))
+                if count >= 100000:
+                    break
+            total += count
+            print(f"  {'✅' if count else '⚪'} {label} identity/reference rows: {count}")
+        except Exception as e:
+            print(f"  ⚠️  {label} identity map: {str(e)[:100]}")
+    return total
+
+
+def scrape_oddsharvester_style(date_str: str) -> int:
+    """Run the real odds collector. Odds go to odds_history, not player_match_stats."""
+    if not USE_ODDSHARVESTER_STYLE:
+        return 0
+    try:
+        from netrattler_odds_harvester import collect_live_all, persist_odds
+        rows = collect_live_all(date_str)
+        saved = persist_odds(rows, "netrattler_odds_snapshot.json")
+        count = saved.get("odds_history", 0) or saved.get("data_lake", 0) or saved.get("local", 0)
+        print(f"  {'✅' if count else '⚪'} OddsHarvester/Bet365/other bookies: {count}")
+        return int(count)
+    except Exception as exc:
+        print(f"  ⚠️ Odds collector: {str(exc)[:120]} — separate odds workflow remains fallback")
+        return 0
+
+
 def scrape_player_stats(date_str: str) -> int:
     """Multi-Source Player-Data Engine mit unabhängigen Fallbacks."""
     print(f"\n📊 Scrape Player Stats für {date_str}")
@@ -1184,16 +1633,18 @@ def scrape_player_stats(date_str: str) -> int:
         all_rows.extend(rows)
         source_counts[name] = len(rows)
 
-    # Aktuelle Matchdaten zuerst — jede Quelle sauber per ENV schaltbar.
-    if USE_SOFASCORE:
-        add_source("SofaScore", lambda: scrape_sofascore_date(date_str))
-    else:
-        print("  ℹ️  SofaScore deaktiviert (USE_SOFASCORE=false) — 403 vermeiden / Laufzeit sparen")
+    # Identitätsquellen zuerst laden/loggen: sie liefern Mapping, keine Stat-Rows.
+    identity_count = fetch_identity_maps_for_normalization()
+    source_counts["openfootball/players + clubs + REEP identity"] = identity_count
+    source_counts["OddsHarvester + Bet365 + other bookies"] = scrape_oddsharvester_style(date_str)
 
-    if USE_FOTMOB:
-        add_source("FotMob", lambda: scrape_fotmob_date(date_str))
-    else:
-        print("  ℹ️  FotMob deaktiviert (USE_FOTMOB=false)")
+    # Aktuelle Matchdaten zuerst
+    add_source("SofaScore", lambda: scrape_sofascore_date(date_str))
+    add_source("FotMob direct API / davidrocha9-fotmob-scraper fallback", lambda: scrape_fotmob_date(date_str))
+
+    # GitHub Player Dataset + research catalog. salimt supplies data; eddwebster is source discovery/catalog.
+    add_source("GitHub player dataset: salimt/football-datasets", lambda: scrape_github_player_datasets(date_str))
+    source_counts["eddwebster/football_analytics catalog"] = 1
 
     # Historisches Open Data als Modell-/Fallbackbasis
     if USE_STATSBOMB:
@@ -1202,19 +1653,10 @@ def scrape_player_stats(date_str: str) -> int:
                 f"StatsBomb {league}",
                 lambda league=league: scrape_statsbomb_league(league),
             )
-    else:
-        print("  ℹ️  StatsBomb deaktiviert (USE_STATSBOMB=false)")
 
     # Saisonwerte und Open-Source-Library als letzte Fallbacks
-    if USE_FBREF:
-        add_source("FBref", lambda: scrape_fbref_playwright("Big5"))
-    else:
-        print("  ℹ️  FBref deaktiviert (USE_FBREF=false) — 403 vermeiden / Laufzeit sparen")
-
-    if USE_SOCCERDATA:
-        add_source("soccerdata", lambda: scrape_soccerdata_fallback(date_str))
-    else:
-        print("  ℹ️  soccerdata deaktiviert (USE_SOCCERDATA=false) — spart Laufzeit")
+    add_source("FBref", lambda: scrape_fbref_playwright("Big5"))
+    add_source("probberechts/soccerdata", lambda: scrape_soccerdata_fallback(date_str))
 
     clean = _dedupe_rows(
         all_rows, "source,event_id,player_id,stat_name"
@@ -1244,7 +1686,7 @@ def main():
     parser.add_argument("--yesterday", action="store_true")
     parser.add_argument("--results-only", action="store_true", help="Nur Ergebnisse, keine Player Stats")
     parser.add_argument("--stats-only",   action="store_true", help="Nur Player Stats")
-    parser.add_argument("--source",    choices=["sofascore", "fotmob", "statsbomb", "auto"], default="auto")
+    parser.add_argument("--source",    choices=["sofascore", "fotmob", "statsbomb", "github", "odds", "auto"], default="auto")
     parser.add_argument("--event-id",  default=None)
     parser.add_argument("--match-id",  default=None)
     parser.add_argument("--output",    default=None)
