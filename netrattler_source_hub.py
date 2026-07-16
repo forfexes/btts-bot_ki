@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """
-NETRATTLER Source Hub V30
+NETRATTLER Source Hub V34
 =========================
 Modulare, fehlertolerante Integration der GitHub/Open-Source-Quellen:
 - probberechts/soccerdata
@@ -35,7 +35,7 @@ import requests
 
 from netrattler_identity_hub import normalize_team_name, teams_match
 
-UA = "NETRATTLER-SourceHub/30.0 (+https://github.com/forfexes/btts-bot_ki)"
+UA = "NETRATTLER-SourceHub/34.0 (+https://github.com/forfexes/btts-bot_ki)"
 DEFAULT_TIMEOUT = int(os.getenv("NTR_SOURCE_TIMEOUT", "18"))
 CACHE_DIR = os.getenv("NTR_SOURCE_CACHE_DIR", ".netrattler_cache")
 os.makedirs(CACHE_DIR, exist_ok=True)
@@ -64,12 +64,12 @@ class SourceAdapter:
 
 
 SOURCES: Tuple[SourceAdapter, ...] = (
-    SourceAdapter("soccerdata", "probberechts/soccerdata", "player_stats", "FBref/SofaScore/ESPN/Understat/WhoScored/ClubElo wrapper", "ENABLE_SOCCERDATA", False, "soccerdata", "Apache-2.0"),
+    SourceAdapter("soccerdata", "probberechts/soccerdata", "player_stats", "FBref/SofaScore/ESPN/Understat/WhoScored/ClubElo wrapper", "ENABLE_SOCCERDATA", True, "soccerdata", "Apache-2.0"),
     SourceAdapter("statsbomb_open_data", "statsbomb/open-data", "event_data", "historical event/player features", "ENABLE_STATSBOMB", True, "", "open-data terms", urls=("https://raw.githubusercontent.com/statsbomb/open-data/master/data/competitions.json",)),
     SourceAdapter("fotmob_scraper", "davidrocha9/fotmob-scraper", "player_stats", "FotMob fixtures/squads/player stats/Supabase sync pattern", "ENABLE_FOTMOB", True, "", "check-upstream"),
     SourceAdapter("reep_identity", "withqwerty/reep", "identity", "provider identity mapping: Transfermarkt/FBref/UEFA/SofaScore", "ENABLE_REEP", True, "", "check-upstream"),
-    SourceAdapter("oddsharvester", "jordantete/OddsHarvester", "odds_clv", "OddsPortal historical/closing odds fallback via Playwright", "ENABLE_ODDSHARVESTER", False, "", "MIT", True),
-    SourceAdapter("livescore_api", "Simatwa/livescore-api", "results_live", "Livescore.com unofficial results fallback", "ENABLE_LIVESCORE_API", False, "livescore_api", "MIT-ish check", True),
+    SourceAdapter("oddsharvester", "jordantete/OddsHarvester", "odds_clv", "OddsPortal historical/closing odds fallback via Playwright", "ENABLE_ODDSHARVESTER", True, "", "MIT", True),
+    SourceAdapter("livescore_api", "Simatwa/livescore-api", "results_live", "Livescore.com unofficial results fallback", "ENABLE_LIVESCORE_API", True, "livescore_api", "MIT-ish check", True),
     SourceAdapter("openfootball_football_json", "openfootball/football.json", "results", "free fixture/result fallback", "ENABLE_OPENFOOTBALL", True, "", "CC0", urls=("https://raw.githubusercontent.com/openfootball/football.json/master/2025-26/en.1.json",)),
     SourceAdapter("openfootball_worldcup_json", "openfootball/worldcup.json", "worldcup_results", "World Cup JSON settlement fallback", "ENABLE_OPENFOOTBALL_WC", True, "", "CC0"),
     SourceAdapter("openfootball_south_america", "openfootball/south-america", "south_america_results", "Ecuador/Brazil/Argentina/Libertadores settlement fallback", "ENABLE_OPENFOOTBALL_SA", True, "", "CC0"),
@@ -80,6 +80,10 @@ SOURCES: Tuple[SourceAdapter, ...] = (
     SourceAdapter("openfootball_clubs", "openfootball/clubs", "identity", "club alias/source registry", "ENABLE_OPENFOOTBALL_CLUBS", True, "", "CC0"),
     SourceAdapter("football_datasets", "salimt/football-datasets", "features", "Transfermarkt-like features: players/clubs/values/transfers", "ENABLE_FOOTBALL_DATASETS", True, "", "check-upstream"),
     SourceAdapter("football_analytics", "eddwebster/football_analytics", "feature_catalog", "research catalog for models/features/data recipes", "ENABLE_FOOTBALL_ANALYTICS", True, "", "check-upstream"),
+    SourceAdapter("martj42_international_results", "martj42/international_results", "results", "international match results", "ENABLE_MARTJ42", True, "", "open-data"),
+    SourceAdapter("openfootball_worldcup_txt", "openfootball/worldcup", "worldcup_results", "World Cup Football.TXT source", "ENABLE_OPENFOOTBALL_WC", True, "", "CC0"),
+    SourceAdapter("openfootball_world", "openfootball/world", "world_results", "worldwide Football.TXT leagues", "ENABLE_OPENFOOTBALL_WORLD", True, "", "CC0"),
+    SourceAdapter("openfootball_euro", "openfootball/euro.json", "euro_results", "European Championship JSON", "ENABLE_OPENFOOTBALL_EURO", True, "", "CC0"),
 )
 
 FEATURE_RECIPES: Dict[str, Dict[str, Any]] = {
