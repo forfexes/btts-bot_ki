@@ -8327,18 +8327,6 @@ def get_match_result_from_sources(tip) -> dict:
         return _ORIGINAL_get_match_result_from_sources(tip)
 
 
-_ORIGINAL_af_fixtures_for_date = _af_fixtures_for_date
-
-def _af_fixtures_for_date(date_str):
-    """
-    API-Football Settlement ist bei dir suspended und kostet sonst Zeit.
-    Default AUS. Aktivieren mit ENABLE_API_FOOTBALL_SETTLEMENT=1.
-    """
-    if str(os.getenv("ENABLE_API_FOOTBALL_SETTLEMENT", "0")).lower() not in {"1", "true", "yes", "on"}:
-        return []
-    return _ORIGINAL_af_fixtures_for_date(date_str)
-
-
 
 # ============================================================
 # 🏆 SETTLEMENT / CHECK SYSTEM - Post-Match Auswertung
@@ -8373,6 +8361,8 @@ _AF_FIXTURES_DAY_CACHE = {}  # {date_str: [fixtures]} — verhindert N Calls fü
 
 def _af_fixtures_for_date(date_str):
     """Holt alle FT-Fixtures für ein Datum, gecached pro Tag (1 Call statt N)."""
+    if str(os.getenv("ENABLE_API_FOOTBALL_SETTLEMENT", "0")).lower() not in {"1", "true", "yes", "on"}:
+        return []
     if date_str in _AF_FIXTURES_DAY_CACHE:
         return _AF_FIXTURES_DAY_CACHE[date_str]
     r = _af_request("/fixtures", {"date": date_str, "status": "FT"})
@@ -17492,6 +17482,8 @@ _AF_FIXTURES_DAY_CACHE = {}  # {date_str: [fixtures]} — verhindert N Calls fü
 
 def _af_fixtures_for_date(date_str):
     """Holt alle FT-Fixtures für ein Datum, gecached pro Tag (1 Call statt N)."""
+    if str(os.getenv("ENABLE_API_FOOTBALL_SETTLEMENT", "0")).lower() not in {"1", "true", "yes", "on"}:
+        return []
     if date_str in _AF_FIXTURES_DAY_CACHE:
         return _AF_FIXTURES_DAY_CACHE[date_str]
     r = _af_request("/fixtures", {"date": date_str, "status": "FT"})
