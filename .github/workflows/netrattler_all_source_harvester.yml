@@ -1,51 +1,54 @@
-name: NETRATTLER All Source Harvester
+name: NETRATTLER All Source Harvester V34
 
 on:
   workflow_dispatch:
   schedule:
-    # 1x pro Tag reicht für Discovery/History/Open Data
     - cron: "17 4 * * *"
 
 jobs:
   harvest:
     runs-on: ubuntu-latest
-    timeout-minutes: 40
-
+    timeout-minutes: 120
     steps:
-      - name: Checkout
-        uses: actions/checkout@v4
-
-      - name: Setup Python
-        uses: actions/setup-python@v5
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
         with:
           python-version: "3.11"
-
-      - name: Install dependencies
+          cache: "pip"
+      - name: Install every free adapter
         run: |
           python -m pip install --upgrade pip
           pip install -r requirements_all_source.txt
-
-      - name: Run all source harvester
+          pip install oddsharvester || pip install git+https://github.com/jordantete/OddsHarvester.git || true
+          python -m playwright install chromium --with-deps
+      - name: Compile
+        run: python -m py_compile netrattler_all_source_harvester.py netrattler_source_hub.py netrattler_odds_harvester.py
+      - name: Run all sources; failed source continues to next
         env:
           SUPABASE_URL: ${{ secrets.SUPABASE_URL }}
           SUPABASE_KEY: ${{ secrets.SUPABASE_KEY }}
           SUPABASE_SERVICE_ROLE_KEY: ${{ secrets.SUPABASE_SERVICE_ROLE_KEY }}
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           THESPORTSDB_API_KEY: ${{ secrets.THESPORTSDB_API_KEY }}
-          ENABLE_SOCCERDATA: "0"
-          MAX_STATSBOMB_MATCHES: "40"
-          MAX_OPENFOOTBALL_FILES: "80"
-          MAX_FOOTBALL_DATA_ROWS_PER_CSV: "800"
-          SEASONS: "2526,2425,2324"
-        run: |
-          python netrattler_all_source_harvester.py
-
-      - name: Upload local summary
-        uses: actions/upload-artifact@v4
+          ODDS_API_KEYS: ${{ secrets.ODDS_API_KEYS }}
+          ODDS_API_KEY: ${{ secrets.ODDS_API_KEY }}
+          BETFAIR_APP_KEY: ${{ secrets.BETFAIR_APP_KEY }}
+          BETFAIR_SESSION_TOKEN: ${{ secrets.BETFAIR_SESSION_TOKEN }}
+          ENABLE_SOCCERDATA: "1"
+          ENABLE_ODDSHARVESTER: "true"
+          ENABLE_BET365_PUBLIC: "true"
+          MAX_STATSBOMB_MATCHES: "80"
+          MAX_OPENFOOTBALL_FILES: "180"
+          MAX_FILES_PER_GITHUB_REPO: "25"
+          MAX_FOOTBALL_DATA_ROWS_PER_CSV: "2000"
+          SEASONS: "2526,2425,2324,2223,2122"
+        run: python netrattler_all_source_harvester.py
+      - uses: actions/upload-artifact@v4
         if: always()
         with:
-          name: netrattler-all-source-summary
+          name: netrattler-v34-source-summary
           path: |
             netrattler_all_source_summary.json
             netrattler_source_hub_summary.json
+            netrattler_odds_snapshot.json
           if-no-files-found: ignore
