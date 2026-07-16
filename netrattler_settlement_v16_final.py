@@ -42,12 +42,12 @@ TG_DEFAULT = os.getenv("TELEGRAM_CHAT_ID") or ""
 ALLSPORTS_API_KEY = os.getenv("ALLSPORTS_API_KEY") or ""
 FOOTBALL_DATA_API_KEYS = [k.strip() for k in (os.getenv("FOOTBALL_DATA_API_KEYS") or os.getenv("FOOTBALL_DATA_API_KEY") or "").split(",") if k.strip()]
 FOOTBALLDATA_IO_API_KEY = os.getenv("FOOTBALLDATA_IO_API_KEY") or ""
-RESULT_HTTP_TIMEOUT = int(os.getenv("RESULT_HTTP_TIMEOUT", "18"))
-RESULT_USE_SOFASCORE = os.getenv("RESULT_USE_SOFASCORE", "true").lower() not in {"0", "false", "no"}
+RESULT_HTTP_TIMEOUT = int(os.getenv("RESULT_HTTP_TIMEOUT", "8"))
+RESULT_USE_SOFASCORE = os.getenv("RESULT_USE_SOFASCORE", "false").lower() in {"1", "true", "yes", "on"}
 RESULT_USE_ESPN = os.getenv("RESULT_USE_ESPN", "true").lower() not in {"0", "false", "no"}
 RESULT_USE_OPENLIGADB = os.getenv("RESULT_USE_OPENLIGADB", "true").lower() not in {"0", "false", "no"}
 DAYS = int(os.getenv("SETTLEMENT_DAYS", "14"))
-LIMIT = int(os.getenv("SETTLEMENT_LIMIT", "2500"))
+LIMIT = int(os.getenv("SETTLEMENT_LIMIT", "1200"))
 UPDATE_SOURCE_TIPS = os.getenv("UPDATE_SOURCE_TIPS", "true").lower() not in {"0", "false", "no"}
 SEND_PENDING_SUMMARY = os.getenv("SEND_PENDING_SUMMARY", "false").lower() in {"1", "true", "yes"}
 NOW = datetime.now(timezone.utc)
@@ -267,6 +267,108 @@ def telegram(chat_id: str, text: str) -> bool:
     except Exception as exc:
         log(f"TG: {exc}", "WARN")
         return False
+
+
+
+def telegram_edit(chat_id: str, message_id: Any, text: str) -> bool:
+    """Original-Tipp direkt bearbeiten."""
+    if not TG_TOKEN or not chat_id or not message_id:
+        return False
+    try:
+        response = requests.post(
+            f"https://api.telegram.org/bot{TG_TOKEN}/editMessageText",
+            json={
+                "chat_id": chat_id,
+                "message_id": int(message_id),
+                "text": text[:3900],
+                "parse_mode": "HTML",
+                "disable_web_page_preview": True,
+            },
+            timeout=20,
+        )
+        if not response.ok:
+            log(f"TG edit {response.status_code}: {response.text[:180]}", "WARN")
+        return response.ok
+    except Exception as exc:
+        log(f"TG edit: {exc}", "WARN")
+        return False
+
+
+def _strip_old_direct_summary(original: str) -> str:
+    if not original:
+        return ""
+    pattern = r"\n?⸻⸻\s*(?:<b>)?(?:Match|Combo|Corner|Builder|Prop) Summary(?:</b>)?\s*⸻⸻[\s\S]*$"
+    return re.sub(pattern, "", str(original)).rstrip()
+
+
+def _direct_summary_title(group: str) -> str:
+    if group == "combo":
+        return "Combo Summary"
+    if group == "corners":
+        return "Corner Summary"
+    if group == "builder":
+        return "Builder Summary"
+    if group == "props":
+        return "Prop Summary"
+    return "Match Summary"
+
+
+def format_direct_summary(settlement: Dict[str, Any]) -> str:
+    """Kurzer Block direkt im Original-Tipp."""
+    group = settlement.get("market_group", "default")
+    title = _direct_summary_title(group)
+    status = normalized_status(settlement.get("status"))
+    hit = "✅ Hit  <b>✅ V</b>" if status == "win" else "❌ Miss  <b>❌ X</b>"
+    profit = as_float(settlement.get("profit"), 0.0)
+    profit_icon = "🟢" if profit >= 0 else "🔴"
+    result = settlement.get("match_result") or {}
+    raw = result.get("raw") if isinstance(result, dict) else {}
+    raw = raw if isinstance(raw, dict) else {}
+    home_score = result.get("home_score") if isinstance(result, dict) else None
+    away_score = result.get("away_score") if isinstance(result, dict) else None
+    ht_home = anyv(raw, ["home_score_ht", "ht_home", "home_ht", "HTHG", "intHomeScoreHT"], None)
+    ht_away = anyv(raw, ["away_score_ht", "ht_away", "away_ht", "HTAG", "intAwayScoreHT"], None)
+
+    lines = [f"⸻⸻ <b>{title}</b> ⸻⸻"]
+    if ht_home not in (None, "") and ht_away not in (None, ""):
+        lines.append(f"Half-Time Score: <b>{ht_home}-{ht_away}</b>")
+    if home_score not in (None, "") and away_score not in (None, ""):
+        lines.append(f"Full-Time Score: <b>{home_score}-{away_score}</b>")
+    reason = str(settlement.get("reason") or "").strip()
+    if reason:
+        lines.append(f"Auswertung: <b>{reason[:180]}</b>")
+    lines.append(hit)
+    lines.append(f"{profit_icon} Profit: <b>{profit:+.2f} Units</b>")
+
+    legs = settlement.get("legs_payload") or []
+    if isinstance(legs, list) and legs and group in {"combo", "builder", "props"}:
+        lines.append("")
+        lines.append("<b>Leg-Auswertung:</b>")
+        for item in legs[:8]:
+            if not isinstance(item, dict):
+                continue
+            st = normalized_status(item.get("status"))
+            icon = "✅" if st == "win" else "❌" if st == "loss" else "⏳"
+            leg = item.get("leg") if isinstance(item.get("leg"), dict) else {}
+            label = market_text(leg) if leg else str(item.get("reason") or "Leg")
+            reason_txt = str(item.get("reason") or "")
+            lines.append(f"{icon} {label[:70]} — {reason_txt[:80]}")
+    return "\n".join(lines)
+
+
+def edit_original_tip(settlement: Dict[str, Any]) -> bool:
+    """Wenn telegram_msg_id + message_text gespeichert sind: Original-Tipp direkt editieren."""
+    if normalized_status(settlement.get("status")) not in {"win", "loss"}:
+        return False
+    payload = settlement.get("tip_payload") or {}
+    data = unpack(payload)
+    chat_id = anyv(data, ["telegram_chat_id", "chat_id", "tg_chat_id", "channel_id"], "")
+    message_id = anyv(data, ["telegram_msg_id", "telegram_message_id", "message_id", "tg_message_id"], "")
+    original = str(anyv(data, ["message_text", "text", "tip_text", "message", "caption"], ""))
+    if not chat_id or not message_id or not original:
+        return False
+    edited = _strip_old_direct_summary(original) + "\n\n" + format_direct_summary(settlement)
+    return telegram_edit(str(chat_id), message_id, edited)
 
 
 def market_text(row: Dict[str, Any]) -> str:
@@ -616,7 +718,9 @@ def public_results(day: str) -> List[Dict[str, Any]]:
 
 def load_results(dates: Sequence[str]) -> List[Dict[str, Any]]:
     output: List[Dict[str, Any]] = []
+    min_db_rows = int(os.getenv("RESULT_PUBLIC_FALLBACK_IF_DB_ROWS_LT", "5"))
     for day in dates:
+        day_db_rows = 0
         for table, columns in RESULT_TABLES.items():
             for column in columns:
                 rows = sb_get(table, {"select": "*", column: f"eq.{day}", "limit": "4000"}, quiet=True)
@@ -624,12 +728,16 @@ def load_results(dates: Sequence[str]) -> List[Dict[str, Any]]:
                     for row in rows:
                         row["_result_table"] = table
                     output.extend(rows)
+                    day_db_rows += len(rows)
                     log(f"Results {table} {day} via {column}: {len(rows)}")
                     break
+        if day_db_rows >= min_db_rows:
+            log(f"Public Result-Fallback {day} übersprungen ({day_db_rows} DB-Results vorhanden)")
+            continue
         public = public_results(day)
         if public:
             output.extend(public)
-            log(f"Results TheSportsDB {day}: {len(public)}")
+            log(f"Public Results {day}: {len(public)}")
     seen = set()
     clean = []
     for row in output:
@@ -959,6 +1067,7 @@ def settle_tip(tip: Dict[str, Any], results: Sequence[Dict[str, Any]], player_st
         "tip_date": row_date(tip),
         "tip_payload": tip,
         "legs_payload": leg_payload,
+        "match_result": result if isinstance(result, dict) else {},
         "settled_at": NOW.isoformat(),
     }
 
@@ -1187,6 +1296,7 @@ def send_roi_report(history: Sequence[Dict[str, Any]]) -> None:
 
 def main() -> None:
     log("⚽ NETRATTLER Settlement FINAL V21 startet")
+    log(f"Config: SofaScore={'ON' if RESULT_USE_SOFASCORE else 'OFF'} · Timeout={RESULT_HTTP_TIMEOUT}s · Limit={LIMIT}")
     if not SUPABASE_URL or not SUPABASE_KEY:
         log("SUPABASE_URL oder SUPABASE_KEY fehlt", "ERROR")
         raise SystemExit(2)
@@ -1211,8 +1321,13 @@ def main() -> None:
 
     saved = sb_upsert("netrattler_settlements", settled, "settlement_id")
     log(f"Settlements gespeichert: {saved}")
+    edited_count = 0
     for row in newly_closed:
         update_source_tip(row)
+        if edit_original_tip(row):
+            edited_count += 1
+    if newly_closed:
+        log(f"Original-Tipps direkt editiert: {edited_count}/{len(newly_closed)}")
 
     history = dedup_history(existing + settled)
     save_group_stats(history)
