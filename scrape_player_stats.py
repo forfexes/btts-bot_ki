@@ -1184,9 +1184,16 @@ def scrape_player_stats(date_str: str) -> int:
         all_rows.extend(rows)
         source_counts[name] = len(rows)
 
-    # Aktuelle Matchdaten zuerst
-    add_source("SofaScore", lambda: scrape_sofascore_date(date_str))
-    add_source("FotMob", lambda: scrape_fotmob_date(date_str))
+    # Aktuelle Matchdaten zuerst — jede Quelle sauber per ENV schaltbar.
+    if USE_SOFASCORE:
+        add_source("SofaScore", lambda: scrape_sofascore_date(date_str))
+    else:
+        print("  ℹ️  SofaScore deaktiviert (USE_SOFASCORE=false) — 403 vermeiden / Laufzeit sparen")
+
+    if USE_FOTMOB:
+        add_source("FotMob", lambda: scrape_fotmob_date(date_str))
+    else:
+        print("  ℹ️  FotMob deaktiviert (USE_FOTMOB=false)")
 
     # Historisches Open Data als Modell-/Fallbackbasis
     if USE_STATSBOMB:
@@ -1195,10 +1202,19 @@ def scrape_player_stats(date_str: str) -> int:
                 f"StatsBomb {league}",
                 lambda league=league: scrape_statsbomb_league(league),
             )
+    else:
+        print("  ℹ️  StatsBomb deaktiviert (USE_STATSBOMB=false)")
 
     # Saisonwerte und Open-Source-Library als letzte Fallbacks
-    add_source("FBref", lambda: scrape_fbref_playwright("Big5"))
-    add_source("soccerdata", lambda: scrape_soccerdata_fallback(date_str))
+    if USE_FBREF:
+        add_source("FBref", lambda: scrape_fbref_playwright("Big5"))
+    else:
+        print("  ℹ️  FBref deaktiviert (USE_FBREF=false) — 403 vermeiden / Laufzeit sparen")
+
+    if USE_SOCCERDATA:
+        add_source("soccerdata", lambda: scrape_soccerdata_fallback(date_str))
+    else:
+        print("  ℹ️  soccerdata deaktiviert (USE_SOCCERDATA=false) — spart Laufzeit")
 
     clean = _dedupe_rows(
         all_rows, "source,event_id,player_id,stat_name"
