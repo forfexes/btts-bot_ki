@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """
-NETRATTLER V14 — Supabase Data Importer
+NETRATTLER V34 — ALL HISTORICAL SOURCES IMPORTER
 
 Imports football data into the correct Supabase tables:
 
@@ -29,7 +29,7 @@ import pandas as pd
 
 
 SUPABASE_URL = os.environ.get("SUPABASE_URL", "").rstrip("/")
-SUPABASE_KEY = os.environ.get("SUPABASE_KEY", "")
+SUPABASE_KEY = os.environ.get("SUPABASE_SERVICE_ROLE_KEY") or os.environ.get("SUPABASE_KEY", "")
 CHUNK_SIZE = int(os.environ.get("IMPORT_CHUNK_SIZE", "500"))
 TIMEOUT = int(os.environ.get("IMPORT_TIMEOUT", "60"))
 MAX_ROWS_PER_SOURCE = int(os.environ.get("MAX_ROWS_PER_SOURCE", "0"))  # 0 = no limit
@@ -66,13 +66,26 @@ FD_LEAGUES = {
 DEFAULT_FD_SEASONS = os.environ.get("FD_SEASONS", "2526,2425,2324").split(",")
 DEFAULT_FD_CODES = os.environ.get("FD_CODES", ",".join(FD_LEAGUES.keys())).split(",")
 
-DEFAULT_OPENFOOTBALL_URLS = [
-    # Keep configurable. Many openfootball repos differ by folder names; failures are logged, not fatal.
-    "https://raw.githubusercontent.com/openfootball/england/master/2024-25/1-premierleague.json",
-    "https://raw.githubusercontent.com/openfootball/deutschland/master/2024-25/1-bundesliga.json",
-    "https://raw.githubusercontent.com/openfootball/italy/master/2024-25/1-seriea.json",
-    "https://raw.githubusercontent.com/openfootball/espana/master/2024-25/1-liga.json",
-    "https://raw.githubusercontent.com/openfootball/france/master/2024-25/1-ligue1.json",
+GITHUB_TOKEN = os.environ.get("GITHUB_TOKEN", "")
+GITHUB_MAX_FILES_PER_REPO = int(os.environ.get("GITHUB_MAX_FILES_PER_REPO", "80"))
+GITHUB_MIN_YEAR = int(os.environ.get("GITHUB_MIN_YEAR", "2000"))
+
+GITHUB_HISTORICAL_REPOS = [
+    "openfootball/football.json",
+    "openfootball/worldcup.json",
+    "openfootball/euro.json",
+    "openfootball/worldcup",
+    "openfootball/south-america",
+    "openfootball/europe",
+    "openfootball/champions-league",
+    "openfootball/internationals",
+    "openfootball/world",
+    "openfootball/england",
+    "openfootball/deutschland",
+    "openfootball/italy",
+    "openfootball/espana",
+    "openfootball/france",
+    "martj42/international_results",
 ]
 
 
@@ -461,6 +474,171 @@ def import_fpl_profiles() -> int:
         return 0
 
 
+
+def github_headers() -> Dict[str, str]:
+    h = {"Accept": "application/vnd.github+json", "User-Agent": "NETRATTLER-V34-History"}
+    if GITHUB_TOKEN:
+        h["Authorization"] = f"Bearer {GITHUB_TOKEN}"
+    return h
+
+
+def github_repo_files(repo: str) -> Tuple[str, List[str]]:
+    meta = requests.get(f"https://api.github.com/repos/{repo}", headers=github_headers(), timeout=TIMEOUT)
+    meta.raise_for_status()
+    branch = meta.json().get("default_branch") or "master"
+    tree = requests.get(
+        f"https://api.github.com/repos/{repo}/git/trees/{branch}",
+        headers=github_headers(), params={"recursive": "1"}, timeout=TIMEOUT,
+    )
+    tree.raise_for_status()
+    files = []
+    for item in tree.json().get("tree", []):
+        path = item.get("path") or ""
+        if item.get("type") != "blob" or not path.lower().endswith((".json", ".csv", ".tsv", ".txt", ".jsonl", ".ndjson")):
+            continue
+        low = path.lower()
+        if any(x in low for x in ("node_modules/", "vendor/", ".github/", "test/", "spec/", "readme")):
+            continue
+        # Prefer match/result files and years inside configured horizon.
+        years = [int(x) for x in re.findall(r"(?:19|20)\d{2}", path)]
+        if years and max(years) < GITHUB_MIN_YEAR:
+            continue
+        files.append(path)
+    files.sort(key=lambda p: (0 if any(k in p.lower() for k in ("match", "result", "fixture", "cup", "league", "20")) else 1, p))
+    return branch, files[:GITHUB_MAX_FILES_PER_REPO]
+
+
+def historical_row(source: str, league: str, season: Optional[str], d: Any, home: Any, away: Any,
+                   hg: Any, ag: Any, raw: Any, ht_h: Any = None, ht_a: Any = None) -> Optional[Dict[str, Any]]:
+    d = to_date(d); home = clean(home); away = clean(away); hg = to_int(hg); ag = to_int(ag)
+    if not d or not home or not away or hg is None or ag is None:
+        return None
+    total = hg + ag
+    return {
+        "source": source[:100], "match_id": match_id(source, league, d, home, away),
+        "match_date": d, "season": season, "country": None, "league": clean(league) or source,
+        "division": clean(league) or source, "home_team": home, "away_team": away,
+        "home_goals": hg, "away_goals": ag,
+        "result": "H" if hg > ag else ("A" if ag > hg else "D"),
+        "ht_home_goals": to_int(ht_h), "ht_away_goals": to_int(ht_a),
+        "total_goals": total, "btts": bool(hg > 0 and ag > 0), "over_25_hit": bool(total > 2.5),
+        "raw": raw, "updated_at": datetime.now(timezone.utc).isoformat(),
+    }
+
+
+def generic_json_matches(obj: Any, source: str, league_hint: str, season_hint: Optional[str]) -> List[Dict[str, Any]]:
+    containers = []
+    if isinstance(obj, dict):
+        league_hint = clean(obj.get("name") or obj.get("league") or obj.get("title") or league_hint) or league_hint
+        for key in ("matches", "games", "fixtures", "results"):
+            if isinstance(obj.get(key), list): containers.extend(obj[key])
+        for rnd in obj.get("rounds", []) if isinstance(obj.get("rounds"), list) else []:
+            if isinstance(rnd, dict): containers.extend(rnd.get("matches") or rnd.get("games") or [])
+        if not containers and any(k in obj for k in ("home_team", "HomeTeam", "team1")): containers=[obj]
+    elif isinstance(obj, list):
+        containers=obj
+    out=[]
+    for m in containers:
+        if not isinstance(m, dict): continue
+        home=m.get("team1") or m.get("home_team") or m.get("home") or m.get("HomeTeam")
+        away=m.get("team2") or m.get("away_team") or m.get("away") or m.get("AwayTeam")
+        if isinstance(home,dict): home=home.get("name")
+        if isinstance(away,dict): away=away.get("name")
+        score=m.get("score") or m.get("result") or {}
+        ft=score.get("ft") if isinstance(score,dict) else None
+        if isinstance(ft,dict): hg,ag=ft.get("home"),ft.get("away")
+        elif isinstance(ft,list) and len(ft)>=2: hg,ag=ft[0],ft[1]
+        else: hg=m.get("home_score") or m.get("home_goals") or m.get("FTHG"); ag=m.get("away_score") or m.get("away_goals") or m.get("FTAG")
+        ht=score.get("ht") if isinstance(score,dict) else None
+        hth,hta=(ht[0],ht[1]) if isinstance(ht,list) and len(ht)>=2 else (m.get("HTHG"),m.get("HTAG"))
+        row=historical_row(source, m.get("league") or m.get("competition") or league_hint, season_hint,
+                           m.get("date") or m.get("match_date") or m.get("utcDate"), home, away, hg, ag, m, hth, hta)
+        if row: out.append(row)
+    return out
+
+
+def generic_csv_matches(text: str, source: str, league_hint: str, season_hint: Optional[str], delimiter: str = ",") -> List[Dict[str, Any]]:
+    out=[]
+    try:
+        for m in csv.DictReader(io.StringIO(text), delimiter=delimiter):
+            row=historical_row(source, m.get("league") or m.get("competition") or m.get("tournament") or league_hint,
+                season_hint, m.get("date") or m.get("Date") or m.get("match_date"),
+                m.get("home_team") or m.get("home") or m.get("HomeTeam"),
+                m.get("away_team") or m.get("away") or m.get("AwayTeam"),
+                m.get("home_score") or m.get("home_goals") or m.get("FTHG"),
+                m.get("away_score") or m.get("away_goals") or m.get("FTAG"), m,
+                m.get("ht_home") or m.get("HTHG"), m.get("ht_away") or m.get("HTAG"))
+            if row: out.append(row)
+    except Exception: pass
+    return out
+
+
+def football_txt_matches(text: str, source: str, league_hint: str, season_hint: Optional[str], path: str) -> List[Dict[str, Any]]:
+    """Best-effort Football.TXT parser. Unsupported lines are skipped, never fatal."""
+    out=[]; current_date=None
+    years=[int(x) for x in re.findall(r"(?:19|20)\d{2}", path)]
+    base_year=max(years) if years else datetime.now().year
+    months={m.lower():i for i,m in enumerate(("Jan","Feb","Mar","Apr","May","Jun","Jul","Aug","Sep","Oct","Nov","Dec"),1)}
+    score_re=re.compile(r"^\s*(?:\(\d+\)\s*)?(?:(?:Mon|Tue|Wed|Thu|Fri|Sat|Sun)\s+)?(?:(?P<mon>[A-Z][a-z]{2})[/. ](?P<day>\d{1,2})\s+)?(?:\d{1,2}:\d{2}\s+)?(?P<home>.+?)\s+(?P<h>\d+)\s*[-–:]\s*(?P<a>\d+)(?:\s+(?:a\.e\.t\.|pen\.|pens\.))?(?:\s*\([^)]*\))?\s+(?P<away>.+?)(?:\s+@\s+.*)?$",re.I)
+    date_re=re.compile(r"(?P<mon>Jan|Feb|Mar|Apr|May|Jun|Jul|Aug|Sep|Oct|Nov|Dec)[/. ](?P<day>\d{1,2})",re.I)
+    for rawline in text.splitlines():
+        line=re.sub(r"\s+#.*$","",rawline).strip()
+        if not line: continue
+        dm=date_re.search(line)
+        if dm:
+            try:
+                month=months[dm.group('mon').lower()]; day=int(dm.group('day'))
+                year=base_year
+                current_date=date(year,month,day).isoformat()
+            except Exception: pass
+        m=score_re.match(line)
+        if not m: continue
+        d=current_date
+        if m.group('mon'):
+            try: d=date(base_year,months[m.group('mon').lower()],int(m.group('day'))).isoformat()
+            except Exception: pass
+        row=historical_row(source,league_hint,season_hint,d,m.group('home').strip(),m.group('away').strip(),m.group('h'),m.group('a'),{"line":line,"path":path})
+        if row: out.append(row)
+    return out
+
+
+def import_all_github_history() -> int:
+    total=0
+    for repo in GITHUB_HISTORICAL_REPOS:
+        source=f"github:{repo}"
+        repo_total=0
+        try:
+            branch, files=github_repo_files(repo)
+        except Exception as e:
+            log(f"  ⚠️ {repo} tree: {e} — next source")
+            health(source,"error",0,str(e)); continue
+        for path in files:
+            url=f"https://raw.githubusercontent.com/{repo}/{branch}/{path}"
+            try:
+                r=requests.get(url,timeout=TIMEOUT); r.raise_for_status(); text=r.text
+                season=next((x for x in path.split('/') if re.match(r"^(?:19|20)\d{2}(?:-\d{2,4})?$",x)),None)
+                if path.lower().endswith('.json'):
+                    rows=generic_json_matches(r.json(),source,repo.split('/')[-1],season)
+                elif path.lower().endswith(('.jsonl','.ndjson')):
+                    objs=[json.loads(x) for x in text.splitlines() if x.strip().startswith('{')]
+                    rows=generic_json_matches(objs,source,repo.split('/')[-1],season)
+                elif path.lower().endswith('.csv'):
+                    rows=generic_csv_matches(text,source,repo.split('/')[-1],season,',')
+                elif path.lower().endswith('.tsv'):
+                    rows=generic_csv_matches(text,source,repo.split('/')[-1],season,'\t')
+                else:
+                    rows=football_txt_matches(text,source,repo.split('/')[-1],season,path)
+                if MAX_ROWS_PER_SOURCE: rows=rows[:max(0,MAX_ROWS_PER_SOURCE-repo_total)]
+                if rows:
+                    ok=rest_upsert('football_historical_matches',rows,'source,match_id'); repo_total+=ok; total+=ok
+                if MAX_ROWS_PER_SOURCE and repo_total>=MAX_ROWS_PER_SOURCE: break
+            except Exception as e:
+                log(f"  ⚠️ {repo}/{path}: {str(e)[:120]} — next file")
+        health(source,'ok' if repo_total else 'warn',repo_total,f'GitHub historical files parsed: {len(files)}')
+        log(f"  ✅ {repo}: {repo_total} normalized historical matches")
+    return total
+
+
 def openfootball_matches_from_json(obj: Any) -> List[Dict[str, Any]]:
     if isinstance(obj, dict):
         matches = obj.get("matches") or obj.get("rounds") or []
@@ -518,26 +696,8 @@ def openfootball_matches_from_json(obj: Any) -> List[Dict[str, Any]]:
 
 
 def import_openfootball() -> int:
-    urls_env = os.environ.get("OPENFOOTBALL_URLS", "")
-    urls = [u.strip() for u in urls_env.split(",") if u.strip()] if urls_env else DEFAULT_OPENFOOTBALL_URLS
-    total = 0
-    for url in urls:
-        try:
-            log(f"📦 openfootball: {url}")
-            r = requests.get(url, timeout=TIMEOUT)
-            if r.status_code != 200:
-                log(f"  ⚠️ HTTP {r.status_code}")
-                continue
-            data = r.json()
-            rows = openfootball_matches_from_json(data)
-            if MAX_ROWS_PER_SOURCE:
-                rows = rows[:MAX_ROWS_PER_SOURCE]
-            ok = rest_upsert("football_historical_matches", rows, "source,match_id")
-            total += ok
-            log(f"  ✅ openfootball rows: {ok}")
-        except Exception as e:
-            log(f"  ⚠️ openfootball error: {e}")
-    health("openfootball", "ok" if total else "warn", total, "openfootball json import")
+    total = import_all_github_history()
+    health("all_github_history", "ok" if total else "warn", total, "all configured GitHub historical repositories")
     return total
 
 
@@ -608,7 +768,7 @@ def import_extra_csv_urls() -> int:
 
 def main() -> None:
     log("=" * 60)
-    log("NETRATTLER V14 — Supabase Data Importer")
+    log("NETRATTLER V34 — ALL HISTORICAL SOURCES IMPORTER")
     log("=" * 60)
     log(f"Sources: {IMPORT_SOURCES}")
     if not SUPABASE_URL or not SUPABASE_KEY:
