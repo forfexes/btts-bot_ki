@@ -1,0 +1,55 @@
+name: NETRATTLER Odds Harvester V34
+
+on:
+  schedule:
+    - cron: "15 */6 * * *"
+    - cron: "35 3 * * 0"
+  workflow_dispatch:
+    inputs:
+      history:
+        description: "Auch historische Bookmaker-Quoten laden"
+        required: false
+        default: "false"
+
+jobs:
+  odds:
+    runs-on: ubuntu-latest
+    timeout-minutes: 120
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+          cache: "pip"
+      - name: Install odds scrapers
+        run: |
+          python -m pip install --upgrade pip
+          pip install -r requirements_all_source.txt
+          pip install oddsharvester || pip install git+https://github.com/jordantete/OddsHarvester.git || true
+          python -m playwright install chromium --with-deps
+      - name: Compile
+        run: python -m py_compile netrattler_odds_harvester.py
+      - name: Collect Bet365 and every available bookmaker
+        env:
+          SUPABASE_URL: ${{ secrets.SUPABASE_URL }}
+          SUPABASE_KEY: ${{ secrets.SUPABASE_KEY }}
+          SUPABASE_SERVICE_ROLE_KEY: ${{ secrets.SUPABASE_SERVICE_ROLE_KEY }}
+          ODDS_API_KEYS: ${{ secrets.ODDS_API_KEYS }}
+          ODDS_API_KEY: ${{ secrets.ODDS_API_KEY }}
+          BETFAIR_APP_KEY: ${{ secrets.BETFAIR_APP_KEY }}
+          BETFAIR_SESSION_TOKEN: ${{ secrets.BETFAIR_SESSION_TOKEN }}
+          ENABLE_ODDSHARVESTER: "true"
+          ENABLE_BET365_PUBLIC: "true"
+          ODDS_HISTORY_START_YEAR: "2010"
+        run: |
+          if [ "${{ github.event.schedule }}" = "35 3 * * 0" ] || [ "${{ github.event.inputs.history }}" = "true" ]; then
+            python netrattler_odds_harvester.py --all --start-year 2010
+          else
+            python netrattler_odds_harvester.py --live
+          fi
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: netrattler-odds-snapshot
+          path: netrattler_odds_snapshot.json
+          if-no-files-found: ignore
