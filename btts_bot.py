@@ -6068,9 +6068,31 @@ def _ntr_perf_line(row, label):
     em = "🟢" if prof >= 0 else "🔴"
     return f"{label}: {wins}-{losses} / {bets} · ROI {roi:.1f}% · {prof:+.2f}U {em}"
 
+
+def _ntr_strip_duplicate_group_footer(text):
+    """Remove duplicated 'Bewertung dieser Gruppe' blocks before Telegram send."""
+    raw = str(text or "")
+    token = "Bewertung dieser Gruppe"
+    if raw.count(token) <= 1:
+        return raw
+
+    first = raw.find(token)
+    second = raw.find(token, first + len(token))
+    if second <= 0:
+        return raw
+
+    # Cut from the separator right before the second footer.
+    sep = "━━━━━━━━━━━━━━━━━━"
+    cut = raw.rfind(sep, 0, second)
+    if cut <= first:
+        cut = raw.rfind("\n", 0, second)
+    if cut > 0:
+        return raw[:cut].rstrip()
+    return raw[:second].rstrip()
+
 def _ntr_enhance_message_with_stats(text, chat_id):
     """Append one compact performance block only to real fresh tip messages."""
-    if str(env("ENABLE_TIP_PERFORMANCE_FOOTER", "true")).lower() not in ("1", "true", "yes", "on"):
+    if str(env("ENABLE_TIP_PERFORMANCE_FOOTER", "false")).lower() not in ("1", "true", "yes", "on"):
         return text
     if not text or len(text) > 3300:
         return text
@@ -6081,9 +6103,10 @@ def _ntr_enhance_message_with_stats(text, chat_id):
         "AUSWERTUNG", "GESAMT-STATISTIK", "AI TIPP BOT - DAILY", "NETRATTLER HEUTE",
         "BACKTEST", "SELF TEST", "ÜBERSICHT HEUTE", "PERFORMANCE DIESER GRUPPE",
         "WINRATE:", "AUSGEWERTETE TIPPS", "DATEN WERDEN GESAMMELT", "ROI REPORT",
+        "BEWERTUNG DIESER GRUPPE", "LIGARANKING MONAT",
     ]
     if any(w in upper for w in skip_words):
-        return text
+        return _ntr_strip_duplicate_group_footer(text)
     # A primary tip needs a price and a concrete selection/leg. This prevents the
     # duplicate footer on the separate market-stat cards shown in Telegram.
     has_price = any(w in upper for w in ["QUOTE:", "GESAMT-QUOTE:", " @ ", "BET BUILDER"])
@@ -6298,6 +6321,11 @@ def send_telegram(text, chat_id=None, reply_markup=None):
             log(f"ML-Footer übersprungen: {str(_ntr_ml_e)[:60]}", "WARN")
         except Exception:
             pass
+
+    try:
+        text = _ntr_strip_duplicate_group_footer(text)
+    except Exception:
+        pass
 
     payload = {
         "chat_id": chat_id,
@@ -6898,31 +6926,60 @@ def generate_multi_combo_bets(all_tips, num_tips=3):
 
 
 def format_combo_telegram_message(combo):
-    """Formatiert Multi-Combo für Telegram — kompakt, eine Zeile pro Leg"""
+    """Formatiert Multi-Combo für Telegram — V31 clean, stake capped."""
     if not combo:
         return ""
 
-    total_odds = combo.get("total_odds", "?")
-    stake = combo.get("stake_suggestion", 0.5)
-    win = round(float(str(total_odds).replace(",",".")) * float(stake), 1) if str(total_odds).replace(".","").isdigit() else "?"
+    def _fnum(x, default=0.0):
+        try:
+            return float(str(x).replace(",", "."))
+        except Exception:
+            return default
+
+    total_odds = _fnum(combo.get("total_odds", 0), 0)
+    nlegs = len(combo.get("tips", []) or [])
+    # Safer stakes: keine 0.5u auf 284/512er Lotterien.
+    if nlegs <= 3:
+        stake = 0.50
+    elif nlegs == 4:
+        stake = 0.35
+    elif nlegs == 5:
+        stake = 0.25
+    elif nlegs == 6:
+        stake = 0.15
+    else:
+        stake = 0.05
+    if total_odds >= 50:
+        stake = min(stake, 0.05)
+    elif total_odds >= 25:
+        stake = min(stake, 0.10)
+    combo["stake_suggestion"] = stake
+
+    win = round(total_odds * stake, 1) if total_odds else "?"
     label = combo.get("label", "COMBO")
+    if nlegs >= 7:
+        risk = "LOTTERY"
+    elif nlegs >= 5:
+        risk = "HIGH RISK"
+    else:
+        risk = "VALUE"
 
     msg = f"<b>🎰 {label}</b>\n"
     msg += "━━━━━━━━━━━━━━━━━━\n"
-    msg += f"🎯 Gesamt-Quote: <b>{total_odds}</b>\n"
-    msg += f"💵 Einsatz: {stake} Units · Gewinn: ~{win} Units\n\n"
+    msg += f"🎯 Gesamt-Quote: <b>{total_odds:.2f}</b>\n"
+    msg += f"💵 Einsatz: <b>{stake:.2f} Units</b> · Gewinn: ~{win} Units\n"
+    msg += f"⚠️ Risiko: <b>{risk}</b>\n\n"
     msg += "<b>📋 Legs:</b>\n"
 
     for i, tip in enumerate(combo.get("tips", []), 1):
         _mk = tip.get("market", "")
         market_emoji = {"btts": "⚽", "over25": "🎯", "combo": "🔥", "btts_ht": "🕐", "over15_ht": "⏰", "corners": "🔵"}.get(_mk, "💎")
-        market_label = {"btts": "BTTS", "over25": "Over 2.5", "combo": "BTTS+O2.5", "btts_ht": "BTTS HT", "over15_ht": "O1.5 HT", "corners": "Corners"}.get(_mk, _mk.upper())
+        market_label = {"btts": "BTTS", "over25": "Over 2.5", "combo": "BTTS+O2.5", "btts_ht": "BTTS HT", "over15_ht": "O1.5 HT", "corners": "Corners"}.get(_mk, str(_mk).upper())
         odds_val = tip.get("odds", tip.get("oddsYes", "?"))
         msg += f"{i}. {market_emoji} <b>{tip.get('match','?')}</b> · {market_label} @ {odds_val}\n"
 
     msg += "\n━━━━━━━━━━━━━━━━━━\n"
-    msg += f"<i>💡 {combo.get('desc', 'Multi-Combo')}</i>"
-
+    msg += "<i>💡 Clean Combo: 3-6 Legs Standard. 7-11 nur als optionale Lottery.</i>"
     return msg
 
 
@@ -7213,9 +7270,14 @@ def _ntr_market_daily_card(market_id, title, target_date, today_count):
 
 def _send_market_daily_cards_to_own_groups(tips_by_market, target_date, stats=None):
     """
-    Sendet keine Gesamt-Statistik in BTTS.
-    Jede Tipp-Gruppe bekommt nur ihre eigene Tages-/Markt-Bewertung.
+    V31 FINAL:
+    Standard AUS, weil diese DAILY-Karten bei jedem AI-Run mehrfach gespammt haben.
+    Einschalten nur bewusst mit ENABLE_MARKET_DAILY_CARDS=true.
+    Settlement-/ROI-Reports bleiben unabhängig davon aktiv.
     """
+    if str(env("ENABLE_MARKET_DAILY_CARDS", "false")).lower() not in ("1", "true", "yes", "on"):
+        log("ℹ️ Markt-Daily-Cards übersprungen (ENABLE_MARKET_DAILY_CARDS=false)")
+        return
     market_cards = [
         ("btts", "⚽ BTTS", TELEGRAM_GROUPS.get("btts"), len(tips_by_market.get("btts", []))),
         ("over25", "🎯 Over 2.5", TELEGRAM_GROUPS.get("over25"), len(tips_by_market.get("over25", []))),
@@ -7232,9 +7294,9 @@ def _send_market_daily_cards_to_own_groups(tips_by_market, target_date, stats=No
     for market_id, title, chat_id, today_count in market_cards:
         if not chat_id or str(chat_id) in sent:
             continue
-        # keine leere Tageskarte, wenn es auch noch keine Historie gibt
+        # keine leere Tageskarte. Historie allein reicht nicht, sonst kommt "Heute gesendet: 0 Tipps".
         ms = _get_market_stats_from_supabase(market_id)
-        if today_count <= 0 and not (ms and ms.get("total", 0) >= 3):
+        if today_count <= 0 and str(env("ENABLE_EMPTY_MARKET_DAILY_CARDS", "false")).lower() not in ("1", "true", "yes", "on"):
             continue
         msg = _ntr_group_daily_card_v31(market_id, title, target_date, today_count)
         send_telegram(msg, chat_id)
@@ -7592,12 +7654,6 @@ def send_top_tips(tips_by_market, target_date):
             best_odds = r.get("oddsYes", "")
             if best_bookie and best_odds:
                 msg += f"\n🏆 Empfehlung: <b>{best_bookie}</b> · Quote {best_odds}"
-
-            # 🆕 V20: Performance Footer
-            try:
-                msg = _ntr_enhance_message_with_stats(msg, target_chat)
-            except Exception:
-                pass
 
             msg_id = send_telegram(msg, target_chat)
             mark_tip_sent(match_name, market_id, target_date)
@@ -8234,6 +8290,53 @@ def get_match_result_from_sources(tip) -> dict:
         pass
 
     return None
+
+
+
+
+# ============================================================
+# V30 HOTFIX — Settlement Turbo Cache
+# ============================================================
+
+_RESULT_RESOLVER_CACHE = {}
+_RESULT_RESOLVER_STATS = {"hit": 0, "miss": 0}
+
+_ORIGINAL_get_match_result_from_sources = get_match_result_from_sources
+
+def get_match_result_from_sources(tip) -> dict:
+    """
+    Cached wrapper around the normal result resolver.
+    Viele pending Tips haben dasselbe Match mit mehreren Märkten.
+    Ohne Cache werden dieselben Quellen mehrfach abgefragt.
+    """
+    try:
+        match_name = str(tip.get("match", "") or "")
+        tip_date = str(tip.get("date", "") or "")[:10]
+        # Combo-Match: für Matchresult reicht der erste Match-Key
+        first_match = match_name.split(" / ")[0].strip() if " / " in match_name else match_name.strip()
+        key = (first_match.lower(), tip_date)
+        if key in _RESULT_RESOLVER_CACHE:
+            _RESULT_RESOLVER_STATS["hit"] += 1
+            return _RESULT_RESOLVER_CACHE[key]
+        _RESULT_RESOLVER_STATS["miss"] += 1
+        res = _ORIGINAL_get_match_result_from_sources(tip)
+        # Auch None cachen, damit erfolglose Matches nicht 10x gesucht werden.
+        _RESULT_RESOLVER_CACHE[key] = res
+        return res
+    except Exception:
+        return _ORIGINAL_get_match_result_from_sources(tip)
+
+
+_ORIGINAL_af_fixtures_for_date = _af_fixtures_for_date
+
+def _af_fixtures_for_date(date_str):
+    """
+    API-Football Settlement ist bei dir suspended und kostet sonst Zeit.
+    Default AUS. Aktivieren mit ENABLE_API_FOOTBALL_SETTLEMENT=1.
+    """
+    if str(os.getenv("ENABLE_API_FOOTBALL_SETTLEMENT", "0")).lower() not in {"1", "true", "yes", "on"}:
+        return []
+    return _ORIGINAL_af_fixtures_for_date(date_str)
 
 
 
@@ -15808,6 +15911,11 @@ def send_telegram(text, chat_id=None, reply_markup=None):
         except Exception:
             pass
 
+    try:
+        text = _ntr_strip_duplicate_group_footer(text)
+    except Exception:
+        pass
+
     payload = {
         "chat_id": chat_id,
         "text": text,
@@ -16396,31 +16504,60 @@ def generate_multi_combo_bets(all_tips, num_tips=3):
 
 
 def format_combo_telegram_message(combo):
-    """Formatiert Multi-Combo für Telegram — kompakt, eine Zeile pro Leg"""
+    """Formatiert Multi-Combo für Telegram — V31 clean, stake capped."""
     if not combo:
         return ""
 
-    total_odds = combo.get("total_odds", "?")
-    stake = combo.get("stake_suggestion", 0.5)
-    win = round(float(str(total_odds).replace(",",".")) * float(stake), 1) if str(total_odds).replace(".","").isdigit() else "?"
+    def _fnum(x, default=0.0):
+        try:
+            return float(str(x).replace(",", "."))
+        except Exception:
+            return default
+
+    total_odds = _fnum(combo.get("total_odds", 0), 0)
+    nlegs = len(combo.get("tips", []) or [])
+    # Safer stakes: keine 0.5u auf 284/512er Lotterien.
+    if nlegs <= 3:
+        stake = 0.50
+    elif nlegs == 4:
+        stake = 0.35
+    elif nlegs == 5:
+        stake = 0.25
+    elif nlegs == 6:
+        stake = 0.15
+    else:
+        stake = 0.05
+    if total_odds >= 50:
+        stake = min(stake, 0.05)
+    elif total_odds >= 25:
+        stake = min(stake, 0.10)
+    combo["stake_suggestion"] = stake
+
+    win = round(total_odds * stake, 1) if total_odds else "?"
     label = combo.get("label", "COMBO")
+    if nlegs >= 7:
+        risk = "LOTTERY"
+    elif nlegs >= 5:
+        risk = "HIGH RISK"
+    else:
+        risk = "VALUE"
 
     msg = f"<b>🎰 {label}</b>\n"
     msg += "━━━━━━━━━━━━━━━━━━\n"
-    msg += f"🎯 Gesamt-Quote: <b>{total_odds}</b>\n"
-    msg += f"💵 Einsatz: {stake} Units · Gewinn: ~{win} Units\n\n"
+    msg += f"🎯 Gesamt-Quote: <b>{total_odds:.2f}</b>\n"
+    msg += f"💵 Einsatz: <b>{stake:.2f} Units</b> · Gewinn: ~{win} Units\n"
+    msg += f"⚠️ Risiko: <b>{risk}</b>\n\n"
     msg += "<b>📋 Legs:</b>\n"
 
     for i, tip in enumerate(combo.get("tips", []), 1):
         _mk = tip.get("market", "")
         market_emoji = {"btts": "⚽", "over25": "🎯", "combo": "🔥", "btts_ht": "🕐", "over15_ht": "⏰", "corners": "🔵"}.get(_mk, "💎")
-        market_label = {"btts": "BTTS", "over25": "Over 2.5", "combo": "BTTS+O2.5", "btts_ht": "BTTS HT", "over15_ht": "O1.5 HT", "corners": "Corners"}.get(_mk, _mk.upper())
+        market_label = {"btts": "BTTS", "over25": "Over 2.5", "combo": "BTTS+O2.5", "btts_ht": "BTTS HT", "over15_ht": "O1.5 HT", "corners": "Corners"}.get(_mk, str(_mk).upper())
         odds_val = tip.get("odds", tip.get("oddsYes", "?"))
         msg += f"{i}. {market_emoji} <b>{tip.get('match','?')}</b> · {market_label} @ {odds_val}\n"
 
     msg += "\n━━━━━━━━━━━━━━━━━━\n"
-    msg += f"<i>💡 {combo.get('desc', 'Multi-Combo')}</i>"
-
+    msg += "<i>💡 Clean Combo: 3-6 Legs Standard. 7-11 nur als optionale Lottery.</i>"
     return msg
 
 
@@ -16955,12 +17092,6 @@ def send_top_tips(tips_by_market, target_date):
             best_odds = r.get("oddsYes", "")
             if best_bookie and best_odds:
                 msg += f"\n🏆 Empfehlung: <b>{best_bookie}</b> · Quote {best_odds}"
-
-            # 🆕 V20: Performance Footer
-            try:
-                msg = _ntr_enhance_message_with_stats(msg, target_chat)
-            except Exception:
-                pass
 
             msg_id = send_telegram(msg, target_chat)
             mark_tip_sent(match_name, market_id, target_date)
@@ -18655,7 +18786,7 @@ def run_settlement():
                 "status": "eq.pending",
                 "date": f"gte.{yesterday}",
                 "select": "*",
-                "limit": "500",
+                "limit": str(int(os.getenv("SETTLEMENT_LIMIT", "150"))),
                 "order": "date.desc",
             },
             timeout=20,
@@ -18666,7 +18797,7 @@ def run_settlement():
             return
 
         pending_tips = r.json()
-        log(f"Settlement: {len(pending_tips)} pending Tips gefunden")
+        log(f"Settlement: {len(pending_tips)} pending Tips gefunden (Limit={os.getenv('SETTLEMENT_LIMIT', '150')})")
         log(f"Settlement DEBUG: API_FOOTBALL_KEYS vorhanden: {bool(API_FOOTBALL_KEYS)} ({len(API_FOOTBALL_KEYS) if API_FOOTBALL_KEYS else 0} Keys)")
         if pending_tips:
             _sample = pending_tips[0]
@@ -18676,6 +18807,8 @@ def run_settlement():
         lost_count = 0
         not_found = 0
         _debug_logged = False
+        _settlement_log_shown = 0
+        _settlement_log_suppressed = 0
 
         for tip in pending_tips:
             try:
@@ -18788,7 +18921,11 @@ def run_settlement():
                         appendix += f"\n{_em} {_leg.get('raw','Prop')} → {_leg.get('actual','?')}"
                 elif _special and _special.get("actual_value") is not None:
                     appendix += f"\n📈 Tatsächlicher Wert: <b>{_special.get('actual_value')}</b>"
-                log(f"   {'✅' if status == 'won' else '❌'} {tip.get('match', '?')} → {status.upper()}")
+                if _settlement_log_shown < int(os.getenv("SETTLEMENT_LOG_LIMIT", "30")):
+                    log(f"   {'✅' if status == 'won' else '❌'} {tip.get('match', '?')} → {status.upper()}")
+                    _settlement_log_shown += 1
+                else:
+                    _settlement_log_suppressed += 1
 
                 if msg_id and chat_id:
                     try:
@@ -18812,6 +18949,9 @@ def run_settlement():
         # ═══ DAILY SUMMARY ═══
         total_settled = won_count + lost_count
         log(f"Settlement fertig: ✅{won_count} gewonnen, ❌{lost_count} verloren, ⏳{not_found} noch nicht fertig")
+        if _settlement_log_suppressed:
+            log(f"Settlement Log gebündelt: {_settlement_log_suppressed} Detail-Zeilen unterdrückt")
+        log(f"Settlement Cache: hit={_RESULT_RESOLVER_STATS.get('hit',0)} miss={_RESULT_RESOLVER_STATS.get('miss',0)} · API-Football Settlement={'ON' if str(os.getenv('ENABLE_API_FOOTBALL_SETTLEMENT','0')).lower() in {'1','true','yes','on'} else 'OFF'}")
 
         if total_settled > 0 or not_found > 0:
             winrate = round(won_count / total_settled * 100) if total_settled > 0 else 0
@@ -22532,8 +22672,10 @@ def run_pinnacle_props_bot(win_start_utc=None, win_end_utc=None, ch_tz=None, top
     if _rejected_too_few_legs or _rejected_low_odds:
         log(f"   🔑 Bet Builder Filter: {_rejected_too_few_legs} mit <2 Legs verworfen, {_rejected_low_odds} mit Quote<1.80 verworfen")
 
-    # 🆕 BTTS-Tipps als Bet Builder — wenn top_btts_tips übergeben und genug vorhanden
-    if top_btts_tips and len(top_btts_tips) >= 2:
+    # 🆕 BTTS-Tipps als Bet Builder — optional.
+    # V31: Standard AUS, damit der Prop-Kanal nicht mit Team-BTTS-Kombis zugemüllt wird.
+    # Aktivieren mit ENABLE_BTTS_AS_PROP_BUILDER=true.
+    if env("ENABLE_BTTS_AS_PROP_BUILDER", "false").lower() in ["1", "true", "yes"] and top_btts_tips and len(top_btts_tips) >= 2:
         log(f"   🔑 Verwende {len(top_btts_tips)} BTTS-Tipps als Bet Builder Beine...")
         prop_chat = TELEGRAM_GROUPS.get("advanced_props") or TELEGRAM_GROUPS.get("props")
 
@@ -22617,8 +22759,15 @@ def run_pinnacle_props_bot(win_start_utc=None, win_end_utc=None, ch_tz=None, top
                     _value_sent += 1
                     log(f"   🎯 Value Alert: {player} {value_info['market']} +{value_info['edge_pct']}%")
 
+    # V31 CLEAN: Alte Pinnacle-Bet-Builder mit generischen Team-/Total-Goals-Legs nicht mehr senden.
+    # Die echten Player-Props gehen über netrattler_builder_engine.py.
+    if str(env("ENABLE_LEGACY_PINNACLE_BUILDER", "false")).lower() not in ["1", "true", "yes", "on"]:
+        if builders:
+            log(f"🔑 Legacy Pinnacle Bet Builder übersprungen: {len(builders)} generische Builder (V31 Player-Prop Engine aktiv)")
+        builders = []
+
     if not builders:
-        log("🔑 Pinnacle Props: keine Same-Match-Builder aus Pinnacle-Specials")
+        log("🔑 Pinnacle Legacy Builder: keine Sendung (V31 Clean Mode)")
 
     # Nur valide Builder-Dictionaries weiterverarbeiten.
     _invalid_builders = sum(1 for item in builders if not isinstance(item, dict))
@@ -24675,8 +24824,12 @@ def main():
         from netrattler_builder_engine import run_builder_engine, build_builder_picks
         _builder_prop_pool = []
 
-        # Kandidaten aus allen Quellen sammeln (Prop Builder Pool)
-        for _mk, _tips in tips_by_market.items():
+        # Kandidaten aus normalen Team-Tipps nur optional.
+        # V31 CLEAN: Prop Builder soll echte Spielerprops senden, keine BTTS/Over-Team-Builder.
+        _allow_team_legs_for_builder = str(env("ENABLE_TEAM_LEGS_IN_PROP_BUILDER", "false")).lower() in ["1", "true", "yes", "on"]
+        if _allow_team_legs_for_builder:
+            log("   🏗️ Team-Legs im Prop Builder aktiviert (ENABLE_TEAM_LEGS_IN_PROP_BUILDER=true)")
+        for _mk, _tips in (tips_by_market.items() if _allow_team_legs_for_builder else []):
             for _t in _tips:
                 _match_n = _t.get("match", "")
                 _parts = _match_n.split(" vs ") if " vs " in _match_n else [_match_n, ""]
@@ -24754,8 +24907,7 @@ def main():
             _builder_chat = TELEGRAM_GROUPS.get("advanced_props") or TELEGRAM_GROUPS.get("props")
             if _builder_chat:
                 def _send_builder(msg):
-                    enhanced = _ntr_enhance_message_with_stats(msg, _builder_chat)
-                    send_telegram(enhanced, chat_id=_builder_chat)
+                    send_telegram(msg, chat_id=_builder_chat)
 
                 _sent_n, _picks = run_builder_engine(
                     raw_props=_builder_prop_pool,
@@ -24781,7 +24933,10 @@ def main():
 
     if len(all_tips_flat) >= 3:
         log("")
-        log("🎰 Generiere Multi-Combos (3-11 Tipps)...")
+        _combo_sizes = [3, 4, 5, 6]
+        if str(env("ENABLE_LOTTERY_COMBOS", "false")).lower() in ["1", "true", "yes", "on"]:
+            _combo_sizes += [7, 8, 9, 10, 11]
+        log(f"🎰 Generiere Multi-Combos ({','.join(str(x) for x in _combo_sizes)} Tipps)...")
         combo_chat = TELEGRAM_GROUPS.get("combos", TELEGRAM_CHAT_ID)  # Multi-Combos
 
         # Header für Combo Channel
@@ -24790,10 +24945,10 @@ def main():
         combo_header += f"<i>Basis: {len(all_tips_flat)} Top-Tipps</i>"
         send_telegram(combo_header, combo_chat)
 
-        # Alle Combo-Größen generieren (3 bis 11)
+        # V31 CLEAN: normale Combos 3-6. 7-11 nur mit ENABLE_LOTTERY_COMBOS=true.
         _combo_run_ts = datetime.now(timezone.utc).strftime("%H%M%S")
         generated = 0
-        for n in [3, 4, 5, 6, 7, 8, 9, 10, 11]:
+        for n in _combo_sizes:
             combo = generate_multi_combo_bets(all_tips_flat, num_tips=n)
             if combo:
                 # Deterministische Signatur — identische Kombi (gleiche Legs) wird nicht erneut gesendet
@@ -24806,10 +24961,6 @@ def main():
                 log(f"   {combo['label']}: Quote {combo['total_odds']}")
                 msg = format_combo_telegram_message(combo)
                 if msg:
-                    try:
-                        msg = _ntr_enhance_message_with_stats(msg, combo_chat)
-                    except Exception:
-                        pass
                     _combo_mid = send_telegram(msg, combo_chat)
                     generated += 1
                     try:
