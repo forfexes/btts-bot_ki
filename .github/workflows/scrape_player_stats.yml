@@ -2,7 +2,7 @@ name: NETRATTLER Player Stats + Results Scraper
 
 on:
   schedule:
-    - cron: "0 2 * * *"   # Täglich 02:00 UTC (nach Ende der meisten Abendspiele)
+    - cron: "0 2 * * *"
   workflow_dispatch:
     inputs:
       date:
@@ -29,9 +29,13 @@ jobs:
 
       - name: Install Dependencies
         run: |
+          python -m pip install --upgrade pip
           pip install -r requirements.txt || pip install requests cloudscraper supabase python-dotenv
-          pip install playwright
-          playwright install chromium --with-deps
+          pip install -r requirements_all_source.txt
+          python -m playwright install chromium --with-deps
+
+      - name: Compile Scraper
+        run: python -m py_compile scrape_player_stats.py
 
       - name: Run Scraper
         env:
@@ -40,6 +44,17 @@ jobs:
           SUPABASE_SERVICE_ROLE_KEY: ${{ secrets.SUPABASE_SERVICE_ROLE_KEY }}
           TELEGRAM_TOKEN: ${{ secrets.TELEGRAM_TOKEN }}
           TELEGRAM_GROUP_STATS: ${{ secrets.TELEGRAM_GROUP_STATS }}
+
+          # Source-Schalter:
+          # SofaScore/FBref sind bei dir aktuell 403, deshalb default AUS.
+          USE_SOFASCORE: "false"
+          USE_FOTMOB: "true"
+          USE_STATSBOMB: "true"
+          USE_FBREF: "false"
+          USE_SOCCERDATA: "true"
+          ENABLE_SOCCERDATA: "1"
+          SOURCE_MAX_EVENTS: "60"
+          SOURCE_SLEEP: "0.10"
         run: |
           if [ -n "${{ github.event.inputs.date }}" ]; then
             ARGS="--date ${{ github.event.inputs.date }}"
