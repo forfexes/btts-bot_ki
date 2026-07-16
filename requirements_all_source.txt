@@ -1,12 +1,13 @@
 requests>=2.31.0
 python-dateutil>=2.8.2
+python-dotenv>=1.0.0
 pandas>=2.0.0
-# Optional. Der Harvester läuft auch ohne aktives soccerdata,
-# aber wenn ENABLE_SOCCERDATA=1 gesetzt wird, ist es installiert.
-soccerdata>=1.8.7
-
-# V30 optional source packages; adapters degrade gracefully if unavailable
-rapidfuzz>=3.0.0
+numpy>=1.26.0
+cloudscraper>=1.2.71
 beautifulsoup4>=4.12.0
-lxml>=4.9.0
-# livescore-api is optional and disabled unless ENABLE_LIVESCORE_API=1
+lxml>=5.0.0
+html5lib>=1.1
+requests-cache>=1.2.0
+rapidfuzz>=3.0.0
+soccerdata
+playwright>=1.45.0
