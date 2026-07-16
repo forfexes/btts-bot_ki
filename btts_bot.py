@@ -23173,6 +23173,28 @@ def get_bet365_quote_any_source(tip: Dict, odds_data: Optional[List] = None) -> 
                                     continue
                                 return float(outcome.get("price", 0)), "odds_data"
 
+    # 3. Persistierter Multi-Bookmaker-Harvester: Bet365/OddsPortal/Pinnacle/Betfair/etc.
+    try:
+        from netrattler_odds_harvester import get_best_quote_from_supabase
+        lookup = {
+            "btts": [("btts", "yes")],
+            "over25": [("totals", "over_2_5")],
+            "home_win": [("1x2", "home")],
+            "draw": [("1x2", "draw")],
+            "away_win": [("1x2", "away")],
+        }
+        if market == "combo":
+            qb = get_best_quote_from_supabase(home, away, "btts", "yes")
+            qo = get_best_quote_from_supabase(home, away, "totals", "over_2_5")
+            if qb and qo:
+                return round(float(qb[0]) * float(qo[0]), 4), f"odds_history:{qb[1]}+{qo[1]}"
+        for hist_market, selection in lookup.get(market, []):
+            found = get_best_quote_from_supabase(home, away, hist_market, selection)
+            if found and found[0] > 1.0:
+                return float(found[0]), f"odds_history:{found[1]}"
+    except Exception:
+        pass
+
     return None, "none"
 
 
