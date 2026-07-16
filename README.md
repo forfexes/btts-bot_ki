@@ -1,44 +1,47 @@
-# NETRATTLER V30
+# NETRATTLER V34 — All Sources + ML + Bookmaker Odds
 
-Football analytics / Telegram tip bot with modular source, identity, builder, settlement and ML layers.
+## Replace/add these files
+- `scrape_player_stats.py`
+- `train_model.py`
+- `netrattler_odds_harvester.py`
+- `netrattler_all_source_harvester.py`
+- `import_football_data_sources_v14.py`
+- `netrattler_source_hub.py`
+- `netrattler_builder_engine.py`
+- `btts_bot.py`
+- `requirements_all_source.txt`
+- `requirements_train.txt`
+- workflows in `.github/workflows/`
 
-## V30 Source Stack
+## Data routing
+- Match/results sources -> `match_results`, `football_historical_matches`, data lake
+- Player/event sources -> `player_match_stats`, data lake
+- Identity sources -> canonical Reep/OpenFootball mapping
+- Bookmaker sources -> `odds_history`, fallback data lake, local snapshot
+- ML reads match results, historical matches, player stats and odds history, then fuses duplicate matches instead of discarding richer rows
+- Bot/Builder reads the live odds pipeline first and `odds_history` as runtime fallback
 
-Integrated as guarded adapters with timeout, cache, health checks and fallback behavior:
+## Source fallback order
+Every adapter catches its own error and continues. No free source is allowed to stop the run.
 
-- probberechts/soccerdata
-- statsbomb/open-data
-- davidrocha9/fotmob-scraper concepts
-- withqwerty/reep identity mapping concepts
-- OddsHarvester as optional CLV/OddsPortal fallback
-- Simatwa/livescore-api as optional guarded settlement fallback
-- openfootball/football.json
-- openfootball/worldcup.json
-- openfootball/south-america
-- openfootball/europe
-- openfootball/champions-league
-- openfootball/internationals
-- openfootball/players
-- openfootball/clubs
-- salimt/football-datasets
-- eddwebster/football_analytics feature catalog
+### Results/history
+OpenFootball JSON + Football.TXT repos, martj42, ESPN, TheSportsDB, OpenLigaDB, Football-Data.co.uk, Supabase results.
 
-Every source may fail without stopping the main bot.
+### Player data
+StatsBomb open data, FotMob direct, Soccerdata adapters (FBref, Sofascore, Understat, ESPN, Football-Data, WhoScored where available), SofaScore direct, FBref Playwright, salimt datasets.
 
-## Important modules
+### Identity
+Reep plus OpenFootball players/clubs.
 
-- `btts_bot.py` — main Telegram bot
-- `scrape_player_stats.py` — result + player-stat scraper
-- `netrattler_builder_engine.py` — pure builder engine
-- `netrattler_identity_hub.py` — team/player alias matching
-- `netrattler_source_hub.py` — GitHub/OpenFootball/source adapters
-- `netrattler_feature_hub.py` — football_analytics-inspired feature recipes
-- `netrattler_settlement_v16_final.py` — settlement with SourceHub fallbacks
+### Odds/bookmakers
+Football-Data historical bookmaker columns; Pinnacle guest; The Odds API when a key exists; OddsHarvester/OddsPortal all-bookmaker pass; explicit Bet365 pass; direct public Bet365 Playwright best effort; official Betfair API when credentials exist.
 
-## Tests
+Direct Bet365 scraping is inherently fragile and may be blocked. The stable Bet365 fallbacks are Football-Data historical B365 columns and OddsPortal/OddsHarvester bookmaker filtering. No anti-bot bypass or login circumvention is implemented.
 
-```bash
-python -m py_compile btts_bot.py netrattler_builder_engine.py netrattler_settlement_v16_final.py netrattler_source_hub.py netrattler_identity_hub.py netrattler_feature_hub.py scrape_player_stats.py
-python test_netrattler_core.py
-python test_source_hub_v30.py
-```
+## Run order
+1. Historical All Sources Import V34 (first run/manual, then weekly)
+2. Player Stats + Results Scraper V34
+3. Odds Harvester V34
+4. All Source Harvester V34
+5. ML Train V34 All Sources
+6. AI Tipp Bot
