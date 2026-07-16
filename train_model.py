@@ -24,7 +24,7 @@ from datetime import datetime, timezone
 
 # ML
 import xgboost as xgb
-from sklearn.model_selection import TimeSeriesSplit
+from sklearn.model_selection import TimeSeriesSplit, StratifiedKFold
 from sklearn.calibration import CalibratedClassifierCV
 from sklearn.metrics import brier_score_loss, roc_auc_score
 
@@ -604,6 +604,50 @@ def compute_form_features(df, n=10):
 
 
 # ═══════════════════════════════════════════════════════════════════════════════
+# 4A. ROBUSTE KALIBRIERUNG — kein Crash bei einseitigen CV-Folds
+# ═══════════════════════════════════════════════════════════════════════════════
+
+def _safe_fit_classifier(base_model, X, y, model_name, prefer_calibration=True):
+    """
+    Trainiert robust:
+    - StratifiedKFold statt TimeSeriesSplit, damit jeder Fold beide Klassen hat.
+    - Wenn zu wenig Minderheitsklasse vorhanden ist: ohne Calibration trainieren.
+    - Wenn Calibration trotzdem crasht: Fallback auf unkalibrierten XGBoost.
+    """
+    y_arr = np.asarray(y).astype(int)
+    classes, counts = np.unique(y_arr, return_counts=True)
+    if len(classes) < 2:
+        raise ValueError(f"{model_name}: only one class in target")
+
+    minority = int(counts.min())
+    if (not prefer_calibration) or minority < 2:
+        print(f"   ⚠️ Calibration AUS: Minderheitsklasse nur {minority} Samples")
+        base_model.fit(X, y_arr)
+        return base_model
+
+    n_splits = max(2, min(3, minority))
+    cv = StratifiedKFold(n_splits=n_splits, shuffle=True, random_state=42)
+
+    try:
+        calibrated = CalibratedClassifierCV(base_model, method="sigmoid", cv=cv)
+        calibrated.fit(X, y_arr)
+        return calibrated
+    except Exception as e:
+        print(f"   ⚠️ Calibration-Fallback für {model_name}: {str(e)[:120]}")
+        base_model.fit(X, y_arr)
+        return base_model
+
+
+def _safe_auc(y_true, proba):
+    try:
+        if len(np.unique(y_true)) < 2:
+            return 0.5
+        return roc_auc_score(y_true, proba)
+    except Exception:
+        return 0.5
+
+
+# ═══════════════════════════════════════════════════════════════════════════════
 # 4. MODELL TRAINIEREN
 # ═══════════════════════════════════════════════════════════════════════════════
 
@@ -701,18 +745,17 @@ def train_model(df, target_col, model_name):
         n_jobs=-1,
     )
 
-    # 🆕 Time-Series-CV Splits anpassen an Datensatzgrösse
-    n_splits = min(3, max(2, len(X) // 500))
-    tscv = TimeSeriesSplit(n_splits=n_splits)
-    calibrated = CalibratedClassifierCV(base_model, method="isotonic", cv=tscv)
-    calibrated.fit(X, y)
+    # V32B: robuste Calibration.
+    # TimeSeriesSplit kann bei schiefen Targets einzelne Folds mit nur einer Klasse erzeugen
+    # und XGBoost crasht dann: "Expected [0], got [1]".
+    calibrated = _safe_fit_classifier(base_model, X, y, model_name)
 
     # Evaluierung auf letzten 20% (Out-of-Sample)
     split = int(len(X) * 0.8)
     X_eval, y_eval = X[split:], y[split:]
     proba = calibrated.predict_proba(X_eval)[:, 1]
     brier = brier_score_loss(y_eval, proba)
-    auc = roc_auc_score(y_eval, proba)
+    auc = _safe_auc(y_eval, proba)
     print(f"   ✅ Brier Score: {brier:.4f} (niedriger = besser, Baseline ~0.24)")
     print(f"   ✅ ROC-AUC:     {auc:.4f} (höher = besser, Zuffall = 0.5)")
 
@@ -969,17 +1012,12 @@ def train_player_prop_model(dfp, stat, line, model_name):
         random_state=42,
         n_jobs=-1,
     )
-    n_splits = min(3, max(2, len(X) // 400))
-    calibrated = CalibratedClassifierCV(base_model, method="isotonic", cv=TimeSeriesSplit(n_splits=n_splits))
-    calibrated.fit(X, y)
+    calibrated = _safe_fit_classifier(base_model, X, y, model_name)
 
     split = int(len(X) * 0.8)
     proba = calibrated.predict_proba(X[split:])[:, 1]
     brier = brier_score_loss(y[split:], proba)
-    try:
-        auc = roc_auc_score(y[split:], proba)
-    except Exception:
-        auc = 0.5
+    auc = _safe_auc(y[split:], proba)
 
     print(f"   ✅ Brier Score: {brier:.4f}")
     print(f"   ✅ ROC-AUC:     {auc:.4f}")
@@ -1038,7 +1076,7 @@ def train_all_player_prop_models():
 # ═══════════════════════════════════════════════════════════════════════════════
 
 if __name__ == "__main__":
-    print("🧠 NETRATTLER ML-Training startet — TRAIN ALL CHANNELS V32...")
+    print("🧠 NETRATTLER ML-Training startet — TRAIN ALL POSSIBLE CHANNELS V32D...")
     print(f"   Zeitstempel: {datetime.now(timezone.utc).isoformat()}")
 
     # Daten laden
@@ -1084,14 +1122,9 @@ if __name__ == "__main__":
         # Combos
         "btts_over25_combo_model": "btts_over25",
 
-        # Half Time
+        # Half Time — alles, was als Kanal aktiv ist: BTTS HT + Over 1.5 HT
         "btts_ht_model": "btts_ht",
-        "over05_ht_model": "over05_ht",
         "over15_ht_model": "over15_ht",
-        "under15_ht_model": "under15_ht",
-        "home_win_ht_model": "home_win_ht",
-        "draw_ht_model": "draw_ht",
-        "away_win_ht_model": "away_win_ht",
 
         # Corners
         "corners_over65_model": "corners_over65",
@@ -1119,22 +1152,43 @@ if __name__ == "__main__":
 
     all_meta = {}
     for model_name, target_col in targets.items():
-        model, meta = train_model(df, target_col, model_name)
-        if model is None:
-            print(f"   ⏭️  {model_name} übersprungen: {meta.get('reason', 'unbekannt')}")
+        try:
+            model, meta = train_model(df, target_col, model_name)
+            if model is None:
+                print(f"   ⏭️  {model_name} übersprungen: {meta.get('reason', 'unbekannt')}")
+                all_meta[model_name] = meta
+                continue
+            save_model_to_supabase(model, meta)
             all_meta[model_name] = meta
-            continue
-        save_model_to_supabase(model, meta)
-        all_meta[model_name] = meta
+        except Exception as e:
+            print(f"   ⚠️ {model_name} Fehler, Training läuft weiter: {str(e)[:250]}")
+            all_meta[model_name] = {
+                "model_name": model_name,
+                "target_col": target_col,
+                "skipped": True,
+                "reason": str(e)[:500],
+                "trained_at": datetime.now(timezone.utc).isoformat(),
+            }
 
     # Player Props trainieren wir ebenfalls: alles, was aus player_match_stats ableitbar ist.
-    player_prop_meta = train_all_player_prop_models()
-    all_meta.update(player_prop_meta)
+    try:
+        player_prop_meta = train_all_player_prop_models()
+        all_meta.update(player_prop_meta)
+    except Exception as e:
+        print(f"   ⚠️ Player-Prop Training Fehler, Match-Modelle bleiben gespeichert: {str(e)[:250]}")
+        all_meta["player_props_training"] = {
+            "model_name": "player_props_training",
+            "skipped": True,
+            "reason": str(e)[:500],
+            "trained_at": datetime.now(timezone.utc).isoformat(),
+        }
 
     print("\n" + "="*60)
     print("✅ Training abgeschlossen!")
     for name, meta in all_meta.items():
-        if meta.get("skipped"):
+        if isinstance(meta, dict) and meta.get("skipped"):
             print(f"   {name}: ÜBERSPRUNGEN ({meta.get('reason')})")
+        elif isinstance(meta, dict):
+            print(f"   {name}: AUC={meta.get('roc_auc')}, Brier={meta.get('brier_score')}")
         else:
-            print(f"   {name}: AUC={meta['roc_auc']}, Brier={meta['brier_score']}")
+            print(f"   {name}: meta nicht lesbar")
