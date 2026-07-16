@@ -16,7 +16,7 @@ Features pro Spiel:
 - Elo-Differenz
 """
 
-import os, sys, json, math, base64, io, pickle
+import os, sys, json, math, base64, io, pickle, statistics
 import requests
 import numpy as np
 import pandas as pd
@@ -55,7 +55,13 @@ FD_CO_UK_LEAGUES = {
     "B1": "Jupiler Pro League", "T1": "Super Lig",
     "SC0": "Scottish Premiership", "G1": "Super League Greece",
 }
-FD_CO_UK_SEASONS = ["2021-22", "2022-23", "2023-24", "2024-25"]
+def _season_labels(start_year: int, end_year: int):
+    return [f"{y}-{str(y + 1)[-2:]}" for y in range(start_year, end_year + 1)]
+
+
+_FD_START_YEAR = int(os.environ.get("FD_START_YEAR", "2010"))
+_FD_END_YEAR = int(os.environ.get("FD_END_YEAR", str(datetime.now(timezone.utc).year)))
+FD_CO_UK_SEASONS = [x.strip() for x in os.environ.get("FD_SEASONS", "").split(",") if x.strip()] or _season_labels(_FD_START_YEAR, _FD_END_YEAR)
 
 
 # ── Elo-Konfiguration ─────────────────────────────────────────────────────────
@@ -68,9 +74,247 @@ ELO_HOME_ADV = 60
 # 1. DATEN LADEN
 # ═══════════════════════════════════════════════════════════════════════════════
 
+def _to_int_or_none(value):
+    try:
+        if value is None or value == "":
+            return None
+        return int(float(value))
+    except Exception:
+        return None
+
+
+def _to_float_or_none(value):
+    try:
+        if value is None or str(value).strip() == "":
+            return None
+        return float(str(value).strip().replace(",", "."))
+    except Exception:
+        return None
+
+
+def _parse_match_date(value):
+    raw = str(value or "").strip()
+    for fmt in ("%Y-%m-%d", "%d/%m/%Y", "%d/%m/%y", "%d.%m.%Y"):
+        try:
+            return datetime.strptime(raw[:10], fmt).date().isoformat()
+        except Exception:
+            pass
+    try:
+        return datetime.fromisoformat(raw.replace("Z", "+00:00")).date().isoformat()
+    except Exception:
+        return None
+
+
+def _norm_team(value):
+    import re as _re
+    value = str(value or "").lower().strip()
+    value = _re.sub(r"\b(fc|cf|ac|sc|sv|afc)\b", " ", value)
+    value = _re.sub(r"[^a-z0-9à-ž]+", " ", value, flags=_re.I)
+    return " ".join(value.split())
+
+
+def _match_key(match_date, home, away):
+    return f"{str(match_date)[:10]}|{_norm_team(home)}|{_norm_team(away)}"
+
+
+def _odds_richness(row):
+    return sum(1 for k in [
+        "odd_home", "odd_draw", "odd_away", "over25_odds", "under25_odds",
+        "bet365_home", "bet365_draw", "bet365_away", "pinnacle_home", "pinnacle_draw", "pinnacle_away",
+    ] if row.get(k) not in (None, ""))
+
+
+def _row_stat_richness(row):
+    """Used before dedup: keep Football-Data/Supabase rows with corners/cards/shots over empty GitHub rows."""
+    score = 0
+    for k in ["shots_home", "shots_away", "corners_home", "corners_away", "cards_home", "cards_away"]:
+        v = row.get(k)
+        if v is not None and v != "":
+            score += 1
+    return score
+
+
+def _fetch_supabase_rows(table, select="*", order=None, limit_total=50000):
+    if not SUPABASE_URL or not SUPABASE_KEY:
+        return []
+    headers = {
+        "apikey": SUPABASE_KEY,
+        "Authorization": f"Bearer {SUPABASE_KEY}",
+    }
+    rows = []
+    step = 1000  # Supabase/PostgREST free projects often cap one request at 1000
+    for offset in range(0, limit_total, step):
+        params = {"select": select, "limit": step, "offset": offset}
+        if order:
+            params["order"] = order
+        try:
+            r = requests.get(f"{SUPABASE_URL}/rest/v1/{table}", headers=headers, params=params, timeout=45)
+            if not r.ok:
+                print(f"  ⚠️  Supabase {table}: {r.status_code} {r.text[:200]}")
+                break
+            batch = r.json()
+            if not batch:
+                break
+            rows.extend(batch)
+            if len(batch) < step:
+                break
+        except Exception as e:
+            print(f"  ⚠️  Supabase {table}: {e}")
+            break
+    return rows
+
+
+def _normalize_result_row(row, default_source="supabase"):
+    home = row.get("home") or row.get("home_team")
+    away = row.get("away") or row.get("away_team")
+    hg = row.get("home_goals", row.get("home_score"))
+    ag = row.get("away_goals", row.get("away_score"))
+    dt = row.get("date") or row.get("match_date")
+    if not home or not away or hg is None or ag is None or not dt:
+        return None
+    try:
+        hg = int(float(hg))
+        ag = int(float(ag))
+    except Exception:
+        return None
+
+    return {
+        "date": dt,
+        "season": str(dt)[:4],
+        "league": row.get("league") or row.get("competition") or "Supabase Results",
+        "source": row.get("source") or default_source,
+        "home": str(home).strip(),
+        "away": str(away).strip(),
+        "home_goals": hg,
+        "away_goals": ag,
+        "ht_home": _to_int_or_none(row.get("ht_home")) or 0,
+        "ht_away": _to_int_or_none(row.get("ht_away")) or 0,
+        "shots_home": _to_int_or_none(row.get("shots_home") or row.get("home_shots") or row.get("HS")),
+        "shots_away": _to_int_or_none(row.get("shots_away") or row.get("away_shots") or row.get("AS")),
+        "corners_home": _to_int_or_none(row.get("corners_home") or row.get("home_corners") or row.get("HC")),
+        "corners_away": _to_int_or_none(row.get("corners_away") or row.get("away_corners") or row.get("AC")),
+        "cards_home": _to_int_or_none(row.get("cards_home") or row.get("home_cards") or row.get("HY") or row.get("home_yellow")),
+        "cards_away": _to_int_or_none(row.get("cards_away") or row.get("away_cards") or row.get("AY") or row.get("away_yellow")),
+        "match_id": row.get("match_id") or row.get("event_id"),
+        "odd_home": _to_float_or_none(row.get("odd_home") or row.get("odds_home")),
+        "odd_draw": _to_float_or_none(row.get("odd_draw") or row.get("odds_draw")),
+        "odd_away": _to_float_or_none(row.get("odd_away") or row.get("odds_away")),
+        "over25_odds": _to_float_or_none(row.get("over25_odds") or row.get("odds_over25")),
+        "under25_odds": _to_float_or_none(row.get("under25_odds") or row.get("odds_under25")),
+    }
+
+
+
+def _load_supabase_match_table(table: str, limit_total: int = 100000):
+    rows = []
+    for row in _fetch_supabase_rows(table, select="*", order="match_date.asc", limit_total=limit_total):
+        norm = _normalize_result_row(row, table)
+        if norm:
+            rows.append(norm)
+    print(f"   ✅ Supabase {table}: {len(rows)} Spiele")
+    return rows
+
+
+def _load_odds_history(limit_total: int = 200000):
+    print("📥 Lade Supabase odds_history (alle Bookies)...")
+    raw = _fetch_supabase_rows(
+        "odds_history", select="*", order="match_date.asc,captured_date.asc", limit_total=limit_total
+    )
+    by_key = {}
+    for row in raw:
+        dt = _parse_match_date(row.get("match_date"))
+        home, away = row.get("home_team"), row.get("away_team")
+        odd = _to_float_or_none(row.get("odds"))
+        if not dt or not home or not away or not odd:
+            continue
+        key = _match_key(dt, home, away)
+        by_key.setdefault(key, []).append(row)
+    print(f"   ✅ odds_history: {len(raw)} Rows / {len(by_key)} Matches")
+    return by_key
+
+
+def _merge_odds_into_match(row, odds_rows):
+    if not odds_rows:
+        return row
+    buckets = {}
+    for o in odds_rows:
+        market = str(o.get("market") or "").lower()
+        book = str(o.get("bookmaker") or "").lower()
+        sel = str(o.get("selection") or "").lower()
+        odd = _to_float_or_none(o.get("odds"))
+        if odd:
+            buckets.setdefault((market, sel), []).append((book, odd))
+
+    def values(market_names, selections):
+        vals = []
+        for (market, sel), items in buckets.items():
+            if any(m in market for m in market_names) and any(s == sel or s in sel for s in selections):
+                vals.extend(items)
+        return vals
+
+    def consensus(items):
+        nums = [v for _, v in items if v and v > 1]
+        return statistics.median(nums) if nums else None
+
+    def book(items, names):
+        for name in names:
+            vals = [v for b, v in items if name in b]
+            if vals:
+                return vals[-1]
+        return None
+
+    hv, dv, av = values(["1x2", "h2h", "match_odds"], ["home"]), values(["1x2", "h2h", "match_odds"], ["draw"]), values(["1x2", "h2h", "match_odds"], ["away"])
+    ov, uv = values(["total", "over_under"], ["over_2_5", "over_2.5", "over"]), values(["total", "over_under"], ["under_2_5", "under_2.5", "under"])
+    for k, v in {
+        "odd_home": consensus(hv), "odd_draw": consensus(dv), "odd_away": consensus(av),
+        "over25_odds": consensus(ov), "under25_odds": consensus(uv),
+        "bet365_home": book(hv, ["bet365"]), "bet365_draw": book(dv, ["bet365"]), "bet365_away": book(av, ["bet365"]),
+        "pinnacle_home": book(hv, ["pinnacle"]), "pinnacle_draw": book(dv, ["pinnacle"]), "pinnacle_away": book(av, ["pinnacle"]),
+        "betfair_home": book(hv, ["betfair"]), "betfair_draw": book(dv, ["betfair"]), "betfair_away": book(av, ["betfair"]),
+        "bet365_over25": book(ov, ["bet365"]), "bet365_under25": book(uv, ["bet365"]),
+        "pinnacle_over25": book(ov, ["pinnacle"]), "pinnacle_under25": book(uv, ["pinnacle"]),
+    }.items():
+        if row.get(k) in (None, "") and v is not None:
+            row[k] = v
+    row["odds_source_count"] = len({str(o.get("bookmaker") or "") for o in odds_rows})
+    return row
+
+
+def _fuse_match_group(group):
+    """Fuse fields from all sources instead of dropping useful duplicate-source columns."""
+    group = list(group)
+    group.sort(key=lambda r: (_row_stat_richness(r), _odds_richness(r)), reverse=True)
+    out = dict(group[0])
+    all_keys = set().union(*(r.keys() for r in group))
+    for key in all_keys:
+        _current = out.get(key)
+        _missing = _current is None or _current == ""
+        try:
+            _missing = _missing or (isinstance(_current, float) and math.isnan(_current))
+        except Exception:
+            pass
+        if _missing:
+            for row in group[1:]:
+                value = row.get(key)
+                if value is not None and value != "":
+                    try:
+                        if isinstance(value, float) and math.isnan(value):
+                            continue
+                    except Exception:
+                        pass
+                    out[key] = value
+                    break
+    out["source_count"] = len({str(r.get("source") or "unknown") for r in group})
+    out["sources"] = ",".join(sorted({str(r.get("source") or "unknown") for r in group}))[:1000]
+    return out
+
+
 def load_all_matches():
     """Lädt alle verfügbaren Spiele aus mehreren Quellen."""
     all_rows = []
+
+    print("📥 ML-Quellen aktiv: openfootball GitHub, Football-Data.co.uk, martj42 GitHub, Supabase ml_tips, Supabase match_results, Supabase player_match_stats")
+    print("   Hinweis: GitHub Registry ist Quellen-Metadaten. Trainiert wird mit geladenen Match-/Player-Daten aus diesen Quellen.")
 
     # ── 1. openfootball (JSON, mehrere Saisons) ────────────────────────────
     print("📥 Lade openfootball Daten...")
@@ -94,6 +338,8 @@ def load_all_matches():
                         "date": match.get("date", ""),
                         "season": season,
                         "league": league,
+                        "source": "openfootball/football.json",
+                        "match_id": None,
                         "home": match.get("team1", "").replace(" FC", "").replace(" CF", "").strip(),
                         "away": match.get("team2", "").replace(" FC", "").replace(" CF", "").strip(),
                         "home_goals": int(ft[0]),
@@ -127,22 +373,50 @@ def load_all_matches():
                 try:
                     if not row.get("HomeTeam") or not row.get("FTHG"):
                         continue
+                    _date = _parse_match_date(row.get("Date"))
+                    _home = row.get("HomeTeam", "").strip()
+                    _away = row.get("AwayTeam", "").strip()
+                    if not _date or not _home or not _away:
+                        continue
                     all_rows.append({
-                        "date": row.get("Date", ""),
+                        "date": _date,
                         "season": season_str,
                         "league": FD_CO_UK_LEAGUES[league_code],
-                        "home": row.get("HomeTeam", "").strip(),
-                        "away": row.get("AwayTeam", "").strip(),
-                        "home_goals": int(row.get("FTHG", 0) or 0),
-                        "away_goals": int(row.get("FTAG", 0) or 0),
-                        "ht_home": int(row.get("HTHG", 0) or 0),
-                        "ht_away": int(row.get("HTAG", 0) or 0),
-                        "shots_home": int(row.get("HS", 0) or 0),
-                        "shots_away": int(row.get("AS", 0) or 0),
-                        "corners_home": int(row.get("HC", 0) or 0),
-                        "corners_away": int(row.get("AC", 0) or 0),
-                        "cards_home": int(row.get("HY", 0) or 0),
-                        "cards_away": int(row.get("AY", 0) or 0),
+                        "source": "football_data_co_uk",
+                        "match_id": f"fd_{season_str}_{league_code}_{_norm_team(_home)}_{_norm_team(_away)}_{_date}",
+                        "home": _home,
+                        "away": _away,
+                        "home_goals": _to_int_or_none(row.get("FTHG")),
+                        "away_goals": _to_int_or_none(row.get("FTAG")),
+                        "ht_home": _to_int_or_none(row.get("HTHG")),
+                        "ht_away": _to_int_or_none(row.get("HTAG")),
+                        "shots_home": _to_float_or_none(row.get("HS")),
+                        "shots_away": _to_float_or_none(row.get("AS")),
+                        "sot_home": _to_float_or_none(row.get("HST")),
+                        "sot_away": _to_float_or_none(row.get("AST")),
+                        "corners_home": _to_float_or_none(row.get("HC")),
+                        "corners_away": _to_float_or_none(row.get("AC")),
+                        "cards_home": _to_float_or_none(row.get("HY")),
+                        "cards_away": _to_float_or_none(row.get("AY")),
+                        # Bet365 + Pinnacle + Betfair/market consensus. All are pre-match odds.
+                        "bet365_home": _to_float_or_none(row.get("B365CH") or row.get("B365H")),
+                        "bet365_draw": _to_float_or_none(row.get("B365CD") or row.get("B365D")),
+                        "bet365_away": _to_float_or_none(row.get("B365CA") or row.get("B365A")),
+                        "pinnacle_home": _to_float_or_none(row.get("PSCH") or row.get("PSH") or row.get("PH")),
+                        "pinnacle_draw": _to_float_or_none(row.get("PSCD") or row.get("PSD") or row.get("PD")),
+                        "pinnacle_away": _to_float_or_none(row.get("PSCA") or row.get("PSA") or row.get("PA")),
+                        "betfair_home": _to_float_or_none(row.get("BFEH") or row.get("BFH")),
+                        "betfair_draw": _to_float_or_none(row.get("BFED") or row.get("BFD")),
+                        "betfair_away": _to_float_or_none(row.get("BFEA") or row.get("BFA")),
+                        "odd_home": _to_float_or_none(row.get("AvgH") or row.get("B365CH") or row.get("B365H") or row.get("PSH")),
+                        "odd_draw": _to_float_or_none(row.get("AvgD") or row.get("B365CD") or row.get("B365D") or row.get("PSD")),
+                        "odd_away": _to_float_or_none(row.get("AvgA") or row.get("B365CA") or row.get("B365A") or row.get("PSA")),
+                        "over25_odds": _to_float_or_none(row.get("Avg>2.5") or row.get("B365>2.5") or row.get("P>2.5")),
+                        "under25_odds": _to_float_or_none(row.get("Avg<2.5") or row.get("B365<2.5") or row.get("P<2.5")),
+                        "bet365_over25": _to_float_or_none(row.get("B365>2.5")),
+                        "bet365_under25": _to_float_or_none(row.get("B365<2.5")),
+                        "pinnacle_over25": _to_float_or_none(row.get("P>2.5")),
+                        "pinnacle_under25": _to_float_or_none(row.get("P<2.5")),
                     })
                     fd_count += 1
                 except (ValueError, TypeError):
@@ -172,6 +446,8 @@ def load_all_matches():
                         "date": date_str,
                         "season": date_str[:4],
                         "league": "International",
+                        "source": "martj42/international_results",
+                        "match_id": None,
                         "home": row.get("home_team", "").strip(),
                         "away": row.get("away_team", "").strip(),
                         "home_goals": int(row.get("home_score", 0) or 0),
@@ -227,15 +503,51 @@ def load_all_matches():
             print(f"  ⚠️  Supabase ml_tips: {e}")
         print(f"   ✅ Supabase ml_tips: {supabase_count} eigene Spiele")
 
+# ── 5. Supabase match_results (Result-Scraper/Source-Hub Output) ───────
+    print("📥 Lade Supabase match_results...")
+    mr_count = 0
+    for row in _fetch_supabase_rows("match_results", select="*", order="match_date.asc", limit_total=30000):
+        norm = _normalize_result_row(row, "supabase_match_results")
+        if norm:
+            all_rows.append(norm)
+            mr_count += 1
+    print(f"   ✅ Supabase match_results: {mr_count} Spiele")
+
+    # V34: Import-Harvester tables contain many more GitHub/Open-Source historical matches.
+    all_rows.extend(_load_supabase_match_table("football_historical_matches", limit_total=150000))
+
+    # Merge every bookmaker/source from odds_history into matching games.
+    odds_by_key = _load_odds_history(limit_total=250000)
+    for _row in all_rows:
+        _dt = _parse_match_date(_row.get("date"))
+        if _dt:
+            _row["date"] = _dt
+            _merge_odds_into_match(_row, odds_by_key.get(_match_key(_dt, _row.get("home"), _row.get("away")), []))
+
     # Sortieren nach Datum
     df = pd.DataFrame(all_rows)
     df["date"] = pd.to_datetime(df["date"], errors="coerce")
     df = df.dropna(subset=["date", "home", "away"]).sort_values("date").reset_index(drop=True)
 
-    # Duplikate entfernen (same match from multiple sources)
-    df["_dedup_key"] = df["home"].str.lower().str[:8] + "_" + df["away"].str.lower().str[:8] + "_" + df["date"].dt.strftime("%Y-%m-%d")
-    df = df.drop_duplicates(subset=["_dedup_key"]).drop(columns=["_dedup_key"])
-    df = df.reset_index(drop=True)
+    # Multi-source fusion: preserve stats/odds from every successful source.
+    stat_cols = ["shots_home", "shots_away", "corners_home", "corners_away", "cards_home", "cards_away"]
+    for _c in stat_cols:
+        if _c not in df.columns:
+            df[_c] = None
+    if "source" not in df.columns:
+        df["source"] = "unknown"
+    df["_dedup_key"] = df.apply(lambda r: _match_key(r["date"].date().isoformat(), r["home"], r["away"]), axis=1)
+    fused = []
+    for _, _g in df.groupby("_dedup_key", sort=False):
+        fused.append(_fuse_match_group(_g.drop(columns=["_dedup_key"]).to_dict("records")))
+    df = pd.DataFrame(fused)
+    df["date"] = pd.to_datetime(df["date"], errors="coerce")
+    df = df.sort_values("date").reset_index(drop=True)
+
+    print("   📊 Stat-Abdeckung nach Dedup:",
+          "shots", int(pd.to_numeric(df.get("shots_home"), errors="coerce").notna().sum()),
+          "corners", int(pd.to_numeric(df.get("corners_home"), errors="coerce").notna().sum()),
+          "cards", int(pd.to_numeric(df.get("cards_home"), errors="coerce").notna().sum()))
 
     print(f"\n✅ TOTAL: {len(df)} Spiele aus {df['league'].nunique()} Ligen, {df['date'].dt.year.nunique()} Jahre")
     print(f"   Datum: {df['date'].min().date()} bis {df['date'].max().date()}")
@@ -603,6 +915,54 @@ def compute_form_features(df, n=10):
     return df
 
 
+
+def add_market_odds_features(df):
+    """Pre-match bookmaker consensus features. Missing odds use neutral priors plus availability flags."""
+    for col in [
+        "odd_home", "odd_draw", "odd_away", "over25_odds", "under25_odds",
+        "bet365_home", "bet365_draw", "bet365_away", "pinnacle_home", "pinnacle_draw", "pinnacle_away",
+        "betfair_home", "betfair_draw", "betfair_away", "bet365_over25", "bet365_under25",
+        "pinnacle_over25", "pinnacle_under25", "source_count", "odds_source_count",
+    ]:
+        if col not in df.columns:
+            df[col] = np.nan
+        df[col] = pd.to_numeric(df[col], errors="coerce")
+
+    def implied(series):
+        return np.where(series > 1.0, 1.0 / series, np.nan)
+
+    home_p, draw_p, away_p = implied(df["odd_home"]), implied(df["odd_draw"]), implied(df["odd_away"])
+    total = home_p + draw_p + away_p
+    df["odds_available_1x2"] = np.where(np.isfinite(total), 1.0, 0.0)
+    df["market_margin_1x2"] = np.where(np.isfinite(total), total - 1.0, 0.0)
+    df["market_home_prob"] = np.where(np.isfinite(total) & (total > 0), home_p / total, 1/3)
+    df["market_draw_prob"] = np.where(np.isfinite(total) & (total > 0), draw_p / total, 1/3)
+    df["market_away_prob"] = np.where(np.isfinite(total) & (total > 0), away_p / total, 1/3)
+
+    over_p, under_p = implied(df["over25_odds"]), implied(df["under25_odds"])
+    total_ou = over_p + under_p
+    df["odds_available_ou25"] = np.where(np.isfinite(total_ou), 1.0, 0.0)
+    df["market_over25_prob"] = np.where(np.isfinite(total_ou) & (total_ou > 0), over_p / total_ou, 0.5)
+    df["market_under25_prob"] = np.where(np.isfinite(total_ou) & (total_ou > 0), under_p / total_ou, 0.5)
+
+    # Sharp/soft deltas: Pinnacle and Bet365 compared with consensus.
+    for side in ["home", "draw", "away"]:
+        consensus = pd.to_numeric(df[f"odd_{side}"], errors="coerce")
+        for book in ["pinnacle", "bet365", "betfair"]:
+            b = pd.to_numeric(df[f"{book}_{side}"], errors="coerce")
+            df[f"{book}_{side}_delta"] = np.where(
+                (b > 1) & (consensus > 1), (1 / b) - (1 / consensus), 0.0
+            )
+
+    df["source_count_norm"] = pd.to_numeric(df["source_count"], errors="coerce").fillna(1).clip(1, 10) / 10.0
+    df["odds_source_count_norm"] = pd.to_numeric(df["odds_source_count"], errors="coerce").fillna(0).clip(0, 20) / 20.0
+    stat_present = sum(pd.to_numeric(df.get(c), errors="coerce").notna().astype(int) for c in [
+        "shots_home", "shots_away", "corners_home", "corners_away", "cards_home", "cards_away"
+    ])
+    df["stat_coverage"] = stat_present / 6.0
+    return df
+
+
 # ═══════════════════════════════════════════════════════════════════════════════
 # 4A. ROBUSTE KALIBRIERUNG — kein Crash bei einseitigen CV-Folds
 # ═══════════════════════════════════════════════════════════════════════════════
@@ -673,6 +1033,14 @@ FEATURE_COLS = [
     "avg_shots_home", "avg_shots_away", "total_shots_exp",
     "avg_corners_home", "avg_corners_away", "total_corners_exp",
     "avg_cards_home", "avg_cards_away", "total_cards_exp",
+    # Multi-source + bookmaker market features
+    "source_count_norm", "stat_coverage", "odds_source_count_norm",
+    "odds_available_1x2", "market_margin_1x2",
+    "market_home_prob", "market_draw_prob", "market_away_prob",
+    "odds_available_ou25", "market_over25_prob", "market_under25_prob",
+    "pinnacle_home_delta", "pinnacle_draw_delta", "pinnacle_away_delta",
+    "bet365_home_delta", "bet365_draw_delta", "bet365_away_delta",
+    "betfair_home_delta", "betfair_draw_delta", "betfair_away_delta",
 ]
 
 
@@ -840,11 +1208,11 @@ PLAYER_STAT_ALIASES = {
 PLAYER_FEATURE_COLS = [
     "games_prior", "avg_minutes", "avg_shots", "avg_sot", "avg_goals", "avg_assists",
     "avg_passes", "avg_tackles", "avg_fouls_committed", "avg_fouls_won",
-    "avg_cards", "avg_corners",
+    "avg_cards", "avg_corners", "avg_source_count",
 ]
 
 
-def _safe_rest_get(table, params, page_size=5000, max_pages=6):
+def _safe_rest_get(table, params, page_size=1000, max_pages=60):
     if not SUPABASE_URL or not SUPABASE_KEY:
         return []
     headers = {
@@ -877,15 +1245,15 @@ def load_player_prop_training_frame():
     """Lädt player_match_stats und baut spielerbasierte Rolling-Features."""
     print("\n📥 Lade Player-Stats für Player-Prop Training...")
     select_cols = ",".join([
-        "event_id", "match_date", "league", "team", "player_id", "player_name",
+        "source", "event_id", "match_date", "league", "team", "player_id", "player_name",
         "stat_name", "stat_value", "minutes", "shots", "sot", "goals", "assists",
         "passes", "tackles", "fouls_committed", "fouls_won", "cards", "corners"
     ])
     raw = _safe_rest_get(
         "player_match_stats",
         {"select": select_cols, "order": "match_date.asc"},
-        page_size=5000,
-        max_pages=8,
+        page_size=1000,
+        max_pages=60,
     )
     if not raw:
         print("   ⚠️ Keine Player-Stats gefunden")
@@ -895,7 +1263,7 @@ def load_player_prop_training_frame():
     print(f"   ✅ player_match_stats geladen: {len(dfp)} Rows")
 
     # Basis-Keys
-    for c in ["event_id", "match_date", "league", "team", "player_id", "player_name"]:
+    for c in ["source", "event_id", "match_date", "league", "team", "player_id", "player_name"]:
         if c not in dfp.columns:
             dfp[c] = None
     dfp["player_key"] = dfp["player_id"].fillna("").astype(str)
@@ -937,6 +1305,9 @@ def load_player_prop_training_frame():
         return pd.DataFrame()
 
     combined = combined.groupby(["event_id", "match_date", "league", "team", "player_key", "player_name"], dropna=False)[stat_cols].max().reset_index()
+    source_counts = dfp.groupby(["event_id", "player_key"], dropna=False)["source"].nunique().rename("source_count").reset_index()
+    combined = combined.merge(source_counts, on=["event_id", "player_key"], how="left")
+    combined["source_count"] = pd.to_numeric(combined["source_count"], errors="coerce").fillna(1.0)
     combined["match_date"] = pd.to_datetime(combined["match_date"], errors="coerce")
     combined = combined.dropna(subset=["match_date", "player_key"]).sort_values(["player_key", "match_date"])
 
@@ -961,9 +1332,10 @@ def load_player_prop_training_frame():
 
         for stat in stat_cols:
             feat[f"avg_{stat}"] = avg_stat(stat, 0.0)
+        feat["avg_source_count"] = avg_stat("source_count", 1.0)
 
         rows.append(feat)
-        hist.setdefault(pk, []).append({s: float(row.get(s, 0.0)) for s in stat_cols})
+        hist.setdefault(pk, []).append({**{s: float(row.get(s, 0.0)) for s in stat_cols}, "source_count": float(row.get("source_count", 1.0))})
 
     out = pd.DataFrame(rows)
     for c in PLAYER_FEATURE_COLS:
@@ -1076,7 +1448,7 @@ def train_all_player_prop_models():
 # ═══════════════════════════════════════════════════════════════════════════════
 
 if __name__ == "__main__":
-    print("🧠 NETRATTLER ML-Training startet — TRAIN ALL POSSIBLE CHANNELS V32D...")
+    print("🧠 NETRATTLER ML-Training startet — TRAIN ALL SOURCES + ODDS V34...")
     print(f"   Zeitstempel: {datetime.now(timezone.utc).isoformat()}")
 
     # Daten laden
@@ -1087,6 +1459,8 @@ if __name__ == "__main__":
     df = compute_elo_ratings(df)
     print("📊 Berechne Form-Features...")
     df = compute_form_features(df)
+    print("📊 Berechne Multi-Source- und Bookmaker-Features...")
+    df = add_market_odds_features(df)
 
     # Targets definieren
     targets = {
