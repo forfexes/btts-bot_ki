@@ -1,72 +1,40 @@
-name: NETRATTLER V14 Supabase Data Imports
+name: NETRATTLER V34 Historical All Sources Import
 
 on:
   workflow_dispatch:
     inputs:
-      sources:
-        description: "all | clubelo,fdcouk,fpl,openfootball,extra_csv"
-        required: false
-        default: "all"
       max_rows:
-        description: "0 = kein Limit, sonst Testlimit pro Quelle"
+        description: "0 = unlimited; otherwise per source"
         required: false
         default: "0"
+  schedule:
+    - cron: "40 0 * * 0"
 
 jobs:
-  import-data:
+  import-history:
     runs-on: ubuntu-latest
     timeout-minutes: 360
-
     steps:
       - uses: actions/checkout@v4
-
       - uses: actions/setup-python@v5
         with:
           python-version: "3.11"
-
-      - name: Install dependencies
-        run: |
-          pip install requests pandas python-dotenv
-
-      - name: Try applying V14 SQL schema via psql
-        shell: bash
-        env:
-          SUPABASE_URL: ${{ secrets.SUPABASE_URL }}
-          SUPABASE_DB_URL: ${{ secrets.SUPABASE_DB_URL }}
-          DATABASE_URL: ${{ secrets.DATABASE_URL }}
-          SUPABASE_DB_PASSWORD: ${{ secrets.SUPABASE_DB_PASSWORD }}
-        run: |
-          set -e
-          sudo apt-get update
-          sudo apt-get install -y postgresql-client
-
-          DB_URL=""
-          if [ -n "$SUPABASE_DB_URL" ]; then
-            DB_URL="$SUPABASE_DB_URL"
-          elif [ -n "$DATABASE_URL" ]; then
-            DB_URL="$DATABASE_URL"
-          elif [ -n "$SUPABASE_DB_PASSWORD" ] && [ -n "$SUPABASE_URL" ]; then
-            PROJECT_REF=$(echo "$SUPABASE_URL" | sed -E 's#https://([^.]+)\.supabase\.co.*#\1#')
-            DB_URL="postgresql://postgres:${SUPABASE_DB_PASSWORD}@db.${PROJECT_REF}.supabase.co:5432/postgres?sslmode=require"
-          fi
-
-          if [ -z "$DB_URL" ]; then
-            echo "⚠️ Kein DB URL/DB Passwort Secret gefunden."
-            echo "⚠️ Schema wird nicht automatisch angelegt."
-            echo "⚠️ Setze SUPABASE_DB_PASSWORD oder SUPABASE_DB_URL, falls der Import wegen fehlender Tabellen scheitert."
-            exit 0
-          fi
-
-          psql "$DB_URL" -v ON_ERROR_STOP=1 -f supabase_v14_data_sources_schema.sql
-          echo "✅ V14 schema applied"
-
-      - name: Run V14 data importer
+          cache: "pip"
+      - name: Install
+        run: pip install requests pandas python-dateutil
+      - name: Compile
+        run: python -m py_compile import_football_data_sources_v14.py
+      - name: Import every free historical source; failures continue
         env:
           SUPABASE_URL: ${{ secrets.SUPABASE_URL }}
           SUPABASE_KEY: ${{ secrets.SUPABASE_KEY }}
-          IMPORT_SOURCES: ${{ github.event.inputs.sources }}
-          MAX_ROWS_PER_SOURCE: ${{ github.event.inputs.max_rows }}
-          FD_SEASONS: "2526,2425,2324"
-          IMPORT_CHUNK_SIZE: "500"
-        run: |
-          python import_football_data_sources_v14.py
+          SUPABASE_SERVICE_ROLE_KEY: ${{ secrets.SUPABASE_SERVICE_ROLE_KEY }}
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          IMPORT_SOURCES: "all"
+          MAX_ROWS_PER_SOURCE: ${{ github.event.inputs.max_rows || '0' }}
+          FD_SEASONS: "2526,2425,2324,2223,2122,2021,1920,1819,1718,1617,1516,1415,1314,1213,1112,1011"
+          GITHUB_MAX_FILES_PER_REPO: "120"
+          GITHUB_MIN_YEAR: "2000"
+          IMPORT_CHUNK_SIZE: "400"
+          IMPORT_TIMEOUT: "90"
+        run: python import_football_data_sources_v14.py
