@@ -2,7 +2,7 @@
 """
 NETRATTLER ML-Training-Script
 ==============================
-Trainiert XGBoost-Modelle für BTTS und Over2.5 aus openfootball-Daten.
+Trainiert XGBoost-Modelle für ALLE verfügbaren NETRATTLER-Kanäle: BTTS, Over/Under, HT, 1X2, Double Chance, Team Goals, Corners, Cards, Shots und Player Props.
 Wird wöchentlich via GitHub Actions ausgeführt.
 Speichert trainierte Modelle in Supabase (Tabelle: ml_models).
 
@@ -305,6 +305,67 @@ def compute_form_features(df, n=10):
     df["btts_ht"] = ((df["ht_home"] > 0) & (df["ht_away"] > 0)).astype(int)
     df["over15_ht"] = ((df["ht_home"] + df["ht_away"]) > 1).astype(int)
 
+    # V31: weitere Channel-Targets für Training
+    df["over15"] = ((df["home_goals"] + df["away_goals"]) > 1).astype(int)
+    df["over35"] = ((df["home_goals"] + df["away_goals"]) > 3).astype(int)
+    df["btts_over25"] = ((df["btts"] == 1) & (df["over25"] == 1)).astype(int)
+    df["home_win"] = (df["home_goals"] > df["away_goals"]).astype(int)
+    df["draw"] = (df["home_goals"] == df["away_goals"]).astype(int)
+    df["away_win"] = (df["away_goals"] > df["home_goals"]).astype(int)
+
+    # Corners/Cards nur trainieren, wenn echte Football-Data.co.uk Werte vorhanden sind.
+    # Bei openfootball/martj42 bleiben diese Targets NaN und werden im Training sauber gedroppt.
+    corners_total = pd.to_numeric(df.get("corners_home"), errors="coerce") + pd.to_numeric(df.get("corners_away"), errors="coerce")
+    cards_total = pd.to_numeric(df.get("cards_home"), errors="coerce") + pd.to_numeric(df.get("cards_away"), errors="coerce")
+    df["corners_over85"] = np.where(corners_total.notna(), (corners_total > 8).astype(int), np.nan)
+    df["corners_over95"] = np.where(corners_total.notna(), (corners_total > 9).astype(int), np.nan)
+    df["cards_over25"] = np.where(cards_total.notna(), (cards_total > 2).astype(int), np.nan)
+    df["cards_over35"] = np.where(cards_total.notna(), (cards_total > 3).astype(int), np.nan)
+
+    # V32 TRAIN-ALL: alle Match-/Kanal-Targets, die aus den vorhandenen Daten ableitbar sind.
+    total_goals = pd.to_numeric(df["home_goals"], errors="coerce") + pd.to_numeric(df["away_goals"], errors="coerce")
+    home_goals = pd.to_numeric(df["home_goals"], errors="coerce")
+    away_goals = pd.to_numeric(df["away_goals"], errors="coerce")
+    ht_goals = pd.to_numeric(df["ht_home"], errors="coerce") + pd.to_numeric(df["ht_away"], errors="coerce")
+    shots_total = pd.to_numeric(df.get("shots_home"), errors="coerce") + pd.to_numeric(df.get("shots_away"), errors="coerce")
+
+    df["over05"] = (total_goals > 0).astype(int)
+    df["over45"] = (total_goals > 4).astype(int)
+    df["under25"] = (total_goals < 3).astype(int)
+    df["under35"] = (total_goals < 4).astype(int)
+    df["btts_no"] = (df["btts"] == 0).astype(int)
+
+    df["home_over05"] = (home_goals > 0).astype(int)
+    df["home_over15"] = (home_goals > 1).astype(int)
+    df["home_over25"] = (home_goals > 2).astype(int)
+    df["away_over05"] = (away_goals > 0).astype(int)
+    df["away_over15"] = (away_goals > 1).astype(int)
+    df["away_over25"] = (away_goals > 2).astype(int)
+    df["home_clean_sheet"] = (away_goals == 0).astype(int)
+    df["away_clean_sheet"] = (home_goals == 0).astype(int)
+
+    df["home_or_draw"] = ((df["home_win"] == 1) | (df["draw"] == 1)).astype(int)
+    df["away_or_draw"] = ((df["away_win"] == 1) | (df["draw"] == 1)).astype(int)
+    df["home_or_away"] = ((df["home_win"] == 1) | (df["away_win"] == 1)).astype(int)
+
+    df["over05_ht"] = (ht_goals > 0).astype(int)
+    df["under15_ht"] = (ht_goals < 2).astype(int)
+    df["home_win_ht"] = (pd.to_numeric(df["ht_home"], errors="coerce") > pd.to_numeric(df["ht_away"], errors="coerce")).astype(int)
+    df["draw_ht"] = (pd.to_numeric(df["ht_home"], errors="coerce") == pd.to_numeric(df["ht_away"], errors="coerce")).astype(int)
+    df["away_win_ht"] = (pd.to_numeric(df["ht_away"], errors="coerce") > pd.to_numeric(df["ht_home"], errors="coerce")).astype(int)
+
+    for line in [65, 75, 85, 95, 105, 115]:
+        col = f"corners_over{line}"
+        df[col] = np.where(corners_total.notna(), (corners_total > (line / 10.0)).astype(int), np.nan)
+
+    for line in [15, 25, 35, 45, 55]:
+        col = f"cards_over{line}"
+        df[col] = np.where(cards_total.notna(), (cards_total > (line / 10.0)).astype(int), np.nan)
+
+    for line in [185, 205, 225, 245, 265, 285]:
+        col = f"shots_over{line}"
+        df[col] = np.where(shots_total.notna(), (shots_total > (line / 10.0)).astype(int), np.nan)
+
     # Team-History aufbauen {team: [list of match dicts]}
     team_history = {}
 
@@ -564,11 +625,10 @@ FEATURE_COLS = [
     "streak_win_home", "streak_win_away",
     # H2H-History
     "h2h_btts_rate", "h2h_avg_goals", "h2h_matches_norm",
-    # Schüsse/Ecken (nur football-data.co.uk — mit fillna 0 damit kein dropna-Problem)
+    # Schüsse/Ecken/Karten
     "avg_shots_home", "avg_shots_away", "total_shots_exp",
     "avg_corners_home", "avg_corners_away", "total_corners_exp",
-    # Karten BEWUSST NICHT in FEATURE_COLS — 99.2% NaN (nur FD.co.uk, openfootball/martj42 haben keine)
-    # Können später als Feature hinzukommen wenn Scraper player_match_stats befüllt ist
+    "avg_cards_home", "avg_cards_away", "total_cards_exp",
 ]
 
 
@@ -706,16 +766,279 @@ def save_model_to_supabase(model, meta):
     if r.ok:
         size_kb = len(model_b64) / 1024
         print(f"   ✅ {meta['model_name']} in Supabase gespeichert/aktualisiert ({size_kb:.0f} KB)")
+
     else:
         print(f"   ❌ Supabase-Fehler {r.status_code}: {r.text[:200]}")
 
 
 # ═══════════════════════════════════════════════════════════════════════════════
-# 6. HAUPTPROGRAMM
+# 6. PLAYER-PROP TRAINING — TRAIN ALL
+# ═══════════════════════════════════════════════════════════════════════════════
+
+PLAYER_STAT_ALIASES = {
+    "shots_on_target": "sot",
+    "sot": "sot",
+    "shots": "shots",
+    "goals": "goals",
+    "assists": "assists",
+    "passes": "passes",
+    "tackles": "tackles",
+    "tackles_committed": "tackles",
+    "fouls_committed": "fouls_committed",
+    "fouls_won": "fouls_won",
+    "fouls_received": "fouls_won",
+    "cards": "cards",
+    "yellow_cards": "cards",
+    "red_cards": "cards",
+    "corners": "corners",
+    "minutes": "minutes",
+}
+
+PLAYER_FEATURE_COLS = [
+    "games_prior", "avg_minutes", "avg_shots", "avg_sot", "avg_goals", "avg_assists",
+    "avg_passes", "avg_tackles", "avg_fouls_committed", "avg_fouls_won",
+    "avg_cards", "avg_corners",
+]
+
+
+def _safe_rest_get(table, params, page_size=5000, max_pages=6):
+    if not SUPABASE_URL or not SUPABASE_KEY:
+        return []
+    headers = {
+        "apikey": SUPABASE_KEY,
+        "Authorization": f"Bearer {SUPABASE_KEY}",
+    }
+    rows = []
+    for page in range(max_pages):
+        p = dict(params)
+        p["limit"] = page_size
+        p["offset"] = page * page_size
+        try:
+            r = requests.get(f"{SUPABASE_URL}/rest/v1/{table}", headers=headers, params=p, timeout=45)
+            if not r.ok:
+                print(f"   ⚠️ {table} GET {r.status_code}: {r.text[:300]}")
+                break
+            batch = r.json()
+            if not batch:
+                break
+            rows.extend(batch)
+            if len(batch) < page_size:
+                break
+        except Exception as e:
+            print(f"   ⚠️ {table} GET exception: {e}")
+            break
+    return rows
+
+
+def load_player_prop_training_frame():
+    """Lädt player_match_stats und baut spielerbasierte Rolling-Features."""
+    print("\n📥 Lade Player-Stats für Player-Prop Training...")
+    select_cols = ",".join([
+        "event_id", "match_date", "league", "team", "player_id", "player_name",
+        "stat_name", "stat_value", "minutes", "shots", "sot", "goals", "assists",
+        "passes", "tackles", "fouls_committed", "fouls_won", "cards", "corners"
+    ])
+    raw = _safe_rest_get(
+        "player_match_stats",
+        {"select": select_cols, "order": "match_date.asc"},
+        page_size=5000,
+        max_pages=8,
+    )
+    if not raw:
+        print("   ⚠️ Keine Player-Stats gefunden")
+        return pd.DataFrame()
+
+    dfp = pd.DataFrame(raw)
+    print(f"   ✅ player_match_stats geladen: {len(dfp)} Rows")
+
+    # Basis-Keys
+    for c in ["event_id", "match_date", "league", "team", "player_id", "player_name"]:
+        if c not in dfp.columns:
+            dfp[c] = None
+    dfp["player_key"] = dfp["player_id"].fillna("").astype(str)
+    dfp.loc[dfp["player_key"].eq(""), "player_key"] = dfp["player_name"].fillna("").astype(str)
+
+    # Wide columns normalisieren
+    stat_cols = ["minutes", "shots", "sot", "goals", "assists", "passes", "tackles",
+                 "fouls_committed", "fouls_won", "cards", "corners"]
+    for c in stat_cols:
+        if c not in dfp.columns:
+            dfp[c] = np.nan
+        dfp[c] = pd.to_numeric(dfp[c], errors="coerce")
+
+    # stat_name/stat_value rows in wide cols mappen
+    if "stat_name" in dfp.columns and "stat_value" in dfp.columns:
+        tmp = dfp[["event_id", "match_date", "league", "team", "player_key", "player_name", "stat_name", "stat_value"]].copy()
+        tmp["stat_norm"] = tmp["stat_name"].astype(str).str.lower().map(PLAYER_STAT_ALIASES)
+        tmp["stat_value"] = pd.to_numeric(tmp["stat_value"], errors="coerce")
+        tmp = tmp[tmp["stat_norm"].notna()]
+        if not tmp.empty:
+            piv = tmp.pivot_table(
+                index=["event_id", "match_date", "league", "team", "player_key", "player_name"],
+                columns="stat_norm",
+                values="stat_value",
+                aggfunc="sum",
+            ).reset_index()
+            for c in stat_cols:
+                if c not in piv.columns:
+                    piv[c] = np.nan
+        else:
+            piv = pd.DataFrame(columns=["event_id", "match_date", "league", "team", "player_key", "player_name"] + stat_cols)
+    else:
+        piv = pd.DataFrame(columns=["event_id", "match_date", "league", "team", "player_key", "player_name"] + stat_cols)
+
+    # Wide rows aggregieren und mit Pivot kombinieren
+    wide = dfp.groupby(["event_id", "match_date", "league", "team", "player_key", "player_name"], dropna=False)[stat_cols].max().reset_index()
+    combined = pd.concat([wide, piv], ignore_index=True, sort=False)
+    if combined.empty:
+        return pd.DataFrame()
+
+    combined = combined.groupby(["event_id", "match_date", "league", "team", "player_key", "player_name"], dropna=False)[stat_cols].max().reset_index()
+    combined["match_date"] = pd.to_datetime(combined["match_date"], errors="coerce")
+    combined = combined.dropna(subset=["match_date", "player_key"]).sort_values(["player_key", "match_date"])
+
+    # Missing Stats: 0, Minuten unbekannt: Median/0
+    for c in stat_cols:
+        combined[c] = pd.to_numeric(combined[c], errors="coerce").fillna(0.0)
+
+    # Rolling Features pro Spieler, strikt nur Vergangenheit
+    rows = []
+    hist = {}
+    for _, row in combined.iterrows():
+        pk = str(row["player_key"])
+        h = hist.get(pk, [])
+        feat = dict(row)
+        feat["games_prior"] = len(h)
+
+        def avg_stat(stat, default=0.0):
+            last = h[-8:]
+            if not last:
+                return default
+            return float(np.mean([x.get(stat, 0.0) for x in last]))
+
+        for stat in stat_cols:
+            feat[f"avg_{stat}"] = avg_stat(stat, 0.0)
+
+        rows.append(feat)
+        hist.setdefault(pk, []).append({s: float(row.get(s, 0.0)) for s in stat_cols})
+
+    out = pd.DataFrame(rows)
+    for c in PLAYER_FEATURE_COLS:
+        if c not in out.columns:
+            out[c] = 0.0
+        out[c] = pd.to_numeric(out[c], errors="coerce").fillna(0.0)
+
+    print(f"   ✅ Player-Prop Trainingsframe: {len(out)} Spieler-Matches")
+    return out
+
+
+def train_player_prop_model(dfp, stat, line, model_name):
+    if dfp.empty or stat not in dfp.columns:
+        print(f"   ⏭️ {model_name}: keine Daten für {stat}")
+        return None, {"model_name": model_name, "skipped": True, "reason": f"no data for {stat}", "trained_at": datetime.now(timezone.utc).isoformat()}
+
+    d = dfp.copy()
+    d["target"] = (pd.to_numeric(d[stat], errors="coerce").fillna(0.0) > line).astype(int)
+    d = d.dropna(subset=PLAYER_FEATURE_COLS + ["target"])
+    d = d[d["games_prior"] >= 1].reset_index(drop=True)
+
+    print(f"\n{'='*60}")
+    print(f"🎯 Trainiere Player-Prop Modell: {model_name}")
+    print(f"   Daten: {len(d)} | Target: {stat} > {line}")
+
+    if len(d) < 80:
+        print(f"   ⏭️ zu wenig Daten")
+        return None, {"model_name": model_name, "skipped": True, "reason": f"only {len(d)} samples", "trained_at": datetime.now(timezone.utc).isoformat()}
+    if d["target"].nunique() < 2:
+        print(f"   ⏭️ keine Varianz")
+        return None, {"model_name": model_name, "skipped": True, "reason": "no target variance", "trained_at": datetime.now(timezone.utc).isoformat()}
+
+    X = d[PLAYER_FEATURE_COLS].values
+    y = d["target"].values
+    print(f"   Positiv-Rate: {y.mean():.1%}")
+
+    base_model = xgb.XGBClassifier(
+        n_estimators=220,
+        max_depth=3,
+        learning_rate=0.05,
+        subsample=0.85,
+        colsample_bytree=0.85,
+        min_child_weight=8,
+        scale_pos_weight=max(0.2, (1 - y.mean()) / max(y.mean(), 1e-6)),
+        eval_metric="logloss",
+        random_state=42,
+        n_jobs=-1,
+    )
+    n_splits = min(3, max(2, len(X) // 400))
+    calibrated = CalibratedClassifierCV(base_model, method="isotonic", cv=TimeSeriesSplit(n_splits=n_splits))
+    calibrated.fit(X, y)
+
+    split = int(len(X) * 0.8)
+    proba = calibrated.predict_proba(X[split:])[:, 1]
+    brier = brier_score_loss(y[split:], proba)
+    try:
+        auc = roc_auc_score(y[split:], proba)
+    except Exception:
+        auc = 0.5
+
+    print(f"   ✅ Brier Score: {brier:.4f}")
+    print(f"   ✅ ROC-AUC:     {auc:.4f}")
+
+    meta = {
+        "model_name": model_name,
+        "feature_cols": PLAYER_FEATURE_COLS,
+        "model_family": "player_prop",
+        "stat": stat,
+        "line": line,
+        "brier_score": round(float(brier), 4),
+        "roc_auc": round(float(auc), 4),
+        "training_samples": int(len(X)),
+        "positive_rate": round(float(y.mean()), 3),
+        "trained_at": datetime.now(timezone.utc).isoformat(),
+    }
+    return calibrated, meta
+
+
+def train_all_player_prop_models():
+    dfp = load_player_prop_training_frame()
+    prop_targets = [
+        ("shots", 0.5, "player_shots_over05_model"),
+        ("shots", 1.5, "player_shots_over15_model"),
+        ("shots", 2.5, "player_shots_over25_model"),
+        ("sot", 0.5, "player_sot_over05_model"),
+        ("sot", 1.5, "player_sot_over15_model"),
+        ("goals", 0.5, "player_goal_over05_model"),
+        ("assists", 0.5, "player_assist_over05_model"),
+        ("passes", 24.5, "player_passes_over245_model"),
+        ("passes", 34.5, "player_passes_over345_model"),
+        ("passes", 44.5, "player_passes_over445_model"),
+        ("tackles", 0.5, "player_tackles_over05_model"),
+        ("tackles", 1.5, "player_tackles_over15_model"),
+        ("fouls_committed", 0.5, "player_fouls_committed_over05_model"),
+        ("fouls_committed", 1.5, "player_fouls_committed_over15_model"),
+        ("fouls_won", 0.5, "player_fouls_won_over05_model"),
+        ("fouls_won", 1.5, "player_fouls_won_over15_model"),
+        ("cards", 0.5, "player_card_over05_model"),
+        ("corners", 0.5, "player_corners_over05_model"),
+    ]
+
+    metas = {}
+    for stat, line, model_name in prop_targets:
+        model, meta = train_player_prop_model(dfp, stat, line, model_name)
+        metas[model_name] = meta
+        if model is not None:
+            save_model_to_supabase(model, meta)
+        else:
+            print(f"   ⏭️ {model_name} übersprungen: {meta.get('reason')}")
+    return metas
+
+
+# ═══════════════════════════════════════════════════════════════════════════════
+# 7. HAUPTPROGRAMM
 # ═══════════════════════════════════════════════════════════════════════════════
 
 if __name__ == "__main__":
-    print("🧠 NETRATTLER ML-Training startet...")
+    print("🧠 NETRATTLER ML-Training startet — TRAIN ALL CHANNELS V32...")
     print(f"   Zeitstempel: {datetime.now(timezone.utc).isoformat()}")
 
     # Daten laden
@@ -729,10 +1052,69 @@ if __name__ == "__main__":
 
     # Targets definieren
     targets = {
+        # BTTS / Goals
         "btts_model": "btts",
+        "btts_no_model": "btts_no",
+        "over05_model": "over05",
+        "over15_model": "over15",
         "over25_model": "over25",
+        "over35_model": "over35",
+        "over45_model": "over45",
+        "under25_model": "under25",
+        "under35_model": "under35",
+
+        # Team Goals / Clean Sheet
+        "home_over05_model": "home_over05",
+        "home_over15_model": "home_over15",
+        "home_over25_model": "home_over25",
+        "away_over05_model": "away_over05",
+        "away_over15_model": "away_over15",
+        "away_over25_model": "away_over25",
+        "home_clean_sheet_model": "home_clean_sheet",
+        "away_clean_sheet_model": "away_clean_sheet",
+
+        # 1X2 / Double Chance
+        "home_win_model": "home_win",
+        "draw_model": "draw",
+        "away_win_model": "away_win",
+        "home_or_draw_model": "home_or_draw",
+        "away_or_draw_model": "away_or_draw",
+        "home_or_away_model": "home_or_away",
+
+        # Combos
+        "btts_over25_combo_model": "btts_over25",
+
+        # Half Time
         "btts_ht_model": "btts_ht",
+        "over05_ht_model": "over05_ht",
         "over15_ht_model": "over15_ht",
+        "under15_ht_model": "under15_ht",
+        "home_win_ht_model": "home_win_ht",
+        "draw_ht_model": "draw_ht",
+        "away_win_ht_model": "away_win_ht",
+
+        # Corners
+        "corners_over65_model": "corners_over65",
+        "corners_over75_model": "corners_over75",
+        "corners_over85_model": "corners_over85",
+        "corners_over95_model": "corners_over95",
+        "corners_over105_model": "corners_over105",
+        "corners_over115_model": "corners_over115",
+
+        # Cards
+        "cards_over15_model": "cards_over15",
+        "cards_over25_model": "cards_over25",
+        "cards_over35_model": "cards_over35",
+        "cards_over45_model": "cards_over45",
+        "cards_over55_model": "cards_over55",
+
+        # Team Shots total
+        "shots_over185_model": "shots_over185",
+        "shots_over205_model": "shots_over205",
+        "shots_over225_model": "shots_over225",
+        "shots_over245_model": "shots_over245",
+        "shots_over265_model": "shots_over265",
+        "shots_over285_model": "shots_over285",
     }
 
     all_meta = {}
@@ -744,6 +1126,10 @@ if __name__ == "__main__":
             continue
         save_model_to_supabase(model, meta)
         all_meta[model_name] = meta
+
+    # Player Props trainieren wir ebenfalls: alles, was aus player_match_stats ableitbar ist.
+    player_prop_meta = train_all_player_prop_models()
+    all_meta.update(player_prop_meta)
 
     print("\n" + "="*60)
     print("✅ Training abgeschlossen!")
