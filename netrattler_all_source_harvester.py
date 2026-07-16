@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """
-NETRATTLER ALL SOURCE HARVESTER — DATA LAKE + PLAYER STATS + SOURCE DISCOVERY
+NETRATTLER ALL SOURCE HARVESTER V34 — DATA LAKE + PLAYER STATS + ODDS + SOURCE FALLBACK
 ============================================================================
 
 Zweck:
@@ -17,7 +17,7 @@ SUPABASE_SERVICE_ROLE_KEY  empfohlen
 SUPABASE_KEY               fallback
 GITHUB_TOKEN               optional, höhere Rate Limits
 THESPORTSDB_API_KEY        optional
-ENABLE_SOCCERDATA=1        optional, nutzt soccerdata wenn installiert
+ENABLE_SOCCERDATA=1        standard, nutzt soccerdata wenn installiert
 MAX_STATSBOMB_MATCHES=40
 MAX_OPENFOOTBALL_FILES=80
 MAX_FOOTBALL_DATA_ROWS_PER_CSV=800
@@ -47,7 +47,7 @@ NOW = datetime.now(timezone.utc).isoformat()
 TODAY = datetime.now(timezone.utc).date().isoformat()
 
 TIMEOUT = 25
-UA = "NETRATTLER-AllSourceHarvester/1.0 (+https://github.com/forfexes/btts-bot_ki)"
+UA = "NETRATTLER-AllSourceHarvester/34.0 (+https://github.com/forfexes/btts-bot_ki)"
 
 
 # ─────────────────────────────────────────────────────────────
@@ -684,17 +684,28 @@ OPENFOOTBALL_REPOS = [
     "openfootball/football.json",
     "openfootball/worldcup.json",
     "openfootball/euro.json",
+    "openfootball/worldcup",
+    "openfootball/south-america",
+    "openfootball/europe",
+    "openfootball/champions-league",
+    "openfootball/internationals",
+    "openfootball/world",
     "openfootball/england",
     "openfootball/deutschland",
     "openfootball/italy",
     "openfootball/espana",
     "openfootball/france",
-    "openfootball/europe-champions-league",
+    "openfootball/players",
+    "openfootball/clubs",
+    "martj42/international_results",
+    "withqwerty/reep",
+    "salimt/football-datasets",
 ]
 
 
 def collect_openfootball() -> None:
-    max_files = int(os.getenv("MAX_OPENFOOTBALL_FILES", "80"))
+    """Fetch actual data files from every free GitHub data repo; one repo failure never stops the next."""
+    max_files = int(os.getenv("MAX_OPENFOOTBALL_FILES", "180"))
     rows = []
     files_seen = 0
 
@@ -702,35 +713,55 @@ def collect_openfootball() -> None:
         if files_seen >= max_files:
             break
         try:
-            tree = http_get(f"https://api.github.com/repos/{repo}/git/trees/master",
-                            headers=github_headers(),
-                            params={"recursive": "1"}, timeout=30)
+            meta = http_get(f"https://api.github.com/repos/{repo}", headers=github_headers(), timeout=25)
+            branch = meta.get("default_branch") or "master"
+            tree = http_get(f"https://api.github.com/repos/{repo}/git/trees/{branch}",
+                            headers=github_headers(), params={"recursive": "1"}, timeout=35)
         except Exception as e:
-            log(f"OpenFootball tree {repo}: {str(e)[:120]}", "WARN")
+            log(f"GitHub data tree {repo}: {str(e)[:120]} — next source", "WARN")
             continue
+        candidates = []
         for item in tree.get("tree", []):
+            path = item.get("path") or ""
+            if item.get("type") != "blob" or not path.lower().endswith((".json", ".csv", ".tsv", ".txt", ".ndjson", ".jsonl")):
+                continue
+            if any(x in path.lower() for x in ("node_modules/", "vendor/", ".github/", "test/", "spec/")):
+                continue
+            candidates.append(path)
+        candidates.sort(key=lambda p: (0 if any(k in p.lower() for k in ("2026", "2025", "match", "result", "player", "club", "data")) else 1, p))
+        repo_count = 0
+        for path in candidates:
             if files_seen >= max_files:
                 break
-            path = item.get("path") or ""
-            if not path.endswith(".json"):
-                continue
-            raw_url = f"https://raw.githubusercontent.com/{repo}/master/{path}"
+            raw_url = f"https://raw.githubusercontent.com/{repo}/{branch}/{path}"
             try:
-                js = http_get(raw_url, timeout=20)
+                raw = http_get(raw_url, timeout=30, text=True)
             except Exception:
                 continue
-            payload = {"repo": repo, "path": path, "data": js}
-            # keep raw but avoid massive files
+            # Keep payload bounded; huge public datasets are represented by a sample + metadata.
+            max_chars = int(os.getenv("MAX_GITHUB_RAW_CHARS", "1500000"))
+            payload = {
+                "repo": repo, "path": path,
+                "content": raw[:max_chars], "truncated": len(raw) > max_chars,
+                "size_chars": len(raw),
+            }
             rows.append(data_lake_row(
-                "OpenFootball", "json", "openfootball_file",
-                payload, url=raw_url, league=repo.split("/")[-1], season=path.split("/")[0] if "/" in path else "",
-                entity_name=path, category="fixtures_results"
+                f"GitHub:{repo}", path.rsplit(".", 1)[-1].lower(), "open_source_file",
+                payload, url=raw_url, league=repo.split("/")[-1],
+                season=next((x for x in path.split("/") if re.match(r"^20\\d{2}(?:-\\d{2})?$", x)), ""),
+                entity_name=path, category="fixtures_results_players_identity"
             ))
             files_seen += 1
-            time.sleep(0.2)
-
-    log(f"OpenFootball files={files_seen}")
-    push_lake(rows)
+            repo_count += 1
+            if repo_count >= int(os.getenv("MAX_FILES_PER_GITHUB_REPO", "25")):
+                break
+            time.sleep(0.08)
+        log(f"GitHub data {repo}: files={repo_count}")
+        if len(rows) >= 100:
+            push_lake(rows); rows = []
+    if rows:
+        push_lake(rows)
+    log(f"GitHub/OpenFootball actual files={files_seen}")
 
 
 # ─────────────────────────────────────────────────────────────
@@ -821,7 +852,7 @@ def df_to_records(df: Any, limit: int = 2500) -> List[Dict[str, Any]]:
 
 
 def collect_soccerdata_optional() -> None:
-    if os.getenv("ENABLE_SOCCERDATA", "0") != "1":
+    if os.getenv("ENABLE_SOCCERDATA", "1") != "1":
         log("soccerdata optional: ENABLE_SOCCERDATA=0 — nur registriert, nicht ausgeführt")
         return
 
@@ -877,6 +908,21 @@ def collect_soccerdata_optional() -> None:
     push_lake(rows)
 
 
+
+# ─────────────────────────────────────────────────────────────
+# BOOKMAKER ODDS — every source with fallback
+# ─────────────────────────────────────────────────────────────
+
+def collect_bookmaker_odds() -> None:
+    try:
+        from netrattler_odds_harvester import collect_live_all, persist_odds
+        rows = collect_live_all(TODAY)
+        result = persist_odds(rows, "netrattler_odds_snapshot.json")
+        log(f"Odds sources: raw={len(rows)} odds_history={result.get('odds_history', 0)} data_lake={result.get('data_lake', 0)}")
+    except Exception as exc:
+        log(f"Odds sources failed: {str(exc)[:180]} — harvester continues", "WARN")
+
+
 # ─────────────────────────────────────────────────────────────
 # LOCAL SUMMARY
 # ─────────────────────────────────────────────────────────────
@@ -888,7 +934,7 @@ def write_local_summary() -> None:
             "SUPABASE_URL": bool(SUPABASE_URL),
             "SUPABASE_KEY": bool(SUPABASE_KEY),
             "GITHUB_TOKEN": bool(GITHUB_TOKEN),
-            "ENABLE_SOCCERDATA": os.getenv("ENABLE_SOCCERDATA", "0"),
+            "ENABLE_SOCCERDATA": os.getenv("ENABLE_SOCCERDATA", "1"),
         },
         "sources": KNOWN_SOURCES,
         "github_queries": GITHUB_QUERIES,
@@ -931,7 +977,8 @@ def main() -> int:
         ("openfootball", collect_openfootball),
         ("openligadb", collect_openligadb),
         ("thesportsdb", collect_thesportsdb),
-        ("soccerdata_optional", collect_soccerdata_optional),
+        ("soccerdata_all_adapters", collect_soccerdata_optional),
+        ("bookmaker_odds_all_fallbacks", collect_bookmaker_odds),
     ]
 
     for name, fn in jobs:
