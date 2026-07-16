@@ -1312,7 +1312,7 @@ def format_builder_message(pick: BuilderPick) -> str:
         sep,
         f"💰 Gesamt-Quote: <b>{pick.total_odds:.2f}</b>{estimate}",
         f"🔥 Einsatz: <b>{pick.stake:.2f} Units</b>",
-        ("🎲 Risiko: <b>LOTTERY</b>" if pick.total_odds >= 50 else "🎯 Risiko: <b>VALUE</b>" if pick.total_odds >= 8 else "✅ Risiko: <b>STANDARD</b>"),
+        ("🎲 Risiko: <b>LOTTERY</b>" if pick.total_odds >= 50 else "🔥 Risiko: <b>RISKY</b>" if pick.total_odds >= 15 else "🎯 Risiko: <b>VALUE</b>" if pick.total_odds >= 6 else "✅ Risiko: <b>SAFE</b>"),
         f"🧠 Daten: {', '.join(dict.fromkeys(x.source.split(':')[0] for x in pick.legs))}",
     ])
     return "\n".join(lines)
@@ -1689,6 +1689,70 @@ def _v31_pick_score(pick: BuilderPick) -> float:
         odds_adj = -0.30
     return avg + real_ratio * 0.35 + cat_div * 0.10 + odds_adj
 
+def _v32d_risk_tier(pick: BuilderPick) -> str:
+    """Risk tier for Builder output and bucket selection."""
+    odds = float(pick.total_odds or 0.0)
+    if odds >= 50:
+        return "LOTTERY"
+    if odds >= 15:
+        return "RISKY"
+    if odds >= 6:
+        return "VALUE"
+    return "SAFE"
+
+
+def _v32d_rebalance_best_builders(unique: List[BuilderPick], max_count: int) -> List[BuilderPick]:
+    """
+    Picks the best builders, but reserves slots for risky builders too.
+    This keeps the best safe/value builders while still allowing high-odds/risky output.
+    """
+    allow_risky = str(os.getenv("ENABLE_RISKY_BUILDERS", "true")).lower() in {"1", "true", "yes", "on"}
+    allow_lottery = str(os.getenv("ENABLE_LOTTERY_BUILDERS", "true")).lower() in {"1", "true", "yes", "on"}
+
+    buckets: Dict[str, List[BuilderPick]] = {"SAFE": [], "VALUE": [], "RISKY": [], "LOTTERY": []}
+    for pick in unique:
+        tier = _v32d_risk_tier(pick)
+        if tier == "RISKY" and not allow_risky:
+            continue
+        if tier == "LOTTERY" and not allow_lottery:
+            continue
+        buckets.setdefault(tier, []).append(pick)
+
+    # Reserve: Best/value first, but Risky/Lottery must appear if available.
+    desired = {
+        "SAFE": as_int(os.getenv("NETRATTLER_BUILDER_SAFE_SLOTS", "5"), 5),
+        "VALUE": as_int(os.getenv("NETRATTLER_BUILDER_VALUE_SLOTS", "7"), 7),
+        "RISKY": as_int(os.getenv("NETRATTLER_BUILDER_RISKY_SLOTS", "4"), 4),
+        "LOTTERY": as_int(os.getenv("NETRATTLER_BUILDER_LOTTERY_SLOTS", "2"), 2),
+    }
+
+    selected: List[BuilderPick] = []
+    seen_ids = set()
+
+    def add_pick(pick: BuilderPick) -> None:
+        if pick.builder_id in seen_ids:
+            return
+        selected.append(pick)
+        seen_ids.add(pick.builder_id)
+
+    for tier in ["SAFE", "VALUE", "RISKY", "LOTTERY"]:
+        for pick in buckets.get(tier, [])[:max(0, desired.get(tier, 0))]:
+            add_pick(pick)
+            if len(selected) >= max_count:
+                return selected
+
+    # Fill remaining by global ranking.
+    for pick in unique:
+        if _v32d_risk_tier(pick) == "RISKY" and not allow_risky:
+            continue
+        if _v32d_risk_tier(pick) == "LOTTERY" and not allow_lottery:
+            continue
+        add_pick(pick)
+        if len(selected) >= max_count:
+            break
+    return selected
+
+
 def build_builder_picks(
     raw_props: Sequence[Dict[str, Any]],
     match_contexts: Optional[Sequence[Dict[str, Any]]] = None,
@@ -1757,7 +1821,10 @@ def build_builder_picks(
         match_counts[match_key] = match_counts.get(match_key, 0) + 1
         if len(selected) >= max_count:
             break
-    return selected
+
+    # V32D: Rebalance aus allen unique candidates, damit Risky/High-Odds Builder nicht
+    # komplett von SAFE/VALUE verdrängt werden.
+    return _v32d_rebalance_best_builders(unique, max_count)
 
 def _v31_market_label(leg: PropLeg) -> str:
     labels = {
