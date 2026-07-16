@@ -392,7 +392,7 @@ def group_of(row: Dict[str, Any]) -> str:
         str(anyv(data, [key], ""))
         for key in ("market", "type", "bet_type", "category", "group", "channel", "selection", "pick", "message", "text", "tip_text", "title", "style")
     ).lower()
-    if any(x in low for x in ("builder", "shot ladder", "sot trio", "foul press", "tackle wall", "corner fusion")):
+    if any(x in low for x in ("builder", "bet_builder", "bet builder", "shot ladder", "sot trio", "foul press", "tackle wall", "corner fusion")):
         return "builder"
     if any(x in low for x in ("combo", "multi", "parlay", "acca", "same game")):
         return "combo"
@@ -843,6 +843,11 @@ def find_player_stat(leg: Dict[str, Any], stats: Sequence[Dict[str, Any]]) -> Op
 
 
 def market_line(text: str, default: float = 1.0) -> float:
+    low_txt = str(text).lower()
+    if any(x in low_txt for x in ["over25", "over_25", "over 2.5", "over2.5", "o2.5"]):
+        return 2.5
+    if any(x in low_txt for x in ["over15_ht", "over 1.5 ht", "over1.5 ht", "o1.5 ht"]):
+        return 1.5
     plus = re.search(r"(\d+(?:\.\d+)?)\s*\+", str(text))
     if plus:
         return as_float(plus.group(1), default)
@@ -911,8 +916,19 @@ def settle_score_market(tip: Dict[str, Any], result: Dict[str, Any]) -> Tuple[st
             return "pending", "Halbzeit-Resultat fehlt"
         return ("win" if hth + hta > 1.5 else "loss", f"HT {hth}:{hta}")
 
+    # Combo BTTS + Over 2.5 muss BEIDES treffen.
+    if (
+        ("btts" in low or "both teams" in low)
+        and ("over25" in low or "over 2.5" in low or "over2.5" in low or "total goals" in low)
+    ):
+        line = 2.5
+        return ("win" if (hs > 0 and aw > 0 and total > line) else "loss", f"{hs}:{aw} · BTTS {'YES' if hs > 0 and aw > 0 else 'NO'} · Tore {total} · Over {line}")
+
     if "btts" in low or "both teams" in low:
         return ("win" if hs > 0 and aw > 0 else "loss", f"{hs}:{aw}")
+    if "over25" in low or "over_25" in low or "over 2.5" in low or "over2.5" in low:
+        line = 2.5
+        return ("win" if total > line else "loss", f"{hs}:{aw} · Tore {total} · Over {line}")
     if "over" in low:
         match = re.search(r"over\s*([0-9]+(?:\.[0-9]+)?)", low)
         line = as_float(match.group(1), 2.5) if match else 2.5
