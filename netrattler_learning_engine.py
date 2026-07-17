@@ -29,7 +29,7 @@ from typing import Any, Dict, Iterable, Iterator, List, Mapping, Optional, Seque
 import requests
 
 UTC_NOW = lambda: datetime.now(timezone.utc).isoformat()
-UA = "NETRATTLER-SelfLearning/36C (+https://github.com/forfexes/btts-bot_ki)"
+UA = "NETRATTLER-SelfLearning/36D (+https://github.com/forfexes/btts-bot_ki)"
 POLICY_FILE = Path(os.getenv("NETRATTLER_POLICY_FILE", "netrattler_active_policy.json"))
 SUPABASE_URL = (os.getenv("SUPABASE_URL") or "").rstrip("/")
 SUPABASE_KEY = os.getenv("SUPABASE_SERVICE_ROLE_KEY") or os.getenv("SUPABASE_KEY") or ""
@@ -104,6 +104,10 @@ SOURCE_ROLE_OVERRIDES = {
     "gingeleski/odds-portal-scraper": ("odds_adapter", False, "dedicated_adapter", "fallback"),
     "mg30/odds-portal-scraper": ("odds_adapter", False, "dedicated_adapter", "fallback"),
     "davccavalcante/bet365-api-scraper": ("odds_adapter", False, "dedicated_adapter", "fallback"),
+    "openfootball/players": ("identity_adapter", False, "dedicated_adapter", "fallback"),
+    "openfootball/clubs": ("identity_adapter", False, "dedicated_adapter", "fallback"),
+    "openfootball/awesome-football": ("reference_catalog", False, "dedicated_adapter", "fallback"),
+    "datasets/football-datasets": ("match_results", True, "generic_data", "active"),
 }
 
 NON_PRODUCTION_PATH_PARTS = {
@@ -132,9 +136,12 @@ def is_production_football_data_path(path: str) -> bool:
 
 def source_role_override(repo_full_name: str) -> Optional[Tuple[str, bool, str, str]]:
     key = str(repo_full_name or "").lower()
+    explicit = SOURCE_ROLE_OVERRIDES.get(key)
+    if explicit:
+        return explicit
     if key.startswith("openfootball/"):
         return ("match_results_adapter", False, "dedicated_adapter", "active")
-    return SOURCE_ROLE_OVERRIDES.get(key)
+    return None
 
 
 def dedupe_rows_for_conflict(
@@ -495,6 +502,10 @@ def test_repository(repo: Mapping[str, Any]) -> SourceTest:
     metadata.update({
         "default_branch": default_branch,
         "data_files": [x.get("path") for x in data_files[:50]],
+        "data_file_shas": {
+            str(x.get("path")): str(x.get("sha") or "")
+            for x in data_files[:50] if x.get("path")
+        },
         "code_file_count": len(code_files),
         "best_data_path": best_path,
         "schema_mapping": best_mapping,
