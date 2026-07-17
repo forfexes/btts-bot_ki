@@ -29,7 +29,7 @@ from typing import Any, Dict, Iterable, Iterator, List, Mapping, Optional, Seque
 import requests
 
 UTC_NOW = lambda: datetime.now(timezone.utc).isoformat()
-UA = "NETRATTLER-SelfLearning/36.0 (+https://github.com/forfexes/btts-bot_ki)"
+UA = "NETRATTLER-SelfLearning/36C (+https://github.com/forfexes/btts-bot_ki)"
 POLICY_FILE = Path(os.getenv("NETRATTLER_POLICY_FILE", "netrattler_active_policy.json"))
 SUPABASE_URL = (os.getenv("SUPABASE_URL") or "").rstrip("/")
 SUPABASE_KEY = os.getenv("SUPABASE_SERVICE_ROLE_KEY") or os.getenv("SUPABASE_KEY") or ""
@@ -89,6 +89,70 @@ ODDS_ALIASES = {
     "bookmaker": {"bookmaker", "bookie", "sportsbook"},
     "market": {"market", "market_key", "bet_type"},
 }
+
+
+# Repositories that are valuable adapters but must never be treated as
+# generic CSV/JSON result datasets. They are routed to their dedicated
+# scraper/normalizer instead.
+SOURCE_ROLE_OVERRIDES = {
+    "jordantete/oddsharvester": ("odds_adapter", False, "dedicated_adapter", "active"),
+    "probberechts/soccerdata": ("multi_source_adapter", False, "dedicated_adapter", "fallback"),
+    "davidrocha9/fotmob-scraper": ("player_stats_adapter", False, "dedicated_adapter", "fallback"),
+    "withqwerty/reep": ("identity_adapter", False, "dedicated_adapter", "fallback"),
+    "statsbomb/open-data": ("event_player_data", False, "dedicated_adapter", "active"),
+    "simatwa/livescore-api": ("live_results_adapter", False, "dedicated_adapter", "fallback"),
+    "gingeleski/odds-portal-scraper": ("odds_adapter", False, "dedicated_adapter", "fallback"),
+    "mg30/odds-portal-scraper": ("odds_adapter", False, "dedicated_adapter", "fallback"),
+    "davccavalcante/bet365-api-scraper": ("odds_adapter", False, "dedicated_adapter", "fallback"),
+}
+
+NON_PRODUCTION_PATH_PARTS = {
+    "test", "tests", "fixture", "fixtures", "sample", "samples",
+    "example", "examples", "demo", "demos", "mock", "mocks",
+    "benchmark", "benchmarks", "snapshot", "snapshots",
+}
+NON_FOOTBALL_SPORT_PARTS = {
+    "baseball", "basketball", "handball", "tennis", "hockey",
+    "cricket", "rugby", "volleyball", "mlb", "nba", "nfl", "nhl",
+}
+
+
+def is_production_football_data_path(path: str) -> bool:
+    normalized = str(path or "").replace("\\", "/").lower()
+    parts = {part for part in normalized.split("/") if part}
+    if parts & NON_PRODUCTION_PATH_PARTS:
+        return False
+    if parts & NON_FOOTBALL_SPORT_PARTS:
+        return False
+    filename = normalized.rsplit("/", 1)[-1]
+    if any(token in filename for token in ("fixture", "sample", "example", "mock", "test")):
+        return False
+    return normalized.endswith((".csv", ".tsv", ".json", ".parquet"))
+
+
+def source_role_override(repo_full_name: str) -> Optional[Tuple[str, bool, str, str]]:
+    key = str(repo_full_name or "").lower()
+    if key.startswith("openfootball/"):
+        return ("match_results_adapter", False, "dedicated_adapter", "active")
+    return SOURCE_ROLE_OVERRIDES.get(key)
+
+
+def dedupe_rows_for_conflict(
+    rows: Sequence[Dict[str, Any]],
+    conflict: str,
+) -> List[Dict[str, Any]]:
+    keys = [key.strip() for key in str(conflict or "").split(",") if key.strip()]
+    if not keys:
+        return [dict(row) for row in rows]
+    unique: Dict[Tuple[Any, ...], Dict[str, Any]] = {}
+    for row in rows:
+        clean = dict(row)
+        signature = tuple(clean.get(key) for key in keys)
+        if any(value is None or value == "" for value in signature):
+            # Keep malformed signatures unique so Supabase can report the real issue.
+            signature = signature + (stable_hash(clean),)
+        unique[signature] = clean
+    return list(unique.values())
 
 
 def log(message: str, level: str = "INFO") -> None:
@@ -172,11 +236,15 @@ class SupabaseRest:
     def upsert(self, table: str, rows: Sequence[Dict[str, Any]], conflict: str, chunk_size: int = 200) -> Tuple[int, int]:
         if not rows:
             return 0, 0
+        clean_rows = dedupe_rows_for_conflict(rows, conflict)
+        removed = len(rows) - len(clean_rows)
+        if removed:
+            log(f"UPSERT DEDUPE {table}: removed={removed}")
         if not self.enabled:
-            return 0, len(rows)
+            return 0, len(clean_rows)
         ok = fail = 0
-        for index in range(0, len(rows), chunk_size):
-            chunk = list(rows[index:index + chunk_size])
+        for index in range(0, len(clean_rows), chunk_size):
+            chunk = list(clean_rows[index:index + chunk_size])
             response = requests.post(
                 f"{self.url}/rest/v1/{table}",
                 headers=self.headers("resolution=merge-duplicates,return=minimal"),
@@ -348,9 +416,9 @@ def test_repository(repo: Mapping[str, Any]) -> SourceTest:
             continue
         path = str(item.get("path") or "")
         lower = path.lower()
-        if any(part in lower for part in ("node_modules/", "vendor/", ".git/", "tests/fixtures/")):
+        if any(part in lower for part in ("node_modules/", "vendor/", ".git/")):
             continue
-        if lower.endswith((".csv", ".json", ".tsv", ".parquet")) and int(item.get("size") or 0) <= 5_000_000:
+        if is_production_football_data_path(path) and int(item.get("size") or 0) <= 5_000_000:
             data_files.append(item)
         if lower.endswith((".py", ".js", ".ts")):
             code_files.append(item)
@@ -418,6 +486,11 @@ def test_repository(repo: Mapping[str, Any]) -> SourceTest:
         status = "blocked"
     else:
         status = "quarantine"
+
+    override = source_role_override(full_name)
+    if override:
+        category, auto_ingest, adapter, override_status = override
+        status = "blocked" if archived else override_status
 
     metadata.update({
         "default_branch": default_branch,
