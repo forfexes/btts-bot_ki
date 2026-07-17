@@ -10,6 +10,8 @@ import csv
 import io
 import json
 import os
+import tempfile
+from pathlib import Path
 from datetime import datetime, timezone
 from typing import Any, Dict, Iterable, List, Mapping, Optional, Sequence
 
@@ -24,6 +26,10 @@ from netrattler_source_router_v36 import load_last_good, save_last_good
 
 MAX_FILES = int(os.getenv("NETRATTLER_GENERIC_MAX_FILES", "30"))
 MAX_ROWS_PER_FILE = int(os.getenv("NETRATTLER_GENERIC_MAX_ROWS_PER_FILE", "5000"))
+STATE_FILE = Path(os.getenv(
+    "NETRATTLER_GENERIC_STATE_FILE",
+    ".netrattler_cache/generic_ingest_state.json",
+))
 
 
 GENERIC_DATA_REPO_ALLOWLIST = {
@@ -57,8 +63,44 @@ def _path_is_allowed(repo: str, path: str) -> bool:
     return True
 
 
+def _load_state() -> Dict[str, str]:
+    try:
+        data = json.loads(STATE_FILE.read_text(encoding="utf-8"))
+        return {str(k): str(v) for k, v in data.items()} if isinstance(data, dict) else {}
+    except Exception:
+        return {}
+
+
+def _save_state(state: Mapping[str, str]) -> None:
+    STATE_FILE.parent.mkdir(parents=True, exist_ok=True)
+    fd, tmp = tempfile.mkstemp(prefix=STATE_FILE.name, suffix=".tmp", dir=str(STATE_FILE.parent))
+    try:
+        with os.fdopen(fd, "w", encoding="utf-8") as handle:
+            json.dump(dict(state), handle, ensure_ascii=False, indent=2, sort_keys=True)
+        os.replace(tmp, STATE_FILE)
+    finally:
+        try:
+            os.unlink(tmp)
+        except FileNotFoundError:
+            pass
+
+
+def _file_state_key(repo: str, branch: str, path: str) -> str:
+    return f"{str(repo).lower()}|{branch}|{path}"
+
+
+def _should_skip_unchanged(
+    state: Mapping[str, str],
+    repo: str,
+    branch: str,
+    path: str,
+    sha: str,
+) -> bool:
+    return bool(sha) and state.get(_file_state_key(repo, branch, path)) == sha
+
+
 def _headers() -> Dict[str, str]:
-    headers = {"User-Agent": "NETRATTLER-GenericRepoIngestor/36C", "Accept": "*/*"}
+    headers = {"User-Agent": "NETRATTLER-GenericRepoIngestor/36D", "Accept": "*/*"}
     if GITHUB_TOKEN:
         headers["Authorization"] = f"Bearer {GITHUB_TOKEN}"
     return headers
@@ -202,11 +244,14 @@ def _odds_row(source: str, raw: Mapping[str, Any], mapping: Mapping[str, str]) -
     }
 
 
-def ingest_source(candidate: Mapping[str, Any], db: SupabaseRest) -> Dict[str, int]:
+def ingest_source(candidate: Mapping[str, Any], db: SupabaseRest, state: Dict[str, str]) -> Dict[str, int]:
     repo = str(candidate.get("repo_full_name") or candidate.get("source_name") or "")
     if not _repo_allows_generic_ingest(repo, candidate):
         log(f"GENERIC SKIP {repo}: dedicated adapter or unapproved generic source")
-        return {"match_results": 0, "player_stats": 0, "odds": 0, "identity": 0, "failed": 0, "cached": 0, "skipped": 1, "deduped": 0}
+        return {
+            "match_results": 0, "player_stats": 0, "odds": 0, "identity": 0,
+            "failed": 0, "cached": 0, "skipped": 1, "deduped": 0, "unchanged": 0,
+        }
     metadata = candidate.get("metadata") or {}
     if isinstance(metadata, str):
         try:
@@ -215,13 +260,25 @@ def ingest_source(candidate: Mapping[str, Any], db: SupabaseRest) -> Dict[str, i
             metadata = {}
     branch = str(metadata.get("default_branch") or "main")
     paths = list(metadata.get("data_files") or [])[:MAX_FILES]
+    file_shas = metadata.get("data_file_shas") or {}
+    if not isinstance(file_shas, Mapping):
+        file_shas = {}
     source = f"github:{repo}"
-    totals = {"match_results": 0, "player_stats": 0, "odds": 0, "identity": 0, "failed": 0, "cached": 0, "skipped": 0, "deduped": 0}
+    totals = {
+        "match_results": 0, "player_stats": 0, "odds": 0, "identity": 0,
+        "failed": 0, "cached": 0, "skipped": 0, "deduped": 0, "unchanged": 0,
+    }
     cache_items: List[Dict[str, Any]] = []
     live_rows = 0
     for path in paths:
-        if not _path_is_allowed(repo, str(path)):
+        path = str(path)
+        if not _path_is_allowed(repo, path):
             totals["skipped"] += 1
+            continue
+        file_sha = str(file_shas.get(path) or "")
+        if _should_skip_unchanged(state, repo, branch, path, file_sha):
+            totals["unchanged"] += 1
+            log(f"GENERIC UNCHANGED {repo}:{path}")
             continue
         url = f"https://raw.githubusercontent.com/{repo}/{branch}/{path}"
         try:
@@ -273,6 +330,8 @@ def ingest_source(candidate: Mapping[str, Any], db: SupabaseRest) -> Dict[str, i
             if ok and not failed:
                 for row in rows[:ok]:
                     cache_items.append({"table": table, "conflict": conflict, "schema": schema, "row": row})
+            if failed == 0 and file_sha:
+                state[_file_state_key(repo, branch, path)] = file_sha
             log(
                 f"GENERIC {repo}:{path} schema={schema} "
                 f"parsed={original_count} deduped={len(rows)} written={ok} failed={failed}"
@@ -311,12 +370,15 @@ def main() -> None:
     )
     grand: Dict[str, int] = {
         "match_results": 0, "player_stats": 0, "odds": 0,
-        "identity": 0, "failed": 0, "cached": 0, "skipped": 0, "deduped": 0,
+        "identity": 0, "failed": 0, "cached": 0, "skipped": 0,
+        "deduped": 0, "unchanged": 0,
     }
+    state = _load_state()
     for candidate in candidates:
-        totals = ingest_source(candidate, db)
+        totals = ingest_source(candidate, db, state)
         for key, value in totals.items():
             grand[key] = grand.get(key, 0) + value
+    _save_state(state)
     log(f"GENERIC INGEST DONE {grand}")
 
 
