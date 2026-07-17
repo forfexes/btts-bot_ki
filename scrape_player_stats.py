@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """
-NETRATTLER - scrape_player_stats.py — V36G DAILY RUNTIME SAFE
+NETRATTLER - scrape_player_stats.py — V36H VERIFIED DAILY
 =====================================
 Täglich nach Spielende:
 1. Match-Ergebnisse von ESPN + TheSportsDB + OpenFootball → Supabase match_results
@@ -1081,6 +1081,15 @@ _STAT_ALIASES = {
     "expectedgoals": "xg",
     "xa": "xa",
     "expectedassists": "xa",
+    "ontargetscoringatt": "sot",
+    "totalpass": "passes",
+    "accuratepass": "passes",
+    "totalduel": "duels",
+    "woncontest": "duels_won",
+    "poss won contest": "duels_won",
+    "fouls": "fouls_committed",
+    "wasfouled": "fouls_won",
+    "saves": "saves",
 }
 
 
@@ -1123,45 +1132,104 @@ def _numeric(value: Any) -> Optional[float]:
 
 
 def _flatten_stats(stats: Any) -> Dict[str, Any]:
-    """Normalize FotMob/SofaScore nested dictionaries and stat lists."""
+    """Normalize current FotMob/SofaScore stat dictionaries and grouped stat lists."""
     output: Dict[str, Any] = {}
-    if isinstance(stats, dict):
-        for raw_key, value in stats.items():
-            if isinstance(value, dict):
-                direct = _numeric(value)
-                if direct is not None:
-                    output[str(raw_key)] = direct
-                else:
-                    nested = _flatten_stats(value)
-                    output.update(nested)
-            elif isinstance(value, list):
-                nested = _flatten_stats(value)
-                if nested:
-                    output.update(nested)
-                else:
-                    direct = _numeric(value)
-                    if direct is not None:
-                        output[str(raw_key)] = direct
-            else:
-                output[str(raw_key)] = value
-    elif isinstance(stats, list):
+
+    if isinstance(stats, list):
         for item in stats:
             if not isinstance(item, dict):
                 continue
+
+            # Current FotMob groups:
+            # {"title": "Top stats", "stats": {
+            #   "Shots total": {"key": "totalShots", "stat": {"value": 4}}
+            # }}
+            group_stats = item.get("stats")
+            if isinstance(group_stats, dict):
+                output.update(_flatten_stats(group_stats))
+                continue
+
             key = (
                 item.get("key") or item.get("statKey") or item.get("name")
                 or item.get("title") or item.get("label")
             )
             value = (
+                item.get("stat") if "stat" in item else
                 item.get("value") if "value" in item else
                 item.get("statValue") if "statValue" in item else
                 item.get("total")
             )
-            if key is not None and value is not None:
-                output[str(key)] = value
+            if key is not None:
+                numeric = _numeric(value)
+                if numeric is not None:
+                    output[str(key)] = numeric
             else:
                 output.update(_flatten_stats(item))
+        return output
+
+    if not isinstance(stats, dict):
+        return output
+
+    # A single FotMob stat object:
+    # {"key":"totalShots","stat":{"value":4,"total":5}}
+    if stats.get("key") and ("stat" in stats or "value" in stats):
+        numeric = _numeric(stats.get("stat") if "stat" in stats else stats.get("value"))
+        if numeric is not None:
+            output[str(stats.get("key"))] = numeric
+        return output
+
+    for label, value in stats.items():
+        if isinstance(value, dict):
+            inner_key = value.get("key") or value.get("statKey") or label
+            if "stat" in value:
+                numeric = _numeric(value.get("stat"))
+                if numeric is not None:
+                    output[str(inner_key)] = numeric
+                    continue
+            if "value" in value or "statValue" in value:
+                numeric = _numeric(
+                    value.get("value") if "value" in value else value.get("statValue")
+                )
+                if numeric is not None:
+                    output[str(inner_key)] = numeric
+                    continue
+
+            nested = _flatten_stats(value)
+            if nested:
+                output.update(nested)
+        elif isinstance(value, list):
+            output.update(_flatten_stats(value))
+        else:
+            numeric = _numeric(value)
+            if numeric is not None:
+                output[str(label)] = numeric
+
     return output
+
+
+def _fotmob_player_records(detail: Dict[str, Any]) -> List[Dict[str, Any]]:
+    """Read FotMob content.playerStats, which is keyed by player id."""
+    content = detail.get("content") or {}
+    player_stats = content.get("playerStats") or {}
+    records: List[Dict[str, Any]] = []
+
+    if isinstance(player_stats, dict):
+        for player_id, value in player_stats.items():
+            if not isinstance(value, dict):
+                continue
+            stats = value.get("stats") or []
+            if not stats:
+                continue
+            record = dict(value)
+            record.setdefault("id", value.get("id") or player_id)
+            record["stats"] = stats
+            records.append(record)
+    elif isinstance(player_stats, list):
+        for value in player_stats:
+            if isinstance(value, dict) and value.get("stats"):
+                records.append(dict(value))
+
+    return records
 
 
 def _stats_to_rows(source: str, event_id: Any, player: dict, stats: dict,
@@ -1334,6 +1402,8 @@ def scrape_fotmob_date(date_str: str) -> List[Dict]:
 
     matches = matches[:SOURCE_MAX_EVENTS]
     rows = []
+    details_ok = 0
+    details_with_player_stats = 0
 
     for league_name, match in matches:
         match_id = match.get("id") or match.get("matchId")
@@ -1358,6 +1428,9 @@ def scrape_fotmob_date(date_str: str) -> List[Dict]:
 
         if not isinstance(detail, dict):
             continue
+        details_ok += 1
+        if _fotmob_player_records(detail):
+            details_with_player_stats += 1
 
         general = detail.get("general") or {}
         home = (
@@ -1374,12 +1447,19 @@ def scrape_fotmob_date(date_str: str) -> List[Dict]:
         )
 
         seen = set()
-        for obj in _walk_fotmob_players(detail.get("content") or detail):
+        direct_records = _fotmob_player_records(detail)
+        player_objects = direct_records or list(
+            _walk_fotmob_players(detail.get("content") or detail)
+        )
+        for obj in player_objects:
             player = {
                 "id": obj.get("id") or obj.get("playerId"),
-                "name": obj.get("name") or obj.get("displayName"),
+                "name": (
+                    obj.get("name") or obj.get("displayName")
+                    or obj.get("shortName")
+                ),
             }
-            stats = obj.get("stats") or {}
+            stats = obj.get("stats") or obj.get("statistics") or {}
             if not player["name"] or not stats:
                 continue
 
@@ -1399,7 +1479,11 @@ def scrape_fotmob_date(date_str: str) -> List[Dict]:
             ))
         time.sleep(SOURCE_SLEEP)
 
-    print(f"  ✅ FotMob: {len(rows)} Player-Stat-Rows aus {len(matches)} Spielen")
+    print(
+        f"  {'✅' if rows else '⚪'} FotMob: {len(rows)} Player-Stat-Rows "
+        f"aus {len(matches)} Spielen | Details={details_ok} "
+        f"| mit PlayerStats={details_with_player_stats}"
+    )
     return rows
 
 
