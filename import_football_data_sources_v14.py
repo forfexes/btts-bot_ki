@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """
-NETRATTLER V34 — ALL HISTORICAL SOURCES IMPORTER
+NETRATTLER V34C — ALL SOURCES STORAGE-SAFE IMPORTER
 
 Imports football data into the correct Supabase tables:
 
@@ -34,6 +34,17 @@ CHUNK_SIZE = int(os.environ.get("IMPORT_CHUNK_SIZE", "500"))
 TIMEOUT = int(os.environ.get("IMPORT_TIMEOUT", "60"))
 MAX_ROWS_PER_SOURCE = int(os.environ.get("MAX_ROWS_PER_SOURCE", "0"))  # 0 = no limit
 IMPORT_SOURCES = [x.strip().lower() for x in os.environ.get("IMPORT_SOURCES", "all").split(",") if x.strip()]
+
+STORE_HISTORICAL_ODDS = os.environ.get("STORE_HISTORICAL_ODDS", "false").lower() in {"1", "true", "yes", "on"}
+STORE_RAW_PAYLOADS = os.environ.get("STORE_RAW_PAYLOADS", "false").lower() in {"1", "true", "yes", "on"}
+STOP_ON_DATABASE_FULL = os.environ.get("STOP_ON_DATABASE_FULL", "true").lower() in {"1", "true", "yes", "on"}
+
+UPSERT_STATS = {"attempted": 0, "written": 0, "failed": 0}
+DATABASE_FULL = False
+
+
+class DatabaseFullError(RuntimeError):
+    pass
 
 HEADERS = {
     "apikey": SUPABASE_KEY,
@@ -161,19 +172,46 @@ def match_id(source: str, league: Any, match_date: Any, home: Any, away: Any) ->
 
 
 def rest_upsert(table: str, rows: List[Dict[str, Any]], conflict: str) -> int:
+    global DATABASE_FULL
     if not rows:
         return 0
+    if DATABASE_FULL and STOP_ON_DATABASE_FULL:
+        raise DatabaseFullError("Supabase database already reported full")
     if not SUPABASE_URL or not SUPABASE_KEY:
         raise RuntimeError("SUPABASE_URL / SUPABASE_KEY missing")
+
+    # Raw source payloads are very large and unnecessary for ML.
+    prepared = []
+    for row in rows:
+        clean_row = dict(row)
+        if not STORE_RAW_PAYLOADS:
+            clean_row.pop("raw", None)
+        prepared.append(clean_row)
+
     url = f"{SUPABASE_URL}/rest/v1/{table}?on_conflict={conflict}"
     ok = 0
-    for i in range(0, len(rows), CHUNK_SIZE):
-        chunk = rows[i:i + CHUNK_SIZE]
+    for i in range(0, len(prepared), CHUNK_SIZE):
+        chunk = prepared[i:i + CHUNK_SIZE]
+        UPSERT_STATS["attempted"] += len(chunk)
         r = requests.post(url, headers=HEADERS, data=json.dumps(chunk, default=str), timeout=TIMEOUT)
         if r.status_code not in (200, 201, 204):
-            log(f"⚠️ UPSERT {table} {r.status_code}: {r.text[:700]}")
+            UPSERT_STATS["failed"] += len(chunk)
+            body = r.text[:700]
+            log(f"⚠️ UPSERT {table} {r.status_code}: {body}")
+
+            is_full = (
+                '"code":"53100"' in r.text
+                or "No space left on device" in r.text
+                or "Check free disk space" in r.text
+            )
+            if is_full:
+                DATABASE_FULL = True
+                log("🛑 SUPABASE STORAGE FULL — Import wird sofort abgebrochen. Keine falsche grüne Erfolgsmeldung.")
+                if STOP_ON_DATABASE_FULL:
+                    raise DatabaseFullError(f"Supabase storage full while writing {table}")
         else:
             ok += len(chunk)
+            UPSERT_STATS["written"] += len(chunk)
         time.sleep(0.05)
     return ok
 
@@ -208,7 +246,7 @@ def import_clubelo() -> int:
     for url in urls:
         try:
             log(f"📦 ClubElo: {url}")
-            r = requests.get(url, timeout=TIMEOUT)
+            r = requests.get(url, timeout=min(TIMEOUT, 20))
             if r.status_code != 200 or not r.text.strip():
                 log(f"  ⚠️ ClubElo HTTP {r.status_code}")
                 continue
@@ -416,7 +454,10 @@ def import_football_data_co_uk() -> int:
                     if MAX_ROWS_PER_SOURCE and len(rows) >= MAX_ROWS_PER_SOURCE:
                         break
                 ok = rest_upsert("football_historical_matches", rows, "source,match_id")
-                rest_upsert("odds_history", odds, "source,match_id,market,bookmaker,captured_date,selection")
+                if STORE_HISTORICAL_ODDS:
+                    rest_upsert("odds_history", odds, "source,match_id,market,bookmaker,captured_date,selection")
+                else:
+                    log(f"  ℹ️ Historische Einzelquoten nicht in Supabase gespeichert ({len(odds)} Rows gespart); ML liest FD.co.uk direkt.")
                 total += ok
                 all_matches.extend(rows)
                 log(f"  ✅ {league}: {ok} Matches")
@@ -768,26 +809,42 @@ def import_extra_csv_urls() -> int:
 
 def main() -> None:
     log("=" * 60)
-    log("NETRATTLER V34 — ALL HISTORICAL SOURCES IMPORTER")
+    log("NETRATTLER V34C — ALL SOURCES STORAGE-SAFE IMPORTER")
     log("=" * 60)
     log(f"Sources: {IMPORT_SOURCES}")
+    log(f"STORE_HISTORICAL_ODDS={STORE_HISTORICAL_ODDS} | STORE_RAW_PAYLOADS={STORE_RAW_PAYLOADS}")
     if not SUPABASE_URL or not SUPABASE_KEY:
         raise SystemExit("SUPABASE_URL / SUPABASE_KEY fehlt")
 
     total = 0
-    if enabled("clubelo"):
-        total += import_clubelo()
-    if enabled("fdcouk") or enabled("football-data"):
-        total += import_football_data_co_uk()
-    if enabled("fpl"):
-        total += import_fpl_profiles()
-    if enabled("openfootball"):
-        total += import_openfootball()
-    if enabled("extra_csv"):
-        total += import_extra_csv_urls()
+    try:
+        if enabled("clubelo"):
+            total += import_clubelo()
+        if enabled("fdcouk") or enabled("football-data"):
+            total += import_football_data_co_uk()
+        if enabled("fpl"):
+            total += import_fpl_profiles()
+        if enabled("openfootball"):
+            total += import_openfootball()
+        if enabled("extra_csv"):
+            total += import_extra_csv_urls()
+    except DatabaseFullError as e:
+        log("=" * 60)
+        log(f"❌ IMPORT ABGEBROCHEN: {e}")
+        log(
+            f"UPSERT attempted={UPSERT_STATS['attempted']} "
+            f"written={UPSERT_STATS['written']} failed={UPSERT_STATS['failed']}"
+        )
+        log("Supabase-Speicher zuerst bereinigen oder Plan erhöhen; danach Workflow erneut starten.")
+        raise SystemExit(2)
 
     log("=" * 60)
-    log(f"✅ V14 Import fertig. Gesamt importierte/upsertete Rows ca.: {total}")
+    log(f"✅ V34C Import fertig. Tatsächlich geschriebene Rows: {UPSERT_STATS['written']}")
+    log(
+        f"UPSERT attempted={UPSERT_STATS['attempted']} "
+        f"written={UPSERT_STATS['written']} failed={UPSERT_STATS['failed']}"
+    )
+    log(f"Importer-return total: {total}")
     log("=" * 60)
 
 
