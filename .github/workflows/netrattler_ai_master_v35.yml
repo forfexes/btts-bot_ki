@@ -1,4 +1,4 @@
-name: NETRATTLER AI MASTER V36H VERIFIED DAILY
+name: NETRATTLER AI MASTER V36I PYTHON 3.12
 
 on:
   workflow_dispatch:
@@ -127,8 +127,19 @@ jobs:
 
       - uses: actions/setup-python@v5
         with:
-          python-version: "3.11"
+          python-version: "3.12"
           cache: "pip"
+
+      - name: Verify Python runtime
+        shell: bash
+        run: |
+          set -euo pipefail
+          python - <<'PY'
+          import sys
+          print("PYTHON", sys.version)
+          if sys.version_info < (3, 12):
+              raise SystemExit("OddsHarvester 0.5.0 requires Python >= 3.12")
+          PY
       - name: Restore last-good source cache
         uses: actions/cache@v4
         with:
