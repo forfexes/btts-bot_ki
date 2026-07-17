@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """
-NETRATTLER - scrape_player_stats.py — ALL SOURCES V34 FALLBACK
+NETRATTLER - scrape_player_stats.py — V36G DAILY RUNTIME SAFE
 =====================================
 Täglich nach Spielende:
 1. Match-Ergebnisse von ESPN + TheSportsDB + OpenFootball → Supabase match_results
@@ -9,7 +9,8 @@ Täglich nach Spielende:
 Läuft täglich 02:00 UTC via scrape_player_stats.yml
 """
 
-import argparse, csv, io, json, os, re, time, hashlib
+import argparse, csv, gzip, io, json, os, re, time, hashlib
+from pathlib import Path
 from collections import defaultdict
 from datetime import datetime, timezone, timedelta
 from typing import Any, Dict, List, Optional
@@ -42,6 +43,12 @@ GITHUB_SOURCE_TIMEOUT = int(os.environ.get("GITHUB_SOURCE_TIMEOUT", "25"))
 GITHUB_TOKEN = os.environ.get("GITHUB_TOKEN", "")
 ENABLE_REEP_IDENTITY = os.environ.get("ENABLE_REEP_IDENTITY", "true").lower() in ("1", "true", "yes", "on")
 REEP_MAX_ROWS = int(os.environ.get("REEP_MAX_ROWS", "600000"))
+IDENTITY_REFERENCE_HEALTHCHECK = os.environ.get(
+    "IDENTITY_REFERENCE_HEALTHCHECK", "false"
+).lower() in ("1", "true", "yes", "on")
+REEP_CACHE_DAYS = int(os.environ.get("REEP_CACHE_DAYS", "7"))
+CACHE_DIR = Path(os.environ.get("NETRATTLER_CACHE_DIR", ".netrattler_cache"))
+REEP_CACHE_FILE = CACHE_DIR / "reep_identity_map.json.gz"
 _IDENTITY_NAME_TO_ID: Dict[str, str] = {}
 
 
@@ -160,8 +167,17 @@ def _dedupe_rows(rows: list, conflict: str = None) -> list:
     return list(unique.values()) + passthrough
 
 
+def _rows_by_keyset(rows: List[Dict[str, Any]]) -> List[List[Dict[str, Any]]]:
+    """PostgREST bulk inserts require identical object keys inside one request."""
+    groups: Dict[tuple, List[Dict[str, Any]]] = defaultdict(list)
+    for row in rows:
+        if isinstance(row, dict):
+            groups[tuple(sorted(row.keys()))].append(row)
+    return list(groups.values())
+
+
 def _sb_post(table: str, rows: list, conflict: str = None) -> int:
-    """Batch-Upsert mit Deduplizierung und Einzelrow-Fallback."""
+    """Key-homogeneous batch upsert with a last-resort single-row fallback."""
     if not rows or not SUPABASE_URL or not SUPABASE_KEY:
         return 0
 
@@ -175,37 +191,47 @@ def _sb_post(table: str, rows: list, conflict: str = None) -> int:
     params = {"on_conflict": conflict} if conflict else {}
     endpoint = f"{SUPABASE_URL.rstrip('/')}/rest/v1/{table}"
     total = 0
+    group_count = 0
 
-    for i in range(0, len(clean_rows), 500):
-        chunk = clean_rows[i:i + 500]
-        try:
-            r = requests.post(
-                endpoint, headers=headers, params=params, json=chunk, timeout=90
-            )
-        except requests.RequestException as exc:
-            print(f"  ⚠️  Supabase {table}: {exc}")
-            continue
-
-        if r.ok:
-            total += len(chunk)
-            continue
-
-        print(f"  ⚠️  Supabase {table} {r.status_code}: {r.text[:300]}")
-        for row in chunk:
+    for same_keys in _rows_by_keyset(clean_rows):
+        group_count += 1
+        for i in range(0, len(same_keys), 500):
+            chunk = same_keys[i:i + 500]
             try:
-                one = requests.post(
-                    endpoint, headers=headers, params=params, json=[row], timeout=30
+                response = requests.post(
+                    endpoint, headers=headers, params=params, json=chunk, timeout=90
                 )
-                if one.ok:
-                    total += 1
-                else:
-                    print(
-                        f"     ❌ {row.get('source')} / {row.get('event_id')} / "
-                        f"{row.get('player_id')} / {row.get('stat_name')}: "
-                        f"{one.status_code} {one.text[:140]}"
-                    )
-            except requests.RequestException:
+            except requests.RequestException as exc:
+                print(f"  ⚠️  Supabase {table}: {exc}")
                 continue
+
+            if response.ok:
+                total += len(chunk)
+                continue
+
+            print(
+                f"  ⚠️  Supabase {table} {response.status_code}: "
+                f"{response.text[:300]}"
+            )
+            # Keep the run useful if one source has a schema-specific row.
+            for row in chunk:
+                try:
+                    one = requests.post(
+                        endpoint, headers=headers, params=params, json=[row], timeout=30
+                    )
+                    if one.ok:
+                        total += 1
+                    else:
+                        print(
+                            f"     ❌ {row.get('source')} / {row.get('event_id')} / "
+                            f"{row.get('player_id')} / {row.get('stat_name')}: "
+                            f"{one.status_code} {one.text[:140]}"
+                        )
+                except requests.RequestException:
+                    continue
+
+    if group_count > 1:
+        print(f"  ℹ️  Supabase {table}: {group_count} homogene Key-Gruppen")
     return total
 
 
@@ -738,23 +764,48 @@ def _parse_football_txt_results(raw: str, date_str: str, source: str, league: st
 
 
 def _load_reep_identity_index() -> int:
-    """Load canonical Reep IDs. Failure is non-fatal and the next identity source remains active."""
+    """Load canonical REEP IDs with a persistent GitHub Actions cache."""
     global _IDENTITY_NAME_TO_ID
     if _IDENTITY_NAME_TO_ID or not ENABLE_REEP_IDENTITY:
         return len(_IDENTITY_NAME_TO_ID)
+
+    try:
+        max_age = max(1, REEP_CACHE_DAYS) * 86400
+        if (
+            REEP_CACHE_FILE.exists()
+            and time.time() - REEP_CACHE_FILE.stat().st_mtime <= max_age
+        ):
+            with gzip.open(REEP_CACHE_FILE, "rt", encoding="utf-8") as handle:
+                cached = json.load(handle)
+            if isinstance(cached, dict):
+                _IDENTITY_NAME_TO_ID = {
+                    str(key): str(value) for key, value in cached.items()
+                    if key and value
+                }
+                print(
+                    f"  ✅ REEP canonical identities (Cache): "
+                    f"{len(_IDENTITY_NAME_TO_ID)}"
+                )
+                return len(_IDENTITY_NAME_TO_ID)
+    except Exception as exc:
+        print(f"  ⚠️ REEP Cache ignoriert: {str(exc)[:100]}")
+
     urls = [
         "https://raw.githubusercontent.com/withqwerty/reep/main/data/people.csv",
         "https://raw.githubusercontent.com/withqwerty/reep/main/data/names.csv",
     ]
     for url in urls:
         try:
-            with requests.get(url, headers=HEADERS, stream=True, timeout=90) as r:
-                if not r.ok:
+            with requests.get(url, headers=HEADERS, stream=True, timeout=90) as response:
+                if not response.ok:
                     continue
-                lines = (line.decode("utf-8", errors="replace") for line in r.iter_lines() if line)
+                lines = (
+                    line.decode("utf-8", errors="replace")
+                    for line in response.iter_lines() if line
+                )
                 reader = csv.DictReader(lines)
-                for i, row in enumerate(reader):
-                    if i >= REEP_MAX_ROWS:
+                for index, row in enumerate(reader):
+                    if index >= REEP_MAX_ROWS:
                         break
                     rid = row.get("reep_id") or row.get("id")
                     names = [row.get("name"), row.get("full_name"), row.get("alias")]
@@ -768,7 +819,21 @@ def _load_reep_identity_index() -> int:
                 break
         except Exception as exc:
             print(f"  ⚠️ REEP identity: {str(exc)[:100]}")
-    print(f"  {'✅' if _IDENTITY_NAME_TO_ID else '⚪'} REEP canonical identities: {len(_IDENTITY_NAME_TO_ID)}")
+
+    if _IDENTITY_NAME_TO_ID:
+        try:
+            CACHE_DIR.mkdir(parents=True, exist_ok=True)
+            tmp = REEP_CACHE_FILE.with_suffix(".tmp.gz")
+            with gzip.open(tmp, "wt", encoding="utf-8", compresslevel=5) as handle:
+                json.dump(_IDENTITY_NAME_TO_ID, handle, ensure_ascii=False)
+            os.replace(tmp, REEP_CACHE_FILE)
+        except Exception as exc:
+            print(f"  ⚠️ REEP Cache konnte nicht gespeichert werden: {str(exc)[:80]}")
+
+    print(
+        f"  {'✅' if _IDENTITY_NAME_TO_ID else '⚪'} "
+        f"REEP canonical identities: {len(_IDENTITY_NAME_TO_ID)}"
+    )
     return len(_IDENTITY_NAME_TO_ID)
 
 
@@ -974,45 +1039,53 @@ def scrape_statsbomb_league(league_name: str) -> List[Dict]:
 
 
 _STAT_ALIASES = {
-    "minutesPlayed": "minutes",
+    "minutesplayed": "minutes",
     "minutes": "minutes",
-    "totalShots": "totalShots",
-    "shots": "totalShots",
-    "shotsOnTarget": "shotsOnTarget",
+    "totalshots": "shots",
+    "shots": "shots",
+    "shotstotal": "shots",
+    "shotsontarget": "sot",
+    "ontargetscoringattempt": "sot",
     "goals": "goals",
-    "goalAssist": "goalAssist",
-    "assists": "goalAssist",
-    "accuratePass": "passes",
-    "totalPass": "passes",
+    "goalassist": "assists",
+    "assists": "assists",
+    "accuratepass": "passes",
+    "accuratepasses": "passes",
+    "totalpass": "passes",
     "passes": "passes",
     "tackles": "tackles",
-    "totalTackle": "tackles",
+    "totaltackle": "tackles",
+    "wontackles": "tackles",
     "interceptions": "interceptions",
     "clearance": "clearances",
     "clearances": "clearances",
-    "fouls": "foulsCommitted",
-    "foulsCommitted": "foulsCommitted",
-    "wasFouled": "foulsWon",
-    "foulsWon": "foulsWon",
-    "yellowCards": "yellowCards",
-    "yellowCard": "yellowCards",
-    "redCards": "redCards",
-    "redCard": "redCards",
+    "fouls": "fouls_committed",
+    "foulscommitted": "fouls_committed",
+    "wasfouled": "fouls_won",
+    "foulswon": "fouls_won",
+    "yellowcards": "yellow_cards",
+    "yellowcard": "yellow_cards",
+    "redcards": "red_cards",
+    "redcard": "red_cards",
     "saves": "saves",
-    "keeperSaves": "saves",
+    "keepersaves": "saves",
     "offsides": "offsides",
-    "keyPass": "keyPasses",
-    "keyPasses": "keyPasses",
-    "duelWon": "duelsWon",
-    "duelsWon": "duelsWon",
-    "totalDuel": "duels",
+    "keypass": "key_passes",
+    "keypasses": "key_passes",
+    "duelwon": "duels_won",
+    "duelswon": "duels_won",
+    "totalduel": "duels",
     "duels": "duels",
     "touches": "touches",
-    "xG": "xg",
-    "expectedGoals": "xg",
-    "xA": "xa",
-    "expectedAssists": "xa",
+    "xg": "xg",
+    "expectedgoals": "xg",
+    "xa": "xa",
+    "expectedassists": "xa",
 }
+
+
+def _stat_key(value: Any) -> str:
+    return re.sub(r"[^a-z0-9]+", "", str(value or "").lower())
 
 
 def _numeric(value: Any) -> Optional[float]:
@@ -1020,13 +1093,75 @@ def _numeric(value: Any) -> Optional[float]:
         return None
     if isinstance(value, (int, float)):
         return float(value)
+    if isinstance(value, dict):
+        for key in (
+            "value", "statValue", "stat_value", "total", "count",
+            "displayValue", "valueDisplay", "value_display",
+        ):
+            if key in value:
+                parsed = _numeric(value.get(key))
+                if parsed is not None:
+                    return parsed
+        return None
+    if isinstance(value, list):
+        for item in value:
+            parsed = _numeric(item)
+            if parsed is not None:
+                return parsed
+        return None
     raw = str(value).strip().replace("%", "")
     if "/" in raw:
         raw = raw.split("/", 1)[0]
+    raw = raw.replace(",", ".")
+    match = re.search(r"-?\d+(?:\.\d+)?", raw)
+    if not match:
+        return None
     try:
-        return float(raw)
+        return float(match.group(0))
     except Exception:
         return None
+
+
+def _flatten_stats(stats: Any) -> Dict[str, Any]:
+    """Normalize FotMob/SofaScore nested dictionaries and stat lists."""
+    output: Dict[str, Any] = {}
+    if isinstance(stats, dict):
+        for raw_key, value in stats.items():
+            if isinstance(value, dict):
+                direct = _numeric(value)
+                if direct is not None:
+                    output[str(raw_key)] = direct
+                else:
+                    nested = _flatten_stats(value)
+                    output.update(nested)
+            elif isinstance(value, list):
+                nested = _flatten_stats(value)
+                if nested:
+                    output.update(nested)
+                else:
+                    direct = _numeric(value)
+                    if direct is not None:
+                        output[str(raw_key)] = direct
+            else:
+                output[str(raw_key)] = value
+    elif isinstance(stats, list):
+        for item in stats:
+            if not isinstance(item, dict):
+                continue
+            key = (
+                item.get("key") or item.get("statKey") or item.get("name")
+                or item.get("title") or item.get("label")
+            )
+            value = (
+                item.get("value") if "value" in item else
+                item.get("statValue") if "statValue" in item else
+                item.get("total")
+            )
+            if key is not None and value is not None:
+                output[str(key)] = value
+            else:
+                output.update(_flatten_stats(item))
+    return output
 
 
 def _stats_to_rows(source: str, event_id: Any, player: dict, stats: dict,
@@ -1038,8 +1173,8 @@ def _stats_to_rows(source: str, event_id: Any, player: dict, stats: dict,
         player.get("displayName") or "Unknown"
     )
     result = []
-    for raw_name, value in (stats or {}).items():
-        stat_name = _STAT_ALIASES.get(str(raw_name))
+    for raw_name, value in _flatten_stats(stats).items():
+        stat_name = _STAT_ALIASES.get(_stat_key(raw_name))
         stat_value = _numeric(value)
         if not stat_name or stat_value is None:
             continue
@@ -1126,14 +1261,26 @@ def scrape_sofascore_date(date_str: str) -> List[Dict]:
 
 
 def _walk_fotmob_players(node: Any):
-    """Findet rekursiv FotMob-Spielerobjekte mit eingebetteten stats."""
+    """Find FotMob player records across current and legacy response shapes."""
     if isinstance(node, dict):
-        if (
-            isinstance(node.get("stats"), dict)
-            and (node.get("id") or node.get("playerId"))
-            and (node.get("name") or node.get("displayName"))
-        ):
-            yield node
+        stats = (
+            node.get("stats") or node.get("statistics")
+            or node.get("playerStats")
+        )
+        player_obj = node.get("player") if isinstance(node.get("player"), dict) else node
+        player_id = player_obj.get("id") or player_obj.get("playerId")
+        player_name = (
+            player_obj.get("name") or player_obj.get("displayName")
+            or player_obj.get("shortName")
+        )
+        if stats and player_id and player_name:
+            merged = dict(player_obj)
+            merged["stats"] = stats
+            merged["teamName"] = (
+                node.get("teamName") or node.get("team")
+                or player_obj.get("teamName") or player_obj.get("team")
+            )
+            yield merged
         for value in node.values():
             yield from _walk_fotmob_players(value)
     elif isinstance(node, list):
@@ -1575,11 +1722,14 @@ def scrape_github_player_datasets(date_str: str) -> List[Dict[str, Any]]:
 
 
 def fetch_identity_maps_for_normalization() -> int:
-    """Load real identity mappings; identity repositories are not fake match-stat rows."""
+    """Load the useful REEP map; reference-only repo scans belong to source learning."""
     if not USE_GITHUB_OPEN_SOURCES:
         return 0
     total = _load_reep_identity_index()
-    # OpenFootball players/clubs are additional aliases/reference data. We health-check all raw files.
+    if not IDENTITY_REFERENCE_HEALTHCHECK:
+        print("  ℹ️  OpenFootball identity health-check im Daily-Run übersprungen")
+        return total
+
     for owner, repo, kind in GITHUB_OPEN_SOURCE_REPOS:
         if kind != "identity" or repo == "reep":
             continue
@@ -1588,7 +1738,9 @@ def fetch_identity_maps_for_normalization() -> int:
         try:
             files = _github_tree_files(owner, repo, max_files=80)
             for path in files:
-                if not path.lower().endswith((".csv", ".json", ".ndjson", ".jsonl", ".txt")):
+                if not path.lower().endswith(
+                    (".csv", ".json", ".ndjson", ".jsonl", ".txt")
+                ):
                     continue
                 raw = _github_raw(owner, repo, path)
                 if raw:
@@ -1597,8 +1749,8 @@ def fetch_identity_maps_for_normalization() -> int:
                     break
             total += count
             print(f"  {'✅' if count else '⚪'} {label} identity/reference rows: {count}")
-        except Exception as e:
-            print(f"  ⚠️  {label} identity map: {str(e)[:100]}")
+        except Exception as exc:
+            print(f"  ⚠️  {label} identity map: {str(exc)[:100]}")
     return total
 
 
@@ -1636,7 +1788,11 @@ def scrape_player_stats(date_str: str) -> int:
     # Identitätsquellen zuerst laden/loggen: sie liefern Mapping, keine Stat-Rows.
     identity_count = fetch_identity_maps_for_normalization()
     source_counts["openfootball/players + clubs + REEP identity"] = identity_count
-    source_counts["OddsHarvester + Bet365 + other bookies"] = scrape_oddsharvester_style(date_str)
+    if USE_ODDSHARVESTER_STYLE:
+        source_counts["OddsHarvester + Bet365 + other bookies"] = scrape_oddsharvester_style(date_str)
+    else:
+        source_counts["OddsHarvester + Bet365 + other bookies"] = 0
+        print("  ℹ️  Odds im Player-Stats-Lauf deaktiviert — eigener Odds-Schritt folgt")
 
     # Aktuelle Matchdaten zuerst
     add_source("SofaScore", lambda: scrape_sofascore_date(date_str))
