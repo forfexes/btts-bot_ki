@@ -1,4 +1,4 @@
-name: NETRATTLER AI MASTER V36F RUNTIME-SAFE
+name: NETRATTLER AI MASTER V36G DAILY DATA FIX
 
 on:
   workflow_dispatch:
@@ -139,6 +139,40 @@ jobs:
           pip install -r requirements_all_source.txt
           pip install -r requirements_train.txt
           pip install -r requirements.txt || true
+      - name: Resolve Playwright version
+        if: contains(fromJSON('["daily","full"]'), steps.mode.outputs.mode)
+        id: playwright-version
+        shell: bash
+        run: |
+          echo "version=$(python -c 'import importlib.metadata; print(importlib.metadata.version(\"playwright\"))')" >> "$GITHUB_OUTPUT"
+
+      - name: Restore Chromium browser cache
+        if: contains(fromJSON('["daily","full"]'), steps.mode.outputs.mode)
+        id: playwright-browser-cache
+        uses: actions/cache@v4
+        with:
+          path: ~/.cache/ms-playwright
+          key: playwright-chromium-${{ runner.os }}-${{ steps.playwright-version.outputs.version }}
+
+      - name: Install Chromium browser
+        if: contains(fromJSON('["daily","full"]'), steps.mode.outputs.mode) && steps.playwright-browser-cache.outputs.cache-hit != 'true'
+        run: python -m playwright install chromium
+
+      - name: Verify Chromium launch
+        if: contains(fromJSON('["daily","full"]'), steps.mode.outputs.mode)
+        shell: bash
+        run: |
+          python - <<'PY'
+          from playwright.sync_api import sync_playwright
+          with sync_playwright() as p:
+              browser = p.chromium.launch(
+                  headless=True,
+                  args=["--no-sandbox", "--disable-dev-shm-usage"],
+              )
+              browser.close()
+          print("PLAYWRIGHT CHROMIUM OK")
+          PY
+
       - name: Compile selected runtime modules
         shell: bash
         run: |
@@ -243,7 +277,14 @@ jobs:
           ODDS_API_KEY: ${{ secrets.ODDS_API_KEY }}
           BETFAIR_APP_KEY: ${{ secrets.BETFAIR_APP_KEY }}
           BETFAIR_SESSION_TOKEN: ${{ secrets.BETFAIR_SESSION_TOKEN }}
-        run: python scrape_player_stats.py --yesterday
+        run: |
+          # Odds have a separate step. Daily mode also skips the slow soccerdata/TLS fallback.
+          export USE_ODDSHARVESTER_STYLE=false
+          export IDENTITY_REFERENCE_HEALTHCHECK=false
+          if [[ "${{ steps.mode.outputs.mode }}" == "daily" ]]; then
+            export USE_SOCCERDATA=false
+          fi
+          python scrape_player_stats.py --yesterday
       - name: Compact current and closing odds
         if: contains(fromJSON('["daily","full"]'), steps.mode.outputs.mode)
         env:
@@ -255,6 +296,8 @@ jobs:
           ODDS_API_KEY: ${{ secrets.ODDS_API_KEY }}
           BETFAIR_APP_KEY: ${{ secrets.BETFAIR_APP_KEY }}
           BETFAIR_SESSION_TOKEN: ${{ secrets.BETFAIR_SESSION_TOKEN }}
+          ODDSHARVESTER_TIMEOUT: "240"
+          BET365_WAIT_MS: "6000"
         run: |
           python netrattler_closing_odds_capture_v35.py --snapshot-type current
           python netrattler_closing_odds_capture_v35.py --snapshot-type closing
