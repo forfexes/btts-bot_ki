@@ -1,4 +1,4 @@
-name: NETRATTLER AI MASTER V36G DAILY DATA FIX
+name: NETRATTLER AI MASTER V36H VERIFIED DAILY
 
 on:
   workflow_dispatch:
@@ -46,10 +46,7 @@ jobs:
               ;;
           esac
 
-          required=(
-            requirements_all_source.txt
-            requirements_train.txt
-          )
+          required=()
 
           case "$MODE" in
             daily)
@@ -71,15 +68,21 @@ jobs:
               ;;
             sources)
               required+=(
+                requirements_all_source.txt
                 netrattler_learning_engine.py
                 netrattler_generic_repo_ingestor.py
               )
               ;;
             train)
-              required+=(train_model.py)
+              required+=(
+                requirements_train.txt
+                train_model.py
+              )
               ;;
             full)
               required+=(
+                requirements_all_source.txt
+                requirements_train.txt
                 netrattler_learning_engine.py
                 netrattler_runtime_policy.py
                 netrattler_generic_repo_ingestor.py
@@ -133,18 +136,60 @@ jobs:
           key: netrattler-source-cache-${{ runner.os }}-${{ github.run_id }}
           restore-keys: |
             netrattler-source-cache-${{ runner.os }}-
-      - name: Install
+      - name: Install selected runtime
+        shell: bash
         run: |
+          set -euo pipefail
           python -m pip install --upgrade pip
-          pip install -r requirements_all_source.txt
-          pip install -r requirements_train.txt
-          pip install -r requirements.txt || true
+          MODE="${{ steps.mode.outputs.mode }}"
+
+          case "$MODE" in
+            daily)
+              python -m pip install \
+                "requests>=2.32,<3" \
+                "python-dateutil>=2.9,<3" \
+                "pandas>=2,<4" \
+                "rapidfuzz>=3,<4" \
+                "beautifulsoup4>=4.12,<5" \
+                "cloudscraper>=1.2.71,<2" \
+                "playwright>=1.45,<2" \
+                "oddsharvester==0.5.0"
+              ;;
+            learning)
+              python -m pip install "requests>=2.32,<3"
+              ;;
+            sources)
+              python -m pip install -r requirements_all_source.txt
+              ;;
+            train)
+              python -m pip install -r requirements_train.txt
+              ;;
+            full)
+              python -m pip install -r requirements_all_source.txt
+              python -m pip install -r requirements_train.txt
+              python -m pip install "oddsharvester==0.5.0"
+              ;;
+          esac
+
+          if [[ "${{ github.event.inputs.run_tip_bot }}" == "true" && -f requirements.txt ]]; then
+            python -m pip install -r requirements.txt
+          fi
+
+          if [[ "$MODE" == "daily" || "$MODE" == "full" ]]; then
+            command -v oddsharvester >/dev/null
+            oddsharvester --help >/dev/null
+            echo "ODDSHARVESTER CLI OK"
+          fi
+
       - name: Resolve Playwright version
         if: contains(fromJSON('["daily","full"]'), steps.mode.outputs.mode)
         id: playwright-version
         shell: bash
         run: |
-          echo "version=$(python -c 'import importlib.metadata; print(importlib.metadata.version(\"playwright\"))')" >> "$GITHUB_OUTPUT"
+          VERSION="$(python -c "import importlib.metadata as m; print(m.version('playwright'))")"
+          test -n "$VERSION"
+          echo "version=$VERSION" >> "$GITHUB_OUTPUT"
+          echo "PLAYWRIGHT VERSION $VERSION"
 
       - name: Restore Chromium browser cache
         if: contains(fromJSON('["daily","full"]'), steps.mode.outputs.mode)
@@ -283,6 +328,7 @@ jobs:
           export IDENTITY_REFERENCE_HEALTHCHECK=false
           if [[ "${{ steps.mode.outputs.mode }}" == "daily" ]]; then
             export USE_SOCCERDATA=false
+            export USE_STATSBOMB=false
           fi
           python scrape_player_stats.py --yesterday
       - name: Compact current and closing odds
@@ -296,11 +342,10 @@ jobs:
           ODDS_API_KEY: ${{ secrets.ODDS_API_KEY }}
           BETFAIR_APP_KEY: ${{ secrets.BETFAIR_APP_KEY }}
           BETFAIR_SESSION_TOKEN: ${{ secrets.BETFAIR_SESSION_TOKEN }}
-          ODDSHARVESTER_TIMEOUT: "240"
-          BET365_WAIT_MS: "6000"
+          ODDSHARVESTER_TIMEOUT: "150"
+          BET365_WAIT_MS: "4000"
         run: |
           python netrattler_closing_odds_capture_v35.py --snapshot-type current
-          python netrattler_closing_odds_capture_v35.py --snapshot-type closing
       - name: Temporal models and champion promotion
         if: contains(fromJSON('["full","train"]'), steps.mode.outputs.mode)
         env:
