@@ -16,8 +16,9 @@ from typing import Any, Dict, Iterable, List, Mapping, Optional, Sequence
 import requests
 
 from netrattler_learning_engine import (
-    GITHUB_TOKEN, HTTP_TIMEOUT, SupabaseRest, infer_schema, log, norm,
-    stable_hash, to_float,
+    GITHUB_TOKEN, HTTP_TIMEOUT, SupabaseRest, dedupe_rows_for_conflict,
+    infer_schema, is_production_football_data_path, log, norm,
+    source_role_override, stable_hash, to_float,
 )
 from netrattler_source_router_v36 import load_last_good, save_last_good
 
@@ -25,8 +26,39 @@ MAX_FILES = int(os.getenv("NETRATTLER_GENERIC_MAX_FILES", "30"))
 MAX_ROWS_PER_FILE = int(os.getenv("NETRATTLER_GENERIC_MAX_ROWS_PER_FILE", "5000"))
 
 
+GENERIC_DATA_REPO_ALLOWLIST = {
+    "martj42/international_results",
+    "martj42/womens-international-results",
+    "datasets/football-datasets",
+    "anishkhetani/premier-league-data",
+    "salimt/football-datasets",
+}
+
+
+def _repo_allows_generic_ingest(repo: str, candidate: Mapping[str, Any]) -> bool:
+    key = str(repo or "").lower()
+    if source_role_override(key):
+        return False
+    adapter = str(candidate.get("adapter") or "").lower()
+    category = str(candidate.get("category") or "").lower()
+    if key in GENERIC_DATA_REPO_ALLOWLIST:
+        return True
+    return adapter == "generic_data" and category in {"match_results", "player_stats", "odds"}
+
+
+def _path_is_allowed(repo: str, path: str) -> bool:
+    if not is_production_football_data_path(path):
+        return False
+    lower = str(path or "").replace("\\", "/").lower()
+    # Odds/code repositories often contain multi-sport test payloads. Generic
+    # ingestion is forbidden even when a file accidentally resembles results.
+    if source_role_override(repo):
+        return False
+    return True
+
+
 def _headers() -> Dict[str, str]:
-    headers = {"User-Agent": "NETRATTLER-GenericRepoIngestor/35.0", "Accept": "*/*"}
+    headers = {"User-Agent": "NETRATTLER-GenericRepoIngestor/36C", "Accept": "*/*"}
     if GITHUB_TOKEN:
         headers["Authorization"] = f"Bearer {GITHUB_TOKEN}"
     return headers
@@ -172,6 +204,9 @@ def _odds_row(source: str, raw: Mapping[str, Any], mapping: Mapping[str, str]) -
 
 def ingest_source(candidate: Mapping[str, Any], db: SupabaseRest) -> Dict[str, int]:
     repo = str(candidate.get("repo_full_name") or candidate.get("source_name") or "")
+    if not _repo_allows_generic_ingest(repo, candidate):
+        log(f"GENERIC SKIP {repo}: dedicated adapter or unapproved generic source")
+        return {"match_results": 0, "player_stats": 0, "odds": 0, "identity": 0, "failed": 0, "cached": 0, "skipped": 1, "deduped": 0}
     metadata = candidate.get("metadata") or {}
     if isinstance(metadata, str):
         try:
@@ -181,11 +216,12 @@ def ingest_source(candidate: Mapping[str, Any], db: SupabaseRest) -> Dict[str, i
     branch = str(metadata.get("default_branch") or "main")
     paths = list(metadata.get("data_files") or [])[:MAX_FILES]
     source = f"github:{repo}"
-    totals = {"match_results": 0, "player_stats": 0, "odds": 0, "identity": 0, "failed": 0, "cached": 0}
+    totals = {"match_results": 0, "player_stats": 0, "odds": 0, "identity": 0, "failed": 0, "cached": 0, "skipped": 0, "deduped": 0}
     cache_items: List[Dict[str, Any]] = []
     live_rows = 0
     for path in paths:
-        if not str(path).lower().endswith((".csv", ".tsv", ".json")):
+        if not _path_is_allowed(repo, str(path)):
+            totals["skipped"] += 1
             continue
         url = f"https://raw.githubusercontent.com/{repo}/{branch}/{path}"
         try:
@@ -216,12 +252,31 @@ def ingest_source(candidate: Mapping[str, Any], db: SupabaseRest) -> Dict[str, i
                 table, conflict = "netrattler_odds_snapshots", "snapshot_id"
             else:
                 rows = []
-            ok, _ = db.upsert(table, rows, conflict) if table and rows else (0, 0)
+            candidate_category = str(candidate.get("category") or "").lower()
+            if candidate_category in {"match_results", "player_stats", "odds"} and schema != candidate_category:
+                totals["skipped"] += 1
+                log(
+                    f"GENERIC SKIP {repo}:{path}: inferred={schema} expected={candidate_category}",
+                    "WARN",
+                )
+                continue
+
+            original_count = len(rows)
+            rows = dedupe_rows_for_conflict(rows, conflict) if table and rows else []
+            totals["deduped"] += original_count - len(rows)
+            ok, failed = db.upsert(table, rows, conflict) if table and rows else (0, 0)
+            totals["failed"] += failed
             totals[schema] = totals.get(schema, 0) + ok
             live_rows += ok
-            for row in rows[:MAX_ROWS_PER_FILE]:
-                cache_items.append({"table": table, "conflict": conflict, "schema": schema, "row": row})
-            log(f"GENERIC {repo}:{path} schema={schema} rows={ok}")
+
+            # Cache only data that was actually accepted by Supabase.
+            if ok and not failed:
+                for row in rows[:ok]:
+                    cache_items.append({"table": table, "conflict": conflict, "schema": schema, "row": row})
+            log(
+                f"GENERIC {repo}:{path} schema={schema} "
+                f"parsed={original_count} deduped={len(rows)} written={ok} failed={failed}"
+            )
         except Exception as exc:
             totals["failed"] += 1
             log(f"GENERIC {repo}:{path}: {exc}", "WARN")
@@ -254,7 +309,10 @@ def main() -> None:
         filters={"status": "in.(active,fallback)", "auto_ingest": "eq.true", "cost": "eq.free"},
         order="trust_score.desc", limit_total=500,
     )
-    grand: Dict[str, int] = {"match_results": 0, "player_stats": 0, "odds": 0, "failed": 0}
+    grand: Dict[str, int] = {
+        "match_results": 0, "player_stats": 0, "odds": 0,
+        "identity": 0, "failed": 0, "cached": 0, "skipped": 0, "deduped": 0,
+    }
     for candidate in candidates:
         totals = ingest_source(candidate, db)
         for key, value in totals.items():
