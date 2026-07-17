@@ -1,4 +1,4 @@
-name: NETRATTLER AI MASTER V36I PYTHON 3.12
+name: NETRATTLER AI MASTER V36K FINAL BET365 PROPS
 
 on:
   workflow_dispatch:
@@ -57,6 +57,7 @@ jobs:
                 scrape_player_stats.py
                 netrattler_odds_harvester.py
                 netrattler_closing_odds_capture_v35.py
+                netrattler_bet365_player_props.py
               )
               ;;
             learning)
@@ -87,6 +88,7 @@ jobs:
                 netrattler_runtime_policy.py
                 netrattler_generic_repo_ingestor.py
                 netrattler_closing_odds_capture_v35.py
+                netrattler_bet365_player_props.py
                 scrape_player_stats.py
                 netrattler_odds_harvester.py
                 train_model.py
@@ -138,7 +140,7 @@ jobs:
           import sys
           print("PYTHON", sys.version)
           if sys.version_info < (3, 12):
-              raise SystemExit("OddsHarvester 0.5.0 requires Python >= 3.12")
+              raise SystemExit("NETRATTLER V36J requires Python >= 3.12")
           PY
       - name: Restore last-good source cache
         uses: actions/cache@v4
@@ -164,10 +166,12 @@ jobs:
                 "beautifulsoup4>=4.12,<5" \
                 "cloudscraper>=1.2.71,<2" \
                 "playwright>=1.45,<2" \
-                "oddsharvester==0.5.0"
+                "scikit-learn>=1.5,<2"
               ;;
             learning)
-              python -m pip install "requests>=2.32,<3"
+              python -m pip install \
+                "requests>=2.32,<3" \
+                "scikit-learn>=1.5,<2"
               ;;
             sources)
               python -m pip install -r requirements_all_source.txt
@@ -186,11 +190,20 @@ jobs:
             python -m pip install -r requirements.txt
           fi
 
-          if [[ "$MODE" == "daily" || "$MODE" == "full" ]]; then
+          if [[ "$MODE" == "full" ]]; then
             command -v oddsharvester >/dev/null
             oddsharvester --help >/dev/null
-            echo "ODDSHARVESTER CLI OK"
+            echo "ODDSHARVESTER CLI OK (FULL MODE)"
           fi
+
+      - name: Verify ML runtime
+        if: contains(fromJSON('["daily","full","learning"]'), steps.mode.outputs.mode)
+        shell: bash
+        run: |
+          python - <<'PY'
+          import sklearn
+          print("SCIKIT-LEARN", sklearn.__version__)
+          PY
 
       - name: Resolve Playwright version
         if: contains(fromJSON('["daily","full"]'), steps.mode.outputs.mode)
@@ -245,6 +258,7 @@ jobs:
                 scrape_player_stats.py
                 netrattler_odds_harvester.py
                 netrattler_closing_odds_capture_v35.py
+                netrattler_bet365_player_props.py
               )
               ;;
             learning)
@@ -269,6 +283,7 @@ jobs:
                 netrattler_runtime_policy.py
                 netrattler_generic_repo_ingestor.py
                 netrattler_closing_odds_capture_v35.py
+                netrattler_bet365_player_props.py
                 scrape_player_stats.py
                 netrattler_odds_harvester.py
                 train_model.py
@@ -342,7 +357,7 @@ jobs:
             export USE_STATSBOMB=false
           fi
           python scrape_player_stats.py --yesterday
-      - name: Compact current and closing odds
+      - name: Compact current odds
         if: contains(fromJSON('["daily","full"]'), steps.mode.outputs.mode)
         env:
           SUPABASE_URL: ${{ secrets.SUPABASE_URL }}
@@ -353,7 +368,9 @@ jobs:
           ODDS_API_KEY: ${{ secrets.ODDS_API_KEY }}
           BETFAIR_APP_KEY: ${{ secrets.BETFAIR_APP_KEY }}
           BETFAIR_SESSION_TOKEN: ${{ secrets.BETFAIR_SESSION_TOKEN }}
-          ODDSHARVESTER_TIMEOUT: "150"
+          # OddsHarvester/OddsPortal only duplicates team markets here and
+          # consumed the full timeout. Keep it for FULL maintenance, not DAILY.
+          ENABLE_ODDSHARVESTER: "false"
           BET365_WAIT_MS: "4000"
         run: |
           python netrattler_closing_odds_capture_v35.py --snapshot-type current
@@ -369,6 +386,20 @@ jobs:
           BETFAIR_APP_KEY: ${{ secrets.BETFAIR_APP_KEY }}
           BETFAIR_SESSION_TOKEN: ${{ secrets.BETFAIR_SESSION_TOKEN }}
         run: python train_model.py
+      - name: Bet365 football player props
+        if: contains(fromJSON('["daily","full"]'), steps.mode.outputs.mode)
+        continue-on-error: true
+        timeout-minutes: 3
+        env:
+          SUPABASE_URL: ${{ secrets.SUPABASE_URL }}
+          SUPABASE_KEY: ${{ secrets.SUPABASE_KEY }}
+          SUPABASE_SERVICE_ROLE_KEY: ${{ secrets.SUPABASE_SERVICE_ROLE_KEY }}
+          BET365_FOOTBALL_URL: ${{ secrets.BET365_FOOTBALL_URL }}
+          BET365_EVENT_URLS: ${{ secrets.BET365_EVENT_URLS }}
+          BET365_PROPS_TIMEOUT: "120"
+          BET365_PROPS_MAX_EVENTS: "12"
+        run: python netrattler_bet365_player_props.py --date today
+
       - name: Settlement learning, calibration and risk policy
         if: contains(fromJSON('["daily","full","learning"]'), steps.mode.outputs.mode)
         env:
