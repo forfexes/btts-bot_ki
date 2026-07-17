@@ -26,6 +26,10 @@ jobs:
         run: python -m py_compile import_football_data_sources_v14.py
       - name: Import every free historical source; failures continue
         env:
+          STORE_HISTORICAL_ODDS: "false"
+          STORE_RAW_PAYLOADS: "false"
+          STOP_ON_DATABASE_FULL: "true"
+          IMPORT_CHUNK_SIZE: "200"
           SUPABASE_URL: ${{ secrets.SUPABASE_URL }}
           SUPABASE_KEY: ${{ secrets.SUPABASE_KEY }}
           SUPABASE_SERVICE_ROLE_KEY: ${{ secrets.SUPABASE_SERVICE_ROLE_KEY }}
