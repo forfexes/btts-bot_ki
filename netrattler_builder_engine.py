@@ -1904,3 +1904,493 @@ def format_builder_message(pick: BuilderPick) -> str:
     ])
     return "\n".join(lines)
 
+
+
+# ============================================================
+# V34B BUILDER SANITY LAYER
+# ============================================================
+# Fixes:
+# - no negative-edge legs
+# - no generic team markets inside PROP BUILDER
+# - no legacy TEAM BUILDER fallback when real player props are missing
+# - no fake multiplication of correlated same-game team markets
+# - real bookmaker odds required by default
+# - Risky/Lottery builders remain possible, but only from valid player props
+
+_V34B_REAL_ODDS_SOURCES = {
+    "pinnacle", "bet365", "betfair", "oddsportal", "william hill",
+    "williamhill", "betvictor", "bwin", "ladbrokes", "coral",
+    "1xbet", "betmgm", "the odds api", "the-odds-api", "oddspedia",
+}
+
+
+def _v34b_edge(leg: PropLeg) -> float:
+    if not leg.odds or leg.odds <= 1:
+        return -1.0
+    return float(leg.probability or 0.0) - (1.0 / float(leg.odds))
+
+
+def _v34b_has_real_bookmaker_odds(leg: PropLeg) -> bool:
+    src = norm(leg.source)
+    return any(book in src for book in _V34B_REAL_ODDS_SOURCES)
+
+
+def _v34b_valid_player_leg(leg: PropLeg) -> bool:
+    if not _v31_is_real_player_leg(leg):
+        return False
+
+    # Generic selections/teams must never masquerade as player names.
+    player_n = norm(leg.player)
+    home, away = parse_match(leg.match)
+    team_names = {norm(home), norm(away), norm(leg.team)}
+    if player_n in {x for x in team_names if x}:
+        return False
+
+    market_n = norm(leg.market)
+    generic_market_terms = [
+        "both teams to score", "either team to score", "team to score",
+        "match goals", "total goals", "double chance", "draw no bet",
+        "over goals", "under goals",
+    ]
+    if any(term in market_n for term in generic_market_terms):
+        return False
+
+    allow_estimated = str(os.getenv("NETRATTLER_BUILDER_ALLOW_ESTIMATED_ODDS", "false")).lower() in {
+        "1", "true", "yes", "on"
+    }
+    if not allow_estimated and not _v34b_has_real_bookmaker_odds(leg):
+        return False
+
+    min_edge = float(os.getenv("NETRATTLER_BUILDER_MIN_LEG_EDGE", "0.02"))
+    min_prob = float(os.getenv("NETRATTLER_BUILDER_MIN_LEG_PROB", "0.20"))
+    min_odds = float(os.getenv("NETRATTLER_BUILDER_MIN_LEG_ODDS", "1.35"))
+    max_odds = float(os.getenv("NETRATTLER_BUILDER_MAX_LEG_ODDS", "25.0"))
+
+    return (
+        min_odds <= float(leg.odds or 0.0) <= max_odds
+        and float(leg.probability or 0.0) >= min_prob
+        and _v34b_edge(leg) >= min_edge
+    )
+
+
+def _v34b_builder_stake(total_odds: float) -> float:
+    if total_odds >= 50:
+        return 0.05
+    if total_odds >= 15:
+        return 0.15
+    if total_odds >= 8:
+        return 0.25
+    return 0.40
+
+
+def _v34b_pick_valid(pick: BuilderPick) -> bool:
+    min_total = float(os.getenv("NETRATTLER_BUILDER_MIN_TOTAL_ODDS", "5.0"))
+    max_total = float(os.getenv("NETRATTLER_BUILDER_MAX_TOTAL_ODDS", "250.0"))
+    if not (min_total <= float(pick.total_odds or 0.0) <= max_total):
+        return False
+    if len(pick.legs) < 2:
+        return False
+    if not all(_v34b_valid_player_leg(leg) for leg in pick.legs):
+        return False
+    # No conflicting same player/category lines in the same builder.
+    seen = set()
+    for leg in pick.legs:
+        key = (norm(leg.player), leg.category)
+        if key in seen:
+            return False
+        seen.add(key)
+    return True
+
+
+def build_builder_picks(
+    raw_props: Sequence[Dict[str, Any]],
+    match_contexts: Optional[Sequence[Dict[str, Any]]] = None,
+    match_date: Optional[str] = None,
+    max_builders: Optional[int] = None,
+) -> List[BuilderPick]:
+    props = deduplicate_props(raw_props)
+    run_date = match_date or date.today().isoformat()
+    max_count = max_builders or as_int(os.getenv("NETRATTLER_MAX_BUILDERS_PER_RUN", "18"), 18)
+
+    # Strict player-only pool with positive edge and real bookmaker odds.
+    real_props = [leg for leg in props if _v34b_valid_player_leg(leg)]
+    if len(real_props) < 2:
+        return []
+
+    candidates: List[BuilderPick] = []
+    candidates.extend(_v31_same_match_builders(real_props, run_date))
+    candidates.extend(_v31_cross_match_builders(real_props, run_date))
+    candidates.extend(_v31_ladder_builders(real_props, run_date))
+
+    # IMPORTANT: no legacy team-builder fallback.
+    candidates = [pick for pick in candidates if _v34b_pick_valid(pick)]
+    if not candidates:
+        return []
+
+    # Dedupe by exact player/market/line set.
+    unique: List[BuilderPick] = []
+    seen = set()
+    for pick in candidates:
+        sig = "|".join(sorted(
+            f"{norm(x.player)}:{norm(x.match)}:{x.category}:{round(x.line, 2)}"
+            for x in pick.legs
+        ))
+        if sig in seen:
+            continue
+        seen.add(sig)
+        pick.stake = _v34b_builder_stake(pick.total_odds)
+        unique.append(pick)
+
+    unique.sort(key=_v31_pick_score, reverse=True)
+    return _v32d_rebalance_best_builders(unique, max_count)
+
+
+def _v34b_risk_label(total_odds: float) -> str:
+    if total_odds >= 50:
+        return "LOTTERY"
+    if total_odds >= 15:
+        return "RISKY"
+    if total_odds >= 8:
+        return "VALUE"
+    return "SAFE"
+
+
+def format_builder_message(pick: BuilderPick) -> str:
+    sep = "━" * 22
+    same_match = len({x.match for x in pick.legs}) == 1
+    avg_score = sum(_v31_leg_score(x) for x in pick.legs) / max(1, len(pick.legs))
+    avg_edge = sum(_v34b_edge(x) for x in pick.legs) / max(1, len(pick.legs))
+
+    if avg_score >= 0.92:
+        read = "A-SETUP"
+    elif avg_score >= 0.82:
+        read = "B+ VALUE"
+    elif avg_score >= 0.72:
+        read = "B VALUE"
+    else:
+        read = "SPECULATIVE"
+
+    risk = _v34b_risk_label(float(pick.total_odds or 0.0))
+    lines = [
+        "🔑 <b>NETRATTLER PROP BUILDER</b>",
+        f"<b>{pick.style} · {pick.variant}</b>",
+        sep,
+    ]
+    if same_match and pick.legs:
+        lines.append(f"⚽ <b>{pick.legs[0].match}</b>")
+
+    for i, leg in enumerate(pick.legs, 1):
+        icon = CATEGORY_ICON.get(leg.category, "🎯")
+        match_suffix = "" if same_match else f" · {leg.match}"
+        source_note = leg.source.split(":")[0] if leg.source else "Bookmaker"
+        prob = int(round(float(leg.probability or 0) * 100))
+        fair = 1.0 / max(0.01, float(leg.probability or 0))
+        edge = _v34b_edge(leg) * 100
+        lines.append(f"{i}. {icon} <b>{leg.player}</b> — {_v31_market_label(leg)}{match_suffix}")
+        lines.append(
+            f"   Quote {leg.odds:.2f} · Fair {fair:.2f} · Prob {prob}% · {source_note}"
+        )
+        lines.append(f"   ↳ {_v31_reason(leg).split(' · Edge')[0]} · Edge <b>+{edge:.1f}%</b>")
+
+    lines.extend([
+        sep,
+        f"💰 Gesamt-Quote: <b>{pick.total_odds:.2f}</b>",
+        f"🔥 Einsatz: <b>{pick.stake:.2f} Units</b>",
+        f"🧠 <b>READ:</b> {read} · {risk} · Ø Edge +{avg_edge * 100:.1f}%",
+        "<i>Nur echte Spielerprops mit positiver Edge und realer Bookmaker-Quote. Keine generischen Team-Märkte.</i>",
+    ])
+    return "\n".join(lines)
+
+# ============================================================
+# V35 AUTONOMOUS POLICY LAYER
+# ============================================================
+# Runtime policy is generated after settlement learning.  It calibrates every
+# leg, downweights weak sources/markets and controls legs/stakes by drawdown.
+try:
+    from netrattler_runtime_policy import (
+        adjust_probability as _v35_adjust_probability,
+        allow_pick as _v35_allow_pick,
+        max_builder_legs as _v35_max_builder_legs,
+        max_daily_builders as _v35_max_daily_builders,
+        minimum_edge as _v35_minimum_edge,
+        risk_state as _v35_risk_state,
+        stake_for_builder as _v35_stake_for_builder,
+    )
+except Exception:  # safe fallback if policy module is temporarily absent
+    _v35_adjust_probability = lambda p, **_: (p / 100.0 if p > 1 else p)
+    _v35_allow_pick = lambda p, o, **_: o > 1 and (p / 100.0 if p > 1 else p) - (1.0 / o) >= 0.03
+    _v35_max_builder_legs = lambda: 6
+    _v35_max_daily_builders = lambda: 8
+    _v35_minimum_edge = lambda default=0.03: default
+    _v35_risk_state = lambda: {"mode": "normal"}
+    _v35_stake_for_builder = lambda total_odds, legs, **_: 0.05 if total_odds >= 50 else 0.15 if total_odds >= 15 else 0.25
+
+_v35_previous_valid_leg = _v34b_valid_player_leg
+_v35_previous_build_builder_picks = build_builder_picks
+_v35_previous_format_builder_message = format_builder_message
+
+
+def _v34b_valid_player_leg(leg: PropLeg) -> bool:
+    if not _v35_previous_valid_leg(leg):
+        return False
+    # V35 rows are calibrated before normalization; PropLeg is frozen and must
+    # never be mutated here.
+    return _v35_allow_pick(
+        float(leg.probability or 0.0),
+        float(leg.odds or 0.0),
+        market=leg.category or leg.market,
+        league=leg.league,
+        source=leg.source,
+        player=leg.player,
+        min_edge=max(float(os.getenv("NETRATTLER_BUILDER_MIN_LEG_EDGE", "0.02")), _v35_minimum_edge(0.02)),
+        already_adjusted=True,
+    )
+
+
+def _v35_correlation_penalty(pick: BuilderPick) -> float:
+    same_match = len({norm(x.match) for x in pick.legs}) == 1
+    if not same_match:
+        return 0.0
+    categories = [x.category for x in pick.legs]
+    repeated = len(categories) - len(set(categories))
+    same_team = len([x for x in pick.legs if x.team and norm(x.team) == norm(pick.legs[0].team)])
+    return min(0.55, repeated * 0.10 + max(0, same_team - 1) * 0.06)
+
+
+def build_builder_picks(
+    raw_props: Sequence[Dict[str, Any]],
+    match_contexts: Optional[Sequence[Dict[str, Any]]] = None,
+    match_date: Optional[str] = None,
+    max_builders: Optional[int] = None,
+) -> List[BuilderPick]:
+    dynamic_max = min(
+        max_builders or as_int(os.getenv("NETRATTLER_MAX_BUILDERS_PER_RUN", "18"), 18),
+        _v35_max_daily_builders(),
+    )
+    calibrated_rows: List[Dict[str, Any]] = []
+    for row in raw_props:
+        item = dict(row)
+        raw_p = probability_from_row(item)
+        adjusted = _v35_adjust_probability(
+            raw_p,
+            market=item.get("category") or item.get("market") or "",
+            league=item.get("league") or "",
+            source=item.get("source") or "",
+            player=item.get("player") or item.get("selection") or "",
+        )
+        item["raw_probability"] = raw_p
+        item["model_prob"] = adjusted
+        item["probability"] = adjusted
+        calibrated_rows.append(item)
+    picks = _v35_previous_build_builder_picks(
+        raw_props=calibrated_rows,
+        match_contexts=match_contexts,
+        match_date=match_date,
+        max_builders=dynamic_max,
+    )
+    max_legs = _v35_max_builder_legs()
+    output: List[BuilderPick] = []
+    for pick in picks:
+        if len(pick.legs) > max_legs:
+            continue
+        edges = [_v34b_edge(x) for x in pick.legs]
+        if not edges or min(edges) < _v35_minimum_edge(0.02):
+            continue
+        penalty = _v35_correlation_penalty(pick)
+        stake = _v35_stake_for_builder(
+            float(pick.total_odds or 0.0),
+            len(pick.legs),
+            average_edge=sum(edges) / len(edges),
+            builder_type=f"{pick.style}:{pick.variant}",
+            correlation_penalty=penalty,
+        )
+        if stake <= 0:
+            continue
+        pick.stake = stake
+        output.append(pick)
+    return output[:dynamic_max]
+
+
+def format_builder_message(pick: BuilderPick) -> str:
+    message = _v35_previous_format_builder_message(pick)
+    mode = str(_v35_risk_state().get("mode", "normal")).upper()
+    return message.replace(
+        "<i>Nur echte Spielerprops",
+        f"🛡️ <b>RISK MODE:</b> {mode}\n<i>Nur echte Spielerprops",
+        1,
+    )
+
+# ============================================================
+# V36 PROP-HUNTER-V12 PORT: CONSENSUS + LEARNED PAIRS + EXPOSURE
+# ============================================================
+try:
+    from netrattler_market_consensus_v36 import enrich as _v36_consensus_enrich
+except Exception:
+    _v36_consensus_enrich = lambda rows: [dict(row) for row in rows]
+try:
+    from netrattler_builder_learning_v36 import joint_probability as _v36_joint_probability
+except Exception:
+    _v36_joint_probability = lambda legs: (
+        math.prod(max(0.01, min(0.99, float(getattr(leg, "probability", 0.0) or 0.0))) for leg in legs),
+        1.0,
+        0,
+    )
+try:
+    from netrattler_exposure_engine_v36 import ExposureManager as _V36ExposureManager
+except Exception:
+    _V36ExposureManager = None
+
+_v36_previous_build_builder_picks = build_builder_picks
+_v36_previous_format_builder_message = format_builder_message
+_v36_previous_to_row = BuilderPick.to_row
+
+
+def _v36_risk_label(total_odds: float) -> str:
+    if total_odds >= 50:
+        return "LOTTERY"
+    if total_odds >= 15:
+        return "RISKY"
+    if total_odds >= 8:
+        return "VALUE"
+    return "SAFE"
+
+
+def _v36_kelly(probability: float, odds: float, fraction: float, cap: float) -> float:
+    if odds <= 1:
+        return 0.0
+    probability = max(0.001, min(0.999, probability))
+    full = (probability * odds - 1.0) / (odds - 1.0)
+    return round(max(0.0, min(cap, full * fraction)), 2)
+
+
+def build_builder_picks(
+    raw_props: Sequence[Dict[str, Any]],
+    match_contexts: Optional[Sequence[Dict[str, Any]]] = None,
+    match_date: Optional[str] = None,
+    max_builders: Optional[int] = None,
+) -> List[BuilderPick]:
+    # Consensus groups only exact observed player/market/direction/line rows.
+    # Missing lines or estimated odds never become real via this enrichment.
+    consensus_rows = _v36_consensus_enrich(raw_props)
+    picks = _v36_previous_build_builder_picks(
+        raw_props=consensus_rows,
+        match_contexts=match_contexts,
+        match_date=match_date,
+        max_builders=max_builders,
+    )
+    output: List[BuilderPick] = []
+    for pick in picks:
+        if not pick.legs or any(bool(getattr(leg, "estimated", False)) for leg in pick.legs):
+            continue
+        joint_prob, pair_factor, pair_samples = _v36_joint_probability(pick.legs)
+        joint_edge = joint_prob * float(pick.total_odds or 0.0) - 1.0
+        label = _v36_risk_label(float(pick.total_odds or 0.0))
+        thresholds = {
+            "SAFE": float(os.getenv("NETRATTLER_BUILDER_MIN_JOINT_EV_SAFE", "0.02")),
+            "VALUE": float(os.getenv("NETRATTLER_BUILDER_MIN_JOINT_EV_VALUE", "0.04")),
+            "RISKY": float(os.getenv("NETRATTLER_BUILDER_MIN_JOINT_EV_RISKY", "0.06")),
+            "LOTTERY": float(os.getenv("NETRATTLER_BUILDER_MIN_JOINT_EV_LOTTERY", "0.08")),
+        }
+        if joint_edge < thresholds[label]:
+            continue
+        caps = {"SAFE": 0.35, "VALUE": 0.28, "RISKY": 0.16, "LOTTERY": 0.06}
+        fractions = {"SAFE": 0.22, "VALUE": 0.18, "RISKY": 0.10, "LOTTERY": 0.05}
+        learned_stake = _v36_kelly(joint_prob, float(pick.total_odds), fractions[label], caps[label])
+        if learned_stake <= 0:
+            continue
+        pick.stake = min(float(pick.stake or learned_stake), learned_stake)
+        pick.v36_joint_probability = round(joint_prob, 6)
+        pick.v36_joint_edge = round(joint_edge, 6)
+        pick.v36_pair_factor = round(pair_factor, 6)
+        pick.v36_pair_samples = int(pair_samples)
+        pick.v36_risk_label = label
+        output.append(pick)
+    output.sort(
+        key=lambda pick: (
+            float(getattr(pick, "v36_joint_edge", 0.0)),
+            float(getattr(pick, "v36_joint_probability", 0.0)),
+        ),
+        reverse=True,
+    )
+    return output[: max_builders or len(output)]
+
+
+def format_builder_message(pick: BuilderPick) -> str:
+    message = _v36_previous_format_builder_message(pick)
+    probability = float(getattr(pick, "v36_joint_probability", 0.0) or 0.0)
+    edge = float(getattr(pick, "v36_joint_edge", 0.0) or 0.0)
+    factor = float(getattr(pick, "v36_pair_factor", 1.0) or 1.0)
+    samples = int(getattr(pick, "v36_pair_samples", 0) or 0)
+    learned = (
+        f"\n🧬 <b>LEARNED JOINT:</b> {probability*100:.1f}% · EV {edge*100:+.1f}%"
+        f" · Pair {factor:.3f}"
+    )
+    if samples:
+        learned += f" ({samples}+ Leg-Paare)"
+    return message + learned
+
+
+def _v36_to_row(self: BuilderPick) -> Dict[str, Any]:
+    row = _v36_previous_to_row(self)
+    row.update({
+        "joint_probability": getattr(self, "v36_joint_probability", None),
+        "joint_edge": getattr(self, "v36_joint_edge", None),
+        "pair_factor": getattr(self, "v36_pair_factor", None),
+        "pair_samples": getattr(self, "v36_pair_samples", None),
+        "risk_label": getattr(self, "v36_risk_label", None),
+    })
+    return row
+
+
+BuilderPick.to_row = _v36_to_row
+
+
+def run_builder_engine(
+    raw_props: Sequence[Dict[str, Any]],
+    send_message: Callable[[str], Any],
+    match_contexts: Optional[Sequence[Dict[str, Any]]] = None,
+    match_date: Optional[str] = None,
+    supabase_url: str = "",
+    supabase_key: str = "",
+    logger: Optional[Callable[[str], Any]] = None,
+) -> Tuple[int, List[BuilderPick]]:
+    normalized = deduplicate_props(raw_props)
+    picks = build_builder_picks(raw_props, match_contexts, match_date)
+    exposure = _V36ExposureManager(supabase_url, supabase_key) if _V36ExposureManager else None
+    if logger:
+        logger(
+            f"V36 BUILDER normalized={len(normalized)} generated={len(picks)} "
+            f"learned_pairs={'on' if _V36ExposureManager else 'fallback'}"
+        )
+    sent = 0
+    accepted: List[BuilderPick] = []
+    for pick in picks:
+        if exposure:
+            adjusted = exposure.adjust_builder(pick, float(pick.stake or 0.0))
+            if adjusted <= 0:
+                if logger:
+                    logger(f"V36 BUILDER exposure blocked: {pick.builder_id}")
+                continue
+            pick.stake = adjusted
+        persisted = persist_builder_pick(pick, supabase_url, supabase_key)
+        if persisted is False:
+            if logger:
+                logger(f"V36 BUILDER duplicate skipped: {pick.builder_id}")
+            continue
+        try:
+            send_message(format_builder_message(pick))
+            sent += 1
+            accepted.append(pick)
+            if exposure:
+                exposure.record_builder(pick, float(pick.stake or 0.0))
+            if logger:
+                logger(
+                    f"V36 BUILDER {getattr(pick, 'v36_risk_label', '')}: "
+                    f"{pick.leg_count}L @{pick.total_odds:.2f} "
+                    f"jointEV={float(getattr(pick, 'v36_joint_edge', 0))*100:+.1f}% "
+                    f"stake={pick.stake:.2f}"
+                )
+        except Exception as exc:
+            if logger:
+                logger(f"V36 BUILDER send failed: {exc}")
+    return sent, accepted
