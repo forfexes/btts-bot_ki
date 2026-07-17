@@ -39,6 +39,5 @@ jobs:
           FD_SEASONS: "2526,2425,2324,2223,2122,2021,1920,1819,1718,1617,1516,1415,1314,1213,1112,1011"
           GITHUB_MAX_FILES_PER_REPO: "120"
           GITHUB_MIN_YEAR: "2000"
-          IMPORT_CHUNK_SIZE: "400"
           IMPORT_TIMEOUT: "90"
         run: python import_football_data_sources_v14.py
