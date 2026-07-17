@@ -1,4 +1,4 @@
-name: NETRATTLER V36 SOURCE INGEST + POLICY + AUTOML
+name: NETRATTLER V36B SOURCE DISCOVERY + INGEST + POLICY + AUTOML
 
 on:
   workflow_dispatch:
@@ -12,37 +12,74 @@ concurrency:
 jobs:
   learn:
     runs-on: ubuntu-latest
-    timeout-minutes: 90
+    timeout-minutes: 120
     steps:
       - uses: actions/checkout@v4
+
       - uses: actions/setup-python@v5
         with:
           python-version: "3.11"
           cache: "pip"
+
       - uses: actions/cache@v4
         with:
           path: .netrattler_cache
           key: netrattler-source-cache-${{ runner.os }}-${{ github.run_id }}
           restore-keys: |
             netrattler-source-cache-${{ runner.os }}-
-      - run: pip install requests pandas python-dateutil numpy scikit-learn
-      - run: python -m py_compile netrattler_learning_engine.py netrattler_generic_repo_ingestor.py netrattler_runtime_policy.py netrattler_autolearn_v36.py netrattler_builder_learning_v36.py netrattler_source_router_v36.py
-      - name: Ingest promoted free data files and rebuild policy
+
+      - name: Install
+        run: pip install requests pandas python-dateutil numpy scikit-learn
+
+      - name: Compile V36B modules
+        run: |
+          python -m py_compile \
+            netrattler_schema_check_v36.py \
+            netrattler_learning_engine.py \
+            netrattler_generic_repo_ingestor.py \
+            netrattler_runtime_policy.py \
+            netrattler_autolearn_v36.py \
+            netrattler_builder_learning_v36.py \
+            netrattler_source_router_v36.py
+
+      - name: Verify complete Supabase learning schema
+        env:
+          SUPABASE_URL: ${{ secrets.SUPABASE_URL }}
+          SUPABASE_KEY: ${{ secrets.SUPABASE_KEY }}
+          SUPABASE_SERVICE_ROLE_KEY: ${{ secrets.SUPABASE_SERVICE_ROLE_KEY }}
+        run: python netrattler_schema_check_v36.py
+
+      - name: Discover and test free football sources
         env:
           SUPABASE_URL: ${{ secrets.SUPABASE_URL }}
           SUPABASE_KEY: ${{ secrets.SUPABASE_KEY }}
           SUPABASE_SERVICE_ROLE_KEY: ${{ secrets.SUPABASE_SERVICE_ROLE_KEY }}
           GITHUB_TOKEN: ${{ github.token }}
           NETRATTLER_MAX_DISCOVERY_REPOS: "80"
+        run: NETRATTLER_LEARNING_MODE=sources python netrattler_learning_engine.py
+
+      - name: Ingest promoted free data files
+        env:
+          SUPABASE_URL: ${{ secrets.SUPABASE_URL }}
+          SUPABASE_KEY: ${{ secrets.SUPABASE_KEY }}
+          SUPABASE_SERVICE_ROLE_KEY: ${{ secrets.SUPABASE_SERVICE_ROLE_KEY }}
+          GITHUB_TOKEN: ${{ github.token }}
           NETRATTLER_GENERIC_MAX_FILES: "30"
           NETRATTLER_GENERIC_MAX_ROWS_PER_FILE: "5000"
-        run: |
-          python netrattler_generic_repo_ingestor.py
-          NETRATTLER_LEARNING_MODE=learning python netrattler_learning_engine.py
+        run: python netrattler_generic_repo_ingestor.py
+
+      - name: Learn from settlements and rebuild policy
+        env:
+          SUPABASE_URL: ${{ secrets.SUPABASE_URL }}
+          SUPABASE_KEY: ${{ secrets.SUPABASE_KEY }}
+          SUPABASE_SERVICE_ROLE_KEY: ${{ secrets.SUPABASE_SERVICE_ROLE_KEY }}
+          GITHUB_TOKEN: ${{ github.token }}
+        run: NETRATTLER_LEARNING_MODE=learning python netrattler_learning_engine.py
+
       - uses: actions/upload-artifact@v4
         if: always()
         with:
-          name: netrattler-v36-policy-models
+          name: netrattler-v36b-policy-models
           path: |
             netrattler_active_policy.json
             netrattler_autolearn_registry.json
