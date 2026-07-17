@@ -24840,10 +24840,14 @@ def main():
 
         # Kandidaten aus normalen Team-Tipps nur optional.
         # V31 CLEAN: Prop Builder soll echte Spielerprops senden, keine BTTS/Over-Team-Builder.
-        _allow_team_legs_for_builder = str(env("ENABLE_TEAM_LEGS_IN_PROP_BUILDER", "false")).lower() in ["1", "true", "yes", "on"]
-        if _allow_team_legs_for_builder:
-            log("   🏗️ Team-Legs im Prop Builder aktiviert (ENABLE_TEAM_LEGS_IN_PROP_BUILDER=true)")
-        for _mk, _tips in (tips_by_market.items() if _allow_team_legs_for_builder else []):
+        # V34B SANITY: PROP BUILDER ist player-only.
+        # Team-Märkte bleiben in BTTS / Over / Combo und dürfen nicht als
+        # "Player-Prop Profil" oder mit multiplizierten korrelierten Quoten erscheinen.
+        _team_builder_env = str(env("ENABLE_TEAM_LEGS_IN_PROP_BUILDER", "false")).lower() in ["1", "true", "yes", "on"]
+        if _team_builder_env:
+            log("   ⚠️ ENABLE_TEAM_LEGS_IN_PROP_BUILDER wird in V34B ignoriert: Prop Builder bleibt player-only", "WARN")
+        _allow_team_legs_for_builder = False
+        for _mk, _tips in []:
             for _t in _tips:
                 _match_n = _t.get("match", "")
                 _parts = _match_n.split(" vs ") if " vs " in _match_n else [_match_n, ""]
@@ -24917,7 +24921,7 @@ def main():
             f"≥3 Legs: {sum(1 for v in _pool_matches.values() if v >= 3)}"
         )
 
-        if len(_builder_prop_pool) >= 3:
+        if len(_builder_prop_pool) >= 2:
             _builder_chat = TELEGRAM_GROUPS.get("advanced_props") or TELEGRAM_GROUPS.get("props")
             if _builder_chat:
                 def _send_builder(msg):
