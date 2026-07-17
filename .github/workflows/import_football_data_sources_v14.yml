@@ -1,43 +1,430 @@
-name: NETRATTLER V34 Historical All Sources Import
+name: NETRATTLER AI MASTER V36J MINUTE-SAFE ML
 
 on:
   workflow_dispatch:
     inputs:
-      max_rows:
-        description: "0 = unlimited; otherwise per source"
+      mode:
+        description: "daily=fresh stats+odds+learning | full=all | learning | sources | train"
         required: false
-        default: "0"
+        default: "daily"
+      run_tip_bot:
+        description: "AI Tipp Bot am Ende starten"
+        required: false
+        default: "false"
   schedule:
-    - cron: "40 0 * * 0"
+    - cron: "10 1 * * 0"
+
+permissions:
+  contents: read
+
+concurrency:
+  group: netrattler-ai-master-v36
+  cancel-in-progress: false
 
 jobs:
-  import-history:
+  master:
     runs-on: ubuntu-latest
-    timeout-minutes: 360
+    timeout-minutes: 240
     steps:
       - uses: actions/checkout@v4
+
+      - name: Resolve mode and preflight runtime files
+        id: mode
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          MODE="${{ github.event.inputs.mode }}"
+          if [[ -z "$MODE" ]]; then MODE="daily"; fi
+          if [[ "${{ github.event_name }}" == "schedule" ]]; then MODE="sources"; fi
+
+          case "$MODE" in
+            daily|full|learning|sources|train) ;;
+            *)
+              echo "INVALID MODE: $MODE"
+              exit 2
+              ;;
+          esac
+
+          required=()
+
+          case "$MODE" in
+            daily)
+              required+=(
+                netrattler_learning_engine.py
+                netrattler_autolearn_v36.py
+                netrattler_builder_learning_v36.py
+                scrape_player_stats.py
+                netrattler_odds_harvester.py
+                netrattler_closing_odds_capture_v35.py
+              )
+              ;;
+            learning)
+              required+=(
+                netrattler_learning_engine.py
+                netrattler_autolearn_v36.py
+                netrattler_builder_learning_v36.py
+              )
+              ;;
+            sources)
+              required+=(
+                requirements_all_source.txt
+                netrattler_learning_engine.py
+                netrattler_generic_repo_ingestor.py
+              )
+              ;;
+            train)
+              required+=(
+                requirements_train.txt
+                train_model.py
+              )
+              ;;
+            full)
+              required+=(
+                requirements_all_source.txt
+                requirements_train.txt
+                netrattler_learning_engine.py
+                netrattler_runtime_policy.py
+                netrattler_generic_repo_ingestor.py
+                netrattler_closing_odds_capture_v35.py
+                scrape_player_stats.py
+                netrattler_odds_harvester.py
+                train_model.py
+                netrattler_autolearn_v36.py
+                netrattler_builder_learning_v36.py
+                netrattler_market_consensus_v36.py
+                netrattler_exposure_engine_v36.py
+                netrattler_source_router_v36.py
+              )
+              ;;
+          esac
+
+          if [[ "${{ github.event.inputs.run_tip_bot }}" == "true" ]]; then
+            required+=(
+              btts_bot.py
+              netrattler_builder_engine.py
+              netrattler_runtime_policy.py
+              netrattler_market_consensus_v36.py
+              netrattler_exposure_engine_v36.py
+              netrattler_source_router_v36.py
+            )
+          fi
+
+          mapfile -t required < <(printf '%s\n' "${required[@]}" | awk '!seen[$0]++')
+
+          missing=()
+          for file in "${required[@]}"; do
+            [[ -f "$file" ]] || missing+=("$file")
+          done
+
+          if (( ${#missing[@]} > 0 )); then
+            printf 'MISSING RUNTIME FILE: %s\n' "${missing[@]}"
+            exit 2
+          fi
+
+          echo "mode=$MODE" >> "$GITHUB_OUTPUT"
+          echo "PREFLIGHT OK mode=$MODE runtime_files=${#required[@]}"
+
       - uses: actions/setup-python@v5
         with:
-          python-version: "3.11"
+          python-version: "3.12"
           cache: "pip"
-      - name: Install
-        run: pip install requests pandas python-dateutil
-      - name: Compile
-        run: python -m py_compile import_football_data_sources_v14.py
-      - name: Import every free historical source; failures continue
+
+      - name: Verify Python runtime
+        shell: bash
+        run: |
+          set -euo pipefail
+          python - <<'PY'
+          import sys
+          print("PYTHON", sys.version)
+          if sys.version_info < (3, 12):
+              raise SystemExit("NETRATTLER V36J requires Python >= 3.12")
+          PY
+      - name: Restore last-good source cache
+        uses: actions/cache@v4
+        with:
+          path: .netrattler_cache
+          key: netrattler-source-cache-${{ runner.os }}-${{ github.run_id }}
+          restore-keys: |
+            netrattler-source-cache-${{ runner.os }}-
+      - name: Install selected runtime
+        shell: bash
+        run: |
+          set -euo pipefail
+          python -m pip install --upgrade pip
+          MODE="${{ steps.mode.outputs.mode }}"
+
+          case "$MODE" in
+            daily)
+              python -m pip install \
+                "requests>=2.32,<3" \
+                "python-dateutil>=2.9,<3" \
+                "pandas>=2,<4" \
+                "rapidfuzz>=3,<4" \
+                "beautifulsoup4>=4.12,<5" \
+                "cloudscraper>=1.2.71,<2" \
+                "playwright>=1.45,<2" \
+                "scikit-learn>=1.5,<2"
+              ;;
+            learning)
+              python -m pip install \
+                "requests>=2.32,<3" \
+                "scikit-learn>=1.5,<2"
+              ;;
+            sources)
+              python -m pip install -r requirements_all_source.txt
+              ;;
+            train)
+              python -m pip install -r requirements_train.txt
+              ;;
+            full)
+              python -m pip install -r requirements_all_source.txt
+              python -m pip install -r requirements_train.txt
+              python -m pip install "oddsharvester==0.5.0"
+              ;;
+          esac
+
+          if [[ "${{ github.event.inputs.run_tip_bot }}" == "true" && -f requirements.txt ]]; then
+            python -m pip install -r requirements.txt
+          fi
+
+          if [[ "$MODE" == "full" ]]; then
+            command -v oddsharvester >/dev/null
+            oddsharvester --help >/dev/null
+            echo "ODDSHARVESTER CLI OK (FULL MODE)"
+          fi
+
+      - name: Verify ML runtime
+        if: contains(fromJSON('["daily","full","learning"]'), steps.mode.outputs.mode)
+        shell: bash
+        run: |
+          python - <<'PY'
+          import sklearn
+          print("SCIKIT-LEARN", sklearn.__version__)
+          PY
+
+      - name: Resolve Playwright version
+        if: contains(fromJSON('["daily","full"]'), steps.mode.outputs.mode)
+        id: playwright-version
+        shell: bash
+        run: |
+          VERSION="$(python -c "import importlib.metadata as m; print(m.version('playwright'))")"
+          test -n "$VERSION"
+          echo "version=$VERSION" >> "$GITHUB_OUTPUT"
+          echo "PLAYWRIGHT VERSION $VERSION"
+
+      - name: Restore Chromium browser cache
+        if: contains(fromJSON('["daily","full"]'), steps.mode.outputs.mode)
+        id: playwright-browser-cache
+        uses: actions/cache@v4
+        with:
+          path: ~/.cache/ms-playwright
+          key: playwright-chromium-${{ runner.os }}-${{ steps.playwright-version.outputs.version }}
+
+      - name: Install Chromium browser
+        if: contains(fromJSON('["daily","full"]'), steps.mode.outputs.mode) && steps.playwright-browser-cache.outputs.cache-hit != 'true'
+        run: python -m playwright install chromium
+
+      - name: Verify Chromium launch
+        if: contains(fromJSON('["daily","full"]'), steps.mode.outputs.mode)
+        shell: bash
+        run: |
+          python - <<'PY'
+          from playwright.sync_api import sync_playwright
+          with sync_playwright() as p:
+              browser = p.chromium.launch(
+                  headless=True,
+                  args=["--no-sandbox", "--disable-dev-shm-usage"],
+              )
+              browser.close()
+          print("PLAYWRIGHT CHROMIUM OK")
+          PY
+
+      - name: Compile selected runtime modules
+        shell: bash
+        run: |
+          set -euo pipefail
+          MODE="${{ steps.mode.outputs.mode }}"
+          files=()
+
+          case "$MODE" in
+            daily)
+              files=(
+                netrattler_learning_engine.py
+                netrattler_autolearn_v36.py
+                netrattler_builder_learning_v36.py
+                scrape_player_stats.py
+                netrattler_odds_harvester.py
+                netrattler_closing_odds_capture_v35.py
+              )
+              ;;
+            learning)
+              files=(
+                netrattler_learning_engine.py
+                netrattler_autolearn_v36.py
+                netrattler_builder_learning_v36.py
+              )
+              ;;
+            sources)
+              files=(
+                netrattler_learning_engine.py
+                netrattler_generic_repo_ingestor.py
+              )
+              ;;
+            train)
+              files=(train_model.py)
+              ;;
+            full)
+              files=(
+                netrattler_learning_engine.py
+                netrattler_runtime_policy.py
+                netrattler_generic_repo_ingestor.py
+                netrattler_closing_odds_capture_v35.py
+                scrape_player_stats.py
+                netrattler_odds_harvester.py
+                train_model.py
+                netrattler_autolearn_v36.py
+                netrattler_builder_learning_v36.py
+                netrattler_market_consensus_v36.py
+                netrattler_exposure_engine_v36.py
+                netrattler_source_router_v36.py
+              )
+              ;;
+          esac
+
+          if [[ "${{ github.event.inputs.run_tip_bot }}" == "true" ]]; then
+            files+=(
+              btts_bot.py
+              netrattler_builder_engine.py
+              netrattler_runtime_policy.py
+              netrattler_market_consensus_v36.py
+              netrattler_exposure_engine_v36.py
+              netrattler_source_router_v36.py
+            )
+          fi
+
+          mapfile -t files < <(printf '%s\n' "${files[@]}" | awk '!seen[$0]++')
+          python -m py_compile "${files[@]}"
+          echo "COMPILE OK mode=$MODE files=${#files[@]}"
+
+      - name: Source discovery and quarantine lab
+        if: contains(fromJSON('["full","sources"]'), steps.mode.outputs.mode)
         env:
-          STORE_HISTORICAL_ODDS: "false"
-          STORE_RAW_PAYLOADS: "false"
-          STOP_ON_DATABASE_FULL: "true"
-          IMPORT_CHUNK_SIZE: "200"
           SUPABASE_URL: ${{ secrets.SUPABASE_URL }}
           SUPABASE_KEY: ${{ secrets.SUPABASE_KEY }}
           SUPABASE_SERVICE_ROLE_KEY: ${{ secrets.SUPABASE_SERVICE_ROLE_KEY }}
-          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-          IMPORT_SOURCES: "all"
-          MAX_ROWS_PER_SOURCE: ${{ github.event.inputs.max_rows || '0' }}
-          FD_SEASONS: "2526,2425,2324,2223,2122,2021,1920,1819,1718,1617,1516,1415,1314,1213,1112,1011"
-          GITHUB_MAX_FILES_PER_REPO: "120"
-          GITHUB_MIN_YEAR: "2000"
-          IMPORT_TIMEOUT: "90"
-        run: python import_football_data_sources_v14.py
+          GITHUB_TOKEN: ${{ github.token }}
+          ODDS_API_KEYS: ${{ secrets.ODDS_API_KEYS }}
+          ODDS_API_KEY: ${{ secrets.ODDS_API_KEY }}
+          BETFAIR_APP_KEY: ${{ secrets.BETFAIR_APP_KEY }}
+          BETFAIR_SESSION_TOKEN: ${{ secrets.BETFAIR_SESSION_TOKEN }}
+        run: NETRATTLER_LEARNING_MODE=sources python netrattler_learning_engine.py
+      - name: Safe generic data ingestion
+        # Historical GitHub datasets run only for full/source maintenance.
+        # Daily mode is reserved for fresh player stats, odds and learning.
+        if: contains(fromJSON('["full","sources"]'), steps.mode.outputs.mode)
+        env:
+          SUPABASE_URL: ${{ secrets.SUPABASE_URL }}
+          SUPABASE_KEY: ${{ secrets.SUPABASE_KEY }}
+          SUPABASE_SERVICE_ROLE_KEY: ${{ secrets.SUPABASE_SERVICE_ROLE_KEY }}
+          GITHUB_TOKEN: ${{ github.token }}
+          ODDS_API_KEYS: ${{ secrets.ODDS_API_KEYS }}
+          ODDS_API_KEY: ${{ secrets.ODDS_API_KEY }}
+          BETFAIR_APP_KEY: ${{ secrets.BETFAIR_APP_KEY }}
+          BETFAIR_SESSION_TOKEN: ${{ secrets.BETFAIR_SESSION_TOKEN }}
+        run: python netrattler_generic_repo_ingestor.py
+      - name: Player stats and results
+        if: contains(fromJSON('["daily","full"]'), steps.mode.outputs.mode)
+        env:
+          SUPABASE_URL: ${{ secrets.SUPABASE_URL }}
+          SUPABASE_KEY: ${{ secrets.SUPABASE_KEY }}
+          SUPABASE_SERVICE_ROLE_KEY: ${{ secrets.SUPABASE_SERVICE_ROLE_KEY }}
+          GITHUB_TOKEN: ${{ github.token }}
+          ODDS_API_KEYS: ${{ secrets.ODDS_API_KEYS }}
+          ODDS_API_KEY: ${{ secrets.ODDS_API_KEY }}
+          BETFAIR_APP_KEY: ${{ secrets.BETFAIR_APP_KEY }}
+          BETFAIR_SESSION_TOKEN: ${{ secrets.BETFAIR_SESSION_TOKEN }}
+        run: |
+          # Odds have a separate step. Daily mode also skips the slow soccerdata/TLS fallback.
+          export USE_ODDSHARVESTER_STYLE=false
+          export IDENTITY_REFERENCE_HEALTHCHECK=false
+          if [[ "${{ steps.mode.outputs.mode }}" == "daily" ]]; then
+            export USE_SOCCERDATA=false
+            export USE_STATSBOMB=false
+          fi
+          python scrape_player_stats.py --yesterday
+      - name: Compact current odds
+        if: contains(fromJSON('["daily","full"]'), steps.mode.outputs.mode)
+        env:
+          SUPABASE_URL: ${{ secrets.SUPABASE_URL }}
+          SUPABASE_KEY: ${{ secrets.SUPABASE_KEY }}
+          SUPABASE_SERVICE_ROLE_KEY: ${{ secrets.SUPABASE_SERVICE_ROLE_KEY }}
+          GITHUB_TOKEN: ${{ github.token }}
+          ODDS_API_KEYS: ${{ secrets.ODDS_API_KEYS }}
+          ODDS_API_KEY: ${{ secrets.ODDS_API_KEY }}
+          BETFAIR_APP_KEY: ${{ secrets.BETFAIR_APP_KEY }}
+          BETFAIR_SESSION_TOKEN: ${{ secrets.BETFAIR_SESSION_TOKEN }}
+          # OddsHarvester/OddsPortal only duplicates team markets here and
+          # consumed the full timeout. Keep it for FULL maintenance, not DAILY.
+          ENABLE_ODDSHARVESTER: "false"
+          BET365_WAIT_MS: "4000"
+        run: |
+          python netrattler_closing_odds_capture_v35.py --snapshot-type current
+      - name: Temporal models and champion promotion
+        if: contains(fromJSON('["full","train"]'), steps.mode.outputs.mode)
+        env:
+          SUPABASE_URL: ${{ secrets.SUPABASE_URL }}
+          SUPABASE_KEY: ${{ secrets.SUPABASE_KEY }}
+          SUPABASE_SERVICE_ROLE_KEY: ${{ secrets.SUPABASE_SERVICE_ROLE_KEY }}
+          GITHUB_TOKEN: ${{ github.token }}
+          ODDS_API_KEYS: ${{ secrets.ODDS_API_KEYS }}
+          ODDS_API_KEY: ${{ secrets.ODDS_API_KEY }}
+          BETFAIR_APP_KEY: ${{ secrets.BETFAIR_APP_KEY }}
+          BETFAIR_SESSION_TOKEN: ${{ secrets.BETFAIR_SESSION_TOKEN }}
+        run: python train_model.py
+      - name: Settlement learning, calibration and risk policy
+        if: contains(fromJSON('["daily","full","learning"]'), steps.mode.outputs.mode)
+        env:
+          SUPABASE_URL: ${{ secrets.SUPABASE_URL }}
+          SUPABASE_KEY: ${{ secrets.SUPABASE_KEY }}
+          SUPABASE_SERVICE_ROLE_KEY: ${{ secrets.SUPABASE_SERVICE_ROLE_KEY }}
+          GITHUB_TOKEN: ${{ github.token }}
+          ODDS_API_KEYS: ${{ secrets.ODDS_API_KEYS }}
+          ODDS_API_KEY: ${{ secrets.ODDS_API_KEY }}
+          BETFAIR_APP_KEY: ${{ secrets.BETFAIR_APP_KEY }}
+          BETFAIR_SESSION_TOKEN: ${{ secrets.BETFAIR_SESSION_TOKEN }}
+        run: NETRATTLER_LEARNING_MODE=learning python netrattler_learning_engine.py
+      - name: Optional AI Tipp Bot
+        if: github.event.inputs.run_tip_bot == 'true'
+        env:
+          SUPABASE_URL: ${{ secrets.SUPABASE_URL }}
+          SUPABASE_KEY: ${{ secrets.SUPABASE_KEY }}
+          SUPABASE_SERVICE_ROLE_KEY: ${{ secrets.SUPABASE_SERVICE_ROLE_KEY }}
+          GITHUB_TOKEN: ${{ github.token }}
+          ODDS_API_KEYS: ${{ secrets.ODDS_API_KEYS }}
+          ODDS_API_KEY: ${{ secrets.ODDS_API_KEY }}
+          TELEGRAM_TOKEN: ${{ secrets.TELEGRAM_TOKEN }}
+          TELEGRAM_BOT_TOKEN: ${{ secrets.TELEGRAM_BOT_TOKEN }}
+          TELEGRAM_CHAT_ID: ${{ secrets.TELEGRAM_CHAT_ID }}
+          TELEGRAM_GROUP_BTTS: ${{ secrets.TELEGRAM_GROUP_BTTS }}
+          TELEGRAM_GROUP_OVER25: ${{ secrets.TELEGRAM_GROUP_OVER25 }}
+          TELEGRAM_GROUP_COMBO: ${{ secrets.TELEGRAM_GROUP_COMBO }}
+          TELEGRAM_GROUP_COMBOS: ${{ secrets.TELEGRAM_GROUP_COMBOS }}
+          TELEGRAM_GROUP_BTTS_HT: ${{ secrets.TELEGRAM_GROUP_BTTS_HT }}
+          TELEGRAM_GROUP_BUILDER: ${{ secrets.TELEGRAM_GROUP_BUILDER }}
+          TELEGRAM_GROUP_PROPS: ${{ secrets.TELEGRAM_GROUP_PROPS }}
+          TELEGRAM_GROUP_STATS: ${{ secrets.TELEGRAM_GROUP_STATS }}
+        run: python btts_bot.py
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: netrattler-v36-policy-models-and-summaries
+          path: |
+            netrattler_active_policy.json
+            netrattler_all_source_summary.json
+            netrattler_source_hub_summary.json
+            netrattler_odds_snapshot.json
+            netrattler_autolearn_registry.json
+            netrattler_autolearn_report.json
+            netrattler_builder_correlations.json
+          if-no-files-found: ignore
