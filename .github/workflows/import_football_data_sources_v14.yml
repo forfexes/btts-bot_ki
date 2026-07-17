@@ -1,0 +1,44 @@
+name: NETRATTLER V34 Historical All Sources Import
+
+on:
+  workflow_dispatch:
+    inputs:
+      max_rows:
+        description: "0 = unlimited; otherwise per source"
+        required: false
+        default: "0"
+  schedule:
+    - cron: "40 0 * * 0"
+
+jobs:
+  import-history:
+    runs-on: ubuntu-latest
+    timeout-minutes: 360
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+          cache: "pip"
+      - name: Install
+        run: pip install requests pandas python-dateutil
+      - name: Compile
+        run: python -m py_compile import_football_data_sources_v14.py
+      - name: Import every free historical source; failures continue
+        env:
+          STORE_HISTORICAL_ODDS: "false"
+          STORE_RAW_PAYLOADS: "false"
+          STOP_ON_DATABASE_FULL: "true"
+          IMPORT_CHUNK_SIZE: "200"
+          SUPABASE_URL: ${{ secrets.SUPABASE_URL }}
+          SUPABASE_KEY: ${{ secrets.SUPABASE_KEY }}
+          SUPABASE_SERVICE_ROLE_KEY: ${{ secrets.SUPABASE_SERVICE_ROLE_KEY }}
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          IMPORT_SOURCES: "all"
+          MAX_ROWS_PER_SOURCE: ${{ github.event.inputs.max_rows || '0' }}
+          FD_SEASONS: "2526,2425,2324,2223,2122,2021,1920,1819,1718,1617,1516,1415,1314,1213,1112,1011"
+          GITHUB_MAX_FILES_PER_REPO: "120"
+          GITHUB_MIN_YEAR: "2000"
+          IMPORT_CHUNK_SIZE: "400"
+          IMPORT_TIMEOUT: "90"
+        run: python import_football_data_sources_v14.py
