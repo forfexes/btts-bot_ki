@@ -1904,3 +1904,199 @@ def format_builder_message(pick: BuilderPick) -> str:
     ])
     return "\n".join(lines)
 
+
+
+# ============================================================
+# V34B BUILDER SANITY LAYER
+# ============================================================
+# Fixes:
+# - no negative-edge legs
+# - no generic team markets inside PROP BUILDER
+# - no legacy TEAM BUILDER fallback when real player props are missing
+# - no fake multiplication of correlated same-game team markets
+# - real bookmaker odds required by default
+# - Risky/Lottery builders remain possible, but only from valid player props
+
+_V34B_REAL_ODDS_SOURCES = {
+    "pinnacle", "bet365", "betfair", "oddsportal", "william hill",
+    "williamhill", "betvictor", "bwin", "ladbrokes", "coral",
+    "1xbet", "betmgm", "the odds api", "the-odds-api", "oddspedia",
+}
+
+
+def _v34b_edge(leg: PropLeg) -> float:
+    if not leg.odds or leg.odds <= 1:
+        return -1.0
+    return float(leg.probability or 0.0) - (1.0 / float(leg.odds))
+
+
+def _v34b_has_real_bookmaker_odds(leg: PropLeg) -> bool:
+    src = norm(leg.source)
+    return any(book in src for book in _V34B_REAL_ODDS_SOURCES)
+
+
+def _v34b_valid_player_leg(leg: PropLeg) -> bool:
+    if not _v31_is_real_player_leg(leg):
+        return False
+
+    # Generic selections/teams must never masquerade as player names.
+    player_n = norm(leg.player)
+    home, away = parse_match(leg.match)
+    team_names = {norm(home), norm(away), norm(leg.team)}
+    if player_n in {x for x in team_names if x}:
+        return False
+
+    market_n = norm(leg.market)
+    generic_market_terms = [
+        "both teams to score", "either team to score", "team to score",
+        "match goals", "total goals", "double chance", "draw no bet",
+        "over goals", "under goals",
+    ]
+    if any(term in market_n for term in generic_market_terms):
+        return False
+
+    allow_estimated = str(os.getenv("NETRATTLER_BUILDER_ALLOW_ESTIMATED_ODDS", "false")).lower() in {
+        "1", "true", "yes", "on"
+    }
+    if not allow_estimated and not _v34b_has_real_bookmaker_odds(leg):
+        return False
+
+    min_edge = float(os.getenv("NETRATTLER_BUILDER_MIN_LEG_EDGE", "0.02"))
+    min_prob = float(os.getenv("NETRATTLER_BUILDER_MIN_LEG_PROB", "0.20"))
+    min_odds = float(os.getenv("NETRATTLER_BUILDER_MIN_LEG_ODDS", "1.35"))
+    max_odds = float(os.getenv("NETRATTLER_BUILDER_MAX_LEG_ODDS", "25.0"))
+
+    return (
+        min_odds <= float(leg.odds or 0.0) <= max_odds
+        and float(leg.probability or 0.0) >= min_prob
+        and _v34b_edge(leg) >= min_edge
+    )
+
+
+def _v34b_builder_stake(total_odds: float) -> float:
+    if total_odds >= 50:
+        return 0.05
+    if total_odds >= 15:
+        return 0.15
+    if total_odds >= 8:
+        return 0.25
+    return 0.40
+
+
+def _v34b_pick_valid(pick: BuilderPick) -> bool:
+    min_total = float(os.getenv("NETRATTLER_BUILDER_MIN_TOTAL_ODDS", "5.0"))
+    max_total = float(os.getenv("NETRATTLER_BUILDER_MAX_TOTAL_ODDS", "250.0"))
+    if not (min_total <= float(pick.total_odds or 0.0) <= max_total):
+        return False
+    if len(pick.legs) < 2:
+        return False
+    if not all(_v34b_valid_player_leg(leg) for leg in pick.legs):
+        return False
+    # No conflicting same player/category lines in the same builder.
+    seen = set()
+    for leg in pick.legs:
+        key = (norm(leg.player), leg.category)
+        if key in seen:
+            return False
+        seen.add(key)
+    return True
+
+
+def build_builder_picks(
+    raw_props: Sequence[Dict[str, Any]],
+    match_contexts: Optional[Sequence[Dict[str, Any]]] = None,
+    match_date: Optional[str] = None,
+    max_builders: Optional[int] = None,
+) -> List[BuilderPick]:
+    props = deduplicate_props(raw_props)
+    run_date = match_date or date.today().isoformat()
+    max_count = max_builders or as_int(os.getenv("NETRATTLER_MAX_BUILDERS_PER_RUN", "18"), 18)
+
+    # Strict player-only pool with positive edge and real bookmaker odds.
+    real_props = [leg for leg in props if _v34b_valid_player_leg(leg)]
+    if len(real_props) < 2:
+        return []
+
+    candidates: List[BuilderPick] = []
+    candidates.extend(_v31_same_match_builders(real_props, run_date))
+    candidates.extend(_v31_cross_match_builders(real_props, run_date))
+    candidates.extend(_v31_ladder_builders(real_props, run_date))
+
+    # IMPORTANT: no legacy team-builder fallback.
+    candidates = [pick for pick in candidates if _v34b_pick_valid(pick)]
+    if not candidates:
+        return []
+
+    # Dedupe by exact player/market/line set.
+    unique: List[BuilderPick] = []
+    seen = set()
+    for pick in candidates:
+        sig = "|".join(sorted(
+            f"{norm(x.player)}:{norm(x.match)}:{x.category}:{round(x.line, 2)}"
+            for x in pick.legs
+        ))
+        if sig in seen:
+            continue
+        seen.add(sig)
+        pick.stake = _v34b_builder_stake(pick.total_odds)
+        unique.append(pick)
+
+    unique.sort(key=_v31_pick_score, reverse=True)
+    return _v32d_rebalance_best_builders(unique, max_count)
+
+
+def _v34b_risk_label(total_odds: float) -> str:
+    if total_odds >= 50:
+        return "LOTTERY"
+    if total_odds >= 15:
+        return "RISKY"
+    if total_odds >= 8:
+        return "VALUE"
+    return "SAFE"
+
+
+def format_builder_message(pick: BuilderPick) -> str:
+    sep = "━" * 22
+    same_match = len({x.match for x in pick.legs}) == 1
+    avg_score = sum(_v31_leg_score(x) for x in pick.legs) / max(1, len(pick.legs))
+    avg_edge = sum(_v34b_edge(x) for x in pick.legs) / max(1, len(pick.legs))
+
+    if avg_score >= 0.92:
+        read = "A-SETUP"
+    elif avg_score >= 0.82:
+        read = "B+ VALUE"
+    elif avg_score >= 0.72:
+        read = "B VALUE"
+    else:
+        read = "SPECULATIVE"
+
+    risk = _v34b_risk_label(float(pick.total_odds or 0.0))
+    lines = [
+        "🔑 <b>NETRATTLER PROP BUILDER</b>",
+        f"<b>{pick.style} · {pick.variant}</b>",
+        sep,
+    ]
+    if same_match and pick.legs:
+        lines.append(f"⚽ <b>{pick.legs[0].match}</b>")
+
+    for i, leg in enumerate(pick.legs, 1):
+        icon = CATEGORY_ICON.get(leg.category, "🎯")
+        match_suffix = "" if same_match else f" · {leg.match}"
+        source_note = leg.source.split(":")[0] if leg.source else "Bookmaker"
+        prob = int(round(float(leg.probability or 0) * 100))
+        fair = 1.0 / max(0.01, float(leg.probability or 0))
+        edge = _v34b_edge(leg) * 100
+        lines.append(f"{i}. {icon} <b>{leg.player}</b> — {_v31_market_label(leg)}{match_suffix}")
+        lines.append(
+            f"   Quote {leg.odds:.2f} · Fair {fair:.2f} · Prob {prob}% · {source_note}"
+        )
+        lines.append(f"   ↳ {_v31_reason(leg).split(' · Edge')[0]} · Edge <b>+{edge:.1f}%</b>")
+
+    lines.extend([
+        sep,
+        f"💰 Gesamt-Quote: <b>{pick.total_odds:.2f}</b>",
+        f"🔥 Einsatz: <b>{pick.stake:.2f} Units</b>",
+        f"🧠 <b>READ:</b> {read} · {risk} · Ø Edge +{avg_edge * 100:.1f}%",
+        "<i>Nur echte Spielerprops mit positiver Edge und realer Bookmaker-Quote. Keine generischen Team-Märkte.</i>",
+    ])
+    return "\n".join(lines)
