@@ -1,0 +1,169 @@
+name: NETRATTLER AI MASTER V36 AUTONOMOUS FOOTBALL
+
+on:
+  workflow_dispatch:
+    inputs:
+      mode:
+        description: "daily | full | learning | sources | train"
+        required: false
+        default: "daily"
+      run_tip_bot:
+        description: "AI Tipp Bot am Ende starten"
+        required: false
+        default: "false"
+  schedule:
+    - cron: "10 1 * * 0"
+
+permissions:
+  contents: read
+
+concurrency:
+  group: netrattler-ai-master-v36
+  cancel-in-progress: false
+
+jobs:
+  master:
+    runs-on: ubuntu-latest
+    timeout-minutes: 240
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+          cache: "pip"
+      - name: Restore last-good source cache
+        uses: actions/cache@v4
+        with:
+          path: .netrattler_cache
+          key: netrattler-source-cache-${{ runner.os }}-${{ github.run_id }}
+          restore-keys: |
+            netrattler-source-cache-${{ runner.os }}-
+      - name: Install
+        run: |
+          python -m pip install --upgrade pip
+          pip install -r requirements_all_source.txt
+          pip install -r requirements_train.txt
+          pip install -r requirements.txt || true
+      - name: Compile all V36 modules
+        run: |
+          python -m py_compile netrattler_learning_engine.py netrattler_runtime_policy.py netrattler_generic_repo_ingestor.py netrattler_closing_odds_capture_v35.py scrape_player_stats.py netrattler_odds_harvester.py train_model.py btts_bot.py netrattler_builder_engine.py netrattler_autolearn_v36.py netrattler_builder_learning_v36.py netrattler_market_consensus_v36.py netrattler_exposure_engine_v36.py netrattler_source_router_v36.py
+      - name: Offline V36 smoke tests
+        env:
+          PYTHONPATH: .
+        run: python tests/test_netrattler_v36_smoke.py
+      - name: Resolve mode
+        id: mode
+        shell: bash
+        run: |
+          MODE="${{ github.event.inputs.mode }}"
+          if [ -z "$MODE" ]; then MODE="daily"; fi
+          if [ "${{ github.event.schedule }}" = "10 1 * * 0" ]; then MODE="sources"; fi
+          echo "mode=$MODE" >> "$GITHUB_OUTPUT"
+      - name: Source discovery and quarantine lab
+        if: contains(fromJSON('["full","sources"]'), steps.mode.outputs.mode)
+        env:
+          SUPABASE_URL: ${{ secrets.SUPABASE_URL }}
+          SUPABASE_KEY: ${{ secrets.SUPABASE_KEY }}
+          SUPABASE_SERVICE_ROLE_KEY: ${{ secrets.SUPABASE_SERVICE_ROLE_KEY }}
+          GITHUB_TOKEN: ${{ github.token }}
+          ODDS_API_KEYS: ${{ secrets.ODDS_API_KEYS }}
+          ODDS_API_KEY: ${{ secrets.ODDS_API_KEY }}
+          BETFAIR_APP_KEY: ${{ secrets.BETFAIR_APP_KEY }}
+          BETFAIR_SESSION_TOKEN: ${{ secrets.BETFAIR_SESSION_TOKEN }}
+        run: NETRATTLER_LEARNING_MODE=sources python netrattler_learning_engine.py
+      - name: Safe generic data ingestion
+        if: contains(fromJSON('["daily","full","sources"]'), steps.mode.outputs.mode)
+        env:
+          SUPABASE_URL: ${{ secrets.SUPABASE_URL }}
+          SUPABASE_KEY: ${{ secrets.SUPABASE_KEY }}
+          SUPABASE_SERVICE_ROLE_KEY: ${{ secrets.SUPABASE_SERVICE_ROLE_KEY }}
+          GITHUB_TOKEN: ${{ github.token }}
+          ODDS_API_KEYS: ${{ secrets.ODDS_API_KEYS }}
+          ODDS_API_KEY: ${{ secrets.ODDS_API_KEY }}
+          BETFAIR_APP_KEY: ${{ secrets.BETFAIR_APP_KEY }}
+          BETFAIR_SESSION_TOKEN: ${{ secrets.BETFAIR_SESSION_TOKEN }}
+        run: python netrattler_generic_repo_ingestor.py
+      - name: Player stats and results
+        if: contains(fromJSON('["daily","full"]'), steps.mode.outputs.mode)
+        env:
+          SUPABASE_URL: ${{ secrets.SUPABASE_URL }}
+          SUPABASE_KEY: ${{ secrets.SUPABASE_KEY }}
+          SUPABASE_SERVICE_ROLE_KEY: ${{ secrets.SUPABASE_SERVICE_ROLE_KEY }}
+          GITHUB_TOKEN: ${{ github.token }}
+          ODDS_API_KEYS: ${{ secrets.ODDS_API_KEYS }}
+          ODDS_API_KEY: ${{ secrets.ODDS_API_KEY }}
+          BETFAIR_APP_KEY: ${{ secrets.BETFAIR_APP_KEY }}
+          BETFAIR_SESSION_TOKEN: ${{ secrets.BETFAIR_SESSION_TOKEN }}
+        run: python scrape_player_stats.py --yesterday
+      - name: Compact current and closing odds
+        if: contains(fromJSON('["daily","full"]'), steps.mode.outputs.mode)
+        env:
+          SUPABASE_URL: ${{ secrets.SUPABASE_URL }}
+          SUPABASE_KEY: ${{ secrets.SUPABASE_KEY }}
+          SUPABASE_SERVICE_ROLE_KEY: ${{ secrets.SUPABASE_SERVICE_ROLE_KEY }}
+          GITHUB_TOKEN: ${{ github.token }}
+          ODDS_API_KEYS: ${{ secrets.ODDS_API_KEYS }}
+          ODDS_API_KEY: ${{ secrets.ODDS_API_KEY }}
+          BETFAIR_APP_KEY: ${{ secrets.BETFAIR_APP_KEY }}
+          BETFAIR_SESSION_TOKEN: ${{ secrets.BETFAIR_SESSION_TOKEN }}
+        run: |
+          python netrattler_closing_odds_capture_v35.py --snapshot-type current
+          python netrattler_closing_odds_capture_v35.py --snapshot-type closing
+      - name: Temporal models and champion promotion
+        if: contains(fromJSON('["full","train"]'), steps.mode.outputs.mode)
+        env:
+          SUPABASE_URL: ${{ secrets.SUPABASE_URL }}
+          SUPABASE_KEY: ${{ secrets.SUPABASE_KEY }}
+          SUPABASE_SERVICE_ROLE_KEY: ${{ secrets.SUPABASE_SERVICE_ROLE_KEY }}
+          GITHUB_TOKEN: ${{ github.token }}
+          ODDS_API_KEYS: ${{ secrets.ODDS_API_KEYS }}
+          ODDS_API_KEY: ${{ secrets.ODDS_API_KEY }}
+          BETFAIR_APP_KEY: ${{ secrets.BETFAIR_APP_KEY }}
+          BETFAIR_SESSION_TOKEN: ${{ secrets.BETFAIR_SESSION_TOKEN }}
+        run: python train_model.py
+      - name: Settlement learning, calibration and risk policy
+        if: contains(fromJSON('["daily","full","learning"]'), steps.mode.outputs.mode)
+        env:
+          SUPABASE_URL: ${{ secrets.SUPABASE_URL }}
+          SUPABASE_KEY: ${{ secrets.SUPABASE_KEY }}
+          SUPABASE_SERVICE_ROLE_KEY: ${{ secrets.SUPABASE_SERVICE_ROLE_KEY }}
+          GITHUB_TOKEN: ${{ github.token }}
+          ODDS_API_KEYS: ${{ secrets.ODDS_API_KEYS }}
+          ODDS_API_KEY: ${{ secrets.ODDS_API_KEY }}
+          BETFAIR_APP_KEY: ${{ secrets.BETFAIR_APP_KEY }}
+          BETFAIR_SESSION_TOKEN: ${{ secrets.BETFAIR_SESSION_TOKEN }}
+        run: NETRATTLER_LEARNING_MODE=learning python netrattler_learning_engine.py
+      - name: Optional AI Tipp Bot
+        if: github.event.inputs.run_tip_bot == 'true'
+        env:
+          SUPABASE_URL: ${{ secrets.SUPABASE_URL }}
+          SUPABASE_KEY: ${{ secrets.SUPABASE_KEY }}
+          SUPABASE_SERVICE_ROLE_KEY: ${{ secrets.SUPABASE_SERVICE_ROLE_KEY }}
+          GITHUB_TOKEN: ${{ github.token }}
+          ODDS_API_KEYS: ${{ secrets.ODDS_API_KEYS }}
+          ODDS_API_KEY: ${{ secrets.ODDS_API_KEY }}
+          TELEGRAM_TOKEN: ${{ secrets.TELEGRAM_TOKEN }}
+          TELEGRAM_BOT_TOKEN: ${{ secrets.TELEGRAM_BOT_TOKEN }}
+          TELEGRAM_CHAT_ID: ${{ secrets.TELEGRAM_CHAT_ID }}
+          TELEGRAM_GROUP_BTTS: ${{ secrets.TELEGRAM_GROUP_BTTS }}
+          TELEGRAM_GROUP_OVER25: ${{ secrets.TELEGRAM_GROUP_OVER25 }}
+          TELEGRAM_GROUP_COMBO: ${{ secrets.TELEGRAM_GROUP_COMBO }}
+          TELEGRAM_GROUP_COMBOS: ${{ secrets.TELEGRAM_GROUP_COMBOS }}
+          TELEGRAM_GROUP_BTTS_HT: ${{ secrets.TELEGRAM_GROUP_BTTS_HT }}
+          TELEGRAM_GROUP_BUILDER: ${{ secrets.TELEGRAM_GROUP_BUILDER }}
+          TELEGRAM_GROUP_PROPS: ${{ secrets.TELEGRAM_GROUP_PROPS }}
+          TELEGRAM_GROUP_STATS: ${{ secrets.TELEGRAM_GROUP_STATS }}
+        run: python btts_bot.py
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: netrattler-v36-policy-models-and-summaries
+          path: |
+            netrattler_active_policy.json
+            netrattler_all_source_summary.json
+            netrattler_source_hub_summary.json
+            netrattler_odds_snapshot.json
+            netrattler_autolearn_registry.json
+            netrattler_autolearn_report.json
+            netrattler_builder_correlations.json
+          if-no-files-found: ignore
