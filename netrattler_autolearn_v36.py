@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""NETRATTLER V36 settled-pick AutoML.
+"""NETRATTLER V36D settled-pick AutoML.
 
 Football adaptation of the useful PROP HUNTER V12 pattern:
 - trains only on settled historical picks;
@@ -315,6 +315,36 @@ def _promote(candidate: Mapping[str, Any], champion: Optional[Mapping[str, Any]]
     )
 
 
+
+
+def _db_champions(db: SupabaseRest) -> Dict[str, Dict[str, Any]]:
+    if not db.enabled:
+        return {}
+    try:
+        rows = db.get(
+            "netrattler_autolearn_models",
+            filters={"status": "eq.champion"},
+            order="updated_at.desc",
+            limit_total=5000,
+        )
+    except Exception:
+        return {}
+    champions: Dict[str, Dict[str, Any]] = {}
+    for row in rows:
+        key = str(row.get("model_key") or "")
+        model = row.get("model")
+        if key and isinstance(model, Mapping):
+            champions[key] = dict(model)
+    return champions
+
+
+def _registry_fingerprint(champions: Mapping[str, Mapping[str, Any]]) -> str:
+    global_model = champions.get("global")
+    if isinstance(global_model, Mapping):
+        return str(global_model.get("training_fingerprint") or "")
+    return ""
+
+
 def train_and_promote(db: Optional[SupabaseRest] = None) -> Dict[str, Any]:
     db = db or SupabaseRest()
     rows = load_training_rows(db)
@@ -323,12 +353,29 @@ def train_and_promote(db: Optional[SupabaseRest] = None) -> Dict[str, Any]:
         (row.get("date"), row.get("market_group"), row.get("league"), row.get("odds_bucket"), row.get("raw_probability"), row.get("y"))
         for row in rows
     ], separators=(",", ":"), default=str).encode("utf-8")).hexdigest()
-    if isinstance(old_payload, Mapping) and old_payload.get("training_fingerprint") == fingerprint:
+
+    local_champions = dict(old_payload.get("models") or {}) if isinstance(old_payload, Mapping) else {}
+    database_champions = _db_champions(db)
+    champions = {**local_champions, **database_champions}
+
+    old_fingerprint = (
+        str(old_payload.get("training_fingerprint") or "")
+        if isinstance(old_payload, Mapping) else ""
+    ) or _registry_fingerprint(champions)
+    if old_fingerprint == fingerprint:
         report = {"rows": len(rows), "trained_at": _utc(), "status": "unchanged", "groups": {}}
+        payload = {
+            "version": 4,
+            "updated_at": _utc(),
+            "training_rows": len(rows),
+            "training_fingerprint": fingerprint,
+            "models": champions,
+            "last_report": report,
+        }
+        _atomic_json_write(MODEL_FILE, payload)
         _atomic_json_write(REPORT_FILE, report)
-        print(f"V36 AutoML: unchanged settled history rows={len(rows)}; training skipped")
+        print(f"V36D AutoML: unchanged settled history rows={len(rows)}; training skipped")
         return report
-    champions = dict(old_payload.get("models") or {}) if isinstance(old_payload, Mapping) else {}
     report: Dict[str, Any] = {"rows": len(rows), "trained_at": _utc(), "groups": {}}
     for key, group_rows in _groups(rows).items():
         minimum = MIN_GLOBAL if key == "global" else MIN_GROUP
@@ -339,6 +386,8 @@ def train_and_promote(db: Optional[SupabaseRest] = None) -> Dict[str, Any]:
         if not candidate:
             report["groups"][key] = {"status": "not_trainable", "n": len(group_rows)}
             continue
+        candidate["training_fingerprint"] = fingerprint
+        candidate["model_key"] = key
         promoted, reason = _promote(candidate, champions.get(key))
         status = "promoted" if promoted else "rejected"
         if promoted:
@@ -357,10 +406,17 @@ def train_and_promote(db: Optional[SupabaseRest] = None) -> Dict[str, Any]:
                 "model": candidate,
                 "updated_at": _utc(),
             }], "model_key")
-    payload = {"version": 3, "updated_at": _utc(), "training_rows": len(rows), "training_fingerprint": fingerprint, "models": champions, "last_report": report}
+    payload = {
+        "version": 4,
+        "updated_at": _utc(),
+        "training_rows": len(rows),
+        "training_fingerprint": fingerprint,
+        "models": champions,
+        "last_report": report,
+    }
     _atomic_json_write(MODEL_FILE, payload)
     _atomic_json_write(REPORT_FILE, report)
-    print(f"V36 AutoML: rows={len(rows)} champions={len(champions)}")
+    print(f"V36D AutoML: rows={len(rows)} champions={len(champions)}")
     for key, info in report["groups"].items():
         if info.get("status") in {"promoted", "rejected"}:
             print(f"  {key}: {info['status']} n={info['n']} brier={info.get('brier')} logloss={info.get('logloss')}")
