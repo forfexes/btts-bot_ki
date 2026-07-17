@@ -1,9 +1,9 @@
-name: NETRATTLER ML Train V34 All Sources
+name: NETRATTLER ML Train V36 Temporal All Sources
 
 on:
   workflow_dispatch:
   schedule:
-    - cron: "20 5 * * *"
+    - cron: "20 5 * * 0"
 
 jobs:
   train:
@@ -20,7 +20,7 @@ jobs:
           python -m pip install --upgrade pip
           pip install -r requirements_train.txt
       - name: Compile
-        run: python -m py_compile train_model.py
+        run: python -m py_compile train_model.py netrattler_autolearn_v36.py
       - name: Train from all normalized source tables and bookmaker odds
         env:
           SUPABASE_URL: ${{ secrets.SUPABASE_URL }}
@@ -29,4 +29,6 @@ jobs:
           TELEGRAM_BOT_TOKEN: ${{ secrets.TELEGRAM_BOT_TOKEN }}
           TELEGRAM_CHAT_ID: ${{ secrets.TELEGRAM_CHAT_ID }}
           FD_START_YEAR: "2010"
-        run: python train_model.py
+        run: |
+          python train_model.py
+          python netrattler_autolearn_v36.py --train || true
