@@ -1,4 +1,4 @@
-name: NETRATTLER AI MASTER V36E MINUTES-SAFE
+name: NETRATTLER AI MASTER V36F RUNTIME-SAFE
 
 on:
   workflow_dispatch:
@@ -28,38 +28,99 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
-      - name: Preflight required repository files
+      - name: Resolve mode and preflight runtime files
+        id: mode
         shell: bash
         run: |
           set -euo pipefail
+
+          MODE="${{ github.event.inputs.mode }}"
+          if [[ -z "$MODE" ]]; then MODE="daily"; fi
+          if [[ "${{ github.event_name }}" == "schedule" ]]; then MODE="sources"; fi
+
+          case "$MODE" in
+            daily|full|learning|sources|train) ;;
+            *)
+              echo "INVALID MODE: $MODE"
+              exit 2
+              ;;
+          esac
+
           required=(
-            netrattler_learning_engine.py
-            netrattler_runtime_policy.py
-            netrattler_generic_repo_ingestor.py
-            netrattler_closing_odds_capture_v35.py
-            scrape_player_stats.py
-            netrattler_odds_harvester.py
-            train_model.py
-            btts_bot.py
-            netrattler_builder_engine.py
-            netrattler_autolearn_v36.py
-            netrattler_builder_learning_v36.py
-            netrattler_market_consensus_v36.py
-            netrattler_exposure_engine_v36.py
-            netrattler_source_router_v36.py
-            tests/test_netrattler_v36_smoke.py
             requirements_all_source.txt
             requirements_train.txt
           )
+
+          case "$MODE" in
+            daily)
+              required+=(
+                netrattler_learning_engine.py
+                netrattler_autolearn_v36.py
+                netrattler_builder_learning_v36.py
+                scrape_player_stats.py
+                netrattler_odds_harvester.py
+                netrattler_closing_odds_capture_v35.py
+              )
+              ;;
+            learning)
+              required+=(
+                netrattler_learning_engine.py
+                netrattler_autolearn_v36.py
+                netrattler_builder_learning_v36.py
+              )
+              ;;
+            sources)
+              required+=(
+                netrattler_learning_engine.py
+                netrattler_generic_repo_ingestor.py
+              )
+              ;;
+            train)
+              required+=(train_model.py)
+              ;;
+            full)
+              required+=(
+                netrattler_learning_engine.py
+                netrattler_runtime_policy.py
+                netrattler_generic_repo_ingestor.py
+                netrattler_closing_odds_capture_v35.py
+                scrape_player_stats.py
+                netrattler_odds_harvester.py
+                train_model.py
+                netrattler_autolearn_v36.py
+                netrattler_builder_learning_v36.py
+                netrattler_market_consensus_v36.py
+                netrattler_exposure_engine_v36.py
+                netrattler_source_router_v36.py
+              )
+              ;;
+          esac
+
+          if [[ "${{ github.event.inputs.run_tip_bot }}" == "true" ]]; then
+            required+=(
+              btts_bot.py
+              netrattler_builder_engine.py
+              netrattler_runtime_policy.py
+              netrattler_market_consensus_v36.py
+              netrattler_exposure_engine_v36.py
+              netrattler_source_router_v36.py
+            )
+          fi
+
+          mapfile -t required < <(printf '%s\n' "${required[@]}" | awk '!seen[$0]++')
+
           missing=()
           for file in "${required[@]}"; do
             [[ -f "$file" ]] || missing+=("$file")
           done
+
           if (( ${#missing[@]} > 0 )); then
-            printf 'MISSING REQUIRED FILE: %s\n' "${missing[@]}"
+            printf 'MISSING RUNTIME FILE: %s\n' "${missing[@]}"
             exit 2
           fi
-          echo "PREFLIGHT OK files=${#required[@]}"
+
+          echo "mode=$MODE" >> "$GITHUB_OUTPUT"
+          echo "PREFLIGHT OK mode=$MODE runtime_files=${#required[@]}"
 
       - uses: actions/setup-python@v5
         with:
@@ -78,21 +139,73 @@ jobs:
           pip install -r requirements_all_source.txt
           pip install -r requirements_train.txt
           pip install -r requirements.txt || true
-      - name: Compile all V36 modules
-        run: |
-          python -m py_compile netrattler_learning_engine.py netrattler_runtime_policy.py netrattler_generic_repo_ingestor.py netrattler_closing_odds_capture_v35.py scrape_player_stats.py netrattler_odds_harvester.py train_model.py btts_bot.py netrattler_builder_engine.py netrattler_autolearn_v36.py netrattler_builder_learning_v36.py netrattler_market_consensus_v36.py netrattler_exposure_engine_v36.py netrattler_source_router_v36.py
-      - name: Offline V36 smoke tests
-        env:
-          PYTHONPATH: .
-        run: python tests/test_netrattler_v36_smoke.py
-      - name: Resolve mode
-        id: mode
+      - name: Compile selected runtime modules
         shell: bash
         run: |
-          MODE="${{ github.event.inputs.mode }}"
-          if [ -z "$MODE" ]; then MODE="daily"; fi
-          if [ "${{ github.event.schedule }}" = "10 1 * * 0" ]; then MODE="sources"; fi
-          echo "mode=$MODE" >> "$GITHUB_OUTPUT"
+          set -euo pipefail
+          MODE="${{ steps.mode.outputs.mode }}"
+          files=()
+
+          case "$MODE" in
+            daily)
+              files=(
+                netrattler_learning_engine.py
+                netrattler_autolearn_v36.py
+                netrattler_builder_learning_v36.py
+                scrape_player_stats.py
+                netrattler_odds_harvester.py
+                netrattler_closing_odds_capture_v35.py
+              )
+              ;;
+            learning)
+              files=(
+                netrattler_learning_engine.py
+                netrattler_autolearn_v36.py
+                netrattler_builder_learning_v36.py
+              )
+              ;;
+            sources)
+              files=(
+                netrattler_learning_engine.py
+                netrattler_generic_repo_ingestor.py
+              )
+              ;;
+            train)
+              files=(train_model.py)
+              ;;
+            full)
+              files=(
+                netrattler_learning_engine.py
+                netrattler_runtime_policy.py
+                netrattler_generic_repo_ingestor.py
+                netrattler_closing_odds_capture_v35.py
+                scrape_player_stats.py
+                netrattler_odds_harvester.py
+                train_model.py
+                netrattler_autolearn_v36.py
+                netrattler_builder_learning_v36.py
+                netrattler_market_consensus_v36.py
+                netrattler_exposure_engine_v36.py
+                netrattler_source_router_v36.py
+              )
+              ;;
+          esac
+
+          if [[ "${{ github.event.inputs.run_tip_bot }}" == "true" ]]; then
+            files+=(
+              btts_bot.py
+              netrattler_builder_engine.py
+              netrattler_runtime_policy.py
+              netrattler_market_consensus_v36.py
+              netrattler_exposure_engine_v36.py
+              netrattler_source_router_v36.py
+            )
+          fi
+
+          mapfile -t files < <(printf '%s\n' "${files[@]}" | awk '!seen[$0]++')
+          python -m py_compile "${files[@]}"
+          echo "COMPILE OK mode=$MODE files=${#files[@]}"
+
       - name: Source discovery and quarantine lab
         if: contains(fromJSON('["full","sources"]'), steps.mode.outputs.mode)
         env:
