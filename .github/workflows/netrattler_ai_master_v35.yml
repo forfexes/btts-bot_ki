@@ -27,6 +27,40 @@ jobs:
     timeout-minutes: 240
     steps:
       - uses: actions/checkout@v4
+
+      - name: Preflight required repository files
+        shell: bash
+        run: |
+          set -euo pipefail
+          required=(
+            netrattler_learning_engine.py
+            netrattler_runtime_policy.py
+            netrattler_generic_repo_ingestor.py
+            netrattler_closing_odds_capture_v35.py
+            scrape_player_stats.py
+            netrattler_odds_harvester.py
+            train_model.py
+            btts_bot.py
+            netrattler_builder_engine.py
+            netrattler_autolearn_v36.py
+            netrattler_builder_learning_v36.py
+            netrattler_market_consensus_v36.py
+            netrattler_exposure_engine_v36.py
+            netrattler_source_router_v36.py
+            tests/test_netrattler_v36_smoke.py
+            requirements_all_source.txt
+            requirements_train.txt
+          )
+          missing=()
+          for file in "${required[@]}"; do
+            [[ -f "$file" ]] || missing+=("$file")
+          done
+          if (( ${#missing[@]} > 0 )); then
+            printf 'MISSING REQUIRED FILE: %s\n' "${missing[@]}"
+            exit 2
+          fi
+          echo "PREFLIGHT OK files=${#required[@]}"
+
       - uses: actions/setup-python@v5
         with:
           python-version: "3.11"
