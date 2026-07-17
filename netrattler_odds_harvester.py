@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """
-NETRATTLER V34 — BOOKMAKER ODDS HARVESTER
+NETRATTLER V36G — BOOKMAKER ODDS HARVESTER
 ==========================================
 Collects every free/public odds source that is actually usable and falls back
 source-by-source without aborting the run.
@@ -30,6 +30,7 @@ import json
 import os
 import re
 import subprocess
+import shutil
 import sys
 import tempfile
 import time
@@ -183,20 +184,32 @@ def _sb_post(table: str, rows: Sequence[Dict[str, Any]], conflict: str) -> Tuple
         return 0, 0
     ok = fail = 0
     endpoint = f"{SUPABASE_URL}/rest/v1/{table}"
-    for i in range(0, len(rows), 400):
-        chunk = list(rows[i:i + 400])
-        try:
-            r = requests.post(
-                endpoint, headers=_sb_headers(), params={"on_conflict": conflict}, json=chunk, timeout=90
-            )
-            if r.ok:
-                ok += len(chunk)
-            else:
+    groups: Dict[Tuple[str, ...], List[Dict[str, Any]]] = {}
+    for row in rows:
+        groups.setdefault(tuple(sorted(row.keys())), []).append(dict(row))
+    for same_keys in groups.values():
+        for index in range(0, len(same_keys), 400):
+            chunk = same_keys[index:index + 400]
+            try:
+                response = requests.post(
+                    endpoint,
+                    headers=_sb_headers(),
+                    params={"on_conflict": conflict},
+                    json=chunk,
+                    timeout=90,
+                )
+                if response.ok:
+                    ok += len(chunk)
+                else:
+                    fail += len(chunk)
+                    log(
+                        f"Supabase {table} {response.status_code}: "
+                        f"{response.text[:240]}",
+                        "WARN",
+                    )
+            except Exception as exc:
                 fail += len(chunk)
-                log(f"Supabase {table} {r.status_code}: {r.text[:240]}", "WARN")
-        except Exception as exc:
-            fail += len(chunk)
-            log(f"Supabase {table}: {exc}", "WARN")
+                log(f"Supabase {table}: {exc}", "WARN")
     return ok, fail
 
 
@@ -547,6 +560,14 @@ def collect_oddsharvester(target_date: Optional[str] = None) -> List[Dict[str, A
     if not _bool_env("ENABLE_ODDSHARVESTER", True):
         return []
     exe = os.getenv("ODDSHARVESTER_BIN", "oddsharvester")
+    resolved_exe = shutil.which(exe)
+    if not resolved_exe:
+        log(
+            "OddsHarvester CLI fehlt; requirements_all_source.txt installieren",
+            "WARN",
+        )
+        return []
+    exe = resolved_exe
     with tempfile.TemporaryDirectory(prefix="ntr_oddsharvester_") as td:
         root = Path(td)
         output_base = root / "odds"
@@ -791,7 +812,7 @@ def main() -> None:
     do_live = args.live or args.all or (not args.history and not args.live and not args.all)
     target_date = args.date or date.today().isoformat()
 
-    print("🎰 NETRATTLER V34 ODDS HARVESTER")
+    print("🎰 NETRATTLER V36G ODDS HARVESTER")
     print(f"   target_date={target_date} history={do_history} live={do_live}")
     rows: List[Dict[str, Any]] = []
     if do_history:
