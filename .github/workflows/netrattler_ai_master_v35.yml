@@ -1,10 +1,10 @@
-name: NETRATTLER AI MASTER V36 AUTONOMOUS FOOTBALL
+name: NETRATTLER AI MASTER V36E MINUTES-SAFE
 
 on:
   workflow_dispatch:
     inputs:
       mode:
-        description: "daily | full | learning | sources | train"
+        description: "daily=fresh stats+odds+learning | full=all | learning | sources | train"
         required: false
         default: "daily"
       run_tip_bot:
@@ -72,7 +72,9 @@ jobs:
           BETFAIR_SESSION_TOKEN: ${{ secrets.BETFAIR_SESSION_TOKEN }}
         run: NETRATTLER_LEARNING_MODE=sources python netrattler_learning_engine.py
       - name: Safe generic data ingestion
-        if: contains(fromJSON('["daily","full","sources"]'), steps.mode.outputs.mode)
+        # Historical GitHub datasets run only for full/source maintenance.
+        # Daily mode is reserved for fresh player stats, odds and learning.
+        if: contains(fromJSON('["full","sources"]'), steps.mode.outputs.mode)
         env:
           SUPABASE_URL: ${{ secrets.SUPABASE_URL }}
           SUPABASE_KEY: ${{ secrets.SUPABASE_KEY }}
