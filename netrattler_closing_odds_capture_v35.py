@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Capture compact opening/current/closing odds and calculate CLV.
+"""Capture compact opening/current/closing odds and calculate CLV safely.
 
 The source chain is inherited from ``netrattler_odds_harvester``:
 Pinnacle -> The Odds API -> OddsHarvester/OddsPortal -> Bet365 best effort ->
@@ -159,15 +159,27 @@ def main() -> None:
         raw = collect_live_all(args.date)
         compact = compact_rows(raw, args.snapshot_type)
         ok, fail = db.upsert("netrattler_odds_snapshots", compact, "snapshot_id")
-        log(f"ODDS {args.snapshot_type}: raw={len(raw)} compact={len(compact)} saved={ok} failed={fail}")
-    clv = calculate_clv(db)
-    ok, fail = db.upsert("netrattler_clv_events", clv, "clv_id")
-    log(f"CLV: calculated={len(clv)} saved={ok} failed={fail}")
-    if db.enabled and args.cleanup_days > 0:
+        log(
+            f"ODDS {args.snapshot_type}: raw={len(raw)} compact={len(compact)} "
+            f"saved={ok} failed={fail}"
+        )
+
+    run_clv = args.clv_only or args.snapshot_type == "closing"
+    if run_clv:
+        clv = calculate_clv(db)
+        ok, fail = db.upsert("netrattler_clv_events", clv, "clv_id")
+        log(f"CLV: calculated={len(clv)} saved={ok} failed={fail}")
+    else:
+        log(f"CLV deferred until closing snapshot (current={args.snapshot_type})")
+
+    run_cleanup = run_clv and db.enabled and args.cleanup_days > 0
+    if run_cleanup:
         try:
             response = requests.post(
                 f"{db.url}/rest/v1/rpc/netrattler_cleanup_odds_snapshots",
-                headers=db.headers(), json={"retention_days": args.cleanup_days}, timeout=20,
+                headers=db.headers(),
+                json={"retention_days": args.cleanup_days},
+                timeout=20,
             )
             if response.ok:
                 log(f"Odds retention cleanup: {response.text[:120]}")
