@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """
-NETRATTLER V36G — BOOKMAKER ODDS HARVESTER
+NETRATTLER V36H — BOOKMAKER ODDS HARVESTER
 ==========================================
 Collects every free/public odds source that is actually usable and falls back
 source-by-source without aborting the run.
@@ -563,7 +563,7 @@ def collect_oddsharvester(target_date: Optional[str] = None) -> List[Dict[str, A
     resolved_exe = shutil.which(exe)
     if not resolved_exe:
         log(
-            "OddsHarvester CLI fehlt; requirements_all_source.txt installieren",
+            "OddsHarvester CLI fehlt; V36H Install-Schritt prüfen",
             "WARN",
         )
         return []
@@ -572,11 +572,17 @@ def collect_oddsharvester(target_date: Optional[str] = None) -> List[Dict[str, A
         root = Path(td)
         output_base = root / "odds"
         day = (target_date or date.today().isoformat()).replace("-", "")
-        commands = [
-            [exe, "upcoming", "-s", "football", "-d", day, "-m", "1x2,btts,over_under", "--headless", "-f", "json", "-o", str(output_base)],
-            # Explicit Bet365 pass. If Bet365 is absent, this exits/returns empty and all-bookie pass still remains.
-            [exe, "upcoming", "-s", "football", "-d", day, "-m", "1x2,btts,over_under", "--target-bookmaker", "Bet365", "--headless", "-f", "json", "-o", str(root / "bet365")],
-        ]
+        commands = [[
+            exe, "upcoming",
+            "-s", "football",
+            "-d", day,
+            "-m", "1x2,btts,over_under",
+            "--headless",
+            "--concurrency", os.getenv("ODDSHARVESTER_CONCURRENCY", "2"),
+            "--request-delay", os.getenv("ODDSHARVESTER_REQUEST_DELAY", "0.5"),
+            "-f", "json",
+            "-o", str(output_base),
+        ]]
         for cmd in commands:
             try:
                 subprocess.run(cmd, cwd=root, check=False, timeout=int(os.getenv("ODDSHARVESTER_TIMEOUT", "900")), capture_output=True, text=True)
@@ -812,7 +818,7 @@ def main() -> None:
     do_live = args.live or args.all or (not args.history and not args.live and not args.all)
     target_date = args.date or date.today().isoformat()
 
-    print("🎰 NETRATTLER V36G ODDS HARVESTER")
+    print("🎰 NETRATTLER V36H ODDS HARVESTER")
     print(f"   target_date={target_date} history={do_history} live={do_live}")
     rows: List[Dict[str, Any]] = []
     if do_history:
