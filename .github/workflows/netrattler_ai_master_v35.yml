@@ -1,4 +1,4 @@
-name: NETRATTLER AI MASTER V36M FINAL VERIFIED
+name: NETRATTLER AI MASTER V36N BET365 OPTIONAL
 
 on:
   workflow_dispatch:
@@ -46,6 +46,12 @@ jobs:
               ;;
           esac
 
+          if [[ -f netrattler_bet365_player_props.py ]]; then
+            echo "BET365 PLAYER PROPS FILE: present"
+          else
+            echo "BET365 PLAYER PROPS FILE: absent (optional; master continues)"
+          fi
+
           required=()
 
           case "$MODE" in
@@ -57,7 +63,6 @@ jobs:
                 scrape_player_stats.py
                 netrattler_odds_harvester.py
                 netrattler_closing_odds_capture_v35.py
-                netrattler_bet365_player_props.py
                 test_netrattler_core.py
                 btts_bot.py
                 netrattler_builder_engine.py
@@ -95,7 +100,6 @@ jobs:
                 netrattler_runtime_policy.py
                 netrattler_generic_repo_ingestor.py
                 netrattler_closing_odds_capture_v35.py
-                netrattler_bet365_player_props.py
                 scrape_player_stats.py
                 netrattler_odds_harvester.py
                 train_model.py
@@ -272,7 +276,6 @@ jobs:
                 scrape_player_stats.py
                 netrattler_odds_harvester.py
                 netrattler_closing_odds_capture_v35.py
-                netrattler_bet365_player_props.py
               )
               ;;
             learning)
@@ -297,7 +300,6 @@ jobs:
                 netrattler_runtime_policy.py
                 netrattler_generic_repo_ingestor.py
                 netrattler_closing_odds_capture_v35.py
-                netrattler_bet365_player_props.py
                 scrape_player_stats.py
                 netrattler_odds_harvester.py
                 train_model.py
@@ -322,6 +324,13 @@ jobs:
           fi
 
           mapfile -t files < <(printf '%s\n' "${files[@]}" | awk '!seen[$0]++')
+          if [[ -f netrattler_bet365_player_props.py ]]; then
+            files+=(netrattler_bet365_player_props.py)
+            echo "BET365 PLAYER PROPS FILE: present"
+          else
+            echo "BET365 PLAYER PROPS FILE: absent (optional)"
+          fi
+
           python -m py_compile "${files[@]}"
           echo "COMPILE OK mode=$MODE files=${#files[@]}"
 
@@ -409,7 +418,7 @@ jobs:
           BETFAIR_SESSION_TOKEN: ${{ secrets.BETFAIR_SESSION_TOKEN }}
         run: python train_model.py
       - name: Bet365 football player props
-        if: contains(fromJSON('["daily","full"]'), steps.mode.outputs.mode)
+        if: contains(fromJSON('["daily","full"]'), steps.mode.outputs.mode) && hashFiles('netrattler_bet365_player_props.py') != ''
         continue-on-error: true
         timeout-minutes: 3
         env:
