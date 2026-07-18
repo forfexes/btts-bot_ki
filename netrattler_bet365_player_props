@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""NETRATTLER V36K — Bet365 football player-props collector.
+"""NETRATTLER V36M — Bet365 football player-props collector.
 
 Best-effort public-page/network parser. It never invents lines or odds.
 It writes bet365_player_props_cache.json and, when compatible, stores rows in
@@ -134,21 +134,36 @@ def collect() -> List[Dict[str,Any]]:
         browser=p.chromium.launch(headless=True,args=['--no-sandbox','--disable-dev-shm-usage'])
         page=browser.new_page(locale='en-GB',viewport={'width':1440,'height':1200})
         page.on('response',on_response)
-        targets=BET365_EVENT_URLS or [BET365_URL]
+        targets=list(BET365_EVENT_URLS or [BET365_URL])
+        visited=set()
         deadline=time.time()+TIMEOUT
-        for url in targets[:MAX_EVENTS]:
-            if time.time()>deadline: break
+        while targets and len(visited)<MAX_EVENTS and time.time()<=deadline:
+            url=targets.pop(0)
+            if not url or url in visited:
+                continue
+            visited.add(url)
             try:
                 page.goto(url,wait_until='domcontentloaded',timeout=45000)
                 page.wait_for_timeout(5000)
-                body=page.locator('body').inner_text(timeout=10000)
-                # DOM fallback: retain visible text for SOP-O detection, but never synthesize odds.
-                urls.extend(page.eval_on_selector_all('a','els=>els.map(e=>e.href).filter(Boolean)'))
+                # DOM fallback is discovery-only; lines and odds still come from observed JSON.
+                discovered=page.eval_on_selector_all(
+                    'a',
+                    """els=>els.map(e=>e.href).filter(h=>
+                      h && /bet365/i.test(h) &&
+                      new RegExp('(football|soccer|event|fixture|match|AC/B1)','i').test(h)
+                    )""",
+                )
+                urls.extend(discovered)
+                for link in discovered:
+                    if link not in visited and link not in targets:
+                        targets.append(link)
                 for script in page.locator('script').all():
                     try:
                         t=script.text_content(timeout=1000) or ''
-                        if len(t)>20 and t.lstrip().startswith(('{','[')): payloads.append(json.loads(t))
-                    except Exception: pass
+                        if len(t)>20 and t.lstrip().startswith(('{','[')):
+                            payloads.append(json.loads(t))
+                    except Exception:
+                        pass
             except Exception as e:
                 print('BET365 PAGE WARN',str(e)[:180])
         browser.close()
@@ -157,21 +172,42 @@ def collect() -> List[Dict[str,Any]]:
     print(f'BET365 payloads={len(payloads)} links={len(set(urls))} props={len(rows)}')
     return rows
 
+def _key_groups(rows:List[Dict[str,Any]])->List[List[Dict[str,Any]]]:
+    """PostgREST requires identical object keys inside each bulk request."""
+    groups:Dict[Tuple[str,...],List[Dict[str,Any]]]={}
+    for row in rows:
+        groups.setdefault(tuple(sorted(row.keys())),[]).append(row)
+    return list(groups.values())
+
 def save_supabase(rows:List[Dict[str,Any]])->int:
     if not rows or not SUPABASE_URL or not SUPABASE_KEY: return 0
     endpoint=f'{SUPABASE_URL}/rest/v1/player_prop_db'
-    headers={'apikey':SUPABASE_KEY,'Authorization':f'Bearer {SUPABASE_KEY}','Content-Type':'application/json','Prefer':'return=minimal'}
-    # Project to common football player_prop_db fields; raw cache remains authoritative.
-    common=('source','sport','event_id','event_name','home_team','away_team','start_time','bookmaker','market_key','market_name','player_name','selection','selection_name','line','odds','sub_on_play_on','observed_at','raw')
+    headers={
+      'apikey':SUPABASE_KEY,
+      'Authorization':f'Bearer {SUPABASE_KEY}',
+      'Content-Type':'application/json',
+      'Prefer':'return=minimal',
+    }
+    # Raw JSON cache stays authoritative when the project table has an older schema.
+    common=(
+      'source','sport','event_id','event_name','home_team','away_team',
+      'start_time','bookmaker','market_key','market_name','player_name',
+      'selection','selection_name','line','odds','sub_on_play_on',
+      'observed_at','raw',
+    )
     payload=[{k:r[k] for k in common if k in r and r[k] not in ('',None)} for r in rows]
     saved=0
-    for i in range(0,len(payload),200):
-        chunk=payload[i:i+200]
-        try:
-            resp=requests.post(endpoint,headers=headers,json=chunk,timeout=45)
-            if resp.ok: saved+=len(chunk)
-            else: print('SUPABASE player_prop_db WARN',resp.status_code,resp.text[:240])
-        except Exception as e: print('SUPABASE WARN',str(e)[:180])
+    for same_keys in _key_groups(payload):
+        for i in range(0,len(same_keys),200):
+            chunk=same_keys[i:i+200]
+            try:
+                resp=requests.post(endpoint,headers=headers,json=chunk,timeout=45)
+                if resp.ok:
+                    saved+=len(chunk)
+                else:
+                    print('SUPABASE player_prop_db WARN',resp.status_code,resp.text[:240])
+            except Exception as e:
+                print('SUPABASE WARN',str(e)[:180])
     return saved
 
 def main()->int:
