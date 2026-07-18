@@ -1,4 +1,4 @@
-name: NETRATTLER AI MASTER V36K FINAL BET365 PROPS
+name: NETRATTLER AI MASTER V36M FINAL VERIFIED
 
 on:
   workflow_dispatch:
@@ -58,6 +58,13 @@ jobs:
                 netrattler_odds_harvester.py
                 netrattler_closing_odds_capture_v35.py
                 netrattler_bet365_player_props.py
+                test_netrattler_core.py
+                btts_bot.py
+                netrattler_builder_engine.py
+                netrattler_settlement_v16_final.py
+                netrattler_source_hub.py
+                netrattler_identity_hub.py
+                netrattler_feature_hub.py
               )
               ;;
             learning)
@@ -97,6 +104,13 @@ jobs:
                 netrattler_market_consensus_v36.py
                 netrattler_exposure_engine_v36.py
                 netrattler_source_router_v36.py
+                test_netrattler_core.py
+                btts_bot.py
+                netrattler_builder_engine.py
+                netrattler_settlement_v16_final.py
+                netrattler_source_hub.py
+                netrattler_identity_hub.py
+                netrattler_feature_hub.py
               )
               ;;
           esac
@@ -140,7 +154,7 @@ jobs:
           import sys
           print("PYTHON", sys.version)
           if sys.version_info < (3, 12):
-              raise SystemExit("NETRATTLER V36J requires Python >= 3.12")
+              raise SystemExit("NETRATTLER V36M requires Python >= 3.12")
           PY
       - name: Restore last-good source cache
         uses: actions/cache@v4
@@ -311,6 +325,14 @@ jobs:
           python -m py_compile "${files[@]}"
           echo "COMPILE OK mode=$MODE files=${#files[@]}"
 
+      - name: Core regression test
+        if: contains(fromJSON('["daily","full"]'), steps.mode.outputs.mode)
+        shell: bash
+        run: |
+          set -euo pipefail
+          python -m py_compile             btts_bot.py             netrattler_builder_engine.py             netrattler_settlement_v16_final.py             netrattler_source_hub.py             netrattler_identity_hub.py             netrattler_feature_hub.py             test_netrattler_core.py
+          python test_netrattler_core.py
+
       - name: Source discovery and quarantine lab
         if: contains(fromJSON('["full","sources"]'), steps.mode.outputs.mode)
         env:
@@ -396,8 +418,8 @@ jobs:
           SUPABASE_SERVICE_ROLE_KEY: ${{ secrets.SUPABASE_SERVICE_ROLE_KEY }}
           BET365_FOOTBALL_URL: ${{ secrets.BET365_FOOTBALL_URL }}
           BET365_EVENT_URLS: ${{ secrets.BET365_EVENT_URLS }}
-          BET365_PROPS_TIMEOUT: "120"
-          BET365_PROPS_MAX_EVENTS: "12"
+          BET365_PROPS_TIMEOUT: "90"
+          BET365_PROPS_MAX_EVENTS: "8"
         run: python netrattler_bet365_player_props.py --date today
 
       - name: Settlement learning, calibration and risk policy
