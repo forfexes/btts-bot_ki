@@ -11,8 +11,10 @@ import os
 from pathlib import Path
 
 # Deterministic and aligned with the current production floor.
-os.environ["NETRATTLER_BUILDER_MIN_ODDS"] = "5.0"
+os.environ["NETRATTLER_BUILDER_MIN_ODDS"] = "1.75"
 os.environ["NETRATTLER_BUILDER_MAX_ODDS"] = "150"
+os.environ["NETRATTLER_PROP_BUILDER_MIN_ODDS"] = "5.0"
+os.environ["NETRATTLER_PROP_BUILDER_MIN_EDGE"] = "0.0"
 
 from netrattler_builder_engine import build_builder_picks, deduplicate_props
 
@@ -65,11 +67,9 @@ normalized_team = deduplicate_props(team_rows)
 assert len(normalized_team) == 3, "England-Argentina team markets were not normalized"
 assert all(leg.match == eng_arg and leg.odds > 1 for leg in normalized_team)
 
-# A team-only builder may legitimately be empty. If one is returned, validate it.
+# Team-only rows must never become a PROP BUILDER.
 team_picks = build_builder_picks(team_rows, match_date="2026-07-15", max_builders=50)
-for pick in team_picks:
-    assert len(pick.legs) >= 2
-    assert all(leg.match == eng_arg and leg.odds > 1 for leg in pick.legs)
+assert team_picks == [], "Generic team markets leaked into PROP BUILDER"
 
 # Real player-prop sample with verified bookmaker lines and odds.
 player_rows = [
@@ -122,6 +122,65 @@ assert any(
     for pick in valid_player_picks
 ), "No builder used only observed bookmaker lines and odds"
 
+assert all(
+    all(leg.category in player_categories for leg in pick.legs)
+    for pick in player_picks
+), "A team-market leg leaked into a player builder"
+assert all(
+    all(leg.probability > (1.0 / leg.odds) for leg in pick.legs)
+    for pick in player_picks
+), "A zero/negative-edge leg leaked into a player builder"
+assert all(
+    pick.style != "TEAM BUILDER"
+    for pick in player_picks
+), "TEAM BUILDER style leaked into PROP BUILDER"
+
+# Mixed pool: team rows may be present upstream, but output remains player-only.
+mixed_picks = build_builder_picks(
+    team_rows + player_rows,
+    match_date="2026-07-15",
+    max_builders=50,
+)
+assert mixed_picks, "Mixed pool lost valid player builders"
+assert all(
+    all(leg.category in player_categories for leg in pick.legs)
+    for pick in mixed_picks
+), "Mixed pool produced a team-market builder"
+
+# Negative-edge bookmaker props must be rejected.
+negative_edge_rows = [
+    row("Player A", eng_arg, "2+ Shots", "shots", 2, 1.50, 50, team="England"),
+    row("Player B", eng_arg, "2+ SOT", "sot", 2, 1.55, 50, team="Argentina"),
+    row("Player C", eng_arg, "2+ Fouls", "fouls", 2, 1.60, 50, team="England"),
+]
+assert build_builder_picks(
+    negative_edge_rows,
+    match_date="2026-07-15",
+    max_builders=50,
+) == [], "Negative-edge builder was generated"
+
+# Positive-edge legs below combined odds 5.00 must also be rejected.
+low_total_odds_rows = [
+    row("Player D", eng_arg, "1+ Shot", "shots", 1, 1.50, 75, team="England"),
+    row("Player E", eng_arg, "1+ SOT", "sot", 1, 1.55, 72, team="Argentina"),
+]
+assert build_builder_picks(
+    low_total_odds_rows,
+    match_date="2026-07-15",
+    max_builders=50,
+) == [], "Builder below total odds 5.00 was generated"
+
+# Non-bookmaker/estimated sources must not be used for a published builder.
+estimated_rows = [
+    row("Player F", eng_arg, "2+ Shots", "shots", 2, 2.50, 60, source="fotmob", team="England"),
+    row("Player G", eng_arg, "2+ SOT", "sot", 2, 2.50, 60, source="statsbomb", team="Argentina"),
+]
+assert build_builder_picks(
+    estimated_rows,
+    match_date="2026-07-15",
+    max_builders=50,
+) == [], "Estimated/non-bookmaker odds were published"
+
 # Source/identity regression tests.
 from netrattler_identity_hub import teams_match, normalize_team_name, explain_match
 from netrattler_source_hub import (
@@ -167,6 +226,6 @@ assert source_priority_for_market("tackles_received")[0] == "pinnacle"
 
 assert Path("btts_bot.py").is_file()
 
-print(f"OK team-market normalization: {len(normalized_team)}")
+print(f"OK team markets rejected from PROP BUILDER: {len(normalized_team)}")
 print(f"OK player-only builders: {len(valid_player_picks)}")
 print("NETRATTLER core regression: OK")
