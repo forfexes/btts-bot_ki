@@ -2312,6 +2312,28 @@ def build_builder_picks(
         ),
         reverse=True,
     )
+
+    # 🆕 SCREENSHOT BUILDERS — JK-Style High-Odds + Full Profile + Team Correlation
+    # Diese laufen PARALLEL zu V36 mit eigenen Schwellwerten (nicht durch joint_edge gefiltert)
+    run_date = match_date or date.today().isoformat()
+    all_props = deduplicate_props(raw_props)
+    screenshot_candidates: List[BuilderPick] = []
+    screenshot_candidates.extend(_team_correlation_builders(all_props, run_date))
+    screenshot_candidates.extend(_high_odds_booking_builder(all_props, run_date))
+    screenshot_candidates.extend(_fouls_tackles_combo_builder(all_props, run_date))
+    screenshot_candidates.extend(_jk_multi_shot_builder(all_props, run_date))
+    screenshot_candidates.extend(_outside_box_sot_builder(all_props, run_date))
+    screenshot_candidates.extend(_full_profile_builder(all_props, run_date))
+    screenshot_candidates.extend(_goalscorer_combo_builder(all_props, run_date))
+
+    # Duplikate mit V36-Output entfernen
+    v36_sigs = {getattr(p, "pick_id", None) or str(sorted(l.player for l in p.legs)) for p in output}
+    for pick in screenshot_candidates:
+        sig = str(sorted(l.player for l in pick.legs))
+        if sig not in v36_sigs:
+            v36_sigs.add(sig)
+            output.append(pick)
+
     return output[: max_builders or len(output)]
 
 
