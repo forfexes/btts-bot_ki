@@ -99,10 +99,12 @@ jobs:
           # ── Supabase ──
           SUPABASE_URL:               ${{ secrets.SUPABASE_URL }}
           SUPABASE_KEY:               ${{ secrets.SUPABASE_KEY }}
+          SUPABASE_SERVICE_ROLE_KEY:  ${{ secrets.SUPABASE_SERVICE_ROLE_KEY }}
           # ── Bot Einstellungen ──
           RUN_MODE:                   ${{ github.event.inputs.mode || 'tips' }}
           ENABLE_SETTLEMENT:          "false"
           ENABLE_ADVANCED_PROPS:      "true"
+          ENABLE_SUPABASE_PROP_STATS: "1"
           MAX_LEAGUES_PER_RUN:        "0"
           PARALLEL_WORKERS:           "10"
           AI_SLEEP_SECONDS:           "0.1"
