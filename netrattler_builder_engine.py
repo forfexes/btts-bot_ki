@@ -1812,7 +1812,7 @@ _SHARP_PLAYER_CATS_V31 = {
     "yellow_cards", "fouls", "fouls_won",
     "tackles_committed", "tackles_received", "tackles",
     "score", "first_scorer", "last_scorer", "assist", "score_assist",
-    "offsides",
+    "offsides", "saves",
 }
 
 _CAT_WEIGHT_V31 = {
@@ -1847,7 +1847,9 @@ def _v31_is_real_player_leg(leg: PropLeg) -> bool:
         " to score" in str(leg.market).lower() and norm(leg.player) in norm(leg.match)
     ):
         return False
-    if leg.category == "score" and any(x in m for x in ["team to score", "to score yes", "to score?"]):
+    if leg.category == "score" and "player" not in m and any(
+        x in m for x in ["team to score", "to score yes", "to score?"]
+    ):
         return False
     return True
 
@@ -1857,8 +1859,13 @@ def _v31_edge(leg: PropLeg) -> float:
 
 
 def _v31_min_edge() -> float:
-    value = as_float(os.getenv("NETRATTLER_PROP_BUILDER_MIN_EDGE", "0.0"), 0.0)
-    return max(0.0, min(0.50, value))
+    # Prop-Wahrscheinlichkeiten sind aktuell implied-abgeleitet (prob ~= implied * 0.95),
+    # daher ist die Edge durch die Buchmacher-Marge fast immer leicht negativ.
+    # Ein harter >0-Filter verwirft dadurch JEDES reale Pinnacle-Leg (Deadlock -> 0 Builder).
+    # Toleranz laesst vig-getriebene Mini-Negativ-Edges zu; grob negative Legs bleiben raus.
+    # Edge bleibt zusaetzlich starkes Ranking-Signal in _v31_leg_score.
+    value = as_float(os.getenv("NETRATTLER_PROP_BUILDER_MIN_EDGE", "-0.08"), -0.08)
+    return max(-0.25, min(0.50, value))
 
 
 def _v31_min_total_odds() -> float:
@@ -2483,14 +2490,14 @@ def build_builder_picks(
 ) -> List[BuilderPick]:
     props = deduplicate_props(raw_props)
     run_date = match_date or date.today().isoformat()
-    max_count = max_builders or as_int(os.getenv("NETRATTLER_MAX_BUILDERS_PER_RUN", "18"), 18)
+    max_count = max_builders or as_int(os.getenv("NETRATTLER_MAX_BUILDERS_PER_RUN", "24"), 24)
 
     real_props = [
         x for x in props
         if _v31_valid_prop_leg(x)
         and x.odds >= 1.35
         and x.odds <= float(os.getenv("NETRATTLER_SHARP_PROP_LEG_MAX_ODDS", "25"))
-        and x.probability >= float(os.getenv("NETRATTLER_SHARP_PROP_MIN_PROB", "0.15"))
+        and x.probability >= float(os.getenv("NETRATTLER_SHARP_PROP_MIN_PROB", "0.12"))
     ]
 
     focused: List[BuilderPick] = []
@@ -2541,7 +2548,7 @@ def build_builder_picks(
         match_key = pick.legs[0].match if len({x.match for x in pick.legs}) == 1 else "CROSS"
         if style_counts[pick.style] >= 5:
             continue
-        if match_key != "CROSS" and match_counts.get(match_key, 0) >= 3:
+        if match_key != "CROSS" and match_counts.get(match_key, 0) >= 4:
             continue
         selected.append(pick)
         style_counts[pick.style] = style_counts.get(pick.style, 0) + 1
