@@ -11,8 +11,10 @@ on:
         description: "AI Tipp Bot am Ende starten"
         required: false
         default: "false"
-  schedule:
-    - cron: "10 1 * * 0"
+  # Auto-Schedule deaktiviert: dieselben Quellen/Writes wie ai_master_v35 (Doppelung).
+  # Bei Bedarf manuell ueber "Run workflow" startbar.
+  # schedule:
+  #   - cron: "10 1 * * 0"
 
 permissions:
   contents: read
