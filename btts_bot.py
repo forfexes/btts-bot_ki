@@ -6166,6 +6166,10 @@ def _ntr_ml_headers():
 
 def _ntr_ml_load_model(force=False):
     global _NTR_ML_MODEL_CACHE, _NTR_ML_MODEL_TS
+    # Deaktiviert: Tabelle netrattler_ml_models existiert nicht und der Footer
+    # beeinflusst die Tipps nicht (echtes ML laeuft ueber ml_models/get_ml_prediction).
+    # Frueher Ausstieg spart bei jeder Nachricht eine erfolglose Supabase-Abfrage.
+    return None
     try:
         import time as _time
         now = _time.time()
@@ -10120,6 +10124,22 @@ def get_fd_co_uk_team_stats(team_name, league_name, last_n=10):
 # ============================================================
 
 _ML_MODELS = {}           # {model_name: calibrated_model}
+
+# Team-Modelle, die geladen UND vorhergesagt werden (Loader + Predictor synchron,
+# damit der Supabase-Payload begrenzt bleibt und kein Timeout entsteht).
+_ML_TEAM_TARGETS = [
+    ("btts_model", "btts_pct"),
+    ("over25_model", "over25_pct"),
+    ("btts_ht_model", "btts_ht_pct"),
+    ("over15_ht_model", "over15_ht_pct"),
+    ("over15_model", "over15_pct"),
+    ("over35_model", "over35_pct"),
+    ("home_win_model", "home_win_pct"),
+    ("draw_model", "draw_pct"),
+    ("away_win_model", "away_win_pct"),
+    ("corners_over85_model", "corners_over85_pct"),
+    ("corners_over95_model", "corners_over95_pct"),
+]
 _ML_MODELS_LOADED = False # Flag, damit wir nur einmal laden
 _ML_FEATURE_COLS = [
     # Elo-Ratings
@@ -10172,11 +10192,14 @@ def _ml_load_models():
 
     try:
         import pickle, base64, io
+        # Nur die tatsaechlich genutzten Modelle laden statt aller 30+ —
+        # der ungefilterte Full-Blob-Request (~50 MB base64) lief in einen Read-Timeout.
+        _needed_models = ",".join(name for name, _ in _ML_TEAM_TARGETS)
         r = requests.get(
             f"{SUPABASE_URL}/rest/v1/ml_models",
             headers={"apikey": SUPABASE_KEY, "Authorization": f"Bearer {SUPABASE_KEY}"},
-            params={"select": "model_name,model_data,meta"},
-            timeout=20,
+            params={"select": "model_name,model_data", "model_name": f"in.({_needed_models})"},
+            timeout=60,
         )
         if not r.ok:
             log(f"   🤖 ML-Models: Supabase {r.status_code} — Fallback auf Elo/Poisson", "WARN")
@@ -10383,15 +10406,8 @@ def get_ml_prediction(home_team, away_team, league_name):
     X = np.array(features).reshape(1, -1)
     result = {}
 
-    model_targets = [
-        ("btts_model", "btts_pct"),
-        ("over25_model", "over25_pct"),
-        ("btts_ht_model", "btts_ht_pct"),
-        ("over15_ht_model", "over15_ht_pct"),
-    ]
-
     try:
-        for model_name, out_key in model_targets:
+        for model_name, out_key in _ML_TEAM_TARGETS:
             if model_name in _ML_MODELS:
                 prob = _ML_MODELS[model_name].predict_proba(X)[0][1]
                 result[out_key] = round(prob * 100, 1)
@@ -19523,6 +19539,17 @@ def analyze_corners_tip(fixture, league):
         prob_over2 += (math.exp(-lam) * lam**k) / math.factorial(k)
     prob_over2 = round((1 - prob_over2) * 100)
 
+    # 🆕 XGBoost-Corner-Modelle einblenden (60% ML / 40% Poisson; Corner-AUC ~0.67).
+    try:
+        _mlc = get_ml_prediction(fixture.get("home", ""), fixture.get("away", ""), league)
+        if _mlc:
+            if _mlc.get("corners_over95_pct") is not None:
+                prob_over = round(0.60 * _mlc["corners_over95_pct"] + 0.40 * prob_over)
+            if _mlc.get("corners_over85_pct") is not None:
+                prob_over2 = round(0.60 * _mlc["corners_over85_pct"] + 0.40 * prob_over2)
+    except Exception:
+        pass
+
     # Besten Tipp wählen
     if prob_over >= 68:
         line_used = 9.5
@@ -20621,7 +20648,7 @@ def _ntr_prop_category(text):
         return "btts_ht"
     if "both teams to receive a card" in low:
         return "team_cards"
-    if " to score?" in low or "team to score" in low:
+    if ("player" not in low) and (" to score?" in low or "team to score" in low):
         return "match_goals"
 
     # Team-/Matchmärkte zuerst, damit "receive a card" nicht als Player Booking endet.
@@ -20632,9 +20659,11 @@ def _ntr_prop_category(text):
     if "to qualify" in low or "qualify" in low:
         return "result"
 
-    if "shots on target from outside" in low or "shot on target from outside" in low:
+    if ("outside box" in low or "outside the box" in low or "from outside" in low) and (
+        "shot on target" in low or "shots on target" in low
+    ):
         return "sot_outside_box"
-    if "outside the box" in low and "shot" in low:
+    if ("outside box" in low or "outside the box" in low or "from outside" in low) and "shot" in low:
         return "shots_outside_box"
     if "shots on target" in low or "shot on target" in low:
         return "sot"
@@ -20655,7 +20684,11 @@ def _ntr_prop_category(text):
         return "fouls_won"
     if "fouls committed" in low or "foul committed" in low or "foul" in low:
         return "fouls"
-    if "booked" in low or "receive a card" in low or "carded" in low:
+    if (
+        "booked" in low or "receive a card" in low or "carded" in low
+        or "to be shown a card" in low or "to be carded" in low
+        or ("card" in low and "player" in low)
+    ):
         return "yellow_cards"
     if "first goalscorer" in low or "first goal scorer" in low:
         return "first_scorer"
@@ -22043,6 +22076,8 @@ def fetch_pinnacle_player_props() -> List[Dict]:
                 "player to score", "to assist", "to be booked", "shots",
                 "shot on target", "fouls committed", "fouls won", "tackles",
                 "saves", "offsides", "passes", "interceptions", "clearances",
+                "player cards", "to be fouled", "to be carded", "to be shown a card",
+                "headed shot", "outside box", "goalkeeper saves", "player headed",
             ]
             team_builder_keywords = [
                 "either team to score", "both teams to score", "team to score",
@@ -22758,8 +22793,41 @@ def run_pinnacle_props_bot(win_start_utc=None, win_end_utc=None, ch_tz=None, top
     if _sofa_event_ids:
         _value_chat = TELEGRAM_GROUPS.get("advanced_props") or TELEGRAM_GROUPS.get("props")
         _value_sent = 0
-        for match_key, ev_id in list(_sofa_event_ids.items())[:5]:
+        _sofa_pool_added = 0
+        for match_key, ev_id in list(_sofa_event_ids.items())[:12]:
             sofa_props = get_sofascore_player_props(ev_id)
+            # 🆕 bet365-Player-Props (SofaScore Provider 1) in den Builder-Pool speisen.
+            # Das ist die fehlende Verbindung: bisher wurden diese Props nur fuer
+            # Value-Alerts genutzt, nie fuer echte Same-Game-Builder.
+            try:
+                _sofa_match = match_key.replace("_vs_", " vs ")
+                for _sp in sofa_props:
+                    _grp = str(_sp.get("market_group", ""))
+                    _lnraw = str(_sp.get("line", ""))
+                    _ll = _lnraw.lower()
+                    if "under" in _ll or _ll.strip() in {"no", "-"}:
+                        continue  # nur Over/Yes-Seite als Builder-Leg
+                    _pl = str(_sp.get("player_name", "")).strip()
+                    try:
+                        _od = float(_sp.get("odds", 0) or 0)
+                    except (TypeError, ValueError):
+                        continue
+                    if not _pl or _od <= 1.20:
+                        continue
+                    _cat = _ntr_prop_category(_grp)
+                    if _cat == "other":
+                        continue
+                    _mm = re.search(r"(\d+(?:\.\d+)?)", _lnraw)
+                    _line = float(_mm.group(1)) if _mm else 0.5
+                    _ntr_collect_prop(
+                        _pl, "", _sofa_match, "", _grp,
+                        category=_cat, line=_line, odds=_od,
+                        probability=(1.0 / _od * 0.95) if _od > 1 else 0,
+                        source="bet365_sofascore", games=0,
+                    )
+                    _sofa_pool_added += 1
+            except Exception as _sfe:
+                log(f"   💰 SofaScore->Builder-Pool Fehler: {str(_sfe)[:60]}", "WARN")
             for prop in sofa_props[:30]:
                 player = prop.get("player_name", "")
                 supabase_stats = get_supabase_player_avg_stats(player)
@@ -22785,6 +22853,77 @@ def run_pinnacle_props_bot(win_start_utc=None, win_end_utc=None, ch_tz=None, top
                     send_telegram(_msg, chat_id=_value_chat)
                     _value_sent += 1
                     log(f"   🎯 Value Alert: {player} {value_info['market']} +{value_info['edge_pct']}%")
+        if _sofa_pool_added:
+            log(f"   💰 bet365/SofaScore: {_sofa_pool_added} Player-Props in Builder-Pool eingespeist")
+
+    # 🆕 EXTRA-QUELLEN-KETTE: Kambi (Unibet/Betsson) + 1xbet-Familie.
+    # Fehlertolerant: jede Quelle in try/except, Ausfall stoppt nichts.
+    try:
+        from netrattler_prop_sources import collect_extra_player_props
+        _extra_fixtures = []
+        _seen_fx = set()
+        for league, fixtures in (fixtures_cache or {}).items():
+            for fix in (fixtures or []):
+                _h = str(fix.get("home", "")).strip()
+                _a = str(fix.get("away", "")).strip()
+                _k = f"{_h}|{_a}"
+                if _h and _a and _k not in _seen_fx:
+                    _seen_fx.add(_k)
+                    _extra_fixtures.append({"home": _h, "away": _a})
+        if _extra_fixtures:
+            _extra_added = 0
+            for _xp in collect_extra_player_props(_extra_fixtures, log=log):
+                _cat = _xp.get("category") or _ntr_prop_category(_xp.get("market", ""))
+                if _cat == "other":
+                    continue
+                try:
+                    _od = float(_xp.get("odds", 0) or 0)
+                except (TypeError, ValueError):
+                    continue
+                if _od <= 1.20 or not _xp.get("player"):
+                    continue
+                _ntr_collect_prop(
+                    _xp.get("player", ""), _xp.get("team", ""), _xp.get("match", ""),
+                    _xp.get("league", ""), _xp.get("market", ""),
+                    category=_cat, line=float(_xp.get("line", 0.5) or 0.5), odds=_od,
+                    probability=(1.0 / _od * 0.95) if _od > 1 else 0,
+                    source=_xp.get("source", "extra"), games=0,
+                )
+                _extra_added += 1
+            if _extra_added:
+                log(f"   🔌 Extra-Quellen (Kambi/1xbet): {_extra_added} Player-Props in Builder-Pool eingespeist")
+    except Exception as _xse:
+        log(f"   🔌 Extra-Quellen-Kette übersprungen: {str(_xse)[:80]}", "WARN")
+
+    # 🧠 PLAYER-PROP XGBOOST: echte Modell-Wahrscheinlichkeit statt implied-odds.
+    # Damit bekommt der Builder eine ECHTE Edge (Modell vs. Buchmacher).
+    try:
+        import netrattler_ml_player as _mlp
+        _pm = _mlp.load_player_models(SUPABASE_URL, SUPABASE_KEY)
+        if _pm:
+            _ml_prob_set = 0
+            for _row in _NTR_BUILDER_PROP_POOL:
+                _cat = _row.get("category", "")
+                if _mlp.model_for(_cat, _row.get("line", 0.5)) is None:
+                    continue
+                _player = _row.get("player", "")
+                if not _player:
+                    continue
+                try:
+                    _avg = get_supabase_player_avg_stats(_player)
+                except Exception:
+                    _avg = {}
+                _mprob = _mlp.predict_player_prop(_avg, _cat, _row.get("line", 0.5))
+                if _mprob is not None:
+                    _row["probability"] = round(_mprob, 4)
+                    _row["ml_backed"] = True
+                    _ml_prob_set += 1
+            if _ml_prob_set:
+                log(f"   🧠 Player-XGBoost: {_pm} Modelle geladen · {_ml_prob_set} Props mit echter Modell-Wahrscheinlichkeit versehen")
+        else:
+            log("   🧠 Player-XGBoost: keine Modelle geladen (Fallback: implied-odds)", "WARN")
+    except Exception as _mle:
+        log(f"   🧠 Player-XGBoost übersprungen: {str(_mle)[:80]}", "WARN")
 
     # V31 CLEAN: Alte Pinnacle-Bet-Builder mit generischen Team-/Total-Goals-Legs nicht mehr senden.
     # Die echten Player-Props gehen über netrattler_builder_engine.py.
