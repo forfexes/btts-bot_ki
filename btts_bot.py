@@ -198,7 +198,7 @@ def get_dynamic_season(league_id=None, league_name=None):
     return 2025
 
 SUPABASE_URL = env("SUPABASE_URL")
-SUPABASE_KEY = env("SUPABASE_KEY")
+SUPABASE_KEY = env("SUPABASE_SERVICE_ROLE_KEY") or env("SUPABASE_KEY")
 
 MIN_PROBABILITY = int(env("MIN_PROBABILITY", "67"))  # 🆕 Hybrid: 67% (zwischen 65-69)
 MIN_ODDS = float(env("MIN_ODDS", "1.70"))
@@ -10139,6 +10139,18 @@ _ML_FEATURE_COLS = [
     "streak_win_home", "streak_win_away",
     # H2H
     "h2h_btts_rate", "h2h_avg_goals", "h2h_matches_norm",
+    # Schüsse/Ecken/Karten (aus FD.co.uk)
+    "avg_shots_home", "avg_shots_away", "total_shots_exp",
+    "avg_corners_home", "avg_corners_away", "total_corners_exp",
+    "avg_cards_home", "avg_cards_away", "total_cards_exp",
+    # Multi-source + Bookmaker Market Features
+    "source_count_norm", "stat_coverage", "odds_source_count_norm",
+    "odds_available_1x2", "market_margin_1x2",
+    "market_home_prob", "market_draw_prob", "market_away_prob",
+    "odds_available_ou25", "market_over25_prob", "market_under25_prob",
+    "pinnacle_home_delta", "pinnacle_draw_delta", "pinnacle_away_delta",
+    "bet365_home_delta", "bet365_draw_delta", "bet365_away_delta",
+    "betfair_home_delta", "betfair_draw_delta", "betfair_away_delta",
 ]
 
 # Rolling Feature-State (wird pro Run befüllt)
@@ -10337,11 +10349,34 @@ def get_ml_prediction(home_team, away_team, league_name):
         fh["streak_win"], fa["streak_win"],
         # H2H
         h2h_btts, h2h_goals, h2h_norm,
-        # Schüsse/Ecken (0 = unbekannt für Nischenligen, kein Problem)
+        # Schüsse/Ecken/Karten (0 = unbekannt, kein Problem)
         fh.get("avg_shots", 0.0), fa.get("avg_shots", 0.0),
         fh.get("avg_shots", 0.0) + fa.get("avg_shots", 0.0),
         fh.get("avg_corners", 0.0), fa.get("avg_corners", 0.0),
         fh.get("avg_corners", 0.0) + fa.get("avg_corners", 0.0),
+        fh.get("avg_cards", 0.0), fa.get("avg_cards", 0.0),
+        fh.get("avg_cards", 0.0) + fa.get("avg_cards", 0.0),
+        # Multi-source + Bookmaker Market Features (0.0 wenn nicht verfügbar)
+        fh.get("source_count_norm", 0.5),
+        fh.get("stat_coverage", 0.5),
+        fh.get("odds_source_count_norm", 0.5),
+        1.0,   # odds_available_1x2 (Pinnacle verfügbar)
+        0.05,  # market_margin_1x2 (typisch 5%)
+        fh.get("market_home_prob", 0.40),
+        fh.get("market_draw_prob", 0.25),
+        fa.get("market_away_prob", 0.35),
+        1.0,   # odds_available_ou25
+        fh.get("market_over25_prob", 0.50),
+        1.0 - fh.get("market_over25_prob", 0.50),  # market_under25_prob
+        0.0,   # pinnacle_home_delta
+        0.0,   # pinnacle_draw_delta
+        0.0,   # pinnacle_away_delta
+        0.0,   # bet365_home_delta
+        0.0,   # bet365_draw_delta
+        0.0,   # bet365_away_delta
+        0.0,   # betfair_home_delta
+        0.0,   # betfair_draw_delta
+        0.0,   # betfair_away_delta
     ]
 
     import numpy as np
@@ -21728,7 +21763,7 @@ def _cache_set(cache: dict, key: str, data):
 
 # Shared Constants
 SUPABASE_URL = _env("SUPABASE_URL")
-SUPABASE_KEY = _env("SUPABASE_KEY")
+SUPABASE_KEY = _env("SUPABASE_SERVICE_ROLE_KEY") or _env("SUPABASE_KEY")
 ODDS_API_KEYS = [k.strip() for k in _env("ODDS_API_KEYS").split(",") if k.strip()]
 TELEGRAM_TOKEN = _env("TELEGRAM_TOKEN")
 TELEGRAM_CHAT_ID = _env("TELEGRAM_CHAT_ID")
