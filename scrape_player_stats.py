@@ -32,7 +32,7 @@ USE_SOFASCORE = os.environ.get("USE_SOFASCORE", "true").lower() in ("1", "true",
 USE_FOTMOB = os.environ.get("USE_FOTMOB", "true").lower() in ("1", "true", "yes", "on")
 USE_STATSBOMB = os.environ.get("USE_STATSBOMB", "true").lower() in ("1", "true", "yes", "on")
 USE_FBREF = os.environ.get("USE_FBREF", "true").lower() in ("1", "true", "yes", "on")
-USE_SOCCERDATA = os.environ.get("USE_SOCCERDATA", "true").lower() in ("1", "true", "yes", "on")
+USE_SOCCERDATA = os.environ.get("USE_SOCCERDATA", "false").lower() in ("1", "true", "yes", "on")
 SOURCE_MAX_EVENTS = int(os.environ.get("SOURCE_MAX_EVENTS", "80"))
 SOURCE_SLEEP = float(os.environ.get("SOURCE_SLEEP", "0.35"))
 
