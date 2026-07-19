@@ -418,14 +418,24 @@ def _odds_api_keys() -> List[str]:
 
 
 def collect_the_odds_api(target_date: Optional[str] = None, max_sports: int = 80) -> List[Dict[str, Any]]:
+    # Standardmaessig aus: Quota war erschoepft und Pinnacle/OddsHarvester decken ab.
+    # Per ENABLE_ODDS_API=true wieder einschaltbar, falls ein frischer Key vorliegt.
+    if os.getenv("ENABLE_ODDS_API", "false").lower() not in ("1", "true", "yes", "on"):
+        log("The Odds API: deaktiviert (ENABLE_ODDS_API=false)", "OK")
+        return []
     keys = _odds_api_keys()
     if not keys:
         log("The Odds API: no key; next source", "WARN")
         return []
-    for key in keys:
+    log(f"The Odds API: {len(keys)} key(s) loaded", "OK")
+    for idx, key in enumerate(keys, 1):
         try:
             sr = requests.get("https://api.the-odds-api.com/v4/sports", params={"apiKey": key}, timeout=25)
             if not sr.ok:
+                remaining = sr.headers.get("x-requests-remaining")
+                reason = {401: "invalid key", 429: "rate limited", 402: "quota exhausted"}.get(
+                    sr.status_code, f"HTTP {sr.status_code}")
+                log(f"The Odds API key #{idx}: {reason} (remaining={remaining})", "WARN")
                 continue
             sports = [s for s in sr.json() if s.get("active") and str(s.get("key", "")).startswith("soccer_")]
             rows: List[Dict[str, Any]] = []
