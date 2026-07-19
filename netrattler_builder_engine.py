@@ -1877,24 +1877,25 @@ def _v31_has_observed_bookmaker_odds(leg: PropLeg) -> bool:
 
 
 def _v31_valid_prop_leg(leg: PropLeg) -> bool:
+    # line >= 0 erlaubt binary Props (To Score, To Be Booked etc.) mit line=0
     return (
         _v31_is_real_player_leg(leg)
         and _v31_has_observed_bookmaker_odds(leg)
         and _v31_edge(leg) > _v31_min_edge()
-        and leg.line > 0
+        and leg.line >= 0
     )
 
 
 def _v31_valid_prop_builder(pick: BuilderPick) -> bool:
     if not pick or len(pick.legs) < 2:
         return False
-    if "team builder" in norm(pick.style):
-        return False
     if pick.total_odds < _v31_min_total_odds():
         return False
     if pick.estimated_odds:
         return False
-    return all(_v31_valid_prop_leg(leg) for leg in pick.legs)
+    # Mindestens 1 Leg muss valide sein (nicht alle müssen strict valide sein)
+    valid_legs = [l for l in pick.legs if _v31_valid_prop_leg(l)]
+    return len(valid_legs) >= max(1, len(pick.legs) - 1)
 
 def _v31_leg_score(leg: PropLeg) -> float:
     base = float(leg.quality or 0.0)
