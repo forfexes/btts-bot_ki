@@ -8,8 +8,10 @@ on:
         default: "false"
         type: choice
         options: ["false", "true"]
-  schedule:
-    - cron: "23 */4 * * *"
+  # Auto-Schedule deaktiviert: Workflow produzierte nichts (No-Op), lief 6x/Tag.
+  # Bei Bedarf manuell ueber "Run workflow" startbar.
+  # schedule:
+  #   - cron: "23 */4 * * *"
 jobs:
   best-database-simple:
     runs-on: ubuntu-latest
