@@ -19411,6 +19411,29 @@ def run_live_bots():
 # 🔵 ECKEN ANALYSE - Corner Over/Under
 # ============================================================
 
+def _fixture_display_time(fixture):
+    """Anstosszeit als HH:MM (lokal, UTC+2) aus diversen Fixture-Feldern.
+    Ecken-Fixtures aus der Pinnacle-Injektion tragen 'starts' (ISO), nicht 'time_local'."""
+    for k in ("time_local", "time", "kickoff_local"):
+        v = str(fixture.get(k, "") or "").strip()
+        if v and v not in ("TBD", "N/A", "-", "?"):
+            return v[:5] if len(v) >= 5 and ":" in v else v
+    # ISO-Zeitstempel (starts/kickoff/start_time) → lokale HH:MM
+    for k in ("starts", "kickoff", "start_time", "commence_time", "date"):
+        raw = str(fixture.get(k, "") or "").strip()
+        if not raw or "T" not in raw:
+            continue
+        try:
+            from datetime import datetime as _dt, timezone as _tz, timedelta as _td
+            _s = raw.replace("Z", "+00:00")
+            _t = _dt.fromisoformat(_s)
+            if _t.tzinfo is None:
+                _t = _t.replace(tzinfo=_tz.utc)
+            return _t.astimezone(_tz(_td(hours=2))).strftime("%H:%M")
+        except Exception:
+            continue
+    return "TBD"
+
 CORNERS_CACHE = {}
 
 def get_team_corner_stats(team_id, league_id, season):
@@ -19523,7 +19546,7 @@ def analyze_corners_tip_simple(fixture, league):
     return {
         "match": f"{fixture['home']} vs {fixture['away']}",
         "league": league,
-        "time": fixture.get("time_local", "TBD"),
+        "time": _fixture_display_time(fixture),
         "tip": f"Over {line} Ecken",
         "probability": prob,
         "odds": book_odds,
@@ -19600,7 +19623,7 @@ def analyze_corners_tip(fixture, league):
     return {
         "match": f"{fixture['home']} vs {fixture['away']}",
         "league": league,
-        "time": fixture.get("time_local", "TBD"),
+        "time": _fixture_display_time(fixture),
         "tip": f"Over {line_used} Ecken",
         "probability": prob,
         "fair_odds": fair_odds,
@@ -19805,7 +19828,7 @@ def analyze_scorer_tips(fixture, league, scorers):
         tips.append({
             "match": f"{fixture['home']} vs {fixture['away']}",
             "league": league,
-            "time": fixture.get("time_local", "TBD"),
+            "time": _fixture_display_time(fixture),
             "player": scorer["name"],
             "team": scorer["team"],
             "goals_per_game": gpg,
@@ -20700,6 +20723,10 @@ def _ntr_prop_category(text):
         return "sot_outside_box"
     if ("outside box" in low or "outside the box" in low or "from outside" in low) and "shot" in low:
         return "shots_outside_box"
+    if ("total" in low or "match" in low or "team" in low) and ("shots on target" in low or "shot on target" in low):
+        return "match_sot"
+    if ("total" in low or "match" in low or "team" in low) and "shots" in low and "player" not in low:
+        return "team_shots"
     if "shots on target" in low or "shot on target" in low:
         return "sot"
     if "shot" in low:
@@ -22934,9 +22961,15 @@ def run_pinnacle_props_bot(win_start_utc=None, win_end_utc=None, ch_tz=None, top
     # Damit bekommt der Builder eine ECHTE Edge (Modell vs. Buchmacher).
     try:
         import netrattler_ml_player as _mlp
+        try:
+            import netrattler_stat_sources as _sbs
+        except Exception:
+            _sbs = None
         _pm = _mlp.load_player_models(SUPABASE_URL, SUPABASE_KEY)
         if _pm:
             _ml_prob_set = 0
+            _sb_lookups = 0
+            _SB_LOOKUP_CAP = int(os.getenv("NETRATTLER_STATBUNKER_MAX_LOOKUPS", "40"))
             for _row in _NTR_BUILDER_PROP_POOL:
                 _cat = _row.get("category", "")
                 if _mlp.model_for(_cat, _row.get("line", 0.5)) is None:
@@ -22948,6 +22981,15 @@ def run_pinnacle_props_bot(win_start_utc=None, win_end_utc=None, ch_tz=None, top
                     _avg = get_supabase_player_avg_stats(_player)
                 except Exception:
                     _avg = {}
+                # Fallback StatBunker, wenn Supabase-Historie fehlt (kleine Ligen).
+                if _sbs is not None and (not _avg or not any((v or {}).get("avg") for v in _avg.values())) and _sb_lookups < _SB_LOOKUP_CAP:
+                    _sb_lookups += 1
+                    try:
+                        _sb = _sbs.fetch_statbunker_player_stats(_player, _row.get("league", ""))
+                        if _sb:
+                            _avg = _sbs.merge_stats(_avg, _sb)
+                    except Exception:
+                        pass
                 _mprob = _mlp.predict_player_prop(_avg, _cat, _row.get("line", 0.5))
                 if _mprob is not None:
                     _row["probability"] = round(_mprob, 4)
@@ -25168,9 +25210,8 @@ def main():
 
     if len(all_tips_flat) >= 3:
         log("")
-        _combo_sizes = [3, 4, 5, 6]
-        if str(env("ENABLE_LOTTERY_COMBOS", "false")).lower() in ["1", "true", "yes", "on"]:
-            _combo_sizes += [7, 8, 9, 10, 11]
+        # Multi-Combos 3-11 immer erzeugen (7-11 sind die groesseren "Lottery"-Kombis).
+        _combo_sizes = [3, 4, 5, 6, 7, 8, 9, 10, 11]
         log(f"🎰 Generiere Multi-Combos ({','.join(str(x) for x in _combo_sizes)} Tipps)...")
         combo_chat = TELEGRAM_GROUPS.get("combos", TELEGRAM_CHAT_ID)  # Multi-Combos
 
