@@ -250,6 +250,7 @@ def normalize_prop(row: Dict[str, Any]) -> Optional[PropLeg]:
     bookmaker_tokens = (
         "pinnacle", "bet365", "betfair", "oddsportal", "oddsharvester",
         "bookmaker", "sportsbook",
+        "kambi", "unibet", "betsson", "1xbet", "sofascore",
     )
     observed_bookmaker = odds > 1 and any(token in source_text for token in bookmaker_tokens)
     if odds <= 1:
@@ -1880,6 +1881,7 @@ def _v31_has_observed_bookmaker_odds(leg: PropLeg) -> bool:
     return any(token in source for token in {
         "pinnacle", "bet365", "betfair", "oddsportal",
         "oddsharvester", "bookmaker", "sportsbook",
+        "kambi", "unibet", "betsson", "1xbet", "sofascore",
     })
 
 
@@ -2541,20 +2543,40 @@ def build_builder_picks(
     selected: List[BuilderPick] = []
     style_counts: Dict[str, int] = {}
     match_counts: Dict[str, int] = {}
-    for pick in unique:
-        if not _v31_valid_prop_builder(pick):
-            continue
-        style_counts[pick.style] = style_counts.get(pick.style, 0)
+    _selected_ids = set()
+
+    def _try_take(pick: BuilderPick, style_cap: int) -> bool:
+        if id(pick) in _selected_ids or not _v31_valid_prop_builder(pick):
+            return False
         match_key = pick.legs[0].match if len({x.match for x in pick.legs}) == 1 else "CROSS"
-        if style_counts[pick.style] >= 5:
-            continue
+        if style_counts.get(pick.style, 0) >= style_cap:
+            return False
         if match_key != "CROSS" and match_counts.get(match_key, 0) >= 4:
-            continue
+            return False
         selected.append(pick)
+        _selected_ids.add(id(pick))
         style_counts[pick.style] = style_counts.get(pick.style, 0) + 1
         match_counts[match_key] = match_counts.get(match_key, 0) + 1
+        return True
+
+    # Pass 1: Stil-Vielfalt sichern — mind. 1 Builder pro vorhandenem Stil (bester nach Score),
+    # damit nicht nur SHARP PLAYER PROP (JK) rauskommt, sondern auch FAVORITE/INTENSITY/ATTACK
+    # SCRIPT, BOOKING/SHOT LADDER, GOALSCORER COMBO, FULL PROFILE etc.
+    _seen_styles = set()
+    for pick in unique:  # bereits nach _v31_pick_score absteigend sortiert
+        if pick.style in _seen_styles:
+            continue
+        if _try_take(pick, style_cap=1):
+            _seen_styles.add(pick.style)
         if len(selected) >= max_count:
             break
+
+    # Pass 2: Restplätze nach Score auffüllen (bis 5 pro Stil).
+    if len(selected) < max_count:
+        for pick in unique:
+            _try_take(pick, style_cap=5)
+            if len(selected) >= max_count:
+                break
 
     # 🆕 Screenshot-Builder parallel hinzufügen (JK-Style, nicht durch V31-Filter)
     all_props = deduplicate_props(raw_props)
