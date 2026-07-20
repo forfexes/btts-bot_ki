@@ -278,6 +278,115 @@ def fetch_1xbet_player_props(home: str, away: str) -> List[Dict[str, Any]]:
 # ==================================================================
 # Einheitliche Sammel-Funktion: probiert alle Quellen der Reihe nach.
 # ==================================================================
+# ==================================================================
+# QUELLE: Oddspedia (Aggregator, Player-Props / Spezialmärkte)
+#   Oeffentliche JSON-API; aggregiert viele Buchmacher inkl. Player-Props.
+# ==================================================================
+_ODDSPEDIA_HOSTS = ["https://oddspedia.com", "https://www.oddspedia.com"]
+
+
+def fetch_oddspedia_player_props(home: str, away: str) -> List[Dict[str, Any]]:
+    """Best-effort Player-Props von Oddspedia (Aggregator-JSON)."""
+    props: List[Dict[str, Any]] = []
+    match_id = None
+    host_used = None
+    for host in _ODDSPEDIA_HOSTS:
+        data = _get_json(
+            f"{host}/api/v1/getMatchList",
+            params={"sport": "football", "type": "upcoming", "language": "en"},
+        )
+        if not data:
+            continue
+        rows = (data.get("data") or {}).get("matchList") or data.get("data") or []
+        if isinstance(rows, dict):
+            rows = rows.get("matches", [])
+        for mt in rows or []:
+            name = f"{mt.get('ht','')} {mt.get('at','')}" or mt.get("name", "")
+            if _teams_match(name, home, away):
+                match_id = mt.get("id") or mt.get("matchId")
+                host_used = host
+                break
+        if match_id:
+            break
+    if not match_id or not host_used:
+        return []
+
+    offers = _get_json(
+        f"{host_used}/api/v1/getMatchOdds",
+        params={"matchId": match_id, "oddType": "player", "language": "en"},
+    )
+    if not offers:
+        return []
+    match_name = f"{home} vs {away}"
+    market_rows = (offers.get("data") or {}).get("markets") or offers.get("data") or []
+    for mk in market_rows if isinstance(market_rows, list) else []:
+        label = str(mk.get("name") or mk.get("marketName") or "")
+        cat = map_category(label)
+        if cat == "other":
+            continue
+        for oc in mk.get("outcomes") or mk.get("selections") or []:
+            player = oc.get("player") or oc.get("participant") or oc.get("name") or ""
+            _ll = str(oc.get("handicap") or oc.get("line") or oc.get("label") or "")
+            if "under" in _ll.lower() or str(oc.get("name", "")).lower() == "no":
+                continue
+            try:
+                odds = float(oc.get("odds") or oc.get("price") or 0)
+            except (TypeError, ValueError):
+                continue
+            if not player or odds <= 1.20:
+                continue
+            props.append({
+                "player": str(player), "team": "", "match": match_name, "league": "",
+                "market": label, "category": cat, "line": _line_from(_ll, 0.5),
+                "odds": odds, "source": "oddspedia",
+            })
+    return props
+
+
+# ==================================================================
+# QUELLE: FootyMetrics (Fussball-Player-Props)
+# ==================================================================
+_FOOTYMETRICS_HOSTS = ["https://api.footymetrics.com", "https://footymetrics.com"]
+
+
+def fetch_footymetrics_player_props(home: str, away: str) -> List[Dict[str, Any]]:
+    """Best-effort Player-Props von FootyMetrics."""
+    props: List[Dict[str, Any]] = []
+    for host in _FOOTYMETRICS_HOSTS:
+        data = _get_json(
+            f"{host}/v1/props",
+            params={"home": home, "away": away, "sport": "football"},
+        )
+        if not data:
+            continue
+        rows = data.get("props") or data.get("data") or []
+        match_name = f"{home} vs {away}"
+        for r in rows if isinstance(rows, list) else []:
+            label = str(r.get("market") or r.get("type") or "")
+            cat = map_category(label)
+            if cat == "other":
+                continue
+            player = r.get("player") or r.get("name") or ""
+            side = str(r.get("side") or r.get("selection") or "over").lower()
+            if "under" in side or side == "no":
+                continue
+            try:
+                odds = float(r.get("odds") or r.get("price") or 0)
+            except (TypeError, ValueError):
+                continue
+            if not player or odds <= 1.20:
+                continue
+            props.append({
+                "player": str(player), "team": "", "match": match_name, "league": "",
+                "market": label, "category": cat,
+                "line": _line_from(str(r.get("line", "")), 0.5),
+                "odds": odds, "source": "footymetrics",
+            })
+        if props:
+            break
+    return props
+
+
 def collect_extra_player_props(
     fixtures: List[Dict[str, str]],
     log: Optional[Callable[[str], Any]] = None,
@@ -297,6 +406,8 @@ def collect_extra_player_props(
 
     sources = [
         ("kambi", lambda h, a: fetch_kambi_player_props(h, a, brand="ub")),
+        ("oddspedia", lambda h, a: fetch_oddspedia_player_props(h, a)),
+        ("footymetrics", lambda h, a: fetch_footymetrics_player_props(h, a)),
         ("1xbet", lambda h, a: fetch_1xbet_player_props(h, a)),
     ]
     out: List[Dict[str, Any]] = []
@@ -326,6 +437,8 @@ def collect_extra_player_props(
 __all__ = [
     "fetch_kambi_player_props",
     "fetch_1xbet_player_props",
+    "fetch_oddspedia_player_props",
+    "fetch_footymetrics_player_props",
     "collect_extra_player_props",
     "map_category",
 ]
