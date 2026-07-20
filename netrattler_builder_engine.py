@@ -1732,6 +1732,7 @@ def run_builder_engine(
     match_date: Optional[str] = None,
     supabase_url: str = "",
     supabase_key: str = "",
+    send_chat_id: str = "",
     logger: Optional[Callable[[str], Any]] = None,
 ) -> Tuple[int, List[BuilderPick]]:
     normalized = deduplicate_props(raw_props)
@@ -1771,8 +1772,26 @@ def run_builder_engine(
                 logger(f"MASTER BUILDER duplicate skipped: {pick.builder_id}")
             continue
         try:
-            send_message(format_builder_message(pick))
+            _builder_text = format_builder_message(pick)
+            _mid = send_message(_builder_text)
             sent += 1
+            # msg_id + Text zurueckschreiben → V21 kann den Original-Builder-Tipp
+            # direkt editieren ("Auswertung im Tipp selber").
+            if _mid and supabase_url and supabase_key and send_chat_id:
+                try:
+                    requests.patch(
+                        f"{supabase_url.rstrip('/')}/rest/v1/netrattler_builder_picks",
+                        headers=_supabase_headers(supabase_key),
+                        params={"builder_id": f"eq.{pick.builder_id}"},
+                        data=json.dumps({
+                            "telegram_msg_id": str(_mid),
+                            "telegram_chat_id": str(send_chat_id),
+                            "message_text": _builder_text[:3500],
+                        }, ensure_ascii=False, default=str),
+                        timeout=8,
+                    )
+                except Exception:
+                    pass
             if logger:
                 logger(f"MASTER BUILDER {pick.style} {pick.variant}: {pick.leg_count}L @ {pick.total_odds:.2f} | DB={persisted}")
         except Exception as exc:
