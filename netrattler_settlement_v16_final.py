@@ -1349,7 +1349,12 @@ def main() -> None:
     save_group_stats(history)
     save_dimension_stats(history)
     send_group_reports(newly_closed, settled, history)
-    send_roi_report(history)
+    # ROI-Report nur senden, wenn diesem Lauf tatsaechlich neue Abschluesse zugrunde liegen —
+    # sonst wurde er 6-9x/Tag mit identischen Zahlen gepostet (Duplikat-Spam).
+    if newly_closed:
+        send_roi_report(history)
+    else:
+        log("ROI-Report uebersprungen (keine neuen Abschluesse in diesem Lauf)")
     log("✅ NETRATTLER Settlement FINAL V21 fertig")
 
 
