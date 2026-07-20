@@ -74,6 +74,11 @@ if not API_FOOTBALL_KEYS:
     single_key = env("API_FOOTBALL_KEY")
     if single_key:
         API_FOOTBALL_KEYS = [single_key]
+# API-Football deaktiviert (Konto gesperrt, nicht mehr benoetigt: Pinnacle/Kambi/ML decken ab).
+# Alle API-Football-Calls sind auf `if not API_FOOTBALL_KEYS` gegated -> werden uebersprungen.
+# Per ENABLE_API_FOOTBALL=true wieder aktivierbar, falls das Konto je entsperrt wird.
+if env("ENABLE_API_FOOTBALL", "false").lower() not in ("1", "true", "yes", "on"):
+    API_FOOTBALL_KEYS = []
 # Erster Key für Backwards-Kompatibilität
 API_FOOTBALL_KEY = API_FOOTBALL_KEYS[0] if API_FOOTBALL_KEYS else ""
 
@@ -6890,8 +6895,22 @@ def generate_multi_combo_bets(all_tips, num_tips=3):
     if len(sorted_tips) < num_tips:
         return None
 
-    # Beste N Tipps nehmen
-    selected = sorted_tips[:num_tips]
+    # Nur EIN Leg pro Spiel — verhindert korrelierte Same-Match-Legs (z.B. Over 2.5 + BTTS
+    # aus demselben Spiel), die die Quote aufblaehen und als normale Acca nicht platzierbar sind.
+    selected = []
+    _used_matches = set()
+    for tip in sorted_tips:
+        _mkey = str(tip.get("match", "")).strip().lower()
+        if not _mkey or _mkey in _used_matches:
+            continue
+        _used_matches.add(_mkey)
+        selected.append(tip)
+        if len(selected) >= num_tips:
+            break
+
+    # Nicht genug unterschiedliche Spiele fuer diese Combo-Groesse.
+    if len(selected) < num_tips:
+        return None
 
     # Berechne Gesamt-Quote
     total_odds = 1.0
@@ -16505,8 +16524,22 @@ def generate_multi_combo_bets(all_tips, num_tips=3):
     if len(sorted_tips) < num_tips:
         return None
 
-    # Beste N Tipps nehmen
-    selected = sorted_tips[:num_tips]
+    # Nur EIN Leg pro Spiel — verhindert korrelierte Same-Match-Legs (z.B. Over 2.5 + BTTS
+    # aus demselben Spiel), die die Quote aufblaehen und als normale Acca nicht platzierbar sind.
+    selected = []
+    _used_matches = set()
+    for tip in sorted_tips:
+        _mkey = str(tip.get("match", "")).strip().lower()
+        if not _mkey or _mkey in _used_matches:
+            continue
+        _used_matches.add(_mkey)
+        selected.append(tip)
+        if len(selected) >= num_tips:
+            break
+
+    # Nicht genug unterschiedliche Spiele fuer diese Combo-Groesse.
+    if len(selected) < num_tips:
+        return None
 
     # Berechne Gesamt-Quote
     total_odds = 1.0
