@@ -16764,16 +16764,17 @@ def _get_market_stats_from_supabase(market_id):
 
 
 def _send_daily_auswertung_to_all_groups(stats=None):
-    """
-    Sendet marktspezifische Stats in jede Gruppe im Screenshot-Format:
-    Winrate, ROI (Units), Gesamt-Tipps, Monat, Top-3-Ligen.
-    """
+    # Schutz gegen Doppel-Senden innerhalb eines Runs (wird jetzt am main()-Ende
+    # unbedingt aufgerufen, plus im 0-Tipps-Zweig).
+    global _AUSWERTUNG_SENT_THIS_RUN
+    if globals().get("_AUSWERTUNG_SENT_THIS_RUN"):
+        return
+    _AUSWERTUNG_SENT_THIS_RUN = True
+
     from datetime import datetime as _dt3, timezone as _tz3
     now = _dt3.now(_tz3.utc)
-
-    # Saisonpause / WM-Hinweis
     if now.month == 6 and now.day < 11:
-        pause_text = f"🏆 <i>WM 2026 startet in {11-now.day} Tagen! Ab 11. Juni täglich Tipps.</i>"
+        pause_text = f"🏆 <i>WM 2026 startet in {11-now.day} Tagen!</i>"
     elif now.month in [6, 7]:
         pause_text = "<i>🌍 WM 2026 läuft — täglich Tipps!</i>"
     else:
@@ -16782,10 +16783,11 @@ def _send_daily_auswertung_to_all_groups(stats=None):
     market_groups = [
         ("btts",    TELEGRAM_GROUPS.get("btts"),    "⚽ BTTS"),
         ("over25",  TELEGRAM_GROUPS.get("over25"),  "🎯 Over 2.5"),
-        ("combo",   TELEGRAM_GROUPS.get("combo"),   "🔥 BTTS + Over 2.5"),
+        ("combo",   TELEGRAM_GROUPS.get("combo", TELEGRAM_GROUPS.get("combos")),   "🔥 BTTS + Over 2.5"),
         ("btts_ht", TELEGRAM_GROUPS.get("btts_ht"), "🕐 BTTS Halbzeit"),
         ("corners", TELEGRAM_GROUPS.get("corners", TELEGRAM_GROUPS.get("hz_live")), "🔵 Corner Sniper"),
         ("scorer",  TELEGRAM_GROUPS.get("scorer", TELEGRAM_GROUPS.get("late_goals")), "⚽ Goal Hunter"),
+        ("builder", TELEGRAM_GROUPS.get("builder", TELEGRAM_GROUPS.get("combos")), "🧱 Prop Builder"),
     ]
 
     medals = ["🥇","🥈","🥉"]
@@ -22953,6 +22955,8 @@ def run_pinnacle_props_bot(win_start_utc=None, win_end_utc=None, ch_tz=None, top
                     _ml_prob_set += 1
             if _ml_prob_set:
                 log(f"   🧠 Player-XGBoost: {_pm} Modelle geladen · {_ml_prob_set} Props mit echter Modell-Wahrscheinlichkeit versehen")
+            else:
+                log(f"   🧠 Player-XGBoost: {_pm} Modelle geladen · 0 Props gematcht (keine Spielerhistorie in player_avg_stats — bei kleinen Ligen normal)")
         else:
             log("   🧠 Player-XGBoost: keine Modelle geladen (Fallback: implied-odds)", "WARN")
     except Exception as _mle:
@@ -24966,7 +24970,12 @@ def main():
 
     send_top_tips(tips_by_market, target_date)
 
-    # 🎰 Pinnacle-Matches als Fixtures für Corners/Scorer/Props injizieren
+    # 📊 Gruppen-Auswertung IMMER senden (nicht nur an tipplosen Tagen) — jede Gruppe
+    # bekommt ihre Markt-Stats. Guard in der Funktion verhindert Doppel-Senden.
+    try:
+        _send_daily_auswertung_to_all_groups()
+    except Exception as _ae:
+        log(f"Gruppen-Auswertung Error: {str(_ae)[:60]}", "WARN")
     if _PINNACLE_MATCHUPS:
         _injected = 0
         for pm in _PINNACLE_MATCHUPS:
@@ -25132,7 +25141,7 @@ def main():
             _builder_chat = TELEGRAM_GROUPS.get("advanced_props") or TELEGRAM_GROUPS.get("props")
             if _builder_chat:
                 def _send_builder(msg):
-                    send_telegram(msg, chat_id=_builder_chat)
+                    return send_telegram(msg, chat_id=_builder_chat)
 
                 _sent_n, _picks = run_builder_engine(
                     raw_props=_builder_prop_pool,
@@ -25141,6 +25150,7 @@ def main():
                     match_contexts=_builder_contexts,
                     supabase_url=SUPABASE_URL,
                     supabase_key=SUPABASE_KEY,
+                    send_chat_id=str(_builder_chat),
                     logger=lambda m: log(f"   🏗️ {m}"),
                 )
                 log(f"   🏗️ Builder Engine: {_sent_n} Builder aus {len(_builder_prop_pool)} Props gesendet")
