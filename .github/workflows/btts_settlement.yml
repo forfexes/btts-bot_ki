@@ -1,9 +1,12 @@
 name: BTTS Settlement
 on:
-  schedule:
-    - cron: '0 15 * * *'
-    - cron: '45 23 * * *'
-    - cron: '30 5 * * *'
+  # Auto-Schedule deaktiviert: V21 (netrattler_settlement_v16_final.yml) ist die primaere
+  # Auswertung mit gruppenspezifischem Settlement. Parallelbetrieb verursachte
+  # Doppel-Auswertungen und unnoetige GitHub-Minuten. Nur noch manuell startbar.
+  # schedule:
+  #   - cron: '0 15 * * *'
+  #   - cron: '45 23 * * *'
+  #   - cron: '30 5 * * *'
   workflow_dispatch:
 jobs:
   run-settlement:
