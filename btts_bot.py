@@ -21369,26 +21369,25 @@ def run_advanced_props_bot(active_leagues: list, fixtures_cache: dict, target_da
                 try:
                     match_name = f"{home} vs {away}"
                     kickoff = fix.get("time","TBD")
-                    props = get_player_props_for_match(home, away, league, "player_props")
-                    for p in (props or [])[:8]:
+                    props = get_player_props_for_match(home, away, league)
+                    for p in (props or [])[:12]:
                         nm = p.get("player","")
                         tm = p.get("team","")
                         if not nm:
                             continue
-                        sot = float(p.get("sot_per90") or p.get("shots_per90") or 0)
-                        fl  = float(p.get("fouls_per90") or 0)
-                        yc  = float(p.get("yellow_cards_per90") or 0)
-                        if sot >= 1.5:
+                        mtype = str(p.get("market_type","")).lower()
+                        val = float(p.get("stat_value") or 0)
+                        if mtype in ("sot", "shots") and val >= 1.5:
                             _add(shot_candidates, nm, tm, match_name, league, kickoff,
-                                 "2+ Shots on Target", sot, "shots")
-                        if fl >= 1.5:
+                                 "2+ Shots on Target", val, "shots")
+                        elif mtype in ("fouls", "fouls_committed") and val >= 1.5:
                             _add(foul_candidates, nm, tm, match_name, league, kickoff,
-                                 "2+ Fouls", fl, "foul")
-                        if yc >= 0.20:
+                                 "2+ Fouls", val, "foul")
+                        elif mtype in ("cards", "yellow_cards", "card") and val >= 0.20:
                             _add(booking_candidates, nm, tm, match_name, league, kickoff,
-                                 "Player to be Booked", yc, "booking")
-                except Exception:
-                    pass
+                                 "Player to be Booked", val, "booking")
+                except Exception as _ppe:
+                    log(f"   ⚠️ StatsBomb-Prop-Fallback: {str(_ppe)[:60]}", "WARN")
 
         total = len(foul_candidates) + len(booking_candidates) + len(shot_candidates)
         log(f"🔑 Kandidaten nach FBref: {len(foul_candidates)} Fouls · {len(booking_candidates)} Bookings · {len(shot_candidates)} Shots")
