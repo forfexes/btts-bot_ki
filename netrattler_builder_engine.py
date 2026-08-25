@@ -2213,7 +2213,42 @@ def _v31_pick_score(pick: BuilderPick) -> float:
         odds_adj = -0.08
     else:
         odds_adj = -0.30
-    return avg + real_ratio * 0.35 + cat_div * 0.10 + odds_adj + _v31_learned_boost(pick)
+    return (avg + real_ratio * 0.35 + cat_div * 0.10 + odds_adj
+            + _v31_learned_boost(pick) + _v31_role_boost(pick))
+
+
+def _rc_module():
+    """Rollen-Kontext-Modul (Favorit/Außenseiter) — lazy + gecacht."""
+    if getattr(_rc_module, "_c", "x") == "x":
+        try:
+            import netrattler_role_context as _rc
+            _rc.load_team_elo()
+            _rc_module._c = _rc
+        except Exception:
+            _rc_module._c = None
+    return _rc_module._c
+
+
+def _v31_role_boost(pick: BuilderPick) -> float:
+    """Favorit-vs-Außenseiter-Boost: rollengerechte Props (Favorit=Angriff,
+    Außenseiter=Kampf) werden bevorzugt. Nutzt Elo + Team-Info der Legs.
+    Neutral (0), wenn Elo/Team fehlen — bricht nie."""
+    rc = _rc_module()
+    if rc is None:
+        return 0.0
+    try:
+        # Home/Away aus dem Match-String "A vs B"
+        match = pick.legs[0].match if pick.legs else ""
+        if " vs " not in match:
+            return 0.0
+        home, away = [s.strip() for s in match.split(" vs ", 1)]
+        boosts = []
+        for leg in pick.legs:
+            if leg.team:
+                boosts.append(rc.role_boost(leg.category, leg.team, home, away))
+        return round(sum(boosts) / len(boosts), 4) if boosts else 0.0
+    except Exception:
+        return 0.0
 
 # ============================================================
 # 🎯 SCREENSHOT BUILDERS (JK-Style, Full Profile, Team Correlation)
