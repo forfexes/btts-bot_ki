@@ -22956,6 +22956,45 @@ def run_pinnacle_props_bot(win_start_utc=None, win_end_utc=None, ch_tz=None, top
     except Exception as _xse:
         log(f"   🔌 Extra-Quellen-Kette übersprungen: {str(_xse)[:80]}", "WARN")
 
+    # 🎭 TEAM-ZUORDNUNG: jedem Leg sein Team zuweisen (via Lineups) — Basis fuer
+    # das Favorit-vs-Aussenseiter-Rollen-System im Builder. Legs ohne Team-Info
+    # (v.a. Kambi) bekommen es hier; SofaScore-Legs tragen es schon.
+    try:
+        _matches = {}
+        for _row in _NTR_BUILDER_PROP_POOL:
+            if _row.get("team"):
+                continue
+            _m = _row.get("match", "")
+            if " vs " in _m:
+                _matches.setdefault(_m, True)
+        _team_map = {}   # (match, player_norm) -> team
+        _lu_cap = int(os.getenv("NETRATTLER_LINEUP_MAX", "16"))
+        for _i, _m in enumerate(list(_matches.keys())[:_lu_cap]):
+            _h, _a = [s.strip() for s in _m.split(" vs ", 1)]
+            try:
+                _lu = get_sportdb_lineups(_h, _a, str(target_date))
+            except Exception:
+                _lu = None
+            if not _lu:
+                continue
+            for _pl in (_lu.get("home_lineup") or []):
+                _team_map[(_m, _normalize_name(_pl))] = _h
+            for _pl in (_lu.get("away_lineup") or []):
+                _team_map[(_m, _normalize_name(_pl))] = _a
+        _tagged = 0
+        if _team_map:
+            for _row in _NTR_BUILDER_PROP_POOL:
+                if _row.get("team"):
+                    continue
+                _t = _team_map.get((_row.get("match", ""), _normalize_name(_row.get("player", ""))))
+                if _t:
+                    _row["team"] = _t
+                    _tagged += 1
+            if _tagged:
+                log(f"   🎭 Team-Zuordnung: {_tagged} Legs via Lineups (Favorit/Außenseiter-Rollen aktiv)")
+    except Exception as _te:
+        log(f"   🎭 Team-Zuordnung übersprungen: {str(_te)[:70]}", "WARN")
+
     # 🧠 PLAYER-PROP XGBOOST: echte Modell-Wahrscheinlichkeit statt implied-odds.
     # Damit bekommt der Builder eine ECHTE Edge (Modell vs. Buchmacher).
     try:
