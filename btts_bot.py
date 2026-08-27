@@ -23028,13 +23028,71 @@ def run_pinnacle_props_bot(win_start_utc=None, win_end_utc=None, ch_tz=None, top
                             _avg = _sbs.merge_stats(_avg, _sb)
                     except Exception:
                         pass
-                _mprob = _mlp.predict_player_prop(_avg, _cat, _row.get("line", 0.5))
+                # Rollen-Kontext (Favorit/Außenseiter) für das Modell berechnen
+                _ctx = None
+                try:
+                    import netrattler_role_context as _rc
+                    _rc.load_team_elo(SUPABASE_URL, SUPABASE_KEY)
+                    _mtch = _row.get("match", "")
+                    _tm = _row.get("team", "")
+                    if " vs " in _mtch and _tm:
+                        _hh, _aa = [s.strip() for s in _mtch.split(" vs ", 1)]
+                        _te = _rc.team_elo(_tm)
+                        _oe = _rc.team_elo(_aa if _rc._norm(_tm) == _rc._norm(_hh) else _hh)
+                        if _te is not None and _oe is not None:
+                            _ishome = 1.0 if _rc._norm(_tm) == _rc._norm(_hh) else 0.0
+                            _ctx = {
+                                "elo_diff": _te - _oe, "opponent_elo": _oe, "is_home": _ishome,
+                                "is_favorite": 1.0 if (_te - _oe + (65 if _ishome else -65)) > 0 else 0.0,
+                            }
+                except Exception:
+                    _ctx = None
+                _mprob = _mlp.predict_player_prop(_avg, _cat, _row.get("line", 0.5), _ctx)
+                # 🪜 Modell-bevorzugte Linie NUR merken (nicht Quote fälschen).
+                # Die echte Hochstufung passiert unten pool-weit über reale Quoten.
+                try:
+                    _min_conf = float(os.getenv("NETRATTLER_LADDER_MIN_CONF", "0.55"))
+                    _best = _mlp.best_line_for_role(_avg, _cat, _ctx, _min_conf)
+                    if _best is not None:
+                        _row["model_best_line"] = _best[0]
+                        _row["model_best_prob"] = _best[1]
+                except Exception:
+                    pass
                 if _mprob is not None:
                     _row["probability"] = round(_mprob, 4)
                     _row["ml_backed"] = True
                     _ml_prob_set += 1
             if _ml_prob_set:
                 log(f"   🧠 Player-XGBoost: {_pm} Modelle geladen · {_ml_prob_set} Props mit echter Modell-Wahrscheinlichkeit versehen")
+                # 🪜 ROLLEN-STAFFELUNG (Nate-Style 3+/2+/1+) mit ECHTEN Quoten:
+                # Pro Spieler+Kategorie das höchste Linien-Leg bevorzugen, das der
+                # Buchmacher wirklich anbietet UND das Modell mind. min_conf deckt.
+                try:
+                    _min_conf = float(os.getenv("NETRATTLER_LADDER_MIN_CONF", "0.55"))
+                    _groups = {}
+                    for _row in _NTR_BUILDER_PROP_POOL:
+                        _bl = _row.get("model_best_line")
+                        if _bl is None:
+                            continue
+                        _k = (_normalize_name(_row.get("player", "")), _row.get("match", ""), _row.get("category", ""))
+                        _groups.setdefault(_k, []).append(_row)
+                    _escalated = 0
+                    for _k, _rws in _groups.items():
+                        if len(_rws) < 2:
+                            continue
+                        _bestline = max(r.get("model_best_line", 0) for r in _rws)
+                        # reale Legs auf/unter der Modell-Linie behalten, höchste bevorzugen
+                        for _r in _rws:
+                            _ln = float(_r.get("line", 0.5))
+                            if _ln == _bestline and (_r.get("model_best_prob") or 0) >= _min_conf:
+                                _r["ladder_primary"] = True
+                                _escalated += 1
+                            elif _ln < _bestline:
+                                _r["ladder_lower"] = True  # niedrigere Linie abwerten
+                    if _escalated:
+                        log(f"   🪜 Rollen-Staffelung: {_escalated} Legs auf höchste modell-gedeckte Linie gesetzt (echte Quoten)")
+                except Exception as _lae:
+                    log(f"   🪜 Staffelung übersprungen: {str(_lae)[:60]}", "WARN")
             else:
                 log(f"   🧠 Player-XGBoost: {_pm} Modelle geladen · 0 Props gematcht (keine Spielerhistorie in player_avg_stats — bei kleinen Ligen normal)")
         else:
