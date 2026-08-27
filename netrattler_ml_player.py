@@ -31,6 +31,7 @@ PLAYER_FEATURE_COLS = [
     "games_prior", "avg_minutes", "avg_shots", "avg_sot", "avg_goals", "avg_assists",
     "avg_passes", "avg_tackles", "avg_fouls_committed", "avg_fouls_won",
     "avg_cards", "avg_corners", "avg_source_count",
+    "elo_diff", "opponent_elo", "is_home", "is_favorite",
 ]
 
 # category -> {line: model_name}. Nur real trainierte Modelle.
@@ -70,8 +71,14 @@ def model_for(category: str, line: float) -> Optional[str]:
     return table[best]
 
 
-def build_player_features(avg_stats: Dict[str, Any]) -> List[float]:
-    """Baut den 13er-Feature-Vektor aus get_supabase_player_avg_stats()-Output."""
+def build_player_features(avg_stats: Dict[str, Any], context: Optional[Dict[str, Any]] = None) -> List[float]:
+    """Baut den 17er-Feature-Vektor: Spieler-Schnitte + Rollen-Kontext."""
+    ctx = context or {}
+    def cval(key: str, default: float = 0.0) -> float:
+        try:
+            return float(ctx.get(key, default) or default)
+        except (TypeError, ValueError):
+            return default
     def val(*keys: str) -> float:
         for k in keys:
             row = avg_stats.get(k)
@@ -107,6 +114,10 @@ def build_player_features(avg_stats: Dict[str, Any]) -> List[float]:
         val("cards", "yellow_cards"),         # avg_cards
         val("corners"),                       # avg_corners
         g,                                    # avg_source_count (Proxy: games)
+        cval("elo_diff"),                     # elo_diff
+        cval("opponent_elo", 1500.0),         # opponent_elo
+        cval("is_home"),                      # is_home
+        cval("is_favorite"),                  # is_favorite
     ]
 
 
@@ -145,16 +156,18 @@ def load_player_models(supabase_url: str, supabase_key: str, timeout: int = 60) 
 
 
 def predict_player_prop(
-    avg_stats: Dict[str, Any], category: str, line: float
+    avg_stats: Dict[str, Any], category: str, line: float,
+    context: Optional[Dict[str, Any]] = None
 ) -> Optional[float]:
-    """Gibt die Modell-Wahrscheinlichkeit (0..1) fuer 'Over line' zurueck oder None."""
+    """Gibt die Modell-Wahrscheinlichkeit (0..1) fuer 'Over line' zurueck oder None.
+    context = {elo_diff, opponent_elo, is_home, is_favorite} fuer das Rollen-Feature."""
     if not avg_stats or not _MODEL_CACHE:
         return None
     name = model_for(category, line)
     if not name or name not in _MODEL_CACHE:
         return None
     try:
-        feats = build_player_features(avg_stats)
+        feats = build_player_features(avg_stats, context)
         # Ohne Spielhistorie keine sinnvolle Vorhersage.
         if feats[0] <= 0:
             return None
@@ -167,6 +180,53 @@ def predict_player_prop(
 
 def loaded_model_count() -> int:
     return len(_MODEL_CACHE)
+
+
+# Kandidaten-Linien pro Kategorie (hoch → niedrig), inkl. abgeleiteter 3+/2+.
+_LINE_LADDER: Dict[str, list] = {
+    "shots":             [2.5, 1.5, 0.5],
+    "sot":               [1.5, 0.5],
+    "sot_outside_box":   [0.5],
+    "tackles_committed": [1.5, 0.5],
+    "tackles_received":  [1.5, 0.5],
+    "tackles":           [1.5, 0.5],
+    "fouls":             [1.5, 0.5],
+    "fouls_committed":   [1.5, 0.5],
+    "fouls_won":         [1.5, 0.5],
+    "score":             [0.5],
+    "assist":            [0.5],
+    "passes":            [44.5, 34.5, 24.5],
+    "cards":             [0.5],
+    "yellow_cards":      [0.5],
+    "corners":           [0.5],
+}
+
+
+def best_line_for_role(
+    avg_stats: Dict[str, Any], category: str,
+    context: Optional[Dict[str, Any]] = None,
+    min_conf: float = 0.55,
+) -> Optional[Tuple[float, float]]:
+    """
+    Waehlt die HOECHSTE Linie, die das Modell noch mit >= min_conf deckt.
+    Ergibt Nates Staffelung datengetrieben: dominanter Favorit-Angreifer -> 2+/3+,
+    solider -> 2+, schwaecherer rollenpassender -> 1+.
+    Rueckgabe: (line, probability) oder None, wenn keine Linie sicher genug ist.
+    """
+    lines = _LINE_LADDER.get(category)
+    if not lines:
+        return None
+    for ln in lines:                      # hoch -> niedrig
+        prob = predict_player_prop(avg_stats, category, ln, context)
+        if prob is not None and prob >= min_conf:
+            return (ln, prob)
+    # Keine Linie ueber Schwelle: niedrigste Linie mit ihrer Prob zurueckgeben,
+    # damit der Aufrufer selbst entscheiden kann (oder None bei zu schwach).
+    lowest = lines[-1]
+    prob = predict_player_prop(avg_stats, category, lowest, context)
+    if prob is not None and prob >= (min_conf - 0.10):
+        return (lowest, prob)
+    return None
 
 
 __all__ = [
