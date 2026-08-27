@@ -19,6 +19,8 @@ Features pro Spiel:
 import os, sys, json, math, base64, io, pickle, statistics
 import requests
 import numpy as np
+import re
+import unicodedata
 import pandas as pd
 from datetime import datetime, timezone
 
@@ -1209,6 +1211,8 @@ PLAYER_FEATURE_COLS = [
     "games_prior", "avg_minutes", "avg_shots", "avg_sot", "avg_goals", "avg_assists",
     "avg_passes", "avg_tackles", "avg_fouls_committed", "avg_fouls_won",
     "avg_cards", "avg_corners", "avg_source_count",
+    # 🎭 Rollen-Kontext (Favorit vs. Außenseiter) — der Bot lernt die Spielzustand-Rolle:
+    "elo_diff", "opponent_elo", "is_home", "is_favorite",
 ]
 
 
@@ -1247,7 +1251,8 @@ def load_player_prop_training_frame():
     select_cols = ",".join([
         "source", "event_id", "match_date", "league", "team", "player_id", "player_name",
         "stat_name", "stat_value", "minutes", "shots", "sot", "goals", "assists",
-        "passes", "tackles", "fouls_committed", "fouls_won", "cards", "corners"
+        "passes", "tackles", "fouls_committed", "fouls_won", "cards", "corners",
+        "home_team", "away_team", "opponent", "home_away", "team_name",
     ])
     raw = _safe_rest_get(
         "player_match_stats",
@@ -1315,6 +1320,35 @@ def load_player_prop_training_frame():
     for c in stat_cols:
         combined[c] = pd.to_numeric(combined[c], errors="coerce").fillna(0.0)
 
+    # 🎭 Rollen-Kontext-Lookups (Favorit/Außenseiter) — vor der Rolling-Schleife
+    def _nt(s):
+        t = unicodedata.normalize("NFKD", str(s or "").lower().strip())
+        t = "".join(c for c in t if not unicodedata.combining(c))
+        return re.sub(r"[^a-z0-9]", "", t)
+    _elo_map = {}
+    try:
+        _erows = _safe_rest_get("team_elo_history",
+            {"select": "team_name,elo,rating_date", "order": "rating_date.desc"},
+            page_size=1000, max_pages=25)
+        for _er in (_erows or []):
+            _tn = _nt(_er.get("team_name"))
+            if _tn and _tn not in _elo_map:
+                try:
+                    _elo_map[_tn] = float(_er.get("elo") or 0)
+                except (TypeError, ValueError):
+                    pass
+    except Exception:
+        pass
+    _elo_vals = sorted(_elo_map.values())
+    _elo_median = _elo_vals[len(_elo_vals) // 2] if _elo_vals else 1500.0
+    _event_teams = {}
+    for _, _r in dfp.iterrows():
+        _ev = str(_r.get("event_id") or "")
+        if _ev and _ev not in _event_teams:
+            _h, _a = _r.get("home_team") or "", _r.get("away_team") or ""
+            if _h or _a:
+                _event_teams[_ev] = (_h, _a)
+
     # Rolling Features pro Spieler, strikt nur Vergangenheit
     rows = []
     hist = {}
@@ -1333,6 +1367,20 @@ def load_player_prop_training_frame():
         for stat in stat_cols:
             feat[f"avg_{stat}"] = avg_stat(stat, 0.0)
         feat["avg_source_count"] = avg_stat("source_count", 1.0)
+
+        # 🎭 Rollen-Kontext-Features: Favorit/Außenseiter aus Elo-Differenz
+        _team = row.get("team") or ""
+        _ev = str(row.get("event_id") or "")
+        _home, _away = _event_teams.get(_ev, ("", ""))
+        _tn, _hn, _an = _nt(_team), _nt(_home), _nt(_away)
+        _is_home = 1.0 if _tn and _tn == _hn else 0.0
+        _opp = _away if _is_home else (_home if _tn == _an else "")
+        _team_elo = _elo_map.get(_tn, _elo_median)
+        _opp_elo = _elo_map.get(_nt(_opp), _elo_median)
+        feat["elo_diff"] = _team_elo - _opp_elo
+        feat["opponent_elo"] = _opp_elo
+        feat["is_home"] = _is_home
+        feat["is_favorite"] = 1.0 if (_team_elo - _opp_elo + (65 if _is_home else -65)) > 0 else 0.0
 
         rows.append(feat)
         hist.setdefault(pk, []).append({**{s: float(row.get(s, 0.0)) for s in stat_cols}, "source_count": float(row.get("source_count", 1.0))})
