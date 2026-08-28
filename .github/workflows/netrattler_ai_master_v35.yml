@@ -11,8 +11,10 @@ on:
         description: "AI Tipp Bot am Ende starten"
         required: false
         default: "false"
-  schedule:
-    - cron: "10 1 * * 0"
+  # schedule deaktiviert: sources-Lauf macht all_source_harvester (verhindert Doppelung).
+  # Nur noch manuell startbar (als "Alles-auf-einmal"-Orchestrator).
+  # schedule:
+  #   - cron: "10 1 * * 0"
 
 permissions:
   contents: read
