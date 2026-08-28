@@ -3,7 +3,7 @@ name: NETRATTLER Settlement Final V21 + V36 AutoLearning
 on:
   workflow_dispatch:
   schedule:
-    - cron: "20 3,7,11,15,19,23 * * *"
+    - cron: "20 7,15,23 * * *"  # 3×/Tag (früh/nachmittag/nacht)
 
 concurrency:
   group: netrattler-settlement-v36
