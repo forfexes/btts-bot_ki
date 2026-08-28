@@ -2,8 +2,10 @@ name: NETRATTLER AI Tipp Bot
 
 on:
   schedule:
-    - cron: "0 11 * * *"  # 13:00 CH
-    - cron: "0 17 * * *"  # 19:00 CH
+    - cron: "30 9 * * *"  # 11:30 CH — Frühspiele (Serie A 12:30, PL 13:30)
+    - cron: "0 13 * * *"  # 15:00 CH — früher Nachmittag (BuLi 15:30, So-Spiele)
+    - cron: "0 16 * * *"  # 18:00 CH — Nachmittag/früher Abend (PL 18:30, BuLi 18:30)
+    - cron: "0 19 * * *"  # 21:00 CH — Abend (CL 21:00, LaLiga 21:00, Serie A 20:45)
   workflow_dispatch:
     inputs:
       mode:
@@ -63,6 +65,10 @@ jobs:
 
       - name: Run Tips Bot 🤖
         env:
+          # ── ⚡ SPEED: Tipp-Lauf schnell halten (Stats sammelt der Scraper separat) ──
+          NETRATTLER_FAST_TIPS:       "true"
+          NETRATTLER_STATBUNKER_MAX_LOOKUPS: "15"
+          NETRATTLER_LINEUP_MAX:      "12"
           # ── KI APIs ──
           GEMINI_API_KEYS:            ${{ secrets.GEMINI_API_KEYS }}
           GROQ_API_KEYS:              ${{ secrets.GROQ_API_KEYS }}
