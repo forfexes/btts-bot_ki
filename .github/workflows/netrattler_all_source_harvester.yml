@@ -3,7 +3,7 @@ name: NETRATTLER All Source Harvester V34
 on:
   workflow_dispatch:
   schedule:
-    - cron: "17 4 * * *"
+    - cron: "17 4 * * 0"  # nur Sonntag (neue Quellen kommen nicht täglich)
 
 jobs:
   harvest:
