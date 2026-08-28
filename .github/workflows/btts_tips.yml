@@ -2,10 +2,8 @@ name: NETRATTLER AI Tipp Bot
 
 on:
   schedule:
-    - cron: "0 7 * * *"   # 09:00 CH
     - cron: "0 11 * * *"  # 13:00 CH
     - cron: "0 17 * * *"  # 19:00 CH
-    - cron: "0 21 * * *"  # 23:00 CH
   workflow_dispatch:
     inputs:
       mode:
