@@ -4597,6 +4597,12 @@ def scrape_with_playwright(url, wait_for=None, timeout=8000):
     if not PLAYWRIGHT_AVAILABLE:
         return None
 
+    # ⚡ FAST-MODE (Tipp-Lauf): Playwright-Scrapes überspringen — die liefern
+    # v.a. Statistiken (FBref/WhoScored), die der separate Stats-Scraper sammelt.
+    # Spart im Tipp-Lauf ~5-8 Min. Aktiv via NETRATTLER_FAST_TIPS=true.
+    if str(os.getenv("NETRATTLER_FAST_TIPS", "")).lower() in ("1", "true", "yes", "on"):
+        return None
+
     cache_key = f"pw_{url}"
     if cache_key in PLAYWRIGHT_CACHE:
         return PLAYWRIGHT_CACHE[cache_key]
