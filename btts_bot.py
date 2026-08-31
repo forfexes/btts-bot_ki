@@ -6175,6 +6175,62 @@ _NTR_ML_MODEL_TS = 0
 def _ntr_ml_headers():
     return {"apikey": SUPABASE_KEY, "Authorization": f"Bearer {SUPABASE_KEY}", "Content-Type": "application/json"}
 
+
+# ── GELERNTE MARKT-/LIGA-GEWICHTE (aus netrattler_learning_weights) ──────────
+# Die Learning-Engine lernt aus abgerechneten Tipps, welche Märkte/Ligen
+# funktionieren (weight 0.65–1.35, 1.0 = neutral). Hier konsumiert der Tipp-Bot
+# das: Tipps in stark-performenden Markt/Liga-Kombis werden bevorzugt,
+# schwache abgewertet. So lernen ALLE Kanäle (nicht nur die Builder).
+_NTR_LEARNED_WEIGHTS = None
+
+
+def _ntr_load_learned_weights():
+    global _NTR_LEARNED_WEIGHTS
+    if _NTR_LEARNED_WEIGHTS is not None:
+        return _NTR_LEARNED_WEIGHTS
+    _NTR_LEARNED_WEIGHTS = {"market": {}, "league": {}, "source": {}}
+    if not SUPABASE_URL or not SUPABASE_KEY:
+        return _NTR_LEARNED_WEIGHTS
+    try:
+        import requests as _rq
+        r = _rq.get(
+            f"{SUPABASE_URL}/rest/v1/netrattler_learning_weights",
+            headers={"apikey": SUPABASE_KEY, "Authorization": f"Bearer {SUPABASE_KEY}"},
+            params={"select": "dimension,weight_key,weight,winrate,roi,n", "limit": "5000"},
+            timeout=20,
+        )
+        if r.ok:
+            _min_n = int(env("NETRATTLER_LEARNED_WEIGHT_MIN_N", "20") or 20)
+            for row in r.json():
+                dim = str(row.get("dimension", ""))
+                if dim not in _NTR_LEARNED_WEIGHTS:
+                    continue
+                # nur Gewichte mit ausreichender Stichprobe anwenden
+                if int(row.get("n", 0) or 0) < _min_n:
+                    continue
+                key = str(row.get("weight_key", "")).lower().strip()
+                try:
+                    _NTR_LEARNED_WEIGHTS[dim][key] = float(row.get("weight", 1.0) or 1.0)
+                except (TypeError, ValueError):
+                    continue
+    except Exception:
+        pass
+    return _NTR_LEARNED_WEIGHTS
+
+
+def _ntr_learned_weight(market: str = "", league: str = "") -> float:
+    """Kombiniertes gelerntes Gewicht (Markt × Liga), geometrisch gemittelt →
+    bleibt nahe 1.0, wenn wenig/keine Daten. Env-Schalter: NETRATTLER_APPLY_LEARNED_WEIGHTS."""
+    if str(env("NETRATTLER_APPLY_LEARNED_WEIGHTS", "true")).lower() not in ("1", "true", "yes", "on"):
+        return 1.0
+    w = _ntr_load_learned_weights()
+    mw = w.get("market", {}).get(str(market).lower().strip(), 1.0)
+    lw = w.get("league", {}).get(str(league).lower().strip(), 1.0)
+    try:
+        return float((mw * lw) ** 0.5)  # geometrisches Mittel
+    except (TypeError, ValueError):
+        return 1.0
+
 def _ntr_ml_load_model(force=False):
     global _NTR_ML_MODEL_CACHE, _NTR_ML_MODEL_TS
     # Deaktiviert: Tabelle netrattler_ml_models existiert nicht und der Footer
@@ -16522,7 +16578,7 @@ def generate_multi_combo_bets(all_tips, num_tips=3):
     # Sortiere nach Confidence + Probability
     sorted_tips = sorted(
         normalized,
-        key=lambda x: (x.get("confidence", 0), x.get("probability", 0)),
+        key=lambda x: (float(x.get("confidence",0) or 0) * _ntr_learned_weight(x.get("market",""), x.get("league","") or x.get("competition","")), x.get("probability", 0)),
         reverse=True
     )
 
@@ -16965,6 +17021,17 @@ def send_top_tips(tips_by_market, target_date):
     for market_id, tips in tips_by_market.items():
         if not tips:
             continue
+
+        # 🧠 GELERNTE GEWICHTE anwenden: Tipps nach Confidence × gelerntem
+        # Markt/Liga-Gewicht neu sortieren (aus abgerechneten Tipps gelernt).
+        # Neutral solange wenig Lern-Daten da sind (Gewicht ~1.0).
+        try:
+            def _weighted_conf(_t):
+                _lg = str(_t.get("league", "") or _t.get("competition", "") or _t.get("league_name", ""))
+                return float(_t.get("confidence", 0) or 0) * _ntr_learned_weight(market_id, _lg)
+            tips = sorted(tips, key=_weighted_conf, reverse=True)
+        except Exception:
+            pass
 
         target_chat = TELEGRAM_GROUPS.get(market_id, TELEGRAM_CHAT_ID)
         market_name = MARKET_INFO[market_id]["name"]
@@ -20086,6 +20153,11 @@ def run_corners_and_scorer_bots(target_date, active_leagues, odds_data_cache, fi
                 log(f"   Scorer Error: {e}", "WARN")
 
     # Header + Tipps senden
+    # 🧠 Corner-Tipps nach gelerntem Gewicht sortieren
+    try:
+        corners_tips = sorted(corners_tips, key=lambda _t: float(_t.get("confidence", _t.get("probability", 0)) or 0) * _ntr_learned_weight("corners", _t.get("league", "") or _t.get("competition", "")), reverse=True)
+    except Exception:
+        pass
     if corners_tips and group_hz:
         send_telegram(f"🔵 <b>CORNER SNIPER</b>\n<i>📅 {target_date}</i>", group_hz)
         for tip in corners_tips:
@@ -20111,6 +20183,11 @@ def run_corners_and_scorer_bots(target_date, active_leagues, odds_data_cache, fi
             except Exception:
                 pass
 
+    # 🧠 Scorer-Tipps nach gelerntem Gewicht sortieren
+    try:
+        scorer_tips = sorted(scorer_tips, key=lambda _t: float(_t.get("confidence", _t.get("probability", 0)) or 0) * _ntr_learned_weight("scorer", _t.get("league", "") or _t.get("competition", "")), reverse=True)
+    except Exception:
+        pass
     if scorer_tips and group_late:
         send_telegram(f"⚽ <b>SCORER TIPPS</b>\n<i>📅 {target_date}</i>", group_late)
         for tip in scorer_tips:
