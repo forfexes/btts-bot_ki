@@ -6365,6 +6365,98 @@ def _ntr_ml_enhance_message(text, chat_id=None):
         return text
     return raw + footer
 
+def _ntr_weekly_roi_report(force: bool = False) -> None:
+    """Wöchentlicher ROI-Report pro Markt + Liga per Telegram — zeigt glasklar,
+    welcher Kanal Geld verdient. Läuft sonntags (oder force)."""
+    from datetime import datetime as _dt, timezone as _tz
+    if not force and _dt.now(_tz.utc).weekday() != 6:
+        return
+    if not SUPABASE_URL or not SUPABASE_KEY:
+        return
+    import requests as _rq
+    try:
+        r = _rq.get(f"{SUPABASE_URL}/rest/v1/tips",
+                   headers={"apikey": SUPABASE_KEY, "Authorization": f"Bearer {SUPABASE_KEY}"},
+                   params={"select": "market,league,status,odds", "status": "in.(won,lost)", "limit": "5000"},
+                   timeout=25)
+        if not r.ok: return
+        rows = r.json()
+    except Exception:
+        return
+    if not rows: return
+    def _bucket(key_fn):
+        agg = {}
+        for t in rows:
+            k = key_fn(t) or "?"
+            a = agg.setdefault(k, {"w":0,"l":0,"profit":0.0})
+            try: od = float(t.get("odds") or 0)
+            except (TypeError, ValueError): od = 0
+            if t.get("status") == "won":
+                a["w"] += 1; a["profit"] += (od-1) if od>1 else 0.9
+            else:
+                a["l"] += 1; a["profit"] -= 1
+        return agg
+    def _fmt(agg, title, top=8):
+        items = []
+        for k,a in agg.items():
+            n = a["w"]+a["l"]
+            if n < 5: continue
+            items.append((a["profit"]/n*100, k, n, a["w"]/n*100, a["profit"]))
+        items.sort(reverse=True)
+        if not items:
+            return f"\n<b>{title}</b>\n<i>noch zu wenig Daten</i>"
+        out = [f"\n<b>{title}</b>"]
+        for roi,k,n,wr,prof in items[:top]:
+            e = "🟢" if roi>0 else "🔴"
+            out.append(f"{e} {str(k)[:22]}: ROI {roi:+.0f}% · {wr:.0f}%WR · {n}T · {prof:+.1f}u")
+        return "\n".join(out)
+    total_n = len(rows)
+    total_profit = sum((float(t.get("odds") or 2)-1) if t.get("status")=="won" else -1 for t in rows)
+    header = f"📊 <b>NETRATTLER WOCHEN-REPORT</b>\nGesamt: {total_n} abgerechnet · ROI {total_profit/max(1,total_n)*100:+.0f}% · {total_profit:+.1f}u"
+    msg = header + _fmt(_bucket(lambda t: t.get("market")), "📈 Nach Markt") + _fmt(_bucket(lambda t: t.get("league")), "🏆 Nach Liga")
+    try:
+        send_telegram(msg, env("TELEGRAM_CHAT_ID", None)); log("📊 Wochen-ROI-Report gesendet")
+    except Exception:
+        pass
+
+
+
+def _ntr_health_check() -> dict:
+    """Prüft kritische Datenquellen vor dem Tipp-Lauf. critical=True → Telegram-Warnung,
+    damit der Bot nicht still auf leeren Daten läuft (wie die leere player_avg_stats-View)."""
+    import requests as _rq
+    msgs = []; critical = False; checks = {}
+    if not SUPABASE_URL or not SUPABASE_KEY:
+        return {"critical": False, "messages": [], "summary": "kein Supabase", "checks": {}}
+    _h = {"apikey": SUPABASE_KEY, "Authorization": f"Bearer {SUPABASE_KEY}"}
+    def _count(table):
+        try:
+            r = _rq.get(f"{SUPABASE_URL}/rest/v1/{table}", headers={**_h, "Prefer": "count=exact"},
+                       params={"select": "*", "limit": "1"}, timeout=15)
+            cr = r.headers.get("content-range", "")
+            if "/" in cr:
+                return int(cr.split("/")[-1])
+        except Exception:
+            pass
+        return -1
+    n_players = _count("player_avg_stats"); checks["players"] = n_players
+    if n_players == 0:
+        msgs.append("❌ player_avg_stats LEER — Player-Props laufen ins Leere!"); critical = True
+    elif 0 < n_players < 100:
+        msgs.append(f"⚠️ player_avg_stats nur {n_players} Zeilen — sehr dünn")
+    n_elo = _count("team_elo_history"); checks["elo"] = n_elo
+    if n_elo == 0:
+        msgs.append("⚠️ team_elo_history LEER — Rollen-System inaktiv")
+    n_models = _count("ml_models"); checks["models"] = n_models
+    if n_models == 0:
+        msgs.append("❌ ml_models LEER — keine Vorhersagen möglich!"); critical = True
+    elif 0 < n_models < 10:
+        msgs.append(f"⚠️ ml_models nur {n_models} — Training unvollständig?")
+    return {"critical": critical, "messages": msgs,
+            "summary": f"players={n_players}, elo={n_elo}, models={n_models}", "checks": checks}
+
+
+
 def send_telegram(text, chat_id=None, reply_markup=None):
     if not TELEGRAM_TOKEN:
         log("Telegram Token fehlt", "WARN")
@@ -9339,6 +9431,42 @@ def get_clubelo_ratings(target_date=None) -> dict:
 
     _CLUBELO_CACHE[date_str] = ratings
     return ratings
+
+
+def _ntr_refresh_elo_history() -> int:
+    """Frischt team_elo_history mit aktuellen ClubElo-Ratings auf (heutiges Datum).
+    Nur sonntags oder via force, damit die Favorit/Außenseiter-Rollen aktuell bleiben.
+    Braucht ENABLE_CLUBELO=1 (sonst liefert get_clubelo_ratings leer)."""
+    from datetime import datetime as _dt, timezone as _tz
+    if str(env("ENABLE_ELO_REFRESH", "true")).lower() not in ("1", "true", "yes", "on"):
+        return 0
+    if not SUPABASE_URL or not SUPABASE_KEY:
+        return 0
+    ratings = get_clubelo_ratings()
+    if not ratings:
+        log("   ⚡ Elo-Refresh: keine ClubElo-Daten (ENABLE_CLUBELO=1 gesetzt?)", "WARN")
+        return 0
+    today = str(_dt.now(_tz.utc).date())
+    rows = [{"team_name": club.title(), "elo": round(elo, 1),
+             "rating_date": today, "source": "clubelo_refresh"}
+            for club, elo in ratings.items() if elo]
+    try:
+        import requests as _rq
+        # in Batches upserten (Supabase-Limit)
+        _hdr = {"apikey": SUPABASE_KEY, "Authorization": f"Bearer {SUPABASE_KEY}",
+                "Content-Type": "application/json", "Prefer": "resolution=merge-duplicates"}
+        n = 0
+        for i in range(0, len(rows), 500):
+            batch = rows[i:i+500]
+            r = _rq.post(f"{SUPABASE_URL}/rest/v1/team_elo_history",
+                        headers=_hdr, json=batch, timeout=30)
+            if r.ok:
+                n += len(batch)
+        log(f"   ⚡ Elo-History aufgefrischt: {n} Teams ({today})")
+        return n
+    except Exception as _ee:
+        log(f"   ⚡ Elo-Refresh fehlgeschlagen: {str(_ee)[:60]}", "WARN")
+        return 0
 
 
 def get_clubelo_for_match(home_team: str, away_team: str, target_date=None) -> dict:
@@ -24621,6 +24749,37 @@ def main():
     check_config()
     check_rotation_schedule()
 
+    # 🩺 HEALTH-CHECK: kritische Datenquellen prüfen, BEVOR Tipps erzeugt werden.
+    # Verhindert, dass der Bot still auf leeren/kaputten Daten läuft (wie die
+    # leere player_avg_stats-View). Warnt per Telegram statt still Müll zu senden.
+    try:
+        _health = _ntr_health_check()
+        if _health["critical"]:
+            _warn = "🩺 <b>NETRATTLER HEALTH-WARNUNG</b>\n" + "\n".join(_health["messages"])
+            try:
+                send_telegram(_warn, env("TELEGRAM_CHAT_ID", None))
+            except Exception:
+                pass
+            log(f"🩺 HEALTH-CHECK KRITISCH: {'; '.join(_health['messages'])}", "ERROR")
+        else:
+            log(f"🩺 Health-Check OK: {_health['summary']}")
+    except Exception as _he:
+        log(f"🩺 Health-Check übersprungen: {str(_he)[:80]}", "WARN")
+
+    # 📊 Wochen-ROI-Report (nur sonntags, per Telegram)
+    try:
+        _ntr_weekly_roi_report()
+    except Exception:
+        pass
+
+    # ⚡ Elo-History auffrischen (nur sonntags, hält Favorit/Außenseiter aktuell)
+    try:
+        from datetime import datetime as _dtx, timezone as _tzx
+        if _dtx.now(_tzx.utc).weekday() == 6:
+            _ntr_refresh_elo_history()
+    except Exception:
+        pass
+
     now_utc = datetime.now(timezone.utc)
     target_date = now_utc.date()
     hour_utc = now_utc.hour
@@ -25362,6 +25521,12 @@ def main():
             _builder_chat = TELEGRAM_GROUPS.get("advanced_props") or TELEGRAM_GROUPS.get("props")
             if _builder_chat:
                 def _send_builder(msg):
+                    # 👁️ BEOBACHTUNGS-MODUS: Builder senden, aber als "Beobachtung"
+                    # markieren, bis der ROI sie bestätigt. Schutz vor -EV-Multi-Legs.
+                    # Deaktivieren mit NETRATTLER_BUILDER_OBSERVE=false.
+                    if str(env("NETRATTLER_BUILDER_OBSERVE", "true")).lower() in ("1", "true", "yes", "on"):
+                        msg = ("👁️ <b>BEOBACHTUNG</b> <i>(kein Einsatz-Tipp — Track-Record wird aufgebaut)</i>\n"
+                               + msg)
                     return send_telegram(msg, chat_id=_builder_chat)
 
                 _sent_n, _picks = run_builder_engine(
