@@ -23626,6 +23626,44 @@ def _normalize_name(name: str) -> str:
     return " ".join(n.split())
 
 
+def _fetch_btts_odd_kambi(home: str, away: str):
+    """Best-effort BTTS-Quote (Yes) von Kambi/Unibet. None wenn nicht gefunden — bricht nie.
+    Fallback wenn Pinnacle BTTS blockt (403)."""
+    try:
+        import requests as _rq
+        for host in ["https://eu-offering-api.kambicdn.com/offering/v2018/ub",
+                     "https://eu-offering.kambicdn.org/offering/v2018/ub"]:
+            try:
+                sr = _rq.get(f"{host}/listView/football.json",
+                            params={"term": f"{home} {away}"}, timeout=8,
+                            headers={"User-Agent": "Mozilla/5.0"})
+                if not sr.ok:
+                    continue
+                for ev in (sr.json().get("events") or [])[:5]:
+                    _e = ev.get("event", ev)
+                    eid = _e.get("id")
+                    if not eid:
+                        continue
+                    br = _rq.get(f"{host}/betoffer/event/{eid}.json", timeout=8,
+                                headers={"User-Agent": "Mozilla/5.0"})
+                    if not br.ok:
+                        continue
+                    for bo in (br.json().get("betOffers") or []):
+                        crit = (bo.get("criterion", {}).get("label", "") or "").lower()
+                        if "both teams to score" in crit or "both to score" in crit:
+                            for oc in bo.get("outcomes", []):
+                                if (oc.get("label", "") or "").lower() in ("yes", "ja"):
+                                    odds = oc.get("odds")
+                                    if odds:
+                                        return round(odds / 1000.0, 2)
+            except Exception:
+                continue
+    except Exception:
+        pass
+    return None
+
+
+
 def get_pinnacle_match_odds(home_team: str, away_team: str,
                               league_hint: Optional[str] = None) -> Optional[Dict]:
     """Holt Pinnacle-Quoten für ein Match per Team-Namen."""
@@ -24948,6 +24986,22 @@ def main():
                         or "Corners" in league_name or "Bookings" in league_name):
                     continue
 
+                # 🚫 MÜLL-LIGEN-FILTER: Jugend/Reserve/Frauen/kleine Cups raus.
+                # Genau die Ligen, wo das ML-Modell keine Daten hat → pauschale
+                # Fallback-Tipps entstehen. Abschaltbar via NETRATTLER_JUNK_FILTER=false.
+                if str(env("NETRATTLER_JUNK_FILTER", "true")).lower() in ("1", "true", "yes", "on"):
+                    _ll = league_name.lower()
+                    _junk = ["u23", "u21", "u20", "u19", "u18", "u17", "youth", "jugend",
+                             "women", "frauen", "féminin", "feminin", "womens", "ladies",
+                             "reserve", "reserves", "development", "academy",
+                             "regionalliga", "u23 championship", "primavera",
+                             "elite league u21", "professional development"]
+                    # Zweitmannschaften (" II" / " B" am Ende)
+                    _second = home.strip().endswith(" II") or away.strip().endswith(" II") \
+                              or home.strip().endswith(" B") or away.strip().endswith(" B")
+                    if any(_kw in _ll for _kw in _junk) or _second:
+                        continue
+
                 # Zeitfenster: gestaffelt nach CH-Zeit (siehe oben)
                 match_dt = None
                 if starts:
@@ -25036,17 +25090,39 @@ def main():
 
                 # Echte Pinnacle-Odds als Upgrade (optional, mit Schutz)
                 ro = None
+                _real_btts_odd = False
+                _real_over_odd = False
                 try:
-                    ro = get_pinnacle_match_odds(home, away)
+                    # Direkt über die match_id (zuverlässiger als Namenssuche)
+                    _mid = pm.get("match_id")
+                    ro = fetch_pinnacle_match_odds(_mid) if _mid else None
+                    if not ro:
+                        ro = get_pinnacle_match_odds(home, away)
                     if ro:
                         if ro.get("btts_yes"):
                             btts_yes = ro["btts_yes"]
                             prob_b = int(100 / btts_yes * 0.95)
+                            _real_btts_odd = True
                         if ro.get("over_25"):
                             over25 = ro["over_25"]
                             prob_o = int(100 / over25 * 0.95)
+                            _real_over_odd = True
                 except Exception:
                     pass
+
+                # 🔌 BTTS-Quoten-Fallback: Pinnacle blockt BTTS oft (403) → Kambi/Oddspedia.
+                if not _real_btts_odd and str(env("NETRATTLER_BTTS_ODDS_FALLBACK", "true")).lower() in ("1","true","yes","on"):
+                    try:
+                        import netrattler_prop_sources as _ps
+                        _extra = _ps.collect_extra_player_props  # reuse session/helpers
+                        # BTTS ist ein Team-Markt; wir holen ihn über die Kambi-Team-Quote
+                        _kb = _fetch_btts_odd_kambi(home, away)
+                        if _kb and _kb > 1.2:
+                            btts_yes = _kb
+                            prob_b = int(100 / btts_yes * 0.95)
+                            _real_btts_odd = True
+                    except Exception:
+                        pass
 
                 mn = f"{home} vs {away}"
                 tstr = "TBD"
@@ -25062,7 +25138,7 @@ def main():
                     pass
 
                 # BTTS Tipp — nur Value Bets (Quote >=1.70 + echter Edge)
-                if prob_b >= MIN_PROBABILITY and "btts" in tips_by_market and _is_value_bet(btts_yes, prob_b):
+                if prob_b >= MIN_PROBABILITY and "btts" in tips_by_market and _is_value_bet(btts_yes, prob_b) and (_real_btts_odd or str(env("NETRATTLER_REQUIRE_REAL_ODDS", "true")).lower() not in ("1","true","yes","on")):
                     tip_btts = {
                         "match": mn, "league": league_name or "Pinnacle",
                         "time": tstr, "tip": "YES",
@@ -25078,7 +25154,7 @@ def main():
                     log(f"      ✅ BTTS YES @ {btts_yes} ({prob_b}%)")
 
                 # Over 2.5 Tipp — nur Value Bets
-                if prob_o >= MIN_PROBABILITY and "over25" in tips_by_market and _is_value_bet(over25, prob_o):
+                if prob_o >= MIN_PROBABILITY and "over25" in tips_by_market and _is_value_bet(over25, prob_o) and (_real_over_odd or str(env("NETRATTLER_REQUIRE_REAL_ODDS", "true")).lower() not in ("1","true","yes","on")):
                     tip_over25 = {
                         "match": mn, "league": league_name or "Pinnacle",
                         "time": tstr, "tip": "YES",
