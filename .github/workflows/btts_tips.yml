@@ -49,6 +49,7 @@ jobs:
             supabase \
             xgboost \
             cloudscraper \
+            curl_cffi \
             numpy \
             pandas \
             scikit-learn
