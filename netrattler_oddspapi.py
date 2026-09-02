@@ -90,6 +90,18 @@ def get_fixtures(target_date=None) -> List[Dict]:
     fixtures = []
     if isinstance(data, list):
         fixtures = [f for f in data if f.get("hasOdds")]
+    # Diagnose (via print → landet im GitHub-Log)
+    try:
+        if not _key():
+            print("   🍋 OddsPapi: KEIN KEY gefunden (ODDSPAPI_KEY Secret gesetzt?)")
+        elif data is None:
+            print("   🍋 OddsPapi: API-Antwort leer/Fehler (Key gültig? Endpoint?)")
+        elif isinstance(data, dict) and data.get("_rate_limited"):
+            print("   🍋 OddsPapi: Rate-Limit (429) erreicht")
+        else:
+            print(f"   🍋 OddsPapi: {len(fixtures)} Fixtures mit Quoten geladen ({ds})")
+    except Exception:
+        pass
     _FIXTURES_CACHE[ds] = fixtures
     return fixtures
 
@@ -162,18 +174,41 @@ def get_match_odds(fixture_id: str) -> Dict[str, Any]:
     return result
 
 
+def _tokens(name: str) -> set:
+    """Signifikante Wörter eines Teamnamens (ohne Füllwörter)."""
+    stop = {"fc", "cf", "sc", "ac", "sv", "us", "if", "bk", "fk", "cd", "club",
+            "de", "the", "city", "united", "real", "cd", "afc", "ss", "as", "rc"}
+    raw = re.sub(r"[^a-z0-9 ]", " ", str(name or "").lower())
+    return {w for w in raw.split() if len(w) >= 3 and w not in stop}
+
+
 def find_fixture(home: str, away: str, target_date=None) -> Optional[Dict]:
-    """Findet das OddsPapi-Fixture per Teamnamen."""
-    h, a = _norm(home), _norm(away)
+    """Findet das OddsPapi-Fixture per Teamnamen (token-basiert, robust)."""
+    h_tok, a_tok = _tokens(home), _tokens(away)
+    h_norm, a_norm = _norm(home), _norm(away)
+    best = None
     for fx in get_fixtures(target_date):
-        p1 = _norm(fx.get("participant1Name", ""))
-        p2 = _norm(fx.get("participant2Name", ""))
+        p1_name = fx.get("participant1Name", "") or ""
+        p2_name = fx.get("participant2Name", "") or ""
+        p1, p2 = _norm(p1_name), _norm(p2_name)
         if not p1 or not p2:
             continue
-        # beidseitiger Präfix-Match (robust gegen Namensvarianten)
-        if (h[:6] in p1 or p1[:6] in h) and (a[:6] in p2 or p2[:6] in a):
+        # 1) Exakter/Substring-Match (schnell)
+        if (h_norm[:6] and (h_norm[:6] in p1 or p1[:6] in h_norm)) and \
+           (a_norm[:6] and (a_norm[:6] in p2 or p2[:6] in a_norm)):
             return fx
-    return None
+        # 2) Token-Match: teilen sich Heim UND Auswärts je ein signifikantes Wort
+        #    (auch Teilwort: "man" ⊂ "manchester")
+        p1_tok, p2_tok = _tokens(p1_name), _tokens(p2_name)
+        def _tok_overlap(ta, tb):
+            for x in ta:
+                for y in tb:
+                    if x == y or (len(x) >= 4 and x in y) or (len(y) >= 4 and y in x):
+                        return True
+            return False
+        if _tok_overlap(h_tok, p1_tok) and _tok_overlap(a_tok, p2_tok):
+            best = fx
+    return best
 
 
 def get_odds_for_match(home: str, away: str, target_date=None) -> Dict[str, Any]:
