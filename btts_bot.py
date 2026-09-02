@@ -23582,13 +23582,21 @@ def _get_real_odds_any_source(home, away, league_name="", match_id=None, tip_dat
         if got and not result.get("_source"):
             result["_source"] = src
         return got
-    # 1) Pinnacle via match_id
+
+    # 0) 🍋 OddsPapi (HAUPT — 130+ Bücher inkl. Pinnacle, alle Ligen, sauberes JSON)
     try:
-        if match_id:
+        import netrattler_oddspapi as _op
+        _merge(_op.get_odds_for_match(home, away, tip_date), "oddspapi")
+    except Exception:
+        pass
+
+    # 1) Pinnacle via match_id (Fallback)
+    try:
+        if match_id and not (result.get("btts_yes") and result.get("over_25")):
             _merge(fetch_pinnacle_match_odds(match_id), "pinnacle")
     except Exception:
         pass
-    # 2) SofaScore (BTTS + Over + HT)
+    # 2) SofaScore (BTTS + Over + HT — nutzt gecachte Tagesliste, instant wenn leer)
     if not (result.get("btts_yes") and result.get("over_25")):
         try:
             _eid = _sofascore_event_id_for(home, away, tip_date)
@@ -23596,28 +23604,11 @@ def _get_real_odds_any_source(home, away, league_name="", match_id=None, tip_dat
                 _merge(get_sofascore_odds(str(_eid)), "sofascore")
         except Exception:
             pass
-    # 3) Betexplorer
-    if not (result.get("btts_yes") and result.get("over_25")):
-        try:
-            _merge(get_betexplorer_odds(home, away, league_name), "betexplorer")
-        except Exception:
-            pass
-    # 4) SoccerAPI
-    if not (result.get("btts_yes") and result.get("over_25")):
-        try:
-            _merge(get_soccerapi_odds(home, away, tip_date), "soccerapi")
-        except Exception:
-            pass
-    # 5) Kambi (nur BTTS)
-    if not result.get("btts_yes"):
-        try:
-            _kb = _fetch_btts_odd_kambi(home, away)
-            if _kb and _kb > 1.0:
-                result["btts_yes"] = round(_kb, 2)
-                if not result.get("_source"):
-                    result["_source"] = "kambi"
-        except Exception:
-            pass
+
+    # Kambi/Betexplorer/SoccerAPI ENTFERNT aus der Pro-Match-Kette:
+    # zu langsam (HTTP-Suche + Playwright + Rate-Limits) bei ~1000 Matches.
+    # Nur schnelle Quellen (Pinnacle match_id + SofaScore-Tagescache) bleiben.
+
     _get_real_odds_any_source._cache[_ck] = result
     return result
 
