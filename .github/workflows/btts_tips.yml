@@ -103,6 +103,7 @@ jobs:
           # ── Supabase ──
           SUPABASE_URL:               ${{ secrets.SUPABASE_URL }}
           SUPABASE_KEY:               ${{ secrets.SUPABASE_KEY }}
+          ODDSPAPI_KEY:               ${{ secrets.ODDSPAPI_KEY }}
           SUPABASE_SERVICE_ROLE_KEY:  ${{ secrets.SUPABASE_SERVICE_ROLE_KEY }}
           # ── Bot Einstellungen ──
           RUN_MODE:                   ${{ github.event.inputs.mode || 'tips' }}
