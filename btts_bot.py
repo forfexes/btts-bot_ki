@@ -4589,23 +4589,42 @@ except ImportError:
 
 PLAYWRIGHT_CACHE = {}
 
+def _curl_cffi_get(url, timeout=12):
+    """🚀 Schnelles Scraping mit curl_cffi (Chrome-TLS-Impersonation).
+    Umgeht die meisten 403/429-Blocks OHNE Browser-Start — viel schneller als
+    Playwright. Aus der Quellen-Analyse: die Methode, die bei SofaScore/OddsPortal/
+    FBref durchkommt. Gibt HTML-Text oder None."""
+    try:
+        from curl_cffi import requests as _creq
+        r = _creq.get(url, impersonate="chrome", timeout=timeout)
+        if r.status_code == 200 and r.text:
+            return r.text
+    except Exception:
+        pass
+    return None
+
+
 def scrape_with_playwright(url, wait_for=None, timeout=8000):
     """
-    Scrapt eine Seite mit echtem Chromium Browser.
-    Umgeht 403 Blocks von SofaScore, Transfermarkt etc.
+    Holt eine Seite. NEU: erst curl_cffi (schnell, TLS-Impersonation), dann
+    Playwright nur als letzter Fallback. Umgeht Blocks ohne Browser-Overhead.
     """
-    if not PLAYWRIGHT_AVAILABLE:
-        return None
-
-    # ⚡ FAST-MODE (Tipp-Lauf): Playwright-Scrapes überspringen — die liefern
-    # v.a. Statistiken (FBref/WhoScored), die der separate Stats-Scraper sammelt.
-    # Spart im Tipp-Lauf ~5-8 Min. Aktiv via NETRATTLER_FAST_TIPS=true.
-    if str(os.getenv("NETRATTLER_FAST_TIPS", "")).lower() in ("1", "true", "yes", "on"):
-        return None
-
     cache_key = f"pw_{url}"
     if cache_key in PLAYWRIGHT_CACHE:
         return PLAYWRIGHT_CACHE[cache_key]
+
+    # 1) 🚀 curl_cffi zuerst (schnell, kein Browser) — auch im Fast-Mode aktiv!
+    html = _curl_cffi_get(url, timeout=max(8, int(timeout / 1000)))
+    if html:
+        PLAYWRIGHT_CACHE[cache_key] = html
+        return html
+
+    # 2) Playwright nur wenn curl_cffi nichts brachte UND nicht Fast-Mode
+    #    (Fast-Mode = Tipp-Lauf: kein langsamer Browser-Fallback)
+    if str(os.getenv("NETRATTLER_FAST_TIPS", "")).lower() in ("1", "true", "yes", "on"):
+        return None
+    if not PLAYWRIGHT_AVAILABLE:
+        return None
 
     try:
         with sync_playwright() as p:
@@ -11189,7 +11208,10 @@ def smart_request(url, timeout=15, use_playwright_if_blocked=True, headers=None)
     
     try:
         r = requests.get(url, headers=default_headers, timeout=timeout)
-        if r.status_code in [403, 429, 503, 406, 444] and use_playwright_if_blocked:
+        # ⚡ FAST-MODE: kein Playwright-Fallback im Tipp-Lauf (verhindert 18s/Match
+        # Timeout bei geblockten Seiten wie Betexplorer 429). Stats sammelt der Scraper.
+        _fast = str(os.getenv("NETRATTLER_FAST_TIPS", "")).lower() in ("1", "true", "yes", "on")
+        if r.status_code in [403, 429, 503, 406, 444] and use_playwright_if_blocked and not _fast:
             log(f"   🎭 {url[:40]}... → Playwright (Status {r.status_code})")
             html = scrape_with_playwright(url, timeout=8000)
             if html:
