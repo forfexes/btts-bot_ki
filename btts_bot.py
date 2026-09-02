@@ -23537,6 +23537,92 @@ def fetch_pinnacle_matchups() -> List[Dict]:
         return []
 
 
+def _sofascore_event_id_for(home, away, tip_date=None):
+    """Findet die SofaScore event_id per Teamnamen (fuer Team-Markt-Quoten)."""
+    try:
+        from datetime import datetime as _dt, timezone as _tz
+        ds = tip_date or str(_dt.now(_tz.utc).date())
+        events = _sofascore_events_for_date(ds)
+        if not events:
+            return None
+        h, a = _normalize_name(home), _normalize_name(away)
+        for ev in events:
+            _h = _normalize_name((ev.get("homeTeam", {}) or {}).get("name", ""))
+            _a = _normalize_name((ev.get("awayTeam", {}) or {}).get("name", ""))
+            if not _h or not _a:
+                continue
+            if (h[:6] in _h or _h[:6] in h) and (a[:6] in _a or _a[:6] in a):
+                return ev.get("id")
+    except Exception:
+        pass
+    return None
+
+
+def _get_real_odds_any_source(home, away, league_name="", match_id=None, tip_date=None):
+    """ZITRONEN-PRESSE: probiert ALLE Quoten-Quellen durch, bis echte BTTS/Over-
+    Quoten da sind. Cacht pro Match. Gibt {btts_yes, over_25, btts_yes_ht, over15_ht, _source}."""
+    _ck = f"{_normalize_name(home)}_{_normalize_name(away)}"
+    if not hasattr(_get_real_odds_any_source, "_cache"):
+        _get_real_odds_any_source._cache = {}
+    if _ck in _get_real_odds_any_source._cache:
+        return _get_real_odds_any_source._cache[_ck]
+    result = {"_source": None}
+    def _merge(d, src):
+        got = False
+        for k in ("btts_yes", "over_25", "over25", "btts_yes_ht", "btts_ht_yes", "over15_ht"):
+            v = (d or {}).get(k)
+            try:
+                v = float(v) if v else 0
+            except (TypeError, ValueError):
+                v = 0
+            if v > 1.0:
+                key = "over_25" if k in ("over25", "over_25") else ("btts_yes_ht" if k in ("btts_yes_ht", "btts_ht_yes") else k)
+                if key not in result:
+                    result[key] = round(v, 2); got = True
+        if got and not result.get("_source"):
+            result["_source"] = src
+        return got
+    # 1) Pinnacle via match_id
+    try:
+        if match_id:
+            _merge(fetch_pinnacle_match_odds(match_id), "pinnacle")
+    except Exception:
+        pass
+    # 2) SofaScore (BTTS + Over + HT)
+    if not (result.get("btts_yes") and result.get("over_25")):
+        try:
+            _eid = _sofascore_event_id_for(home, away, tip_date)
+            if _eid:
+                _merge(get_sofascore_odds(str(_eid)), "sofascore")
+        except Exception:
+            pass
+    # 3) Betexplorer
+    if not (result.get("btts_yes") and result.get("over_25")):
+        try:
+            _merge(get_betexplorer_odds(home, away, league_name), "betexplorer")
+        except Exception:
+            pass
+    # 4) SoccerAPI
+    if not (result.get("btts_yes") and result.get("over_25")):
+        try:
+            _merge(get_soccerapi_odds(home, away, tip_date), "soccerapi")
+        except Exception:
+            pass
+    # 5) Kambi (nur BTTS)
+    if not result.get("btts_yes"):
+        try:
+            _kb = _fetch_btts_odd_kambi(home, away)
+            if _kb and _kb > 1.0:
+                result["btts_yes"] = round(_kb, 2)
+                if not result.get("_source"):
+                    result["_source"] = "kambi"
+        except Exception:
+            pass
+    _get_real_odds_any_source._cache[_ck] = result
+    return result
+
+
+
 def fetch_pinnacle_match_odds(match_id: int) -> Optional[Dict]:
     """Holt alle Quoten für ein einzelnes Pinnacle-Match."""
     cache_key = f"odds_{match_id}"
@@ -25088,25 +25174,24 @@ def main():
                     except Exception:
                         pass
 
-                # Echte Pinnacle-Odds als Upgrade (optional, mit Schutz)
+                # Echte Odds als Upgrade — 🍋 ZITRONEN-PRESSE: alle Quellen durchprobieren
                 ro = None
                 _real_btts_odd = False
                 _real_over_odd = False
+                _real_btts_ht_odd = False
+                _real_over15_ht_odd = False
                 try:
-                    # Direkt über die match_id (zuverlässiger als Namenssuche)
                     _mid = pm.get("match_id")
-                    ro = fetch_pinnacle_match_odds(_mid) if _mid else None
-                    if not ro:
-                        ro = get_pinnacle_match_odds(home, away)
+                    ro = _get_real_odds_any_source(home, away, league_name, _mid, target_date.isoformat() if hasattr(target_date, "isoformat") else None)
                     if ro:
                         if ro.get("btts_yes"):
-                            btts_yes = ro["btts_yes"]
-                            prob_b = int(100 / btts_yes * 0.95)
-                            _real_btts_odd = True
+                            btts_yes = ro["btts_yes"]; prob_b = int(100 / btts_yes * 0.95); _real_btts_odd = True
                         if ro.get("over_25"):
-                            over25 = ro["over_25"]
-                            prob_o = int(100 / over25 * 0.95)
-                            _real_over_odd = True
+                            over25 = ro["over_25"]; prob_o = int(100 / over25 * 0.95); _real_over_odd = True
+                        _real_btts_ht_odd = bool(ro.get("btts_yes_ht"))
+                        _real_over15_ht_odd = bool(ro.get("over15_ht"))
+                        if ro.get("_source") and ro["_source"] != "pinnacle":
+                            log(f"      🍋 Echte Quote via {ro['_source']}: {home} vs {away}")
                 except Exception:
                     pass
 
@@ -25204,7 +25289,7 @@ def main():
                             btts_ht_odds, btts_ht_prob = 2.05, 68
                         else:
                             btts_ht_odds, btts_ht_prob = 2.30, 67
-                    if btts_ht_prob >= MIN_PROBABILITY and _is_value_bet(btts_ht_odds, btts_ht_prob):
+                    if btts_ht_prob >= MIN_PROBABILITY and _is_value_bet(btts_ht_odds, btts_ht_prob) and (_real_btts_ht_odd or str(env("NETRATTLER_REQUIRE_REAL_ODDS", "true")).lower() not in ("1","true","yes","on")):
                         tip_btts_ht = {
                             "match": mn, "league": league_name or "Pinnacle",
                             "time": tstr, "tip": "BTTS HT (Beide Teams treffen 1.HZ)",
@@ -25232,7 +25317,7 @@ def main():
                             o15_odds, o15_prob = 2.10, 68
                         else:
                             o15_odds, o15_prob = 2.40, 67
-                    if o15_prob >= MIN_PROBABILITY and "over15_ht" in tips_by_market and _is_value_bet(o15_odds, o15_prob):
+                    if o15_prob >= MIN_PROBABILITY and "over15_ht" in tips_by_market and _is_value_bet(o15_odds, o15_prob) and (_real_over15_ht_odd or str(env("NETRATTLER_REQUIRE_REAL_ODDS", "true")).lower() not in ("1","true","yes","on")):
                         tip_o15_ht = {
                             "match": mn, "league": league_name or "Pinnacle",
                             "time": tstr, "tip": "Over 1.5 Tore HT",
