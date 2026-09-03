@@ -43,6 +43,27 @@ ALLSPORTS_API_KEY = os.getenv("ALLSPORTS_API_KEY") or ""
 FOOTBALL_DATA_API_KEYS = [k.strip() for k in (os.getenv("FOOTBALL_DATA_API_KEYS") or os.getenv("FOOTBALL_DATA_API_KEY") or "").split(",") if k.strip()]
 FOOTBALLDATA_IO_API_KEY = os.getenv("FOOTBALLDATA_IO_API_KEY") or ""
 RESULT_HTTP_TIMEOUT = int(os.getenv("RESULT_HTTP_TIMEOUT", "8"))
+
+
+def _cffi_get_json(url, timeout=8, params=None):
+    """🚀 curl_cffi (TLS-Impersonation) für Ergebnis-Abruf — umgeht SofaScore/ESPN 403.
+    Fällt auf normales requests zurück, wenn curl_cffi fehlt."""
+    try:
+        from curl_cffi import requests as _creq
+        r = _creq.get(url, params=params, impersonate="chrome", timeout=timeout)
+        if r.status_code == 200:
+            return r.json()
+    except Exception:
+        pass
+    try:
+        r = requests.get(url, params=params,
+                        headers={"User-Agent": "Mozilla/5.0", "Accept": "application/json"},
+                        timeout=timeout)
+        if r.ok:
+            return r.json()
+    except Exception:
+        pass
+    return None
 RESULT_USE_SOFASCORE = os.getenv("RESULT_USE_SOFASCORE", "false").lower() in {"1", "true", "yes", "on"}
 RESULT_USE_ESPN = os.getenv("RESULT_USE_ESPN", "true").lower() not in {"0", "false", "no"}
 RESULT_USE_OPENLIGADB = os.getenv("RESULT_USE_OPENLIGADB", "true").lower() not in {"0", "false", "no"}
@@ -71,7 +92,7 @@ GROUP_ORDER = ["btts", "over25", "combo", "btts_ht", "over15_ht", "builder", "pr
 
 # Nur tatsächlich gesendete Tipps. player_prop_db ist ein Kandidaten-/Datenpool und
 # wird absichtlich NICHT komplett als Tipp ausgewertet.
-TIP_TABLES = ["tips", "ml_tips", "prop_picks", "netrattler_builder_picks"]
+TIP_TABLES = ["tips", "ml_tips", "netrattler_builder_picks"]  # prop_picks entfernt → gehört Prop Hunter (eigene DB)
 RESULT_TABLES = {
     "match_results": ["match_date"],  # 🆕 Primär: SofaScore post-match (alle Ligen!)
     "international_results": ["date", "match_date", "Date", "game_date", "event_date"],
@@ -542,15 +563,14 @@ def _sofascore_results(day: str) -> List[Dict[str, Any]]:
         return []
     output: List[Dict[str, Any]] = []
     try:
-        r = requests.get(
+        data = _cffi_get_json(
             f"https://www.sofascore.com/api/v1/sport/football/scheduled-events/{day}",
-            headers={"User-Agent": "Mozilla/5.0", "Accept": "application/json"},
             timeout=RESULT_HTTP_TIMEOUT,
         )
-        if not r.ok:
-            log(f"SofaScore {day}: HTTP {r.status_code}", "WARN")
+        if not data:
+            log(f"SofaScore {day}: keine Daten (403/blockiert)", "WARN")
             return []
-        for event in r.json().get("events") or []:
+        for event in data.get("events") or []:
             if str((event.get("status") or {}).get("type") or "").lower() != "finished":
                 continue
             hs = (event.get("homeScore") or {}).get("current")
@@ -571,15 +591,14 @@ def _espn_results(day: str) -> List[Dict[str, Any]]:
     output: List[Dict[str, Any]] = []
     try:
         dates = day.replace("-", "")
-        r = requests.get(
+        data = _cffi_get_json(
             "https://site.api.espn.com/apis/site/v2/sports/soccer/all/scoreboard",
             params={"dates": dates, "limit": "1000"}, timeout=RESULT_HTTP_TIMEOUT,
-            headers={"User-Agent": "Mozilla/5.0", "Accept": "application/json"},
         )
-        if not r.ok:
-            log(f"ESPN {day}: HTTP {r.status_code}", "WARN")
+        if not data:
+            log(f"ESPN {day}: keine Daten (403/blockiert)", "WARN")
             return []
-        for event in r.json().get("events") or []:
+        for event in data.get("events") or []:
             comp = ((event.get("competitions") or [{}])[0])
             status = ((comp.get("status") or {}).get("type") or {})
             if not (status.get("completed") or str(status.get("state") or "").lower() == "post"):
