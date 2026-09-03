@@ -487,11 +487,18 @@ def normalized_status(value: Any) -> str:
 def include_tip(row: Dict[str, Any]) -> bool:
     data = unpack(row)
     _st = normalized_status(anyv(data, ["status", "result", "settlement_status"], "pending"))
-    # pending UND void erneut versuchen: void entstand meist nur, weil kein Ergebnis
-    # gefunden wurde (403-Block). Mit curl_cffi holen wir jetzt Ergebnisse → neu abrechnen.
-    # Nur void der letzten X Tage (ältere sind wirklich abgelaufen).
+    # pending UND void erneut versuchen (void entstand meist nur durch fehlendes Ergebnis).
     _reset_void = str(os.getenv("NETRATTLER_RESETTLE_VOID", "true")).lower() in ("1", "true", "yes", "on")
-    if _st not in ("pending",) and not (_reset_void and _st == "void"):
+    # 🔧 Auch falsch abgerechnete won/lost der HT/Corner-Märkte neu bewerten:
+    # deren Alt-Abrechnung war fehlerhaft (btts_ht 100%, corners 0%). Mit curl_cffi
+    # holen wir jetzt HT-Stände + Ecken → korrekt neu bewerten.
+    _reset_markets = str(os.getenv("NETRATTLER_RESETTLE_MARKETS", "btts_ht,over15_ht,corners")).lower()
+    _mk = str(anyv(data, ["market", "market_group", "type"], "")).lower()
+    _is_reset_market = any(m and m in _mk for m in _reset_markets.split(","))
+    if _st in ("won", "win", "lost", "loss") and _is_reset_market and \
+       str(os.getenv("NETRATTLER_RESETTLE_BROKEN", "true")).lower() in ("1", "true", "yes", "on"):
+        pass  # → wird neu bewertet (nicht ausgeschlossen)
+    elif _st not in ("pending",) and not (_reset_void and _st == "void"):
         return False
     return row_date(row) >= (TODAY - timedelta(days=DAYS)).isoformat()
 
