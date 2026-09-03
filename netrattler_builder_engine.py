@@ -1764,10 +1764,18 @@ def run_builder_engine(
     # XGBoost-Modelle bekannte Spieler matchen, entsteht positive Edge. An Mini-Liga-Tagen
     # ohne Modell-Deckung passiert nichts → schont den ROI statt -EV-Notloesungen zu posten.
     _min_avg_edge = float(os.getenv("NETRATTLER_BUILDER_MIN_AVG_EDGE", "0.0"))
+    # Jedes EINZELNE Leg muss mind. diese Edge haben (blockt Lottery-Builder mit
+    # 1 gutem + 2 schlechten Legs). Default -1% = kleine Toleranz.
+    _min_leg_edge = float(os.getenv("NETRATTLER_BUILDER_MIN_LEG_EDGE", "-0.01"))
+    # Max. Anzahl Legs mit negativer Edge (0 = alle müssen positiv sein).
+    _max_neg_legs = int(os.getenv("NETRATTLER_BUILDER_MAX_NEG_LEGS", "0"))
 
     def _avg_edge(p: BuilderPick) -> float:
         edges = [leg.probability - (1.0 / leg.odds) for leg in p.legs if leg.odds > 1]
         return sum(edges) / len(edges) if edges else -1.0
+
+    def _leg_edges(p: BuilderPick):
+        return [leg.probability - (1.0 / leg.odds) for leg in p.legs if leg.odds > 1]
 
     for pick in picks:
         if not _v31_valid_prop_builder(pick):
@@ -1783,6 +1791,27 @@ def run_builder_engine(
                 logger(
                     f"MASTER BUILDER edge-gefiltert (Ø-Edge {_ae*100:.1f}% < "
                     f"{_min_avg_edge*100:.1f}%): {pick.style} {pick.variant}"
+                )
+            continue
+        # Pro-Leg-Prüfung: zu viele negative-Edge-Legs → blocken
+        _le = _leg_edges(pick)
+        _neg = [e for e in _le if e < _min_leg_edge]
+        if len(_neg) > _max_neg_legs:
+            if logger:
+                logger(
+                    f"MASTER BUILDER leg-edge-gefiltert ({len(_neg)} Legs < "
+                    f"{_min_leg_edge*100:.1f}%): {pick.style} {pick.variant}"
+                )
+            continue
+        # 🚩 Edge-Deckelung: absurd hohe Edges (>Cap) sind meist Modell-Fehler
+        # (schlechte Spielerdaten / veraltete Quote), kein echter Value.
+        _edge_cap = float(os.getenv("NETRATTLER_BUILDER_MAX_LEG_EDGE", "0.15"))
+        _absurd = [e for e in _le if e > _edge_cap]
+        if _absurd:
+            if logger:
+                logger(
+                    f"MASTER BUILDER edge-cap ({len(_absurd)} Legs > "
+                    f"{_edge_cap*100:.0f}% = Modell-Fehler?): {pick.style} {pick.variant}"
                 )
             continue
         persisted = persist_builder_pick(pick, supabase_url, supabase_key)
@@ -1879,6 +1908,22 @@ def _v31_is_real_player_leg(leg: PropLeg) -> bool:
     p = norm(leg.player)
     if not p or p in _GENERIC_PLAYERS_V31:
         return False
+    # 🚫 TEAM-PROPS raus: Wenn der "Spieler"-Name eigentlich ein TEAM ist
+    # (z.B. "Santos-SP To Be Carded"), ist das KEIN echtes Player-Leg.
+    # Erkennung: Teams aus dem Match extrahieren, mit Spielername vergleichen.
+    try:
+        _match_str = str(leg.match or "")
+        _teams = re.split(r"\s+vs\s+|\s+v\s+|\s+-\s+", _match_str, flags=re.IGNORECASE)
+        _pl_words = set(re.sub(r"[^a-z0-9 ]", " ", str(leg.player or "").lower()).split())
+        for _tm in _teams:
+            _tm_words = set(re.sub(r"[^a-z0-9 ]", " ", _tm.lower()).split())
+            _tm_words = {w for w in _tm_words if len(w) >= 4}  # signifikante Wörter
+            # Spielername besteht NUR aus Team-Wörtern (+ evtl. Suffix wie "SP") → Team-Prop
+            if _tm_words and _tm_words.issubset(_pl_words | {w for w in _pl_words}):
+                if _tm_words & _pl_words:
+                    return False
+    except Exception:
+        pass
     # Team props kommen manchmal als "Argentina To Score?" / "England To Score?"
     # in score-Kategorie rein. Diese nicht als Spielerprop behandeln.
     m = norm(leg.market)
