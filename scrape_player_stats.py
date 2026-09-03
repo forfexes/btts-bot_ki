@@ -95,7 +95,17 @@ def _playwright_get(url: str, timeout_ms: int = 60000) -> Optional[str]:
 
 def _fetch_text(url: str, *, params: Optional[dict] = None,
                 timeout: int = 20, allow_playwright: bool = True) -> Optional[str]:
-    """requests → cloudscraper → Playwright."""
+    """curl_cffi (TLS-Impersonation) → requests → cloudscraper → Playwright."""
+    # 0) 🚀 curl_cffi zuerst — umgeht SofaScore/FBref TLS-Block (403)
+    try:
+        from curl_cffi import requests as _creq
+        full_url = requests.Request("GET", url, params=params).prepare().url
+        r = _creq.get(full_url, impersonate="chrome", timeout=timeout)
+        if r.status_code == 200 and r.text:
+            return r.text
+    except Exception:
+        pass
+
     try:
         r = requests.get(url, params=params, headers=HEADERS, timeout=timeout)
         if r.ok and r.text:
