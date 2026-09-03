@@ -25348,6 +25348,12 @@ def main():
             except Exception as pe:
                 log(f"   ⚠️ Pinnacle Match Fehler: {str(pe)[:60]}")
         log(f"🎰 Pinnacle fertig: {pinnacle_tips_count} Tipps generiert")
+        try:
+            import netrattler_oddspapi as _op
+            _st = _op.call_stats()
+            log(f"   🍋 OddsPapi Matching: {_st.get('hits',0)} Treffer / {_st.get('misses',0)} verfehlt · {_st.get('odds',0)} Odds-Calls")
+        except Exception:
+            pass
 
     if MAX_LEAGUES_PER_RUN > 0:
         active_leagues = active_leagues[:MAX_LEAGUES_PER_RUN]
