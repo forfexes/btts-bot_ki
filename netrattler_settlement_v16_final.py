@@ -486,7 +486,12 @@ def normalized_status(value: Any) -> str:
 
 def include_tip(row: Dict[str, Any]) -> bool:
     data = unpack(row)
-    if normalized_status(anyv(data, ["status", "result", "settlement_status"], "pending")) != "pending":
+    _st = normalized_status(anyv(data, ["status", "result", "settlement_status"], "pending"))
+    # pending UND void erneut versuchen: void entstand meist nur, weil kein Ergebnis
+    # gefunden wurde (403-Block). Mit curl_cffi holen wir jetzt Ergebnisse → neu abrechnen.
+    # Nur void der letzten X Tage (ältere sind wirklich abgelaufen).
+    _reset_void = str(os.getenv("NETRATTLER_RESETTLE_VOID", "true")).lower() in ("1", "true", "yes", "on")
+    if _st not in ("pending",) and not (_reset_void and _st == "void"):
         return False
     return row_date(row) >= (TODAY - timedelta(days=DAYS)).isoformat()
 
