@@ -208,6 +208,10 @@ def find_fixture(home: str, away: str, target_date=None) -> Optional[Dict]:
             return False
         if _tok_overlap(h_tok, p1_tok) and _tok_overlap(a_tok, p2_tok):
             best = fx
+            continue
+        # Heim/Auswärts vertauscht? (manche Quellen listen andersrum)
+        if _tok_overlap(h_tok, p2_tok) and _tok_overlap(a_tok, p1_tok):
+            best = fx
     return best
 
 
@@ -215,7 +219,9 @@ def get_odds_for_match(home: str, away: str, target_date=None) -> Dict[str, Any]
     """Komplett-Lookup: Teamnamen → Fixture → Quoten. Für die Quoten-Kette."""
     fx = find_fixture(home, away, target_date)
     if not fx:
+        _CALL_COUNT["misses"] = _CALL_COUNT.get("misses", 0) + 1
         return {}
+    _CALL_COUNT["hits"] = _CALL_COUNT.get("hits", 0) + 1
     return get_match_odds(fx.get("fixtureId"))
 
 
