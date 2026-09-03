@@ -25206,12 +25206,19 @@ def main():
                     _mid = pm.get("match_id")
                     ro = _get_real_odds_any_source(home, away, league_name, _mid, target_date.isoformat() if hasattr(target_date, "isoformat") else None)
                     if ro:
+                        # WICHTIG: nur die echte QUOTE übernehmen, die MODELL-Wahrscheinlichkeit
+                        # (prob_b/prob_o) behalten! Sonst wird prob durch implied-odds
+                        # überschrieben (~52%) und fällt unter MIN_PROBABILITY → keine Tipps.
                         if ro.get("btts_yes"):
-                            btts_yes = ro["btts_yes"]; prob_b = int(100 / btts_yes * 0.95); _real_btts_odd = True
+                            btts_yes = ro["btts_yes"]; _real_btts_odd = True
                         if ro.get("over_25"):
-                            over25 = ro["over_25"]; prob_o = int(100 / over25 * 0.95); _real_over_odd = True
+                            over25 = ro["over_25"]; _real_over_odd = True
                         _real_btts_ht_odd = bool(ro.get("btts_yes_ht"))
                         _real_over15_ht_odd = bool(ro.get("over15_ht"))
+                        if ro.get("btts_yes_ht"):
+                            btts_ht_odds = ro["btts_yes_ht"]
+                        if ro.get("over15_ht"):
+                            o15_odds = ro["over15_ht"]
                         if ro.get("_source") and ro["_source"] != "pinnacle":
                             log(f"      🍋 Echte Quote via {ro['_source']}: {home} vs {away}")
                 except Exception:
