@@ -5062,6 +5062,10 @@ BETEXPLORER_CACHE = {}
 
 def get_betexplorer_odds(home_team, away_team, league_name):
     """Historische Opening/Closing Odds von BetExplorer"""
+    # ⚡ FAST-MODE: Betexplorer komplett überspringen (Playwright 429 → 18s/Match Timeout).
+    # Quoten kommen aus OddsPapi, historische Odds braucht der Tipp-Lauf nicht.
+    if str(os.getenv("NETRATTLER_FAST_TIPS", "")).lower() in ("1", "true", "yes", "on"):
+        return None
     cache_key = f"be_{home_team}_{away_team}"
     if cache_key in BETEXPLORER_CACHE:
         return BETEXPLORER_CACHE[cache_key]
@@ -11193,6 +11197,9 @@ def smart_request(url, timeout=15, use_playwright_if_blocked=True, headers=None)
     Intelligenter Request: erst direkt, dann Playwright bei 403/429/503
     Gilt für ALLE Domains!
     """
+    # ⚡ FAST-MODE: nie Playwright (verhindert 18s/Match Timeout im Tipp-Lauf)
+    if str(os.getenv("NETRATTLER_FAST_TIPS", "")).lower() in ("1", "true", "yes", "on"):
+        use_playwright_if_blocked = False
     import random as _r
     default_headers = {
         "User-Agent": _r.choice([
