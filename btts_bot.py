@@ -4613,16 +4613,19 @@ def scrape_with_playwright(url, wait_for=None, timeout=8000):
     if cache_key in PLAYWRIGHT_CACHE:
         return PLAYWRIGHT_CACHE[cache_key]
 
-    # 1) 🚀 curl_cffi zuerst (schnell, kein Browser) — auch im Fast-Mode aktiv!
+    # ⚡ FAST-MODE (Tipp-Lauf): GAR KEIN Scraping — nicht curl_cffi, nicht Playwright.
+    # Quoten kommen aus der OddsPapi-API, Stats sammelt der separate Scraper.
+    # Das verhindert, dass 25 Scrape-Aufrufe × viele Matches den Lauf ausbremsen.
+    if str(os.getenv("NETRATTLER_FAST_TIPS", "")).lower() in ("1", "true", "yes", "on"):
+        return None
+
+    # 1) 🚀 curl_cffi zuerst (schnell, kein Browser) — nur im Scraper-Lauf (nicht Fast)
     html = _curl_cffi_get(url, timeout=max(8, int(timeout / 1000)))
     if html:
         PLAYWRIGHT_CACHE[cache_key] = html
         return html
 
-    # 2) Playwright nur wenn curl_cffi nichts brachte UND nicht Fast-Mode
-    #    (Fast-Mode = Tipp-Lauf: kein langsamer Browser-Fallback)
-    if str(os.getenv("NETRATTLER_FAST_TIPS", "")).lower() in ("1", "true", "yes", "on"):
-        return None
+    # 2) Playwright nur als letzter Fallback
     if not PLAYWRIGHT_AVAILABLE:
         return None
 
@@ -25068,7 +25071,13 @@ def main():
         log(f"🎰 Analysiere {len(_PINNACLE_MATCHUPS)} Pinnacle Matches...")
         from datetime import datetime as _pdt
         _processed_this_run = set()  # 🆕 Sicherheitsnetz gegen Restduplikate innerhalb des Runs
+        import time as _tmod
+        _loop_start = _tmod.time()
+        _budget_sec = int(env("NETRATTLER_ANALYSIS_BUDGET_SEC", "600"))  # 10 Min Match-Analyse
         for pm in _PINNACLE_MATCHUPS:
+            if _tmod.time() - _loop_start > _budget_sec:
+                log(f"   ⏱️ Zeit-Budget ({_budget_sec}s) erreicht nach {len(_processed_this_run)} Matches — sende bisherige Tipps")
+                break
             try:
                 home = pm.get("home", "")
                 away = pm.get("away", "")
@@ -25538,7 +25547,15 @@ def main():
         log(f"Gruppen-Auswertung Error: {str(_ae)[:60]}", "WARN")
     if _PINNACLE_MATCHUPS:
         _injected = 0
+        # ⏱️ ZEIT-BUDGET: nach X Min Match-Analyse abbrechen und senden was da ist.
+        # Verhindert 20-Min-Timeout bei vielen Ligen (FD.co.uk + ELO pro Liga).
+        import time as _tmod
+        _loop_start = _tmod.time()
+        _budget_sec = int(env("NETRATTLER_ANALYSIS_BUDGET_SEC", "600"))  # 10 Min
         for pm in _PINNACLE_MATCHUPS:
+            if _tmod.time() - _loop_start > _budget_sec:
+                log(f"   ⏱️ Zeit-Budget ({_budget_sec}s) erreicht — Analyse gestoppt, sende bisherige Tipps")
+                break
             _h, _a = pm.get("home",""), pm.get("away","")
             _ln = pm.get("league_name","")
             _st = pm.get("starts","")
