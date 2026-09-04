@@ -217,9 +217,9 @@ MIN_ODDS_VALUE = MIN_ODDS  # Alias — globale Mindestquote für "nur Value Bets
 
 
 def _is_value_bet(odds, prob_pct):
-    """True nur wenn Quote >= MIN_ODDS_VALUE UND echte Edge vorhanden (Value Bet).
-    Global verfügbar — wird von allen Tipp-generierenden Funktionen genutzt
-    (Pinnacle-Block, Corners, Props/Bet Builder)."""
+    """True nur wenn MIN_ODDS <= Quote <= MAX_ODDS UND echte Edge (Value Bet).
+    Global verfügbar — wird von allen Tipp-generierenden Funktionen genutzt.
+    Die Obergrenze verhindert absurde Fehl-Quoten (z.B. Over 2.5 @ 160 = Parsing-Bug)."""
     try:
         o = float(str(odds).replace(",", "."))
         p = float(prob_pct) / 100
@@ -227,9 +227,34 @@ def _is_value_bet(odds, prob_pct):
         return False
     if o < MIN_ODDS_VALUE:
         return False
+    # 🚫 Obergrenze: unrealistische Quoten für Team-Märkte blocken.
+    # Over 2.5/BTTS/1X2 gehen real nie über ~8. Höhere Werte = Parsing-Fehler.
+    _max = float(env("NETRATTLER_MAX_SINGLE_ODDS", "8.0"))
+    if o > _max:
+        return False
     implied = 1 / o if o > 0 else 1
     edge = (p - implied) * 100
     return edge >= 3  # mind. 3% Edge über der Quoten-implizierten Wahrscheinlichkeit
+
+
+def _is_junk_league(league_name="", home="", away="") -> bool:
+    """Zentrale Müll-Liga-Erkennung: Jugend/Frauen/Reserve/Zweitmannschaften.
+    Wird von ALLEN Kanälen genutzt (Pinnacle, Corners, Scorer). Env: NETRATTLER_JUNK_FILTER."""
+    if str(env("NETRATTLER_JUNK_FILTER", "true")).lower() not in ("1", "true", "yes", "on"):
+        return False
+    _ll = str(league_name or "").lower()
+    _junk = ["u23", "u21", "u20", "u19", "u18", "u17", "u16", "youth", "jugend",
+             "women", "frauen", "féminin", "feminin", "womens", "ladies", "female",
+             "reserve", "reserves", "development", "academy", "primavera",
+             "regionalliga", "elite league", "professional development",
+             "next pro", "mls next", "juvenil", "sub-20", "sub20", "u-20", "u-21"]
+    if any(_kw in _ll for _kw in _junk):
+        return True
+    _h, _a = str(home or "").strip(), str(away or "").strip()
+    if _h.endswith(" II") or _a.endswith(" II") or _h.endswith(" B") or _a.endswith(" B") \
+       or _h.endswith(" U21") or _a.endswith(" U21") or _h.endswith(" U20") or _a.endswith(" U20"):
+        return True
+    return False
 
 
 MARKETS_TO_RUN = ["btts", "over25", "combo", "btts_ht", "over15_ht", "1x2"]
@@ -9363,6 +9388,43 @@ def format_result_text(tip, result, status):
     msg += "━━━━━━━━━━━━━━━━━━"
 
     return msg
+
+
+def get_supabase_top_scorers(home_team: str, away_team: str) -> list:
+    """Aktuelle Torschützen aus player_match_stats (Scraper-Daten, immer frisch).
+    Ersetzt veraltete openfootball-Kader (kein Messi-bei-PSG mehr).
+    Gibt nur Spieler, die KÜRZLICH für home/away gespielt haben."""
+    if not SUPABASE_URL or not SUPABASE_KEY:
+        return []
+    scorers = []
+    try:
+        import requests as _rq
+        from datetime import datetime as _dt, timedelta as _td
+        _since = (_dt.utcnow() - _td(days=120)).date().isoformat()
+        for _team in (home_team, away_team):
+            if not _team:
+                continue
+            r = _rq.get(f"{SUPABASE_URL}/rest/v1/player_avg_stats",
+                       headers={"apikey": SUPABASE_KEY, "Authorization": f"Bearer {SUPABASE_KEY}"},
+                       params={"select": "player_name,team,avg_value,games,stat_name",
+                               "stat_name": "eq.goals", "team": f"ilike.%{_team[:10]}%",
+                               "games": "gte.2", "order": "avg_value.desc", "limit": "8"},
+                       timeout=12)
+            if r.ok:
+                for row in r.json():
+                    _av = float(row.get("avg_value") or 0)
+                    if _av <= 0:
+                        continue
+                    scorers.append({
+                        "player": row.get("player_name", ""),
+                        "team": row.get("team", _team),
+                        "goals_per_game": round(_av, 2),
+                        "total_goals": int(_av * (row.get("games") or 1)),
+                        "source": "supabase_current",
+                    })
+    except Exception:
+        pass
+    return scorers
 
 
 def get_supabase_player_avg_stats(player_name: str) -> dict:
@@ -20239,6 +20301,9 @@ def run_corners_and_scorer_bots(target_date, active_leagues, odds_data_cache, fi
         if group_hz:
             for fixture in fixtures:
                 try:
+                    # 🚫 Müll-Ligen raus (U20/Women/Reserve etc.) — auch bei Corners!
+                    if _is_junk_league(league, fixture.get("home", ""), fixture.get("away", "")):
+                        continue
                     home_norm = normalize_team_name(fixture.get("home", ""))
                     away_norm = normalize_team_name(fixture.get("away", ""))
                     match_key = f"{home_norm[:12]}_{away_norm[:12]}"
@@ -20273,6 +20338,11 @@ def run_corners_and_scorer_bots(target_date, active_leagues, odds_data_cache, fi
         if group_late:
             try:
                 scorers = []
+
+                # 0. Supabase (AKTUELLE Scraper-Daten — kein veralteter Kader!)
+                _fx_home = fixture.get("home", "")
+                _fx_away = fixture.get("away", "")
+                scorers = get_supabase_top_scorers(_fx_home, _fx_away)
 
                 # 1. TheStatsAPI (neu, primäre Quelle — kein API-Football nötig)
                 if THESTATSAPI_KEYS and not scorers:
@@ -23606,13 +23676,20 @@ def _get_real_odds_any_source(home, away, league_name="", match_id=None, tip_dat
     result = {"_source": None}
     def _merge(d, src):
         got = False
+        # Realistische Quoten-Grenzen pro Markt (blockt Parsing-Fehler wie Over 2.5 @ 160)
+        _bounds = {
+            "btts_yes": (1.2, 4.0), "over_25": (1.2, 5.0), "over25": (1.2, 5.0),
+            "btts_yes_ht": (1.5, 8.0), "btts_ht_yes": (1.5, 8.0), "over15_ht": (1.5, 8.0),
+            "home": (1.05, 15.0), "draw": (2.5, 8.0), "away": (1.05, 15.0),
+        }
         for k in ("btts_yes", "over_25", "over25", "btts_yes_ht", "btts_ht_yes", "over15_ht", "home", "draw", "away"):
             v = (d or {}).get(k)
             try:
                 v = float(v) if v else 0
             except (TypeError, ValueError):
                 v = 0
-            if v > 1.0:
+            _lo, _hi = _bounds.get(k, (1.0, 15.0))
+            if _lo <= v <= _hi:  # nur realistische Quoten übernehmen
                 key = "over_25" if k in ("over25", "over_25") else ("btts_yes_ht" if k in ("btts_yes_ht", "btts_ht_yes") else k)
                 if key not in result:
                     result[key] = round(v, 2); got = True
@@ -25820,7 +25897,14 @@ def main():
         for n in _combo_sizes:
             combo = generate_multi_combo_bets(all_tips_flat, num_tips=n)
             if combo:
-                # Deterministische Signatur — identische Kombi (gleiche Legs) wird nicht erneut gesendet
+                # 🚫 Quoten-Deckel: absurde Mega-Combos (>500) rausfiltern —
+                # 11er-Ketten mit Quote 1000+ sind sinnlos (~0% Trefferchance).
+                _combo_odds = float(combo.get("total_odds", 0) or 0)
+                _combo_max = float(env("NETRATTLER_COMBO_MAX_ODDS", "500"))
+                if _combo_odds > _combo_max:
+                    log(f"   ⏭️ Combo {n} übersprungen (Quote {_combo_odds:.0f} > {_combo_max:.0f} = Lottery)")
+                    continue
+                # Deterministische Signatur — identische Kombi wird nicht erneut gesendet
                 _sig = _combo_signature(combo.get("tips", []), prefix=f"combo{n}")
                 _combo_tip_id = f"combo_{n}leg_{target_date}_{_sig}".replace(" ", "_")
                 if is_duplicate_combo(_combo_tip_id, target_date):
