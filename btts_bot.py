@@ -20339,6 +20339,10 @@ def run_corners_and_scorer_bots(target_date, active_leagues, odds_data_cache, fi
             try:
                 scorers = []
 
+                # ⏱️ Bei globalem Budget-Ende: Scorer überspringen (verhindert Timeout)
+                if _budget_exceeded():
+                    continue
+
                 # 0. Supabase (AKTUELLE Scraper-Daten — kein veralteter Kader!)
                 _fx_home = fixture.get("home", "")
                 _fx_away = fixture.get("away", "")
@@ -24970,10 +24974,28 @@ if __name__ == "__main__":
     
     print("\n✅ Alle Module funktionieren!")
 
+_NETRATTLER_RUN_START = None
+_NETRATTLER_RUN_BUDGET = 900
+
+
+def _budget_exceeded():
+    """True wenn das globale Zeit-Budget des Laufs überschritten ist."""
+    import time as _t
+    if _NETRATTLER_RUN_START is None:
+        return False
+    return (_t.time() - _NETRATTLER_RUN_START) > _NETRATTLER_RUN_BUDGET
+
+
 def main():
     log("=" * 60)
     log("AI TIPP BOT - ALL-IN-ONE EDITION")
     log("=" * 60)
+    # ⏱️ GLOBALER Watchdog: eine Startzeit für den ganzen Lauf. Alle Analyse-Loops
+    # teilen dieses Budget → verhindert 20-Min-Timeout (GitHub-Limit).
+    import time as _gtime
+    global _NETRATTLER_RUN_START, _NETRATTLER_RUN_BUDGET
+    _NETRATTLER_RUN_START = _gtime.time()
+    _NETRATTLER_RUN_BUDGET = int(env("NETRATTLER_GLOBAL_BUDGET_SEC", "900"))  # 15 Min hart
 
     check_config()
     check_rotation_schedule()
@@ -25164,8 +25186,8 @@ def main():
         _loop_start = _tmod.time()
         _budget_sec = int(env("NETRATTLER_ANALYSIS_BUDGET_SEC", "600"))  # 10 Min Match-Analyse
         for pm in _PINNACLE_MATCHUPS:
-            if _tmod.time() - _loop_start > _budget_sec:
-                log(f"   ⏱️ Zeit-Budget ({_budget_sec}s) erreicht nach {len(_processed_this_run)} Matches — sende bisherige Tipps")
+            if _tmod.time() - _loop_start > _budget_sec or _budget_exceeded():
+                log(f"   ⏱️ Zeit-Budget erreicht nach {len(_processed_this_run)} Matches — sende bisherige Tipps")
                 break
             try:
                 home = pm.get("home", "")
@@ -25682,8 +25704,8 @@ def main():
         _loop_start = _tmod.time()
         _budget_sec = int(env("NETRATTLER_ANALYSIS_BUDGET_SEC", "600"))  # 10 Min
         for pm in _PINNACLE_MATCHUPS:
-            if _tmod.time() - _loop_start > _budget_sec:
-                log(f"   ⏱️ Zeit-Budget ({_budget_sec}s) erreicht — Analyse gestoppt, sende bisherige Tipps")
+            if _tmod.time() - _loop_start > _budget_sec or _budget_exceeded():
+                log(f"   ⏱️ Zeit-Budget erreicht — Analyse gestoppt, sende bisherige Tipps")
                 break
             _h, _a = pm.get("home",""), pm.get("away","")
             _ln = pm.get("league_name","")
