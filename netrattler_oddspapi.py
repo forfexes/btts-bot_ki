@@ -240,5 +240,41 @@ def enrich_fixtures_with_ids(target_date=None) -> Dict[str, Dict]:
     return out
 
 
+def get_results(target_date=None) -> List[Dict[str, Any]]:
+    """Ergebnisse (Endstand + Halbzeit) für beendete Spiele eines Tages.
+    Nutzt denselben /fixtures-Call (gecacht) — kostet keinen Extra-Call.
+    Format: [{home, away, home_score, away_score, ht_home, ht_away, source}]."""
+    out = []
+    for fx in get_fixtures(target_date):
+        try:
+            _status = str(fx.get("status", "") or fx.get("statusType", "")).lower()
+            _sc = fx.get("scores") or fx.get("score") or {}
+            # Endstand
+            hs = fx.get("participant1Score", (_sc.get("home") if isinstance(_sc, dict) else None))
+            as_ = fx.get("participant2Score", (_sc.get("away") if isinstance(_sc, dict) else None))
+            if hs is None or as_ is None:
+                continue
+            # nur beendete Spiele
+            if _status and not any(k in _status for k in ("finished", "ended", "ft", "full")):
+                continue
+            row = {
+                "home": fx.get("participant1Name", ""),
+                "away": fx.get("participant2Name", ""),
+                "home_score": hs, "away_score": as_,
+                "source": "oddspapi",
+            }
+            # Halbzeit falls vorhanden
+            _ht = fx.get("halfTimeScore") or fx.get("scoresHalfTime") or {}
+            if isinstance(_ht, dict):
+                if _ht.get("home") is not None:
+                    row["ht_home"] = _ht.get("home")
+                    row["ht_away"] = _ht.get("away")
+            out.append(row)
+        except Exception:
+            continue
+    return out
+
+
 __all__ = ["get_fixtures", "get_match_odds", "find_fixture",
-           "get_odds_for_match", "enrich_fixtures_with_ids"]
+           "get_odds_for_match", "enrich_fixtures_with_ids", "get_results",
+           "call_stats"]
