@@ -97,6 +97,7 @@ TELEGRAM_GROUPS = {
 
     "btts_ht": env("TELEGRAM_GROUP_BTTS_HT", TELEGRAM_CHAT_ID),
     "over15_ht": env("TELEGRAM_GROUP_BTTS_HT", TELEGRAM_CHAT_ID),
+    "1x2": env("TELEGRAM_GROUP_LATE_GOALS", TELEGRAM_CHAT_ID),
 
     # Deine bestehenden Secret-Namen:
     # TELEGRAM_GROUP_HZ_LIVE    = NETRATTLER CORNER SNIPER
@@ -231,7 +232,7 @@ def _is_value_bet(odds, prob_pct):
     return edge >= 3  # mind. 3% Edge über der Quoten-implizierten Wahrscheinlichkeit
 
 
-MARKETS_TO_RUN = ["btts", "over25", "combo", "btts_ht", "over15_ht"]
+MARKETS_TO_RUN = ["btts", "over25", "combo", "btts_ht", "over15_ht", "1x2"]
 
 # ============================================================
 # AUTO LIGA SWITCH
@@ -1161,6 +1162,10 @@ MARKET_INFO = {
     "over15_ht": {
         "name": "⏰ Over 1.5 HT",
         "instr": "Analysiere Over 1.5 Tore in der 1. Halbzeit.",
+    },
+    "1x2": {
+        "name": "🏆 Sieger (1X2)",
+        "instr": "Analysiere den Spielausgang (Heimsieg/Unentschieden/Auswärtssieg).",
     },
 }
 
@@ -15288,7 +15293,7 @@ def filter_top_tips(tips, target_date, market):
     rejected = {"time": 0, "tip": 0, "prob": 0, "conf": 0, "value": 0, "odds": 0}
 
     max_odds_for_market = 4.5 if market == "btts_ht" else MAX_ODDS
-    min_odds_for_market = 1.6 if market == "btts_ht" else MIN_ODDS
+    min_odds_for_market = MIN_ODDS  # einheitlich 1.70 für ALLE Märkte (mehr Puffer als 1.6)
 
     for r in tips:
         if not is_future_game(r.get("time", ""), target_date):
@@ -23601,7 +23606,7 @@ def _get_real_odds_any_source(home, away, league_name="", match_id=None, tip_dat
     result = {"_source": None}
     def _merge(d, src):
         got = False
-        for k in ("btts_yes", "over_25", "over25", "btts_yes_ht", "btts_ht_yes", "over15_ht"):
+        for k in ("btts_yes", "over_25", "over25", "btts_yes_ht", "btts_ht_yes", "over15_ht", "home", "draw", "away"):
             v = (d or {}).get(k)
             try:
                 v = float(v) if v else 0
@@ -25366,6 +25371,39 @@ def main():
                         enrich_pinnacle_tip(tip_o15_ht, home, away, league_name)
                         tips_by_market["over15_ht"].append(tip_o15_ht)
                         pinnacle_tips_count += 1
+
+                # 🏆 1X2 (Sieger-Tipp): stärkste Modelle (home/draw/away AUC 0.73-0.74).
+                # Nur mit echter Quote (ro) + Modell-Wahrscheinlichkeit.
+                try:
+                    if "1x2" in tips_by_market and ro:
+                        _ml_1x2 = get_ml_prediction(home, away, league_name) or {}
+                        _picks_1x2 = [
+                            ("home", "Heimsieg", ro.get("home"), _ml_1x2.get("home_win_pct", 0)),
+                            ("draw", "Unentschieden", ro.get("draw"), _ml_1x2.get("draw_pct", 0)),
+                            ("away", "Auswärtssieg", ro.get("away"), _ml_1x2.get("away_win_pct", 0)),
+                        ]
+                        # bestes Outcome nach höchster EDGE wählen (nicht nur Wahrscheinlichkeit)
+                        _min_1x2_odd = float(env("NETRATTLER_1X2_MIN_ODDS", "1.70"))
+                        _cands = [(s, l, o, p) for s, l, o, p in _picks_1x2 if o and o >= _min_1x2_odd and p]
+                        if _cands:
+                            # Edge = Modell-Prob - implied Prob; höchste Edge gewinnt
+                            _best_1x2 = max(_cands, key=lambda x: (x[3] / 100.0) - (1.0 / x[2]))
+                            _sel, _label, _odd, _prob = _best_1x2
+                        else:
+                            _sel = _label = _odd = _prob = None
+                        if _odd and _prob >= MIN_PROBABILITY and _is_value_bet(_odd, _prob):
+                            tip_1x2 = {
+                                "match": mn, "league": league_name or "Pinnacle",
+                                "time": tstr, "tip": _label,
+                                "probability": _prob, "confidence": 3,
+                                "oddsYes": _odd, "fairOdds": round(100 / _prob, 2),
+                                "valueRating": "VALUE", "units": 1.0, "market": "1x2",
+                                "_source": ro.get("_source", "oddspapi"), "_kickoff": _ko_sort,
+                            }
+                            tips_by_market["1x2"].append(tip_1x2)
+                            pinnacle_tips_count += 1
+                except Exception:
+                    pass
 
                 total_analyzed += 1
             except Exception as pe:
