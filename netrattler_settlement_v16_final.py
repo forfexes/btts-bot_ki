@@ -658,16 +658,26 @@ def public_results(day: str) -> List[Dict[str, Any]]:
     output: List[Dict[str, Any]] = []
     source_counts: Counter = Counter()
 
+    # 🍋 OddsPapi zuerst (API, Endstand + HT, kein Block) — nutzt gecachten Fixtures-Call
+    try:
+        import netrattler_oddspapi as _op
+        for r in _op.get_results(day):
+            _append_result(output, "OddsPapi", day, r.get("home"), r.get("away"),
+                           r.get("home_score"), r.get("away_score"), r,
+                           r.get("ht_home"), r.get("ht_away"))
+    except Exception as exc:
+        log(f"OddsPapi results {day}: {str(exc)[:80]}", "WARN")
+
     for getter in (_sofascore_results, _espn_results, _openligadb_results):
         rows = getter(day)
         output.extend(rows)
 
-    # TheSportsDB
+    # TheSportsDB (curl_cffi gegen Blocks)
     try:
-        r = requests.get("https://www.thesportsdb.com/api/v1/json/3/eventsday.php",
-                         params={"d": day, "s": "Soccer"}, timeout=RESULT_HTTP_TIMEOUT)
-        if r.ok:
-            for event in r.json().get("events") or []:
+        data = _cffi_get_json("https://www.thesportsdb.com/api/v1/json/3/eventsday.php",
+                             params={"d": day, "s": "Soccer"}, timeout=RESULT_HTTP_TIMEOUT)
+        if data:
+            for event in data.get("events") or []:
                 _append_result(output, "TheSportsDB", day, event.get("strHomeTeam"), event.get("strAwayTeam"),
                                event.get("intHomeScore"), event.get("intAwayScore"), event,
                                event.get("intHomeScoreHT"), event.get("intAwayScoreHT"))
