@@ -19,7 +19,7 @@ jobs:
         with:
           python-version: "3.11"
           cache: "pip"
-      - run: pip install requests numpy scikit-learn curl_cffi
+      - run: pip install requests numpy scikit-learn curl_cffi pandas lxml
       - run: python -m py_compile netrattler_settlement_v16_final.py netrattler_learning_engine.py netrattler_autolearn_v36.py netrattler_builder_learning_v36.py
       - name: Settle per group and learn from newly closed picks
         env:
