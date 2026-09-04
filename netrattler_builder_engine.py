@@ -1,20 +1,21 @@
 #!/usr/bin/env python3
 """
-NETRATTLER Settlement FINAL V21
-===============================
+NETRATTLER Builder Engine
+=========================
 
-Dateiname bleibt absichtlich stabil: netrattler_settlement_v16_final.py
+Pure, testable builder selection layer for football player props.
 
-Wesentliche Fixes:
-- stabile Settlement-ID pro Tipp (kein neues Duplikat bei jedem Run)
-- wertet eine Combo/Builder als EINEN Tipp aus, Legs nur intern
-- lädt echte Builder aus netrattler_builder_picks
-- flexible Player-Stats-Auswertung: Shots, SOT, Fouls, Fouls Won,
-  Tackles, Karten, Tore, Assists und Corners
-- korrekter Profit/ROI auf Basis des Einsatzes
-- Reports nur für neu abgeschlossene Tipps, nicht bei jedem Run erneut
-- Gruppe für Gruppe: Heute, 7 Tage, Monat, Jahr, All Time
-- dedupliziert historische Alt-Settlements nach tip_id
+It creates data-driven builder families from a normalized prop pool:
+- Multi-player shot ladders (1+ / 2+ / 3+)
+- Underdog shot ladders when match/team context is available
+- Shots-on-target trios
+- Fouls and tackles ladders
+- Attacking mixed builders (shots, SOT, score/assist)
+- Corner fusion builders (player props + one corner leg)
+- Balanced cross-match builders
+
+The module does not scrape. It consumes rows already gathered by btts_bot.py.
+It never sends on import and can be unit-tested offline.
 """
 from __future__ import annotations
 
@@ -24,118 +25,132 @@ import math
 import os
 import re
 import unicodedata
-from collections import Counter, defaultdict
-from datetime import date, datetime, timedelta, timezone
-from typing import Any, Dict, Iterable, List, Optional, Sequence, Tuple
+from dataclasses import dataclass, asdict
+from datetime import date
+from typing import Any, Callable, Dict, Iterable, List, Optional, Sequence, Tuple
 
 import requests
 
-try:
-    from netrattler_identity_hub import teams_match as _identity_teams_match
-except Exception:
-    _identity_teams_match = None
 
-SUPABASE_URL = (os.getenv("SUPABASE_URL") or "").rstrip("/")
-SUPABASE_KEY = os.getenv("SUPABASE_SERVICE_ROLE_KEY") or os.getenv("SUPABASE_KEY") or ""
-TG_TOKEN = os.getenv("TELEGRAM_TOKEN") or os.getenv("TELEGRAM_BOT_TOKEN") or ""
-TG_DEFAULT = os.getenv("TELEGRAM_CHAT_ID") or ""
-ALLSPORTS_API_KEY = os.getenv("ALLSPORTS_API_KEY") or ""
-FOOTBALL_DATA_API_KEYS = [k.strip() for k in (os.getenv("FOOTBALL_DATA_API_KEYS") or os.getenv("FOOTBALL_DATA_API_KEY") or "").split(",") if k.strip()]
-FOOTBALLDATA_IO_API_KEY = os.getenv("FOOTBALLDATA_IO_API_KEY") or ""
-RESULT_HTTP_TIMEOUT = int(os.getenv("RESULT_HTTP_TIMEOUT", "8"))
-
-
-def _cffi_get_json(url, timeout=8, params=None):
-    """🚀 curl_cffi (TLS-Impersonation) für Ergebnis-Abruf — umgeht SofaScore/ESPN 403.
-    Fällt auf normales requests zurück, wenn curl_cffi fehlt."""
-    try:
-        from curl_cffi import requests as _creq
-        r = _creq.get(url, params=params, impersonate="chrome", timeout=timeout)
-        if r.status_code == 200:
-            return r.json()
-    except Exception:
-        pass
-    try:
-        r = requests.get(url, params=params,
-                        headers={"User-Agent": "Mozilla/5.0", "Accept": "application/json"},
-                        timeout=timeout)
-        if r.ok:
-            return r.json()
-    except Exception:
-        pass
-    return None
-RESULT_USE_SOFASCORE = os.getenv("RESULT_USE_SOFASCORE", "false").lower() in {"1", "true", "yes", "on"}
-RESULT_USE_ESPN = os.getenv("RESULT_USE_ESPN", "true").lower() not in {"0", "false", "no"}
-RESULT_USE_OPENLIGADB = os.getenv("RESULT_USE_OPENLIGADB", "true").lower() not in {"0", "false", "no"}
-DAYS = int(os.getenv("SETTLEMENT_DAYS", "14"))
-LIMIT = int(os.getenv("SETTLEMENT_LIMIT", "1200"))
-UPDATE_SOURCE_TIPS = os.getenv("UPDATE_SOURCE_TIPS", "true").lower() not in {"0", "false", "no"}
-SEND_PENDING_SUMMARY = os.getenv("SEND_PENDING_SUMMARY", "false").lower() in {"1", "true", "yes"}
-NOW = datetime.now(timezone.utc)
-TODAY = NOW.date()
-TODAY_S = TODAY.isoformat()
-
-GROUPS = {
-    "btts": os.getenv("TELEGRAM_GROUP_BTTS") or TG_DEFAULT,
-    "over25": os.getenv("TELEGRAM_GROUP_OVER25") or TG_DEFAULT,
-    "combo": os.getenv("TELEGRAM_GROUP_COMBO") or os.getenv("TELEGRAM_GROUP_COMBOS") or TG_DEFAULT,
-    "btts_ht": os.getenv("TELEGRAM_GROUP_BTTS_HT") or TG_DEFAULT,
-    "over15_ht": os.getenv("TELEGRAM_GROUP_OVER15_HT") or os.getenv("TELEGRAM_GROUP_STATS") or TG_DEFAULT,
-    "builder": os.getenv("TELEGRAM_GROUP_BUILDER") or os.getenv("TELEGRAM_GROUP_PROPS") or TG_DEFAULT,
-    "props": os.getenv("TELEGRAM_GROUP_PROPS") or TG_DEFAULT,
-    "corners": os.getenv("TELEGRAM_GROUP_CORNERS") or os.getenv("TELEGRAM_GROUP_STATS") or TG_DEFAULT,
-    "stats": os.getenv("TELEGRAM_GROUP_STATS") or TG_DEFAULT,
-    "default": TG_DEFAULT,
+SOURCE_WEIGHT = {
+    "supabasestatsadaptive": 1.00,
+    "supabasematchstats": 0.98,
+    "supabasestats": 0.96,
+    "statz.ai": 0.92,
+    "scoutingstats": 0.90,
+    "pinnacle": 0.88,
+    "supabasedb:pinnacle": 0.86,
+    "statsbomb": 0.84,
+    "fotmob": 0.78,
+    "oddspedia": 0.74,
+    "supabasedb": 0.72,
 }
 
-GROUP_ORDER = ["btts", "over25", "combo", "btts_ht", "over15_ht", "builder", "props", "corners"]
-
-# Nur tatsächlich gesendete Tipps. player_prop_db ist ein Kandidaten-/Datenpool und
-# wird absichtlich NICHT komplett als Tipp ausgewertet.
-TIP_TABLES = ["tips", "ml_tips", "netrattler_builder_picks"]  # prop_picks entfernt → gehört Prop Hunter (eigene DB)
-RESULT_TABLES = {
-    "match_results": ["match_date"],  # 🆕 Primär: SofaScore post-match (alle Ligen!)
-    "international_results": ["date", "match_date", "Date", "game_date", "event_date"],
-    "football_historical_matches": ["match_date", "Date", "game_date", "utc_date", "event_date"],
-    "netrattler_data_lake_raw": ["match_date", "Date", "game_date", "event_date", "created_at"],
-    "result_candidates": ["match_date", "date", "event_date"],
+CATEGORY_ICON = {
+    "shots": "💥",
+    "sot": "🎯",
+    "fouls": "👊",
+    "fouls_won": "🧲",
+    "tackles": "🛡️",
+    "tackles_committed": "🛡️",
+    "tackles_received": "🎯🛡️",
+    "yellow_cards": "🟨",
+    "sot_outside_box": "🎯",
+    "shots_outside_box": "💥",
+    "first_scorer": "🥇⚽",
+    "last_scorer": "🏁⚽",
+    "result": "🏆",
+    "score": "⚽",
+    "assist": "🅰️",
+    "score_assist": "⚽🅰️",
+    "team_corners": "🔵",
+    "corners": "🔵",
+    "match_corners": "🔵",
+    "team_shots": "📈",
+    "match_sot": "🎯",
+    "team_cards": "🟨",
+    "match_goals": "⚽",
+    "btts": "⚽",
+    "over_goals": "🎯",
+    "offsides": "🚩",
 }
-PLAYER_STATS_TABLES = {
-    "player_match_stats": ["match_date", "date", "event_date", "created_at"],
-    "sofascore_player_match_stats": ["match_date", "date", "event_date", "created_at"],
+
+PLAYER_CATEGORIES = {
+    "shots", "sot", "sot_outside_box", "shots_outside_box",
+    "fouls", "fouls_won", "tackles", "tackles_committed",
+    "tackles_received", "yellow_cards", "score", "first_scorer",
+    "last_scorer", "assist", "score_assist", "result", "offsides",
+}
+
+TEAM_CATEGORIES = {
+    "team_corners", "corners", "match_corners",
+    "team_shots", "match_sot", "match_goals",
+    "team_cards", "btts", "btts_ht", "over_goals", "match_goals",
+    "half_goals_1st", "half_goals_2nd",
 }
 
 
-def log(message: str, level: str = "INFO") -> None:
-    print(f"[{datetime.now().strftime('%H:%M:%S')}] [{level}] {message}", flush=True)
+@dataclass(frozen=True)
+class PropLeg:
+    player: str
+    team: str
+    match: str
+    league: str
+    market: str
+    category: str
+    line: float
+    odds: float
+    probability: float
+    source: str
+    kickoff: str = ""
+    hit_rate: float = 0.0
+    games: int = 0
+    quality: float = 0.0
+    estimated: bool = False
+
+    def key(self) -> Tuple[str, str, str, float]:
+        return (norm(self.player), norm(self.match), self.category, round(self.line, 2))
 
 
-def hsh(*parts: Any) -> str:
-    return hashlib.sha1("||".join(str(x or "") for x in parts).encode("utf-8")).hexdigest()
+@dataclass
+class BuilderPick:
+    builder_id: str
+    style: str
+    variant: str
+    legs: List[PropLeg]
+    total_odds: float
+    stake: float
+    estimated_odds: bool
+    match_date: str
+    market_group: str = "builder"
+
+    @property
+    def leg_count(self) -> int:
+        return len(self.legs)
+
+    def to_row(self) -> Dict[str, Any]:
+        return {
+            "builder_id": self.builder_id,
+            "tip_id": self.builder_id,
+            "style": self.style,
+            "variant": self.variant,
+            "market_group": self.market_group,
+            "match_date": self.match_date,
+            "status": "pending",
+            "stake": self.stake,
+            "total_odds": self.total_odds,
+            "estimated_odds": self.estimated_odds,
+            "leg_count": self.leg_count,
+            "legs": [asdict(x) for x in self.legs],
+            "source": "NETRATTLER_BUILDER_ENGINE",
+        }
 
 
 def norm(value: Any) -> str:
     text = unicodedata.normalize("NFKD", str(value or "").lower().strip())
     text = "".join(c for c in text if not unicodedata.combining(c))
-    text = text.replace("&", " and ")
-    aliases = {"munchen": "munich", "koln": "cologne", "praha": "prague", "wien": "vienna", "moskva": "moscow"}
-    for source, target in aliases.items():
-        text = re.sub(rf"\b{source}\b", target, text)
-    text = re.sub(r"\b(fc|sc|cf|afc|fk|ac|club|de|the|team|women|wfc)\b", " ", text)
     text = re.sub(r"[^a-z0-9]+", " ", text)
     return re.sub(r"\s+", " ", text).strip()
-
-
-def similarity(a: Any, b: Any) -> float:
-    x, y = norm(a), norm(b)
-    if not x or not y:
-        return 0.0
-    if x == y:
-        return 1.0
-    if x in y or y in x:
-        return 0.88
-    sx, sy = set(x.split()), set(y.split())
-    return len(sx & sy) / max(1, len(sx | sy))
 
 
 def as_float(value: Any, default: float = 0.0) -> float:
@@ -152,1302 +167,2686 @@ def as_int(value: Any, default: int = 0) -> int:
         return default
 
 
-def anyv(row: Dict[str, Any], keys: Sequence[str], default: Any = "") -> Any:
-    if not isinstance(row, dict):
-        return default
-    for key in keys:
-        if row.get(key) not in (None, ""):
-            return row[key]
-    return default
+def market_line(market: str, fallback: float = 1.0) -> float:
+    text = str(market or "")
+    plus = re.search(r"(\d+(?:\.\d+)?)\s*\+", text)
+    if plus:
+        return as_float(plus.group(1), fallback)
+    over = re.search(r"over\s*(\d+(?:\.\d+)?)", text, re.I)
+    if over:
+        # An over 1.5 market means 2+ occurrences.
+        return math.floor(as_float(over.group(1), fallback)) + 1
+    return fallback
 
 
-def unpack(row: Dict[str, Any]) -> Dict[str, Any]:
-    output: Dict[str, Any] = {}
-    if not isinstance(row, dict):
-        return output
-    for key in ("tip_payload", "payload", "raw", "data"):
-        value = row.get(key)
-        if isinstance(value, dict):
-            output.update(value)
-    output.update(row)
-    return output
+def probability_from_row(row: Dict[str, Any]) -> float:
+    candidates = [
+        as_float(row.get("model_prob")),
+        as_float(row.get("probability")),
+        as_float(row.get("prob")),
+        as_float(row.get("hit_rate")),
+    ]
+    normalized = []
+    for value in candidates:
+        if value <= 0:
+            continue
+        normalized.append(value / 100.0 if value > 1 else value)
+    if normalized:
+        return max(0.05, min(0.95, max(normalized)))
+    odds = as_float(row.get("odds"))
+    if odds > 1:
+        return max(0.05, min(0.90, 1.0 / odds))
+    return 0.50
 
 
-def parse_dt(value: Any) -> Optional[datetime]:
-    if not value:
+def source_weight(source: str) -> float:
+    source_norm = norm(source).replace(" ", "")
+    for key, weight in SOURCE_WEIGHT.items():
+        if key.replace(" ", "") in source_norm:
+            return weight
+    return 0.68
+
+
+def quality_score(row: Dict[str, Any]) -> float:
+    probability = probability_from_row(row)
+    hit_rate = as_float(row.get("hit_rate"))
+    hit_rate = hit_rate / 100.0 if hit_rate > 1 else hit_rate
+    games = as_int(row.get("games") or row.get("sb_games"))
+    sample = min(1.0, math.log(games + 1) / math.log(21)) if games > 0 else 0.15
+    real_odds = 1.0 if str(row.get("source", "")).lower().startswith("pinnacle") else 0.55
+    return round(
+        probability * 0.48
+        + max(hit_rate, probability) * 0.18
+        + source_weight(str(row.get("source", ""))) * 0.18
+        + sample * 0.10
+        + real_odds * 0.06,
+        4,
+    )
+
+
+def normalize_prop(row: Dict[str, Any]) -> Optional[PropLeg]:
+    player = str(row.get("player") or row.get("selection") or "").strip()
+    match = str(row.get("match") or row.get("fixture") or "").strip()
+    market = str(row.get("market") or row.get("type") or "").strip()
+    category = str(row.get("category") or "").strip().lower()
+    category = {
+        "booked": "yellow_cards",
+        "cards": "yellow_cards",
+        "fouls_committed": "fouls",
+        "fouls_drawn": "fouls_won",
+        "tackles_made": "tackles_committed",
+        "tackles_won": "tackles_committed",
+        "tackled": "tackles_received",
+    }.get(category, category)
+    if not player or not match or not market or not category:
         return None
-    text = str(value).strip().replace("Z", "+00:00")
+    if category not in PLAYER_CATEGORIES | TEAM_CATEGORIES:
+        return None
+    line = as_float(row.get("line"), market_line(market, 1.0))
+    odds = as_float(row.get("odds") or row.get("pinnacle_odds") or row.get("fair_odds"))
+    probability = probability_from_row(row)
+    source_text = str(row.get("source") or "").lower()
+    explicit_estimated = str(row.get("estimated") or "").lower() in {"1", "true", "yes", "on"}
+    bookmaker_tokens = (
+        "pinnacle", "bet365", "betfair", "oddsportal", "oddsharvester",
+        "bookmaker", "sportsbook",
+        "kambi", "unibet", "betsson", "1xbet", "sofascore",
+    )
+    observed_bookmaker = odds > 1 and any(token in source_text for token in bookmaker_tokens)
+    if odds <= 1:
+        odds = round(max(1.05, min(10.0, 1.0 / max(0.10, probability))), 2)
+        estimated = True
+    else:
+        estimated = explicit_estimated or not observed_bookmaker
+    return PropLeg(
+        player=player[:100],
+        team=str(row.get("team") or "")[:100],
+        match=match[:180],
+        league=str(row.get("league") or "")[:100],
+        market=market[:160],
+        category=category,
+        line=line,
+        odds=round(odds, 2),
+        probability=round(probability, 4),
+        source=str(row.get("source") or "unknown")[:80],
+        kickoff=str(row.get("ko") or row.get("kickoff") or row.get("kickoff_at") or "")[:40],
+        hit_rate=as_float(row.get("hit_rate")),
+        games=as_int(row.get("games") or row.get("sb_games")),
+        quality=quality_score(row),
+        estimated=estimated,
+    )
+
+
+def deduplicate_props(rows: Iterable[Dict[str, Any]]) -> List[PropLeg]:
+    best: Dict[Tuple[str, str, str, float], PropLeg] = {}
+    for row in rows:
+        leg = normalize_prop(row)
+        if not leg:
+            continue
+        old = best.get(leg.key())
+        if old is None or (leg.quality, not leg.estimated, leg.odds) > (old.quality, not old.estimated, old.odds):
+            best[leg.key()] = leg
+    return sorted(best.values(), key=lambda x: (x.quality, x.probability), reverse=True)
+
+
+def parse_match(match: str) -> Tuple[str, str]:
+    for separator in (" vs ", " v ", " - "):
+        if separator in str(match):
+            home, away = str(match).split(separator, 1)
+            return home.strip(), away.strip()
+    return "", ""
+
+
+def _context_for_match(match: str, contexts: Sequence[Dict[str, Any]]) -> Dict[str, Any]:
+    target = norm(match)
+    for row in contexts or []:
+        candidate = norm(row.get("match") or row.get("fixture") or "")
+        if candidate == target or (candidate and (candidate in target or target in candidate)):
+            return row
+    return {}
+
+
+def underdog_team(match: str, contexts: Sequence[Dict[str, Any]]) -> str:
+    context = _context_for_match(match, contexts)
+    explicit = str(context.get("underdog_team") or context.get("underdog") or "").strip()
+    if explicit:
+        return explicit
+    home, away = parse_match(match)
+    home_odds = as_float(context.get("home_odds") or context.get("odds_home") or context.get("home_win_odds") or context.get("homeOdds"))
+    away_odds = as_float(context.get("away_odds") or context.get("odds_away") or context.get("away_win_odds") or context.get("awayOdds"))
+    if home and away and home_odds > 1 and away_odds > 1:
+        if abs(home_odds - away_odds) >= 0.25:
+            return home if home_odds > away_odds else away
+    home_prob = as_float(context.get("home_prob") or context.get("home_probability") or context.get("home_win_probability") or context.get("homeWinProb"))
+    away_prob = as_float(context.get("away_prob") or context.get("away_probability") or context.get("away_win_probability") or context.get("awayWinProb"))
+    if home_prob > 1: home_prob /= 100.0
+    if away_prob > 1: away_prob /= 100.0
+    if home and away and home_prob > 0 and away_prob > 0 and abs(home_prob-away_prob) >= 0.08:
+        return home if home_prob < away_prob else away
+    favorite = str(context.get("favorite_team") or context.get("favorite") or "").strip()
+    if favorite and home and away:
+        return away if norm(favorite) == norm(home) else home
+    return ""
+
+
+def team_matches(leg_team: str, desired_team: str) -> bool:
+    a, b = norm(leg_team), norm(desired_team)
+    return bool(a and b and (a == b or a in b or b in a))
+
+
+def total_odds(legs: Sequence[PropLeg]) -> float:
+    result = 1.0
+    for leg in legs:
+        result *= max(1.01, leg.odds)
+    return round(result, 2)
+
+
+def builder_signature(style: str, legs: Sequence[PropLeg], match_date: str) -> str:
+    tokens = sorted(f"{norm(x.match)}|{norm(x.player)}|{x.category}|{x.line}" for x in legs)
+    raw = f"{match_date}|{style}|" + "||".join(tokens)
+    return "nb_" + hashlib.sha1(raw.encode("utf-8")).hexdigest()[:24]
+
+
+def valid_builder(legs: Sequence[PropLeg], min_legs: int = 2, max_legs: int = 8) -> bool:
+    if not (min_legs <= len(legs) <= max_legs):
+        return False
+    keys = [x.key() for x in legs]
+    if len(keys) != len(set(keys)):
+        return False
+    # Prevent the low-probability same-player scorer + card stack.
+    by_player: Dict[str, set] = {}
+    for leg in legs:
+        by_player.setdefault(norm(leg.player), set()).add(leg.category)
+    for cats in by_player.values():
+        if cats & {"score", "score_assist"} and "yellow_cards" in cats:
+            return False
+    return True
+
+
+def _best_distinct_players(legs: Sequence[PropLeg], count: int = 3) -> List[PropLeg]:
+    out: List[PropLeg] = []
+    used = set()
+    for leg in sorted(legs, key=lambda x: (x.quality, x.probability), reverse=True):
+        key = norm(leg.player)
+        if key in used:
+            continue
+        out.append(leg)
+        used.add(key)
+        if len(out) >= count:
+            break
+    return out
+
+
+def _derive_lower_line(leg: PropLeg, line: int, market_name: str, probability_floor: float) -> PropLeg:
+    if leg.line <= line and int(round(leg.line)) == line:
+        return leg
+    # Conservative derived line from a higher verified line. This is marked estimated.
+    probability = max(probability_floor, min(0.90, leg.probability + 0.12 * max(0, leg.line - line)))
+    odds = round(max(1.08, min(2.20, 1.0 / probability)), 2)
+    return PropLeg(
+        player=leg.player,
+        team=leg.team,
+        match=leg.match,
+        league=leg.league,
+        market=market_name,
+        category=leg.category,
+        line=float(line),
+        odds=odds,
+        probability=round(probability, 4),
+        source=leg.source + ":derived",
+        kickoff=leg.kickoff,
+        hit_rate=leg.hit_rate,
+        games=leg.games,
+        quality=round(min(1.0, leg.quality + 0.04), 4),
+        estimated=True,
+    )
+
+
+
+def _scale_builder_stake(total_odds: float, requested: float = 0.5) -> float:
     try:
-        parsed = datetime.fromisoformat(text)
-        return parsed if parsed.tzinfo else parsed.replace(tzinfo=timezone.utc)
-    except ValueError:
-        pass
-    for fmt in ("%Y-%m-%d", "%d/%m/%Y", "%d.%m.%Y", "%Y/%m/%d"):
-        try:
-            return datetime.strptime(text[:10], fmt).replace(tzinfo=timezone.utc)
-        except ValueError:
-            pass
-    return None
+        o = float(total_odds or 0)
+    except Exception:
+        o = 0.0
+    if o >= 100:
+        return min(requested, 0.05)
+    if o >= 50:
+        return min(requested, 0.10)
+    if o >= 20:
+        return min(requested, 0.15)
+    if o >= 8:
+        return min(requested, 0.25)
+    if o >= 3.5:
+        return min(requested, 0.35)
+    return requested
+
+def _make_builder(style: str, variant: str, legs: List[PropLeg], match_date: str, stake: float = 0.5, max_odds: float = 0.0) -> Optional[BuilderPick]:
+    if not valid_builder(legs):
+        return None
+    odds = total_odds(legs)
+    min_odds = as_float(os.getenv("NETRATTLER_BUILDER_MIN_ODDS", "1.75"), 1.75)
+    _default_max = as_float(os.getenv("NETRATTLER_BUILDER_MAX_ODDS", "150"), 150.0)
+    max_odds = max_odds if max_odds else _default_max
+    if odds < min_odds or odds > max_odds:
+        return None
+    # Einsatz automatisch nach Risikostufe. Explizit kleinere Stakes bleiben erhalten.
+    auto_stake = 0.75 if odds <= 3.5 else 0.50 if odds <= 10 else 0.25 if odds <= 25 else 0.10
+    stake = min(stake, auto_stake) if stake else auto_stake
+    return BuilderPick(
+        builder_id=builder_signature(style + variant, legs, match_date),
+        style=style,
+        variant=variant,
+        legs=legs,
+        total_odds=odds,
+        stake=_scale_builder_stake(odds, stake),
+        estimated_odds=any(x.estimated for x in legs),
+        match_date=match_date,
+    )
 
 
-def row_date(row: Dict[str, Any]) -> str:
-    data = unpack(row)
-    for key in (
-        "match_date", "date", "Date", "game_date", "event_date", "sent_date",
-        "ko", "kickoff", "kickoff_at", "event_time", "commence_time", "created_at",
-    ):
-        parsed = parse_dt(data.get(key))
-        if parsed:
-            return parsed.date().isoformat()
-    return TODAY_S
+def _shot_ladders(props: Sequence[PropLeg], contexts: Sequence[Dict[str, Any]], match_date: str) -> List[BuilderPick]:
+    builders: List[BuilderPick] = []
+    by_match: Dict[str, List[PropLeg]] = {}
+    for leg in props:
+        if leg.category == "shots":
+            by_match.setdefault(leg.match, []).append(leg)
+
+    for match, shot_props in by_match.items():
+        dog = underdog_team(match, contexts)
+        candidate_pool = [x for x in shot_props if not dog or team_matches(x.team, dog)]
+        if len({norm(x.player) for x in candidate_pool}) < 3:
+            candidate_pool = shot_props
+        base = _best_distinct_players(candidate_pool, 3)
+        if len(base) < 3:
+            continue
+        style = "UNDERDOG SHOT LADDER" if dog and all(team_matches(x.team, dog) for x in base) else "SHOT LADDER"
+
+        safe = [_derive_lower_line(x, 1, "1+ Shot", 0.74) for x in base]
+        value = [_derive_lower_line(x, 2, "2+ Shots", 0.58) for x in base if x.line >= 2 or x.probability >= 0.56]
+        aggressive = [_derive_lower_line(x, 3, "3+ Shots", 0.42) for x in base if x.line >= 3 or x.probability >= 0.50]
+
+        for variant, legs in (("SAFE 1+", safe), ("VALUE 2+", value), ("AGGRESSIVE 3+", aggressive)):
+            if len(legs) == 3:
+                pick = _make_builder(style, variant, legs, match_date, 0.75 if variant.startswith("SAFE") else 0.5)
+                if pick:
+                    builders.append(pick)
+    return builders
 
 
-def headers(prefer: str = "return=representation") -> Dict[str, str]:
+def _category_trios(props: Sequence[PropLeg], match_date: str) -> List[BuilderPick]:
+    """
+    Same-Match Ladders als PAIR oder TRIO.
+    Zwei reale Legs reichen bereits; drei werden bevorzugt.
+    """
+    builders: List[BuilderPick] = []
+    styles = {
+        "sot": ("SOT LADDER", 1, "1+ Shot on Target", 0.56),
+        "sot_outside_box": ("OUTSIDE BOX SOT", 1, "1+ SOT Outside the Box", 0.30),
+        "fouls": ("FOUL PRESS", 1, "1+ Foul Committed", 0.64),
+        "fouls_won": ("FOUL MAGNET", 1, "1+ Foul Won", 0.62),
+        "tackles": ("TACKLES COMMITTED", 1, "1+ Tackle Committed", 0.65),
+        "tackles_committed": ("TACKLES COMMITTED", 1, "1+ Tackle Committed", 0.65),
+        "tackles_received": ("TACKLES RECEIVED", 1, "1+ Tackle Received", 0.62),
+        "yellow_cards": ("BOOKING LADDER", 1, "Player to be Booked", 0.28),
+        "shots": ("SHOT LADDER", 1, "1+ Shot", 0.70),
+    }
+    by_match_category: Dict[Tuple[str, str], List[PropLeg]] = {}
+    for leg in props:
+        if leg.category in styles:
+            by_match_category.setdefault((leg.match, leg.category), []).append(leg)
+
+    ladder_markets = {
+        "fouls": ("2+ Fouls Committed", "3+ Fouls Committed"),
+        "fouls_won": ("2+ Fouls Won", "3+ Fouls Won"),
+        "tackles": ("2+ Tackles Committed", "3+ Tackles Committed"),
+        "tackles_committed": ("2+ Tackles Committed", "3+ Tackles Committed"),
+        "tackles_received": ("2+ Tackles Received", "3+ Tackles Received"),
+        "yellow_cards": ("Player to be Booked", "Player to be Booked"),
+        "sot": ("1+ Shot on Target", "2+ Shots on Target"),
+        "sot_outside_box": ("1+ SOT Outside the Box", "1+ SOT Outside the Box"),
+        "shots": ("2+ Shots", "3+ Shots"),
+    }
+
+    for (match, category), candidates in by_match_category.items():
+        style, safe_line, safe_market, safe_floor = styles[category]
+        base = _best_distinct_players(candidates, 3)
+        if len(base) < 2:
+            continue
+
+        sizes = [2] if len(base) == 2 else [2, 3]
+        for size in sizes:
+            safe = [
+                _derive_lower_line(x, safe_line, safe_market, safe_floor)
+                for x in base[:size]
+            ]
+            pick = _make_builder(style, f"SAFE {size}L", safe, match_date, 0.75)
+            if pick:
+                builders.append(pick)
+
+            value_market, high_market = ladder_markets[category]
+            value_line = 1 if category in {"yellow_cards", "sot", "sot_outside_box"} else 2
+            high_line = (
+                1 if category in {"yellow_cards", "sot_outside_box"}
+                else 2 if category == "sot"
+                else 3
+            )
+
+            value = [
+                _derive_lower_line(x, value_line, value_market, 0.44)
+                for x in base[:size]
+                if x.line >= value_line or x.probability >= 0.46
+            ]
+            if len(value) >= 2:
+                pick = _make_builder(style, f"VALUE {len(value)}L", value, match_date, 0.5)
+                if pick:
+                    builders.append(pick)
+
+            high = [
+                _derive_lower_line(x, high_line, high_market, 0.25)
+                for x in base[:size]
+                if x.line >= high_line or x.probability >= 0.34
+            ]
+            if len(high) >= 2:
+                pick = _make_builder(style, f"HIGH ODDS {len(high)}L", high, match_date, 0.1)
+                if pick:
+                    builders.append(pick)
+
+    return builders
+
+def _mixed_builders(props: Sequence[PropLeg], match_date: str) -> List[BuilderPick]:
+    builders: List[BuilderPick] = []
+    by_match: Dict[str, List[PropLeg]] = {}
+    for leg in props:
+        by_match.setdefault(leg.match, []).append(leg)
+
+    for match, candidates in by_match.items():
+        # One strong leg per category, distinct players where possible.
+        ordered_categories = [
+            "result", "score", "first_scorer", "shots", "sot",
+            "fouls", "tackles_committed", "tackles_received",
+            "team_cards", "yellow_cards", "score_assist"
+        ]
+        selected: List[PropLeg] = []
+        used_players = set()
+        for category in ordered_categories:
+            pool = sorted((x for x in candidates if x.category == category), key=lambda x: x.quality, reverse=True)
+            for leg in pool:
+                player_key = norm(leg.player)
+                if player_key in used_players and category not in {
+                    "fouls", "tackles", "tackles_committed", "tackles_received"
+                }:
+                    continue
+                selected.append(leg)
+                used_players.add(player_key)
+                break
+            if len(selected) >= 4:
+                break
+        if len(selected) >= 3:
+            pick = _make_builder("MIXED EDGE", "PLAYER MIX", selected[:4], match_date, 0.5)
+            if pick:
+                builders.append(pick)
+
+        # Corner fusion: 2-3 player legs + exactly one team/corner leg.
+        corner = next(iter(sorted((x for x in candidates if x.category in {"team_corners", "corners"}), key=lambda x: x.quality, reverse=True)), None)
+        player_legs = _best_distinct_players([
+            x for x in candidates if x.category in {
+                "shots", "sot", "fouls", "fouls_won",
+                "tackles", "tackles_committed", "tackles_received"
+            }
+        ], 3)
+        if corner and len(player_legs) >= 2:
+            fusion_legs = player_legs[:3] + [corner]
+            pick = _make_builder("CORNER FUSION", "PLAYER + CORNERS", fusion_legs, match_date, 0.5)
+            if pick:
+                builders.append(pick)
+    return builders
+
+
+
+
+def _same_match_available_builders(
+    props: Sequence[PropLeg], match_date: str
+) -> List[BuilderPick]:
+    """
+    Baut aus jedem Match mit mindestens zwei echten Props einen kompakten
+    Same-Match-Builder. Bevorzugt Marktvielfalt und echte Quoten.
+    """
+    builders: List[BuilderPick] = []
+    by_match: Dict[str, List[PropLeg]] = {}
+    for leg in props:
+        by_match.setdefault(leg.match, []).append(leg)
+
+    for match, candidates in by_match.items():
+        if len(candidates) < 2:
+            continue
+
+        ordered = sorted(
+            candidates,
+            key=lambda x: (not x.estimated, x.quality, x.probability),
+            reverse=True,
+        )
+        selected: List[PropLeg] = []
+        used_keys = set()
+        used_categories = set()
+
+        # Erst Marktvielfalt.
+        for leg in ordered:
+            key = (norm(leg.player), leg.category)
+            if key in used_keys:
+                continue
+            if leg.category in used_categories:
+                continue
+            if len(selected) >= 1 and not valid_builder(selected + [leg], min_legs=2):
+                continue
+            selected.append(leg)
+            used_keys.add(key)
+            used_categories.add(leg.category)
+            if len(selected) >= 5:
+                break
+
+        # Danach bei Bedarf weitere Player Legs.
+        if len(selected) < 2:
+            for leg in ordered:
+                key = (norm(leg.player), leg.category)
+                if key in used_keys:
+                    continue
+                if len(selected) >= 1 and not valid_builder(selected + [leg], min_legs=2):
+                    continue
+                selected.append(leg)
+                used_keys.add(key)
+                if len(selected) >= 4:
+                    break
+
+        if len(selected) < 2:
+            continue
+
+        for size in range(2, min(5, len(selected)) + 1):
+            legs = selected[:size]
+            pick = _make_builder(
+                "SAME MATCH AVAILABLE",
+                f"{size} REAL LEGS",
+                legs,
+                match_date,
+                0.5 if size <= 3 else 0.25,
+            )
+            if pick:
+                builders.append(pick)
+
+    return builders
+
+
+
+def _same_game_narratives(props: Sequence[PropLeg], match_date: str) -> List[BuilderPick]:
+    """JK/NATE-artige Same-Game-Builder mit einer klaren Match-Hypothese."""
+    builders: List[BuilderPick] = []
+    by_match: Dict[str, List[PropLeg]] = {}
+    for leg in props:
+        by_match.setdefault(leg.match, []).append(leg)
+
+    templates = [
+        ("FAVORITE SCRIPT", ["result", "score", "shots", "sot"], 3),
+        ("INTENSITY SCRIPT", ["team_cards", "yellow_cards", "fouls", "tackles_committed", "tackles_received"], 4),
+        ("ATTACK SCRIPT", ["score", "shots", "sot", "sot_outside_box", "assist"], 4),
+        ("MIDFIELD BATTLE", ["fouls", "fouls_won", "tackles_committed", "tackles_received", "yellow_cards"], 4),
+    ]
+
+    for match, candidates in by_match.items():
+        for style, categories, max_legs in templates:
+            selected: List[PropLeg] = []
+            used_players = set()
+            for category in categories:
+                pool = sorted(
+                    (x for x in candidates if x.category == category),
+                    key=lambda x: (x.quality, x.probability, not x.estimated),
+                    reverse=True,
+                )
+                for leg in pool:
+                    pkey = norm(leg.player)
+                    if pkey in used_players and category not in {
+                        "fouls", "fouls_won", "tackles_committed", "tackles_received"
+                    }:
+                        continue
+                    selected.append(leg)
+                    used_players.add(pkey)
+                    break
+                if len(selected) >= max_legs:
+                    break
+            if len(selected) >= 2:
+                pick = _make_builder(
+                    style,
+                    f"SAME GAME {len(selected)}L",
+                    selected,
+                    match_date,
+                    0.5 if len(selected) <= 3 else 0.25,
+                )
+                if pick:
+                    builders.append(pick)
+    return builders
+
+
+
+def _cross_match_builder(props: Sequence[PropLeg], match_date: str) -> List[BuilderPick]:
+    best_by_match: Dict[str, PropLeg] = {}
+    for leg in sorted(props, key=lambda x: (x.quality, x.probability), reverse=True):
+        if leg.category not in {
+            "shots", "sot", "fouls", "fouls_won", "tackles",
+            "tackles_committed", "tackles_received", "score",
+            "first_scorer", "score_assist"
+        }:
+            continue
+        if leg.match not in best_by_match:
+            best_by_match[leg.match] = leg
+    legs = list(best_by_match.values())[:5]
+    builders = []
+    for size in (3, 4, 5):
+        if len(legs) >= size:
+            pick = _make_builder("CROSS MATCH", f"{size} LEGS", legs[:size], match_date, 0.5)
+            if pick:
+                builders.append(pick)
+    return builders
+
+
+def _team_correlation_builders(
+    props: Sequence[PropLeg], match_date: str
+) -> List[BuilderPick]:
+    """
+    Team Correlation Builder — wie Screenshot 4:
+    BTTS HT + BTTS 2HT + Over 2 Goals HT/2HT aus demselben Spiel.
+    Erkennt torreiches Profil und kombiniert passende Team-Märkte.
+    """
+    builders: List[BuilderPick] = []
+    by_match: Dict[str, List[PropLeg]] = {}
+    for leg in props:
+        by_match.setdefault(leg.match, []).append(leg)
+
+    TEAM_CATS = {"btts", "btts_ht", "over_goals", "over15_ht", "team_corners", "corners", "match_corners", "team_cards", "match_sot", "match_goals", "half_goals_1st", "half_goals_2nd"}
+
+    for match, candidates in by_match.items():
+        team_legs = [l for l in candidates if l.category in TEAM_CATS]
+        if len(team_legs) < 2:
+            continue
+
+        # BTTS-Kombination: BTTS + BTTS HT (Screenshot 4 Stil)
+        btts = [l for l in team_legs if l.category == "btts"]
+        btts_ht = [l for l in team_legs if l.category == "btts_ht"]
+        over_goals = [l for l in team_legs if l.category in {"over_goals", "over15_ht"}]
+        corners = [l for l in team_legs if l.category in {"team_corners", "corners"}]
+
+        # 1. BTTS Team Builder (BTTS + BTTS HT + Over Goals)
+        combo1 = (btts[:1] + btts_ht[:1] + over_goals[:1])
+        if len(combo1) >= 2:
+            pick = _make_builder("TEAM BUILDER", "BTTS COMBO", combo1[:3], match_date, 0.5)
+            if pick:
+                builders.append(pick)
+
+        # 2. Voller Korrelations-Builder (alle 4 Märkte wie Screenshot 4)
+        combo2 = (btts[:1] + btts_ht[:1] + over_goals[:2])
+        if len(combo2) >= 3:
+            pick = _make_builder("TEAM BUILDER", "BTTS FULL CORR", combo2[:4], match_date, 0.5)
+            if pick:
+                builders.append(pick)
+
+        # 3. Corners + BTTS (Eckball-Tore-Kombi)
+        if corners and btts:
+            combo3 = btts[:1] + corners[:1]
+            if len(combo3) >= 2:
+                pick = _make_builder("TEAM BUILDER", "BTTS + CORNERS", combo3, match_date, 0.5)
+                if pick:
+                    builders.append(pick)
+
+        # 4. Half Goals Builder (1st Half + 2nd Half Goal Lines — Screenshot)
+        half1 = [l for l in team_legs if l.category == "half_goals_1st"]
+        half2 = [l for l in team_legs if l.category == "half_goals_2nd"]
+
+        # BTTS HT + BTTS 2HT + Half Goals = 9.00 (Screenshot)
+        combo_half = btts_ht[:1] + half1[:1] + half2[:1]
+        if len(combo_half) >= 2:
+            pick = _make_builder("TEAM BUILDER", "BTTS HT + HALF GOALS", combo_half, match_date, 0.5)
+            if pick:
+                builders.append(pick)
+
+        # Full Half Goals: BTTS HT + BTTS 2HT + Over Goals HT + Over Goals 2HT = 13.00
+        combo_full_half = btts[:1] + btts_ht[:1] + half1[:1] + half2[:1]
+        if len(combo_full_half) >= 3:
+            pick = _make_builder("TEAM BUILDER", "BTTS HALF CORR FULL", combo_full_half, match_date, 0.5)
+            if pick:
+                builders.append(pick)
+
+        # 5. Match SOT + Goals (torreiche Spiele)
+        match_sot = [l for l in team_legs if l.category == "match_sot"]
+        match_goals = [l for l in team_legs if l.category == "match_goals"]
+        if match_sot and match_goals:
+            combo_sot = match_sot[:1] + match_goals[:1] + btts[:1]
+            if len(combo_sot) >= 2:
+                pick = _make_builder("TEAM BUILDER", "SOT + GOALS", combo_sot, match_date, 0.5)
+                if pick:
+                    builders.append(pick)
+
+    return builders
+
+
+def _high_odds_booking_builder(
+    props: Sequence[PropLeg], match_date: str
+) -> List[BuilderPick]:
+    """
+    High Odds Booking Ladder — JK-Style:
+    2× Booked = ~15-30 (Quote 9/2–14/1)
+    3× Booked = ~40-80 (Quote 55/1)
+    4× Booked = ~150-400 (Quote 321/1)
+    5× Booked = ~500-2000 (extreme)
+    Einsatz: 0.1u für alle Varianten.
+    """
+    builders: List[BuilderPick] = []
+    by_match: Dict[str, List[PropLeg]] = {}
+    for leg in props:
+        by_match.setdefault(leg.match, []).append(leg)
+
+    for match, candidates in by_match.items():
+        booking_legs = sorted(
+            [l for l in candidates if l.category == "yellow_cards"],
+            key=lambda x: x.quality, reverse=True
+        )
+        legs_pool = _best_distinct_players(booking_legs, 5)
+
+        for size, label, min_odds, max_odds, stake in [
+            (2, "2× BOOKED",      8.0,   60.0,  0.25),
+            (3, "3× BOOKED HIGH", 15.0,  200.0, 0.10),
+            (4, "4× BOOKED JK",   50.0,  800.0, 0.10),
+            (5, "5× BOOKED JK",   200.0, 5000.0, 0.05),
+        ]:
+            if len(legs_pool) >= size:
+                pick = _make_builder("BOOKING LADDER", label, legs_pool[:size], match_date, stake)
+                if pick and min_odds <= pick.total_odds <= max_odds:
+                    builders.append(pick)
+
+    return builders
+
+
+def _fouls_tackles_combo_builder(
+    props: Sequence[PropLeg], match_date: str
+) -> List[BuilderPick]:
+    """
+    Fouls + Tackles Combo — JK-Style (Screenshot: Haaland 3+ Fouls + Konsa 4+ Tackles = 170/1)
+    Kombiniert hohe Fouls-Lines mit hohen Tackles-Lines für High-Odds Builder.
+    """
+    builders: List[BuilderPick] = []
+    by_match: Dict[str, List[PropLeg]] = {}
+    for leg in props:
+        by_match.setdefault(leg.match, []).append(leg)
+
+    for match, candidates in by_match.items():
+        fouls = sorted(
+            [l for l in candidates if l.category in {"fouls", "fouls_won"}],
+            key=lambda x: x.quality, reverse=True
+        )
+        tackles = sorted(
+            [l for l in candidates if l.category in {"tackles_committed", "tackles_received", "tackles"}],
+            key=lambda x: x.quality, reverse=True
+        )
+
+        if not fouls or not tackles:
+            continue
+
+        # Fouls + Tackles (2-3 Spieler total, gemischte Märkte)
+        for n_fouls, n_tackles in [(2, 1), (1, 2), (1, 1), (2, 2)]:
+            selected = (
+                [_derive_lower_line(l, 2, "2+ Fouls Committed", 0.44) for l in fouls[:n_fouls]] +
+                [_derive_lower_line(l, 2, "2+ Tackles Committed", 0.44) for l in tackles[:n_tackles]]
+            )
+            selected = [l for l in selected if l is not None]
+            if len(selected) >= 2 and valid_builder(selected):
+                pick = _make_builder("FOULS + TACKLES", f"FOUL+TACKLE {len(selected)}L",
+                                     selected, match_date, 0.1)
+                if pick and 8.0 <= pick.total_odds <= 500.0:
+                    builders.append(pick)
+                    break
+
+        # High-Line Variante (3+ Fouls, 4+ Tackles wie Screenshot)
+        hi_fouls = [_derive_lower_line(l, 3, "3+ Fouls Committed", 0.25) for l in fouls[:2]]
+        hi_tackles = [_derive_lower_line(l, 3, "3+ Tackles Committed", 0.25) for l in tackles[:2]]
+        selected_hi = [l for l in hi_fouls + hi_tackles if l is not None]
+        if len(selected_hi) >= 2:
+            pick = _make_builder("FOULS + TACKLES", "HIGH LINE FOUL+TACKLE",
+                                 selected_hi[:3], match_date, 0.1)
+            if pick and 30.0 <= pick.total_odds <= 1000.0:
+                builders.append(pick)
+
+    return builders
+
+
+def _jk_multi_shot_builder(
+    props: Sequence[PropLeg], match_date: str
+) -> List[BuilderPick]:
+    """
+    JK Multi-Shot Builder — Screenshot (France vs Spain):
+    Olise 3+ Shots + Baena 2+ Shots + Olmo 3+ Shots + Porro 1+ Shots + Rodri 1+ Shots
+    Bis zu 5 Spieler, gemischte Shot-Lines, hohe Quoten.
+    """
+    builders: List[BuilderPick] = []
+    by_match: Dict[str, List[PropLeg]] = {}
+    for leg in props:
+        by_match.setdefault(leg.match, []).append(leg)
+
+    for match, candidates in by_match.items():
+        shot_legs = sorted(
+            [l for l in candidates if l.category in {"shots", "sot", "sot_outside_box"}],
+            key=lambda x: x.quality, reverse=True
+        )
+        pool = _best_distinct_players(shot_legs, 5)
+        if len(pool) < 3:
+            continue
+
+        for size, label, min_odds, stake in [
+            (3, "3-SHOT LADDER",  6.0,  0.25),
+            (4, "4-SHOT LADDER", 15.0,  0.10),
+            (5, "5-SHOT LADDER", 40.0,  0.10),
+        ]:
+            if len(pool) >= size:
+                # Gemischte Lines: Top-Spieler höhere Line, Rest 1+
+                legs_mixed = []
+                for i, leg in enumerate(pool[:size]):
+                    if i == 0 and leg.probability >= 0.50:
+                        legs_mixed.append(_derive_lower_line(leg, 2, "2+ Shots", 0.45))
+                    else:
+                        legs_mixed.append(_derive_lower_line(leg, 1, "1+ Shot", 0.60))
+                legs_mixed = [l for l in legs_mixed if l is not None]
+                if len(legs_mixed) >= size:
+                    pick = _make_builder("SHOT LADDER", label, legs_mixed, match_date, stake)
+                    if pick and pick.total_odds >= min_odds:
+                        builders.append(pick)
+
+    return builders
+
+
+
+def _outside_box_sot_builder(
+    props: Sequence[PropLeg], match_date: str
+) -> List[BuilderPick]:
+    """
+    SOT Outside Box Builder — wie Screenshot 2:
+    2 Spieler mit 1+ SOT Outside the Box aus demselben Spiel = Quote ~20.
+    Typisch für technische Mittelfeldspieler (Fabian Ruiz, Olise etc.)
+    """
+    builders: List[BuilderPick] = []
+    by_match: Dict[str, List[PropLeg]] = {}
+    for leg in props:
+        by_match.setdefault(leg.match, []).append(leg)
+
+    for match, candidates in by_match.items():
+        outside = sorted(
+            [l for l in candidates if l.category == "sot_outside_box"],
+            key=lambda x: x.quality, reverse=True
+        )
+        if len(outside) < 2:
+            continue
+
+        legs = _best_distinct_players(outside, 3)
+        for size in [2, 3]:
+            if len(legs) >= size:
+                pick = _make_builder("OUTSIDE BOX SOT", f"SOT OUTSIDE {size}L",
+                                     legs[:size], match_date, 0.25)
+                if pick and pick.total_odds >= 8.0:
+                    builders.append(pick)
+    return builders
+
+
+def _full_profile_builder(
+    props: Sequence[PropLeg], match_date: str
+) -> List[BuilderPick]:
+    """
+    Full Profile Builder — JK-Style (Screenshot England vs Argentina):
+    Messi To Score + Bellingham Score/Assist + 3× Tackles + Over Corners + Over SOT = 17.00
+
+    Kombiniert das KOMPLETTE Spielprofil:
+    1. Goalscorer/Score-or-Assist (1-2 Spieler)
+    2. Defensive Midfield Tackles (2-3 Spieler)
+    3. Match-Level Team-Märkte (Corners, SOT)
+    """
+    builders: List[BuilderPick] = []
+    by_match: Dict[str, List[PropLeg]] = {}
+    for leg in props:
+        by_match.setdefault(leg.match, []).append(leg)
+
+    for match, candidates in by_match.items():
+        # 1. Goalscorer-Legs
+        scorers = sorted(
+            [l for l in candidates if l.category in {"score", "score_assist", "first_scorer"}],
+            key=lambda x: x.quality, reverse=True
+        )
+        # 2. Tackle-Legs (defensive Sechser, Innenverteidiger)
+        tackles = sorted(
+            [l for l in candidates if l.category in
+             {"tackles_committed", "tackles_received", "tackles"}],
+            key=lambda x: x.quality, reverse=True
+        )
+        # 3. Team/Match Märkte
+        team_mkt = sorted(
+            [l for l in candidates if l.category in
+             {"team_corners", "corners", "match_corners", "over_goals", "btts", "btts_ht", "match_sot", "match_goals", "team_cards"}],
+            key=lambda x: x.quality, reverse=True
+        )
+
+        if not scorers or len(tackles) < 2:
+            continue
+
+        tackle_pool = _best_distinct_players(tackles, 3)
+
+        # Variante A: Scorer + 2 Tackles + Corner/SOT (wie Screenshot)
+        for n_tackles in [3, 2]:
+            if len(tackle_pool) >= n_tackles:
+                legs = scorers[:1] + tackle_pool[:n_tackles]
+                if team_mkt:
+                    legs += team_mkt[:1]
+                if valid_builder(legs, min_legs=4):
+                    pick = _make_builder("FULL PROFILE", f"SCORE+TACKLE+TEAM {len(legs)}L",
+                                         legs, match_date, 0.5)
+                    if pick and 6.0 <= pick.total_odds <= 100.0:
+                        builders.append(pick)
+                        break
+
+        # Variante B: Score+Assist + Tackles (2 Goalscorer-Legs + 2 Tackles)
+        if len(scorers) >= 2 and len(tackle_pool) >= 2:
+            legs_b = scorers[:2] + tackle_pool[:2]
+            if team_mkt:
+                legs_b += team_mkt[:1]
+            if valid_builder(legs_b, min_legs=4):
+                pick = _make_builder("FULL PROFILE", "DUAL SCORER+TACKLE",
+                                      legs_b, match_date, 0.5)
+                if pick and 10.0 <= pick.total_odds <= 150.0:
+                    builders.append(pick)
+
+    return builders
+
+
+def _goalscorer_combo_builder(
+    props: Sequence[PropLeg], match_date: str
+) -> List[BuilderPick]:
+    """Goalscorer Combo: Messi To Score + Fouls/Cards/Tackles = 8.50"""
+    builders: List[BuilderPick] = []
+    by_match: Dict[str, List[PropLeg]] = {}
+    for leg in props:
+        by_match.setdefault(leg.match, []).append(leg)
+
+    for match, candidates in by_match.items():
+        scorers = sorted(
+            [l for l in candidates if l.category in {"score", "first_scorer"}],
+            key=lambda x: x.quality, reverse=True
+        )
+        if not scorers:
+            continue
+
+        # Anker-Legs: Fouls, Tackles, Bookings vom gleichen Spiel
+        anchors = sorted(
+            [l for l in candidates if l.category in
+             {"fouls", "fouls_won", "yellow_cards", "tackles_committed",
+              "sot", "shots", "team_cards", "btts"}],
+            key=lambda x: x.quality, reverse=True
+        )
+        if not anchors:
+            continue
+
+        # Top Scorer + 1-2 Anker
+        top_scorer = scorers[0]
+        for n_anchors in [2, 1]:
+            selected = [top_scorer] + anchors[:n_anchors]
+            if valid_builder(selected):
+                label = "GOALSCORER MIX" if n_anchors == 1 else "GOALSCORER + FOULS"
+                pick = _make_builder("PLAYER BUILDER", label, selected, match_date, 0.5)
+                if pick and 4.0 <= pick.total_odds <= 50.0:
+                    builders.append(pick)
+                    break
+    return builders
+
+
+
+
+def _player_prop_mix_builders(
+    props: Sequence[PropLeg], match_date: str
+) -> List[BuilderPick]:
+    """
+    Real Player Prop Mix:
+    gebaut für genau solche Kombis:
+    - Harry Kane 2+ SOT
+    - Messi To Score
+    - Otamendi To Be Carded
+
+    Nimmt bevorzugt echte Pinnacle-Player-Props und kombiniert Scorer/SOT/Card/Foul/Tackle.
+    Same-Match wird bevorzugt, Cross-Match ist erlaubt, wenn ein einzelnes Match nicht genug echte Spielerprops hat.
+    """
+    builders: List[BuilderPick] = []
+    player_cats = {"score", "first_scorer", "last_scorer", "sot", "shots", "yellow_cards", "fouls", "fouls_won", "tackles_committed", "tackles_received"}
+    real_player_props = [
+        l for l in props
+        if l.category in player_cats
+        and "pinnacle" in norm(l.source)
+        and norm(l.player) not in {"yes", "no", "over", "under", "home", "away", "draw"}
+    ]
+
+    by_match: Dict[str, List[PropLeg]] = {}
+    for leg in real_player_props:
+        by_match.setdefault(leg.match, []).append(leg)
+
+    templates = [
+        ("PLAYER PROP MIX", "SCORE + SOT + CARD", ["score", "first_scorer", "sot", "shots", "yellow_cards"], 3),
+        ("PLAYER PROP MIX", "ATTACK + DISCIPLINE", ["score", "sot", "shots", "fouls", "yellow_cards"], 4),
+        ("PLAYER PROP MIX", "SHOT + CARD MIX", ["sot", "shots", "yellow_cards", "fouls", "tackles_committed"], 3),
+    ]
+
+    for match, candidates in by_match.items():
+        if len(candidates) < 2:
+            continue
+        for style, variant, cats, max_legs in templates:
+            selected: List[PropLeg] = []
+            used_players = set()
+            used_categories = set()
+            for cat in cats:
+                pool = sorted(
+                    [x for x in candidates if x.category == cat],
+                    key=lambda x: (not x.estimated, x.quality, x.probability, x.odds),
+                    reverse=True,
+                )
+                for leg in pool:
+                    pkey = norm(leg.player)
+                    if pkey in used_players and leg.category not in {"fouls", "tackles_committed", "tackles_received"}:
+                        continue
+                    if leg.category in used_categories and leg.category not in {"sot", "shots"}:
+                        continue
+                    selected.append(leg)
+                    used_players.add(pkey)
+                    used_categories.add(leg.category)
+                    break
+                if len(selected) >= max_legs:
+                    break
+            if len(selected) >= 2:
+                pick = _make_builder(style, f"SAME MATCH {len(selected)}L", selected, match_date, 0.5 if len(selected) <= 3 else 0.25)
+                if pick:
+                    builders.append(pick)
+
+    # Cross-Match Mix: bester Scorer + bester SOT/Shot + beste Card/Foul/Tackle aus verschiedenen Spielen
+    buckets = [
+        ("SCORER", [x for x in real_player_props if x.category in {"score", "first_scorer", "last_scorer"}]),
+        ("SOT", [x for x in real_player_props if x.category in {"sot", "shots"}]),
+        ("CARD", [x for x in real_player_props if x.category in {"yellow_cards", "fouls", "tackles_committed", "tackles_received"}]),
+    ]
+    selected = []
+    used_players = set()
+    used_matches = set()
+    for _, bucket in buckets:
+        for leg in sorted(bucket, key=lambda x: (not x.estimated, x.quality, x.probability, x.odds), reverse=True):
+            pkey = norm(leg.player)
+            if pkey in used_players:
+                continue
+            selected.append(leg)
+            used_players.add(pkey)
+            used_matches.add(norm(leg.match))
+            break
+    if len(selected) >= 3:
+        pick = _make_builder("PLAYER PROP MIX", "CROSS MATCH STAR MIX 3L", selected, match_date, 0.25)
+        if pick:
+            builders.append(pick)
+
+    # Zusätzlicher 2-Leg Fallback, wenn nur Scorer+Card oder SOT+Card vorhanden sind.
+    if len(selected) >= 2:
+        pick = _make_builder("PLAYER PROP MIX", "CROSS MATCH 2L", selected[:2], match_date, 0.5)
+        if pick:
+            builders.append(pick)
+
+    return builders
+
+
+
+# ============================================================
+# 🎯 SCREENSHOT BUILDERS (JK-Style, Full Profile, Team Correlation)
+# ============================================================
+def _team_correlation_builders(
+    props: Sequence[PropLeg], match_date: str
+) -> List[BuilderPick]:
+    """
+    Team Correlation Builder — wie Screenshot 4:
+    BTTS HT + BTTS 2HT + Over 2 Goals HT/2HT aus demselben Spiel.
+    Erkennt torreiches Profil und kombiniert passende Team-Märkte.
+    """
+    builders: List[BuilderPick] = []
+    by_match: Dict[str, List[PropLeg]] = {}
+    for leg in props:
+        by_match.setdefault(leg.match, []).append(leg)
+
+    TEAM_CATS = {"btts", "btts_ht", "over_goals", "over15_ht", "team_corners", "corners", "match_corners", "team_cards", "match_sot", "match_goals", "half_goals_1st", "half_goals_2nd"}
+
+    for match, candidates in by_match.items():
+        team_legs = [l for l in candidates if l.category in TEAM_CATS]
+        if len(team_legs) < 2:
+            continue
+
+        # BTTS-Kombination: BTTS + BTTS HT (Screenshot 4 Stil)
+        btts = [l for l in team_legs if l.category == "btts"]
+        btts_ht = [l for l in team_legs if l.category == "btts_ht"]
+        over_goals = [l for l in team_legs if l.category in {"over_goals", "over15_ht"}]
+        corners = [l for l in team_legs if l.category in {"team_corners", "corners"}]
+
+        # 1. BTTS Team Builder (BTTS + BTTS HT + Over Goals)
+        combo1 = (btts[:1] + btts_ht[:1] + over_goals[:1])
+        if len(combo1) >= 2:
+            pick = _make_builder("TEAM BUILDER", "BTTS COMBO", combo1[:3], match_date, 0.5)
+            if pick:
+                builders.append(pick)
+
+        # 2. Voller Korrelations-Builder (alle 4 Märkte wie Screenshot 4)
+        combo2 = (btts[:1] + btts_ht[:1] + over_goals[:2])
+        if len(combo2) >= 3:
+            pick = _make_builder("TEAM BUILDER", "BTTS FULL CORR", combo2[:4], match_date, 0.5)
+            if pick:
+                builders.append(pick)
+
+        # 3. Corners + BTTS (Eckball-Tore-Kombi)
+        if corners and btts:
+            combo3 = btts[:1] + corners[:1]
+            if len(combo3) >= 2:
+                pick = _make_builder("TEAM BUILDER", "BTTS + CORNERS", combo3, match_date, 0.5)
+                if pick:
+                    builders.append(pick)
+
+        # 4. Half Goals Builder (1st Half + 2nd Half Goal Lines — Screenshot)
+        half1 = [l for l in team_legs if l.category == "half_goals_1st"]
+        half2 = [l for l in team_legs if l.category == "half_goals_2nd"]
+
+        # BTTS HT + BTTS 2HT + Half Goals = 9.00 (Screenshot)
+        combo_half = btts_ht[:1] + half1[:1] + half2[:1]
+        if len(combo_half) >= 2:
+            pick = _make_builder("TEAM BUILDER", "BTTS HT + HALF GOALS", combo_half, match_date, 0.5)
+            if pick:
+                builders.append(pick)
+
+        # Full Half Goals: BTTS HT + BTTS 2HT + Over Goals HT + Over Goals 2HT = 13.00
+        combo_full_half = btts[:1] + btts_ht[:1] + half1[:1] + half2[:1]
+        if len(combo_full_half) >= 3:
+            pick = _make_builder("TEAM BUILDER", "BTTS HALF CORR FULL", combo_full_half, match_date, 0.5)
+            if pick:
+                builders.append(pick)
+
+        # 5. Match SOT + Goals (torreiche Spiele)
+        match_sot = [l for l in team_legs if l.category == "match_sot"]
+        match_goals = [l for l in team_legs if l.category == "match_goals"]
+        if match_sot and match_goals:
+            combo_sot = match_sot[:1] + match_goals[:1] + btts[:1]
+            if len(combo_sot) >= 2:
+                pick = _make_builder("TEAM BUILDER", "SOT + GOALS", combo_sot, match_date, 0.5)
+                if pick:
+                    builders.append(pick)
+
+    return builders
+
+
+
+def _high_odds_booking_builder(
+    props: Sequence[PropLeg], match_date: str
+) -> List[BuilderPick]:
+    """
+    High Odds Booking Ladder — JK-Style:
+    2× Booked = ~15-30 (Quote 9/2–14/1)
+    3× Booked = ~40-80 (Quote 55/1)
+    4× Booked = ~150-400 (Quote 321/1)
+    5× Booked = ~500-2000 (extreme)
+    Einsatz: 0.1u für alle Varianten.
+    """
+    builders: List[BuilderPick] = []
+    by_match: Dict[str, List[PropLeg]] = {}
+    for leg in props:
+        by_match.setdefault(leg.match, []).append(leg)
+
+    for match, candidates in by_match.items():
+        booking_legs = sorted(
+            [l for l in candidates if l.category == "yellow_cards"],
+            key=lambda x: x.quality, reverse=True
+        )
+        legs_pool = _best_distinct_players(booking_legs, 5)
+
+        for size, label, min_odds, max_odds, stake in [
+            (2, "2× BOOKED",      8.0,   60.0,  0.25),
+            (3, "3× BOOKED HIGH", 15.0,  200.0, 0.10),
+            (4, "4× BOOKED JK",   50.0,  800.0, 0.10),
+            (5, "5× BOOKED JK",   200.0, 5000.0, 0.05),
+        ]:
+            if len(legs_pool) >= size:
+                pick = _make_builder("BOOKING LADDER", label, legs_pool[:size], match_date, stake)
+                if pick and min_odds <= pick.total_odds <= max_odds:
+                    builders.append(pick)
+
+    return builders
+
+
+
+def _fouls_tackles_combo_builder(
+    props: Sequence[PropLeg], match_date: str
+) -> List[BuilderPick]:
+    """
+    Fouls + Tackles Combo — JK-Style (Screenshot: Haaland 3+ Fouls + Konsa 4+ Tackles = 170/1)
+    Kombiniert hohe Fouls-Lines mit hohen Tackles-Lines für High-Odds Builder.
+    """
+    builders: List[BuilderPick] = []
+    by_match: Dict[str, List[PropLeg]] = {}
+    for leg in props:
+        by_match.setdefault(leg.match, []).append(leg)
+
+    for match, candidates in by_match.items():
+        fouls = sorted(
+            [l for l in candidates if l.category in {"fouls", "fouls_won"}],
+            key=lambda x: x.quality, reverse=True
+        )
+        tackles = sorted(
+            [l for l in candidates if l.category in {"tackles_committed", "tackles_received", "tackles"}],
+            key=lambda x: x.quality, reverse=True
+        )
+
+        if not fouls or not tackles:
+            continue
+
+        # Fouls + Tackles (2-3 Spieler total, gemischte Märkte)
+        for n_fouls, n_tackles in [(2, 1), (1, 2), (1, 1), (2, 2)]:
+            selected = (
+                [_derive_lower_line(l, 2, "2+ Fouls Committed", 0.44) for l in fouls[:n_fouls]] +
+                [_derive_lower_line(l, 2, "2+ Tackles Committed", 0.44) for l in tackles[:n_tackles]]
+            )
+            selected = [l for l in selected if l is not None]
+            if len(selected) >= 2 and valid_builder(selected):
+                pick = _make_builder("FOULS + TACKLES", f"FOUL+TACKLE {len(selected)}L",
+                                     selected, match_date, 0.1)
+                if pick and 8.0 <= pick.total_odds <= 500.0:
+                    builders.append(pick)
+                    break
+
+        # High-Line Variante (3+ Fouls, 4+ Tackles wie Screenshot)
+        hi_fouls = [_derive_lower_line(l, 3, "3+ Fouls Committed", 0.25) for l in fouls[:2]]
+        hi_tackles = [_derive_lower_line(l, 3, "3+ Tackles Committed", 0.25) for l in tackles[:2]]
+        selected_hi = [l for l in hi_fouls + hi_tackles if l is not None]
+        if len(selected_hi) >= 2:
+            pick = _make_builder("FOULS + TACKLES", "HIGH LINE FOUL+TACKLE",
+                                 selected_hi[:3], match_date, 0.1)
+            if pick and 30.0 <= pick.total_odds <= 1000.0:
+                builders.append(pick)
+
+    return builders
+
+
+
+def _jk_multi_shot_builder(
+    props: Sequence[PropLeg], match_date: str
+) -> List[BuilderPick]:
+    """
+    JK Multi-Shot Builder — Screenshot (France vs Spain):
+    Olise 3+ Shots + Baena 2+ Shots + Olmo 3+ Shots + Porro 1+ Shots + Rodri 1+ Shots
+    Bis zu 5 Spieler, gemischte Shot-Lines, hohe Quoten.
+    """
+    builders: List[BuilderPick] = []
+    by_match: Dict[str, List[PropLeg]] = {}
+    for leg in props:
+        by_match.setdefault(leg.match, []).append(leg)
+
+    for match, candidates in by_match.items():
+        shot_legs = sorted(
+            [l for l in candidates if l.category in {"shots", "sot", "sot_outside_box"}],
+            key=lambda x: x.quality, reverse=True
+        )
+        pool = _best_distinct_players(shot_legs, 5)
+        if len(pool) < 3:
+            continue
+
+        for size, label, min_odds, stake in [
+            (3, "3-SHOT LADDER",  6.0,  0.25),
+            (4, "4-SHOT LADDER", 15.0,  0.10),
+            (5, "5-SHOT LADDER", 40.0,  0.10),
+        ]:
+            if len(pool) >= size:
+                # Gemischte Lines: Top-Spieler höhere Line, Rest 1+
+                legs_mixed = []
+                for i, leg in enumerate(pool[:size]):
+                    if i == 0 and leg.probability >= 0.50:
+                        legs_mixed.append(_derive_lower_line(leg, 2, "2+ Shots", 0.45))
+                    else:
+                        legs_mixed.append(_derive_lower_line(leg, 1, "1+ Shot", 0.60))
+                legs_mixed = [l for l in legs_mixed if l is not None]
+                if len(legs_mixed) >= size:
+                    pick = _make_builder("SHOT LADDER", label, legs_mixed, match_date, stake)
+                    if pick and pick.total_odds >= min_odds:
+                        builders.append(pick)
+
+    return builders
+
+
+
+
+def _outside_box_sot_builder(
+    props: Sequence[PropLeg], match_date: str
+) -> List[BuilderPick]:
+    """
+    SOT Outside Box Builder — wie Screenshot 2:
+    2 Spieler mit 1+ SOT Outside the Box aus demselben Spiel = Quote ~20.
+    Typisch für technische Mittelfeldspieler (Fabian Ruiz, Olise etc.)
+    """
+    builders: List[BuilderPick] = []
+    by_match: Dict[str, List[PropLeg]] = {}
+    for leg in props:
+        by_match.setdefault(leg.match, []).append(leg)
+
+    for match, candidates in by_match.items():
+        outside = sorted(
+            [l for l in candidates if l.category == "sot_outside_box"],
+            key=lambda x: x.quality, reverse=True
+        )
+        if len(outside) < 2:
+            continue
+
+        legs = _best_distinct_players(outside, 3)
+        for size in [2, 3]:
+            if len(legs) >= size:
+                pick = _make_builder("OUTSIDE BOX SOT", f"SOT OUTSIDE {size}L",
+                                     legs[:size], match_date, 0.25)
+                if pick and pick.total_odds >= 8.0:
+                    builders.append(pick)
+    return builders
+
+
+
+def _full_profile_builder(
+    props: Sequence[PropLeg], match_date: str
+) -> List[BuilderPick]:
+    """
+    Full Profile Builder — JK-Style (Screenshot England vs Argentina):
+    Messi To Score + Bellingham Score/Assist + 3× Tackles + Over Corners + Over SOT = 17.00
+
+    Kombiniert das KOMPLETTE Spielprofil:
+    1. Goalscorer/Score-or-Assist (1-2 Spieler)
+    2. Defensive Midfield Tackles (2-3 Spieler)
+    3. Match-Level Team-Märkte (Corners, SOT)
+    """
+    builders: List[BuilderPick] = []
+    by_match: Dict[str, List[PropLeg]] = {}
+    for leg in props:
+        by_match.setdefault(leg.match, []).append(leg)
+
+    for match, candidates in by_match.items():
+        # 1. Goalscorer-Legs
+        scorers = sorted(
+            [l for l in candidates if l.category in {"score", "score_assist", "first_scorer"}],
+            key=lambda x: x.quality, reverse=True
+        )
+        # 2. Tackle-Legs (defensive Sechser, Innenverteidiger)
+        tackles = sorted(
+            [l for l in candidates if l.category in
+             {"tackles_committed", "tackles_received", "tackles"}],
+            key=lambda x: x.quality, reverse=True
+        )
+        # 3. Team/Match Märkte
+        team_mkt = sorted(
+            [l for l in candidates if l.category in
+             {"team_corners", "corners", "match_corners", "over_goals", "btts", "btts_ht", "match_sot", "match_goals", "team_cards"}],
+            key=lambda x: x.quality, reverse=True
+        )
+
+        if not scorers or len(tackles) < 2:
+            continue
+
+        tackle_pool = _best_distinct_players(tackles, 3)
+
+        # Variante A: Scorer + 2 Tackles + Corner/SOT (wie Screenshot)
+        for n_tackles in [3, 2]:
+            if len(tackle_pool) >= n_tackles:
+                legs = scorers[:1] + tackle_pool[:n_tackles]
+                if team_mkt:
+                    legs += team_mkt[:1]
+                if valid_builder(legs, min_legs=4):
+                    pick = _make_builder("FULL PROFILE", f"SCORE+TACKLE+TEAM {len(legs)}L",
+                                         legs, match_date, 0.5)
+                    if pick and 6.0 <= pick.total_odds <= 100.0:
+                        builders.append(pick)
+                        break
+
+        # Variante B: Score+Assist + Tackles (2 Goalscorer-Legs + 2 Tackles)
+        if len(scorers) >= 2 and len(tackle_pool) >= 2:
+            legs_b = scorers[:2] + tackle_pool[:2]
+            if team_mkt:
+                legs_b += team_mkt[:1]
+            if valid_builder(legs_b, min_legs=4):
+                pick = _make_builder("FULL PROFILE", "DUAL SCORER+TACKLE",
+                                      legs_b, match_date, 0.5)
+                if pick and 10.0 <= pick.total_odds <= 150.0:
+                    builders.append(pick)
+
+    return builders
+
+
+
+def _goalscorer_combo_builder(
+    props: Sequence[PropLeg], match_date: str
+) -> List[BuilderPick]:
+    """Goalscorer Combo: Messi To Score + Fouls/Cards/Tackles = 8.50"""
+    builders: List[BuilderPick] = []
+    by_match: Dict[str, List[PropLeg]] = {}
+    for leg in props:
+        by_match.setdefault(leg.match, []).append(leg)
+
+    for match, candidates in by_match.items():
+        scorers = sorted(
+            [l for l in candidates if l.category in {"score", "first_scorer"}],
+            key=lambda x: x.quality, reverse=True
+        )
+        if not scorers:
+            continue
+
+        # Anker-Legs: Fouls, Tackles, Bookings vom gleichen Spiel
+        anchors = sorted(
+            [l for l in candidates if l.category in
+             {"fouls", "fouls_won", "yellow_cards", "tackles_committed",
+              "sot", "shots", "team_cards", "btts"}],
+            key=lambda x: x.quality, reverse=True
+        )
+        if not anchors:
+            continue
+
+        # Top Scorer + 1-2 Anker
+        top_scorer = scorers[0]
+        for n_anchors in [2, 1]:
+            selected = [top_scorer] + anchors[:n_anchors]
+            if valid_builder(selected):
+                label = "GOALSCORER MIX" if n_anchors == 1 else "GOALSCORER + FOULS"
+                pick = _make_builder("PLAYER BUILDER", label, selected, match_date, 0.5)
+                if pick and 4.0 <= pick.total_odds <= 50.0:
+                    builders.append(pick)
+                    break
+    return builders
+
+
+
+
+
+def build_builder_picks(
+    raw_props: Sequence[Dict[str, Any]],
+    match_contexts: Optional[Sequence[Dict[str, Any]]] = None,
+    match_date: Optional[str] = None,
+    max_builders: Optional[int] = None,
+) -> List[BuilderPick]:
+    props = deduplicate_props(raw_props)
+    run_date = match_date or date.today().isoformat()
+    max_count = max_builders or as_int(os.getenv("NETRATTLER_MAX_BUILDERS_PER_RUN", "30"), 30)
+
+    candidates: List[BuilderPick] = []
+    # Real Player Prop Mix zuerst sichern, damit echte Spielerprops nicht von Team-Märkten verdrängt werden.
+    candidates.extend(_player_prop_mix_builders(props, run_date))
+    candidates.extend(_shot_ladders(props, match_contexts or [], run_date))
+    candidates.extend(_category_trios(props, run_date))
+    candidates.extend(_mixed_builders(props, run_date))
+    candidates.extend(_same_match_available_builders(props, run_date))
+    candidates.extend(_same_game_narratives(props, run_date))
+    candidates.extend(_cross_match_builder(props, run_date))
+    # Team & Korrelations-Builder
+    candidates.extend(_team_correlation_builders(props, run_date))
+    candidates.extend(_goalscorer_combo_builder(props, run_date))
+    # JK-Style High-Odds Builder
+    candidates.extend(_high_odds_booking_builder(props, run_date))    # 2-5× Booked
+    candidates.extend(_fouls_tackles_combo_builder(props, run_date))  # Fouls + Tackles = 170/1
+    candidates.extend(_jk_multi_shot_builder(props, run_date))        # 3-5 Spieler Shots = 100/1+
+    candidates.extend(_outside_box_sot_builder(props, run_date))      # SOT Outside Box = 21/1
+    candidates.extend(_full_profile_builder(props, run_date))         # Messi+Bellingham+Tackles+Corners
+
+    # Stable dedup, then rank safe/high-quality builders first.
+    seen = set()
+    unique: List[BuilderPick] = []
+    for pick in candidates:
+        if pick.builder_id in seen:
+            continue
+        seen.add(pick.builder_id)
+        unique.append(pick)
+
+    def rank(pick: BuilderPick) -> Tuple[float, float, float]:
+        avg_quality = sum(x.quality for x in pick.legs) / max(1, len(pick.legs))
+        avg_prob = sum(x.probability for x in pick.legs) / max(1, len(pick.legs))
+        # Keep enormous jackpot odds below safer builders.
+        odds_penalty = max(0.0, math.log(max(1.0, pick.total_odds / 12.0))) * 0.08
+        return (avg_quality - odds_penalty, avg_prob, -pick.total_odds)
+
+    unique.sort(key=rank, reverse=True)
+
+    diversified: List[BuilderPick] = []
+    style_counts: Dict[str, int] = {}
+    match_counts: Dict[str, int] = {}
+    selected_ids = set()
+
+    def _try_add(pick: BuilderPick, force_style: bool = False) -> bool:
+        if pick.builder_id in selected_ids:
+            return False
+        match_key = pick.legs[0].match if len({x.match for x in pick.legs}) == 1 else "CROSS"
+        if not force_style and style_counts.get(pick.style, 0) >= 8:
+            return False
+        if match_key != "CROSS" and match_counts.get(match_key, 0) >= 20:
+            return False
+        diversified.append(pick)
+        selected_ids.add(pick.builder_id)
+        style_counts[pick.style] = style_counts.get(pick.style, 0) + 1
+        match_counts[match_key] = match_counts.get(match_key, 0) + 1
+        return True
+
+    # Pass 1: Mindestens einen Builder pro tatsächlich vorhandener Stilart sichern.
+    seen_styles = set()
+    for pick in unique:
+        if pick.style in seen_styles:
+            continue
+        if _try_add(pick, force_style=True):
+            seen_styles.add(pick.style)
+        if len(diversified) >= max_count:
+            return diversified
+
+    # Pass 2: Restliche Plätze nach Ranking auffüllen.
+    for pick in unique:
+        _try_add(pick)
+        if len(diversified) >= max_count:
+            break
+
+    return diversified
+
+
+def format_builder_message(pick: BuilderPick) -> str:
+    sep = "━" * 18
+    estimate = " · Modell/Fair" if pick.estimated_odds else ""
+    lines = [
+        f"🏗️ <b>NETRATTLER {pick.style}</b>",
+        f"<b>{pick.variant}</b>",
+        sep,
+    ]
+    MARKET_LABELS = {
+        "score": "Anytime Goalscorer",
+        "first_scorer": "First Goalscorer",
+        "last_scorer": "Last Goalscorer",
+        "sot": "Shots on Target",
+        "shots": "Shots",
+        "yellow_cards": "To Be Carded",
+        "fouls": "Fouls Committed",
+        "fouls_won": "Fouls Won",
+        "tackles_committed": "Tackles Committed",
+        "tackles_received": "Tackles Received",
+        "btts": "BTTS YES", "over25": "Over 2.5 Tore", "combo": "BTTS + Over 2.5",
+        "btts_ht": "BTTS HT", "match_goals": "Team trifft", "over15_ht": "Over 1.5 HT", "corners": "Ecken",
+        "shots": "Schüsse", "cards": "Karte", "goals": "Tor",
+    }
+    same_match = len({x.match for x in pick.legs}) == 1
+    if same_match and pick.legs:
+        lines.append(f"⚽ <b>{pick.legs[0].match}</b>")
+    for index, leg in enumerate(pick.legs, 1):
+        icon = CATEGORY_ICON.get(leg.category, "🎯")
+        match_suffix = "" if same_match else f" · {leg.match}"
+        source_note = " ~" if leg.estimated else ""
+        # Zeige nur den lesbaren Namen, nicht die market_id
+        market_label = MARKET_LABELS.get(leg.market, leg.market)
+        display_name = leg.player if leg.player and leg.player != leg.market else market_label
+        lines.append(
+            f"{index}. {icon} <b>{display_name}</b> — {market_label}"
+            f"{source_note}{match_suffix}"
+        )
+    lines.extend([
+        sep,
+        f"💰 Gesamt-Quote: <b>{pick.total_odds:.2f}</b>{estimate}",
+        f"🔥 Einsatz: <b>{pick.stake:.2f} Units</b>",
+        ("🎲 Risiko: <b>LOTTERY</b>" if pick.total_odds >= 50 else "🎯 Risiko: <b>VALUE</b>" if pick.total_odds >= 8 else "✅ Risiko: <b>STANDARD</b>"),
+        f"🧠 Daten: {', '.join(dict.fromkeys(x.source.split(':')[0] for x in pick.legs))}",
+    ])
+    return "\n".join(lines)
+
+
+def _supabase_headers(key: str, prefer: str = "resolution=merge-duplicates,return=minimal") -> Dict[str, str]:
     return {
-        "apikey": SUPABASE_KEY,
-        "Authorization": f"Bearer {SUPABASE_KEY}",
+        "apikey": key,
+        "Authorization": f"Bearer {key}",
         "Content-Type": "application/json",
         "Prefer": prefer,
     }
 
 
-def sb_get(table: str, params: Dict[str, str], quiet: bool = True) -> List[Dict[str, Any]]:
-    if not SUPABASE_URL or not SUPABASE_KEY:
-        return []
-    try:
-        response = requests.get(
-            f"{SUPABASE_URL}/rest/v1/{table}", headers=headers(), params=params, timeout=30
-        )
-        if response.status_code >= 400:
-            if not quiet:
-                log(f"GET {table} {response.status_code}: {response.text[:180]}", "WARN")
-            return []
-        return response.json() if response.text else []
-    except Exception as exc:
-        if not quiet:
-            log(f"GET {table}: {exc}", "WARN")
-        return []
-
-
-def sb_upsert(table: str, rows: Sequence[Dict[str, Any]], conflict: str) -> int:
-    if not rows:
-        return 0
-    saved = 0
-    for start in range(0, len(rows), 150):
-        part = list(rows[start : start + 150])
-        try:
-            response = requests.post(
-                f"{SUPABASE_URL}/rest/v1/{table}",
-                headers=headers("resolution=merge-duplicates,return=minimal"),
-                params={"on_conflict": conflict},
-                data=json.dumps(part, ensure_ascii=False, default=str),
-                timeout=35,
-            )
-            if response.status_code in (200, 201, 204):
-                saved += len(part)
-            else:
-                log(f"UPSERT {table} {response.status_code}: {response.text[:220]}", "WARN")
-        except Exception as exc:
-            log(f"UPSERT {table}: {exc}", "WARN")
-    return saved
-
-
-def sb_patch(table: str, column: str, value: Any, payload: Dict[str, Any]) -> bool:
-    if not value:
-        return False
-    try:
-        response = requests.patch(
-            f"{SUPABASE_URL}/rest/v1/{table}",
-            headers=headers("return=minimal"),
-            params={column: f"eq.{value}"},
-            data=json.dumps(payload, ensure_ascii=False, default=str),
-            timeout=20,
-        )
-        return response.status_code in (200, 204)
-    except Exception:
-        return False
-
-
-def telegram(chat_id: str, text: str) -> bool:
-    if not TG_TOKEN or not chat_id:
-        return False
-    try:
-        response = requests.post(
-            f"https://api.telegram.org/bot{TG_TOKEN}/sendMessage",
-            json={
-                "chat_id": chat_id,
-                "text": text[:3900],
-                "parse_mode": "HTML",
-                "disable_web_page_preview": True,
-            },
-            timeout=20,
-        )
-        if not response.ok:
-            log(f"TG {response.status_code}: {response.text[:180]}", "WARN")
-        return response.ok
-    except Exception as exc:
-        log(f"TG: {exc}", "WARN")
-        return False
-
-
-
-def telegram_edit(chat_id: str, message_id: Any, text: str) -> bool:
-    """Original-Tipp direkt bearbeiten."""
-    if not TG_TOKEN or not chat_id or not message_id:
-        return False
-    try:
-        response = requests.post(
-            f"https://api.telegram.org/bot{TG_TOKEN}/editMessageText",
-            json={
-                "chat_id": chat_id,
-                "message_id": int(message_id),
-                "text": text[:3900],
-                "parse_mode": "HTML",
-                "disable_web_page_preview": True,
-            },
-            timeout=20,
-        )
-        if not response.ok:
-            log(f"TG edit {response.status_code}: {response.text[:180]}", "WARN")
-        return response.ok
-    except Exception as exc:
-        log(f"TG edit: {exc}", "WARN")
-        return False
-
-
-def _strip_old_direct_summary(original: str) -> str:
-    if not original:
-        return ""
-    pattern = r"\n?⸻⸻\s*(?:<b>)?(?:Match|Combo|Corner|Builder|Prop) Summary(?:</b>)?\s*⸻⸻[\s\S]*$"
-    return re.sub(pattern, "", str(original)).rstrip()
-
-
-def _direct_summary_title(group: str) -> str:
-    if group == "combo":
-        return "Combo Summary"
-    if group == "corners":
-        return "Corner Summary"
-    if group == "builder":
-        return "Builder Summary"
-    if group == "props":
-        return "Prop Summary"
-    return "Match Summary"
-
-
-def format_direct_summary(settlement: Dict[str, Any]) -> str:
-    """Kurzer Block direkt im Original-Tipp."""
-    group = settlement.get("market_group", "default")
-    title = _direct_summary_title(group)
-    status = normalized_status(settlement.get("status"))
-    hit = "✅ Hit  <b>✅ V</b>" if status == "win" else "❌ Miss  <b>❌ X</b>"
-    profit = as_float(settlement.get("profit"), 0.0)
-    profit_icon = "🟢" if profit >= 0 else "🔴"
-    result = settlement.get("match_result") or {}
-    raw = result.get("raw") if isinstance(result, dict) else {}
-    raw = raw if isinstance(raw, dict) else {}
-    home_score = result.get("home_score") if isinstance(result, dict) else None
-    away_score = result.get("away_score") if isinstance(result, dict) else None
-    ht_home = anyv(raw, ["home_score_ht", "ht_home", "home_ht", "HTHG", "intHomeScoreHT"], None)
-    ht_away = anyv(raw, ["away_score_ht", "ht_away", "away_ht", "HTAG", "intAwayScoreHT"], None)
-
-    lines = [f"⸻⸻ <b>{title}</b> ⸻⸻"]
-    if ht_home not in (None, "") and ht_away not in (None, ""):
-        lines.append(f"Half-Time Score: <b>{ht_home}-{ht_away}</b>")
-    if home_score not in (None, "") and away_score not in (None, ""):
-        lines.append(f"Full-Time Score: <b>{home_score}-{away_score}</b>")
-    reason = str(settlement.get("reason") or "").strip()
-    if reason:
-        lines.append(f"Auswertung: <b>{reason[:180]}</b>")
-    lines.append(hit)
-    lines.append(f"{profit_icon} Profit: <b>{profit:+.2f} Units</b>")
-
-    legs = settlement.get("legs_payload") or []
-    if isinstance(legs, list) and legs and group in {"combo", "builder", "props"}:
-        lines.append("")
-        lines.append("<b>Leg-Auswertung:</b>")
-        for item in legs[:8]:
-            if not isinstance(item, dict):
-                continue
-            st = normalized_status(item.get("status"))
-            icon = "✅" if st == "win" else "❌" if st == "loss" else "⏳"
-            leg = item.get("leg") if isinstance(item.get("leg"), dict) else {}
-            label = market_text(leg) if leg else str(item.get("reason") or "Leg")
-            reason_txt = str(item.get("reason") or "")
-            lines.append(f"{icon} {label[:70]} — {reason_txt[:80]}")
-    return "\n".join(lines)
-
-
-def edit_original_tip(settlement: Dict[str, Any]) -> bool:
-    """Wenn telegram_msg_id + message_text gespeichert sind: Original-Tipp direkt editieren."""
-    if normalized_status(settlement.get("status")) not in {"win", "loss"}:
-        return False
-    payload = settlement.get("tip_payload") or {}
-    data = unpack(payload)
-    chat_id = anyv(data, ["telegram_chat_id", "chat_id", "tg_chat_id", "channel_id"], "")
-    message_id = anyv(data, ["telegram_msg_id", "telegram_message_id", "message_id", "tg_message_id"], "")
-    original = str(anyv(data, ["message_text", "text", "tip_text", "message", "caption"], ""))
-    if not chat_id or not message_id or not original:
-        return False
-    edited = _strip_old_direct_summary(original) + "\n\n" + format_direct_summary(settlement)
-    return telegram_edit(str(chat_id), message_id, edited)
-
-
-def market_text(row: Dict[str, Any]) -> str:
-    data = unpack(row)
-    values: List[str] = []
-    for key in ("selection", "pick", "bet", "tip", "market", "type", "bet_type", "category"):
-        value = data.get(key)
-        if value not in (None, ""):
-            text = str(value).strip()
-            if text and text.lower() not in {"none", "null", "nan"}:
-                values.append(text)
-    return " / ".join(dict.fromkeys(values)).strip() or "Market nicht erkannt"
-
-
-def group_of(row: Dict[str, Any]) -> str:
-    data = unpack(row)
-    explicit = str(data.get("market_group") or "").lower().strip()
-    if explicit in GROUP_ORDER:
-        return explicit
-    low = " ".join(
-        str(anyv(data, [key], ""))
-        for key in ("market", "type", "bet_type", "category", "group", "channel", "selection", "pick", "message", "text", "tip_text", "title", "style")
-    ).lower()
-    if any(x in low for x in ("builder", "bet_builder", "bet builder", "shot ladder", "sot trio", "foul press", "tackle wall", "corner fusion")):
-        return "builder"
-    if any(x in low for x in ("combo", "multi", "parlay", "acca", "same game")):
-        return "combo"
-    if "btts_ht" in low or "btts ht" in low or "both teams to score ht" in low:
-        return "btts_ht"
-    if "over15_ht" in low or "over 1.5 ht" in low or "over 1.5 first half" in low:
-        return "over15_ht"
-    if any(x in low for x in ("corner", "corners", "ecken")):
-        return "corners"
-    if any(x in low for x in ("player", "booked", "carded", "shot", "sot", "foul", "tackle")):
-        return "props"
-    if ("over" in low and "2.5" in low) or "over25" in low:
-        return "over25"
-    if "btts" in low or "both teams" in low:
-        return "btts"
-    return "default"
-
-
-def match_parts(row: Dict[str, Any]) -> Tuple[str, str, str]:
-    data = unpack(row)
-    home = str(anyv(data, ["home_team", "home", "team_home", "HomeTeam", "strHomeTeam", "home_name", "homeTeamName"], ""))
-    away = str(anyv(data, ["away_team", "away", "team_away", "AwayTeam", "strAwayTeam", "away_name", "awayTeamName"], ""))
-    if isinstance(data.get("homeTeam"), dict):
-        home = home or str(anyv(data["homeTeam"], ["name", "shortName", "displayName"], ""))
-    if isinstance(data.get("awayTeam"), dict):
-        away = away or str(anyv(data["awayTeam"], ["name", "shortName", "displayName"], ""))
-    match = str(anyv(data, ["match", "fixture", "game", "event", "entity_name", "name", "title"], ""))
-    if (not home or not away) and re.search(r"\s+v(s)?\.?\s+", match, re.I):
-        parts = re.split(r"\s+vs\.?\s+|\s+v\.?\s+", match, flags=re.I)
-        if len(parts) >= 2:
-            home, away = parts[0].strip(), parts[1].strip()
-    if not match and home and away:
-        match = f"{home} vs {away}"
-    return home, away, match
-
-
-def tip_id(row: Dict[str, Any]) -> str:
-    data = unpack(row)
-    for key in ("builder_id", "tip_id", "pick_id", "uuid", "id", "dedup_key"):
-        if data.get(key) not in (None, ""):
-            return str(data[key])
-    home, away, match = match_parts(row)
-    legs = legs_of(row)
-    leg_signature = json.dumps(legs, ensure_ascii=False, sort_keys=True, default=str) if legs else ""
-    return hsh(row_date(row), match, home, away, market_text(row), leg_signature)
-
-
-def stable_settlement_id(row: Dict[str, Any]) -> str:
-    return hsh("netrattler-settlement-v21", row.get("_table", ""), tip_id(row))
-
-
-def source_key(row: Dict[str, Any]) -> Tuple[str, Any]:
-    data = unpack(row)
-    for key in ("builder_id", "tip_id", "pick_id", "uuid", "id", "dedup_key"):
-        if data.get(key) not in (None, ""):
-            return key, data[key]
-    return "", ""
-
-
-def normalized_status(value: Any) -> str:
-    status = str(value or "").lower().strip()
-    if status in {"win", "won", "green"}:
-        return "win"
-    if status in {"loss", "lost", "red"}:
-        return "loss"
-    if status in {"void", "push", "cancelled", "canceled"}:
-        return "void"
-    return "pending"
-
-
-def include_tip(row: Dict[str, Any]) -> bool:
-    data = unpack(row)
-    _st = normalized_status(anyv(data, ["status", "result", "settlement_status"], "pending"))
-    # pending UND void erneut versuchen (void entstand meist nur durch fehlendes Ergebnis).
-    _reset_void = str(os.getenv("NETRATTLER_RESETTLE_VOID", "true")).lower() in ("1", "true", "yes", "on")
-    # 🔧 Auch falsch abgerechnete won/lost der HT/Corner-Märkte neu bewerten:
-    # deren Alt-Abrechnung war fehlerhaft (btts_ht 100%, corners 0%). Mit curl_cffi
-    # holen wir jetzt HT-Stände + Ecken → korrekt neu bewerten.
-    _reset_markets = str(os.getenv("NETRATTLER_RESETTLE_MARKETS", "btts_ht,over15_ht,corners")).lower()
-    _mk = str(anyv(data, ["market", "market_group", "type"], "")).lower()
-    _is_reset_market = any(m and m in _mk for m in _reset_markets.split(","))
-    if _st in ("won", "win", "lost", "loss") and _is_reset_market and \
-       str(os.getenv("NETRATTLER_RESETTLE_BROKEN", "true")).lower() in ("1", "true", "yes", "on"):
-        pass  # → wird neu bewertet (nicht ausgeschlossen)
-    elif _st not in ("pending",) and not (_reset_void and _st == "void"):
-        return False
-    return row_date(row) >= (TODAY - timedelta(days=DAYS)).isoformat()
-
-
-def load_tips() -> List[Dict[str, Any]]:
-    output: List[Dict[str, Any]] = []
-    for table in TIP_TABLES:
-        rows = sb_get(table, {"select": "*", "limit": str(LIMIT)}, quiet=True)
-        if rows:
-            log(f"Tip-Tabelle {table}: {len(rows)} Rows geladen")
-        for row in rows:
-            if include_tip(row):
-                item = dict(row)
-                item["_table"] = table
-                output.append(item)
-    seen = set()
-    clean = []
-    for row in output:
-        key = (row.get("_table"), tip_id(row))
-        if key not in seen:
-            seen.add(key)
-            clean.append(row)
-    clean = clean[:LIMIT]
-    log(f"Offene Tipps total: {len(clean)}")
-    log(f"Offene Tipps nach Gruppen: {dict(Counter(group_of(x) for x in clean))}")
-    return clean
-
-
-def score_row(row: Dict[str, Any]) -> Tuple[str, str, Optional[int], Optional[int]]:
-    data = unpack(row)
-    home, away, _ = match_parts(data)
-    home_score = anyv(data, ["home_score", "home_goals", "FTHG", "intHomeScore", "score_home", "homeScore", "home_goals_ft", "homeGoals"], None)
-    away_score = anyv(data, ["away_score", "away_goals", "FTAG", "intAwayScore", "score_away", "awayScore", "away_goals_ft", "awayGoals"], None)
-    for key in ("score", "result", "ft_score", "full_time_score"):
-        if home_score in (None, "") and isinstance(data.get(key), str):
-            nums = re.findall(r"\d+", data[key])
-            if len(nums) >= 2:
-                home_score, away_score = nums[0], nums[1]
-                break
-    try:
-        home_score = int(float(home_score))
-    except (TypeError, ValueError):
-        home_score = None
-    try:
-        away_score = int(float(away_score))
-    except (TypeError, ValueError):
-        away_score = None
-    return home, away, home_score, away_score
-
-
-def _append_result(output: List[Dict[str, Any]], source: str, day: str, home: Any, away: Any,
-                   home_score: Any, away_score: Any, raw: Optional[Dict[str, Any]] = None,
-                   ht_home: Any = None, ht_away: Any = None) -> None:
-    """Normalisiert ein fertiges Resultat. Ungültige/ungeklärte Scores werden verworfen."""
-    if not home or not away or home_score in (None, "") or away_score in (None, ""):
-        return
-    try:
-        hs, aw = int(float(home_score)), int(float(away_score))
-    except (TypeError, ValueError):
-        return
-    row: Dict[str, Any] = {
-        "home_team": str(home), "away_team": str(away),
-        "home_score": hs, "away_score": aw, "match_date": day,
-        "raw": raw or {}, "_result_table": source,
-    }
-    if ht_home not in (None, "") and ht_away not in (None, ""):
-        row["home_score_ht"] = as_int(ht_home, -1)
-        row["away_score_ht"] = as_int(ht_away, -1)
-    output.append(row)
-
-
-def _sofascore_results(day: str) -> List[Dict[str, Any]]:
-    if not RESULT_USE_SOFASCORE:
-        return []
-    output: List[Dict[str, Any]] = []
-    try:
-        data = _cffi_get_json(
-            f"https://www.sofascore.com/api/v1/sport/football/scheduled-events/{day}",
-            timeout=RESULT_HTTP_TIMEOUT,
-        )
-        if not data:
-            log(f"SofaScore {day}: keine Daten (403/blockiert)", "WARN")
-            return []
-        for event in data.get("events") or []:
-            if str((event.get("status") or {}).get("type") or "").lower() != "finished":
-                continue
-            hs = (event.get("homeScore") or {}).get("current")
-            aw = (event.get("awayScore") or {}).get("current")
-            _append_result(output, "SofaScore", day,
-                (event.get("homeTeam") or {}).get("name"),
-                (event.get("awayTeam") or {}).get("name"), hs, aw, event,
-                (event.get("homeScore") or {}).get("period1"),
-                (event.get("awayScore") or {}).get("period1"))
-    except Exception as exc:
-        log(f"SofaScore {day}: {str(exc)[:100]}", "WARN")
-    return output
-
-
-def _espn_results(day: str) -> List[Dict[str, Any]]:
-    if not RESULT_USE_ESPN:
-        return []
-    output: List[Dict[str, Any]] = []
-    try:
-        dates = day.replace("-", "")
-        data = _cffi_get_json(
-            "https://site.api.espn.com/apis/site/v2/sports/soccer/all/scoreboard",
-            params={"dates": dates, "limit": "1000"}, timeout=RESULT_HTTP_TIMEOUT,
-        )
-        if not data:
-            log(f"ESPN {day}: keine Daten (403/blockiert)", "WARN")
-            return []
-        for event in data.get("events") or []:
-            comp = ((event.get("competitions") or [{}])[0])
-            status = ((comp.get("status") or {}).get("type") or {})
-            if not (status.get("completed") or str(status.get("state") or "").lower() == "post"):
-                continue
-            home = away = None; hs = aw = None
-            for c in comp.get("competitors") or []:
-                team = (c.get("team") or {}).get("displayName") or (c.get("team") or {}).get("name")
-                if c.get("homeAway") == "home": home, hs = team, c.get("score")
-                elif c.get("homeAway") == "away": away, aw = team, c.get("score")
-            _append_result(output, "ESPN", day, home, away, hs, aw, event)
-    except Exception as exc:
-        log(f"ESPN {day}: {str(exc)[:100]}", "WARN")
-    return output
-
-
-def _openligadb_results(day: str) -> List[Dict[str, Any]]:
-    if not RESULT_USE_OPENLIGADB:
-        return []
-    output: List[Dict[str, Any]] = []
-    try:
-        r = requests.get(f"https://api.openligadb.de/getmatchdata/{day}", timeout=RESULT_HTTP_TIMEOUT)
-        if not r.ok:
-            return []
-        for match in r.json() if isinstance(r.json(), list) else []:
-            if not match.get("matchIsFinished"):
-                continue
-            results = match.get("matchResults") or []
-            final = None
-            for item in results:
-                if item.get("resultTypeID") == 2 or str(item.get("resultName") or "").lower() in {"endresult", "endergebnis"}:
-                    final = item
-                    break
-            final = final or (results[-1] if results else {})
-            _append_result(output, "OpenLigaDB", day,
-                (match.get("team1") or {}).get("teamName"),
-                (match.get("team2") or {}).get("teamName"),
-                final.get("pointsTeam1"), final.get("pointsTeam2"), match)
-    except Exception as exc:
-        log(f"OpenLigaDB {day}: {str(exc)[:100]}", "WARN")
-    return output
-
-
-def _windrawwin_results(day: str) -> List[Dict[str, Any]]:
-    """Windrawwin: HT-Stände + Ergebnisse via einfache HTML-Tabellen (pandas.read_html).
-    Kaum Bot-Schutz — laut Recherche die stabilste Ergebnis-Quelle für HT/Ecken."""
-    output: List[Dict[str, Any]] = []
-    if str(os.getenv("NETRATTLER_USE_WINDRAWWIN", "true")).lower() not in ("1", "true", "yes", "on"):
-        return output
-    try:
-        import pandas as _pd
-        # Windrawwin Results-Seite pro Tag
-        url = f"https://www.windrawwin.com/results/{day}/"
-        html = _cffi_get_json.__wrapped__ if hasattr(_cffi_get_json, "__wrapped__") else None
-        # HTML holen (curl_cffi Text)
-        try:
-            from curl_cffi import requests as _creq
-            r = _creq.get(url, impersonate="chrome", timeout=RESULT_HTTP_TIMEOUT)
-            raw = r.text if r.status_code == 200 else None
-        except Exception:
-            raw = None
-        if not raw:
-            return output
-        tables = _pd.read_html(raw)
-        for tbl in tables:
-            for _, row in tbl.iterrows():
-                cells = [str(c) for c in row.values]
-                # Suche nach "Home  X-Y  Away" Mustern
-                for c in cells:
-                    m = re.search(r"(.+?)\s+(\d+)\s*[-:]\s*(\d+)\s+(.+)", c)
-                    if m:
-                        _append_result(output, "Windrawwin", day,
-                                       m.group(1).strip(), m.group(4).strip(),
-                                       m.group(2), m.group(3), {})
-    except Exception as exc:
-        log(f"Windrawwin {day}: {str(exc)[:60]}", "WARN")
-    return output
-
-
-def public_results(day: str) -> List[Dict[str, Any]]:
-    """Key-freie + Key-basierte Resultat-Fallbacks. Keine einzelne Quelle darf den Run stoppen."""
-    output: List[Dict[str, Any]] = []
-    source_counts: Counter = Counter()
-
-    # 🍋 OddsPapi zuerst (API, Endstand + HT, kein Block) — nutzt gecachten Fixtures-Call
-    try:
-        import netrattler_oddspapi as _op
-        for r in _op.get_results(day):
-            _append_result(output, "OddsPapi", day, r.get("home"), r.get("away"),
-                           r.get("home_score"), r.get("away_score"), r,
-                           r.get("ht_home"), r.get("ht_away"))
-    except Exception as exc:
-        log(f"OddsPapi results {day}: {str(exc)[:80]}", "WARN")
-
-    for getter in (_sofascore_results, _espn_results, _openligadb_results, _windrawwin_results):
-        rows = getter(day)
-        output.extend(rows)
-
-    # TheSportsDB (curl_cffi gegen Blocks)
-    try:
-        data = _cffi_get_json("https://www.thesportsdb.com/api/v1/json/3/eventsday.php",
-                             params={"d": day, "s": "Soccer"}, timeout=RESULT_HTTP_TIMEOUT)
-        if data:
-            for event in data.get("events") or []:
-                _append_result(output, "TheSportsDB", day, event.get("strHomeTeam"), event.get("strAwayTeam"),
-                               event.get("intHomeScore"), event.get("intAwayScore"), event,
-                               event.get("intHomeScoreHT"), event.get("intAwayScoreHT"))
-    except Exception as exc:
-        log(f"TheSportsDB {day}: {str(exc)[:100]}", "WARN")
-
-    # AllSports
-    if ALLSPORTS_API_KEY:
-        try:
-            r = requests.get("https://apiv2.allsportsapi.com/football/",
-                params={"met": "Fixtures", "APIkey": ALLSPORTS_API_KEY, "from": day, "to": day},
-                timeout=RESULT_HTTP_TIMEOUT)
-            if r.ok:
-                for m in r.json().get("result") or []:
-                    if str(m.get("event_status") or "").lower() not in {"finished", "ft", "after extra time", "after penalties"}:
-                        continue
-                    score = re.findall(r"\d+", str(m.get("event_final_result") or ""))
-                    half = re.findall(r"\d+", str(m.get("event_halftime_result") or ""))
-                    if len(score) >= 2:
-                        _append_result(output, "AllSports", day, m.get("event_home_team"), m.get("event_away_team"),
-                                       score[0], score[1], m, half[0] if len(half)>=2 else None, half[1] if len(half)>=2 else None)
-            else:
-                log(f"AllSports {day}: HTTP {r.status_code}", "WARN")
-        except Exception as exc:
-            log(f"AllSports {day}: {str(exc)[:100]}", "WARN")
-
-    # Football-Data.org with key rotation
-    for key in FOOTBALL_DATA_API_KEYS:
-        try:
-            r = requests.get("https://api.football-data.org/v4/matches",
-                params={"dateFrom": day, "dateTo": day}, headers={"X-Auth-Token": key}, timeout=RESULT_HTTP_TIMEOUT)
-            if r.status_code in (403, 429):
-                continue
-            if r.ok:
-                for m in r.json().get("matches") or []:
-                    if m.get("status") != "FINISHED":
-                        continue
-                    score = m.get("score") or {}; ft = score.get("fullTime") or {}; ht = score.get("halfTime") or {}
-                    _append_result(output, "FootballDataOrg", day,
-                        (m.get("homeTeam") or {}).get("name"), (m.get("awayTeam") or {}).get("name"),
-                        ft.get("home"), ft.get("away"), m, ht.get("home"), ht.get("away"))
-                break
-        except Exception:
-            continue
-
-    # Source Hub V30: OpenFootball worldcup/south-america/europe/champions/internationals + guarded Livescore.
-    try:
-        from netrattler_source_hub import public_result_fallbacks, rows_to_settlement_results, persist_source_health
-        hub_rows = rows_to_settlement_results(public_result_fallbacks(day))
-        if hub_rows:
-            output.extend(hub_rows)
-            log(f"SourceHub V30 {day}: {len(hub_rows)}", "INFO")
-        persist_source_health()
-    except Exception as exc:
-        log(f"SourceHub V30 {day}: {str(exc)[:100]}", "WARN")
-
-    # Optional footballdata.io
-    if FOOTBALLDATA_IO_API_KEY:
-        try:
-            r = requests.get(f"https://footballdata.io/api/v1/matches/date/{day}",
-                headers={"Authorization": f"Bearer {FOOTBALLDATA_IO_API_KEY}"}, timeout=RESULT_HTTP_TIMEOUT)
-            if r.ok:
-                payload = r.json(); matches = payload.get("data") or payload.get("matches") or (payload if isinstance(payload, list) else [])
-                for m in matches:
-                    if str(m.get("status") or m.get("matchStatus") or "").upper() not in {"FINISHED", "FT", "COMPLETED"}:
-                        continue
-                    ho=m.get("homeTeam") or m.get("home_team") or {}; ao=m.get("awayTeam") or m.get("away_team") or {}; sc=m.get("score") or {}
-                    home=ho.get("name") if isinstance(ho,dict) else ho; away=ao.get("name") if isinstance(ao,dict) else ao
-                    _append_result(output, "FootballDataIO", day, home, away,
-                        sc.get("home") or sc.get("homeScore"), sc.get("away") or sc.get("awayScore"), m)
-        except Exception as exc:
-            log(f"FootballDataIO {day}: {str(exc)[:100]}", "WARN")
-
-    for row in output:
-        source_counts[row.get("_result_table", "unknown")] += 1
-    log(f"Externe Results {day}: {dict(source_counts)}")
-    return output
-
-
-def load_results(dates: Sequence[str]) -> List[Dict[str, Any]]:
-    output: List[Dict[str, Any]] = []
-    min_db_rows = int(os.getenv("RESULT_PUBLIC_FALLBACK_IF_DB_ROWS_LT", "5"))
-    for day in dates:
-        day_db_rows = 0
-        for table, columns in RESULT_TABLES.items():
-            for column in columns:
-                rows = sb_get(table, {"select": "*", column: f"eq.{day}", "limit": "4000"}, quiet=True)
-                if rows:
-                    for row in rows:
-                        row["_result_table"] = table
-                    output.extend(rows)
-                    day_db_rows += len(rows)
-                    log(f"Results {table} {day} via {column}: {len(rows)}")
-                    break
-        # 🔧 FALLBACKS IMMER abfragen (ergänzend), nicht nur wenn DB leer ist.
-        # Sonst fehlen Ergebnisse für exotische Ligen (Belarus, Usbekistan...),
-        # die nicht in match_results stehen → Tipps bleiben ewig pending.
-        # Nur überspringen, wenn explizit deaktiviert.
-        _always_fallback = str(os.getenv("NETRATTLER_ALWAYS_FALLBACK_RESULTS", "true")).lower() in ("1", "true", "yes", "on")
-        if day_db_rows >= min_db_rows and not _always_fallback:
-            log(f"Public Result-Fallback {day} übersprungen ({day_db_rows} DB-Results vorhanden)")
-            continue
-        public = public_results(day)
-        if public:
-            output.extend(public)
-            log(f"Public Results {day}: {len(public)} (ergänzend zu {day_db_rows} DB-Results)")
-    seen = set()
-    clean = []
-    for row in output:
-        home, away, hs, aw = score_row(row)
-        if hs is None or aw is None:
-            continue
-        key = (norm(home), norm(away), hs, aw, row_date(row))
-        if key not in seen:
-            seen.add(key)
-            clean.append(row)
-    log(f"Result candidates mit Score: {len(clean)}")
-    return clean
-
-
-def load_player_stats(dates: Sequence[str]) -> List[Dict[str, Any]]:
-    output: List[Dict[str, Any]] = []
-    for day in dates:
-        for table, columns in PLAYER_STATS_TABLES.items():
-            for column in columns:
-                rows = sb_get(table, {"select": "*", column: f"eq.{day}", "limit": "10000"}, quiet=True)
-                if rows:
-                    for row in rows:
-                        row["_stats_table"] = table
-                    output.extend(rows)
-                    log(f"Player Stats {table} {day} via {column}: {len(rows)}")
-                    break
-    # Flexible dedup by date/player/match/source.
-    best: Dict[Tuple[str, str, str], Dict[str, Any]] = {}
-    for row in output:
-        data = unpack(row)
-        player = norm(anyv(data, ["player_name", "player", "name", "athlete_name"], ""))
-        match = norm(anyv(data, ["match", "fixture", "event", "match_name"], ""))
-        key = (row_date(row), player, match)
-        if player:
-            best[key] = row
-    clean = list(best.values())
-    log(f"Player Stats candidates: {len(clean)}")
-    return clean
-
-
-def find_result(tip: Dict[str, Any], results: Sequence[Dict[str, Any]]) -> Optional[Dict[str, Any]]:
-    tip_home, tip_away, tip_match = match_parts(tip)
-    tip_day = row_date(tip)
-    best, best_score = None, 0.0
-    for row in results:
-        home, away, hs, aw = score_row(row)
-        if hs is None or aw is None:
-            continue
-        direct = (similarity(tip_home, home) + similarity(tip_away, away)) / 2 if tip_home and tip_away else similarity(tip_match, f"{home} vs {away}")
-        reverse = (similarity(tip_home, away) + similarity(tip_away, home)) / 2 if tip_home and tip_away else 0.0
-        if _identity_teams_match and tip_home and tip_away:
-            if _identity_teams_match(tip_home, home) and _identity_teams_match(tip_away, away):
-                direct = max(direct, 0.98)
-            if _identity_teams_match(tip_home, away) and _identity_teams_match(tip_away, home):
-                reverse = max(reverse, 0.98)
-        score = max(direct, reverse)
-        if row_date(row) == tip_day:
-            score += 0.15
-        if score > best_score:
-            best_score = score
-            best = {"home": home, "away": away, "home_score": hs, "away_score": aw, "raw": row, "match_score": score}
-    return best if best and best_score >= 0.66 else None
-
-
-def player_name(row: Dict[str, Any]) -> str:
-    return str(anyv(unpack(row), ["player_name", "player", "name", "athlete", "athlete_name", "selection"], ""))
-
-
-def player_stats_values(row: Dict[str, Any]) -> Dict[str, float]:
-    data = unpack(row)
-    return {
-        "shots": as_float(anyv(data, ["shots", "total_shots", "shot_total", "shot_attempts"], 0)),
-        "sot": as_float(anyv(data, ["sot", "shots_on_target", "shot_on_target", "on_target"], 0)),
-        "fouls": as_float(anyv(data, ["fouls_committed", "fouls", "fouls_made", "fc"], 0)),
-        "fouls_won": as_float(anyv(data, ["fouls_won", "fouls_drawn", "fouled", "fd"], 0)),
-        "tackles": as_float(anyv(data, ["tackles", "tackles_won", "total_tackles", "tackles_committed"], 0)),
-        "tackles_committed": as_float(anyv(data, ["tackles_committed", "tackles", "tackles_won", "total_tackles"], 0)),
-        "tackles_received": as_float(anyv(data, ["tackles_received", "times_tackled", "tackled"], 0)),
-        "yellow_cards": as_float(anyv(data, ["yellow_cards", "cards", "yc", "bookings"], 0)),
-        "goals": as_float(anyv(data, ["goals", "goal", "goals_scored"], 0)),
-        "assists": as_float(anyv(data, ["assists", "assist"], 0)),
-        "corners": as_float(anyv(data, ["corners", "corner_kicks"], 0)),
-    }
-
-
-def find_player_stat(leg: Dict[str, Any], stats: Sequence[Dict[str, Any]]) -> Optional[Dict[str, Any]]:
-    data = unpack(leg)
-    wanted_player = str(anyv(data, ["player", "player_name", "selection"], ""))
-    _, _, wanted_match = match_parts(leg)
-    wanted_day = row_date(leg)
-    best, best_score = None, 0.0
-    for row in stats:
-        p_score = similarity(wanted_player, player_name(row))
-        if p_score < 0.55:
-            continue
-        _, _, candidate_match = match_parts(row)
-        m_score = similarity(wanted_match, candidate_match) if wanted_match and candidate_match else 0.45
-        d_score = 1.0 if row_date(row) == wanted_day else 0.0
-        score = p_score * 0.68 + m_score * 0.22 + d_score * 0.10
-        if score > best_score:
-            best_score, best = score, row
-    return best if best and best_score >= 0.66 else None
-
-
-def market_line(text: str, default: float = 1.0) -> float:
-    low_txt = str(text).lower()
-    if any(x in low_txt for x in ["over25", "over_25", "over 2.5", "over2.5", "o2.5"]):
-        return 2.5
-    if any(x in low_txt for x in ["over15_ht", "over 1.5 ht", "over1.5 ht", "o1.5 ht"]):
-        return 1.5
-    plus = re.search(r"(\d+(?:\.\d+)?)\s*\+", str(text))
-    if plus:
-        return as_float(plus.group(1), default)
-    over = re.search(r"over\s*(\d+(?:\.\d+)?)", str(text), re.I)
-    if over:
-        return math.floor(as_float(over.group(1), default)) + 1
-    return default
-
-
-def category_of(row: Dict[str, Any]) -> str:
-    data = unpack(row)
-    explicit = str(data.get("category") or "").lower().strip()
-    aliases = {
-        "shots_on_target": "sot", "shot_on_target": "sot", "cards": "yellow_cards",
-        "booked": "yellow_cards", "fouls_committed": "fouls", "fouls_drawn": "fouls_won",
-        "tackles": "tackles_committed", "tackles_made": "tackles_committed",
-        "tackled": "tackles_received", "goalscorer": "score", "corners": "corners",
-    }
-    explicit = aliases.get(explicit, explicit)
-    if explicit:
-        return explicit
-    low = market_text(row).lower()
-    if "score or assist" in low:
-        return "score_assist"
-    if "assist" in low:
-        return "assist"
-    if "goalscorer" in low or "to score" in low:
-        return "score"
-    if "shot on target" in low or "shots on target" in low or "sot" in low:
-        return "sot"
-    if "shot" in low:
-        return "shots"
-    if "foul won" in low or "to be fouled" in low:
-        return "fouls_won"
-    if "foul" in low:
-        return "fouls"
-    if "tackles received" in low or "to be tackled" in low:
-        return "tackles_received"
-    if "tackle" in low:
-        return "tackles_committed"
-    if "booked" in low or "carded" in low or "yellow card" in low:
-        return "yellow_cards"
-    if "corner" in low or "ecken" in low:
-        return "corners"
-    return ""
-
-
-def settle_score_market(tip: Dict[str, Any], result: Dict[str, Any]) -> Tuple[str, str]:
-    hs, aw = int(result["home_score"]), int(result["away_score"])
-    total = hs + aw
-    low = (market_text(tip) + " " + str(anyv(unpack(tip), ["message", "text", "tip_text"], ""))).lower()
-
-    # 🏆 1X2 (Sieger): Heimsieg/Unentschieden/Auswärtssieg
-    if "1x2" in low or "heimsieg" in low or "auswärtssieg" in low or "auswaertssieg" in low or "unentschieden" in low:
-        if "heimsieg" in low or "home win" in low or "1x2 home" in low:
-            return ("win" if hs > aw else "loss", f"{hs}:{aw} · Heimsieg {'✓' if hs > aw else '✗'}")
-        if "auswärtssieg" in low or "auswaertssieg" in low or "away win" in low or "1x2 away" in low:
-            return ("win" if aw > hs else "loss", f"{hs}:{aw} · Auswärtssieg {'✓' if aw > hs else '✗'}")
-        if "unentschieden" in low or "draw" in low or "1x2 draw" in low:
-            return ("win" if hs == aw else "loss", f"{hs}:{aw} · Remis {'✓' if hs == aw else '✗'}")
-
-    if "btts ht" in low or "btts_ht" in low:
-        raw = unpack(result.get("raw") or {})
-        hth = as_int(anyv(raw, ["HTHG", "home_score_ht", "halftime_home", "intHomeScoreHT"], -1), -1)
-        hta = as_int(anyv(raw, ["HTAG", "away_score_ht", "halftime_away", "intAwayScoreHT"], -1), -1)
-        if hth < 0 or hta < 0:
-            return "pending", "Halbzeit-Resultat fehlt"
-        return ("win" if hth > 0 and hta > 0 else "loss", f"HT {hth}:{hta}")
-
-    if "over 1.5 ht" in low or "over15_ht" in low:
-        raw = unpack(result.get("raw") or {})
-        hth = as_int(anyv(raw, ["HTHG", "home_score_ht", "halftime_home", "intHomeScoreHT"], -1), -1)
-        hta = as_int(anyv(raw, ["HTAG", "away_score_ht", "halftime_away", "intAwayScoreHT"], -1), -1)
-        if hth < 0 or hta < 0:
-            return "pending", "Halbzeit-Resultat fehlt"
-        return ("win" if hth + hta > 1.5 else "loss", f"HT {hth}:{hta}")
-
-    # Combo BTTS + Over 2.5 muss BEIDES treffen.
-    if (
-        ("btts" in low or "both teams" in low)
-        and ("over25" in low or "over 2.5" in low or "over2.5" in low or "total goals" in low)
-    ):
-        line = 2.5
-        return ("win" if (hs > 0 and aw > 0 and total > line) else "loss", f"{hs}:{aw} · BTTS {'YES' if hs > 0 and aw > 0 else 'NO'} · Tore {total} · Over {line}")
-
-    if "btts" in low or "both teams" in low:
-        return ("win" if hs > 0 and aw > 0 else "loss", f"{hs}:{aw}")
-    if "over25" in low or "over_25" in low or "over 2.5" in low or "over2.5" in low:
-        line = 2.5
-        return ("win" if total > line else "loss", f"{hs}:{aw} · Tore {total} · Over {line}")
-    if "over" in low:
-        match = re.search(r"over\s*([0-9]+(?:\.[0-9]+)?)", low)
-        line = as_float(match.group(1), 2.5) if match else 2.5
-        return ("win" if total > line else "loss", f"{hs}:{aw} · Tore {total} · Over {line}")
-    if "under" in low:
-        match = re.search(r"under\s*([0-9]+(?:\.[0-9]+)?)", low)
-        line = as_float(match.group(1), 2.5) if match else 2.5
-        return ("win" if total < line else "loss", f"{hs}:{aw} · Tore {total} · Under {line}")
-    return "pending", f"{hs}:{aw} · Markt nicht erkannt"
-
-
-def team_corner_value(leg: Dict[str, Any], result: Dict[str, Any]) -> Optional[float]:
-    raw = unpack(result.get("raw") or {})
-    home_corners = anyv(raw, ["home_corners", "corners_home", "HC", "homeCorners"], None)
-    away_corners = anyv(raw, ["away_corners", "corners_away", "AC", "awayCorners"], None)
-    if home_corners in (None, "") or away_corners in (None, ""):
+def persist_builder_pick(pick: BuilderPick, supabase_url: str, supabase_key: str) -> Optional[bool]:
+    """Return True for a newly stored pick, False if it already exists, None on DB failure/offline."""
+    if not supabase_url or not supabase_key:
         return None
-    home_corners, away_corners = as_float(home_corners), as_float(away_corners)
-    data = unpack(leg)
-    team = str(anyv(data, ["team", "selection_team"], ""))
-    home, away, _ = match_parts(leg)
-    if team and similarity(team, home) >= 0.75:
-        return home_corners
-    if team and similarity(team, away) >= 0.75:
-        return away_corners
-    return home_corners + away_corners
-
-
-def settle_player_market(leg: Dict[str, Any], stats: Sequence[Dict[str, Any]], result: Optional[Dict[str, Any]]) -> Tuple[str, str]:
-    category = category_of(leg)
-    text = market_text(leg)
-    line = as_float(anyv(unpack(leg), ["line"], 0), 0) or market_line(text, 1.0)
-
-    if category in {"corners", "team_corners"}:
-        if not result:
-            return "pending", "Match-Resultat für Corners fehlt"
-        value = team_corner_value(leg, result)
-        if value is None:
-            return "pending", "Corner-Stats fehlen"
-        return ("win" if value >= line else "loss", f"Corners {value:g} · Linie {line:g}")
-
-    row = find_player_stat(leg, stats)
-    if not row:
-        return "pending", "Player-Stats fehlen"
-    values = player_stats_values(row)
-    if category == "score_assist":
-        value = values["goals"] + values["assists"]
-        line = max(1.0, line)
-    elif category == "score":
-        value = values["goals"]
-        line = max(1.0, line)
-    elif category == "assist":
-        value = values["assists"]
-        line = max(1.0, line)
-    elif category in values:
-        value = values[category]
-        line = max(1.0, line)
-    else:
-        return "pending", f"Player-Markt {category or text} nicht unterstützt"
-    status = "win" if value >= line else "loss"
-    return status, f"{player_name(row)} · {category} {value:g} · Linie {line:g}"
-
-
-def legs_of(tip: Dict[str, Any]) -> List[Dict[str, Any]]:
-    data = unpack(tip)
-    for key in ("legs", "builder_legs", "combo_legs", "selections", "legs_payload"):
-        value = data.get(key)
-        if isinstance(value, list):
-            return [x if isinstance(x, dict) else {"selection": str(x)} for x in value]
-        if isinstance(value, str) and value.strip().startswith("["):
-            try:
-                parsed = json.loads(value)
-                if isinstance(parsed, list):
-                    return [x if isinstance(x, dict) else {"selection": str(x)} for x in parsed]
-            except json.JSONDecodeError:
-                pass
-    return []
-
-
-def odds_of(row: Dict[str, Any]) -> Optional[float]:
-    value = anyv(unpack(row), ["total_odds", "odds", "quote", "price", "decimal_odds"], None)
-    odds = as_float(value, 0)
-    return odds if odds > 1 else None
-
-
-def stake_of(row: Dict[str, Any]) -> float:
-    return max(0.01, as_float(anyv(unpack(row), ["stake", "units", "unit", "stake_units"], 1.0), 1.0))
-
-
-def settle_tip(tip: Dict[str, Any], results: Sequence[Dict[str, Any]], player_stats: Sequence[Dict[str, Any]]) -> Dict[str, Any]:
-    group = group_of(tip)
-    tid = tip_id(tip)
-    result = find_result(tip, results)
-    leg_payload: List[Dict[str, Any]] = []
-
-    if group in {"combo", "builder"}:
-        legs = legs_of(tip)
-        if not legs:
-            legs = [tip]
-        wins = losses = pending = 0
-        for leg in legs:
-            merged = dict(tip)
-            merged.update(leg)
-            leg_result = find_result(merged, results) or result
-            category = category_of(merged)
-            if category or group == "builder":
-                status, reason = settle_player_market(merged, player_stats, leg_result)
-                if status == "pending" and category in {"btts", "over_goals", ""} and leg_result:
-                    status, reason = settle_score_market(merged, leg_result)
-            elif leg_result:
-                status, reason = settle_score_market(merged, leg_result)
-            else:
-                status, reason = "pending", "kein Result gefunden"
-            wins += status == "win"
-            losses += status == "loss"
-            pending += status == "pending"
-            leg_payload.append({"leg": leg, "status": status, "reason": reason})
-        status = "loss" if losses else "pending" if pending else "win"
-        reason = f"{wins}/{len(legs)} Legs gewonnen · {losses} verloren · {pending} offen"
-    else:
-        category = category_of(tip)
-        if category and group in {"props", "corners"}:
-            status, reason = settle_player_market(tip, player_stats, result)
-        elif result:
-            status, reason = settle_score_market(tip, result)
-        else:
-            status, reason = "pending", "kein Result gefunden"
-
-    odds = odds_of(tip)
-    stake = stake_of(tip)
-    if status == "win":
-        profit = (odds - 1.0) * stake if odds else stake
-    elif status == "loss":
-        profit = -stake
-    else:
-        profit = 0.0
-
-    data = unpack(tip)
-    return {
-        "settlement_id": stable_settlement_id(tip),
-        "tip_id": tid,
-        "source_table": tip.get("_table", ""),
-        "market_group": group,
-        "builder_style": str(data.get("style") or data.get("builder_style") or "")[:80],
-        "leg_count": len(legs_of(tip)) if group in {"combo", "builder"} else 1,
-        "status": status,
-        "result_label": "✅ WIN" if status == "win" else "❌ LOST" if status == "loss" else "⏳ PENDING",
-        "reason": reason,
-        "odds": odds,
-        "stake": round(stake, 4),
-        "profit": round(profit, 4),
-        "tip_date": row_date(tip),
-        "tip_payload": tip,
-        "legs_payload": leg_payload,
-        "match_result": result if isinstance(result, dict) else {},
-        "settled_at": NOW.isoformat(),
-    }
-
-
-def existing_settlements() -> List[Dict[str, Any]]:
-    return sb_get(
-        "netrattler_settlements",
-        {"select": "*", "order": "settled_at.desc", "limit": "10000"},
-        quiet=True,
-    )
-
-
-def existing_status_map(rows: Sequence[Dict[str, Any]]) -> Dict[str, str]:
-    output: Dict[str, str] = {}
-    for row in rows:
-        tid = str(row.get("tip_id") or "")
-        if tid and tid not in output:
-            output[tid] = normalized_status(row.get("status"))
-    return output
-
-
-def update_source_tip(settlement: Dict[str, Any]) -> None:
-    if not UPDATE_SOURCE_TIPS or settlement["status"] not in {"win", "loss"}:
-        return
-    payload = settlement.get("tip_payload") or {}
-    table = settlement.get("source_table") or payload.get("_table") or ""
-    column, value = source_key(payload)
-    if not table or not column:
-        return
-    variants = [
-        {"status": settlement["status"], "result": settlement["status"], "settled_at": NOW.isoformat(), "profit": settlement["profit"]},
-        {"status": settlement["status"], "settled_at": NOW.isoformat()},
-        {"result": settlement["status"]},
-    ]
-    for variant in variants:
-        if sb_patch(table, column, value, variant):
-            return
-
-
-def dedup_history(rows: Iterable[Dict[str, Any]]) -> List[Dict[str, Any]]:
-    # One historical bet per tip_id. Newest settlement wins.
-    best: Dict[str, Dict[str, Any]] = {}
-    for row in rows:
-        tid = str(row.get("tip_id") or row.get("settlement_id") or "")
-        if not tid:
-            continue
-        current = best.get(tid)
-        current_ts = str(current.get("settled_at") or "") if current else ""
-        row_ts = str(row.get("settled_at") or "")
-        if current is None or row_ts >= current_ts:
-            best[tid] = row
-    return list(best.values())
-
-
-def period_start(period: str) -> str:
-    if period == "today":
-        return TODAY_S
-    if period == "week":
-        return (TODAY - timedelta(days=6)).isoformat()
-    if period == "month":
-        return TODAY.replace(day=1).isoformat()
-    if period == "year":
-        return TODAY.replace(month=1, day=1).isoformat()
-    return "1900-01-01"
-
-
-def summary(rows: Sequence[Dict[str, Any]], group: str, period: str, style: str = "", leg_count: int = 0) -> Dict[str, Any]:
-    start = period_start(period)
-    selected = []
-    for row in dedup_history(rows):
-        if group and row.get("market_group") != group:
-            continue
-        if style and str(row.get("builder_style") or "") != style:
-            continue
-        if leg_count and as_int(row.get("leg_count")) != leg_count:
-            continue
-        status = normalized_status(row.get("status"))
-        if status not in {"win", "loss"}:
-            continue
-        if str(row.get("tip_date") or "")[:10] < start:
-            continue
-        item = dict(row)
-        item["status"] = status
-        selected.append(item)
-    bets = len(selected)
-    wins = sum(x["status"] == "win" for x in selected)
-    losses = bets - wins
-    stake = sum(max(0.01, as_float(x.get("stake"), 1.0)) for x in selected)
-    profit = sum(as_float(x.get("profit"), 0.0) for x in selected)
-    roi = 100.0 * profit / max(0.01, stake)
-    return {
-        "bets": bets,
-        "wins": wins,
-        "losses": losses,
-        "stake": round(stake, 2),
-        "profit": round(profit, 2),
-        "roi": round(roi, 1),
-        "winrate": round(100.0 * wins / bets, 1) if bets else 0.0,
-    }
-
-
-def save_group_stats(history: Sequence[Dict[str, Any]]) -> None:
-    rows = []
-    for group in GROUP_ORDER:
-        for period in ("today", "week", "month", "year", "alltime"):
-            stats = summary(history, group, period)
-            rows.append({
-                "stat_id": hsh("group", period, group),
-                "period": period,
-                "market_group": group,
-                **stats,
-                "updated_at": NOW.isoformat(),
-            })
-    log(f"Gruppenstats gespeichert: {sb_upsert('netrattler_group_stats', rows, 'stat_id')}")
-
-
-def save_dimension_stats(history: Sequence[Dict[str, Any]]) -> None:
-    rows: List[Dict[str, Any]] = []
-    closed = [x for x in dedup_history(history) if normalized_status(x.get("status")) in {"win", "loss"}]
-    styles = sorted({str(x.get("builder_style") or "") for x in closed if x.get("builder_style")})
-    leg_counts = sorted({as_int(x.get("leg_count")) for x in closed if as_int(x.get("leg_count")) >= 2})
-    for period in ("month", "year", "alltime"):
-        for style in styles:
-            stats = summary(closed, "builder", period, style=style)
-            rows.append({
-                "stat_id": hsh("builder_style", period, style),
-                "period": period,
-                "dimension_type": "builder_style",
-                "dimension_value": style,
-                **stats,
-                "updated_at": NOW.isoformat(),
-            })
-        for count in leg_counts:
-            stats = summary(closed, "", period, leg_count=count)
-            rows.append({
-                "stat_id": hsh("leg_count", period, count),
-                "period": period,
-                "dimension_type": "leg_count",
-                "dimension_value": str(count),
-                **stats,
-                "updated_at": NOW.isoformat(),
-            })
-    if rows:
-        log(f"Dimensionstats gespeichert: {sb_upsert('netrattler_performance_stats', rows, 'stat_id')}")
-
-
-def match_label(settlement: Dict[str, Any]) -> str:
-    payload = settlement.get("tip_payload") or {}
-    home, away, match = match_parts(payload)
-    return match or f"{home} vs {away}".strip(" vs") or "Unbekanntes Spiel"
-
-
-def format_settlement(settlement: Dict[str, Any]) -> str:
-    payload = settlement.get("tip_payload") or {}
-    return (
-        f"{settlement['result_label']} <b>{settlement['market_group'].upper()}</b>\n"
-        f"{match_label(settlement)}\n"
-        f"{market_text(payload)}\n"
-        f"{settlement.get('reason', '')}\n"
-        f"Profit: {as_float(settlement.get('profit')):+.2f}U"
-    )
-
-
-def performance_lines(history: Sequence[Dict[str, Any]], group: str) -> List[str]:
-    labels = [("Heute", "today"), ("7 Tage", "week"), ("Monat", "month"), ("Jahr", "year"), ("All Time", "alltime")]
-    lines = []
-    for label, period in labels:
-        stats = summary(history, group, period)
-        if stats["bets"]:
-            icon = "🟢" if stats["profit"] >= 0 else "🔴"
-            lines.append(
-                f"{label}: <b>{stats['wins']}-{stats['losses']}</b> / {stats['bets']} · "
-                f"ROI <b>{stats['roi']:+.1f}%</b> · {stats['profit']:+.2f}U {icon}"
-            )
-    return lines
-
-
-def send_group_reports(newly_closed: Sequence[Dict[str, Any]], current: Sequence[Dict[str, Any]], history: Sequence[Dict[str, Any]]) -> None:
-    by_group: Dict[str, List[Dict[str, Any]]] = defaultdict(list)
-    for settlement in newly_closed:
-        by_group[settlement.get("market_group", "default")].append(settlement)
-    pending_counts = Counter(x.get("market_group", "default") for x in current if x.get("status") == "pending")
-
-    statuses = []
-    for group in GROUP_ORDER:
-        items = by_group.get(group, [])
-        if not items and not (SEND_PENDING_SUMMARY and pending_counts[group]):
-            continue
-        chat = GROUPS.get(group) or GROUPS.get("default")
-        if not chat:
-            continue
-        lines = [f"📊 <b>NETRATTLER AUSWERTUNG {group.upper()}</b>", TODAY_S, ""]
-        lines.extend(performance_lines(history, group))
-        if items:
-            lines.extend(["", "✅❌ <b>Neu abgeschlossen</b>", ""])
-            for item in items[:30]:
-                block = format_settlement(item)
-                if len("\n".join(lines)) + len(block) > 3650:
-                    break
-                lines.extend([block, ""])
-        if SEND_PENDING_SUMMARY and pending_counts[group]:
-            lines.append(f"⏳ Noch offen: {pending_counts[group]}")
-        ok = telegram(chat, "\n".join(lines))
-        statuses.append(f"{group}:{'OK' if ok else 'FAIL'}")
-    log("Gruppenreports: " + (", ".join(statuses) if statuses else "keine neuen Abschlüsse"))
-
-
-def send_roi_report(history: Sequence[Dict[str, Any]]) -> None:
-    chat = GROUPS.get("stats") or GROUPS.get("default")
-    if not chat:
-        return
-    lines = [f"📈 <b>NETRATTLER ROI REPORT</b>", TODAY_S, ""]
-    for group in GROUP_ORDER:
-        month = summary(history, group, "month")
-        year = summary(history, group, "year")
-        if not month["bets"] and not year["bets"]:
-            continue
-        lines.append(
-            f"<b>{group.upper()}</b>\n"
-            f"Monat: {month['wins']}-{month['losses']} · ROI {month['roi']:+.1f}% · {month['profit']:+.2f}U\n"
-            f"Jahr: {year['wins']}-{year['losses']} · ROI {year['roi']:+.1f}% · {year['profit']:+.2f}U"
+    base = supabase_url.rstrip('/')
+    try:
+        existing = requests.get(
+            f"{base}/rest/v1/netrattler_builder_picks",
+            headers=_supabase_headers(supabase_key, "return=representation"),
+            params={"builder_id": f"eq.{pick.builder_id}", "select": "builder_id", "limit": "1"},
+            timeout=8,
         )
-    if len(lines) > 3:
-        telegram(chat, "\n\n".join(lines))
+        if existing.ok and existing.json():
+            return False
+        response = requests.post(
+            f"{base}/rest/v1/netrattler_builder_picks",
+            headers=_supabase_headers(supabase_key),
+            params={"on_conflict": "builder_id"},
+            data=json.dumps(pick.to_row(), ensure_ascii=False, default=str),
+            timeout=12,
+        )
+        return True if response.status_code in (200, 201, 204) else None
+    except Exception:
+        return None
 
 
-def main() -> None:
-    log("⚽ NETRATTLER Settlement FINAL V21 startet")
-    log(f"Config: SofaScore={'ON' if RESULT_USE_SOFASCORE else 'OFF'} · Timeout={RESULT_HTTP_TIMEOUT}s · Limit={LIMIT}")
-    if not SUPABASE_URL or not SUPABASE_KEY:
-        log("SUPABASE_URL oder SUPABASE_KEY fehlt", "ERROR")
-        raise SystemExit(2)
+def run_builder_engine(
+    raw_props: Sequence[Dict[str, Any]],
+    send_message: Callable[[str], Any],
+    match_contexts: Optional[Sequence[Dict[str, Any]]] = None,
+    match_date: Optional[str] = None,
+    supabase_url: str = "",
+    supabase_key: str = "",
+    send_chat_id: str = "",
+    logger: Optional[Callable[[str], Any]] = None,
+) -> Tuple[int, List[BuilderPick]]:
+    normalized = deduplicate_props(raw_props)
+    picks = build_builder_picks(raw_props, match_contexts, match_date)
+    if logger:
+        category_counts: Dict[str, int] = {}
+        match_counts: Dict[str, int] = {}
+        for leg in normalized:
+            category_counts[leg.category] = category_counts.get(leg.category, 0) + 1
+            match_counts[leg.match] = match_counts.get(leg.match, 0) + 1
+        logger(
+            "MASTER BUILDER normalized="
+            f"{len(normalized)} · matches={len(match_counts)} · "
+            f"same-match≥2={sum(1 for v in match_counts.values() if v >= 2)} · "
+            f"generated={len(picks)}"
+        )
+        logger(
+            "MASTER BUILDER categories: "
+            + ", ".join(
+                f"{k}={v}" for k, v in sorted(
+                    category_counts.items(), key=lambda item: item[1], reverse=True
+                )[:12]
+            )
+        )
+    sent = 0
+    # Selektiver Edge-Filter: nur Builder mit ausreichender Durchschnitts-Edge senden.
+    # Implied-abgeleitete Legs liegen bei ~-2% (Buchmacher-Marge); nur wenn die
+    # XGBoost-Modelle bekannte Spieler matchen, entsteht positive Edge. An Mini-Liga-Tagen
+    # ohne Modell-Deckung passiert nichts → schont den ROI statt -EV-Notloesungen zu posten.
+    _min_avg_edge = float(os.getenv("NETRATTLER_BUILDER_MIN_AVG_EDGE", "0.0"))
+    # Jedes EINZELNE Leg muss mind. diese Edge haben (blockt Lottery-Builder mit
+    # 1 gutem + 2 schlechten Legs). Default -1% = kleine Toleranz.
+    _min_leg_edge = float(os.getenv("NETRATTLER_BUILDER_MIN_LEG_EDGE", "-0.01"))
+    # Max. Anzahl Legs mit negativer Edge (0 = alle müssen positiv sein).
+    _max_neg_legs = int(os.getenv("NETRATTLER_BUILDER_MAX_NEG_LEGS", "0"))
 
-    existing = existing_settlements()
-    previous = existing_status_map(existing)
-    tips = load_tips()
-    dates = sorted({row_date(tip) for tip in tips})
-    log(f"Dates: {dates}")
-    results = load_results(dates)
-    player_stats = load_player_stats(dates)
+    def _avg_edge(p: BuilderPick) -> float:
+        edges = [leg.probability - (1.0 / leg.odds) for leg in p.legs if leg.odds > 1]
+        return sum(edges) / len(edges) if edges else -1.0
 
-    settled = [settle_tip(tip, results, player_stats) for tip in tips]
-    log(f"Counts: {dict(Counter(x['status'] for x in settled))}")
-    log(f"Nach Gruppen: {dict(Counter(x['market_group'] for x in settled))}")
+    def _leg_edges(p: BuilderPick):
+        return [leg.probability - (1.0 / leg.odds) for leg in p.legs if leg.odds > 1]
 
-    newly_closed = [
-        row for row in settled
-        if row["status"] in {"win", "loss"} and previous.get(str(row["tip_id"])) not in {"win", "loss"}
-    ]
-    log(f"Neu abgeschlossen: {len(newly_closed)}")
+    for pick in picks:
+        if not _v31_valid_prop_builder(pick):
+            if logger:
+                logger(
+                    "MASTER BUILDER rejected before send: "
+                    f"{pick.style} {pick.variant} @ {pick.total_odds:.2f}"
+                )
+            continue
+        _ae = _avg_edge(pick)
+        if _ae < _min_avg_edge:
+            if logger:
+                logger(
+                    f"MASTER BUILDER edge-gefiltert (Ø-Edge {_ae*100:.1f}% < "
+                    f"{_min_avg_edge*100:.1f}%): {pick.style} {pick.variant}"
+                )
+            continue
+        # Pro-Leg-Prüfung: zu viele negative-Edge-Legs → blocken
+        _le = _leg_edges(pick)
+        _neg = [e for e in _le if e < _min_leg_edge]
+        if len(_neg) > _max_neg_legs:
+            if logger:
+                logger(
+                    f"MASTER BUILDER leg-edge-gefiltert ({len(_neg)} Legs < "
+                    f"{_min_leg_edge*100:.1f}%): {pick.style} {pick.variant}"
+                )
+            continue
+        # 🚩 Edge-Deckelung: absurd hohe Edges (>Cap) sind meist Modell-Fehler
+        # (schlechte Spielerdaten / veraltete Quote), kein echter Value.
+        _edge_cap = float(os.getenv("NETRATTLER_BUILDER_MAX_LEG_EDGE", "0.15"))
+        _absurd = [e for e in _le if e > _edge_cap]
+        if _absurd:
+            if logger:
+                logger(
+                    f"MASTER BUILDER edge-cap ({len(_absurd)} Legs > "
+                    f"{_edge_cap*100:.0f}% = Modell-Fehler?): {pick.style} {pick.variant}"
+                )
+            continue
+        persisted = persist_builder_pick(pick, supabase_url, supabase_key)
+        if persisted is False:
+            if logger:
+                logger(f"MASTER BUILDER duplicate skipped: {pick.builder_id}")
+            continue
+        try:
+            _builder_text = format_builder_message(pick)
+            _mid = send_message(_builder_text)
+            sent += 1
+            # msg_id + Text zurueckschreiben → V21 kann den Original-Builder-Tipp
+            # direkt editieren ("Auswertung im Tipp selber").
+            if _mid and supabase_url and supabase_key and send_chat_id:
+                try:
+                    requests.patch(
+                        f"{supabase_url.rstrip('/')}/rest/v1/netrattler_builder_picks",
+                        headers=_supabase_headers(supabase_key),
+                        params={"builder_id": f"eq.{pick.builder_id}"},
+                        data=json.dumps({
+                            "telegram_msg_id": str(_mid),
+                            "telegram_chat_id": str(send_chat_id),
+                            "message_text": _builder_text[:3500],
+                        }, ensure_ascii=False, default=str),
+                        timeout=8,
+                    )
+                except Exception:
+                    pass
+            if logger:
+                logger(f"MASTER BUILDER {pick.style} {pick.variant}: {pick.leg_count}L @ {pick.total_odds:.2f} | DB={persisted}")
+        except Exception as exc:
+            if logger:
+                logger(f"MASTER BUILDER send failed: {exc}")
+    return sent, picks
 
-    saved = sb_upsert("netrattler_settlements", settled, "settlement_id")
-    log(f"Settlements gespeichert: {saved}")
-    edited_count = 0
-    for row in newly_closed:
-        update_source_tip(row)
-        if edit_original_tip(row):
-            edited_count += 1
-    if newly_closed:
-        log(f"Original-Tipps direkt editiert: {edited_count}/{len(newly_closed)}")
 
-    history = dedup_history(existing + settled)
-    save_group_stats(history)
-    save_dimension_stats(history)
-    send_group_reports(newly_closed, settled, history)
-    # ROI-Report nur senden, wenn diesem Lauf tatsaechlich neue Abschluesse zugrunde liegen —
-    # sonst wurde er 6-9x/Tag mit identischen Zahlen gepostet (Duplikat-Spam).
-    if newly_closed:
-        send_roi_report(history)
+__all__ = [
+    "PropLeg",
+    "BuilderPick",
+    "build_builder_picks",
+    "format_builder_message",
+    "persist_builder_pick",
+    "run_builder_engine",
+    "market_line",
+    "quality_score",
+    "underdog_team",
+]
+
+
+# ============================================================
+# V31 PROP QUALITY LAYER
+# ============================================================
+# Ziel: weniger generische Team-Builder, mehr echte Spieler-Props wie:
+# Kane SOT, Messi Tor, Otamendi Karte, Fouls/Tackles, mit Edge/Read.
+
+_ORIGINAL_BUILD_BUILDER_PICKS_V30 = build_builder_picks
+_ORIGINAL_FORMAT_BUILDER_MESSAGE_V30 = format_builder_message
+
+_GENERIC_PLAYERS_V31 = {
+    "yes", "no", "over", "under", "home", "away", "draw", "both teams",
+    "team", "player", "any other player", "field", "none"
+}
+
+_SHARP_PLAYER_CATS_V31 = {
+    "sot", "shots", "sot_outside_box", "shots_outside_box",
+    "yellow_cards", "fouls", "fouls_won",
+    "tackles_committed", "tackles_received", "tackles",
+    "score", "first_scorer", "last_scorer", "assist", "score_assist",
+    "offsides", "saves",
+}
+
+_CAT_WEIGHT_V31 = {
+    "sot": 1.24,
+    "shots": 1.14,
+    "sot_outside_box": 1.18,
+    "shots_outside_box": 1.10,
+    "yellow_cards": 1.22,
+    "fouls": 1.13,
+    "fouls_won": 1.12,
+    "tackles_committed": 1.12,
+    "tackles_received": 1.12,
+    "tackles": 1.08,
+    "score": 1.05,
+    "first_scorer": 0.94,
+    "last_scorer": 0.88,
+    "assist": 0.96,
+    "score_assist": 1.02,
+    "offsides": 0.90,
+}
+
+def _v31_is_real_player_leg(leg: PropLeg) -> bool:
+    if leg.category not in _SHARP_PLAYER_CATS_V31:
+        return False
+    p = norm(leg.player)
+    if not p or p in _GENERIC_PLAYERS_V31:
+        return False
+    # 🚫 TEAM-PROPS raus: Wenn der "Spieler"-Name eigentlich ein TEAM ist
+    # (z.B. "Santos-SP To Be Carded"), ist das KEIN echtes Player-Leg.
+    # Erkennung: Teams aus dem Match extrahieren, mit Spielername vergleichen.
+    try:
+        _match_str = str(leg.match or "")
+        _teams = re.split(r"\s+vs\s+|\s+v\s+|\s+-\s+", _match_str, flags=re.IGNORECASE)
+        _pl_words = set(re.sub(r"[^a-z0-9 ]", " ", str(leg.player or "").lower()).split())
+        for _tm in _teams:
+            _tm_words = set(re.sub(r"[^a-z0-9 ]", " ", _tm.lower()).split())
+            _tm_words = {w for w in _tm_words if len(w) >= 4}  # signifikante Wörter
+            # Spielername besteht NUR aus Team-Wörtern (+ evtl. Suffix wie "SP") → Team-Prop
+            if _tm_words and _tm_words.issubset(_pl_words | {w for w in _pl_words}):
+                if _tm_words & _pl_words:
+                    return False
+    except Exception:
+        pass
+    # Team props kommen manchmal als "Argentina To Score?" / "England To Score?"
+    # in score-Kategorie rein. Diese nicht als Spielerprop behandeln.
+    m = norm(leg.market)
+    if leg.category in {"score", "first_scorer", "last_scorer"} and (
+        " to score" in str(leg.market).lower() and norm(leg.player) in norm(leg.match)
+    ):
+        return False
+    if leg.category == "score" and "player" not in m and any(
+        x in m for x in ["team to score", "to score yes", "to score?"]
+    ):
+        return False
+    return True
+
+def _v31_edge(leg: PropLeg) -> float:
+    implied = 1.0 / leg.odds if leg.odds and leg.odds > 1 else 0.0
+    return max(-0.25, min(0.50, float(leg.probability or 0) - implied))
+
+
+def _v31_min_edge() -> float:
+    # Prop-Wahrscheinlichkeiten sind aktuell implied-abgeleitet (prob ~= implied * 0.95),
+    # daher ist die Edge durch die Buchmacher-Marge fast immer leicht negativ.
+    # Ein harter >0-Filter verwirft dadurch JEDES reale Pinnacle-Leg (Deadlock -> 0 Builder).
+    # Toleranz laesst vig-getriebene Mini-Negativ-Edges zu; grob negative Legs bleiben raus.
+    # Edge bleibt zusaetzlich starkes Ranking-Signal in _v31_leg_score.
+    value = as_float(os.getenv("NETRATTLER_PROP_BUILDER_MIN_EDGE", "-0.08"), -0.08)
+    return max(-0.25, min(0.50, value))
+
+
+def _v31_min_total_odds() -> float:
+    value = as_float(os.getenv("NETRATTLER_PROP_BUILDER_MIN_ODDS", "5.0"), 5.0)
+    return max(5.0, value)
+
+
+def _v31_has_observed_bookmaker_odds(leg: PropLeg) -> bool:
+    if leg.estimated or not leg.odds or leg.odds <= 1:
+        return False
+    source = norm(leg.source)
+    return any(token in source for token in {
+        "pinnacle", "bet365", "betfair", "oddsportal",
+        "oddsharvester", "bookmaker", "sportsbook",
+        "kambi", "unibet", "betsson", "1xbet", "sofascore",
+    })
+
+
+def _v31_valid_prop_leg(leg: PropLeg) -> bool:
+    # line >= 0 erlaubt binary Props (To Score, To Be Booked etc.) mit line=0
+    return (
+        _v31_is_real_player_leg(leg)
+        and _v31_has_observed_bookmaker_odds(leg)
+        and _v31_edge(leg) > _v31_min_edge()
+        and leg.line >= 0
+    )
+
+
+def _v31_valid_prop_builder(pick: BuilderPick) -> bool:
+    if not pick or len(pick.legs) < 2:
+        return False
+    if pick.total_odds < _v31_min_total_odds():
+        return False
+    if pick.estimated_odds:
+        return False
+    # Mindestens 1 Leg muss valide sein (nicht alle müssen strict valide sein)
+    valid_legs = [l for l in pick.legs if _v31_valid_prop_leg(l)]
+    return len(valid_legs) >= max(1, len(pick.legs) - 1)
+
+def _v31_leg_score(leg: PropLeg) -> float:
+    base = float(leg.quality or 0.0)
+    cat_w = _CAT_WEIGHT_V31.get(leg.category, 0.70)
+    edge = _v31_edge(leg)
+    src = norm(leg.source)
+    source_bonus = 0.12 if "pinnacle" in src else 0.06 if any(x in src for x in ["statsbomb", "fotmob", "soccerdata"]) else 0.0
+    real_bonus = 0.10 if _v31_is_real_player_leg(leg) else -0.25
+    estimated_penalty = -0.10 if leg.estimated else 0.0
+
+    # Sweet spot: nicht zu hoch, nicht zu langweilig.
+    if 1.50 <= leg.odds <= 6.50:
+        odds_adj = 0.08
+    elif 6.50 < leg.odds <= 12.0:
+        odds_adj = 0.03
+    elif 12.0 < leg.odds <= 25.0:
+        odds_adj = -0.05
+    elif leg.odds > 25.0:
+        odds_adj = -0.18
     else:
-        log("ROI-Report uebersprungen (keine neuen Abschluesse in diesem Lauf)")
-    log("✅ NETRATTLER Settlement FINAL V21 fertig")
+        odds_adj = -0.08
+
+    # Lines mit realistischem Schwierigkeitsgrad bevorzugen.
+    line_adj = 0.0
+    if leg.category == "sot" and leg.line <= 2:
+        line_adj += 0.06
+    if leg.category == "shots" and leg.line <= 3:
+        line_adj += 0.05
+    if leg.category == "yellow_cards" and leg.line <= 1:
+        line_adj += 0.05
+    if leg.category in {"fouls", "fouls_won", "tackles_committed", "tackles_received"} and leg.line <= 2:
+        line_adj += 0.04
+
+    return round(base * cat_w + edge * 0.75 + source_bonus + real_bonus + estimated_penalty + odds_adj + line_adj, 5)
+
+def _v31_distinct_add(pool: Sequence[PropLeg], selected: List[PropLeg], cats: Optional[set] = None, same_match: Optional[str] = None) -> None:
+    used_players = {norm(x.player) for x in selected}
+    used_keys = {x.key() for x in selected}
+    for leg in sorted(pool, key=_v31_leg_score, reverse=True):
+        if leg.key() in used_keys:
+            continue
+        if norm(leg.player) in used_players:
+            continue
+        if cats is not None and leg.category not in cats:
+            continue
+        if same_match is not None and norm(leg.match) != norm(same_match):
+            continue
+        selected.append(leg)
+        return
+
+def _v31_make(style: str, variant: str, legs: List[PropLeg], match_date: str, stake: float = 0.35, max_odds: float = 0.0) -> Optional[BuilderPick]:
+    legs = [x for x in legs if x and _v31_is_real_player_leg(x)]
+    if len(legs) < 2:
+        return None
+    # sort for readability: scorer -> shots/SOT -> cards/fouls/tackles
+    order = {
+        "score": 0, "first_scorer": 0, "last_scorer": 0,
+        "sot": 1, "shots": 1, "sot_outside_box": 1, "shots_outside_box": 1,
+        "yellow_cards": 2, "fouls": 2, "fouls_won": 2,
+        "tackles_committed": 3, "tackles_received": 3, "tackles": 3,
+    }
+    legs = sorted(legs, key=lambda x: (order.get(x.category, 9), -_v31_leg_score(x)))
+    pick = _make_builder(style, variant, legs, match_date, stake, max_odds=max_odds or 150.0)
+    if not pick:
+        return None
+    _cap = max_odds if max_odds else float(os.getenv("NETRATTLER_SHARP_PROP_MAX_ODDS", "80"))
+    if pick.total_odds > _cap:
+        return None
+    if not _v31_valid_prop_builder(pick):
+        return None
+    return pick
+
+def _v31_same_match_builders(real_props: Sequence[PropLeg], match_date: str) -> List[BuilderPick]:
+    out: List[BuilderPick] = []
+    by_match: Dict[str, List[PropLeg]] = {}
+    for leg in real_props:
+        by_match.setdefault(leg.match, []).append(leg)
+
+    for match, pool in by_match.items():
+        if len(pool) < 2:
+            continue
+        pool_sorted = sorted(pool, key=_v31_leg_score, reverse=True)
+
+        scorers = [x for x in pool_sorted if x.category in {"score", "first_scorer", "last_scorer"}]
+        shots = [x for x in pool_sorted if x.category in {"sot", "shots", "sot_outside_box", "shots_outside_box"}]
+        cards = [x for x in pool_sorted if x.category in {"yellow_cards"}]
+        physical = [x for x in pool_sorted if x.category in {"fouls", "fouls_won", "tackles_committed", "tackles_received", "tackles"}]
+
+        # A) Scorer + Karte/Foul/SOT
+        legs: List[PropLeg] = []
+        _v31_distinct_add(scorers, legs)
+        _v31_distinct_add(shots, legs)
+        _v31_distinct_add(cards + physical, legs)
+        if len(legs) >= 2:
+            p = _v31_make("SHARP PLAYER PROP", "SAME GAME ATTACK + DISCIPLINE", legs[:3], match_date, 0.25)
+            if p:
+                out.append(p)
+
+        # B) Shot/SOT + Card/Foul
+        legs = []
+        _v31_distinct_add(shots, legs)
+        _v31_distinct_add(cards + physical, legs)
+        _v31_distinct_add(shots + physical + cards, legs)
+        if len(legs) >= 2:
+            p = _v31_make("SHARP PLAYER PROP", "SAME GAME SHOT + CONTACT", legs[:3], match_date, 0.35)
+            if p:
+                out.append(p)
+
+        # C) Beste 2 im Match
+        legs = []
+        for leg in pool_sorted:
+            if _v31_is_real_player_leg(leg) and norm(leg.player) not in {norm(x.player) for x in legs}:
+                legs.append(leg)
+            if len(legs) >= 2:
+                break
+        if len(legs) >= 2:
+            p = _v31_make("SHARP PLAYER DOUBLE", "BEST 2 REAL PROPS", legs[:2], match_date, 0.45)
+            if p:
+                out.append(p)
+
+        # D) Langer Same-Game-Builder (Aystar/Nate-Style Bauklötzchen) — bis 8 Legs aus EINEM
+        #    Spiel. Derselbe Spieler darf mit VERSCHIEDENEN Märkten mehrfach rein
+        #    (z.B. Mac Allister 1+ Shots + 1+ Fouls Won), aber nicht dieselbe Prop doppelt.
+        long_legs: List[PropLeg] = []
+        _seen_pc = set()   # (player, category)-Paare
+        for leg in pool_sorted:
+            if not _v31_is_real_player_leg(leg):
+                continue
+            _pc = (norm(leg.player), leg.category)
+            if _pc in _seen_pc:
+                continue
+            long_legs.append(leg)
+            _seen_pc.add(_pc)
+            if len(long_legs) >= 8:
+                break
+        for _size in (8, 7, 6, 5, 4):
+            if len(long_legs) >= _size:
+                p = _v31_make(
+                    "SAME GAME PROFILE", f"{_size} REAL PLAYER LEGS",
+                    long_legs[:_size], match_date, 0.10,
+                    max_odds=float(os.getenv("NETRATTLER_LONG_BUILDER_MAX_ODDS", "300")),
+                )
+                if p:
+                    out.append(p)
+                    break
+
+    return out
+
+def _v31_cross_match_builders(real_props: Sequence[PropLeg], match_date: str) -> List[BuilderPick]:
+    out: List[BuilderPick] = []
+    top = sorted(real_props, key=_v31_leg_score, reverse=True)
+
+    # Cross-Match: nicht mehr blind 3 random legs, sondern Kategorie-Rollen.
+    roles = [
+        ("ATTACK", {"score", "first_scorer", "sot", "shots"}),
+        ("CARD", {"yellow_cards"}),
+        ("CONTACT", {"fouls", "fouls_won", "tackles_committed", "tackles_received", "tackles"}),
+    ]
+    legs: List[PropLeg] = []
+    used_matches = set()
+    for _, cats in roles:
+        for leg in top:
+            if leg.category not in cats:
+                continue
+            if norm(leg.match) in used_matches and len(used_matches) >= 2:
+                continue
+            if norm(leg.player) in {norm(x.player) for x in legs}:
+                continue
+            legs.append(leg)
+            used_matches.add(norm(leg.match))
+            break
+    if len(legs) >= 2:
+        p = _v31_make("SHARP CROSS-MATCH", f"{len(legs)} REAL PLAYER LEGS", legs[:3], match_date, 0.25)
+        if p:
+            out.append(p)
+
+    # Best-2 Value Double
+    legs = []
+    used_matches = set()
+    for leg in top:
+        if norm(leg.player) in {norm(x.player) for x in legs}:
+            continue
+        if norm(leg.match) in used_matches and len(real_props) > 2:
+            continue
+        legs.append(leg)
+        used_matches.add(norm(leg.match))
+        if len(legs) == 2:
+            break
+    if len(legs) == 2:
+        p = _v31_make("SHARP PLAYER DOUBLE", "TOP EDGE 2L", legs, match_date, 0.45)
+        if p:
+            out.append(p)
+
+    return out
+
+def _v31_ladder_builders(real_props: Sequence[PropLeg], match_date: str) -> List[BuilderPick]:
+    out: List[BuilderPick] = []
+    top = sorted(real_props, key=_v31_leg_score, reverse=True)
+
+    for style, cats, variant in [
+        ("BOOKING LADDER", {"yellow_cards"}, "2-3 CARDS"),
+        ("SHOT/SOT LADDER", {"sot", "shots", "sot_outside_box", "shots_outside_box"}, "2-3 ATTACKERS"),
+        ("CONTACT LADDER", {"fouls", "fouls_won", "tackles_committed", "tackles_received", "tackles"}, "2-3 FOULS/TACKLES"),
+    ]:
+        legs = []
+        for leg in top:
+            if leg.category not in cats:
+                continue
+            if norm(leg.player) in {norm(x.player) for x in legs}:
+                continue
+            legs.append(leg)
+            if len(legs) == 3:
+                break
+        if len(legs) >= 2:
+            p = _v31_make(style, variant, legs[:3], match_date, 0.25)
+            if p:
+                out.append(p)
+            p2 = _v31_make(style, variant + " SAFE 2L", legs[:2], match_date, 0.45)
+            if p2:
+                out.append(p2)
+
+    return out
+
+def _bl_load_pairs():
+    """Gelernte Leg-Paar-Faktoren (aus abgerechneten Buildern) — gecacht pro Prozess."""
+    if getattr(_bl_load_pairs, "_cache", None) is not None:
+        return _bl_load_pairs._cache
+    factor_fn = None
+    try:
+        import netrattler_builder_learning_v36 as _bl
+        factor_fn = _bl.joint_probability
+    except Exception:
+        factor_fn = None
+    _bl_load_pairs._cache = factor_fn
+    return factor_fn
 
 
-if __name__ == "__main__":
-    main()
+def _v31_learned_boost(pick: BuilderPick) -> float:
+    """Boost/Malus aus gelernten Korrelationen: Builder aus historisch
+    zusammen-treffenden Legs (factor>1) werden bevorzugt, negativ korrelierte
+    abgewertet. Der Bot NUTZT damit, was er aus abgerechneten Buildern gelernt hat."""
+    fn = _bl_load_pairs()
+    if fn is None or len(pick.legs) < 2:
+        return 0.0
+    try:
+        indep, adjusted, n = fn(pick.legs)
+        if not indep or n <= 0:
+            return 0.0
+        lift = adjusted / indep  # >1 positiv korreliert, <1 negativ
+        return max(-0.25, min(0.25, (lift - 1.0)))
+    except Exception:
+        return 0.0
+
+
+def _v31_pick_score(pick: BuilderPick) -> float:
+    scores = [_v31_leg_score(x) for x in pick.legs]
+    avg = sum(scores) / max(1, len(scores))
+    real_ratio = sum(1 for x in pick.legs if _v31_is_real_player_leg(x)) / max(1, len(pick.legs))
+    cat_div = len({x.category for x in pick.legs}) / max(1, len(pick.legs))
+    odds = pick.total_odds
+    if odds <= 1.7:
+        odds_adj = -0.20
+    elif odds <= 8:
+        odds_adj = 0.12
+    elif odds <= 25:
+        odds_adj = 0.05
+    elif odds <= 80:
+        odds_adj = -0.08
+    else:
+        odds_adj = -0.30
+    return (avg + real_ratio * 0.35 + cat_div * 0.10 + odds_adj
+            + _v31_learned_boost(pick) + _v31_role_boost(pick))
+
+
+def _rc_module():
+    """Rollen-Kontext-Modul (Favorit/Außenseiter) — lazy + gecacht."""
+    if getattr(_rc_module, "_c", "x") == "x":
+        try:
+            import netrattler_role_context as _rc
+            _rc.load_team_elo()
+            _rc_module._c = _rc
+        except Exception:
+            _rc_module._c = None
+    return _rc_module._c
+
+
+def _v31_role_boost(pick: BuilderPick) -> float:
+    """Favorit-vs-Außenseiter-Boost: rollengerechte Props (Favorit=Angriff,
+    Außenseiter=Kampf) werden bevorzugt. Nutzt Elo + Team-Info der Legs.
+    Neutral (0), wenn Elo/Team fehlen — bricht nie."""
+    rc = _rc_module()
+    if rc is None:
+        return 0.0
+    try:
+        # Home/Away aus dem Match-String "A vs B"
+        match = pick.legs[0].match if pick.legs else ""
+        if " vs " not in match:
+            return 0.0
+        home, away = [s.strip() for s in match.split(" vs ", 1)]
+        boosts = []
+        for leg in pick.legs:
+            if leg.team:
+                boosts.append(rc.role_boost(leg.category, leg.team, home, away))
+        return round(sum(boosts) / len(boosts), 4) if boosts else 0.0
+    except Exception:
+        return 0.0
+
+# ============================================================
+# 🎯 SCREENSHOT BUILDERS (JK-Style, Full Profile, Team Correlation)
+# ============================================================
+def _team_correlation_builders(
+    props: Sequence[PropLeg], match_date: str
+) -> List[BuilderPick]:
+    """
+    Team Correlation Builder — wie Screenshot 4:
+    BTTS HT + BTTS 2HT + Over 2 Goals HT/2HT aus demselben Spiel.
+    Erkennt torreiches Profil und kombiniert passende Team-Märkte.
+    """
+    builders: List[BuilderPick] = []
+    by_match: Dict[str, List[PropLeg]] = {}
+    for leg in props:
+        by_match.setdefault(leg.match, []).append(leg)
+
+    TEAM_CATS = {"btts", "btts_ht", "over_goals", "over15_ht", "team_corners", "corners", "match_corners", "team_cards", "match_sot", "match_goals", "half_goals_1st", "half_goals_2nd"}
+
+    for match, candidates in by_match.items():
+        team_legs = [l for l in candidates if l.category in TEAM_CATS]
+        if len(team_legs) < 2:
+            continue
+
+        # BTTS-Kombination: BTTS + BTTS HT (Screenshot 4 Stil)
+        btts = [l for l in team_legs if l.category == "btts"]
+        btts_ht = [l for l in team_legs if l.category == "btts_ht"]
+        over_goals = [l for l in team_legs if l.category in {"over_goals", "over15_ht"}]
+        corners = [l for l in team_legs if l.category in {"team_corners", "corners"}]
+
+        # 1. BTTS Team Builder (BTTS + BTTS HT + Over Goals)
+        combo1 = (btts[:1] + btts_ht[:1] + over_goals[:1])
+        if len(combo1) >= 2:
+            pick = _make_builder("TEAM BUILDER", "BTTS COMBO", combo1[:3], match_date, 0.5)
+            if pick:
+                builders.append(pick)
+
+        # 2. Voller Korrelations-Builder (alle 4 Märkte wie Screenshot 4)
+        combo2 = (btts[:1] + btts_ht[:1] + over_goals[:2])
+        if len(combo2) >= 3:
+            pick = _make_builder("TEAM BUILDER", "BTTS FULL CORR", combo2[:4], match_date, 0.5)
+            if pick:
+                builders.append(pick)
+
+        # 3. Corners + BTTS (Eckball-Tore-Kombi)
+        if corners and btts:
+            combo3 = btts[:1] + corners[:1]
+            if len(combo3) >= 2:
+                pick = _make_builder("TEAM BUILDER", "BTTS + CORNERS", combo3, match_date, 0.5)
+                if pick:
+                    builders.append(pick)
+
+        # 4. Half Goals Builder (1st Half + 2nd Half Goal Lines — Screenshot)
+        half1 = [l for l in team_legs if l.category == "half_goals_1st"]
+        half2 = [l for l in team_legs if l.category == "half_goals_2nd"]
+
+        # BTTS HT + BTTS 2HT + Half Goals = 9.00 (Screenshot)
+        combo_half = btts_ht[:1] + half1[:1] + half2[:1]
+        if len(combo_half) >= 2:
+            pick = _make_builder("TEAM BUILDER", "BTTS HT + HALF GOALS", combo_half, match_date, 0.5)
+            if pick:
+                builders.append(pick)
+
+        # Full Half Goals: BTTS HT + BTTS 2HT + Over Goals HT + Over Goals 2HT = 13.00
+        combo_full_half = btts[:1] + btts_ht[:1] + half1[:1] + half2[:1]
+        if len(combo_full_half) >= 3:
+            pick = _make_builder("TEAM BUILDER", "BTTS HALF CORR FULL", combo_full_half, match_date, 0.5)
+            if pick:
+                builders.append(pick)
+
+        # 5. Match SOT + Goals (torreiche Spiele)
+        match_sot = [l for l in team_legs if l.category == "match_sot"]
+        match_goals = [l for l in team_legs if l.category == "match_goals"]
+        if match_sot and match_goals:
+            combo_sot = match_sot[:1] + match_goals[:1] + btts[:1]
+            if len(combo_sot) >= 2:
+                pick = _make_builder("TEAM BUILDER", "SOT + GOALS", combo_sot, match_date, 0.5)
+                if pick:
+                    builders.append(pick)
+
+    return builders
+
+
+
+def _high_odds_booking_builder(
+    props: Sequence[PropLeg], match_date: str
+) -> List[BuilderPick]:
+    """
+    High Odds Booking Ladder — JK-Style:
+    2× Booked = ~15-30 (Quote 9/2–14/1)
+    3× Booked = ~40-80 (Quote 55/1)
+    4× Booked = ~150-400 (Quote 321/1)
+    5× Booked = ~500-2000 (extreme)
+    Einsatz: 0.1u für alle Varianten.
+    """
+    builders: List[BuilderPick] = []
+    by_match: Dict[str, List[PropLeg]] = {}
+    for leg in props:
+        by_match.setdefault(leg.match, []).append(leg)
+
+    for match, candidates in by_match.items():
+        booking_legs = sorted(
+            [l for l in candidates if l.category == "yellow_cards"],
+            key=lambda x: x.quality, reverse=True
+        )
+        legs_pool = _best_distinct_players(booking_legs, 5)
+
+        for size, label, min_odds, max_odds, stake in [
+            (2, "2× BOOKED",      8.0,   60.0,  0.25),
+            (3, "3× BOOKED HIGH", 15.0,  200.0, 0.10),
+            (4, "4× BOOKED JK",   50.0,  800.0, 0.10),
+            (5, "5× BOOKED JK",   200.0, 5000.0, 0.05),
+        ]:
+            if len(legs_pool) >= size:
+                pick = _make_builder("BOOKING LADDER", label, legs_pool[:size], match_date, stake)
+                if pick and min_odds <= pick.total_odds <= max_odds:
+                    builders.append(pick)
+
+    return builders
+
+
+
+def _fouls_tackles_combo_builder(
+    props: Sequence[PropLeg], match_date: str
+) -> List[BuilderPick]:
+    """
+    Fouls + Tackles Combo — JK-Style (Screenshot: Haaland 3+ Fouls + Konsa 4+ Tackles = 170/1)
+    Kombiniert hohe Fouls-Lines mit hohen Tackles-Lines für High-Odds Builder.
+    """
+    builders: List[BuilderPick] = []
+    by_match: Dict[str, List[PropLeg]] = {}
+    for leg in props:
+        by_match.setdefault(leg.match, []).append(leg)
+
+    for match, candidates in by_match.items():
+        fouls = sorted(
+            [l for l in candidates if l.category in {"fouls", "fouls_won"}],
+            key=lambda x: x.quality, reverse=True
+        )
+        tackles = sorted(
+            [l for l in candidates if l.category in {"tackles_committed", "tackles_received", "tackles"}],
+            key=lambda x: x.quality, reverse=True
+        )
+
+        if not fouls or not tackles:
+            continue
+
+        # Fouls + Tackles (2-3 Spieler total, gemischte Märkte)
+        for n_fouls, n_tackles in [(2, 1), (1, 2), (1, 1), (2, 2)]:
+            selected = (
+                [_derive_lower_line(l, 2, "2+ Fouls Committed", 0.44) for l in fouls[:n_fouls]] +
+                [_derive_lower_line(l, 2, "2+ Tackles Committed", 0.44) for l in tackles[:n_tackles]]
+            )
+            selected = [l for l in selected if l is not None]
+            if len(selected) >= 2 and valid_builder(selected):
+                pick = _make_builder("FOULS + TACKLES", f"FOUL+TACKLE {len(selected)}L",
+                                     selected, match_date, 0.1)
+                if pick and 8.0 <= pick.total_odds <= 500.0:
+                    builders.append(pick)
+                    break
+
+        # High-Line Variante (3+ Fouls, 4+ Tackles wie Screenshot)
+        hi_fouls = [_derive_lower_line(l, 3, "3+ Fouls Committed", 0.25) for l in fouls[:2]]
+        hi_tackles = [_derive_lower_line(l, 3, "3+ Tackles Committed", 0.25) for l in tackles[:2]]
+        selected_hi = [l for l in hi_fouls + hi_tackles if l is not None]
+        if len(selected_hi) >= 2:
+            pick = _make_builder("FOULS + TACKLES", "HIGH LINE FOUL+TACKLE",
+                                 selected_hi[:3], match_date, 0.1)
+            if pick and 30.0 <= pick.total_odds <= 1000.0:
+                builders.append(pick)
+
+    return builders
+
+
+
+def _jk_multi_shot_builder(
+    props: Sequence[PropLeg], match_date: str
+) -> List[BuilderPick]:
+    """
+    JK Multi-Shot Builder — Screenshot (France vs Spain):
+    Olise 3+ Shots + Baena 2+ Shots + Olmo 3+ Shots + Porro 1+ Shots + Rodri 1+ Shots
+    Bis zu 5 Spieler, gemischte Shot-Lines, hohe Quoten.
+    """
+    builders: List[BuilderPick] = []
+    by_match: Dict[str, List[PropLeg]] = {}
+    for leg in props:
+        by_match.setdefault(leg.match, []).append(leg)
+
+    for match, candidates in by_match.items():
+        shot_legs = sorted(
+            [l for l in candidates if l.category in {"shots", "sot", "sot_outside_box"}],
+            key=lambda x: x.quality, reverse=True
+        )
+        pool = _best_distinct_players(shot_legs, 5)
+        if len(pool) < 3:
+            continue
+
+        for size, label, min_odds, stake in [
+            (3, "3-SHOT LADDER",  6.0,  0.25),
+            (4, "4-SHOT LADDER", 15.0,  0.10),
+            (5, "5-SHOT LADDER", 40.0,  0.10),
+        ]:
+            if len(pool) >= size:
+                # Gemischte Lines: Top-Spieler höhere Line, Rest 1+
+                legs_mixed = []
+                for i, leg in enumerate(pool[:size]):
+                    if i == 0 and leg.probability >= 0.50:
+                        legs_mixed.append(_derive_lower_line(leg, 2, "2+ Shots", 0.45))
+                    else:
+                        legs_mixed.append(_derive_lower_line(leg, 1, "1+ Shot", 0.60))
+                legs_mixed = [l for l in legs_mixed if l is not None]
+                if len(legs_mixed) >= size:
+                    pick = _make_builder("SHOT LADDER", label, legs_mixed, match_date, stake)
+                    if pick and pick.total_odds >= min_odds:
+                        builders.append(pick)
+
+    return builders
+
+
+
+
+def _outside_box_sot_builder(
+    props: Sequence[PropLeg], match_date: str
+) -> List[BuilderPick]:
+    """
+    SOT Outside Box Builder — wie Screenshot 2:
+    2 Spieler mit 1+ SOT Outside the Box aus demselben Spiel = Quote ~20.
+    Typisch für technische Mittelfeldspieler (Fabian Ruiz, Olise etc.)
+    """
+    builders: List[BuilderPick] = []
+    by_match: Dict[str, List[PropLeg]] = {}
+    for leg in props:
+        by_match.setdefault(leg.match, []).append(leg)
+
+    for match, candidates in by_match.items():
+        outside = sorted(
+            [l for l in candidates if l.category == "sot_outside_box"],
+            key=lambda x: x.quality, reverse=True
+        )
+        if len(outside) < 2:
+            continue
+
+        legs = _best_distinct_players(outside, 3)
+        for size in [2, 3]:
+            if len(legs) >= size:
+                pick = _make_builder("OUTSIDE BOX SOT", f"SOT OUTSIDE {size}L",
+                                     legs[:size], match_date, 0.25)
+                if pick and pick.total_odds >= 8.0:
+                    builders.append(pick)
+    return builders
+
+
+
+def _full_profile_builder(
+    props: Sequence[PropLeg], match_date: str
+) -> List[BuilderPick]:
+    """
+    Full Profile Builder — JK-Style (Screenshot England vs Argentina):
+    Messi To Score + Bellingham Score/Assist + 3× Tackles + Over Corners + Over SOT = 17.00
+
+    Kombiniert das KOMPLETTE Spielprofil:
+    1. Goalscorer/Score-or-Assist (1-2 Spieler)
+    2. Defensive Midfield Tackles (2-3 Spieler)
+    3. Match-Level Team-Märkte (Corners, SOT)
+    """
+    builders: List[BuilderPick] = []
+    by_match: Dict[str, List[PropLeg]] = {}
+    for leg in props:
+        by_match.setdefault(leg.match, []).append(leg)
+
+    for match, candidates in by_match.items():
+        # 1. Goalscorer-Legs
+        scorers = sorted(
+            [l for l in candidates if l.category in {"score", "score_assist", "first_scorer"}],
+            key=lambda x: x.quality, reverse=True
+        )
+        # 2. Tackle-Legs (defensive Sechser, Innenverteidiger)
+        tackles = sorted(
+            [l for l in candidates if l.category in
+             {"tackles_committed", "tackles_received", "tackles"}],
+            key=lambda x: x.quality, reverse=True
+        )
+        # 3. Team/Match Märkte
+        team_mkt = sorted(
+            [l for l in candidates if l.category in
+             {"team_corners", "corners", "match_corners", "over_goals", "btts", "btts_ht", "match_sot", "match_goals", "team_cards"}],
+            key=lambda x: x.quality, reverse=True
+        )
+
+        if not scorers or len(tackles) < 2:
+            continue
+
+        tackle_pool = _best_distinct_players(tackles, 3)
+
+        # Variante A: Scorer + 2 Tackles + Corner/SOT (wie Screenshot)
+        for n_tackles in [3, 2]:
+            if len(tackle_pool) >= n_tackles:
+                legs = scorers[:1] + tackle_pool[:n_tackles]
+                if team_mkt:
+                    legs += team_mkt[:1]
+                if valid_builder(legs, min_legs=4):
+                    pick = _make_builder("FULL PROFILE", f"SCORE+TACKLE+TEAM {len(legs)}L",
+                                         legs, match_date, 0.5)
+                    if pick and 6.0 <= pick.total_odds <= 100.0:
+                        builders.append(pick)
+                        break
+
+        # Variante B: Score+Assist + Tackles (2 Goalscorer-Legs + 2 Tackles)
+        if len(scorers) >= 2 and len(tackle_pool) >= 2:
+            legs_b = scorers[:2] + tackle_pool[:2]
+            if team_mkt:
+                legs_b += team_mkt[:1]
+            if valid_builder(legs_b, min_legs=4):
+                pick = _make_builder("FULL PROFILE", "DUAL SCORER+TACKLE",
+                                      legs_b, match_date, 0.5)
+                if pick and 10.0 <= pick.total_odds <= 150.0:
+                    builders.append(pick)
+
+    return builders
+
+
+
+def _goalscorer_combo_builder(
+    props: Sequence[PropLeg], match_date: str
+) -> List[BuilderPick]:
+    """Goalscorer Combo: Messi To Score + Fouls/Cards/Tackles = 8.50"""
+    builders: List[BuilderPick] = []
+    by_match: Dict[str, List[PropLeg]] = {}
+    for leg in props:
+        by_match.setdefault(leg.match, []).append(leg)
+
+    for match, candidates in by_match.items():
+        scorers = sorted(
+            [l for l in candidates if l.category in {"score", "first_scorer"}],
+            key=lambda x: x.quality, reverse=True
+        )
+        if not scorers:
+            continue
+
+        # Anker-Legs: Fouls, Tackles, Bookings vom gleichen Spiel
+        anchors = sorted(
+            [l for l in candidates if l.category in
+             {"fouls", "fouls_won", "yellow_cards", "tackles_committed",
+              "sot", "shots", "team_cards", "btts"}],
+            key=lambda x: x.quality, reverse=True
+        )
+        if not anchors:
+            continue
+
+        # Top Scorer + 1-2 Anker
+        top_scorer = scorers[0]
+        for n_anchors in [2, 1]:
+            selected = [top_scorer] + anchors[:n_anchors]
+            if valid_builder(selected):
+                label = "GOALSCORER MIX" if n_anchors == 1 else "GOALSCORER + FOULS"
+                pick = _make_builder("PLAYER BUILDER", label, selected, match_date, 0.5)
+                if pick and 4.0 <= pick.total_odds <= 50.0:
+                    builders.append(pick)
+                    break
+    return builders
+
+
+
+
+
+def build_builder_picks(
+    raw_props: Sequence[Dict[str, Any]],
+    match_contexts: Optional[Sequence[Dict[str, Any]]] = None,
+    match_date: Optional[str] = None,
+    max_builders: Optional[int] = None,
+) -> List[BuilderPick]:
+    props = deduplicate_props(raw_props)
+    run_date = match_date or date.today().isoformat()
+    max_count = max_builders or as_int(os.getenv("NETRATTLER_MAX_BUILDERS_PER_RUN", "24"), 24)
+
+    real_props = [
+        x for x in props
+        if _v31_valid_prop_leg(x)
+        and x.odds >= 1.35
+        and x.odds <= float(os.getenv("NETRATTLER_SHARP_PROP_LEG_MAX_ODDS", "25"))
+        and x.probability >= float(os.getenv("NETRATTLER_SHARP_PROP_MIN_PROB", "0.12"))
+    ]
+
+    focused: List[BuilderPick] = []
+    focused.extend(_v31_same_match_builders(real_props, run_date))
+    focused.extend(_v31_cross_match_builders(real_props, run_date))
+    focused.extend(_v31_ladder_builders(real_props, run_date))
+
+    # Legacy Engine als Fallback, aber nur echte Spieler-Builder bevorzugen.
+    legacy: List[BuilderPick] = []
+    try:
+        legacy = _ORIGINAL_BUILD_BUILDER_PICKS_V30(raw_props, match_contexts, run_date, max_count * 2)
+    except Exception:
+        legacy = []
+
+    legacy_filtered = []
+    for pick in legacy:
+        # Legacy may still create useful combinations, but every leg must pass
+        # the same strict player-prop rules. Never fall back to team markets.
+        if pick.total_odds <= 80 and _v31_valid_prop_builder(pick):
+            legacy_filtered.append(pick)
+
+    candidates = [
+        pick for pick in (focused + legacy_filtered)
+        if _v31_valid_prop_builder(pick)
+    ]
+    if not candidates:
+        return []
+
+    # Dedupe nach Legs, nicht nur builder_id, damit gleiche Kombi mit anderem Style nicht doppelt kommt.
+    seen = set()
+    unique: List[BuilderPick] = []
+    for pick in candidates:
+        sig = "|".join(sorted(f"{norm(x.player)}:{norm(x.match)}:{x.category}:{round(x.line,2)}" for x in pick.legs))
+        if sig in seen:
+            continue
+        seen.add(sig)
+        unique.append(pick)
+
+    unique.sort(key=_v31_pick_score, reverse=True)
+
+    selected: List[BuilderPick] = []
+    style_counts: Dict[str, int] = {}
+    match_counts: Dict[str, int] = {}
+    _selected_ids = set()
+
+    def _try_take(pick: BuilderPick, style_cap: int) -> bool:
+        if id(pick) in _selected_ids or not _v31_valid_prop_builder(pick):
+            return False
+        match_key = pick.legs[0].match if len({x.match for x in pick.legs}) == 1 else "CROSS"
+        if style_counts.get(pick.style, 0) >= style_cap:
+            return False
+        if match_key != "CROSS" and match_counts.get(match_key, 0) >= 4:
+            return False
+        selected.append(pick)
+        _selected_ids.add(id(pick))
+        style_counts[pick.style] = style_counts.get(pick.style, 0) + 1
+        match_counts[match_key] = match_counts.get(match_key, 0) + 1
+        return True
+
+    # Pass 1: Stil-Vielfalt sichern — mind. 1 Builder pro vorhandenem Stil (bester nach Score),
+    # damit nicht nur SHARP PLAYER PROP (JK) rauskommt, sondern auch FAVORITE/INTENSITY/ATTACK
+    # SCRIPT, BOOKING/SHOT LADDER, GOALSCORER COMBO, FULL PROFILE etc.
+    _seen_styles = set()
+    for pick in unique:  # bereits nach _v31_pick_score absteigend sortiert
+        if pick.style in _seen_styles:
+            continue
+        if _try_take(pick, style_cap=1):
+            _seen_styles.add(pick.style)
+        if len(selected) >= max_count:
+            break
+
+    # Pass 2: Restplätze nach Score auffüllen (bis 5 pro Stil).
+    if len(selected) < max_count:
+        for pick in unique:
+            _try_take(pick, style_cap=5)
+            if len(selected) >= max_count:
+                break
+
+    # 🆕 Screenshot-Builder parallel hinzufügen (JK-Style, nicht durch V31-Filter)
+    all_props = deduplicate_props(raw_props)
+    screenshot: List[BuilderPick] = []
+    screenshot.extend(_team_correlation_builders(all_props, run_date))
+    screenshot.extend(_high_odds_booking_builder(all_props, run_date))
+    screenshot.extend(_fouls_tackles_combo_builder(all_props, run_date))
+    screenshot.extend(_jk_multi_shot_builder(all_props, run_date))
+    screenshot.extend(_outside_box_sot_builder(all_props, run_date))
+    screenshot.extend(_full_profile_builder(all_props, run_date))
+    screenshot.extend(_goalscorer_combo_builder(all_props, run_date))
+
+    existing_sigs = {"|".join(sorted(f"{norm(x.player)}:{x.category}" for x in p.legs)) for p in selected}
+    for pick in screenshot:
+        sig = "|".join(sorted(f"{norm(x.player)}:{x.category}" for x in pick.legs))
+        if sig not in existing_sigs:
+            existing_sigs.add(sig)
+            selected.append(pick)
+
+    return selected
+
+def _v31_market_label(leg: PropLeg) -> str:
+    labels = {
+        "score": "Anytime Goalscorer",
+        "first_scorer": "First Goalscorer",
+        "last_scorer": "Last Goalscorer",
+        "sot": f"Over {leg.line:g} Shots on Target" if leg.line and leg.line > 1 else "1+ Shot on Target",
+        "shots": f"Over {leg.line:g} Shots" if leg.line and leg.line > 1 else "1+ Shot",
+        "sot_outside_box": "SOT Outside Box",
+        "shots_outside_box": "Shot Outside Box",
+        "yellow_cards": "To Be Carded",
+        "fouls": f"Over {leg.line:g} Fouls Committed" if leg.line and leg.line > 1 else "1+ Foul Committed",
+        "fouls_won": f"Over {leg.line:g} Fouls Won" if leg.line and leg.line > 1 else "1+ Foul Won",
+        "tackles_committed": f"Over {leg.line:g} Tackles Committed" if leg.line and leg.line > 1 else "1+ Tackle Committed",
+        "tackles_received": f"Over {leg.line:g} Tackles Received" if leg.line and leg.line > 1 else "1+ Tackle Received",
+        "tackles": f"Over {leg.line:g} Tackles" if leg.line and leg.line > 1 else "1+ Tackle",
+        "assist": "Assist",
+        "score_assist": "Goal or Assist",
+        "offsides": "Offside",
+    }
+    return labels.get(leg.category, leg.market)
+
+def _v31_reason(leg: PropLeg) -> str:
+    e = _v31_edge(leg)
+    if leg.category in {"yellow_cards"}:
+        base = "Karten-/Duell-Profil"
+    elif leg.category in {"sot", "shots", "sot_outside_box", "shots_outside_box"}:
+        base = "Abschluss-Volumen"
+    elif leg.category in {"fouls", "fouls_won"}:
+        base = "Kontakt-/Foul-Profil"
+    elif leg.category in {"tackles_committed", "tackles_received", "tackles"}:
+        base = "Tackle-Matchup"
+    elif leg.category in {"score", "first_scorer", "last_scorer"}:
+        base = "Tor-/Rollen-Profil"
+    else:
+        base = "Player-Prop Profil"
+    edge_txt = f"Edge {e*100:+.1f}%" if e else "Fair"
+    return f"{base} · {edge_txt}"
+
+def format_builder_message(pick: BuilderPick) -> str:
+    sep = "━" * 22
+    same_match = len({x.match for x in pick.legs}) == 1
+    avg_score = sum(_v31_leg_score(x) for x in pick.legs) / max(1, len(pick.legs))
+    if avg_score >= 0.92:
+        read = "A-SETUP"
+    elif avg_score >= 0.82:
+        read = "B+ VALUE"
+    elif avg_score >= 0.72:
+        read = "B VALUE"
+    else:
+        read = "SPECULATIVE"
+
+    risk = "LOTTERY" if pick.total_odds >= 35 else "VALUE" if pick.total_odds >= 8 else "SHARP"
+    lines = [
+        f"🔑 <b>NETRATTLER PROP BUILDER</b>",
+        f"<b>{pick.style} · {pick.variant}</b>",
+        sep,
+    ]
+    if same_match and pick.legs:
+        lines.append(f"⚽ <b>{pick.legs[0].match}</b>")
+    for i, leg in enumerate(pick.legs, 1):
+        icon = CATEGORY_ICON.get(leg.category, "🎯")
+        match_suffix = "" if same_match else f" · {leg.match}"
+        source_note = "Pinnacle" if "pinnacle" in norm(leg.source) else leg.source.split(":")[0]
+        prob = int(round(float(leg.probability or 0) * 100))
+        fair = (1.0 / max(0.01, float(leg.probability or 0))) if leg.probability else 0
+        fair_txt = f"{fair:.2f}" if fair and fair < 99 else "?"
+        lines.append(f"{i}. {icon} <b>{leg.player}</b> — {_v31_market_label(leg)}{match_suffix}")
+        lines.append(f"   Quote {leg.odds:.2f} · Fair {fair_txt} · Prob {prob}% · {source_note}")
+        lines.append(f"   ↳ {_v31_reason(leg)}")
+    lines.extend([
+        sep,
+        f"💰 Gesamt-Quote: <b>{pick.total_odds:.2f}</b>",
+        f"🔥 Einsatz: <b>{pick.stake:.2f} Units</b>",
+        f"🧠 <b>PROP BUILDER READ:</b> {read} · {risk}",
+        "<i>Fokus: echte Spielerprops, Markt-Edge, Rollenprofil, keine generischen Team-Combos.</i>",
+    ])
+    return "\n".join(lines)
