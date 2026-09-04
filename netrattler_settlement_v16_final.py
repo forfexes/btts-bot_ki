@@ -653,6 +653,42 @@ def _openligadb_results(day: str) -> List[Dict[str, Any]]:
     return output
 
 
+def _windrawwin_results(day: str) -> List[Dict[str, Any]]:
+    """Windrawwin: HT-Stände + Ergebnisse via einfache HTML-Tabellen (pandas.read_html).
+    Kaum Bot-Schutz — laut Recherche die stabilste Ergebnis-Quelle für HT/Ecken."""
+    output: List[Dict[str, Any]] = []
+    if str(os.getenv("NETRATTLER_USE_WINDRAWWIN", "true")).lower() not in ("1", "true", "yes", "on"):
+        return output
+    try:
+        import pandas as _pd
+        # Windrawwin Results-Seite pro Tag
+        url = f"https://www.windrawwin.com/results/{day}/"
+        html = _cffi_get_json.__wrapped__ if hasattr(_cffi_get_json, "__wrapped__") else None
+        # HTML holen (curl_cffi Text)
+        try:
+            from curl_cffi import requests as _creq
+            r = _creq.get(url, impersonate="chrome", timeout=RESULT_HTTP_TIMEOUT)
+            raw = r.text if r.status_code == 200 else None
+        except Exception:
+            raw = None
+        if not raw:
+            return output
+        tables = _pd.read_html(raw)
+        for tbl in tables:
+            for _, row in tbl.iterrows():
+                cells = [str(c) for c in row.values]
+                # Suche nach "Home  X-Y  Away" Mustern
+                for c in cells:
+                    m = re.search(r"(.+?)\s+(\d+)\s*[-:]\s*(\d+)\s+(.+)", c)
+                    if m:
+                        _append_result(output, "Windrawwin", day,
+                                       m.group(1).strip(), m.group(4).strip(),
+                                       m.group(2), m.group(3), {})
+    except Exception as exc:
+        log(f"Windrawwin {day}: {str(exc)[:60]}", "WARN")
+    return output
+
+
 def public_results(day: str) -> List[Dict[str, Any]]:
     """Key-freie + Key-basierte Resultat-Fallbacks. Keine einzelne Quelle darf den Run stoppen."""
     output: List[Dict[str, Any]] = []
@@ -668,7 +704,7 @@ def public_results(day: str) -> List[Dict[str, Any]]:
     except Exception as exc:
         log(f"OddsPapi results {day}: {str(exc)[:80]}", "WARN")
 
-    for getter in (_sofascore_results, _espn_results, _openligadb_results):
+    for getter in (_sofascore_results, _espn_results, _openligadb_results, _windrawwin_results):
         rows = getter(day)
         output.extend(rows)
 
@@ -772,13 +808,18 @@ def load_results(dates: Sequence[str]) -> List[Dict[str, Any]]:
                     day_db_rows += len(rows)
                     log(f"Results {table} {day} via {column}: {len(rows)}")
                     break
-        if day_db_rows >= min_db_rows:
+        # 🔧 FALLBACKS IMMER abfragen (ergänzend), nicht nur wenn DB leer ist.
+        # Sonst fehlen Ergebnisse für exotische Ligen (Belarus, Usbekistan...),
+        # die nicht in match_results stehen → Tipps bleiben ewig pending.
+        # Nur überspringen, wenn explizit deaktiviert.
+        _always_fallback = str(os.getenv("NETRATTLER_ALWAYS_FALLBACK_RESULTS", "true")).lower() in ("1", "true", "yes", "on")
+        if day_db_rows >= min_db_rows and not _always_fallback:
             log(f"Public Result-Fallback {day} übersprungen ({day_db_rows} DB-Results vorhanden)")
             continue
         public = public_results(day)
         if public:
             output.extend(public)
-            log(f"Public Results {day}: {len(public)}")
+            log(f"Public Results {day}: {len(public)} (ergänzend zu {day_db_rows} DB-Results)")
     seen = set()
     clean = []
     for row in output:
