@@ -982,6 +982,15 @@ def settle_score_market(tip: Dict[str, Any], result: Dict[str, Any]) -> Tuple[st
     total = hs + aw
     low = (market_text(tip) + " " + str(anyv(unpack(tip), ["message", "text", "tip_text"], ""))).lower()
 
+    # 🏆 1X2 (Sieger): Heimsieg/Unentschieden/Auswärtssieg
+    if "1x2" in low or "heimsieg" in low or "auswärtssieg" in low or "auswaertssieg" in low or "unentschieden" in low:
+        if "heimsieg" in low or "home win" in low or "1x2 home" in low:
+            return ("win" if hs > aw else "loss", f"{hs}:{aw} · Heimsieg {'✓' if hs > aw else '✗'}")
+        if "auswärtssieg" in low or "auswaertssieg" in low or "away win" in low or "1x2 away" in low:
+            return ("win" if aw > hs else "loss", f"{hs}:{aw} · Auswärtssieg {'✓' if aw > hs else '✗'}")
+        if "unentschieden" in low or "draw" in low or "1x2 draw" in low:
+            return ("win" if hs == aw else "loss", f"{hs}:{aw} · Remis {'✓' if hs == aw else '✗'}")
+
     if "btts ht" in low or "btts_ht" in low:
         raw = unpack(result.get("raw") or {})
         hth = as_int(anyv(raw, ["HTHG", "home_score_ht", "halftime_home", "intHomeScoreHT"], -1), -1)
