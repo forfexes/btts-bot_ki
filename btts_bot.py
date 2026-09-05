@@ -19798,6 +19798,32 @@ def get_team_corner_stats(team_id, league_id, season):
         return None
 
 
+def get_supabase_corner_stats(team_name: str) -> dict:
+    """Ecken-Schnitt eines Teams aus player_avg_stats (nächtlich gescrapt).
+    Schnell (Supabase-Read), kein Live-Scraping. Cache pro Lauf."""
+    if not hasattr(get_supabase_corner_stats, "_cache"):
+        get_supabase_corner_stats._cache = {}
+    _ck = str(team_name or "").lower()[:15]
+    if _ck in get_supabase_corner_stats._cache:
+        return get_supabase_corner_stats._cache[_ck]
+    result = {}
+    if SUPABASE_URL and SUPABASE_KEY and team_name:
+        try:
+            import requests as _rq
+            r = _rq.get(f"{SUPABASE_URL}/rest/v1/player_avg_stats",
+                       headers={"apikey": SUPABASE_KEY, "Authorization": f"Bearer {SUPABASE_KEY}"},
+                       params={"select": "avg_value,games", "stat_name": "eq.corners",
+                               "team": f"ilike.%{team_name[:10]}%", "order": "games.desc", "limit": "1"},
+                       timeout=8)
+            if r.ok and r.json():
+                row = r.json()[0]
+                result = {"avg_corners": float(row.get("avg_value") or 0), "games": row.get("games", 0)}
+        except Exception:
+            pass
+    get_supabase_corner_stats._cache[_ck] = result
+    return result
+
+
 def analyze_corners_tip_simple(fixture, league):
     """
     Vereinfachte Ecken-Analyse ohne API-Football IDs.
@@ -19816,7 +19842,18 @@ def analyze_corners_tip_simple(fixture, league):
     }
 
     avg = LEAGUE_AVG_CORNERS.get(league, 9.5)
-    expected = avg + random.uniform(-1.5, 1.5)
+    # 🚀 Echte Team-Ecken aus Supabase (statt nur Zufall) — schnell, kein Scraping
+    try:
+        _hc = get_supabase_corner_stats(fixture.get("home", ""))
+        _ac = get_supabase_corner_stats(fixture.get("away", ""))
+        _h_corners = _hc.get("avg_corners", 0)
+        _a_corners = _ac.get("avg_corners", 0)
+        if _h_corners > 0 and _a_corners > 0:
+            expected = _h_corners + _a_corners  # Team-Ecken zusammen = erwartete Gesamt-Ecken
+        else:
+            expected = avg + random.uniform(-1.5, 1.5)
+    except Exception:
+        expected = avg + random.uniform(-1.5, 1.5)
     lam = expected
 
     def poisson_over(line):
@@ -21325,7 +21362,7 @@ def run_advanced_props_bot(active_leagues: list, fixtures_cache: dict, target_da
             kickoff   = fixture.get("time_local", "TBD")
 
             # ── Quelle 1: FBref (alle Ligen versuchen) ──
-            if True:  # Immer versuchen
+            if str(os.getenv('NETRATTLER_FAST_TIPS','')).lower() not in ('1','true','yes','on'):  # Fast-Mode: FBref aus
                 player_db = manager.scrape_fbref_advanced_stats(league)
                 if player_db:
                     lineup  = get_sofascore_lineups(match_id, home, away) if match_id else None
@@ -22596,6 +22633,8 @@ def _fbref_prop_edge_check(player_name, league_name, prop_name, pinnacle_prob):
     da FBref echte Spielerleistung misst, der Markt aber Verletzungen/Tagesform einpreist.
     """
     try:
+        if str(os.getenv('NETRATTLER_FAST_TIPS','')).lower() in ('1','true','yes','on'):
+            return {}
         stats = _advanced_props_manager.scrape_fbref_advanced_stats(league_name)
     except Exception:
         stats = {}
@@ -23676,6 +23715,34 @@ def _sofascore_event_id_for(home, away, tip_date=None):
     return None
 
 
+_ODDS_SOURCE_ROTATION = ["oddspapi", "sofascore", "kambi", "bsd", "soccerapi",
+                          "theoddsapi", "betexplorer", "oddsportal_scrape", "betfair"]
+_ODDS_SOURCE_STATUS = {}  # {source: "ok"/"ratelimited"/"failed"} pro Lauf
+
+
+def _with_timeout(fn, seconds):
+    """Führt fn() mit hartem Timeout aus (Thread-basiert). Gibt None bei Timeout/Fehler.
+    Verhindert, dass ein hängender Scraper den ganzen Bot blockiert."""
+    import threading
+    _res = {"val": None}
+    def _run():
+        try:
+            _res["val"] = fn()
+        except Exception:
+            _res["val"] = None
+    _t = threading.Thread(target=_run, daemon=True)
+    _t.start()
+    _t.join(timeout=seconds)
+    if _t.is_alive():
+        return None  # Timeout — Thread läuft im Hintergrund weiter (daemon), blockiert nicht
+    return _res["val"]
+
+
+def _odds_source_available(source: str) -> bool:
+    """True wenn die Quelle in diesem Lauf noch nutzbar ist (kein 429/Fehler)."""
+    return _ODDS_SOURCE_STATUS.get(source) not in ("ratelimited", "failed")
+
+
 def _get_real_odds_any_source(home, away, league_name="", match_id=None, tip_date=None):
     """ZITRONEN-PRESSE: probiert ALLE Quoten-Quellen durch, bis echte BTTS/Over-
     Quoten da sind. Cacht pro Match. Gibt {btts_yes, over_25, btts_yes_ht, over15_ht, _source}."""
@@ -23708,12 +23775,18 @@ def _get_real_odds_any_source(home, away, league_name="", match_id=None, tip_dat
             result["_source"] = src
         return got
 
-    # 0) 🍋 OddsPapi (HAUPT — 130+ Bücher inkl. Pinnacle, alle Ligen, sauberes JSON)
-    try:
-        import netrattler_oddspapi as _op
-        _merge(_op.get_odds_for_match(home, away, tip_date), "oddspapi")
-    except Exception:
-        pass
+    # 0) 🍋 OddsPapi (HAUPT) — überspringen wenn in diesem Lauf schon 429/failed
+    if _odds_source_available("oddspapi"):
+        try:
+            import netrattler_oddspapi as _op
+            _od = _op.get_odds_for_match(home, away, tip_date)
+            if isinstance(_od, dict) and _od.get("_rate_limited"):
+                _ODDS_SOURCE_STATUS["oddspapi"] = "ratelimited"
+                log("   🍋 OddsPapi Rate-Limit → wechsle zu Fallback-Quellen für Rest des Laufs")
+            else:
+                _merge(_od, "oddspapi")
+        except Exception:
+            _ODDS_SOURCE_STATUS["oddspapi"] = "failed"
 
     # 1) Pinnacle via match_id (Fallback)
     try:
@@ -23721,10 +23794,9 @@ def _get_real_odds_any_source(home, away, league_name="", match_id=None, tip_dat
             _merge(fetch_pinnacle_match_odds(match_id), "pinnacle")
     except Exception:
         pass
-    # 2) SofaScore (BTTS + Over + HT — nutzt gecachte Tagesliste, instant wenn leer)
-    #    ⚡ FAST-MODE: überspringen (scrapt pro Match, langsam bei vielen Ligen).
-    _fast = str(os.getenv("NETRATTLER_FAST_TIPS", "")).lower() in ("1","true","yes","on")
-    if not _fast and not (result.get("btts_yes") and result.get("over_25")):
+    # 2) SofaScore-Fallback (nutzt gecachte Tagesliste — schnell, auch im Fast-Mode).
+    #    Läuft NUR wenn OddsPapi/Pinnacle nichts hatten (z.B. Rate-Limit 429).
+    if not (result.get("btts_yes") and result.get("over_25")):
         try:
             _eid = _sofascore_event_id_for(home, away, tip_date)
             if _eid:
@@ -23732,7 +23804,71 @@ def _get_real_odds_any_source(home, away, league_name="", match_id=None, tip_dat
         except Exception:
             pass
 
-    # Kambi/Betexplorer/SoccerAPI ENTFERNT aus der Pro-Match-Kette:
+    # 3) Kambi-Fallback für BTTS (schnelles HTTP)
+    if not result.get("btts_yes") and _odds_source_available("kambi"):
+        try:
+            _kb = _fetch_btts_odd_kambi(home, away)
+            if _kb and 1.2 <= _kb <= 4.0:
+                result["btts_yes"] = round(_kb, 2)
+                if not result.get("_source"):
+                    result["_source"] = "kambi"
+        except Exception:
+            _ODDS_SOURCE_STATUS["kambi"] = "failed"
+
+    # 4) BSD (79+ Buchmacher, schnelles HTTP) — wenn match_id vorhanden
+    if not (result.get("btts_yes") and result.get("over_25")) and _odds_source_available("bsd"):
+        try:
+            _bsd = get_bsd_odds(match_id) if match_id else None
+            if _bsd:
+                _merge(_bsd, "bsd")
+        except Exception:
+            _ODDS_SOURCE_STATUS["bsd"] = "failed"
+
+    # 5) SoccerAPI (Namens-basiert, HTTP)
+    if not (result.get("btts_yes") and result.get("over_25")) and _odds_source_available("soccerapi"):
+        try:
+            _sa = get_soccerapi_odds(home, away, tip_date)
+            if _sa:
+                _merge(_sa, "soccerapi")
+        except Exception:
+            _ODDS_SOURCE_STATUS["soccerapi"] = "failed"
+
+    # 6) The Odds API / OddsPortal HTTP (schnell)
+    if not (result.get("btts_yes") and result.get("over_25")) and _odds_source_available("theoddsapi"):
+        try:
+            _oa = fetch_oddsportal_odds(home, away, league_name)
+            if _oa:
+                _merge(_oa, "oddsportal")
+        except Exception:
+            _ODDS_SOURCE_STATUS["theoddsapi"] = "failed"
+
+    # 7) Betexplorer (Scraper, mit HARTEM Timeout gegen Hänger)
+    if not (result.get("btts_yes") and result.get("over_25")) and _odds_source_available("betexplorer"):
+        try:
+            _bx = _with_timeout(lambda: get_betexplorer_odds(home, away, league_name), 4)
+            if _bx and isinstance(_bx, dict):
+                _merge(_bx, "betexplorer")
+        except Exception:
+            _ODDS_SOURCE_STATUS["betexplorer"] = "failed"
+
+    # 8) OddsPortal BTTS-Scraper (mit HARTEM Timeout)
+    if not result.get("btts_yes") and _odds_source_available("oddsportal_scrape"):
+        try:
+            _op2 = _with_timeout(lambda: scrape_oddsportal_btts(home, away, league_name, tip_date), 4)
+            if _op2 and isinstance(_op2, dict) and _op2.get("btts_yes"):
+                _merge(_op2, "oddsportal_scrape")
+        except Exception:
+            _ODDS_SOURCE_STATUS["oddsportal_scrape"] = "failed"
+
+    # 9) Betfair (falls Event-Name matcht)
+    if not (result.get("btts_yes") and result.get("over_25")) and _odds_source_available("betfair"):
+        try:
+            _bf = _with_timeout(lambda: get_betfair_odds_api(f"{home} v {away}"), 4)
+            if _bf and isinstance(_bf, dict):
+                _merge(_bf, "betfair")
+        except Exception:
+            _ODDS_SOURCE_STATUS["betfair"] = "failed"
+
     # zu langsam (HTTP-Suche + Playwright + Rate-Limits) bei ~1000 Matches.
     # Nur schnelle Quellen (Pinnacle match_id + SofaScore-Tagescache) bleiben.
 
@@ -26001,6 +26137,24 @@ def main():
 
 
 if __name__ == "__main__":
+    # ⏱️ HARTER WATCHDOG: SIGALRM unterbricht JEDE hängende Operation (Playwright,
+    # requests ohne Timeout, etc.) nach X Sekunden. Garantiert kein 20-Min-Timeout.
+    try:
+        import signal as _sig
+        def _hard_timeout(signum, frame):
+            log("⏱️ HARTER WATCHDOG: Zeitlimit erreicht — Bot wird sofort beendet", "WARN")
+            # os._exit umgeht ALLE except-Blöcke → garantierter Stopp (kein Loop fängt es ab)
+            try:
+                import sys as _s; _s.stdout.flush()
+            except Exception:
+                pass
+            os._exit(0)
+        _wd = int(os.getenv("NETRATTLER_HARD_WATCHDOG_SEC", "660"))  # 11 Min
+        if hasattr(_sig, "SIGALRM"):
+            _sig.signal(_sig.SIGALRM, _hard_timeout)
+            _sig.alarm(_wd)
+    except Exception:
+        pass
     try:
         main()
     except Exception as e:
