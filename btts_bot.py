@@ -23715,7 +23715,9 @@ def _get_real_odds_any_source(home, away, league_name="", match_id=None, tip_dat
     except Exception:
         pass
     # 2) SofaScore (BTTS + Over + HT — nutzt gecachte Tagesliste, instant wenn leer)
-    if not (result.get("btts_yes") and result.get("over_25")):
+    #    ⚡ FAST-MODE: überspringen (scrapt pro Match, langsam bei vielen Ligen).
+    _fast = str(os.getenv("NETRATTLER_FAST_TIPS", "")).lower() in ("1","true","yes","on")
+    if not _fast and not (result.get("btts_yes") and result.get("over_25")):
         try:
             _eid = _sofascore_event_id_for(home, away, tip_date)
             if _eid:
@@ -25269,9 +25271,12 @@ def main():
                         pass
                 else:
                     # 🆕 football-data.co.uk: echte BTTS/Over-Raten für ~20 Top-Vereinsligen
+                    # ⚡ FAST-MODE: überspringen (langsam, ~2 Calls/Match). Das trainierte
+                    # XGBoost-Modell hat diese Muster bereits gelernt → nicht nötig live.
+                    _fast_stats = str(os.getenv("NETRATTLER_FAST_TIPS", "")).lower() in ("1","true","yes","on")
                     try:
-                        _fh = get_fd_co_uk_team_stats(home, league_name)
-                        _fa = get_fd_co_uk_team_stats(away, league_name)
+                        _fh = None if _fast_stats else get_fd_co_uk_team_stats(home, league_name)
+                        _fa = None if _fast_stats else get_fd_co_uk_team_stats(away, league_name)
                         if _fh and _fa:
                             _mb = (_fh["btts_pct"] + _fa["btts_pct"]) / 2
                             _mo = (_fh["over25_pct"] + _fa["over25_pct"]) / 2
