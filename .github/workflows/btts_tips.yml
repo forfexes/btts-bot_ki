@@ -2,10 +2,10 @@ name: NETRATTLER AI Tipp Bot
 
 on:
   schedule:
-    - cron: "30 9 * * *"  # 11:30 CH — Frühspiele (Serie A 12:30, PL 13:30)
-    - cron: "0 13 * * 6,0" # 15:00 CH — Sa/So Nachmittag (BuLi 15:30)
-    - cron: "0 16 * * 6,0" # 18:00 CH — Sa/So Nachmittag (PL 18:30, BuLi 18:30)
-    - cron: "0 19 * * *"  # 21:00 CH — Abend (CL 21:00, LaLiga 21:00, Serie A 20:45)
+    - cron: "0 7 * * *"   # 09:00 CH
+    - cron: "0 11 * * *"  # 13:00 CH
+    - cron: "0 17 * * *"  # 19:00 CH
+    - cron: "0 21 * * *"  # 23:00 CH
   workflow_dispatch:
     inputs:
       mode:
@@ -49,7 +49,6 @@ jobs:
             supabase \
             xgboost \
             cloudscraper \
-            curl_cffi \
             numpy \
             pandas \
             scikit-learn
@@ -66,10 +65,6 @@ jobs:
 
       - name: Run Tips Bot 🤖
         env:
-          # ── ⚡ SPEED: Tipp-Lauf schnell halten (Stats sammelt der Scraper separat) ──
-          NETRATTLER_FAST_TIPS:       "true"
-          NETRATTLER_STATBUNKER_MAX_LOOKUPS: "15"
-          NETRATTLER_LINEUP_MAX:      "12"
           # ── KI APIs ──
           GEMINI_API_KEYS:            ${{ secrets.GEMINI_API_KEYS }}
           GROQ_API_KEYS:              ${{ secrets.GROQ_API_KEYS }}
@@ -104,7 +99,6 @@ jobs:
           # ── Supabase ──
           SUPABASE_URL:               ${{ secrets.SUPABASE_URL }}
           SUPABASE_KEY:               ${{ secrets.SUPABASE_KEY }}
-          ODDSPAPI_KEY:               ${{ secrets.ODDSPAPI_KEY }}
           SUPABASE_SERVICE_ROLE_KEY:  ${{ secrets.SUPABASE_SERVICE_ROLE_KEY }}
           # ── Bot Einstellungen ──
           RUN_MODE:                   ${{ github.event.inputs.mode || 'tips' }}
