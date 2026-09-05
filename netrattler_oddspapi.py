@@ -46,6 +46,7 @@ _PREFERRED_BOOKS = ["pinnacle", "bet365", "betano", "bwin", "888sport", "betsson
 _FIXTURES_CACHE: Dict[str, List[Dict]] = {}
 _ODDS_CACHE: Dict[str, Dict] = {}
 _CALL_COUNT = {"fixtures": 0, "odds": 0}
+_RATE_LIMITED_FLAG = {"hit": False}
 
 
 def call_stats() -> dict:
@@ -97,6 +98,7 @@ def get_fixtures(target_date=None) -> List[Dict]:
         elif data is None:
             print("   🍋 OddsPapi: API-Antwort leer/Fehler (Key gültig? Endpoint?)")
         elif isinstance(data, dict) and data.get("_rate_limited"):
+            _RATE_LIMITED_FLAG["hit"] = True
             print("   🍋 OddsPapi: Rate-Limit (429) erreicht")
         else:
             print(f"   🍋 OddsPapi: {len(fixtures)} Fixtures mit Quoten geladen ({ds})")
@@ -217,6 +219,10 @@ def find_fixture(home: str, away: str, target_date=None) -> Optional[Dict]:
 
 def get_odds_for_match(home: str, away: str, target_date=None) -> Dict[str, Any]:
     """Komplett-Lookup: Teamnamen → Fixture → Quoten. Für die Quoten-Kette."""
+    # Wenn die Fixtures-Liste rate-limited war → Flag durchreichen
+    _fx_list = get_fixtures(target_date)
+    if _RATE_LIMITED_FLAG.get("hit"):
+        return {"_rate_limited": True}
     fx = find_fixture(home, away, target_date)
     if not fx:
         _CALL_COUNT["misses"] = _CALL_COUNT.get("misses", 0) + 1
