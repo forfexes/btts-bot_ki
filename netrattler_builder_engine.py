@@ -250,7 +250,6 @@ def normalize_prop(row: Dict[str, Any]) -> Optional[PropLeg]:
     bookmaker_tokens = (
         "pinnacle", "bet365", "betfair", "oddsportal", "oddsharvester",
         "bookmaker", "sportsbook",
-        "kambi", "unibet", "betsson", "1xbet", "sofascore",
     )
     observed_bookmaker = odds > 1 and any(token in source_text for token in bookmaker_tokens)
     if odds <= 1:
@@ -347,7 +346,7 @@ def builder_signature(style: str, legs: Sequence[PropLeg], match_date: str) -> s
     return "nb_" + hashlib.sha1(raw.encode("utf-8")).hexdigest()[:24]
 
 
-def valid_builder(legs: Sequence[PropLeg], min_legs: int = 2, max_legs: int = 8) -> bool:
+def valid_builder(legs: Sequence[PropLeg], min_legs: int = 2, max_legs: int = 6) -> bool:
     if not (min_legs <= len(legs) <= max_legs):
         return False
     keys = [x.key() for x in legs]
@@ -420,13 +419,12 @@ def _scale_builder_stake(total_odds: float, requested: float = 0.5) -> float:
         return min(requested, 0.35)
     return requested
 
-def _make_builder(style: str, variant: str, legs: List[PropLeg], match_date: str, stake: float = 0.5, max_odds: float = 0.0) -> Optional[BuilderPick]:
+def _make_builder(style: str, variant: str, legs: List[PropLeg], match_date: str, stake: float = 0.5) -> Optional[BuilderPick]:
     if not valid_builder(legs):
         return None
     odds = total_odds(legs)
     min_odds = as_float(os.getenv("NETRATTLER_BUILDER_MIN_ODDS", "1.75"), 1.75)
-    _default_max = as_float(os.getenv("NETRATTLER_BUILDER_MAX_ODDS", "150"), 150.0)
-    max_odds = max_odds if max_odds else _default_max
+    max_odds = as_float(os.getenv("NETRATTLER_BUILDER_MAX_ODDS", "150"), 150.0)
     if odds < min_odds or odds > max_odds:
         return None
     # Einsatz automatisch nach Risikostufe. Explizit kleinere Stakes bleiben erhalten.
@@ -1733,7 +1731,6 @@ def run_builder_engine(
     match_date: Optional[str] = None,
     supabase_url: str = "",
     supabase_key: str = "",
-    send_chat_id: str = "",
     logger: Optional[Callable[[str], Any]] = None,
 ) -> Tuple[int, List[BuilderPick]]:
     normalized = deduplicate_props(raw_props)
@@ -1759,24 +1756,6 @@ def run_builder_engine(
             )
         )
     sent = 0
-    # Selektiver Edge-Filter: nur Builder mit ausreichender Durchschnitts-Edge senden.
-    # Implied-abgeleitete Legs liegen bei ~-2% (Buchmacher-Marge); nur wenn die
-    # XGBoost-Modelle bekannte Spieler matchen, entsteht positive Edge. An Mini-Liga-Tagen
-    # ohne Modell-Deckung passiert nichts → schont den ROI statt -EV-Notloesungen zu posten.
-    _min_avg_edge = float(os.getenv("NETRATTLER_BUILDER_MIN_AVG_EDGE", "0.0"))
-    # Jedes EINZELNE Leg muss mind. diese Edge haben (blockt Lottery-Builder mit
-    # 1 gutem + 2 schlechten Legs). Default -1% = kleine Toleranz.
-    _min_leg_edge = float(os.getenv("NETRATTLER_BUILDER_MIN_LEG_EDGE", "-0.01"))
-    # Max. Anzahl Legs mit negativer Edge (0 = alle müssen positiv sein).
-    _max_neg_legs = int(os.getenv("NETRATTLER_BUILDER_MAX_NEG_LEGS", "0"))
-
-    def _avg_edge(p: BuilderPick) -> float:
-        edges = [leg.probability - (1.0 / leg.odds) for leg in p.legs if leg.odds > 1]
-        return sum(edges) / len(edges) if edges else -1.0
-
-    def _leg_edges(p: BuilderPick):
-        return [leg.probability - (1.0 / leg.odds) for leg in p.legs if leg.odds > 1]
-
     for pick in picks:
         if not _v31_valid_prop_builder(pick):
             if logger:
@@ -1785,61 +1764,14 @@ def run_builder_engine(
                     f"{pick.style} {pick.variant} @ {pick.total_odds:.2f}"
                 )
             continue
-        _ae = _avg_edge(pick)
-        if _ae < _min_avg_edge:
-            if logger:
-                logger(
-                    f"MASTER BUILDER edge-gefiltert (Ø-Edge {_ae*100:.1f}% < "
-                    f"{_min_avg_edge*100:.1f}%): {pick.style} {pick.variant}"
-                )
-            continue
-        # Pro-Leg-Prüfung: zu viele negative-Edge-Legs → blocken
-        _le = _leg_edges(pick)
-        _neg = [e for e in _le if e < _min_leg_edge]
-        if len(_neg) > _max_neg_legs:
-            if logger:
-                logger(
-                    f"MASTER BUILDER leg-edge-gefiltert ({len(_neg)} Legs < "
-                    f"{_min_leg_edge*100:.1f}%): {pick.style} {pick.variant}"
-                )
-            continue
-        # 🚩 Edge-Deckelung: absurd hohe Edges (>Cap) sind meist Modell-Fehler
-        # (schlechte Spielerdaten / veraltete Quote), kein echter Value.
-        _edge_cap = float(os.getenv("NETRATTLER_BUILDER_MAX_LEG_EDGE", "0.15"))
-        _absurd = [e for e in _le if e > _edge_cap]
-        if _absurd:
-            if logger:
-                logger(
-                    f"MASTER BUILDER edge-cap ({len(_absurd)} Legs > "
-                    f"{_edge_cap*100:.0f}% = Modell-Fehler?): {pick.style} {pick.variant}"
-                )
-            continue
         persisted = persist_builder_pick(pick, supabase_url, supabase_key)
         if persisted is False:
             if logger:
                 logger(f"MASTER BUILDER duplicate skipped: {pick.builder_id}")
             continue
         try:
-            _builder_text = format_builder_message(pick)
-            _mid = send_message(_builder_text)
+            send_message(format_builder_message(pick))
             sent += 1
-            # msg_id + Text zurueckschreiben → V21 kann den Original-Builder-Tipp
-            # direkt editieren ("Auswertung im Tipp selber").
-            if _mid and supabase_url and supabase_key and send_chat_id:
-                try:
-                    requests.patch(
-                        f"{supabase_url.rstrip('/')}/rest/v1/netrattler_builder_picks",
-                        headers=_supabase_headers(supabase_key),
-                        params={"builder_id": f"eq.{pick.builder_id}"},
-                        data=json.dumps({
-                            "telegram_msg_id": str(_mid),
-                            "telegram_chat_id": str(send_chat_id),
-                            "message_text": _builder_text[:3500],
-                        }, ensure_ascii=False, default=str),
-                        timeout=8,
-                    )
-                except Exception:
-                    pass
             if logger:
                 logger(f"MASTER BUILDER {pick.style} {pick.variant}: {pick.leg_count}L @ {pick.total_odds:.2f} | DB={persisted}")
         except Exception as exc:
@@ -1880,7 +1812,7 @@ _SHARP_PLAYER_CATS_V31 = {
     "yellow_cards", "fouls", "fouls_won",
     "tackles_committed", "tackles_received", "tackles",
     "score", "first_scorer", "last_scorer", "assist", "score_assist",
-    "offsides", "saves",
+    "offsides",
 }
 
 _CAT_WEIGHT_V31 = {
@@ -1908,22 +1840,6 @@ def _v31_is_real_player_leg(leg: PropLeg) -> bool:
     p = norm(leg.player)
     if not p or p in _GENERIC_PLAYERS_V31:
         return False
-    # 🚫 TEAM-PROPS raus: Wenn der "Spieler"-Name eigentlich ein TEAM ist
-    # (z.B. "Santos-SP To Be Carded"), ist das KEIN echtes Player-Leg.
-    # Erkennung: Teams aus dem Match extrahieren, mit Spielername vergleichen.
-    try:
-        _match_str = str(leg.match or "")
-        _teams = re.split(r"\s+vs\s+|\s+v\s+|\s+-\s+", _match_str, flags=re.IGNORECASE)
-        _pl_words = set(re.sub(r"[^a-z0-9 ]", " ", str(leg.player or "").lower()).split())
-        for _tm in _teams:
-            _tm_words = set(re.sub(r"[^a-z0-9 ]", " ", _tm.lower()).split())
-            _tm_words = {w for w in _tm_words if len(w) >= 4}  # signifikante Wörter
-            # Spielername besteht NUR aus Team-Wörtern (+ evtl. Suffix wie "SP") → Team-Prop
-            if _tm_words and _tm_words.issubset(_pl_words | {w for w in _pl_words}):
-                if _tm_words & _pl_words:
-                    return False
-    except Exception:
-        pass
     # Team props kommen manchmal als "Argentina To Score?" / "England To Score?"
     # in score-Kategorie rein. Diese nicht als Spielerprop behandeln.
     m = norm(leg.market)
@@ -1931,9 +1847,7 @@ def _v31_is_real_player_leg(leg: PropLeg) -> bool:
         " to score" in str(leg.market).lower() and norm(leg.player) in norm(leg.match)
     ):
         return False
-    if leg.category == "score" and "player" not in m and any(
-        x in m for x in ["team to score", "to score yes", "to score?"]
-    ):
+    if leg.category == "score" and any(x in m for x in ["team to score", "to score yes", "to score?"]):
         return False
     return True
 
@@ -1943,13 +1857,8 @@ def _v31_edge(leg: PropLeg) -> float:
 
 
 def _v31_min_edge() -> float:
-    # Prop-Wahrscheinlichkeiten sind aktuell implied-abgeleitet (prob ~= implied * 0.95),
-    # daher ist die Edge durch die Buchmacher-Marge fast immer leicht negativ.
-    # Ein harter >0-Filter verwirft dadurch JEDES reale Pinnacle-Leg (Deadlock -> 0 Builder).
-    # Toleranz laesst vig-getriebene Mini-Negativ-Edges zu; grob negative Legs bleiben raus.
-    # Edge bleibt zusaetzlich starkes Ranking-Signal in _v31_leg_score.
-    value = as_float(os.getenv("NETRATTLER_PROP_BUILDER_MIN_EDGE", "-0.08"), -0.08)
-    return max(-0.25, min(0.50, value))
+    value = as_float(os.getenv("NETRATTLER_PROP_BUILDER_MIN_EDGE", "0.0"), 0.0)
+    return max(0.0, min(0.50, value))
 
 
 def _v31_min_total_odds() -> float:
@@ -1964,7 +1873,6 @@ def _v31_has_observed_bookmaker_odds(leg: PropLeg) -> bool:
     return any(token in source for token in {
         "pinnacle", "bet365", "betfair", "oddsportal",
         "oddsharvester", "bookmaker", "sportsbook",
-        "kambi", "unibet", "betsson", "1xbet", "sofascore",
     })
 
 
@@ -2038,7 +1946,7 @@ def _v31_distinct_add(pool: Sequence[PropLeg], selected: List[PropLeg], cats: Op
         selected.append(leg)
         return
 
-def _v31_make(style: str, variant: str, legs: List[PropLeg], match_date: str, stake: float = 0.35, max_odds: float = 0.0) -> Optional[BuilderPick]:
+def _v31_make(style: str, variant: str, legs: List[PropLeg], match_date: str, stake: float = 0.35) -> Optional[BuilderPick]:
     legs = [x for x in legs if x and _v31_is_real_player_leg(x)]
     if len(legs) < 2:
         return None
@@ -2050,11 +1958,11 @@ def _v31_make(style: str, variant: str, legs: List[PropLeg], match_date: str, st
         "tackles_committed": 3, "tackles_received": 3, "tackles": 3,
     }
     legs = sorted(legs, key=lambda x: (order.get(x.category, 9), -_v31_leg_score(x)))
-    pick = _make_builder(style, variant, legs, match_date, stake, max_odds=max_odds or 150.0)
+    pick = _make_builder(style, variant, legs, match_date, stake)
     if not pick:
         return None
-    _cap = max_odds if max_odds else float(os.getenv("NETRATTLER_SHARP_PROP_MAX_ODDS", "80"))
-    if pick.total_odds > _cap:
+    # Player-Prop Builder: only observed bookmaker quotes, positive edge and 5.00+.
+    if pick.total_odds > float(os.getenv("NETRATTLER_SHARP_PROP_MAX_ODDS", "80")):
         return None
     if not _v31_valid_prop_builder(pick):
         return None
@@ -2107,32 +2015,6 @@ def _v31_same_match_builders(real_props: Sequence[PropLeg], match_date: str) -> 
             p = _v31_make("SHARP PLAYER DOUBLE", "BEST 2 REAL PROPS", legs[:2], match_date, 0.45)
             if p:
                 out.append(p)
-
-        # D) Langer Same-Game-Builder (Aystar/Nate-Style Bauklötzchen) — bis 8 Legs aus EINEM
-        #    Spiel. Derselbe Spieler darf mit VERSCHIEDENEN Märkten mehrfach rein
-        #    (z.B. Mac Allister 1+ Shots + 1+ Fouls Won), aber nicht dieselbe Prop doppelt.
-        long_legs: List[PropLeg] = []
-        _seen_pc = set()   # (player, category)-Paare
-        for leg in pool_sorted:
-            if not _v31_is_real_player_leg(leg):
-                continue
-            _pc = (norm(leg.player), leg.category)
-            if _pc in _seen_pc:
-                continue
-            long_legs.append(leg)
-            _seen_pc.add(_pc)
-            if len(long_legs) >= 8:
-                break
-        for _size in (8, 7, 6, 5, 4):
-            if len(long_legs) >= _size:
-                p = _v31_make(
-                    "SAME GAME PROFILE", f"{_size} REAL PLAYER LEGS",
-                    long_legs[:_size], match_date, 0.10,
-                    max_odds=float(os.getenv("NETRATTLER_LONG_BUILDER_MAX_ODDS", "300")),
-                )
-                if p:
-                    out.append(p)
-                    break
 
     return out
 
@@ -2211,37 +2093,6 @@ def _v31_ladder_builders(real_props: Sequence[PropLeg], match_date: str) -> List
 
     return out
 
-def _bl_load_pairs():
-    """Gelernte Leg-Paar-Faktoren (aus abgerechneten Buildern) — gecacht pro Prozess."""
-    if getattr(_bl_load_pairs, "_cache", None) is not None:
-        return _bl_load_pairs._cache
-    factor_fn = None
-    try:
-        import netrattler_builder_learning_v36 as _bl
-        factor_fn = _bl.joint_probability
-    except Exception:
-        factor_fn = None
-    _bl_load_pairs._cache = factor_fn
-    return factor_fn
-
-
-def _v31_learned_boost(pick: BuilderPick) -> float:
-    """Boost/Malus aus gelernten Korrelationen: Builder aus historisch
-    zusammen-treffenden Legs (factor>1) werden bevorzugt, negativ korrelierte
-    abgewertet. Der Bot NUTZT damit, was er aus abgerechneten Buildern gelernt hat."""
-    fn = _bl_load_pairs()
-    if fn is None or len(pick.legs) < 2:
-        return 0.0
-    try:
-        indep, adjusted, n = fn(pick.legs)
-        if not indep or n <= 0:
-            return 0.0
-        lift = adjusted / indep  # >1 positiv korreliert, <1 negativ
-        return max(-0.25, min(0.25, (lift - 1.0)))
-    except Exception:
-        return 0.0
-
-
 def _v31_pick_score(pick: BuilderPick) -> float:
     scores = [_v31_leg_score(x) for x in pick.legs]
     avg = sum(scores) / max(1, len(scores))
@@ -2258,42 +2109,7 @@ def _v31_pick_score(pick: BuilderPick) -> float:
         odds_adj = -0.08
     else:
         odds_adj = -0.30
-    return (avg + real_ratio * 0.35 + cat_div * 0.10 + odds_adj
-            + _v31_learned_boost(pick) + _v31_role_boost(pick))
-
-
-def _rc_module():
-    """Rollen-Kontext-Modul (Favorit/Außenseiter) — lazy + gecacht."""
-    if getattr(_rc_module, "_c", "x") == "x":
-        try:
-            import netrattler_role_context as _rc
-            _rc.load_team_elo()
-            _rc_module._c = _rc
-        except Exception:
-            _rc_module._c = None
-    return _rc_module._c
-
-
-def _v31_role_boost(pick: BuilderPick) -> float:
-    """Favorit-vs-Außenseiter-Boost: rollengerechte Props (Favorit=Angriff,
-    Außenseiter=Kampf) werden bevorzugt. Nutzt Elo + Team-Info der Legs.
-    Neutral (0), wenn Elo/Team fehlen — bricht nie."""
-    rc = _rc_module()
-    if rc is None:
-        return 0.0
-    try:
-        # Home/Away aus dem Match-String "A vs B"
-        match = pick.legs[0].match if pick.legs else ""
-        if " vs " not in match:
-            return 0.0
-        home, away = [s.strip() for s in match.split(" vs ", 1)]
-        boosts = []
-        for leg in pick.legs:
-            if leg.team:
-                boosts.append(rc.role_boost(leg.category, leg.team, home, away))
-        return round(sum(boosts) / len(boosts), 4) if boosts else 0.0
-    except Exception:
-        return 0.0
+    return avg + real_ratio * 0.35 + cat_div * 0.10 + odds_adj
 
 # ============================================================
 # 🎯 SCREENSHOT BUILDERS (JK-Style, Full Profile, Team Correlation)
@@ -2667,14 +2483,14 @@ def build_builder_picks(
 ) -> List[BuilderPick]:
     props = deduplicate_props(raw_props)
     run_date = match_date or date.today().isoformat()
-    max_count = max_builders or as_int(os.getenv("NETRATTLER_MAX_BUILDERS_PER_RUN", "24"), 24)
+    max_count = max_builders or as_int(os.getenv("NETRATTLER_MAX_BUILDERS_PER_RUN", "18"), 18)
 
     real_props = [
         x for x in props
         if _v31_valid_prop_leg(x)
         and x.odds >= 1.35
         and x.odds <= float(os.getenv("NETRATTLER_SHARP_PROP_LEG_MAX_ODDS", "25"))
-        and x.probability >= float(os.getenv("NETRATTLER_SHARP_PROP_MIN_PROB", "0.12"))
+        and x.probability >= float(os.getenv("NETRATTLER_SHARP_PROP_MIN_PROB", "0.15"))
     ]
 
     focused: List[BuilderPick] = []
@@ -2718,40 +2534,20 @@ def build_builder_picks(
     selected: List[BuilderPick] = []
     style_counts: Dict[str, int] = {}
     match_counts: Dict[str, int] = {}
-    _selected_ids = set()
-
-    def _try_take(pick: BuilderPick, style_cap: int) -> bool:
-        if id(pick) in _selected_ids or not _v31_valid_prop_builder(pick):
-            return False
+    for pick in unique:
+        if not _v31_valid_prop_builder(pick):
+            continue
+        style_counts[pick.style] = style_counts.get(pick.style, 0)
         match_key = pick.legs[0].match if len({x.match for x in pick.legs}) == 1 else "CROSS"
-        if style_counts.get(pick.style, 0) >= style_cap:
-            return False
-        if match_key != "CROSS" and match_counts.get(match_key, 0) >= 4:
-            return False
+        if style_counts[pick.style] >= 5:
+            continue
+        if match_key != "CROSS" and match_counts.get(match_key, 0) >= 3:
+            continue
         selected.append(pick)
-        _selected_ids.add(id(pick))
         style_counts[pick.style] = style_counts.get(pick.style, 0) + 1
         match_counts[match_key] = match_counts.get(match_key, 0) + 1
-        return True
-
-    # Pass 1: Stil-Vielfalt sichern — mind. 1 Builder pro vorhandenem Stil (bester nach Score),
-    # damit nicht nur SHARP PLAYER PROP (JK) rauskommt, sondern auch FAVORITE/INTENSITY/ATTACK
-    # SCRIPT, BOOKING/SHOT LADDER, GOALSCORER COMBO, FULL PROFILE etc.
-    _seen_styles = set()
-    for pick in unique:  # bereits nach _v31_pick_score absteigend sortiert
-        if pick.style in _seen_styles:
-            continue
-        if _try_take(pick, style_cap=1):
-            _seen_styles.add(pick.style)
         if len(selected) >= max_count:
             break
-
-    # Pass 2: Restplätze nach Score auffüllen (bis 5 pro Stil).
-    if len(selected) < max_count:
-        for pick in unique:
-            _try_take(pick, style_cap=5)
-            if len(selected) >= max_count:
-                break
 
     # 🆕 Screenshot-Builder parallel hinzufügen (JK-Style, nicht durch V31-Filter)
     all_props = deduplicate_props(raw_props)
