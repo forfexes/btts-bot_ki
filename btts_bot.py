@@ -20289,6 +20289,8 @@ def run_corners_and_scorer_bots(target_date, active_leagues, odds_data_cache, fi
     seen_corner_matches = set()  # Duplikat-Check über ALLE Ligen
 
     for league in active_leagues:
+        if _budget_exceeded():
+            break
         fixtures = fixtures_cache.get(league, [])
         if not fixtures:
             continue
@@ -20955,6 +20957,9 @@ class AdvancedPropsManager:
         """
         Hauptfunktion: Analysiert Advanced Props für alle Spiele einer Liga.
         """
+        # ⚡ FAST-MODE: FBref-Playwright-Scrape überspringen (Hauptzeitfresser!)
+        if str(os.getenv("NETRATTLER_FAST_TIPS", "")).lower() in ("1","true","yes","on"):
+            return []
         player_db = self.scrape_fbref_advanced_stats(league_name)
         if not player_db:
             return []
@@ -21306,6 +21311,8 @@ def run_advanced_props_bot(active_leagues: list, fixtures_cache: dict, target_da
         )
 
     for league in active_leagues:
+        if _budget_exceeded():
+            break
         fixtures = fixtures_cache.get(league, [])
         if not fixtures:
             continue
@@ -24997,7 +25004,7 @@ def main():
     import time as _gtime
     global _NETRATTLER_RUN_START, _NETRATTLER_RUN_BUDGET
     _NETRATTLER_RUN_START = _gtime.time()
-    _NETRATTLER_RUN_BUDGET = int(env("NETRATTLER_GLOBAL_BUDGET_SEC", "900"))  # 15 Min hart
+    _NETRATTLER_RUN_BUDGET = int(env("NETRATTLER_GLOBAL_BUDGET_SEC", "720"))  # 15 Min hart
 
     check_config()
     check_rotation_schedule()
