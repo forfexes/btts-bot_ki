@@ -318,8 +318,14 @@ def telegram_edit(chat_id: str, message_id: Any, text: str) -> bool:
 def _strip_old_direct_summary(original: str) -> str:
     if not original:
         return ""
+    original = str(original)
+    # neue Auswertung: ab der ━━━-Zeile, die von 🏁/✅/❌ ERGEBNIS gefolgt wird
+    m = re.search(r"\n?━━━+\n(?:🏁|✅ <b>Tipp|❌ <b>Tipp)", original)
+    if m:
+        original = original[:m.start()].rstrip()
+    # alte Auswertung (⸻⸻ ... Summary) entfernen
     pattern = r"\n?⸻⸻\s*(?:<b>)?(?:Match|Combo|Corner|Builder|Prop) Summary(?:</b>)?\s*⸻⸻[\s\S]*$"
-    return re.sub(pattern, "", str(original)).rstrip()
+    return re.sub(pattern, "", original).rstrip()
 
 
 def _direct_summary_title(group: str) -> str:
@@ -335,13 +341,9 @@ def _direct_summary_title(group: str) -> str:
 
 
 def format_direct_summary(settlement: Dict[str, Any]) -> str:
-    """Kurzer Block direkt im Original-Tipp."""
-    group = settlement.get("market_group", "default")
-    title = _direct_summary_title(group)
+    """Auswertung direkt im Original-Tipp — Variante B (sauber, kompakt)."""
     status = normalized_status(settlement.get("status"))
-    hit = "✅ Hit  <b>✅ V</b>" if status == "win" else "❌ Miss  <b>❌ X</b>"
     profit = as_float(settlement.get("profit"), 0.0)
-    profit_icon = "🟢" if profit >= 0 else "🔴"
     result = settlement.get("match_result") or {}
     raw = result.get("raw") if isinstance(result, dict) else {}
     raw = raw if isinstance(raw, dict) else {}
@@ -350,21 +352,29 @@ def format_direct_summary(settlement: Dict[str, Any]) -> str:
     ht_home = anyv(raw, ["home_score_ht", "ht_home", "home_ht", "HTHG", "intHomeScoreHT"], None)
     ht_away = anyv(raw, ["away_score_ht", "ht_away", "away_ht", "HTAG", "intAwayScoreHT"], None)
 
-    lines = [f"⸻⸻ <b>{title}</b> ⸻⸻"]
-    if ht_home not in (None, "") and ht_away not in (None, ""):
-        lines.append(f"Half-Time Score: <b>{ht_home}-{ht_away}</b>")
-    if home_score not in (None, "") and away_score not in (None, ""):
-        lines.append(f"Full-Time Score: <b>{home_score}-{away_score}</b>")
-    reason = str(settlement.get("reason") or "").strip()
-    if reason:
-        lines.append(f"Auswertung: <b>{reason[:180]}</b>")
-    lines.append(hit)
-    lines.append(f"{profit_icon} Profit: <b>{profit:+.2f} Units</b>")
+    lines = ["━━━━━━━━━━━━━━━━━━"]
 
+    # 🏁 ERGEBNIS: 2:1 (HT 1:0)
+    if home_score not in (None, "") and away_score not in (None, ""):
+        _res = f"🏁 <b>ERGEBNIS: {home_score}:{away_score}</b>"
+        if ht_home not in (None, "") and ht_away not in (None, ""):
+            _res += f" (HT {ht_home}:{ht_away})"
+        lines.append(_res)
+
+    # ✅ Tipp GEWONNEN / ❌ Tipp VERLOREN
+    if status == "win":
+        lines.append("✅ <b>Tipp GEWONNEN</b>")
+    else:
+        lines.append("❌ <b>Tipp VERLOREN</b>")
+
+    # 💰 +0.85 Units
+    _icon = "💰" if profit >= 0 else "📉"
+    lines.append(f"{_icon} <b>{profit:+.2f} Units</b>")
+
+    # Leg-Auswertung nur bei Combos/Buildern (kompakt)
     legs = settlement.get("legs_payload") or []
-    if isinstance(legs, list) and legs and group in {"combo", "builder", "props"}:
+    if isinstance(legs, list) and legs and settlement.get("market_group", "") in {"combo", "builder", "props"}:
         lines.append("")
-        lines.append("<b>Leg-Auswertung:</b>")
         for item in legs[:8]:
             if not isinstance(item, dict):
                 continue
@@ -372,8 +382,7 @@ def format_direct_summary(settlement: Dict[str, Any]) -> str:
             icon = "✅" if st == "win" else "❌" if st == "loss" else "⏳"
             leg = item.get("leg") if isinstance(item.get("leg"), dict) else {}
             label = market_text(leg) if leg else str(item.get("reason") or "Leg")
-            reason_txt = str(item.get("reason") or "")
-            lines.append(f"{icon} {label[:70]} — {reason_txt[:80]}")
+            lines.append(f"{icon} {label[:60]}")
     return "\n".join(lines)
 
 
