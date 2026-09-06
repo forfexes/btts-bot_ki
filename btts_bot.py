@@ -22314,10 +22314,16 @@ _PIN_ODDS_CACHE = {}
 
 
 def _pin_american_to_decimal(a) -> float:
-    """American Odds → Dezimalquote."""
+    """Pinnacle/Arcadia price -> decimal odds; accepts American or decimal input."""
     try:
         a = float(a)
-        return round(1 + (a / 100.0 if a > 0 else 100.0 / abs(a)), 2)
+        if 1.01 <= a <= 25.0:
+            return round(a, 2)
+        if a >= 100.0:
+            return round(1.0 + a / 100.0, 2)
+        if a <= -100.0:
+            return round(1.0 + 100.0 / abs(a), 2)
+        return 0.0
     except Exception:
         return 0.0
 
@@ -24075,63 +24081,100 @@ def _get_real_odds_any_source(home, away, league_name="", match_id=None, tip_dat
 
 
 
+_PIN_TEAM_MARKETS_RUN_CACHE = None
+
+
+def _parse_pinnacle_team_market(market: Dict, result: Dict) -> None:
+    """Parse one observed Arcadia straight market into normalized team-market keys."""
+    try:
+        mtype = str(market.get("type", "") or "").lower()
+        try:
+            period = int(market.get("period", 0) or 0)
+        except (TypeError, ValueError):
+            period = 0
+        for price in market.get("prices", []) or []:
+            pv = _pin_american_to_decimal(price.get("price"))
+            if pv <= 1.0:
+                continue
+            des = str(price.get("designation", "") or "").lower()
+            pts = price.get("points")
+            try:
+                pts_f = float(pts) if pts is not None else None
+            except (TypeError, ValueError):
+                pts_f = None
+            if mtype == "moneyline" and period == 0:
+                if des == "home": result["home_win"] = pv
+                elif des == "draw": result["draw"] = pv
+                elif des == "away": result["away_win"] = pv
+            elif mtype == "total" and period == 0 and pts_f == 2.5:
+                if des == "over": result["over_25"] = pv
+                elif des == "under": result["under_25"] = pv
+            elif mtype == "total" and period == 1:
+                if pts_f == 1.5 and des == "over": result["over_15_ht"] = pv
+                elif pts_f == 0.5 and des == "over": result["over_05_ht"] = pv
+    except Exception:
+        return
+
+
+def _get_pinnacle_team_market_index(force: bool = False) -> Dict:
+    """Load standard soccer markets once per run and index by matchupId."""
+    global _PIN_TEAM_MARKETS_RUN_CACHE
+    if isinstance(_PIN_TEAM_MARKETS_RUN_CACHE, dict) and not force:
+        return _PIN_TEAM_MARKETS_RUN_CACHE
+    index = {}
+    try:
+        data, status = _pinnacle_get_json(
+            f"{PINNACLE_BASE}/sports/{PINNACLE_SPORT_SOCCER}/markets/straight",
+            {"primaryOnly": "false", "withSpecials": "false"},
+        )
+        if not data:
+            log(f"   🎰 Pinnacle Team-Markets Bulk fehlgeschlagen ({status})", "WARN")
+            _PIN_TEAM_MARKETS_RUN_CACHE = {}
+            return _PIN_TEAM_MARKETS_RUN_CACHE
+        for market in data:
+            mid = market.get("matchupId")
+            if mid is None:
+                continue
+            bucket = index.setdefault(str(mid), {"match_id": mid})
+            _parse_pinnacle_team_market(market, bucket)
+        cov_1x2 = sum(1 for x in index.values() if x.get("home_win") or x.get("away_win") or x.get("draw"))
+        cov_o25 = sum(1 for x in index.values() if x.get("over_25"))
+        cov_ht = sum(1 for x in index.values() if x.get("over_15_ht"))
+        log(f"   🎰 Pinnacle Team-Markets Bulk: {len(data)} Märkte · Matches={len(index)} · 1X2={cov_1x2} · O2.5={cov_o25} · O1.5HT={cov_ht}")
+    except Exception as exc:
+        log(f"   🎰 Pinnacle Team-Markets Bulk Fehler: {str(exc)[:80]}", "WARN")
+        index = {}
+    _PIN_TEAM_MARKETS_RUN_CACHE = index
+    return index
+
+
 def fetch_pinnacle_match_odds(match_id: int, include_specials: bool = True) -> Optional[Dict]:
-    """Holt alle Quoten für ein einzelnes Pinnacle-Match."""
+    """Get normalized observed Pinnacle team odds for one matchup."""
     cache_key = f"odds_{match_id}_{1 if include_specials else 0}"
     cached = _cache_get(_PIN_ODDS_CACHE, cache_key)
     if cached is not None:
         return cached
 
+    result = {"match_id": match_id}
     try:
-        r = requests.get(
-            f"{PINNACLE_BASE}/matchups/{match_id}/markets/related/straight",
-            headers=PINNACLE_HEADERS,
-            timeout=(5 if not include_specials else 10),
-        )
-        if not r.ok:
-            _cache_set(_PIN_ODDS_CACHE, cache_key, None)
-            return None
+        bulk = _get_pinnacle_team_market_index()
+        got = bulk.get(str(match_id)) if isinstance(bulk, dict) else None
+        if got:
+            result.update(got)
+    except Exception:
+        pass
 
-        markets = r.json()
-        result = {"match_id": match_id}
-
-        for market in markets:
-            mtype = market.get("type", "")
-            period = market.get("period", 0)
-            for price in market.get("prices", []):
-                pv_raw = price.get("price")
-                des = str(price.get("designation", "") or "").lower()
-                pts = price.get("points")
-                # Arcadia/Pinnacle guest API liefert `price` als American Odds
-                # (z.B. -120 / +135), genau wie bei den Player Props.  Der alte
-                # Team-Markt-Parser behandelte diese Zahl faelschlich als Dezimalquote;
-                # negative Favoriten wurden verworfen und positive Underdogs als 135.0
-                # weitergereicht. Dadurch kam am Edge-Filter praktisch keine echte Quote an.
-                pv = _pin_american_to_decimal(pv_raw)
-                if pv <= 1.0:
-                    continue
-
-                if mtype == "moneyline" and period == 0:
-                    if des == "home": result["home_win"] = pv
-                    elif des == "draw": result["draw"] = pv
-                    elif des == "away": result["away_win"] = pv
-                elif mtype == "total" and period == 0:
-                    try:
-                        _pts = float(pts)
-                    except (TypeError, ValueError):
-                        _pts = None
-                    if _pts == 2.5:
-                        if des == "over": result["over_25"] = pv
-                        elif des == "under": result["under_25"] = pv
-                elif mtype == "total" and period == 1:
-                    try:
-                        _pts = float(pts)
-                    except (TypeError, ValueError):
-                        _pts = None
-                    if _pts == 1.5 and des == "over":
-                        result["over_15_ht"] = pv
-                    elif _pts == 0.5 and des == "over":
-                        result["over_05_ht"] = pv
+    if not any(result.get(k) for k in ("home_win", "draw", "away_win", "over_25", "over_15_ht")):
+        try:
+            r = requests.get(
+                f"{PINNACLE_BASE}/matchups/{match_id}/markets/related/straight",
+                headers=PINNACLE_HEADERS, timeout=(5 if not include_specials else 10),
+            )
+            if r.ok:
+                for market in r.json() or []:
+                    _parse_pinnacle_team_market(market, result)
+        except Exception:
+            pass
 
         # BTTS via related markets. Deliberately skipped in FAST mode because
         # this second network chain was the dominant per-match runtime cost.
@@ -24168,11 +24211,8 @@ def fetch_pinnacle_match_odds(match_id: int, include_specials: bool = True) -> O
         except Exception:
             pass
 
-        _cache_set(_PIN_ODDS_CACHE, cache_key, result)
-        return result
-    except Exception:
-        _cache_set(_PIN_ODDS_CACHE, cache_key, None)
-        return None
+    _cache_set(_PIN_ODDS_CACHE, cache_key, result)
+    return result
 
 
 def _normalize_name(name: str) -> str:
@@ -25689,6 +25729,8 @@ def main():
                 # while removing the 10-20s/network cost for obvious non-candidates.
                 _fast_real = str(env("NETRATTLER_FAST_TIPS", "false")).lower() in ("1", "true", "yes", "on") \
                     and str(env("NETRATTLER_REQUIRE_REAL_ODDS", "true")).lower() in ("1", "true", "yes", "on")
+                if _has_independent_model:
+                    _pin_diag["model_supported"] += 1
                 if _fast_real:
                     _p1x2 = max(
                         float((_ml_match or {}).get("home_win_pct", 0) or 0),
@@ -25699,6 +25741,7 @@ def main():
                         continue
                     if max(float(prob_b or 0), float(prob_o or 0), _p1x2) < float(MIN_PROBABILITY):
                         continue
+                    _pin_diag["model_threshold"] += 1
 
                 # Echte Odds als Upgrade — 🍋 ZITRONEN-PRESSE: alle Quellen durchprobieren
                 ro = None
@@ -25712,6 +25755,7 @@ def main():
                 _real_over15_ht_source = ""
                 try:
                     _mid = pm.get("match_id")
+                    _pin_diag["odds_lookup"] += 1
                     ro = _get_real_odds_any_source(home, away, league_name, _mid, target_date.isoformat() if hasattr(target_date, "isoformat") else None)
                     if ro:
                         # WICHTIG: nur die echte QUOTE übernehmen, die MODELL-Wahrscheinlichkeit
@@ -25728,6 +25772,12 @@ def main():
                             btts_ht_odds = ro["btts_yes_ht"]; _real_btts_ht_source = _ro_source
                         if ro.get("over15_ht"):
                             o15_odds = ro["over15_ht"]; _real_over15_ht_source = _ro_source
+                        if any(ro.get(k) for k in ("btts_yes", "over_25", "home", "draw", "away", "btts_yes_ht", "over15_ht")):
+                            _pin_diag["quote_any"] += 1
+                        if ro.get("btts_yes"): _pin_diag["quote_btts"] += 1
+                        if ro.get("over_25"): _pin_diag["quote_over25"] += 1
+                        if any(ro.get(k) for k in ("home", "draw", "away")): _pin_diag["quote_1x2"] += 1
+                        if ro.get("btts_yes_ht") or ro.get("over15_ht"): _pin_diag["quote_ht"] += 1
                         if ro.get("_source") and ro["_source"] != "pinnacle":
                             log(f"      🍋 Echte Quote via {ro['_source']}: {home} vs {away}")
                 except Exception:
@@ -25776,6 +25826,7 @@ def main():
                     enrich_pinnacle_tip(tip_btts, home, away, league_name)
                     tips_by_market["btts"].append(tip_btts)
                     pinnacle_tips_count += 1
+                    _pin_diag["tips"] += 1
                     log(f"      ✅ BTTS YES @ {btts_yes} ({prob_b}%)")
 
                 # Over 2.5 Tipp — nur Value Bets
@@ -25792,14 +25843,14 @@ def main():
                     enrich_pinnacle_tip(tip_over25, home, away, league_name)
                     tips_by_market["over25"].append(tip_over25)
                     pinnacle_tips_count += 1
+                    _pin_diag["tips"] += 1
 
                 # 🔥 Combo: BTTS + Over 2.5 (stark korreliert)
                 if prob_b >= MIN_PROBABILITY and prob_o >= MIN_PROBABILITY and "combo" in tips_by_market:
-                    # Korrelation: BTTS-Yes-Spiele sind meist auch Over 2.5
                     combo_prob = min(prob_b, prob_o) - 5
-                    combo_odds = round(btts_yes * over25 * 0.80, 2)  # Korrelationsabschlag
-                    # Combo nur mit ECHTEN Quoten für BEIDE Teile (kein Fake-Value)
-                    _combo_real = (_real_btts_odd and _real_over_odd) or str(env("NETRATTLER_REQUIRE_REAL_ODDS", "true")).lower() not in ("1","true","yes","on")
+                    # Never synthesize a bookmaker combo price from two singles.
+                    combo_odds = float((ro or {}).get("btts_over25_combo") or 0)
+                    _combo_real = bool(combo_odds)
                     if combo_prob >= (MIN_PROBABILITY - 10) and _is_value_bet(combo_odds, combo_prob) and _combo_real:
                         tip_combo = {
                             "match": mn, "league": league_name or "Pinnacle",
@@ -25813,6 +25864,7 @@ def main():
                         enrich_pinnacle_tip(tip_combo, home, away, league_name)
                         tips_by_market["combo"].append(tip_combo)
                         pinnacle_tips_count += 1
+                    _pin_diag["tips"] += 1
 
                 # 🕐 HT-Tipps: BTTS HT + Over 1.5 HT (zwei separate Tipps)
                 if "btts_ht" in tips_by_market:
@@ -25825,12 +25877,7 @@ def main():
                             btts_ht_prob = float((_ml_match or {}).get("btts_ht_pct", 0) or 0)
                     except Exception:
                         pass
-                    if not btts_ht_odds:
-                        # Fallback: ~38-44% liegt BTTS HT typischerweise
-                        if prob_b >= MIN_PROBABILITY + 5:  # sehr torreiche Paarung
-                            btts_ht_odds, btts_ht_prob = 2.05, 68
-                        else:
-                            btts_ht_odds, btts_ht_prob = 2.30, 67
+                    # REAL_ODDS_ONLY: no synthetic HT odds fallback.
                     if btts_ht_prob >= MIN_PROBABILITY and _is_value_bet(btts_ht_odds, btts_ht_prob) and (_real_btts_ht_odd or str(env("NETRATTLER_REQUIRE_REAL_ODDS", "true")).lower() not in ("1","true","yes","on")):
                         tip_btts_ht = {
                             "match": mn, "league": league_name or "Pinnacle",
@@ -25844,6 +25891,7 @@ def main():
                         enrich_pinnacle_tip(tip_btts_ht, home, away, league_name)
                         tips_by_market["btts_ht"].append(tip_btts_ht)
                         pinnacle_tips_count += 1
+                    _pin_diag["tips"] += 1
 
                     # --- Over 1.5 Tore HT ---
                     o15_odds = 0
@@ -25854,11 +25902,7 @@ def main():
                             o15_prob = float((_ml_match or {}).get("over15_ht_pct", 0) or 0)
                     except Exception:
                         pass
-                    if not o15_odds:
-                        if prob_o >= MIN_PROBABILITY:  # torreiche Liga
-                            o15_odds, o15_prob = 2.10, 68
-                        else:
-                            o15_odds, o15_prob = 2.40, 67
+                    # REAL_ODDS_ONLY: no synthetic HT odds fallback.
                     if o15_prob >= MIN_PROBABILITY and "over15_ht" in tips_by_market and _is_value_bet(o15_odds, o15_prob) and (_real_over15_ht_odd or str(env("NETRATTLER_REQUIRE_REAL_ODDS", "true")).lower() not in ("1","true","yes","on")):
                         tip_o15_ht = {
                             "match": mn, "league": league_name or "Pinnacle",
@@ -25872,6 +25916,7 @@ def main():
                         enrich_pinnacle_tip(tip_o15_ht, home, away, league_name)
                         tips_by_market["over15_ht"].append(tip_o15_ht)
                         pinnacle_tips_count += 1
+                    _pin_diag["tips"] += 1
 
                 # 🏆 1X2 (Sieger-Tipp): stärkste Modelle (home/draw/away AUC 0.73-0.74).
                 # Nur mit echter Quote (ro) + Modell-Wahrscheinlichkeit.
@@ -25903,6 +25948,7 @@ def main():
                             }
                             tips_by_market["1x2"].append(tip_1x2)
                             pinnacle_tips_count += 1
+                    _pin_diag["tips"] += 1
                 except Exception:
                     pass
 
@@ -25910,6 +25956,7 @@ def main():
             except Exception as pe:
                 log(f"   ⚠️ Pinnacle Match Fehler: {str(pe)[:60]}")
         log(f"🎰 Pinnacle fertig: {pinnacle_tips_count} Tipps generiert")
+        log(f"   🔎 Teammarkt-Diagnose: Modell-Support={_pin_diag['model_supported']} · ≥{MIN_PROBABILITY}%={_pin_diag['model_threshold']} · Odds-Lookups={_pin_diag['odds_lookup']} · Quote-any={_pin_diag['quote_any']} · BTTS={_pin_diag['quote_btts']} · O2.5={_pin_diag['quote_over25']} · 1X2={_pin_diag['quote_1x2']} · HT={_pin_diag['quote_ht']} · Tipps={_pin_diag['tips']}")
         try:
             import netrattler_oddspapi as _op
             _st = _op.call_stats()
@@ -26081,7 +26128,10 @@ def main():
                     if _filt:
                         tips_by_market[_mk] = _filt
                     else:
-                        log(f"   🎯 Edge Filter [{_mk}]: keine Quoten — behalte {len(_orig)} Tipps")
+                        if not _orig:
+                            log(f"   🎯 Edge Filter [{_mk}]: keine Kandidaten vor Edge-Filter")
+                        else:
+                            log(f"   🎯 Edge Filter [{_mk}]: {len(_orig)} Kandidaten, aber keine Edge-qualifizierte Quote")
                 log(f"   🎯 Edge Filter angewendet (mit Pinnacle-Fallback)")
         except Exception as _efe:
             log(f"   🎯 Edge Filter übersprungen: {str(_efe)[:60]}")
