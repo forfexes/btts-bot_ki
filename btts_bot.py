@@ -23900,10 +23900,14 @@ def _get_real_odds_any_source(home, away, league_name="", match_id=None, tip_dat
         except Exception:
             _ODDS_SOURCE_STATUS["oddspapi"] = "failed"
 
-    # 1) Pinnacle via match_id (Fallback)
+    # 1) Pinnacle via match_id (Fallback). In FAST mode skip the extra
+    # BTTS-special discovery request; normal 1X2/totals are enough to decide
+    # whether a candidate has an observed quote. BTTS can come from cached/other
+    # sources without blocking every match for another ~8-16 seconds.
     try:
         if match_id and not (result.get("btts_yes") and result.get("over_25")):
-            _merge(fetch_pinnacle_match_odds(match_id), "pinnacle")
+            _fast = str(os.getenv("NETRATTLER_FAST_TIPS", "false")).lower() in ("1", "true", "yes", "on")
+            _merge(fetch_pinnacle_match_odds(match_id, include_specials=not _fast), "pinnacle")
     except Exception:
         pass
     # 2) SofaScore-Fallback (nutzt gecachte Tagesliste — schnell, auch im Fast-Mode).
@@ -23917,7 +23921,8 @@ def _get_real_odds_any_source(home, away, league_name="", match_id=None, tip_dat
             pass
 
     # 3) Kambi-Fallback für BTTS (schnelles HTTP)
-    if not result.get("btts_yes") and _odds_source_available("kambi"):
+    if (str(os.getenv("NETRATTLER_FAST_TIPS", "false")).lower() not in ("1", "true", "yes", "on")
+            and not result.get("btts_yes") and _odds_source_available("kambi")):
         try:
             _kb = _fetch_btts_odd_kambi(home, away)
             if _kb and 1.2 <= _kb <= 4.0:
@@ -23993,9 +23998,9 @@ def _get_real_odds_any_source(home, away, league_name="", match_id=None, tip_dat
 
 
 
-def fetch_pinnacle_match_odds(match_id: int) -> Optional[Dict]:
+def fetch_pinnacle_match_odds(match_id: int, include_specials: bool = True) -> Optional[Dict]:
     """Holt alle Quoten für ein einzelnes Pinnacle-Match."""
-    cache_key = f"odds_{match_id}"
+    cache_key = f"odds_{match_id}_{1 if include_specials else 0}"
     cached = _cache_get(_PIN_ODDS_CACHE, cache_key)
     if cached is not None:
         return cached
@@ -24004,7 +24009,7 @@ def fetch_pinnacle_match_odds(match_id: int) -> Optional[Dict]:
         r = requests.get(
             f"{PINNACLE_BASE}/matchups/{match_id}/markets/related/straight",
             headers=PINNACLE_HEADERS,
-            timeout=10,
+            timeout=(5 if not include_specials else 10),
         )
         if not r.ok:
             _cache_set(_PIN_ODDS_CACHE, cache_key, None)
@@ -24037,8 +24042,11 @@ def fetch_pinnacle_match_odds(match_id: int) -> Optional[Dict]:
                     elif pts == 0.5:
                         if des == "over": result["over_05_ht"] = round(pv, 2)
 
-        # BTTS via related markets
+        # BTTS via related markets. Deliberately skipped in FAST mode because
+        # this second network chain was the dominant per-match runtime cost.
         try:
+            if not include_specials:
+                raise LookupError("specials disabled in FAST mode")
             r2 = requests.get(
                 f"{PINNACLE_BASE}/matchups/{match_id}/related",
                 headers=PINNACLE_HEADERS, timeout=8,
@@ -25515,6 +25523,11 @@ def main():
                     any(k in ln for k in ["world cup", "fifa", "international", "nations league", "weltmeister"])
                     or ("friendl" in ln and "club" not in ln)
                 )
+                # FAST/REAL-ODDS: only spend network time on matches backed by an
+                # independent model/stat source. Static league defaults are not enough
+                # to claim value and used to trigger slow quote lookups for niche games.
+                _has_independent_model = False
+                _ml_match = {}
                 if _is_intl:
                     try:
                         _sh = get_national_team_btts_stats(home)
@@ -25525,6 +25538,7 @@ def main():
                             # Mit Liga-Basis mischen (60% Team-Daten, 40% Basis)
                             prob_b = int(0.6 * _mb + 0.4 * prob_b)
                             prob_o = int(0.6 * _mo + 0.4 * prob_o)
+                            _has_independent_model = True
                             log(f"      🌍 martj42: {home} {_sh['btts_pct']}% / {away} {_sa['btts_pct']}% BTTS → {prob_b}%")
                     except Exception:
                         pass
@@ -25555,6 +25569,8 @@ def main():
 
                         _ml = get_ml_prediction(home, away, league_name)
                         if _ml:
+                            _ml_match = _ml
+                            _has_independent_model = True
                             # 80% ML-Modell, 20% bisherige Schätzung (Absicherung bei Nischenteams)
                             prob_b = int(0.80 * _ml.get("btts_pct", prob_b) + 0.20 * prob_b)
                             prob_o = int(0.80 * _ml.get("over25_pct", prob_o) + 0.20 * prob_o)
@@ -25564,12 +25580,31 @@ def main():
                             # Fallback: Elo + Poisson Formel
                             _elo = get_elo_poisson_prediction(home, away, league_name)
                             if _elo:
+                                _has_independent_model = True
                                 prob_b = int(0.70 * prob_b + 0.30 * _elo["btts_pct"])
                                 prob_o = int(0.70 * prob_o + 0.30 * _elo["over25_pct"])
                                 log(f"      🧠 Elo-Fallback: {home}({_elo['elo_home']:.0f}) vs {away}({_elo['elo_away']:.0f}) "
                                     f"BTTS {_elo['btts_pct']}% → final {prob_b}%")
                     except Exception:
                         pass
+
+                # ⚡ FAST REAL-ODDS PRE-FILTER
+                # Do not call bookmaker endpoints for every Pinnacle fixture. First
+                # require independent predictive support and at least one market near
+                # the configured probability threshold. This preserves real quotes
+                # while removing the 10-20s/network cost for obvious non-candidates.
+                _fast_real = str(env("NETRATTLER_FAST_TIPS", "false")).lower() in ("1", "true", "yes", "on") \
+                    and str(env("NETRATTLER_REQUIRE_REAL_ODDS", "true")).lower() in ("1", "true", "yes", "on")
+                if _fast_real:
+                    _p1x2 = max(
+                        float((_ml_match or {}).get("home_win_pct", 0) or 0),
+                        float((_ml_match or {}).get("draw_pct", 0) or 0),
+                        float((_ml_match or {}).get("away_win_pct", 0) or 0),
+                    )
+                    if not _has_independent_model:
+                        continue
+                    if max(float(prob_b or 0), float(prob_o or 0), _p1x2) < float(MIN_PROBABILITY):
+                        continue
 
                 # Echte Odds als Upgrade — 🍋 ZITRONEN-PRESSE: alle Quellen durchprobieren
                 ro = None
@@ -25605,7 +25640,8 @@ def main():
                     pass
 
                 # 🔌 BTTS-Quoten-Fallback: Pinnacle blockt BTTS oft (403) → Kambi/Oddspedia.
-                if not _real_btts_odd and str(env("NETRATTLER_BTTS_ODDS_FALLBACK", "true")).lower() in ("1","true","yes","on"):
+                if (not _fast_real and not _real_btts_odd
+                        and str(env("NETRATTLER_BTTS_ODDS_FALLBACK", "true")).lower() in ("1","true","yes","on")):
                     try:
                         import netrattler_prop_sources as _ps
                         _extra = _ps.collect_extra_player_props  # reuse session/helpers
@@ -25795,8 +25831,11 @@ def main():
     # (ESPN/FotMob/etc. liefern aus GitHub Actions eh 0 — spart ~5 Min Actions-Minuten)
     _skip_league_loop = False
     try:
-        # 🆕 Schwelle auf 10 gesenkt (vorher 30) — auch Morgen-Runs mit wenigen Matches sparen Zeit
-        if pinnacle_tips_count >= 10 and env("FORCE_LEAGUE_LOOP", "false").lower() not in ["1", "true", "yes"]:
+        _fast_tips_now = str(env("NETRATTLER_FAST_TIPS", "false")).lower() in ["1", "true", "yes", "on"]
+        if _fast_tips_now and env("FORCE_LEAGUE_LOOP", "false").lower() not in ["1", "true", "yes"]:
+            _skip_league_loop = True
+            log("⚡ FAST: langsame Liga-Fallbackschleife komplett übersprungen — Props/Builder laufen danach aus Pinnacle/Supabase")
+        elif pinnacle_tips_count >= 10 and env("FORCE_LEAGUE_LOOP", "false").lower() not in ["1", "true", "yes"]:
             _skip_league_loop = True
             log(f"⚡ Liga-Schleife übersprungen ({pinnacle_tips_count} Pinnacle-Tipps reichen) — spart ~5 Min")
     except Exception:
@@ -26272,8 +26311,8 @@ if __name__ == "__main__":
                 import sys as _s; _s.stdout.flush()
             except Exception:
                 pass
-            os._exit(0)
-        _wd = int(os.getenv("NETRATTLER_HARD_WATCHDOG_SEC", "660"))  # 11 Min
+            os._exit(124)
+        _wd = int(os.getenv("NETRATTLER_HARD_WATCHDOG_SEC", "480"))  # 8 Min hard ceiling
         if hasattr(_sig, "SIGALRM"):
             _sig.signal(_sig.SIGALRM, _hard_timeout)
             _sig.alarm(_wd)
