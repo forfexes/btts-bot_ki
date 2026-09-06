@@ -19,7 +19,7 @@ jobs:
       - uses: actions/checkout@v4
       - uses: actions/setup-python@v5
         with:
-          python-version: "3.11"
+          python-version: "3.12"
           cache: "pip"
       - name: Install odds scrapers
         run: |
@@ -28,7 +28,7 @@ jobs:
           pip install oddsharvester || pip install git+https://github.com/jordantete/OddsHarvester.git || true
           python -m playwright install chromium --with-deps
       - name: Compile
-        run: python -m py_compile netrattler_odds_harvester.py
+        run: python -m py_compile netrattler_odds_harvester.py netrattler_bet365_player_props.py
       - name: Collect Bet365 and every available bookmaker
         env:
           SUPABASE_URL: ${{ secrets.SUPABASE_URL }}
@@ -39,7 +39,10 @@ jobs:
           BETFAIR_APP_KEY: ${{ secrets.BETFAIR_APP_KEY }}
           BETFAIR_SESSION_TOKEN: ${{ secrets.BETFAIR_SESSION_TOKEN }}
           ENABLE_ODDSHARVESTER: "true"
+          ENABLE_ODDS_API: "true"
           ENABLE_BET365_PUBLIC: "true"
+          BET365_PROPS_TIMEOUT: "90"
+          BET365_PROPS_MAX_EVENTS: "8"
           ODDS_HISTORY_START_YEAR: "2010"
         run: |
           if [ "${{ github.event.schedule }}" = "35 3 * * 0" ] || [ "${{ github.event.inputs.history }}" = "true" ]; then
@@ -47,6 +50,9 @@ jobs:
           else
             python netrattler_odds_harvester.py --live
           fi
+          # Dedicated Player-Props collector: real observed Bet365 lines/odds only.
+          # Non-fatal because Bet365 may temporarily block public/browser access.
+          python netrattler_bet365_player_props.py --date today || true
       - uses: actions/upload-artifact@v4
         if: always()
         with:
