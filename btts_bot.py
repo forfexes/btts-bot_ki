@@ -2173,6 +2173,39 @@ def fetch_sofascore_fixtures(league_name, target_date):
         return []
 
 
+def _sofascore_get_json(path: str, timeout: int = 12):
+    """SofaScore JSON via TLS fingerprint; mirror/proxy fallback on 403/429."""
+    path = "/" + str(path or "").lstrip("/")
+    hosts = [
+        "https://api.sofascore.com/api/v1",
+        "https://api.sofascore.app/api/v1",
+        "https://www.sofascore.com/api/v1",
+    ]
+    headers = {
+        "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 Chrome/124.0.0.0 Safari/537.36",
+        "Accept": "application/json, text/plain, */*",
+        "Referer": "https://www.sofascore.com/",
+        "Origin": "https://www.sofascore.com",
+    }
+    last_status = None
+    for base in hosts:
+        try:
+            url = base + path
+            try:
+                from curl_cffi import requests as _cr
+                r = _cr.get(url, headers=headers, timeout=timeout, impersonate="chrome")
+            except Exception:
+                r = requests.get(url, headers=headers, timeout=timeout)
+            last_status = getattr(r, "status_code", None)
+            if getattr(r, "ok", False):
+                data = r.json()
+                if data is not None:
+                    return data, last_status, base
+        except Exception:
+            continue
+    return None, last_status, ""
+
+
 def fetch_sofascore_all_today(target_date):
     """
     Holt ALLE heutigen Spiele von SofaScore auf einmal.
@@ -2189,34 +2222,13 @@ def fetch_sofascore_all_today(target_date):
     
     try:
         date_str = str(target_date)
-        url = f"https://api.sofascore.com/api/v1/sport/football/scheduled-events/{date_str}"
-        
-        import random as _random2
-        _ua_list2 = [
-            "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/121.0.0.0 Safari/537.36",
-            "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 Chrome/120.0.0.0 Safari/537.36",
-            "Mozilla/5.0 (Windows NT 10.0; Win64; x64; rv:122.0) Gecko/20100101 Firefox/122.0",
-        ]
-        r = requests.get(
-            url,
-            headers={
-                "User-Agent": _random2.choice(_ua_list2),
-                "Accept": "application/json, text/plain, */*",
-                "Accept-Language": "en-US,en;q=0.9",
-                "Referer": "https://www.sofascore.com/",
-                "Origin": "https://www.sofascore.com",
-            },
-            timeout=20,
-        )
-        
-        if r.status_code in [403, 429, 503]:
-            log(f"   ℹ️  SofaScore All blockiert ({r.status_code})", "INFO")
+        data, _status, _host = _sofascore_get_json(f"/sport/football/scheduled-events/{date_str}", timeout=12)
+        if not data:
+            if _status in [403, 429, 503]:
+                log(f"   ℹ️  SofaScore All blockiert ({_status}) nach TLS/Mirror-Fallback", "INFO")
             return {}
-        
-        if not r.ok:
-            return {}
-        
-        data = r.json()
+        if _host and "api.sofascore.com" not in _host:
+            log(f"   🛟 SofaScore Mirror aktiv: {_host}")
         events = data.get("events", [])
         
         if not events:
@@ -8634,9 +8646,9 @@ def _sofascore_events_for_date(date_str):
     except Exception as _se:
         _status = f"EXC:{str(_se)[:60]}"
 
-    log(f"   🔍 SOFA-DEBUG: {date_str} → HTTP {_status}, {len(events)} Events (direkt)")
+    log(f"   🔍 SOFA-DEBUG: {date_str} → HTTP {_status}, {len(events)} Events ({_host or 'no-host'})")
 
-    if not events and PLAYWRIGHT_AVAILABLE:
+    if not events and PLAYWRIGHT_AVAILABLE and str(os.getenv("NETRATTLER_FAST_TIPS", "false")).lower() not in {"1","true","yes","on"}:
         try:
             html = scrape_with_playwright(url, timeout=15000)
             if html:
@@ -9415,11 +9427,13 @@ def get_supabase_top_scorers(home_team: str, away_team: str) -> list:
                     _av = float(row.get("avg_value") or 0)
                     if _av <= 0:
                         continue
+                    _pn = row.get("player_name", "")
+                    _gt = int(_av * (row.get("games") or 1))
                     scorers.append({
-                        "player": row.get("player_name", ""),
+                        "player": _pn, "name": _pn,
                         "team": row.get("team", _team),
                         "goals_per_game": round(_av, 2),
-                        "total_goals": int(_av * (row.get("games") or 1)),
+                        "total_goals": _gt, "goals_total": _gt,
                         "source": "supabase_current",
                     })
     except Exception:
@@ -9453,6 +9467,34 @@ def get_supabase_player_avg_stats(player_name: str) -> dict:
     except Exception:
         _SUPABASE_PLAYER_STATS_CACHE[player_name] = {}
         return {}
+
+
+def _prefetch_supabase_player_avg_stats(player_names, chunk_size=30):
+    """Targeted batch preload only for players with real bookmaker props."""
+    if not SUPABASE_URL or not SUPABASE_KEY: return 0
+    names=[]; seen=set()
+    for n in player_names or []:
+        n=str(n or "").strip()
+        if n and n not in seen and n not in _SUPABASE_PLAYER_STATS_CACHE:
+            seen.add(n); names.append(n)
+    if not names: return 0
+    loaded=0; headers={"apikey":SUPABASE_KEY,"Authorization":f"Bearer {SUPABASE_KEY}"}
+    for i in range(0,len(names),max(1,int(chunk_size))):
+        chunk=names[i:i+max(1,int(chunk_size))]
+        escaped=[x.replace("\\","\\\\").replace(chr(34),"\\"+chr(34)) for x in chunk]
+        expr='in.('+','.join(chr(34)+x+chr(34) for x in escaped)+')'
+        try:
+            r=requests.get(f"{SUPABASE_URL.rstrip('/')}/rest/v1/player_avg_stats",headers=headers,params={"player_name":expr,"select":"player_name,stat_name,avg_value,hit_rate_pct,games","limit":"5000"},timeout=10)
+            if not r.ok: continue
+            grouped={n:{} for n in chunk}
+            for row in r.json() or []:
+                pn,stat=str(row.get("player_name") or ""),str(row.get("stat_name") or "")
+                if pn and stat: grouped.setdefault(pn,{})[stat]={"avg":row.get("avg_value"),"hit_rate":row.get("hit_rate_pct"),"games":row.get("games")}
+            for pn in chunk:
+                _SUPABASE_PLAYER_STATS_CACHE[pn]=grouped.get(pn,{})
+                if grouped.get(pn): loaded+=1
+        except Exception: pass
+    return loaded
 
 
 # ============================================================
@@ -9605,27 +9647,12 @@ def get_sofascore_odds(event_id: str) -> dict:
         return _SOFA_ODDS_CACHE[event_id]
 
     odds = {}
-    url = f"https://api.sofascore.com/api/v1/event/{event_id}/odds/provider/1/featured"
-
     try:
-        # cloudscraper falls verfügbar, sonst requests
-        try:
-            import cloudscraper as _cs
-            _sess = _cs.create_scraper()
-        except ImportError:
-            _sess = requests.Session()
-
-        headers = {
-            "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 Chrome/122.0.0.0 Safari/537.36",
-            "Accept": "application/json",
-            "Referer": "https://www.sofascore.com/",
-        }
-        r = _sess.get(url, headers=headers, timeout=12)
-        if not r.ok:
+        data, _status, _host = _sofascore_get_json(f"/event/{event_id}/odds/provider/1/featured", timeout=10)
+        if not data:
             _SOFA_ODDS_CACHE[event_id] = {}
             return {}
 
-        data = r.json()
         for market in data.get("featuredOdds", {}).get("choices", []):
             mname = (market.get("name") or "").lower()
             options = market.get("sourceOdds", [])
@@ -9679,24 +9706,11 @@ def get_sofascore_player_props(event_id: str) -> list:
         return []
 
     props = []
-    url = f"https://api.sofascore.com/api/v1/event/{event_id}/odds/provider/1/submarkets"
-
     try:
-        try:
-            import cloudscraper as _cs
-            _sess = _cs.create_scraper()
-        except ImportError:
-            _sess = requests.Session()
-
-        headers = {
-            "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) Chrome/122.0.0.0 Safari/537.36",
-            "Referer": "https://www.sofascore.com/",
-        }
-        r = _sess.get(url, headers=headers, timeout=12)
-        if not r.ok:
+        data, _status, _host = _sofascore_get_json(f"/event/{event_id}/odds/provider/1/submarkets", timeout=10)
+        if not data:
             return []
 
-        data = r.json()
         for submarket in data.get("submarkets", []):
             market_group = submarket.get("marketGroup", "")
             for market in submarket.get("choices", []):
@@ -17888,23 +17902,13 @@ def _sofascore_events_for_date(date_str):
     if date_str in _SOFA_EVENTS_DAY_CACHE:
         return _SOFA_EVENTS_DAY_CACHE[date_str]
 
-    url = f"https://api.sofascore.com/api/v1/sport/football/scheduled-events/{date_str}"
     events = []
     _status = None
+    _host = ""
     try:
-        r = requests.get(
-            url,
-            headers={
-                "User-Agent": "Mozilla/5.0 (iPhone; CPU iPhone OS 16_0 like Mac OS X) AppleWebKit/605.1.15",
-                "Accept": "application/json",
-                "Referer": "https://www.sofascore.com/",
-            },
-            timeout=15,
-        )
-        _status = r.status_code
-        if r.ok:
-            data = r.json()
-            events = data.get("events", [])
+        _data, _status, _host = _sofascore_get_json(f"/sport/football/scheduled-events/{date_str}", timeout=10)
+        if _data:
+            events = (_data or {}).get("events", [])
     except Exception as _se:
         _status = f"EXC:{str(_se)[:60]}"
 
@@ -19824,72 +19828,56 @@ def get_supabase_corner_stats(team_name: str) -> dict:
     return result
 
 
-def analyze_corners_tip_simple(fixture, league):
-    """
-    Vereinfachte Ecken-Analyse ohne API-Football IDs.
-    Basiert auf Liga-Durchschnitt + Poisson.
-    Sucht über mehrere Linien (7.5-12.5) die mit realistischer Quote >=1.70.
-    """
+def analyze_corners_tip_simple(fixture, league, real_quotes=None):
+    """Deterministische Corner-Analyse; REAL_ODDS_ONLY akzeptiert nur beobachtete Quoten."""
     import math
-    import random
-
-    # Liga-basierte Durchschnittswerte
     LEAGUE_AVG_CORNERS = {
         "Premier League": 10.2, "Bundesliga": 9.8, "La Liga": 9.5,
         "Serie A": 9.7, "Ligue 1": 9.3, "Eredivisie": 10.1,
         "Champions League": 9.9, "Championship": 10.5,
         "EFL League 1": 10.8, "EFL League 2": 11.0,
     }
-
-    avg = LEAGUE_AVG_CORNERS.get(league, 9.5)
-    # 🚀 Echte Team-Ecken aus Supabase (statt nur Zufall) — schnell, kein Scraping
+    avg = float(LEAGUE_AVG_CORNERS.get(league, 9.5))
+    expected = avg
     try:
         _hc = get_supabase_corner_stats(fixture.get("home", ""))
         _ac = get_supabase_corner_stats(fixture.get("away", ""))
-        _h_corners = _hc.get("avg_corners", 0)
-        _a_corners = _ac.get("avg_corners", 0)
-        if _h_corners > 0 and _a_corners > 0:
-            expected = _h_corners + _a_corners  # Team-Ecken zusammen = erwartete Gesamt-Ecken
-        else:
-            expected = avg + random.uniform(-1.5, 1.5)
+        _h = float((_hc or {}).get("avg_corners", 0) or 0)
+        _a = float((_ac or {}).get("avg_corners", 0) or 0)
+        if _h > 0 and _a > 0:
+            expected = _h + _a
     except Exception:
-        expected = avg + random.uniform(-1.5, 1.5)
-    lam = expected
-
-    def poisson_over(line):
-        """P(X > line) für halbe Linien (z.B. 8.5 → Summe k=0..8 abziehen)."""
-        k_max = int(line)  # bei 8.5 → 8
-        cum = 0
-        for k in range(k_max + 1):
-            cum += (math.exp(-lam) * lam**k) / math.factorial(k)
-        return round((1 - cum) * 100)
-
-    # Mehrere Linien durchprobieren, höchste mit prob>=60% UND realistischer Buchmacher-Quote >=1.70 wählen
-    candidates = []
-    for line in [7.5, 8.5, 9.5, 10.5, 11.5]:
-        prob = poisson_over(line)
-        if prob < 60:
-            continue
-        # Simulierte Buchmacher-Quote inkl. Marge (~7%, realistischer als reine Fair Odds)
-        book_odds = round((100 / prob) * 1.07, 2) if prob > 0 else 0
-        candidates.append((line, prob, book_odds))
-
-    # Bevorzuge die höchste Linie, die Quote >=1.70 erreicht (beste Balance Sicherheit/Value)
-    valid = [c for c in candidates if c[2] >= MIN_ODDS_VALUE]
-    if not valid:
+        expected = avg
+    lam = max(1.0, expected)
+    def _over(line):
+        cum = sum((math.exp(-lam) * lam**k) / math.factorial(k) for k in range(int(float(line)) + 1))
+        return round((1 - cum) * 100, 1)
+    real_only = str(os.getenv("NETRATTLER_REAL_ODDS_ONLY", os.getenv("NETRATTLER_REQUIRE_REAL_ODDS", "true"))).lower() in {"1","true","yes","on"}
+    quotes = [q for q in (real_quotes or []) if isinstance(q, dict)]
+    if real_only and not quotes:
         return None
-    line, prob, book_odds = max(valid, key=lambda c: c[0])  # höchste qualifizierende Linie
-
+    candidates = []
+    for q in quotes:
+        try:
+            line, odds = float(q.get("line")), float(q.get("odds"))
+        except (TypeError, ValueError):
+            continue
+        if line <= 0 or odds < MIN_ODDS_VALUE:
+            continue
+        prob = _over(line)
+        edge = (prob / 100.0) * odds - 1.0
+        if prob >= 60 and edge >= float(os.getenv("NETRATTLER_CORNER_MIN_EDGE", "0.02")):
+            candidates.append((edge, line, prob, odds, str(q.get("source") or "pinnacle")))
+    if not candidates:
+        return None
+    edge, line, prob, odds, source = max(candidates, key=lambda x: (x[0], x[2]))
     return {
-        "match": f"{fixture['home']} vs {fixture['away']}",
-        "league": league,
-        "time": _fixture_display_time(fixture),
-        "tip": f"Over {line} Ecken",
-        "probability": prob,
-        "odds": book_odds,
-        "fair_odds": round(100 / prob, 2) if prob > 0 else 0,
-        "expected_corners": round(expected, 1),
-        "market": "corners",
+        "match": f"{fixture['home']} vs {fixture['away']}", "league": league,
+        "time": _fixture_display_time(fixture), "tip": f"Over {line:g} Ecken",
+        "probability": prob, "odds": round(odds,2),
+        "fair_odds": round(100/prob,2) if prob else 0, "edge": round(edge*100,1),
+        "expected_corners": round(expected,1), "market": "corners",
+        "_source": source, "_real_odds": True,
     }
 
 
@@ -20300,180 +20288,107 @@ def get_understat_top_scorers(league_name, season):
         return []
 
 
+def _pinnacle_corner_quotes_by_match():
+    """Echte Pinnacle Over-Corner-Specials pro Match indexieren."""
+    out = {}
+    try:
+        for p in fetch_pinnacle_player_props() or []:
+            if not isinstance(p, dict):
+                continue
+            text = f"{p.get('special_category','')} {p.get('player_prop','')} {p.get('selection','')}"
+            if _get_leg_category(text) != "corners":
+                continue
+            sel = str(p.get("selection") or "").lower().strip()
+            if not sel.startswith("over"):
+                continue
+            try:
+                odds = float(p.get("odds") or 0)
+                line = float(_ntr_market_line(f"{p.get('player_prop','')} {sel}", 0) or 0)
+            except (TypeError, ValueError):
+                continue
+            match = str(p.get("match") or "")
+            if odds <= 1 or line <= 0 or " vs " not in match:
+                continue
+            h,a = [x.strip() for x in match.split(" vs ",1)]
+            key = f"{normalize_team_name(h)}|{normalize_team_name(a)}"
+            out.setdefault(key, []).append({"line":line,"odds":odds,"source":"pinnacle"})
+    except Exception as exc:
+        log(f"   🔵 Pinnacle Corner-Index Fehler: {str(exc)[:80]}", "WARN")
+    return out
+
+def _corner_quote_lookup(index, home, away):
+    h,a = normalize_team_name(home), normalize_team_name(away)
+    rows = index.get(f"{h}|{a}") or index.get(f"{a}|{h}") or []
+    if rows:
+        return rows
+    for key, rows in index.items():
+        try:
+            kh,ka = key.split("|",1)
+            if (h==kh or (len(h)>=6 and (h[:8] in kh or kh[:8] in h))) and (a==ka or (len(a)>=6 and (a[:8] in ka or ka[:8] in a))):
+                return rows
+        except Exception:
+            pass
+    return []
+
 def run_corners_and_scorer_bots(target_date, active_leagues, odds_data_cache, fixtures_cache):
-    """
-    Hauptfunktion für Ecken + Scorer Bots.
-    Läuft parallel zum Haupt-Bot.
-    """
+    """Fast side-pipeline: real Corner odds only; legacy scorer excluded from REAL_ODDS runs."""
+    import time as _time
     group_hz = TELEGRAM_GROUPS.get("hz_live") or env("TELEGRAM_GROUP_HZ_LIVE", "")
     group_late = TELEGRAM_GROUPS.get("late_goals") or env("TELEGRAM_GROUP_LATE_GOALS", "")
-
     if not group_hz and not group_late:
-        log("Corners/Scorer: Keine Gruppen konfiguriert", "INFO")
-        return
-
-    try:
-        prefetch_sent_tips_for_date(target_date)
-    except Exception:
-        pass
-    log("🔵⚽ Corners + Scorer Bot startet...")
-
-    corners_count = 0
-    scorer_count = 0
-    corners_tips = []
-    scorer_tips = []
-
-    seen_corner_matches = set()  # Duplikat-Check über ALLE Ligen
-
+        log("Corners/Scorer: Keine Gruppen konfiguriert", "INFO"); return
+    try: prefetch_sent_tips_for_date(target_date)
+    except Exception: pass
+    started = _time.monotonic()
+    budget = max(5, int(os.getenv("NETRATTLER_CORNERS_BUDGET_SEC", "45")))
+    max_matches = max(1, int(os.getenv("NETRATTLER_CORNERS_MAX_MATCHES", "80")))
+    real_only = str(os.getenv("NETRATTLER_REAL_ODDS_ONLY", os.getenv("NETRATTLER_REQUIRE_REAL_ODDS", "true"))).lower() in {"1","true","yes","on"}
+    legacy_scorer = str(os.getenv("NETRATTLER_LEGACY_SCORER", "false")).lower() in {"1","true","yes","on"}
+    log(f"🔵⚽ Corners + Scorer Bot startet (Budget={budget}s, max={max_matches}, real_odds={real_only})...")
+    corner_index = _pinnacle_corner_quotes_by_match() if (group_hz and real_only) else {}
+    if group_hz and real_only:
+        log(f"   🔵 Echte Pinnacle-Corner-Matches: {len(corner_index)}")
+    corners_tips, scorer_tips, seen, scanned = [], [], set(), 0
     for league in active_leagues:
-        if _budget_exceeded():
-            break
-        fixtures = fixtures_cache.get(league, [])
-        if not fixtures:
-            continue
-
-        league_id = API_FOOTBALL_LEAGUES.get(league)
-        now_utc = datetime.now(timezone.utc)
-        season = now_utc.year if now_utc.month > 6 else now_utc.year - 1
-
-        # Ecken-Tipps - auch ohne API-Football IDs!
+        if _time.monotonic()-started >= budget or scanned >= max_matches: break
+        fixtures = fixtures_cache.get(league, []) or []
         if group_hz:
             for fixture in fixtures:
+                if _time.monotonic()-started >= budget or scanned >= max_matches: break
                 try:
-                    # 🚫 Müll-Ligen raus (U20/Women/Reserve etc.) — auch bei Corners!
-                    if _is_junk_league(league, fixture.get("home", ""), fixture.get("away", "")):
-                        continue
-                    home_norm = normalize_team_name(fixture.get("home", ""))
-                    away_norm = normalize_team_name(fixture.get("away", ""))
-                    match_key = f"{home_norm[:12]}_{away_norm[:12]}"
-                    match_key_rev = f"{away_norm[:12]}_{home_norm[:12]}"
-                    if match_key in seen_corner_matches or match_key_rev in seen_corner_matches:
-                        continue
-                    seen_corner_matches.add(match_key)
-
-                    # 🆕 Duplikat zwischen Runs prüfen!
-                    match_name = f"{fixture.get('home','')} vs {fixture.get('away','')}"
-                    if is_duplicate_tip(match_name, "corners", target_date):
-                        _ntr_log_duplicate(f"   ⏭️ Ecken Duplikat: {match_name}", key="corners")
-                        continue
-
-                    tip = analyze_corners_tip_simple(fixture, league)
+                    home,away = fixture.get("home",""), fixture.get("away","")
+                    if not home or not away or _is_junk_league(league,home,away): continue
+                    quotes = _corner_quote_lookup(corner_index, home, away) if real_only else []
+                    if real_only and not quotes: continue
+                    scanned += 1
+                    key=f"{normalize_team_name(home)}|{normalize_team_name(away)}"
+                    if key in seen: continue
+                    seen.add(key)
+                    match=f"{home} vs {away}"
+                    if is_duplicate_tip(match,"corners",target_date): continue
+                    tip=analyze_corners_tip_simple(fixture,league,real_quotes=quotes)
                     if tip:
-                        _c_odds = tip.get("odds", tip.get("fair_odds", 0))
-                        try:
-                            _c_odds_f = float(str(_c_odds).replace(",", "."))
-                        except Exception:
-                            _c_odds_f = 0
-                        if _c_odds_f < MIN_ODDS_VALUE:
-                            log(f"   ⏭️ Ecken unter 1.70 verworfen: {tip['match']} ({_c_odds_f})")
-                            continue
                         corners_tips.append(tip)
-                        corners_count += 1
-                        log(f"   🔵 Ecken: {tip['match']} → {tip['tip']} ({tip['probability']}%)")
-                except Exception as e:
-                    log(f"   Corners Error: {e}", "WARN")
-
-        # Scorer-Tipps - nutze Understat + geschätzte Werte
-        if group_late:
-            try:
-                scorers = []
-
-                # ⏱️ Bei globalem Budget-Ende: Scorer überspringen (verhindert Timeout)
-                if _budget_exceeded():
-                    continue
-
-                # 0. Supabase (AKTUELLE Scraper-Daten — kein veralteter Kader!)
-                _fx_home = fixture.get("home", "")
-                _fx_away = fixture.get("away", "")
-                scorers = get_supabase_top_scorers(_fx_home, _fx_away)
-
-                # 1. TheStatsAPI (neu, primäre Quelle — kein API-Football nötig)
-                if THESTATSAPI_KEYS and not scorers:
-                    scorers = tsa_get_top_scorers(league, season)
-
-                # 2. API-Football (gesperrt, bleibt als Basis)
-                if not scorers and league_id and not APIFOOTBALL_QUOTA_EXHAUSTED:
-                    scorers = get_top_scorers(league_id, season)
-
-                # 3. Understat (oft geblockt auf GitHub Actions)
-                if not scorers:
-                    scorers = get_understat_top_scorers(league, season)
-
-                # 4. Understat via Playwright
-                if not scorers and PLAYWRIGHT_AVAILABLE:
-                    scorers = pw_get_understat_scorers(league, season)
-
-                # 5. StatsBomb HTTP (kostenlos, direkt von GitHub)
-                if not scorers:
-                    scorers = get_statsbomb_top_scorers(league)
-
-                if scorers:
-                    for fixture in fixtures:
-                        home_norm = normalize_team_name(fixture.get("home", ""))
-                        away_norm = normalize_team_name(fixture.get("away", ""))
-                        match_key = f"sc_{home_norm[:8]}_{away_norm[:8]}"
-                        if match_key in seen_corner_matches:
-                            continue
-                        seen_corner_matches.add(match_key)
-
-                        # 🆕 Duplikat zwischen Runs prüfen!
-                        match_name = f"{fixture.get('home','')} vs {fixture.get('away','')}"
-                        if is_duplicate_tip(match_name, "scorer", target_date):
-                            log(f"   ⏭️ Scorer Duplikat: {match_name}")
-                            continue
-
-                        tips = analyze_scorer_tips(fixture, league, scorers)
-                        for tip in tips:
-                            scorer_tips.append(tip)
-                            scorer_count += 1
-                            log(f"   ⚽ Scorer: {tip['player']} ({tip['probability']}%)")
-            except Exception as e:
-                log(f"   Scorer Error: {e}", "WARN")
-
-    # Header + Tipps senden
-    # 🧠 Corner-Tipps nach gelerntem Gewicht sortieren
-    try:
-        corners_tips = sorted(corners_tips, key=lambda _t: float(_t.get("confidence", _t.get("probability", 0)) or 0) * _ntr_learned_weight("corners", _t.get("league", "") or _t.get("competition", "")), reverse=True)
-    except Exception:
-        pass
+                        log(f"   🔵 Ecken VALUE: {match} → {tip['tip']} @ {tip['odds']} ({tip['probability']}%, Edge {tip.get('edge',0)}%)")
+                except Exception as exc:
+                    log(f"   Corners Error: {str(exc)[:100]}","WARN")
+        # Legacy scorer intentionally disabled for real-odds mode. Real scorer prices go through props.
+        if group_late and legacy_scorer and not real_only and _time.monotonic()-started < budget:
+            log(f"   ⚽ Legacy-Scorer für {league} deaktiviert im Standardprofil; Player Props sind primär", "INFO")
+    if real_only and group_late:
+        log("   ⚽ Legacy-Scorer übersprungen: REAL_ODDS_ONLY — echte Scorer-Quoten laufen über Player Props/Builder")
+    corners_tips.sort(key=lambda t:(float(t.get("edge",0) or 0),float(t.get("probability",0) or 0)),reverse=True)
+    corners_tips=corners_tips[:max(1,int(os.getenv("NETRATTLER_CORNERS_MAX_SEND","12")))]
     if corners_tips and group_hz:
-        send_telegram(f"🔵 <b>CORNER SNIPER</b>\n<i>📅 {target_date}</i>", group_hz)
+        send_telegram(f"🔵 <b>CORNER SNIPER</b>\n<i>📅 {target_date} · echte Quoten</i>", group_hz)
         for tip in corners_tips:
-            _cmsg = format_corners_message(tip)
-            _cmid = send_telegram(_cmsg, group_hz)
-            mark_tip_sent(tip.get("match",""), "corners", target_date)
-            # Für Settlement speichern
+            msg=format_corners_message(tip); mid=send_telegram(msg,group_hz); mark_tip_sent(tip.get("match",""),"corners",target_date)
             try:
-                save_to_supabase({
-                    **tip,
-                    "tip_id": f"corners_{tip.get('match','?')}_{target_date}".replace(" ","_"),
-                    "date": str(target_date),
-                    "market": "corners",
-                    "status": "pending",
-                    "group_key": "corners",
-                    "pick_type": "corners",
-                    "telegram_chat_id": str(group_hz),
-                    "telegram_msg_id": _cmid,
-                    "message_text": _cmsg[:3500],
-                    "probability": tip.get("probability", 0),
-                    "confidence": tip.get("confidence", 3),
-                })
-            except Exception:
-                pass
-
-    # 🧠 Scorer-Tipps nach gelerntem Gewicht sortieren
-    try:
-        scorer_tips = sorted(scorer_tips, key=lambda _t: float(_t.get("confidence", _t.get("probability", 0)) or 0) * _ntr_learned_weight("scorer", _t.get("league", "") or _t.get("competition", "")), reverse=True)
-    except Exception:
-        pass
-    if scorer_tips and group_late:
-        send_telegram(f"⚽ <b>SCORER TIPPS</b>\n<i>📅 {target_date}</i>", group_late)
-        for tip in scorer_tips:
-            send_telegram(format_scorer_message(tip), group_late)
-            mark_tip_sent(tip.get("match",""), "scorer", target_date)
-
-    log(f"🔵⚽ Fertig: {corners_count} Ecken Tips, {scorer_count} Scorer Tips")
-
+                save_to_supabase({**tip,"tip_id":f"corners_{tip.get('match','?')}_{target_date}".replace(" ","_"),"date":str(target_date),"market":"corners","status":"pending","group_key":"corners","pick_type":"corners","telegram_chat_id":str(group_hz),"telegram_msg_id":mid,"message_text":msg[:3500],"probability":tip.get("probability",0),"confidence":tip.get("confidence",3)})
+            except Exception: pass
+    run_corners_and_scorer_bots._last_corners=len(corners_tips)
+    run_corners_and_scorer_bots._last_scorer=0
+    log(f"🔵⚽ Corners/Scorer fertig: corners={len(corners_tips)}, scorer=0, scanned={scanned}, {_time.monotonic()-started:.1f}s")
 
 
 # ============================================================
@@ -22540,7 +22455,10 @@ def _pinnacle_get_json(url, params):
 
 
 def fetch_pinnacle_player_props() -> List[Dict]:
-    """Player Props Specials von Pinnacle (echte Quoten)."""
+    """Player/Team Specials von Pinnacle (echte Quoten), pro Lauf gecacht."""
+    _cache = getattr(fetch_pinnacle_player_props, "_run_cache", None)
+    if isinstance(_cache, list):
+        return _cache
     try:
         data, status = _pinnacle_get_json(
             f"{PINNACLE_BASE}/sports/{PINNACLE_SPORT_SOCCER}/matchups",
@@ -22608,6 +22526,7 @@ def fetch_pinnacle_player_props() -> List[Dict]:
                 "either team to score", "both teams to score", "team to score",
                 " to score?", "both teams to receive a card", "to qualify",
                 "to reach the final", "1st half goals", "2nd half goals",
+                "corners", "corner kicks",
             ]
             is_player_category = "player" in cat
             is_team_category = "team" in cat or "reach the final" in cat
@@ -22642,10 +22561,12 @@ def fetch_pinnacle_player_props() -> List[Dict]:
                 })
         if skipped_no_price:
             log(f"   🔑 Pinnacle Props: {skipped_no_price} Props ohne Preis übersprungen")
-        _log("PINNACLE", f"🔑 {len(props)} Player-Prop-Quoten geladen")
+        _log("PINNACLE", f"🔑 {len(props)} Player-/Special-Quoten geladen")
+        fetch_pinnacle_player_props._run_cache = props
         return props
     except Exception as e:
         _log("PINNACLE", f"Props Fehler: {str(e)[:80]}", "WARN")
+        fetch_pinnacle_player_props._run_cache = []
         return []
 
 
@@ -22732,7 +22653,7 @@ def _fbref_prop_edge_check(player_name, league_name, prop_name, pinnacle_prob):
     """
     try:
         if str(os.getenv('NETRATTLER_FAST_TIPS','')).lower() in ('1','true','yes','on'):
-            return {}
+            return pinnacle_prob, False, False
         stats = _advanced_props_manager.scrape_fbref_advanced_stats(league_name)
     except Exception:
         stats = {}
@@ -23112,8 +23033,10 @@ def run_pinnacle_props_bot(win_start_utc=None, win_end_utc=None, ch_tz=None, top
         mn = p.get("match", "?")
         by_match.setdefault(mn, []).append(p)
 
-    # 🏆 Matchwinner-Leg: echte Pinnacle 1X2-Quote pro Spiel als zusätzliche Leg-Option
-    for match_name in list(by_match.keys()):
+    # 🏆 Matchwinner-Leg nur für den optionalen Legacy-Builder. Im normalen V31/V34
+    # Player-only Modus wären diese Netzwerk-Calls reine Laufzeitverschwendung.
+    _legacy_pin_builder = str(env("ENABLE_LEGACY_PINNACLE_BUILDER", "false")).lower() in ["1", "true", "yes", "on"]
+    for match_name in (list(by_match.keys()) if _legacy_pin_builder else []):
         try:
             parts = match_name.split(" vs ")
             if len(parts) != 2:
@@ -23473,7 +23396,11 @@ def run_pinnacle_props_bot(win_start_utc=None, win_end_utc=None, ch_tz=None, top
         if _pm:
             _ml_prob_set = 0
             _sb_lookups = 0
-            _SB_LOOKUP_CAP = int(os.getenv("NETRATTLER_STATBUNKER_MAX_LOOKUPS", "40"))
+            _SB_LOOKUP_CAP = int(os.getenv("NETRATTLER_STATBUNKER_MAX_LOOKUPS", "4"))
+            _target_players = [r.get("player", "") for r in _NTR_BUILDER_PROP_POOL if isinstance(r, dict) and float(r.get("odds", 0) or 0) > 1.0]
+            _prefetched = _prefetch_supabase_player_avg_stats(_target_players)
+            if _target_players:
+                log(f"   🗄️ Supabase Player-Stats targeted: {_prefetched}/{len(set(p for p in _target_players if p))} Spieler vorgeladen")
             for _row in _NTR_BUILDER_PROP_POOL:
                 _cat = _row.get("category", "")
                 if _mlp.model_for(_cat, _row.get("line", 0.5)) is None:
@@ -23869,20 +23796,40 @@ def _get_real_odds_any_source(home, away, league_name="", match_id=None, tip_dat
         # Realistische Quoten-Grenzen pro Markt (blockt Parsing-Fehler wie Over 2.5 @ 160)
         _bounds = {
             "btts_yes": (1.2, 4.0), "over_25": (1.2, 5.0), "over25": (1.2, 5.0),
-            "btts_yes_ht": (1.5, 8.0), "btts_ht_yes": (1.5, 8.0), "over15_ht": (1.5, 8.0),
-            "home": (1.05, 15.0), "draw": (2.5, 8.0), "away": (1.05, 15.0),
+            "btts_yes_ht": (1.5, 8.0), "btts_ht_yes": (1.5, 8.0),
+            "over15_ht": (1.5, 8.0), "over_15_ht": (1.5, 8.0),
+            "home": (1.05, 15.0), "home_win": (1.05, 15.0),
+            "draw": (2.5, 8.0),
+            "away": (1.05, 15.0), "away_win": (1.05, 15.0),
         }
-        for k in ("btts_yes", "over_25", "over25", "btts_yes_ht", "btts_ht_yes", "over15_ht", "home", "draw", "away"):
+        _keys = ("btts_yes", "over_25", "over25", "btts_yes_ht", "btts_ht_yes",
+                 "over15_ht", "over_15_ht", "home", "home_win", "draw", "away", "away_win")
+        for k in _keys:
             v = (d or {}).get(k)
             try:
                 v = float(v) if v else 0
             except (TypeError, ValueError):
                 v = 0
             _lo, _hi = _bounds.get(k, (1.0, 15.0))
-            if _lo <= v <= _hi:  # nur realistische Quoten übernehmen
-                key = "over_25" if k in ("over25", "over_25") else ("btts_yes_ht" if k in ("btts_yes_ht", "btts_ht_yes") else k)
+            if _lo <= v <= _hi:
+                if k in ("over25", "over_25"):
+                    key = "over_25"
+                elif k in ("btts_yes_ht", "btts_ht_yes"):
+                    key = "btts_yes_ht"
+                elif k in ("over15_ht", "over_15_ht"):
+                    key = "over_15_ht"
+                elif k in ("home", "home_win"):
+                    key = "home"
+                elif k in ("away", "away_win"):
+                    key = "away"
+                else:
+                    key = k
                 if key not in result:
                     result[key] = round(v, 2); got = True
+        # compatibility aliases for older callers
+        if "over_15_ht" in result: result["over15_ht"] = result["over_15_ht"]
+        if "home" in result: result["home_win"] = result["home"]
+        if "away" in result: result["away_win"] = result["away"]
         if got and not result.get("_source"):
             result["_source"] = src
         return got
@@ -25728,7 +25675,7 @@ def main():
                     try:
                         if ro and ro.get("btts_yes_ht"):
                             btts_ht_odds = ro["btts_yes_ht"]
-                            btts_ht_prob = int(100 / btts_ht_odds * 0.95)
+                            btts_ht_prob = float((_ml_match or {}).get("btts_ht_pct", 0) or 0)
                     except Exception:
                         pass
                     if not btts_ht_odds:
@@ -25757,7 +25704,7 @@ def main():
                     try:
                         if ro and ro.get("over_15_ht"):
                             o15_odds = ro["over_15_ht"]
-                            o15_prob = int(100 / o15_odds * 0.95)
+                            o15_prob = float((_ml_match or {}).get("over15_ht_pct", 0) or 0)
                     except Exception:
                         pass
                     if not o15_odds:
@@ -26049,15 +25996,6 @@ def main():
     # Builder-Pool pro Run zurücksetzen, damit keine alten Legs erneut erscheinen.
     _NTR_BUILDER_PROP_POOL.clear()
 
-    # 🔵⚽ Ecken + Scorer Bots
-    if env("ENABLE_CORNERS_SCORER", "true").lower() in ["1", "true", "yes"]:
-        run_corners_and_scorer_bots(
-            target_date=target_date,
-            active_leagues=active_leagues,
-            odds_data_cache={},
-            fixtures_cache=_fixtures_cache,
-        )
-
     # 🔑 ADVANCED PROPS BOT
     if env("ENABLE_ADVANCED_PROPS", "true").lower() in ["1", "true", "yes"]:
         run_advanced_props_bot(
@@ -26203,6 +26141,16 @@ def main():
         log("   🏗️ netrattler_builder_engine nicht gefunden — skip", "WARN")
     except Exception as _be:
         log(f"   🏗️ Builder Engine Error: {str(_be)[:80]}", "WARN")
+
+    # 🔵⚽ Corners/legacy scorer are deliberately LAST among prediction pipelines.
+    # Player Props + Builder must never be starved by secondary market work.
+    if env("ENABLE_CORNERS_SCORER", "true").lower() in ["1", "true", "yes"]:
+        run_corners_and_scorer_bots(
+            target_date=target_date,
+            active_leagues=active_leagues,
+            odds_data_cache={},
+            fixtures_cache=_fixtures_cache,
+        )
 
     # 🆕 MULTI-COMBO SYSTEM (3,4,5,6,7,8 Tipps)
     all_tips_flat = []
