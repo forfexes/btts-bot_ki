@@ -25527,6 +25527,18 @@ def main():
     _m42_sent_today = set()  # Dedup: martj42-Match nur einmal analysieren, nicht für jede intl. Liga
 
     # ── Pinnacle global laden ──
+    # FIX6: run-scoped diagnostics must exist before any Pinnacle match is analysed.
+    _pin_diag = {
+        "model_supported": 0,
+        "model_threshold": 0,
+        "odds_lookup": 0,
+        "quote_any": 0,
+        "quote_btts": 0,
+        "quote_over25": 0,
+        "quote_1x2": 0,
+        "quote_ht": 0,
+        "tips": 0,
+    }
     log("📊 Pinnacle Matchups laden...")
     try:
         _PINNACLE_MATCHUPS = fetch_pinnacle_matchups()
