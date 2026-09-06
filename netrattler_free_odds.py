@@ -1,4 +1,4 @@
-netrattler_free_odds.py#!/usr/bin/env python3
+#!/usr/bin/env python3
 """NETRATTLER free/low-cost observed-odds hub.
 
 Only returns bookmaker-observed decimal prices. No fair/synthetic/model odds.
