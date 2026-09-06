@@ -23493,6 +23493,136 @@ def run_pinnacle_props_bot(win_start_utc=None, win_end_utc=None, ch_tz=None, top
     except Exception as _mle:
         log(f"   🧠 Player-XGBoost übersprungen: {str(_mle)[:80]}", "WARN")
 
+    # 🎯 V31 SINGLE PLAYER PROPS — echte beobachtete Quote + echte Modellwahrscheinlichkeit.
+    # Der alte Ablauf sammelte/ML-bewertete hunderte Props, sendete sie aber nur indirekt
+    # ueber Builder. Dadurch konnte ein Builder-Fehler dazu fuehren, dass trotz 1000+ echten
+    # Props kein einziger Player-Tipp auf Telegram erschien. Singles sind nun ein eigener,
+    # unabhaengiger Ausgabepfad.
+    try:
+        _single_chat = TELEGRAM_GROUPS.get("props") or TELEGRAM_GROUPS.get("advanced_props") or TELEGRAM_GROUPS.get("builder")
+        _single_min_prob = float(env("NETRATTLER_PLAYER_PROP_MIN_PROB", "0.60"))
+        if _single_min_prob > 1:
+            _single_min_prob /= 100.0
+        _single_min_edge = float(env("NETRATTLER_PLAYER_PROP_MIN_EDGE", "0.05"))
+        _single_min_odds = float(env("NETRATTLER_PLAYER_PROP_MIN_ODDS", "1.50"))
+        _single_max_odds = float(env("NETRATTLER_PLAYER_PROP_MAX_ODDS", "10.0"))
+        _single_max = int(env("NETRATTLER_MAX_PLAYER_PROPS_PER_RUN", "12"))
+        _bookmaker_tokens = (
+            "pinnacle", "bet365", "kambi", "unibet", "1xbet", "melbet",
+            "odds_api", "oddsapi", "the odds api", "oddspapi", "oddspedia",
+            "footymetrics", "betfair", "bookmaker", "sportsbook",
+        )
+        _single_best = {}
+        for _row in _NTR_BUILDER_PROP_POOL:
+            if not isinstance(_row, dict) or not _row.get("ml_backed"):
+                continue
+            _cat = str(_row.get("category") or "")
+            if _cat not in _REAL_PLAYER_BUILDER_CATS:
+                continue
+            _src = str(_row.get("source") or "").lower()
+            if not any(tok in _src for tok in _bookmaker_tokens):
+                continue
+            try:
+                _odd = float(_row.get("odds", 0) or 0)
+                _prob = float(_row.get("probability", 0) or 0)
+            except (TypeError, ValueError):
+                continue
+            if _prob > 1:
+                _prob /= 100.0
+            if not (_single_min_odds <= _odd <= _single_max_odds):
+                continue
+            if _prob < _single_min_prob:
+                continue
+            _edge = _prob - (1.0 / _odd)
+            if _edge < _single_min_edge:
+                continue
+            _player = str(_row.get("player") or "").strip()
+            _match = str(_row.get("match") or "").strip()
+            _market = str(_row.get("market") or _row.get("category") or "").strip()
+            if not _player or not _match or not _market:
+                continue
+            _key = (_normalize_name(_player), _match.lower(), _cat, round(float(_row.get("line", 0) or 0), 2))
+            _score = (_edge, _prob, -_odd)
+            if _key not in _single_best or _score > _single_best[_key][0]:
+                _single_best[_key] = (_score, _row, _edge, _prob, _odd)
+
+        _single_candidates = sorted(
+            _single_best.values(),
+            key=lambda item: (item[2], item[3]),
+            reverse=True,
+        )[:max(0, _single_max)]
+        _single_sent = 0
+        if _single_candidates and not _single_chat:
+            log(f"   🎯 Player Props: {len(_single_candidates)} Value-Kandidaten, aber kein Telegram-Ziel", "WARN")
+        elif _single_chat:
+            _single_date = str(datetime.now(timezone.utc).date())
+            _icons = {
+                "score":"⚽", "first_scorer":"🥇⚽", "last_scorer":"🏁⚽", "assist":"🅰️",
+                "booked":"🟨", "yellow_cards":"🟨", "sot":"🎯", "shots":"🥅",
+                "sot_outside_box":"🎯", "shots_outside_box":"🥅", "fouls":"👊",
+                "fouls_won":"🧲", "tackles_committed":"🦵", "tackles_received":"🎯🦵",
+                "saves":"🧤", "offsides":"🚩",
+            }
+            for _score, _row, _edge, _prob, _odd in _single_candidates:
+                _player = str(_row.get("player") or "").strip()
+                _match = str(_row.get("match") or "").strip()
+                _market = str(_row.get("market") or _row.get("category") or "").strip()
+                _cat = str(_row.get("category") or "")
+                _sig = _combo_signature([{
+                    "match": _match, "market": _market,
+                    "tip": _player + "|" + str(_row.get("line", "")),
+                }], prefix="player_prop")
+                _tip_id = f"player_prop_{_single_date}_{_sig}"
+                if is_duplicate_combo(_tip_id, _single_date):
+                    continue
+                _edge_pct = round(_edge * 100.0, 1)
+                _prob_pct = round(_prob * 100.0, 1)
+                _icon = _icons.get(_cat, "🎯")
+                _msg = (
+                    f"{_icon} <b>PLAYER PROP</b>\n"
+                    f"━━━━━━━━━━━━━━━━━━\n"
+                    f"⚽ <b>{_match}</b>\n"
+                    f"👤 <b>{_player}</b>\n"
+                    f"🎯 {_market}\n"
+                    f"💰 Quote: <b>{_odd:.2f}</b>\n"
+                    f"🧠 Modell: <b>{_prob_pct:.1f}%</b> · Edge: <b>+{_edge_pct:.1f}%</b>\n"
+                    f"📡 Quelle: {_row.get('source','pinnacle')}"
+                )
+                _mid = send_telegram(_msg, chat_id=_single_chat)
+                _single_sent += 1
+                try:
+                    save_to_supabase({
+                        "tip_id": _tip_id,
+                        "date": _single_date,
+                        "market": "player_prop",
+                        "market_name": "🎯 Player Prop",
+                        "match": _match,
+                        "tip": f"{_player} — {_market}",
+                        "odds": str(round(_odd, 2)),
+                        "units": 0.5,
+                        "probability": int(round(_prob * 100)),
+                        "confidence": max(3, min(5, int(round(3 + _edge * 10)))),
+                        "status": "pending",
+                        "group_key": "props",
+                        "pick_type": "player_prop",
+                        "source": str(_row.get("source") or "pinnacle"),
+                        "telegram_chat_id": str(_single_chat),
+                        "telegram_msg_id": _mid,
+                        "message_text": _msg[:3500],
+                        "prop_market": _market,
+                        "player_name": _player,
+                        "line": _row.get("line"),
+                    })
+                except Exception as _se:
+                    log(f"   ⚠️ Player Prop DB-Save fehlgeschlagen: {str(_se)[:100]}", "WARN")
+        log(
+            f"   🎯 Player Props Value: {_single_sent} gesendet / "
+            f"{len(_single_candidates)} Kandidaten "
+            f"(minProb={_single_min_prob*100:.0f}%, minEdge={_single_min_edge*100:.0f}%)"
+        )
+    except Exception as _spe:
+        log(f"   🎯 Player Props Value Error: {type(_spe).__name__}: {str(_spe)[:120]}", "WARN")
+
     # V31 CLEAN: Alte Pinnacle-Bet-Builder mit generischen Team-/Total-Goals-Legs nicht mehr senden.
     # Die echten Player-Props gehen über netrattler_builder_engine.py.
     if str(env("ENABLE_LEGACY_PINNACLE_BUILDER", "false")).lower() not in ["1", "true", "yes", "on"]:
@@ -23969,25 +24099,39 @@ def fetch_pinnacle_match_odds(match_id: int, include_specials: bool = True) -> O
             mtype = market.get("type", "")
             period = market.get("period", 0)
             for price in market.get("prices", []):
-                pv = price.get("price")
-                des = price.get("designation", "")
+                pv_raw = price.get("price")
+                des = str(price.get("designation", "") or "").lower()
                 pts = price.get("points")
-                if not pv or pv <= 1:
+                # Arcadia/Pinnacle guest API liefert `price` als American Odds
+                # (z.B. -120 / +135), genau wie bei den Player Props.  Der alte
+                # Team-Markt-Parser behandelte diese Zahl faelschlich als Dezimalquote;
+                # negative Favoriten wurden verworfen und positive Underdogs als 135.0
+                # weitergereicht. Dadurch kam am Edge-Filter praktisch keine echte Quote an.
+                pv = _pin_american_to_decimal(pv_raw)
+                if pv <= 1.0:
                     continue
 
                 if mtype == "moneyline" and period == 0:
-                    if des == "home": result["home_win"] = round(pv, 2)
-                    elif des == "draw": result["draw"] = round(pv, 2)
-                    elif des == "away": result["away_win"] = round(pv, 2)
+                    if des == "home": result["home_win"] = pv
+                    elif des == "draw": result["draw"] = pv
+                    elif des == "away": result["away_win"] = pv
                 elif mtype == "total" and period == 0:
-                    if pts == 2.5:
-                        if des == "over": result["over_25"] = round(pv, 2)
-                        elif des == "under": result["under_25"] = round(pv, 2)
+                    try:
+                        _pts = float(pts)
+                    except (TypeError, ValueError):
+                        _pts = None
+                    if _pts == 2.5:
+                        if des == "over": result["over_25"] = pv
+                        elif des == "under": result["under_25"] = pv
                 elif mtype == "total" and period == 1:
-                    if pts == 1.5:
-                        if des == "over": result["over_15_ht"] = round(pv, 2)
-                    elif pts == 0.5:
-                        if des == "over": result["over_05_ht"] = round(pv, 2)
+                    try:
+                        _pts = float(pts)
+                    except (TypeError, ValueError):
+                        _pts = None
+                    if _pts == 1.5 and des == "over":
+                        result["over_15_ht"] = pv
+                    elif _pts == 0.5 and des == "over":
+                        result["over_05_ht"] = pv
 
         # BTTS via related markets. Deliberately skipped in FAST mode because
         # this second network chain was the dominant per-match runtime cost.
@@ -24012,12 +24156,15 @@ def fetch_pinnacle_match_odds(match_id: int, include_specials: bool = True) -> O
                             continue
                         for m in rs.json():
                             for p in m.get("prices", []):
-                                if p.get("designation", "").lower() == "yes":
+                                if str(p.get("designation", "") or "").lower() == "yes":
+                                    _dec = _pin_american_to_decimal(p.get("price"))
+                                    if _dec <= 1.0:
+                                        continue
                                     pp = m.get("period", 0)
                                     if pp == 0:
-                                        result["btts_yes"] = round(p["price"], 2)
+                                        result["btts_yes"] = _dec
                                     elif pp == 1:
-                                        result["btts_yes_ht"] = round(p["price"], 2)
+                                        result["btts_yes_ht"] = _dec
         except Exception:
             pass
 
@@ -26133,10 +26280,11 @@ def main():
                     match_contexts=_builder_contexts,
                     supabase_url=SUPABASE_URL,
                     supabase_key=SUPABASE_KEY,
-                    send_chat_id=str(_builder_chat),
                     logger=lambda m: log(f"   🏗️ {m}"),
                 )
                 log(f"   🏗️ Builder Engine: {_sent_n} Builder aus {len(_builder_prop_pool)} Props gesendet")
+            else:
+                log("   🏗️ Builder Engine: kein Telegram-Ziel fuer Player Props/Builder konfiguriert", "WARN")
     except ImportError:
         log("   🏗️ netrattler_builder_engine nicht gefunden — skip", "WARN")
     except Exception as _be:
