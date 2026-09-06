@@ -21213,6 +21213,12 @@ def _ntr_extract_player(description, selection=""):
 def _ntr_collect_prop(player, team, match_name, league, market, category=None,
                       line=None, odds=0, probability=0, source="unknown",
                       kickoff="", hit_rate=0, games=0):
+    if str(os.getenv("NETRATTLER_REAL_ODDS_ONLY", os.getenv("NETRATTLER_REQUIRE_REAL_ODDS", "true"))).lower() in {"1", "true", "yes", "on"}:
+        try:
+            if float(odds or 0) <= 1.0:
+                return
+        except (TypeError, ValueError):
+            return
     category = category or _ntr_prop_category(market)
     if category == "other" or not match_name or " vs " not in match_name:
         return
@@ -21275,6 +21281,98 @@ def run_advanced_props_bot(active_leagues: list, fixtures_cache: dict, target_da
         prefetch_sent_tips_for_date(target_date)
     except Exception:
         pass
+    if str(os.getenv("NETRATTLER_REAL_ODDS_ONLY", os.getenv("NETRATTLER_REQUIRE_REAL_ODDS", "true"))).lower() in {"1", "true", "yes", "on"}:
+        # FAST/REAL-ODDS path: nur echte Odds-API Player Props einsammeln.
+        # Die historischen FBref/StatsBomb/Understat/FPL-Kandidaten und die AI-Kombis
+        # darunter erzeugen keine beobachteten Quoten und werden deshalb übersprungen.
+        _added = 0
+        if ODDS_API_KEYS:
+            try:
+                for _c in get_odds_api_player_prop_candidates(fixtures_cache, target_date):
+                    _od = float(_c.get("odds", 0) or 0)
+                    if _od <= 1.0:
+                        continue
+                    _market = str(_c.get("market") or "")
+                    _cat = _ntr_prop_category(_market)
+                    if _cat == "other":
+                        _mtype = str(_c.get("mtype") or "")
+                        _cat = {
+                            "shots": "shots", "booking": "yellow_cards",
+                            "tackles": "tackles_committed",
+                        }.get(_mtype, "other")
+                    if _cat == "other":
+                        continue
+                    _ntr_collect_prop(
+                        _c.get("player", ""), _c.get("team", ""), _c.get("match", ""),
+                        _c.get("league", ""), _market, category=_cat,
+                        line=_ntr_market_line(_market, 0.5), odds=_od, probability=0,
+                        source=str(_c.get("_source") or "odds_api"),
+                        kickoff=_c.get("kickoff", ""), games=0,
+                    )
+                    _added += 1
+            except Exception as _oe:
+                log(f"🔑 OddsAPI REAL Props Error: {str(_oe)[:80]}", "WARN")
+        _bet365_added = 0
+        if SUPABASE_URL and SUPABASE_KEY:
+            try:
+                _headers = {"apikey": SUPABASE_KEY, "Authorization": f"Bearer {SUPABASE_KEY}"}
+                _params = {
+                    "select": "source,event_name,home_team,away_team,start_time,market_key,market_name,player_name,selection,line,odds,observed_at",
+                    "source": "eq.bet365_public",
+                    "order": "observed_at.desc",
+                    "limit": "500",
+                }
+                _r = requests.get(
+                    f"{SUPABASE_URL.rstrip('/')}/rest/v1/player_prop_db",
+                    headers=_headers, params=_params, timeout=10,
+                )
+                if _r.ok:
+                    for _bp in (_r.json() or []):
+                        try:
+                            _od = float(_bp.get("odds", 0) or 0)
+                        except (TypeError, ValueError):
+                            continue
+                        if _od <= 1.0:
+                            continue
+                        _h = str(_bp.get("home_team") or "").strip()
+                        _a = str(_bp.get("away_team") or "").strip()
+                        _match = f"{_h} vs {_a}" if _h and _a else str(_bp.get("event_name") or "").strip()
+                        if " vs " not in _match:
+                            _match = re.sub(r"\s+v\s+", " vs ", _match, flags=re.I)
+                        if " vs " not in _match:
+                            continue
+                        _market = str(_bp.get("market_name") or _bp.get("market_key") or "")
+                        _cat = {
+                            "shots_on_target": "sot", "shots": "shots",
+                            "tackles": "tackles_committed", "fouls_committed": "fouls",
+                            "fouled": "fouls_won", "assists": "assist",
+                            "goal_or_assist": "score", "goals": "score", "cards": "yellow_cards",
+                            "goalkeeper_saves": "saves", "headed_sot": "sot",
+                            "outside_box_sot": "sot_outside_box",
+                        }.get(str(_bp.get("market_key") or ""), _ntr_prop_category(_market))
+                        if _cat == "other":
+                            continue
+                        _line = _bp.get("line")
+                        try:
+                            _line = float(_line) if _line is not None else _ntr_market_line(_market, 0.5)
+                        except (TypeError, ValueError):
+                            _line = _ntr_market_line(_market, 0.5)
+                        _ntr_collect_prop(
+                            _bp.get("player_name", ""), "", _match, "", _market,
+                            category=_cat, line=_line, odds=_od, probability=0,
+                            source="bet365_public", kickoff=_bp.get("start_time", ""), games=0,
+                        )
+                        _bet365_added += 1
+                else:
+                    log(f"🔑 Bet365 Supabase Props HTTP {_r.status_code}: {_r.text[:100]}", "WARN")
+            except Exception as _be:
+                log(f"🔑 Bet365 Supabase Props Error: {str(_be)[:80]}", "WARN")
+        log(
+            f"🔑 Legacy Prop Builder übersprungen: REAL_ODDS_ONLY aktiv · "
+            f"OddsAPI echte Props={_added} · Bet365 gespeicherte Props={_bet365_added}."
+        )
+        return
+
     log("🔑 Prop Builder Bot startet...")
 
     manager = _advanced_props_manager
@@ -21540,7 +21638,7 @@ def run_advanced_props_bot(active_leagues: list, fixtures_cache: dict, target_da
             _wanted_stats = ",".join(sorted(set(_aliases.keys())))
             _rows = []
             _page_size = 1000
-            _max_rows = int(os.environ.get("PROP_STATS_MAX_ROWS", "12000"))
+            _max_rows = int(os.environ.get("PROP_STATS_MAX_ROWS", "500"))
             _offset = 0
 
             while _offset < _max_rows:
@@ -25479,6 +25577,10 @@ def main():
                 _real_over_odd = False
                 _real_btts_ht_odd = False
                 _real_over15_ht_odd = False
+                _real_btts_source = ""
+                _real_over_source = ""
+                _real_btts_ht_source = ""
+                _real_over15_ht_source = ""
                 try:
                     _mid = pm.get("match_id")
                     ro = _get_real_odds_any_source(home, away, league_name, _mid, target_date.isoformat() if hasattr(target_date, "isoformat") else None)
@@ -25486,16 +25588,17 @@ def main():
                         # WICHTIG: nur die echte QUOTE übernehmen, die MODELL-Wahrscheinlichkeit
                         # (prob_b/prob_o) behalten! Sonst wird prob durch implied-odds
                         # überschrieben (~52%) und fällt unter MIN_PROBABILITY → keine Tipps.
+                        _ro_source = str(ro.get("_source") or "pinnacle")
                         if ro.get("btts_yes"):
-                            btts_yes = ro["btts_yes"]; _real_btts_odd = True
+                            btts_yes = ro["btts_yes"]; _real_btts_odd = True; _real_btts_source = _ro_source
                         if ro.get("over_25"):
-                            over25 = ro["over_25"]; _real_over_odd = True
+                            over25 = ro["over_25"]; _real_over_odd = True; _real_over_source = _ro_source
                         _real_btts_ht_odd = bool(ro.get("btts_yes_ht"))
                         _real_over15_ht_odd = bool(ro.get("over15_ht"))
                         if ro.get("btts_yes_ht"):
-                            btts_ht_odds = ro["btts_yes_ht"]
+                            btts_ht_odds = ro["btts_yes_ht"]; _real_btts_ht_source = _ro_source
                         if ro.get("over15_ht"):
-                            o15_odds = ro["over15_ht"]
+                            o15_odds = ro["over15_ht"]; _real_over15_ht_source = _ro_source
                         if ro.get("_source") and ro["_source"] != "pinnacle":
                             log(f"      🍋 Echte Quote via {ro['_source']}: {home} vs {away}")
                 except Exception:
@@ -25510,8 +25613,9 @@ def main():
                         _kb = _fetch_btts_odd_kambi(home, away)
                         if _kb and _kb > 1.2:
                             btts_yes = _kb
-                            prob_b = int(100 / btts_yes * 0.95)
+                            # Quote ist Marktpreis; Modellwahrscheinlichkeit bleibt unabhängig.
                             _real_btts_odd = True
+                            _real_btts_source = "kambi"
                     except Exception:
                         pass
 
@@ -25537,7 +25641,7 @@ def main():
                         "oddsYes": btts_yes, "fairOdds": round(100/prob_b, 2),
                         "valueRating": ("VALUE" if ro else "OK"), "units": 1.0, "market": "btts",
                         "reasoning": f"Pinnacle Markt-Analyse | {league_name}",
-                        "_no_real_odds": not bool(ro), "_source": "pinnacle", "_kickoff": _ko_sort,
+                        "_no_real_odds": not _real_btts_odd, "_source": (_real_btts_source or "pinnacle"), "_kickoff": _ko_sort,
                     }
                     enrich_pinnacle_tip(tip_btts, home, away, league_name)
                     tips_by_market["btts"].append(tip_btts)
@@ -25553,7 +25657,7 @@ def main():
                         "oddsYes": over25, "fairOdds": round(100/prob_o, 2),
                         "valueRating": ("VALUE" if ro else "OK"), "units": 1.0, "market": "over25",
                         "reasoning": f"Pinnacle Markt-Analyse | {league_name}",
-                        "_no_real_odds": not bool(ro), "_source": "pinnacle", "_kickoff": _ko_sort,
+                        "_no_real_odds": not _real_over_odd, "_source": (_real_over_source or "pinnacle"), "_kickoff": _ko_sort,
                     }
                     enrich_pinnacle_tip(tip_over25, home, away, league_name)
                     tips_by_market["over25"].append(tip_over25)
@@ -25574,7 +25678,7 @@ def main():
                             "oddsYes": combo_odds, "fairOdds": round(100/combo_prob, 2),
                             "valueRating": ("VALUE" if ro else "OK"), "units": 0.75, "market": "combo",
                             "reasoning": f"Pinnacle Combo-Analyse | {league_name}",
-                            "_no_real_odds": not bool(ro), "_source": "pinnacle", "_kickoff": _ko_sort,
+                            "_no_real_odds": not (_real_btts_odd and _real_over_odd), "_source": "real_odds_consensus", "_kickoff": _ko_sort,
                         }
                         enrich_pinnacle_tip(tip_combo, home, away, league_name)
                         tips_by_market["combo"].append(tip_combo)
@@ -25605,7 +25709,7 @@ def main():
                             "oddsYes": btts_ht_odds, "fairOdds": round(100/btts_ht_prob, 2),
                             "valueRating": ("VALUE" if (ro and ro.get("btts_yes_ht")) else "OK"), "units": 1.0, "market": "btts_ht",
                             "reasoning": f"Pinnacle HT-Analyse | {league_name}",
-                            "_no_real_odds": not bool(ro), "_source": "pinnacle", "_kickoff": _ko_sort,
+                            "_no_real_odds": not _real_btts_ht_odd, "_source": (_real_btts_ht_source or "pinnacle"), "_kickoff": _ko_sort,
                         }
                         enrich_pinnacle_tip(tip_btts_ht, home, away, league_name)
                         tips_by_market["btts_ht"].append(tip_btts_ht)
@@ -25633,7 +25737,7 @@ def main():
                             "oddsYes": o15_odds, "fairOdds": round(100/o15_prob, 2),
                             "valueRating": ("VALUE" if (ro and ro.get("over_15_ht")) else "OK"), "units": 1.0, "market": "over15_ht",
                             "reasoning": f"Pinnacle HT-Analyse | {league_name}",
-                            "_no_real_odds": not bool(ro), "_source": "pinnacle", "_kickoff": _ko_sort,
+                            "_no_real_odds": not _real_over15_ht_odd, "_source": (_real_over15_ht_source or "pinnacle"), "_kickoff": _ko_sort,
                         }
                         enrich_pinnacle_tip(tip_o15_ht, home, away, league_name)
                         tips_by_market["over15_ht"].append(tip_o15_ht)
