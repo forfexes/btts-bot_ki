@@ -39,7 +39,6 @@ jobs:
           pip install \
             requests \
             python-dotenv \
-            playwright \
             beautifulsoup4 \
             lxml \
             google-generativeai \
@@ -53,7 +52,6 @@ jobs:
             numpy \
             pandas \
             scikit-learn
-          playwright install chromium --with-deps
 
       - name: Compile and core tests
 
@@ -68,8 +66,8 @@ jobs:
         env:
           # ── ⚡ SPEED: Tipp-Lauf schnell halten (Stats sammelt der Scraper separat) ──
           NETRATTLER_FAST_TIPS:       "true"
-          NETRATTLER_STATBUNKER_MAX_LOOKUPS: "15"
-          NETRATTLER_LINEUP_MAX:      "12"
+          NETRATTLER_STATBUNKER_MAX_LOOKUPS: "4"
+          NETRATTLER_LINEUP_MAX:      "6"
           # ── KI APIs ──
           GEMINI_API_KEYS:            ${{ secrets.GEMINI_API_KEYS }}
           GROQ_API_KEYS:              ${{ secrets.GROQ_API_KEYS }}
@@ -101,6 +99,9 @@ jobs:
           TELEGRAM_GROUP_HZ_LIVE:     ${{ secrets.TELEGRAM_GROUP_HZ_LIVE }}
           TELEGRAM_GROUP_LATE_GOALS:  ${{ secrets.TELEGRAM_GROUP_LATE_GOALS }}
           TELEGRAM_GROUP_STATS:       ${{ secrets.TELEGRAM_GROUP_STATS }}
+          TELEGRAM_GROUP_PLAYER_PROPS: ${{ secrets.TELEGRAM_GROUP_PLAYER_PROPS }}
+          TELEGRAM_GROUP_PROPS:       ${{ secrets.TELEGRAM_GROUP_PROPS }}
+          TELEGRAM_GROUP_BUILDER:     ${{ secrets.TELEGRAM_GROUP_BUILDER }}
           # ── Supabase ──
           SUPABASE_URL:               ${{ secrets.SUPABASE_URL }}
           SUPABASE_KEY:               ${{ secrets.SUPABASE_KEY }}
@@ -110,8 +111,13 @@ jobs:
           RUN_MODE:                   ${{ github.event.inputs.mode || 'tips' }}
           ENABLE_SETTLEMENT:          "false"
           ENABLE_ADVANCED_PROPS:      "true"
-          ENABLE_SUPABASE_PROP_STATS: "1"
-          MAX_LEAGUES_PER_RUN:        "0"
+          # Nur beobachtete Buchmacherquoten senden; keine Modell-/Fallback-Quoten.
+          NETRATTLER_REQUIRE_REAL_ODDS: "true"
+          NETRATTLER_REAL_ODDS_ONLY:    "true"
+          NETRATTLER_PROP_BUILDER_MIN_EDGE: "0.02"
+          PROP_STATS_MAX_ROWS:          "500"
+          ENABLE_SUPABASE_PROP_STATS: "0"
+          MAX_LEAGUES_PER_RUN:        "20"
           PARALLEL_WORKERS:           "10"
           AI_SLEEP_SECONDS:           "0.1"
           GROQ_SLEEP_SECONDS:         "0.5"
