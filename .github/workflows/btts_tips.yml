@@ -71,6 +71,11 @@ jobs:
           # Team-market analysis gets a strict budget; slow harvesters run separately.
           NETRATTLER_ANALYSIS_BUDGET_SEC: "240"
           NETRATTLER_HARD_WATCHDOG_SEC:   "480"
+          NETRATTLER_CORNERS_BUDGET_SEC:  "45"
+          NETRATTLER_CORNERS_MAX_MATCHES: "80"
+          NETRATTLER_CORNERS_MAX_SEND:    "12"
+          NETRATTLER_CORNER_MIN_EDGE:     "0.02"
+          NETRATTLER_LEGACY_SCORER:       "false"
           # ── KI APIs ──
           GEMINI_API_KEYS:            ${{ secrets.GEMINI_API_KEYS }}
           GROQ_API_KEYS:              ${{ secrets.GROQ_API_KEYS }}
