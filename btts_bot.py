@@ -23718,6 +23718,7 @@ def _sofascore_event_id_for(home, away, tip_date=None):
 _ODDS_SOURCE_ROTATION = ["oddspapi", "sofascore", "kambi", "bsd", "soccerapi",
                           "theoddsapi", "betexplorer", "oddsportal_scrape", "betfair"]
 _ODDS_SOURCE_STATUS = {}  # {source: "ok"/"ratelimited"/"failed"} pro Lauf
+_ODDS_SOURCE_MISSES = {}   # nach 5 Fehlschlägen wird die Quelle deaktiviert
 
 
 def _with_timeout(fn, seconds):
@@ -23739,8 +23740,21 @@ def _with_timeout(fn, seconds):
 
 
 def _odds_source_available(source: str) -> bool:
-    """True wenn die Quelle in diesem Lauf noch nutzbar ist (kein 429/Fehler)."""
-    return _ODDS_SOURCE_STATUS.get(source) not in ("ratelimited", "failed")
+    """True wenn Quelle nutzbar. Deaktiviert nach 429/Fehler ODER 5 Fehlschlägen
+    (spart Zeit — probiert keine tote Quelle 100× durch)."""
+    if _ODDS_SOURCE_STATUS.get(source) in ("ratelimited", "failed"):
+        return False
+    if _ODDS_SOURCE_MISSES.get(source, 0) >= 5:
+        return False
+    return True
+
+
+def _note_miss(source: str, got_something: bool):
+    """Zählt Fehlschläge pro Quelle. Reset bei Erfolg → deaktiviert tote Quellen."""
+    if got_something:
+        _ODDS_SOURCE_MISSES[source] = 0
+    else:
+        _ODDS_SOURCE_MISSES[source] = _ODDS_SOURCE_MISSES.get(source, 0) + 1
 
 
 def _get_real_odds_any_source(home, away, league_name="", match_id=None, tip_date=None):
@@ -23827,7 +23841,8 @@ def _get_real_odds_any_source(home, away, league_name="", match_id=None, tip_dat
     # 5) SoccerAPI (Namens-basiert, HTTP)
     if not (result.get("btts_yes") and result.get("over_25")) and _odds_source_available("soccerapi"):
         try:
-            _sa = get_soccerapi_odds(home, away, tip_date)
+            _sa = _with_timeout(lambda: get_soccerapi_odds(home, away, tip_date), 4)
+            _note_miss("soccerapi", bool(_sa))
             if _sa:
                 _merge(_sa, "soccerapi")
         except Exception:
@@ -23846,6 +23861,7 @@ def _get_real_odds_any_source(home, away, league_name="", match_id=None, tip_dat
     if not (result.get("btts_yes") and result.get("over_25")) and _odds_source_available("betexplorer"):
         try:
             _bx = _with_timeout(lambda: get_betexplorer_odds(home, away, league_name), 4)
+            _note_miss("betexplorer", bool(_bx))
             if _bx and isinstance(_bx, dict):
                 _merge(_bx, "betexplorer")
         except Exception:
@@ -23855,6 +23871,7 @@ def _get_real_odds_any_source(home, away, league_name="", match_id=None, tip_dat
     if not result.get("btts_yes") and _odds_source_available("oddsportal_scrape"):
         try:
             _op2 = _with_timeout(lambda: scrape_oddsportal_btts(home, away, league_name, tip_date), 4)
+            _note_miss("oddsportal_scrape", bool(_op2 and _op2.get("btts_yes") if isinstance(_op2,dict) else False))
             if _op2 and isinstance(_op2, dict) and _op2.get("btts_yes"):
                 _merge(_op2, "oddsportal_scrape")
         except Exception:
@@ -23864,6 +23881,7 @@ def _get_real_odds_any_source(home, away, league_name="", match_id=None, tip_dat
     if not (result.get("btts_yes") and result.get("over_25")) and _odds_source_available("betfair"):
         try:
             _bf = _with_timeout(lambda: get_betfair_odds_api(f"{home} v {away}"), 4)
+            _note_miss("betfair", bool(_bf))
             if _bf and isinstance(_bf, dict):
                 _merge(_bf, "betfair")
         except Exception:
@@ -25546,7 +25564,9 @@ def main():
                     # Korrelation: BTTS-Yes-Spiele sind meist auch Over 2.5
                     combo_prob = min(prob_b, prob_o) - 5
                     combo_odds = round(btts_yes * over25 * 0.80, 2)  # Korrelationsabschlag
-                    if combo_prob >= (MIN_PROBABILITY - 10) and _is_value_bet(combo_odds, combo_prob):
+                    # Combo nur mit ECHTEN Quoten für BEIDE Teile (kein Fake-Value)
+                    _combo_real = (_real_btts_odd and _real_over_odd) or str(env("NETRATTLER_REQUIRE_REAL_ODDS", "true")).lower() not in ("1","true","yes","on")
+                    if combo_prob >= (MIN_PROBABILITY - 10) and _is_value_bet(combo_odds, combo_prob) and _combo_real:
                         tip_combo = {
                             "match": mn, "league": league_name or "Pinnacle",
                             "time": tstr, "tip": "BTTS + Over 2.5",
