@@ -249,6 +249,8 @@ def normalize_prop(row: Dict[str, Any]) -> Optional[PropLeg]:
     explicit_estimated = str(row.get("estimated") or "").lower() in {"1", "true", "yes", "on"}
     bookmaker_tokens = (
         "pinnacle", "bet365", "betfair", "oddsportal", "oddsharvester",
+        "the odds api", "odds api", "odds_api", "oddsapi", "oddspapi",
+        "kambi", "unibet", "1xbet", "melbet", "oddspedia", "footymetrics",
         "bookmaker", "sportsbook",
     )
     observed_bookmaker = odds > 1 and any(token in source_text for token in bookmaker_tokens)
@@ -1871,8 +1873,10 @@ def _v31_has_observed_bookmaker_odds(leg: PropLeg) -> bool:
         return False
     source = norm(leg.source)
     return any(token in source for token in {
-        "pinnacle", "bet365", "betfair", "oddsportal",
-        "oddsharvester", "bookmaker", "sportsbook",
+        "pinnacle", "bet365", "betfair", "oddsportal", "oddsharvester",
+        "the odds api", "odds api", "odds_api", "oddsapi", "oddspapi",
+        "kambi", "unibet", "1xbet", "melbet", "oddspedia", "footymetrics",
+        "bookmaker", "sportsbook",
     })
 
 
@@ -1893,9 +1897,9 @@ def _v31_valid_prop_builder(pick: BuilderPick) -> bool:
         return False
     if pick.estimated_odds:
         return False
-    # Mindestens 1 Leg muss valide sein (nicht alle müssen strict valide sein)
-    valid_legs = [l for l in pick.legs if _v31_valid_prop_leg(l)]
-    return len(valid_legs) >= max(1, len(pick.legs) - 1)
+    # REAL-ODDS-ONLY: jedes einzelne Leg muss eine beobachtete Buchmacherquote
+    # und positive, unabhängige Modell-Edge haben. Kein geschätztes Leg in Buildern.
+    return all(_v31_valid_prop_leg(l) for l in pick.legs)
 
 def _v31_leg_score(leg: PropLeg) -> float:
     base = float(leg.quality or 0.0)
