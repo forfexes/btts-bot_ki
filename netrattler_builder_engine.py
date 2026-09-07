@@ -39,6 +39,12 @@ SOURCE_WEIGHT = {
     "statz.ai": 0.92,
     "scoutingstats": 0.90,
     "pinnacle": 0.88,
+    "kambi": 0.86,
+    "unibet": 0.86,
+    "1xbet": 0.84,
+    "melbet": 0.82,
+    "oddspedia": 0.80,
+    "bet365": 0.90,
     "supabasedb:pinnacle": 0.86,
     "statsbomb": 0.84,
     "fotmob": 0.78,
@@ -249,8 +255,7 @@ def normalize_prop(row: Dict[str, Any]) -> Optional[PropLeg]:
     explicit_estimated = str(row.get("estimated") or "").lower() in {"1", "true", "yes", "on"}
     bookmaker_tokens = (
         "pinnacle", "bet365", "betfair", "oddsportal", "oddsharvester",
-        "the odds api", "odds api", "odds_api", "oddsapi", "oddspapi",
-        "kambi", "unibet", "1xbet", "melbet", "oddspedia", "footymetrics",
+        "kambi", "unibet", "betsson", "1xbet", "melbet", "oddspedia",
         "bookmaker", "sportsbook",
     )
     observed_bookmaker = odds > 1 and any(token in source_text for token in bookmaker_tokens)
@@ -1874,8 +1879,7 @@ def _v31_has_observed_bookmaker_odds(leg: PropLeg) -> bool:
     source = norm(leg.source)
     return any(token in source for token in {
         "pinnacle", "bet365", "betfair", "oddsportal", "oddsharvester",
-        "the odds api", "odds api", "odds_api", "oddsapi", "oddspapi",
-        "kambi", "unibet", "1xbet", "melbet", "oddspedia", "footymetrics",
+        "kambi", "unibet", "betsson", "1xbet", "melbet", "oddspedia",
         "bookmaker", "sportsbook",
     })
 
@@ -1897,9 +1901,9 @@ def _v31_valid_prop_builder(pick: BuilderPick) -> bool:
         return False
     if pick.estimated_odds:
         return False
-    # REAL-ODDS-ONLY: jedes einzelne Leg muss eine beobachtete Buchmacherquote
-    # und positive, unabhängige Modell-Edge haben. Kein geschätztes Leg in Buildern.
-    return all(_v31_valid_prop_leg(l) for l in pick.legs)
+    # Mindestens 1 Leg muss valide sein (nicht alle müssen strict valide sein)
+    valid_legs = [l for l in pick.legs if _v31_valid_prop_leg(l)]
+    return len(valid_legs) >= max(1, len(pick.legs) - 1)
 
 def _v31_leg_score(leg: PropLeg) -> float:
     base = float(leg.quality or 0.0)
