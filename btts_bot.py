@@ -9481,30 +9481,107 @@ def get_supabase_player_avg_stats(player_name: str) -> dict:
 
 
 def _prefetch_supabase_player_avg_stats(player_names, chunk_size=30):
-    """Targeted batch preload only for players with real bookmaker props."""
-    if not SUPABASE_URL or not SUPABASE_KEY: return 0
+    """Targeted preload for real-bookmaker players, with safe fuzzy fallback.
+
+    Phase 1 keeps the cheap exact `IN (...)` query. Phase 2 only runs for misses
+    and searches surnames in small OR batches, then maps returned names locally
+    using accent-insensitive/token similarity. This avoids the old 12k-row blind
+    load while fixing Pinnacle/Kambi name variants such as initials/diacritics.
+    """
+    if not SUPABASE_URL or not SUPABASE_KEY:
+        return 0
+    import difflib as _difflib
+    import unicodedata as _ud
+
+    def _pnorm(v):
+        t = _ud.normalize("NFKD", str(v or "").lower())
+        t = "".join(c for c in t if not _ud.combining(c))
+        t = re.sub(r"[^a-z0-9 ]+", " ", t)
+        return " ".join(t.split())
+
     names=[]; seen=set()
     for n in player_names or []:
         n=str(n or "").strip()
         if n and n not in seen and n not in _SUPABASE_PLAYER_STATS_CACHE:
             seen.add(n); names.append(n)
-    if not names: return 0
-    loaded=0; headers={"apikey":SUPABASE_KEY,"Authorization":f"Bearer {SUPABASE_KEY}"}
+    if not names:
+        return 0
+
+    loaded=0
+    headers={"apikey":SUPABASE_KEY,"Authorization":f"Bearer {SUPABASE_KEY}"}
+    missing=[]
     for i in range(0,len(names),max(1,int(chunk_size))):
         chunk=names[i:i+max(1,int(chunk_size))]
         escaped=[x.replace("\\","\\\\").replace(chr(34),"\\"+chr(34)) for x in chunk]
         expr='in.('+','.join(chr(34)+x+chr(34) for x in escaped)+')'
+        grouped={n:{} for n in chunk}
         try:
-            r=requests.get(f"{SUPABASE_URL.rstrip('/')}/rest/v1/player_avg_stats",headers=headers,params={"player_name":expr,"select":"player_name,stat_name,avg_value,hit_rate_pct,games","limit":"5000"},timeout=10)
-            if not r.ok: continue
-            grouped={n:{} for n in chunk}
-            for row in r.json() or []:
-                pn,stat=str(row.get("player_name") or ""),str(row.get("stat_name") or "")
-                if pn and stat: grouped.setdefault(pn,{})[stat]={"avg":row.get("avg_value"),"hit_rate":row.get("hit_rate_pct"),"games":row.get("games")}
-            for pn in chunk:
-                _SUPABASE_PLAYER_STATS_CACHE[pn]=grouped.get(pn,{})
-                if grouped.get(pn): loaded+=1
-        except Exception: pass
+            r=requests.get(
+                f"{SUPABASE_URL.rstrip('/')}/rest/v1/player_avg_stats",
+                headers=headers,
+                params={"player_name":expr,"select":"player_name,stat_name,avg_value,hit_rate_pct,games","limit":"5000"},
+                timeout=10,
+            )
+            if r.ok:
+                for row in r.json() or []:
+                    pn,stat=str(row.get("player_name") or ""),str(row.get("stat_name") or "")
+                    if pn and stat:
+                        grouped.setdefault(pn,{})[stat]={"avg":row.get("avg_value"),"hit_rate":row.get("hit_rate_pct"),"games":row.get("games")}
+        except Exception:
+            pass
+        for pn in chunk:
+            _SUPABASE_PLAYER_STATS_CACHE[pn]=grouped.get(pn,{})
+            if grouped.get(pn):
+                loaded+=1
+            else:
+                missing.append(pn)
+
+    # Fuzzy phase: query only surname-like tokens, batched to keep runtime/API use low.
+    fuzzy_cap=max(0,int(os.getenv("NETRATTLER_PLAYER_STATS_FUZZY_CAP","120")))
+    missing=missing[:fuzzy_cap]
+    for i in range(0,len(missing),12):
+        chunk=missing[i:i+12]
+        needles=[]
+        for name in chunk:
+            toks=[x for x in _pnorm(name).split() if len(x)>=3]
+            if toks:
+                needles.append((name,toks[-1]))
+        if not needles:
+            continue
+        or_expr='('+','.join(f"player_name.ilike.*{tok}*" for _,tok in needles)+')'
+        try:
+            r=requests.get(
+                f"{SUPABASE_URL.rstrip('/')}/rest/v1/player_avg_stats",
+                headers=headers,
+                params={"or":or_expr,"select":"player_name,stat_name,avg_value,hit_rate_pct,games","limit":"5000"},
+                timeout=10,
+            )
+            rows=r.json() if r.ok else []
+        except Exception:
+            rows=[]
+        by_actual={}
+        for row in rows or []:
+            actual=str(row.get("player_name") or "")
+            stat=str(row.get("stat_name") or "")
+            if actual and stat:
+                by_actual.setdefault(actual,{})[stat]={"avg":row.get("avg_value"),"hit_rate":row.get("hit_rate_pct"),"games":row.get("games")}
+        for requested,_surname in needles:
+            rn=_pnorm(requested)
+            rt=rn.split()
+            best=None; best_score=0.0
+            for actual,stats in by_actual.items():
+                an=_pnorm(actual); at=an.split()
+                if not an or not stats:
+                    continue
+                ratio=_difflib.SequenceMatcher(None,rn,an).ratio()
+                surname_bonus=0.12 if rt and at and rt[-1]==at[-1] else 0.0
+                initial_bonus=0.05 if rt and at and rt[0][:1]==at[0][:1] else 0.0
+                score=ratio+surname_bonus+initial_bonus
+                if score>best_score:
+                    best=(actual,stats); best_score=score
+            if best and best_score>=0.78:
+                _SUPABASE_PLAYER_STATS_CACHE[requested]=best[1]
+                loaded+=1
     return loaded
 
 
@@ -10659,6 +10736,12 @@ def get_ml_prediction(home_team, away_team, league_name):
     elo_h = elo_ratings.get(h_key, ELO_RATINGS_CACHE.get("_global", {}).get(h_key, 1500)) + 60
     elo_a = elo_ratings.get(a_key, ELO_RATINGS_CACHE.get("_global", {}).get(a_key, 1500))
 
+    # Form-Features ZUERST bauen. Der alte Code griff im Nischenliga-Fallback
+    # auf fh/fa zu, bevor die Variablen existierten; dadurch konnten einzelne
+    # Matches ohne Elo komplett aus dem ML-Pfad fallen.
+    fh = _ml_get_team_form(home_team)
+    fa = _ml_get_team_form(away_team)
+
     # 🆕 Falls kein Elo für diese Teams (Nischenliga): martj42-Stats als Feature-Basis
     if elo_h == 1560 and elo_a == 1500:  # = beide Default
         h_st = get_national_team_btts_stats(home_team)
@@ -10668,10 +10751,6 @@ def get_ml_prediction(home_team, away_team, league_name):
             fa["btts_rate"] = a_st.get("btts_pct", 50) / 100
             fh["o25_rate"] = h_st.get("over25_pct", 50) / 100
             fa["o25_rate"] = a_st.get("over25_pct", 50) / 100
-
-    # Form-Features
-    fh = _ml_get_team_form(home_team)
-    fa = _ml_get_team_form(away_team)
 
     # H2H-Features aus dem Rolling-State
     _h2h_key = tuple(sorted([normalize_team_name(home_team), normalize_team_name(away_team)]))
@@ -20326,6 +20405,29 @@ def _pinnacle_corner_quotes_by_match():
             out.setdefault(key, []).append({"line":line,"odds":odds,"source":"pinnacle"})
     except Exception as exc:
         log(f"   🔵 Pinnacle Corner-Index Fehler: {str(exc)[:80]}", "WARN")
+
+    # Kambi/other real-bookmaker corner totals collected earlier for the builder pool.
+    # These are observed prices too and let Corner Sniper run when Pinnacle has no
+    # corner specials in the Arcadia payload.
+    try:
+        for p in _NTR_BUILDER_PROP_POOL:
+            if not isinstance(p, dict) or str(p.get("category") or "") not in {"corners","team_corners","match_corners"}:
+                continue
+            try:
+                odds=float(p.get("odds") or 0); line=float(p.get("line") or 0)
+            except (TypeError,ValueError):
+                continue
+            src=str(p.get("source") or "").lower()
+            match=str(p.get("match") or "")
+            if odds<=1 or line<=0 or " vs " not in match or not any(x in src for x in ("kambi","unibet","bet365","pinnacle","1xbet","melbet","oddspedia")):
+                continue
+            h,a=[x.strip() for x in match.split(" vs ",1)]
+            key=f"{normalize_team_name(h)}|{normalize_team_name(a)}"
+            row={"line":line,"odds":odds,"source":src}
+            if row not in out.setdefault(key,[]):
+                out[key].append(row)
+    except Exception:
+        pass
     return out
 
 def _corner_quote_lookup(index, home, away):
@@ -23988,7 +24090,9 @@ def _pinnacle_team_special_quotes_by_match() -> Dict[str, Dict]:
             bucket = out.setdefault(key, {})
             desc = str(row.get("player_prop") or "").lower()
             sel = str(row.get("selection") or "").lower().strip()
-            txt = f"{desc} {sel}"
+            designation = str(row.get("designation") or "").lower().strip()
+            category = str(row.get("special_category") or "").lower().strip()
+            txt = f"{category} {desc} {sel} {designation}".strip()
             try:
                 odd = float(row.get("odds") or 0)
             except (TypeError, ValueError):
@@ -23996,26 +24100,28 @@ def _pinnacle_team_special_quotes_by_match() -> Dict[str, Dict]:
             if odd <= 1.0:
                 continue
 
-            is_yes = (sel == "yes" or sel.startswith("yes ") or " yes" in f" {sel}")
-            is_over = sel.startswith("over") or " over " in f" {sel} "
-            # Both teams to score specials (FT / 1H).
-            if "both teams to score" in desc and is_yes:
-                if any(x in desc for x in ("1st half", "first half", "1h", "ht")):
-                    bucket.setdefault("btts_yes_ht", odd)
-                elif "over 2.5" in desc or "over2.5" in desc:
-                    bucket.setdefault("btts_over25_combo", odd)
-                else:
-                    bucket.setdefault("btts_yes", odd)
+            is_yes = any(x in {sel, designation} for x in ("yes", "ja")) or sel.startswith("yes ")
+            has_btts = ("both teams to score" in txt or "both teams score" in txt or "btts" in txt)
+            first_half = any(x in txt for x in ("1st half", "first half", "first-half", "1h", " ht"))
+            has_o25 = any(x in txt for x in ("over 2.5", "over2.5", "o2.5", "2.5 goals"))
+            has_o15 = any(x in txt for x in ("over 1.5", "over1.5", "o1.5", "1.5 goals"))
 
-            # Some books phrase the same-game market as 'BTTS & Over 2.5'.
-            if (("btts" in desc or "both teams" in desc) and
-                    ("over 2.5" in desc or "over2.5" in desc) and is_yes):
-                bucket.setdefault("btts_over25_combo", odd)
+            def _best(key):
+                old=float(bucket.get(key) or 0)
+                if odd > old:
+                    bucket[key]=odd
 
-            # First-half O1.5 can also appear as a special instead of standard total.
-            if any(x in desc for x in ("1st half", "first half", "1h")) and (
-                    "over 1.5" in txt or "over1.5" in txt):
-                bucket.setdefault("over_15_ht", odd)
+            # Combined BTTS + O2.5 specials can encode the two legs in either
+            # description OR selection (e.g. "Yes & Over 2.5").
+            if has_btts and has_o25 and (is_yes or "yes" in txt or "&" in txt or "+" in txt):
+                _best("btts_over25_combo")
+            elif has_btts and is_yes:
+                _best("btts_yes_ht" if first_half else "btts_yes")
+
+            # First-half O1.5 may be a standard total or a named special.
+            if first_half and has_o15 and ("over" in txt):
+                _best("over_15_ht")
+
 
         cov = {
             "btts": sum(1 for v in out.values() if v.get("btts_yes")),
@@ -26038,7 +26144,7 @@ def main():
                             "oddsYes": combo_odds, "fairOdds": round(100/combo_prob, 2),
                             "valueRating": ("VALUE" if ro else "OK"), "units": 0.75, "market": "combo",
                             "reasoning": f"Pinnacle Combo-Analyse | {league_name}",
-                            "_no_real_odds": not (_real_btts_odd and _real_over_odd), "_source": "real_odds_consensus", "_kickoff": _ko_sort,
+                            "_no_real_odds": not _combo_real, "_source": str((ro or {}).get("_source") or "observed_combo"), "_kickoff": _ko_sort,
                         }
                         enrich_pinnacle_tip(tip_combo, home, away, league_name)
                         tips_by_market["combo"].append(tip_combo)
@@ -26101,7 +26207,7 @@ def main():
                 # Nur mit echter Quote (ro) + Modell-Wahrscheinlichkeit.
                 try:
                     if "1x2" in tips_by_market and ro:
-                        _ml_1x2 = get_ml_prediction(home, away, league_name) or {}
+                        _ml_1x2 = (_ml_match or {})
                         _picks_1x2 = [
                             ("home", "Heimsieg", ro.get("home"), _ml_1x2.get("home_win_pct", 0)),
                             ("draw", "Unentschieden", ro.get("draw"), _ml_1x2.get("draw_pct", 0)),
