@@ -113,9 +113,17 @@ TELEGRAM_GROUPS = {
 
     "stats": env("TELEGRAM_GROUP_STATS", TELEGRAM_CHAT_ID),
 
-    "advanced_props": env("TELEGRAM_GROUP_PLAYER_PROPS", env("TELEGRAM_GROUP_BUILDER", env("TELEGRAM_GROUP_STATS", TELEGRAM_CHAT_ID))),
-    "props": env("TELEGRAM_GROUP_PLAYER_PROPS", env("TELEGRAM_GROUP_BUILDER", env("TELEGRAM_GROUP_STATS", TELEGRAM_CHAT_ID))),
-    "builder": env("TELEGRAM_GROUP_BUILDER", env("TELEGRAM_GROUP_PLAYER_PROPS", env("TELEGRAM_GROUP_STATS", TELEGRAM_CHAT_ID))),
+    # IMPORTANT: GitHub secrets can exist as empty env vars. os.getenv(..., default)
+    # then does NOT use the default, so use explicit `or` fallbacks.
+    "advanced_props": (env("TELEGRAM_GROUP_PLAYER_PROPS") or env("TELEGRAM_GROUP_BUILDER")
+                       or env("TELEGRAM_GROUP_STATS") or TELEGRAM_CHAT_ID
+                       or env("TELEGRAM_GROUP_COMBOS") or env("TELEGRAM_GROUP_LATE_GOALS")),
+    "props": (env("TELEGRAM_GROUP_PLAYER_PROPS") or env("TELEGRAM_GROUP_BUILDER")
+              or env("TELEGRAM_GROUP_STATS") or TELEGRAM_CHAT_ID
+              or env("TELEGRAM_GROUP_COMBOS") or env("TELEGRAM_GROUP_LATE_GOALS")),
+    "builder": (env("TELEGRAM_GROUP_BUILDER") or env("TELEGRAM_GROUP_PLAYER_PROPS")
+                or env("TELEGRAM_GROUP_STATS") or TELEGRAM_CHAT_ID
+                or env("TELEGRAM_GROUP_COMBOS") or env("TELEGRAM_GROUP_LATE_GOALS")),
 }
 
 
@@ -20306,7 +20314,8 @@ def _pinnacle_corner_quotes_by_match():
                 continue
             try:
                 odds = float(p.get("odds") or 0)
-                line = float(_ntr_market_line(f"{p.get('player_prop','')} {sel}", 0) or 0)
+                _raw_line = p.get("line")
+                line = float(_raw_line if _raw_line is not None else (_ntr_market_line(f"{p.get('player_prop','')} {sel}", 0) or 0))
             except (TypeError, ValueError):
                 continue
             match = str(p.get("match") or "")
@@ -22522,7 +22531,9 @@ def fetch_pinnacle_player_props() -> List[Dict]:
                 for p in mk.get("prices", []):
                     pid = p.get("participantId")
                     if mid and pid:
-                        prices_by_matchup[(mid, pid)] = p.get("price")
+                        # Keep the whole observed price row. `points` is required for
+                        # corners/totals and was previously discarded.
+                        prices_by_matchup[(mid, pid)] = p
         else:
             log(f"   🔑 Pinnacle Props: markets/straight fehlgeschlagen ({status2})", "WARN")
 
@@ -22568,10 +22579,16 @@ def fetch_pinnacle_player_props() -> List[Dict]:
             league_name = (m.get("league") or {}).get("name", "")
             starts = m.get("startTime", "") or parent.get("startTime", "")
             for part in m.get("participants", []):
-                price = prices_by_matchup.get((m.get("id"), part.get("id")))
-                if price is None:
+                _price_row = prices_by_matchup.get((m.get("id"), part.get("id")))
+                if _price_row is None:
                     skipped_no_price += 1
                     continue
+                if isinstance(_price_row, dict):
+                    price = _price_row.get("price")
+                    _line = _price_row.get("points")
+                else:
+                    price = _price_row
+                    _line = None
                 dec = _pin_american_to_decimal(price)
                 if dec <= 1.0:
                     continue
@@ -22584,6 +22601,8 @@ def fetch_pinnacle_player_props() -> List[Dict]:
                     "league": league_name,
                     "starts": starts,
                     "special_category": cat,
+                    "line": _line,
+                    "designation": (part.get("name", "") or ""),
                     "is_team_market": bool(is_team_category or is_team_builder_description),
                 })
         if skipped_no_price:
@@ -23526,7 +23545,10 @@ def run_pinnacle_props_bot(win_start_utc=None, win_end_utc=None, ch_tz=None, top
     # Props kein einziger Player-Tipp auf Telegram erschien. Singles sind nun ein eigener,
     # unabhaengiger Ausgabepfad.
     try:
-        _single_chat = TELEGRAM_GROUPS.get("props") or TELEGRAM_GROUPS.get("advanced_props") or TELEGRAM_GROUPS.get("builder")
+        _single_chat = (TELEGRAM_GROUPS.get("props") or TELEGRAM_GROUPS.get("advanced_props")
+                        or TELEGRAM_GROUPS.get("builder") or TELEGRAM_GROUPS.get("stats")
+                        or TELEGRAM_GROUPS.get("combos") or TELEGRAM_GROUPS.get("late_goals")
+                        or TELEGRAM_CHAT_ID)
         _single_min_prob = float(env("NETRATTLER_PLAYER_PROP_MIN_PROB", "0.60"))
         if _single_min_prob > 1:
             _single_min_prob /= 100.0
@@ -23939,6 +23961,94 @@ def _note_miss(source: str, got_something: bool):
         _ODDS_SOURCE_MISSES[source] = _ODDS_SOURCE_MISSES.get(source, 0) + 1
 
 
+_PIN_TEAM_SPECIAL_QUOTES_CACHE = None
+
+
+def _pinnacle_team_special_quotes_by_match() -> Dict[str, Dict]:
+    """Index observed Pinnacle soccer specials by normalized parent match.
+
+    Reuses fetch_pinnacle_player_props(), so the large withSpecials=true payload is
+    fetched only once per process and is reused later by Player Props/Builder/Corners.
+    No synthetic prices are created here.
+    """
+    global _PIN_TEAM_SPECIAL_QUOTES_CACHE
+    if isinstance(_PIN_TEAM_SPECIAL_QUOTES_CACHE, dict):
+        return _PIN_TEAM_SPECIAL_QUOTES_CACHE
+    out: Dict[str, Dict] = {}
+    try:
+        rows = fetch_pinnacle_player_props() or []
+        for row in rows:
+            if not isinstance(row, dict):
+                continue
+            match = str(row.get("match") or "").strip()
+            if " vs " not in match:
+                continue
+            h, a = [x.strip() for x in match.split(" vs ", 1)]
+            key = f"{_normalize_name(h)}|{_normalize_name(a)}"
+            bucket = out.setdefault(key, {})
+            desc = str(row.get("player_prop") or "").lower()
+            sel = str(row.get("selection") or "").lower().strip()
+            txt = f"{desc} {sel}"
+            try:
+                odd = float(row.get("odds") or 0)
+            except (TypeError, ValueError):
+                odd = 0
+            if odd <= 1.0:
+                continue
+
+            is_yes = (sel == "yes" or sel.startswith("yes ") or " yes" in f" {sel}")
+            is_over = sel.startswith("over") or " over " in f" {sel} "
+            # Both teams to score specials (FT / 1H).
+            if "both teams to score" in desc and is_yes:
+                if any(x in desc for x in ("1st half", "first half", "1h", "ht")):
+                    bucket.setdefault("btts_yes_ht", odd)
+                elif "over 2.5" in desc or "over2.5" in desc:
+                    bucket.setdefault("btts_over25_combo", odd)
+                else:
+                    bucket.setdefault("btts_yes", odd)
+
+            # Some books phrase the same-game market as 'BTTS & Over 2.5'.
+            if (("btts" in desc or "both teams" in desc) and
+                    ("over 2.5" in desc or "over2.5" in desc) and is_yes):
+                bucket.setdefault("btts_over25_combo", odd)
+
+            # First-half O1.5 can also appear as a special instead of standard total.
+            if any(x in desc for x in ("1st half", "first half", "1h")) and (
+                    "over 1.5" in txt or "over1.5" in txt):
+                bucket.setdefault("over_15_ht", odd)
+
+        cov = {
+            "btts": sum(1 for v in out.values() if v.get("btts_yes")),
+            "combo": sum(1 for v in out.values() if v.get("btts_over25_combo")),
+            "btts_ht": sum(1 for v in out.values() if v.get("btts_yes_ht")),
+            "o15ht": sum(1 for v in out.values() if v.get("over_15_ht")),
+        }
+        log(f"   🎰 Pinnacle Team-Specials: Matches={len(out)} · BTTS={cov['btts']} · BTTS+O2.5={cov['combo']} · BTTS-HT={cov['btts_ht']} · O1.5HT={cov['o15ht']}")
+    except Exception as exc:
+        log(f"   🎰 Pinnacle Team-Specials Fehler: {str(exc)[:80]}", "WARN")
+        out = {}
+    _PIN_TEAM_SPECIAL_QUOTES_CACHE = out
+    return out
+
+
+def _lookup_pinnacle_team_specials(home: str, away: str) -> Dict:
+    idx = _pinnacle_team_special_quotes_by_match()
+    h, a = _normalize_name(home), _normalize_name(away)
+    direct = idx.get(f"{h}|{a}") or idx.get(f"{a}|{h}")
+    if direct:
+        return direct
+    # Conservative fuzzy fallback for FC/AC suffix differences only.
+    for key, value in idx.items():
+        try:
+            kh, ka = key.split("|", 1)
+            if ((h == kh or (len(h) >= 6 and (h[:8] in kh or kh[:8] in h))) and
+                    (a == ka or (len(a) >= 6 and (a[:8] in ka or ka[:8] in a)))):
+                return value
+        except Exception:
+            continue
+    return {}
+
+
 def _get_real_odds_any_source(home, away, league_name="", match_id=None, tip_date=None):
     """Observed-odds chain with free/bulk sources first and OddsPapi last.
     Never creates synthetic bookmaker prices. Cached per match."""
@@ -23958,9 +24068,11 @@ def _get_real_odds_any_source(home, away, league_name="", match_id=None, tip_dat
             "home": (1.05, 15.0), "home_win": (1.05, 15.0),
             "draw": (2.5, 8.0),
             "away": (1.05, 15.0), "away_win": (1.05, 15.0),
+            "btts_over25_combo": (1.20, 25.0),
         }
         _keys = ("btts_yes", "over_25", "over25", "btts_yes_ht", "btts_ht_yes",
-                 "over15_ht", "over_15_ht", "home", "home_win", "draw", "away", "away_win")
+                 "over15_ht", "over_15_ht", "home", "home_win", "draw", "away", "away_win",
+                 "btts_over25_combo")
         for k in _keys:
             v = (d or {}).get(k)
             try:
@@ -24027,6 +24139,17 @@ def _get_real_odds_any_source(home, away, league_name="", match_id=None, tip_dat
             _merge(fetch_pinnacle_match_odds(match_id, include_specials=not _fast), "pinnacle")
     except Exception:
         pass
+
+    # 2b) Pinnacle specials in ONE bulk call, then reused by Props/Builder/Corners.
+    # Restores BTTS / BTTS-HT / observed BTTS+O2.5 without per-match related calls.
+    try:
+        if not (result.get("btts_yes") and result.get("btts_yes_ht") and result.get("btts_over25_combo")):
+            _sp = _lookup_pinnacle_team_specials(home, away)
+            if _sp:
+                _merge(_sp, "pinnacle_specials")
+    except Exception:
+        pass
+
     # 2) SofaScore-Fallback (nutzt gecachte Tagesliste — schnell, auch im Fast-Mode).
     #    Läuft NUR wenn OddsPapi/Pinnacle nichts hatten (z.B. Rate-Limit 429).
     if not (result.get("btts_yes") and result.get("over_25")):
@@ -25821,17 +25944,17 @@ def main():
                         if ro.get("over_25"):
                             over25 = ro["over_25"]; _real_over_odd = True; _real_over_source = _ro_source
                         _real_btts_ht_odd = bool(ro.get("btts_yes_ht"))
-                        _real_over15_ht_odd = bool(ro.get("over15_ht"))
+                        _real_over15_ht_odd = bool(ro.get("over_15_ht") or ro.get("over15_ht"))
                         if ro.get("btts_yes_ht"):
                             btts_ht_odds = ro["btts_yes_ht"]; _real_btts_ht_source = _ro_source
-                        if ro.get("over15_ht"):
-                            o15_odds = ro["over15_ht"]; _real_over15_ht_source = _ro_source
-                        if any(ro.get(k) for k in ("btts_yes", "over_25", "home", "draw", "away", "btts_yes_ht", "over15_ht")):
+                        if ro.get("over_15_ht") or ro.get("over15_ht"):
+                            o15_odds = ro.get("over_15_ht") or ro.get("over15_ht"); _real_over15_ht_source = _ro_source
+                        if any(ro.get(k) for k in ("btts_yes", "over_25", "home", "draw", "away", "btts_yes_ht", "over_15_ht", "over15_ht")):
                             _pin_diag["quote_any"] += 1
                         if ro.get("btts_yes"): _pin_diag["quote_btts"] += 1
                         if ro.get("over_25"): _pin_diag["quote_over25"] += 1
                         if any(ro.get(k) for k in ("home", "draw", "away")): _pin_diag["quote_1x2"] += 1
-                        if ro.get("btts_yes_ht") or ro.get("over15_ht"): _pin_diag["quote_ht"] += 1
+                        if ro.get("btts_yes_ht") or ro.get("over_15_ht") or ro.get("over15_ht"): _pin_diag["quote_ht"] += 1
                         if ro.get("_source") and ro["_source"] != "pinnacle":
                             log(f"      🍋 Echte Quote via {ro['_source']}: {home} vs {away}")
                     if not ro or not any((ro or {}).get(k) for k in ("btts_yes","over_25","home","draw","away","btts_yes_ht","over15_ht")):
@@ -26368,7 +26491,10 @@ def main():
         )
 
         if len(_builder_prop_pool) >= 2:
-            _builder_chat = TELEGRAM_GROUPS.get("advanced_props") or TELEGRAM_GROUPS.get("props")
+            _builder_chat = (TELEGRAM_GROUPS.get("advanced_props") or TELEGRAM_GROUPS.get("props")
+                             or TELEGRAM_GROUPS.get("builder") or TELEGRAM_GROUPS.get("stats")
+                             or TELEGRAM_GROUPS.get("combos") or TELEGRAM_GROUPS.get("late_goals")
+                             or TELEGRAM_CHAT_ID)
             if _builder_chat:
                 def _send_builder(msg):
                     # 👁️ BEOBACHTUNGS-MODUS: Builder senden, aber als "Beobachtung"
