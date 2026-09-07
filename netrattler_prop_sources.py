@@ -107,6 +107,8 @@ def map_category(text: str) -> str:
         return "score"
     if "assist" in low:
         return "assist"
+    if "corner" in low:
+        return "corners"
     if "save" in low:
         return "saves"
     if "offside" in low:
@@ -404,8 +406,19 @@ def collect_extra_player_props(
             except Exception:
                 pass
 
+    def _kambi_best(h, a):
+        best=[]
+        # Unibet first; only fan out to sister brands when coverage is sparse.
+        for brand in _KAMBI_BRANDS:
+            rows=fetch_kambi_player_props(h,a,brand=brand) or []
+            if len(rows)>len(best):
+                best=rows
+            if len(best)>=8:
+                break
+        return best
+
     sources = [
-        ("kambi", lambda h, a: fetch_kambi_player_props(h, a, brand="ub")),
+        ("kambi", _kambi_best),
         ("oddspedia", lambda h, a: fetch_oddspedia_player_props(h, a)),
         ("footymetrics", lambda h, a: fetch_footymetrics_player_props(h, a)),
         ("1xbet", lambda h, a: fetch_1xbet_player_props(h, a)),
@@ -413,6 +426,11 @@ def collect_extra_player_props(
     out: List[Dict[str, Any]] = []
     per_source: Dict[str, int] = {}
 
+    try:
+        import os as _os
+        max_matches = int(_os.getenv("NETRATTLER_EXTRA_PROP_MAX_MATCHES", str(max_matches)))
+    except Exception:
+        pass
     for fx in (fixtures or [])[:max_matches]:
         home = str(fx.get("home", "")).strip()
         away = str(fx.get("away", "")).strip()
