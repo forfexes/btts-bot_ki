@@ -22440,7 +22440,25 @@ def _pinnacle_get_json(url, params):
     except Exception as e:
         status = f"EXC:{str(e)[:40]}"
 
-    # Fallback: Playwright (umgeht Cloudflare/Bot-Block)
+    # Leichter TLS/Browser-Fingerprint-Fallback gegen Arcadia 403.
+    # curl_cffi ist im GitHub-Workflow bereits installiert und deutlich günstiger
+    # als Chromium/Playwright.
+    try:
+        from curl_cffi import requests as _cffi_requests
+        _cr = _cffi_requests.get(
+            url, headers=PINNACLE_HEADERS, params=params, timeout=20, impersonate="chrome"
+        )
+        if getattr(_cr, "ok", False):
+            try:
+                data = _cr.json()
+                if data:
+                    return data, "curl_cffi_ok"
+            except Exception:
+                pass
+    except Exception:
+        pass
+
+    # Letzter Fallback: Playwright, falls lokal/Workflow vorhanden.
     if PLAYWRIGHT_AVAILABLE:
         try:
             from urllib.parse import urlencode
@@ -23985,7 +24003,21 @@ def _get_real_odds_any_source(home, away, league_name="", match_id=None, tip_dat
         if str(os.getenv("NETRATTLER_ODDS_DEBUG", "false")).lower() in ("1","true","yes","on"):
             log(f"   🌐 Free-Odds-Hub Fehler: {str(_free_exc)[:100]}", "WARN")
 
-    # 1) Pinnacle via match_id (Fallback). In FAST mode skip the extra
+    # 1) OddsPapi early fallback: this is the proven-good path from the 03.09 run.
+    # Free/bulk stays first, so quota is used only for markets still missing.
+    if not (result.get("btts_yes") and result.get("over_25")) and _odds_source_available("oddspapi"):
+        try:
+            import netrattler_oddspapi as _op
+            _od = _op.get_odds_for_match(home, away, tip_date)
+            if isinstance(_od, dict) and _od.get("_rate_limited"):
+                _ODDS_SOURCE_STATUS["oddspapi"] = "ratelimited"
+                log("   🍋 OddsPapi Rate-Limit → für Rest des Laufs deaktiviert")
+            else:
+                _merge(_od, "oddspapi")
+        except Exception:
+            _ODDS_SOURCE_STATUS["oddspapi"] = "failed"
+
+    # 2) Pinnacle via match_id (Fallback). In FAST mode skip the extra
     # BTTS-special discovery request; normal 1X2/totals are enough to decide
     # whether a candidate has an observed quote. BTTS can come from cached/other
     # sources without blocking every match for another ~8-16 seconds.
@@ -24065,19 +24097,8 @@ def _get_real_odds_any_source(home, away, league_name="", match_id=None, tip_dat
         except Exception:
             _ODDS_SOURCE_STATUS["oddsportal_scrape"] = "failed"
 
-    # 9) OddsPapi LAST-RESORT. It is quota-limited, so only call it if the
-    #    free/bulk/Pinnacle/SofaScore/HTTP/scraper chain still misses key markets.
-    if not (result.get("btts_yes") and result.get("over_25")) and _odds_source_available("oddspapi"):
-        try:
-            import netrattler_oddspapi as _op
-            _od = _op.get_odds_for_match(home, away, tip_date)
-            if isinstance(_od, dict) and _od.get("_rate_limited"):
-                _ODDS_SOURCE_STATUS["oddspapi"] = "ratelimited"
-                log("   🍋 OddsPapi Rate-Limit → für Rest des Laufs deaktiviert")
-            else:
-                _merge(_od, "oddspapi")
-        except Exception:
-            _ODDS_SOURCE_STATUS["oddspapi"] = "failed"
+    # 9) OddsPapi wird absichtlich bereits direkt nach dem Free/Bulk-Hub
+    #    abgefragt (bewährter 03.09-Pfad). Hier kein zweiter API-Call.
 
     # 10) Betfair (falls Event-Name matcht)
     if not (result.get("btts_yes") and result.get("over_25")) and _odds_source_available("betfair"):
@@ -25558,7 +25579,7 @@ def main():
         "below_threshold": 0,
         "no_quote_after_model": 0,
     }
-    log("🌐 Team-Odds Priorität: Free/Bulk → Pinnacle → Sofa/Kambi/Scraper → OddsPapi LAST (keine synthetischen Quoten)")
+    log("🌐 Team-Odds Priorität: Free/Bulk → OddsPapi → Pinnacle → Sofa/Kambi/Scraper (nur echte Quoten)")
     log("📊 Pinnacle Matchups laden...")
     try:
         _PINNACLE_MATCHUPS = fetch_pinnacle_matchups()
@@ -25754,28 +25775,27 @@ def main():
                     except Exception:
                         pass
 
-                # ⚡ FAST REAL-ODDS PRE-FILTER
-                # Do not call bookmaker endpoints for every Pinnacle fixture. First
-                # require independent predictive support and at least one market near
-                # the configured probability threshold. This preserves real quotes
-                # while removing the 10-20s/network cost for obvious non-candidates.
+                # ⚡ FAST REAL-ODDS SOFT FILTER
+                # Regression-Fix: Die frühere harte Variante hat Matches OHNE
+                # XGBoost/Elo vor dem Odds-Lookup komplett verworfen. Im bewährten
+                # 03.09.-Ablauf wurden dagegen die echten Marktpreise abgefragt und
+                # erst danach Probability/Value/Edge gefiltert. Deshalb nur noch
+                # Diagnose hier — KEIN continue vor den realen Quotenquellen.
                 _fast_real = str(env("NETRATTLER_FAST_TIPS", "false")).lower() in ("1", "true", "yes", "on") \
                     and str(env("NETRATTLER_REQUIRE_REAL_ODDS", "true")).lower() in ("1", "true", "yes", "on")
+                _p1x2 = max(
+                    float((_ml_match or {}).get("home_win_pct", 0) or 0),
+                    float((_ml_match or {}).get("draw_pct", 0) or 0),
+                    float((_ml_match or {}).get("away_win_pct", 0) or 0),
+                )
                 if _has_independent_model:
                     _pin_diag["model_supported"] += 1
-                if _fast_real:
-                    _p1x2 = max(
-                        float((_ml_match or {}).get("home_win_pct", 0) or 0),
-                        float((_ml_match or {}).get("draw_pct", 0) or 0),
-                        float((_ml_match or {}).get("away_win_pct", 0) or 0),
-                    )
-                    if not _has_independent_model:
-                        _pin_diag["no_model"] += 1
-                        continue
-                    if max(float(prob_b or 0), float(prob_o or 0), _p1x2) < float(MIN_PROBABILITY):
-                        _pin_diag["below_threshold"] += 1
-                        continue
+                else:
+                    _pin_diag["no_model"] += 1
+                if max(float(prob_b or 0), float(prob_o or 0), _p1x2) >= float(MIN_PROBABILITY):
                     _pin_diag["model_threshold"] += 1
+                else:
+                    _pin_diag["below_threshold"] += 1
 
                 # Echte Odds als Upgrade — 🍋 ZITRONEN-PRESSE: alle Quellen durchprobieren
                 ro = None
