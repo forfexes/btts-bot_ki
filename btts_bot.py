@@ -58,6 +58,35 @@ def env_list(name: str) -> list[str]:
     return [x.strip() for x in value.split(",") if x.strip()]
 
 
+# ============================================================
+# 🧱 STABLE CORE POLICY
+# ============================================================
+# Audit 06-09/2026: the later global FAST switch disabled the exact live-stat /
+# model fallbacks that were active in the known-good 03.09 run.  Source adapters
+# are allowed to fail independently, but they must never switch off the model core.
+# Stable core is ON by default and deliberately wins over a stale FAST env var.
+_TRUE_ENV = {"1", "true", "yes", "on"}
+NETRATTLER_STABLE_CORE = env("NETRATTLER_STABLE_CORE", "true").lower() in _TRUE_ENV
+
+def _netrattler_fast_tips_enabled() -> bool:
+    """FAST is opt-in only when STABLE_CORE is explicitly disabled."""
+    if NETRATTLER_STABLE_CORE:
+        return False
+    return env("NETRATTLER_FAST_TIPS", "false").lower() in _TRUE_ENV
+
+def _real_odds_only_enabled() -> bool:
+    return env("NETRATTLER_REAL_ODDS_ONLY", env("NETRATTLER_REQUIRE_REAL_ODDS", "true")).lower() in _TRUE_ENV
+
+def _stable_budget(name: str, default: int, stable_min: int = 0) -> int:
+    try:
+        value = int(env(name, str(default)))
+    except Exception:
+        value = int(default)
+    if NETRATTLER_STABLE_CORE and stable_min:
+        value = max(value, int(stable_min))
+    return value
+
+
 GEMINI_API_KEYS = env_list("GEMINI_API_KEYS")
 GROQ_API_KEYS = env_list("GROQ_API_KEYS")
 ODDS_API_KEYS = env_list("ODDS_API_KEYS")
@@ -4669,7 +4698,7 @@ def scrape_with_playwright(url, wait_for=None, timeout=8000):
     # ⚡ FAST-MODE (Tipp-Lauf): GAR KEIN Scraping — nicht curl_cffi, nicht Playwright.
     # Quoten kommen aus der OddsPapi-API, Stats sammelt der separate Scraper.
     # Das verhindert, dass 25 Scrape-Aufrufe × viele Matches den Lauf ausbremsen.
-    if str(os.getenv("NETRATTLER_FAST_TIPS", "")).lower() in ("1", "true", "yes", "on"):
+    if _netrattler_fast_tips_enabled():
         return None
 
     # 1) 🚀 curl_cffi zuerst (schnell, kein Browser) — nur im Scraper-Lauf (nicht Fast)
@@ -5117,7 +5146,7 @@ def get_betexplorer_odds(home_team, away_team, league_name):
     """Historische Opening/Closing Odds von BetExplorer"""
     # ⚡ FAST-MODE: Betexplorer komplett überspringen (Playwright 429 → 18s/Match Timeout).
     # Quoten kommen aus OddsPapi, historische Odds braucht der Tipp-Lauf nicht.
-    if str(os.getenv("NETRATTLER_FAST_TIPS", "")).lower() in ("1", "true", "yes", "on"):
+    if _netrattler_fast_tips_enabled():
         return None
     cache_key = f"be_{home_team}_{away_team}"
     if cache_key in BETEXPLORER_CACHE:
@@ -7705,6 +7734,9 @@ def send_top_tips(tips_by_market, target_date):
             match_name = r.get("match", "?")
 
             r["date"] = str(target_date)
+            if _real_odds_only_enabled() and bool(r.get("_no_real_odds", False)):
+                log(f"   ⛔ REAL_ODDS_ONLY: {match_name} ({market_id}) ohne beobachtete Bookmaker-Quote verworfen")
+                continue
             if not is_valid_tip(r, target_date):
                 continue
 
@@ -8659,7 +8691,7 @@ def _sofascore_events_for_date(date_str):
 
     log(f"   🔍 SOFA-DEBUG: {date_str} → HTTP {_status}, {len(events)} Events ({_host or 'no-host'})")
 
-    if not events and PLAYWRIGHT_AVAILABLE and str(os.getenv("NETRATTLER_FAST_TIPS", "false")).lower() not in {"1","true","yes","on"}:
+    if not events and PLAYWRIGHT_AVAILABLE and not _netrattler_fast_tips_enabled():
         try:
             html = scrape_with_playwright(url, timeout=15000)
             if html:
@@ -10388,19 +10420,47 @@ def get_wsf_player_prop_odds(*args, **kwargs) -> dict:
 # Bestätigte URL-Struktur: https://www.football-data.co.uk/mmz4281/{season}/{code}.csv
 # Spalten: HS/AS=Schüsse, HST/AST=Schüsse aufs Tor, HC/AC=Ecken, HY/AY=Gelb, HF/AF=Fouls
 
+# IMPORTANT: mapping is country-aware. The old substring map treated e.g.
+# Venezuela "Primera Division" as Spain SP1 and Ecuador "Serie A" as Italy I1,
+# which produced convincing-looking but wrong features. Never do that again.
 FD_CO_UK_LEAGUE_CODES = {
-    "premier league": "E0", "championship": "E1", "league one": "E2", "league two": "E3",
-    "bundesliga": "D1", "2. bundesliga": "D2",
-    "serie a": "I1", "serie b": "I2",
-    "la liga": "SP1", "primera division": "SP1", "segunda division": "SP2",
-    "ligue 1": "F1", "ligue 2": "F2",
-    "eredivisie": "N1",
-    "primeira liga": "P1",
-    "scottish premiership": "SC0",
-    "super lig": "T1",
-    "super league greece": "G1",
-    "jupiler pro league": "B1",
+    ("england", "premier league"): "E0",
+    ("england", "championship"): "E1",
+    ("england", "league 1"): "E2",
+    ("england", "league one"): "E2",
+    ("england", "league 2"): "E3",
+    ("england", "league two"): "E3",
+    ("germany", "bundesliga"): "D1",
+    ("germany", "2. bundesliga"): "D2",
+    ("italy", "serie a"): "I1",
+    ("italy", "serie b"): "I2",
+    ("spain", "la liga"): "SP1",
+    ("spain", "primera division"): "SP1",
+    ("spain", "segunda division"): "SP2",
+    ("france", "ligue 1"): "F1",
+    ("france", "ligue 2"): "F2",
+    ("netherlands", "eredivisie"): "N1",
+    ("portugal", "primeira liga"): "P1",
+    ("scotland", "premiership"): "SC0",
+    ("turkey", "super league"): "T1",
+    ("turkey", "super lig"): "T1",
+    ("greece", "super league"): "G1",
+    ("belgium", "pro league"): "B1",
+    ("belgium", "jupiler pro league"): "B1",
 }
+
+
+def _fd_co_uk_code(league_name: str):
+    ln = str(league_name or "").lower()
+    # Pinnacle league names are normally "Country - Competition".
+    country = ln.split(" - ", 1)[0].strip() if " - " in ln else ln
+    competition = ln.split(" - ", 1)[1].strip() if " - " in ln else ln
+    # Specific 2nd divisions before generic top-division substring matches.
+    ordered = sorted(FD_CO_UK_LEAGUE_CODES.items(), key=lambda kv: len(kv[0][1]), reverse=True)
+    for (country_key, league_key), code in ordered:
+        if country_key in country and league_key in competition:
+            return code
+    return None
 
 FD_CO_UK_CACHE = {}
 
@@ -10413,41 +10473,64 @@ def _fd_co_uk_season_str():
 
 
 def _fd_co_uk_load_csv(league_name):
-    """Lädt + parsed die Saison-CSV für eine Liga, gecacht pro Liga."""
-    ln = league_name.lower()
-    code = None
-    for key, c in FD_CO_UK_LEAGUE_CODES.items():
-        if key in ln:
-            code = c
-            break
+    """Load current + previous Football-Data seasons, cached per real country/league.
+
+    Current-season files can temporarily be empty/404 early in a season. We therefore
+    merge the previous season as history instead of returning zero features. Exact team
+    matching later prevents promoted/relegated teams from inheriting another club's data.
+    """
+    code = _fd_co_uk_code(league_name)
     if not code:
         return []
+    if code in FD_CO_UK_CACHE:
+        return FD_CO_UK_CACHE[code]
 
-    cache_key = code
-    if cache_key in FD_CO_UK_CACHE:
-        return FD_CO_UK_CACHE[cache_key]
-
-    season = _fd_co_uk_season_str()
-    rows = []
+    cur = _fd_co_uk_season_str()
     try:
-        r = requests.get(
-            f"https://www.football-data.co.uk/mmz4281/{season}/{code}.csv",
-            timeout=15,
-        )
-        if r.ok and r.text:
-            import csv as _csv
-            import io as _io
-            reader = _csv.DictReader(_io.StringIO(r.text))
-            for row in reader:
-                if row.get("HomeTeam") and row.get("FTHG"):
-                    rows.append(row)
-        log(f"   🔍 FDCOUK-DEBUG: {code} ({season}) → {len(rows)} Spiele geladen")
-    except Exception as _fce:
-        log(f"   🔍 FDCOUK-DEBUG: {code} → Fehler {str(_fce)[:60]}", "WARN")
+        sy = int("20" + cur[:2])
+        prev = f"{str(sy-1)[-2:]}{str(sy)[-2:]}"
+    except Exception:
+        prev = "2526"
+    rows = []
+    seen = set()
+    diag = []
+    headers = {
+        "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 Chrome/124 Safari/537.36",
+        "Accept": "text/csv,text/plain,*/*",
+        "Referer": "https://www.football-data.co.uk/",
+    }
+    for season in (prev, cur):
+        season_rows = []
+        status = None
+        url = f"https://www.football-data.co.uk/mmz4281/{season}/{code}.csv"
+        try:
+            r = requests.get(url, headers=headers, timeout=12)
+            status = getattr(r, "status_code", None)
+            if not getattr(r, "ok", False):
+                try:
+                    from curl_cffi import requests as _cr
+                    r = _cr.get(url, headers=headers, timeout=12, impersonate="chrome")
+                    status = getattr(r, "status_code", status)
+                except Exception:
+                    pass
+            if getattr(r, "ok", False) and getattr(r, "text", ""):
+                import csv as _csv, io as _io
+                for row in _csv.DictReader(_io.StringIO(r.text)):
+                    if not row.get("HomeTeam") or row.get("FTHG") in (None, ""):
+                        continue
+                    key = (row.get("Date"), row.get("HomeTeam"), row.get("AwayTeam"), row.get("FTHG"), row.get("FTAG"))
+                    if key in seen:
+                        continue
+                    seen.add(key); season_rows.append(row)
+        except Exception as exc:
+            status = f"EXC:{str(exc)[:30]}"
+        diag.append(f"{season}:{len(season_rows)}[{status}]")
+        rows.extend(season_rows)
 
-    FD_CO_UK_CACHE[cache_key] = rows
+    # football-data CSVs are chronological within each season; previous was appended first.
+    log(f"   🔍 FDCOUK-DEBUG: {code} {' + '.join(diag)} → {len(rows)} historische Spiele")
+    FD_CO_UK_CACHE[code] = rows
     return rows
-
 
 def get_fd_co_uk_team_stats(team_name, league_name, last_n=10):
     """
@@ -10464,7 +10547,7 @@ def get_fd_co_uk_team_stats(team_name, league_name, last_n=10):
     for row in rows:
         h = normalize_team_name(row.get("HomeTeam", ""))
         a = normalize_team_name(row.get("AwayTeam", ""))
-        if team_norm[:6] in h or h[:6] in team_norm or team_norm[:6] in a or a[:6] in team_norm:
+        if _ml_history_team_match(team_name, row.get("HomeTeam", "")) or _ml_history_team_match(team_name, row.get("AwayTeam", "")):
             matches.append(row)
 
     if len(matches) < 3:
@@ -10631,27 +10714,27 @@ def _ml_load_models():
 
 
 def _ml_get_team_form(team_name, n=10):
-    """Holt die rolling Form-Features für ein Team aus dem aktuellen Run-State."""
+    """Rolling team form from real historical matches loaded before prediction."""
     key = normalize_team_name(team_name)
     hist = _ML_TEAM_HISTORY.get(key, [])
     results = _ML_TEAM_RESULTS.get(key, [])
 
+    # These are the same neutral priors used by training when history is missing.
     if not hist:
         return {
             "btts_rate": 0.50, "o25_rate": 0.50,
-            "btts_ht_rate": 0.20, "o15ht_rate": 0.45,
-            "avg_scored": 1.30, "avg_conceded": 1.20,
+            "btts_ht_rate": 0.40, "o15ht_rate": 0.40,
+            "avg_scored": 1.35, "avg_conceded": 1.15,
             "form_pts": 0.33, "streak_win": 0.0,
+            "avg_shots": 0.0, "avg_corners": 0.0, "avg_cards": 0.0,
+            "games": 0,
         }
 
     last = hist[-n:]
     last_r = results[-5:]
-
-    # Form-Punkte (W=3/D=1/L=0)
     pts = sum(3 if r == "W" else 1 if r == "D" else 0 for r in last_r)
-    form_pts = pts / 15.0  # max 15 → normiert 0-1
+    form_pts = pts / 15.0 if last_r else 0.33
 
-    # Gewinn-Streak
     streak = 0
     for r in reversed(results):
         if r == "W":
@@ -10660,39 +10743,63 @@ def _ml_get_team_form(team_name, n=10):
             break
     streak_win = min(streak / 5.0, 1.0)
 
+    def _avg(field, default=0.0):
+        vals = [float(m[field]) for m in last if m.get(field) is not None]
+        return (sum(vals) / len(vals)) if vals else float(default)
+
     return {
-        "btts_rate": sum(m["btts"] for m in last) / len(last),
-        "o25_rate": sum(m["over25"] for m in last) / len(last),
-        "btts_ht_rate": sum(m["btts_ht"] for m in last) / len(last),
-        "o15ht_rate": sum(m["over15_ht"] for m in last) / len(last),
-        "avg_scored": sum(m["scored"] for m in last) / len(last),
-        "avg_conceded": sum(m["conceded"] for m in last) / len(last),
+        "btts_rate": _avg("btts"),
+        "o25_rate": _avg("over25"),
+        "btts_ht_rate": _avg("btts_ht", 0.40),
+        "o15ht_rate": _avg("over15_ht", 0.40),
+        "avg_scored": _avg("scored"),
+        "avg_conceded": _avg("conceded"),
         "form_pts": form_pts,
         "streak_win": streak_win,
+        "avg_shots": _avg("shots"),
+        "avg_corners": _avg("corners"),
+        "avg_cards": _avg("cards"),
+        "games": len(last),
     }
 
 
-def _ml_update_team_history(home, away, home_goals, away_goals, ht_home=0, ht_away=0):
-    """Updated den Rolling-State nach einem bekannten Spiel."""
+def _ml_update_team_history(home, away, home_goals, away_goals, ht_home=None, ht_away=None,
+                            home_shots=None, away_shots=None,
+                            home_corners=None, away_corners=None,
+                            home_cards=None, away_cards=None):
+    """Add one *completed* match to the rolling model state."""
+    try:
+        home_goals, away_goals = float(home_goals), float(away_goals)
+        _ht_known = ht_home not in (None, "") and ht_away not in (None, "")
+        if _ht_known:
+            ht_home = float(ht_home); ht_away = float(ht_away)
+    except (TypeError, ValueError):
+        return
     btts = int(home_goals > 0 and away_goals > 0)
     over25 = int(home_goals + away_goals > 2)
-    btts_ht = int(ht_home > 0 and ht_away > 0)
-    o15ht = int(ht_home + ht_away > 1)
+    btts_ht = int(ht_home > 0 and ht_away > 0) if _ht_known else None
+    o15ht = int(ht_home + ht_away > 1) if _ht_known else None
 
     h_key = normalize_team_name(home)
     a_key = normalize_team_name(away)
+    if not h_key or not a_key:
+        return
 
-    # Match-History (für Rolling-Raten)
+    def _num(v):
+        try: return float(v) if v is not None and v != "" else None
+        except (TypeError, ValueError): return None
+
     _ML_TEAM_HISTORY.setdefault(h_key, []).append({
         "btts": btts, "over25": over25, "btts_ht": btts_ht, "over15_ht": o15ht,
         "scored": home_goals, "conceded": away_goals,
+        "shots": _num(home_shots), "corners": _num(home_corners), "cards": _num(home_cards),
     })
     _ML_TEAM_HISTORY.setdefault(a_key, []).append({
         "btts": btts, "over25": over25, "btts_ht": btts_ht, "over15_ht": o15ht,
         "scored": away_goals, "conceded": home_goals,
+        "shots": _num(away_shots), "corners": _num(away_corners), "cards": _num(away_cards),
     })
 
-    # Form-Ergebnisse (W/D/L)
     if home_goals > away_goals:
         _ML_TEAM_RESULTS.setdefault(h_key, []).append("W")
         _ML_TEAM_RESULTS.setdefault(a_key, []).append("L")
@@ -10703,127 +10810,353 @@ def _ml_update_team_history(home, away, home_goals, away_goals, ht_home=0, ht_aw
         _ML_TEAM_RESULTS.setdefault(h_key, []).append("D")
         _ML_TEAM_RESULTS.setdefault(a_key, []).append("D")
 
-    # H2H-History
     h2h_key = tuple(sorted([h_key, a_key]))
-    _ML_H2H_HISTORY.setdefault(h2h_key, []).append({
-        "btts": btts,
-        "goals": home_goals + away_goals,
-    })
+    _ML_H2H_HISTORY.setdefault(h2h_key, []).append({"btts": btts, "goals": home_goals + away_goals})
 
+
+def _ml_row_score(row, *names, default=None):
+    for name in names:
+        if row.get(name) not in (None, ""):
+            try: return float(row.get(name))
+            except (TypeError, ValueError): pass
+    return default
+
+
+def _ml_date_value(row):
+    return str(row.get("match_date") or row.get("date") or row.get("game_date") or "")[:10]
+
+
+def _ml_history_team_match(a, b):
+    """Stricter than provider matching: history must never cross-contaminate clubs."""
+    from difflib import SequenceMatcher
+    def canon(x):
+        try:
+            from netrattler_identity_hub import normalize_team_name as _ih_norm
+            n = _ih_norm(x)
+        except Exception:
+            n = normalize_team_name(x)
+        repl = {"utd":"united", "st":"saint", "dep":"deportivo", "atl":"atletico"}
+        return " ".join(repl.get(t,t) for t in n.split())
+    n1, n2 = canon(a), canon(b)
+    if not n1 or not n2: return False
+    if n1 == n2: return True
+    t1, t2 = set(n1.split()), set(n2.split())
+    # A single shared token is not enough (Alpha != Alpha Opp, Manchester Utd != City).
+    common=t1 & t2
+    if len(common) >= 2 and len(common) / max(1, min(len(t1),len(t2))) >= .75:
+        return True
+    if min(len(t1),len(t2)) == 1:
+        return False
+    ratio=SequenceMatcher(None,n1,n2).ratio()
+    length_ratio=min(len(n1),len(n2))/max(len(n1),len(n2))
+    return ratio >= .90 and length_ratio >= .75
+
+
+def _ml_candidate_token(team):
+    """Conservative PostgREST search token; local identity check still decides the match."""
+    stop = {"fc","cf","club","de","the","united","city","real","sporting","deportivo","atletico","athletic","sc","ac","ca"}
+    words = re.findall(r"[a-z0-9]+", normalize_team_name(team))
+    words = [w for w in words if len(w) >= 4 and w not in stop]
+    return max(words, key=len) if words else (max(re.findall(r"[a-z0-9]+", normalize_team_name(team)), key=len, default=""))
+
+
+def _prefetch_ml_history_from_supabase(matchups, target_date, win_start_utc=None, win_end_utc=None):
+    """Load completed historical matches for the upcoming teams once per run.
+
+    This fixes the old runtime bug where `_ML_TEAM_HISTORY` was never populated and every
+    club therefore received the same neutral feature vector. Rows on/after target_date are
+    rejected locally as a second no-leakage guard.
+    """
+    if not SUPABASE_URL or not SUPABASE_KEY or not matchups:
+        return 0
+    if getattr(_prefetch_ml_history_from_supabase, "_done", False):
+        return sum(len(v) for v in _ML_TEAM_HISTORY.values())
+
+    target = str(target_date.isoformat() if hasattr(target_date, "isoformat") else target_date)[:10]
+    teams = []
+    seen = set()
+    for pm in matchups:
+        try:
+            starts = str(pm.get("starts") or "")
+            if starts and (win_start_utc or win_end_utc):
+                dt = datetime.fromisoformat(starts.replace("Z", "+00:00"))
+                if win_start_utc and dt < win_start_utc: continue
+                if win_end_utc and dt >= win_end_utc: continue
+        except Exception:
+            pass
+        for t in (pm.get("home"), pm.get("away")):
+            k = normalize_team_name(t or "")
+            if k and k not in seen:
+                seen.add(k); teams.append(str(t))
+    cap = int(env("NETRATTLER_ML_PREFETCH_TEAM_CAP", "140"))
+    teams = teams[:cap]
+    if not teams:
+        return 0
+
+    headers = {"apikey": SUPABASE_KEY, "Authorization": f"Bearer {SUPABASE_KEY}"}
+    import time as _time
+    fetched = []
+    batch_size = max(4, int(env("NETRATTLER_ML_PREFETCH_BATCH", "18")))
+    _preload_started = _time.monotonic()
+    _preload_budget = max(8.0, float(env("NETRATTLER_ML_PREFETCH_BUDGET_SEC", "25")))
+    _preload_failures = 0
+    for i in range(0, len(teams), batch_size):
+        if _time.monotonic() - _preload_started > _preload_budget or _preload_failures >= 3:
+            break
+        batch = teams[i:i+batch_size]
+        tokens = []
+        for t in batch:
+            tok = _ml_candidate_token(t)
+            if tok and tok not in tokens:
+                tokens.append(tok)
+        if not tokens:
+            continue
+        ors = []
+        for tok in tokens:
+            ors.extend([f"home_team.ilike.*{tok}*", f"away_team.ilike.*{tok}*"])
+        params = {
+            "select": "*",
+            "match_date": f"lt.{target}",
+            "or": "(" + ",".join(ors) + ")",
+            "order": "match_date.desc",
+            "limit": str(int(env("NETRATTLER_ML_PREFETCH_ROW_LIMIT", "1600"))),
+        }
+        try:
+            r = requests.get(f"{SUPABASE_URL}/rest/v1/football_historical_matches", headers=headers, params=params, timeout=8)
+            if not r.ok and getattr(r, "status_code", 0) in (400, 404):
+                # Schema compatibility fallback. Local date guard below still prevents leakage.
+                params.pop("match_date", None)
+                r = requests.get(f"{SUPABASE_URL}/rest/v1/football_historical_matches", headers=headers, params=params, timeout=8)
+            if r.ok and isinstance(r.json(), list):
+                fetched.extend(r.json()); _preload_failures = 0
+            else:
+                _preload_failures += 1
+        except Exception:
+            _preload_failures += 1
+            continue
+
+    # De-duplicate source mirrors before filling history.
+    uniq = {}
+    for row in fetched:
+        d = _ml_date_value(row)
+        if not d or d >= target:
+            continue
+        h = str(row.get("home_team") or row.get("home") or "").strip()
+        a = str(row.get("away_team") or row.get("away") or "").strip()
+        hg = _ml_row_score(row, "home_goals", "home_score", "fthg")
+        ag = _ml_row_score(row, "away_goals", "away_score", "ftag")
+        if not h or not a or hg is None or ag is None:
+            continue
+        key = (d, normalize_team_name(h), normalize_team_name(a), hg, ag)
+        uniq[key] = row
+
+    rows = sorted(uniq.values(), key=_ml_date_value)
+    candidate_keys = {normalize_team_name(t): t for t in teams}
+    used_rows = 0
+    matched_teams = set()
+    for row in rows:
+        h_raw = str(row.get("home_team") or row.get("home") or "")
+        a_raw = str(row.get("away_team") or row.get("away") or "")
+        # Only retain rows involving one of the upcoming clubs. This prevents loose SQL
+        # token searches from contaminating model history.
+        h_can = next((orig for k, orig in candidate_keys.items() if _ml_history_team_match(orig, h_raw)), None)
+        a_can = next((orig for k, orig in candidate_keys.items() if _ml_history_team_match(orig, a_raw)), None)
+        if not h_can and not a_can:
+            continue
+        home_name = h_can or h_raw
+        away_name = a_can or a_raw
+        hg = _ml_row_score(row, "home_goals", "home_score", "fthg")
+        ag = _ml_row_score(row, "away_goals", "away_score", "ftag")
+        hh = _ml_row_score(row, "ht_home_goals", "ht_home_score", "hthg", default=None)
+        ha = _ml_row_score(row, "ht_away_goals", "ht_away_score", "htag", default=None)
+        hy = _ml_row_score(row, "home_yellow")
+        ay = _ml_row_score(row, "away_yellow")
+        hcards = _ml_row_score(row, "home_cards", "cards_home")
+        acards = _ml_row_score(row, "away_cards", "cards_away")
+        hr = _ml_row_score(row, "home_red", default=0) or 0
+        ar = _ml_row_score(row, "away_red", default=0) or 0
+        _ml_update_team_history(
+            home_name, away_name, hg, ag, hh, ha,
+            home_shots=_ml_row_score(row, "home_shots", "shots_home"),
+            away_shots=_ml_row_score(row, "away_shots", "shots_away"),
+            home_corners=_ml_row_score(row, "home_corners", "corners_home"),
+            away_corners=_ml_row_score(row, "away_corners", "corners_away"),
+            home_cards=(hy + hr) if hy is not None else hcards,
+            away_cards=(ay + ar) if ay is not None else acards,
+        )
+        used_rows += 1
+        if h_can: matched_teams.add(normalize_team_name(h_can))
+        if a_can: matched_teams.add(normalize_team_name(a_can))
+
+    _prefetch_ml_history_from_supabase._done = True
+    log(f"   🧠 ML-History preload: {len(matched_teams)}/{len(teams)} Teams · {used_rows} historische Matches · Supabase")
+    return used_rows
+
+
+def _ml_seed_fd_history_for_match(home, away, league_name):
+    """Fallback history for correctly mapped football-data.co.uk leagues only."""
+    min_games = int(env("NETRATTLER_ML_MIN_HISTORY", "3"))
+    if _ml_get_team_form(home).get("games", 0) >= min_games and _ml_get_team_form(away).get("games", 0) >= min_games:
+        return
+    if not _fd_co_uk_code(league_name):
+        return
+    rows = _fd_co_uk_load_csv(league_name)
+    if not rows:
+        return
+    # Load all chronological rows involving either target team; cache prevents downloads per match.
+    for row in rows:
+        rh, ra = row.get("HomeTeam", ""), row.get("AwayTeam", "")
+        if not (_ml_history_team_match(home, rh) or _ml_history_team_match(home, ra) or _ml_history_team_match(away, rh) or _ml_history_team_match(away, ra)):
+            continue
+        try:
+            _ml_update_team_history(
+                rh, ra, float(row.get("FTHG")), float(row.get("FTAG")),
+                float(row.get("HTHG") or 0), float(row.get("HTAG") or 0),
+                home_shots=row.get("HS"), away_shots=row.get("AS"),
+                home_corners=row.get("HC"), away_corners=row.get("AC"),
+                home_cards=(float(row.get("HY") or 0)+float(row.get("HR") or 0)),
+                away_cards=(float(row.get("AY") or 0)+float(row.get("AR") or 0)),
+            )
+        except (TypeError, ValueError):
+            continue
+
+
+def _history_poisson_prediction(home_team, away_team):
+    """Independent probability model built only from completed-match history."""
+    import math
+    fh, fa = _ml_get_team_form(home_team), _ml_get_team_form(away_team)
+    min_games = int(env("NETRATTLER_ML_MIN_HISTORY", "3"))
+    if fh.get("games", 0) < min_games or fa.get("games", 0) < min_games:
+        return {}
+
+    prior = float(env("NETRATTLER_ML_PRIOR_STRENGTH", "3.0"))
+    def shrink(rate, games, base):
+        return (float(rate)*games + base*prior) / (games + prior)
+    gh, ga = fh["games"], fa["games"]
+    emp_btts = (shrink(fh["btts_rate"], gh, .50) + shrink(fa["btts_rate"], ga, .50)) / 2
+    emp_o25 = (shrink(fh["o25_rate"], gh, .50) + shrink(fa["o25_rate"], ga, .50)) / 2
+    emp_btts_ht = (shrink(fh["btts_ht_rate"], gh, .40) + shrink(fa["btts_ht_rate"], ga, .40)) / 2
+    emp_o15ht = (shrink(fh["o15ht_rate"], gh, .40) + shrink(fa["o15ht_rate"], ga, .40)) / 2
+
+    lam_h = max(.25, min(3.6, (fh["avg_scored"] + fa["avg_conceded"]) / 2 * 1.06))
+    lam_a = max(.20, min(3.4, (fa["avg_scored"] + fh["avg_conceded"]) / 2 * .98))
+    mat = []
+    phw = pdr = paw = po25 = 0.0
+    for h in range(9):
+        hp = math.exp(-lam_h) * lam_h**h / math.factorial(h)
+        for a in range(9):
+            ap = math.exp(-lam_a) * lam_a**a / math.factorial(a)
+            pr = hp*ap
+            if h > a: phw += pr
+            elif h == a: pdr += pr
+            else: paw += pr
+            if h+a > 2: po25 += pr
+    pbtts = (1-math.exp(-lam_h)) * (1-math.exp(-lam_a))
+
+    # Empirical match history is the primary source; Poisson stabilises extreme samples.
+    btts = .65*emp_btts + .35*pbtts
+    o25 = .65*emp_o25 + .35*po25
+    total_1x2 = phw+pdr+paw or 1.0
+    return {
+        "source": "history_poisson",
+        "btts_pct": round(btts*100, 1), "over25_pct": round(o25*100, 1),
+        "btts_ht_pct": round(emp_btts_ht*100, 1), "over15_ht_pct": round(emp_o15ht*100, 1),
+        "home_win_pct": round(phw/total_1x2*100, 1), "draw_pct": round(pdr/total_1x2*100, 1),
+        "away_win_pct": round(paw/total_1x2*100, 1),
+        "exp_goals_home": round(lam_h,2), "exp_goals_away": round(lam_a,2),
+        "history_games_home": gh, "history_games_away": ga,
+    }
 
 def get_ml_prediction(home_team, away_team, league_name):
-    """
-    Haupt-ML-Vorhersagefunktion: baut Features + ruft XGBoost-Modell auf.
-    Gibt {} zurück wenn kein Modell geladen oder Liga nicht abgedeckt.
-    BTTS/Over2.5/BTTS-HT/Over1.5-HT Wahrscheinlichkeiten als Prozent.
+    """Independent team prediction using real history + trained XGBoost when available.
+
+    Crucially, bookmaker prices are NOT injected here. Value/edge is calculated later from
+    observed bookmaker odds, so model probability and market quote remain independent.
     """
     _ml_load_models()
+    _ml_seed_fd_history_for_match(home_team, away_team, league_name)
 
-    if not _ML_MODELS:
-        return {}
-
-    # Elo-Ratings aus dem bestehenden System holen
-    elo_ratings = _build_elo_ratings(league_name) if league_name else {}
-    h_key = normalize_team_name(home_team)
-    a_key = normalize_team_name(away_team)
-
-    if elo_ratings:
-        if h_key not in elo_ratings:
-            h_key = next((k for k in elo_ratings if h_key[:5] in k or k[:5] in h_key), None)
-        if a_key not in elo_ratings:
-            a_key = next((k for k in elo_ratings if a_key[:5] in k or k[:5] in a_key), None)
-
-    elo_h = elo_ratings.get(h_key, ELO_RATINGS_CACHE.get("_global", {}).get(h_key, 1500)) + 60
-    elo_a = elo_ratings.get(a_key, ELO_RATINGS_CACHE.get("_global", {}).get(a_key, 1500))
-
-    # Form-Features ZUERST bauen. Der alte Code griff im Nischenliga-Fallback
-    # auf fh/fa zu, bevor die Variablen existierten; dadurch konnten einzelne
-    # Matches ohne Elo komplett aus dem ML-Pfad fallen.
     fh = _ml_get_team_form(home_team)
     fa = _ml_get_team_form(away_team)
-
-    # 🆕 Falls kein Elo für diese Teams (Nischenliga): martj42-Stats als Feature-Basis
-    if elo_h == 1560 and elo_a == 1500:  # = beide Default
-        h_st = get_national_team_btts_stats(home_team)
-        a_st = get_national_team_btts_stats(away_team)
-        if h_st and a_st:
-            fh["btts_rate"] = h_st.get("btts_pct", 50) / 100
-            fa["btts_rate"] = a_st.get("btts_pct", 50) / 100
-            fh["o25_rate"] = h_st.get("over25_pct", 50) / 100
-            fa["o25_rate"] = a_st.get("over25_pct", 50) / 100
-
-    # H2H-Features aus dem Rolling-State
-    _h2h_key = tuple(sorted([normalize_team_name(home_team), normalize_team_name(away_team)]))
-    _h2h_hist = _ML_H2H_HISTORY.get(_h2h_key, [])
-    h2h_btts = sum(m["btts"] for m in _h2h_hist) / len(_h2h_hist) if _h2h_hist else 0.5
-    h2h_goals = sum(m["goals"] for m in _h2h_hist) / len(_h2h_hist) if _h2h_hist else 2.5
-    h2h_norm = min(len(_h2h_hist) / 10.0, 1.0)
-
-    features = [
-        # Elo
-        elo_h, elo_a, elo_h - elo_a,
-        # BTTS/Over-Raten
-        fh["btts_rate"], fa["btts_rate"], (fh["btts_rate"] + fa["btts_rate"]) / 2,
-        fh["o25_rate"], fa["o25_rate"], (fh["o25_rate"] + fa["o25_rate"]) / 2,
-        # Tore
-        fh["avg_scored"], fa["avg_scored"],
-        fh["avg_conceded"], fa["avg_conceded"],
-        fh["avg_scored"] + fa["avg_scored"],
-        (fh["avg_conceded"] + fa["avg_conceded"]) / 2,
-        # HT
-        fh["btts_ht_rate"], fa["btts_ht_rate"],
-        fh["o15ht_rate"], fa["o15ht_rate"],
-        # Form-Punkte
-        fh["form_pts"], fa["form_pts"], fh["form_pts"] - fa["form_pts"],
-        fh["streak_win"], fa["streak_win"],
-        # H2H
-        h2h_btts, h2h_goals, h2h_norm,
-        # Schüsse/Ecken/Karten (0 = unbekannt, kein Problem)
-        fh.get("avg_shots", 0.0), fa.get("avg_shots", 0.0),
-        fh.get("avg_shots", 0.0) + fa.get("avg_shots", 0.0),
-        fh.get("avg_corners", 0.0), fa.get("avg_corners", 0.0),
-        fh.get("avg_corners", 0.0) + fa.get("avg_corners", 0.0),
-        fh.get("avg_cards", 0.0), fa.get("avg_cards", 0.0),
-        fh.get("avg_cards", 0.0) + fa.get("avg_cards", 0.0),
-        # Multi-source + Bookmaker Market Features (0.0 wenn nicht verfügbar)
-        fh.get("source_count_norm", 0.5),
-        fh.get("stat_coverage", 0.5),
-        fh.get("odds_source_count_norm", 0.5),
-        1.0,   # odds_available_1x2 (Pinnacle verfügbar)
-        0.05,  # market_margin_1x2 (typisch 5%)
-        fh.get("market_home_prob", 0.40),
-        fh.get("market_draw_prob", 0.25),
-        fa.get("market_away_prob", 0.35),
-        1.0,   # odds_available_ou25
-        fh.get("market_over25_prob", 0.50),
-        1.0 - fh.get("market_over25_prob", 0.50),  # market_under25_prob
-        0.0,   # pinnacle_home_delta
-        0.0,   # pinnacle_draw_delta
-        0.0,   # pinnacle_away_delta
-        0.0,   # bet365_home_delta
-        0.0,   # bet365_draw_delta
-        0.0,   # bet365_away_delta
-        0.0,   # betfair_home_delta
-        0.0,   # betfair_draw_delta
-        0.0,   # betfair_away_delta
-    ]
-
-    import numpy as np
-    X = np.array(features).reshape(1, -1)
-    result = {}
-
-    try:
-        for model_name, out_key in _ML_TEAM_TARGETS:
-            if model_name in _ML_MODELS:
-                prob = _ML_MODELS[model_name].predict_proba(X)[0][1]
-                result[out_key] = round(prob * 100, 1)
-        result["source"] = "xgboost"
-        result["elo_home"] = round(elo_h, 0)
-        result["elo_away"] = round(elo_a, 0)
-    except Exception as _pie:
-        log(f"   🤖 ML-Predict-Error: {str(_pie)[:60]}", "WARN")
+    hist_pred = _history_poisson_prediction(home_team, away_team)
+    min_games = int(env("NETRATTLER_ML_MIN_HISTORY", "3"))
+    if fh.get("games", 0) < min_games or fa.get("games", 0) < min_games:
+        # National teams have their separate martj42 path. For clubs, neutral priors are
+        # not evidence and must never create a fake 67/68% model signal.
         return {}
 
+    elo_ratings = _build_elo_ratings(league_name) if league_name else {}
+    h_key, a_key = normalize_team_name(home_team), normalize_team_name(away_team)
+    def _elo_lookup(key, default):
+        if key in elo_ratings: return elo_ratings[key]
+        k = next((x for x in elo_ratings if _ml_history_team_match(key, x)), None)
+        if k: return elo_ratings[k]
+        return ELO_RATINGS_CACHE.get("_global", {}).get(key, default)
+    elo_h = _elo_lookup(h_key, 1500) + 60
+    elo_a = _elo_lookup(a_key, 1500)
+
+    h2h_key = tuple(sorted([normalize_team_name(home_team), normalize_team_name(away_team)]))
+    h2h_hist = _ML_H2H_HISTORY.get(h2h_key, [])
+    h2h_btts = sum(m["btts"] for m in h2h_hist)/len(h2h_hist) if h2h_hist else .5
+    h2h_goals = sum(m["goals"] for m in h2h_hist)/len(h2h_hist) if h2h_hist else 2.5
+    h2h_norm = min(len(h2h_hist)/10.0, 1.0)
+
+    stat_fields = [fh.get("avg_shots"), fa.get("avg_shots"), fh.get("avg_corners"), fa.get("avg_corners"), fh.get("avg_cards"), fa.get("avg_cards")]
+    stat_coverage = sum(1 for x in stat_fields if x and x > 0) / len(stat_fields)
+    features = [
+        elo_h, elo_a, elo_h-elo_a,
+        fh["btts_rate"], fa["btts_rate"], (fh["btts_rate"]+fa["btts_rate"])/2,
+        fh["o25_rate"], fa["o25_rate"], (fh["o25_rate"]+fa["o25_rate"])/2,
+        fh["avg_scored"], fa["avg_scored"], fh["avg_conceded"], fa["avg_conceded"],
+        fh["avg_scored"]+fa["avg_scored"], (fh["avg_conceded"]+fa["avg_conceded"])/2,
+        fh["btts_ht_rate"], fa["btts_ht_rate"], fh["o15ht_rate"], fa["o15ht_rate"],
+        fh["form_pts"], fa["form_pts"], fh["form_pts"]-fa["form_pts"], fh["streak_win"], fa["streak_win"],
+        h2h_btts, h2h_goals, h2h_norm,
+        fh.get("avg_shots",0), fa.get("avg_shots",0), fh.get("avg_shots",0)+fa.get("avg_shots",0),
+        fh.get("avg_corners",0), fa.get("avg_corners",0), fh.get("avg_corners",0)+fa.get("avg_corners",0),
+        fh.get("avg_cards",0), fa.get("avg_cards",0), fh.get("avg_cards",0)+fa.get("avg_cards",0),
+        # Multi-source/market features: explicit MISSING values. No bookmaker leakage.
+        min((fh.get("games",0)+fa.get("games",0))/20.0, 1.0), stat_coverage, 0.0,
+        0.0, 0.0, 1/3, 1/3, 1/3,
+        0.0, 0.5, 0.5,
+        0.0,0.0,0.0, 0.0,0.0,0.0, 0.0,0.0,0.0,
+    ]
+
+    xgb = {}
+    if _ML_MODELS:
+        try:
+            import numpy as np
+            X=np.array(features, dtype=float).reshape(1,-1)
+            for model_name,out_key in _ML_TEAM_TARGETS:
+                if model_name in _ML_MODELS:
+                    xgb[out_key]=round(float(_ML_MODELS[model_name].predict_proba(X)[0][1])*100,1)
+        except Exception as exc:
+            log(f"   🤖 ML-Predict-Error: {str(exc)[:60]}", "WARN")
+
+    if not hist_pred and not xgb:
+        return {}
+    # History receives more weight because runtime intentionally withholds bookmaker odds
+    # that several training rows contained. This avoids the previous constant ~55% output.
+    result={}
+    for key in ("btts_pct","over25_pct","btts_ht_pct","over15_ht_pct","home_win_pct","draw_pct","away_win_pct"):
+        hp=hist_pred.get(key) if hist_pred else None
+        xp=xgb.get(key)
+        if hp is not None and xp is not None:
+            result[key]=round(.65*float(hp)+.35*float(xp),1)
+        elif hp is not None:
+            result[key]=float(hp)
+        elif xp is not None:
+            result[key]=float(xp)
+    # 1X2 must sum to 100 after blending.
+    sm=sum(float(result.get(k,0) or 0) for k in ("home_win_pct","draw_pct","away_win_pct"))
+    if sm>0:
+        for k in ("home_win_pct","draw_pct","away_win_pct"):
+            result[k]=round(float(result.get(k,0) or 0)/sm*100,1)
+    result.update({
+        "source":"history+xgboost" if xgb else "history_poisson",
+        "elo_home":round(elo_h,0), "elo_away":round(elo_a,0),
+        "history_games_home":fh.get("games",0), "history_games_away":fa.get("games",0),
+    })
     return result
 
 
@@ -10838,12 +11171,7 @@ def _build_elo_ratings(league_name):
     Baut Elo-Ratings aus der kompletten football-data.co.uk Saison-Historie
     (chronologisch durchgerechnet). Gecacht pro Liga-Code.
     """
-    ln = league_name.lower()
-    code = None
-    for key, c in FD_CO_UK_LEAGUE_CODES.items():
-        if key in ln:
-            code = c
-            break
+    code = _fd_co_uk_code(league_name)
     if not code:
         return {}
 
@@ -10922,9 +11250,9 @@ def get_elo_poisson_prediction(home_team, away_team, league_name):
 
     # Fuzzy-Suche falls exakter Key fehlt
     if h_key not in ratings:
-        h_key = next((k for k in ratings if h_key[:6] in k or k[:6] in h_key), None)
+        h_key = next((k for k in ratings if _ml_history_team_match(home_team, k)), None)
     if a_key not in ratings:
-        a_key = next((k for k in ratings if a_key[:6] in k or k[:6] in a_key), None)
+        a_key = next((k for k in ratings if _ml_history_team_match(away_team, k)), None)
     if not h_key or not a_key:
         return {}
 
@@ -11369,7 +11697,7 @@ def smart_request(url, timeout=15, use_playwright_if_blocked=True, headers=None)
     Gilt für ALLE Domains!
     """
     # ⚡ FAST-MODE: nie Playwright (verhindert 18s/Match Timeout im Tipp-Lauf)
-    if str(os.getenv("NETRATTLER_FAST_TIPS", "")).lower() in ("1", "true", "yes", "on"):
+    if _netrattler_fast_tips_enabled():
         use_playwright_if_blocked = False
     import random as _r
     default_headers = {
@@ -11391,7 +11719,7 @@ def smart_request(url, timeout=15, use_playwright_if_blocked=True, headers=None)
         r = requests.get(url, headers=default_headers, timeout=timeout)
         # ⚡ FAST-MODE: kein Playwright-Fallback im Tipp-Lauf (verhindert 18s/Match
         # Timeout bei geblockten Seiten wie Betexplorer 429). Stats sammelt der Scraper.
-        _fast = str(os.getenv("NETRATTLER_FAST_TIPS", "")).lower() in ("1", "true", "yes", "on")
+        _fast = _netrattler_fast_tips_enabled()
         if r.status_code in [403, 429, 503, 406, 444] and use_playwright_if_blocked and not _fast:
             log(f"   🎭 {url[:40]}... → Playwright (Status {r.status_code})")
             html = scrape_with_playwright(url, timeout=8000)
@@ -17375,6 +17703,9 @@ def send_top_tips(tips_by_market, target_date):
             match_name = r.get("match", "?")
 
             r["date"] = str(target_date)
+            if _real_odds_only_enabled() and bool(r.get("_no_real_odds", False)):
+                log(f"   ⛔ REAL_ODDS_ONLY: {match_name} ({market_id}) ohne beobachtete Bookmaker-Quote verworfen")
+                continue
             if not is_valid_tip(r, target_date):
                 continue
 
@@ -21024,7 +21355,7 @@ class AdvancedPropsManager:
         Hauptfunktion: Analysiert Advanced Props für alle Spiele einer Liga.
         """
         # ⚡ FAST-MODE: FBref-Playwright-Scrape überspringen (Hauptzeitfresser!)
-        if str(os.getenv("NETRATTLER_FAST_TIPS", "")).lower() in ("1","true","yes","on"):
+        if _netrattler_fast_tips_enabled():
             return []
         player_db = self.scrape_fbref_advanced_stats(league_name)
         if not player_db:
@@ -21489,7 +21820,7 @@ def run_advanced_props_bot(active_leagues: list, fixtures_cache: dict, target_da
             kickoff   = fixture.get("time_local", "TBD")
 
             # ── Quelle 1: FBref (alle Ligen versuchen) ──
-            if str(os.getenv('NETRATTLER_FAST_TIPS','')).lower() not in ('1','true','yes','on'):  # Fast-Mode: FBref aus
+            if not _netrattler_fast_tips_enabled():  # Stable core keeps independent FBref fallback available
                 player_db = manager.scrape_fbref_advanced_stats(league)
                 if player_db:
                     lineup  = get_sofascore_lineups(match_id, home, away) if match_id else None
@@ -22536,10 +22867,10 @@ def enrich_pinnacle_tip(tip_dict, home, away, league_name, season=2025):
     return tip_dict
 
 
-def _pinnacle_get_json(url, params):
+def _pinnacle_get_json(url, params, timeout=20, allow_playwright=True):
     """GET mit JSON-Parse. Fällt auf Playwright zurück falls requests leer/blockiert ist."""
     try:
-        r = requests.get(url, headers=PINNACLE_HEADERS, params=params, timeout=20)
+        r = requests.get(url, headers=PINNACLE_HEADERS, params=params, timeout=timeout)
         if r.ok:
             try:
                 data = r.json()
@@ -22557,7 +22888,7 @@ def _pinnacle_get_json(url, params):
     try:
         from curl_cffi import requests as _cffi_requests
         _cr = _cffi_requests.get(
-            url, headers=PINNACLE_HEADERS, params=params, timeout=20, impersonate="chrome"
+            url, headers=PINNACLE_HEADERS, params=params, timeout=timeout, impersonate="chrome"
         )
         if getattr(_cr, "ok", False):
             try:
@@ -22570,7 +22901,7 @@ def _pinnacle_get_json(url, params):
         pass
 
     # Letzter Fallback: Playwright, falls lokal/Workflow vorhanden.
-    if PLAYWRIGHT_AVAILABLE:
+    if allow_playwright and PLAYWRIGHT_AVAILABLE:
         try:
             from urllib.parse import urlencode
             full_url = f"{url}?{urlencode(params)}"
@@ -22590,6 +22921,77 @@ def _pinnacle_get_json(url, params):
             log(f"   🔑 Pinnacle Props: Playwright-Fallback Fehler {str(e)[:60]}", "WARN")
 
     return None, status
+
+
+def _pinnacle_special_price_for_part(market_rows, participant):
+    """Resolve a participant price from observed Arcadia market rows without inventing odds."""
+    pid = participant.get("id")
+    pname = str(participant.get("name") or "").strip().lower()
+    palign = str(participant.get("alignment") or participant.get("designation") or "").strip().lower()
+    for row in market_rows or []:
+        for pr in row.get("prices", []) or []:
+            if pid is not None and pr.get("participantId") == pid:
+                return pr
+    # Some linked-market responses omit participantId but expose designation/name.
+    for row in market_rows or []:
+        prs=row.get("prices", []) or []
+        for pr in prs:
+            txt=" ".join(str(pr.get(k) or "") for k in ("designation","name","label","participantName")).lower()
+            if pname and txt and (pname == txt or pname in txt or txt in pname):
+                return pr
+            if palign and txt and palign in txt:
+                return pr
+        parts=row.get("participants") or []
+        if len(parts)==len(prs) and participant in parts:
+            try: return prs[parts.index(participant)]
+            except Exception: pass
+    return None
+
+
+def _pinnacle_linked_special_markets(matchups):
+    """Time-bounded per-parent fallback when global withSpecials is blocked (403)."""
+    import time as _time
+    now=datetime.now(timezone.utc)
+    horizon=now+timedelta(hours=float(env("NETRATTLER_PIN_SPECIAL_HORIZON_HOURS","36")))
+    parents={}
+    for m in matchups or []:
+        if m.get("type") == "special":
+            parent=m.get("parent") or {}
+            mid=parent.get("id") or m.get("parentId")
+            starts=parent.get("startTime") or m.get("startTime")
+        else:
+            mid=m.get("id"); starts=m.get("startTime")
+        if not mid: continue
+        dt=None
+        if starts:
+            try: dt=datetime.fromisoformat(str(starts).replace("Z","+00:00"))
+            except Exception: pass
+        # Prefer current/upcoming parents; keep undated rows only as last resort.
+        if dt and (dt < now-timedelta(hours=2) or dt > horizon):
+            continue
+        if mid not in parents or (dt and parents[mid] is None):
+            parents[mid]=dt
+    ordered=sorted(parents.items(), key=lambda kv: kv[1] or horizon+timedelta(days=1))
+    cap=max(10,int(env("NETRATTLER_PIN_SPECIAL_MATCH_CAP","90")))
+    budget=max(8,float(env("NETRATTLER_PIN_SPECIAL_BUDGET_SEC","30")))
+    per_timeout=max(2,float(env("NETRATTLER_PIN_SPECIAL_TIMEOUT","3.5")))
+    out=[]; ok=0; fails=0; started=_time.monotonic()
+    attempted=0
+    for mid,_dt in ordered[:cap]:
+        if _time.monotonic()-started > budget or fails >= 4:
+            break
+        attempted += 1
+        data,status=_pinnacle_get_json(
+            f"{PINNACLE_BASE}/matchups/{mid}/markets/related/straight",
+            {"brandId":"0"}, timeout=per_timeout, allow_playwright=False,
+        )
+        if isinstance(data,list) and data:
+            out.extend(data); ok+=1; fails=0
+        else:
+            fails += 1
+    elapsed=_time.monotonic()-started
+    log(f"   🔑 Pinnacle Props Fallback: {ok}/{attempted} Parent-Matches · {len(out)} linked market rows · {elapsed:.1f}s")
+    return out
 
 
 def fetch_pinnacle_player_props() -> List[Dict]:
@@ -22626,18 +23028,20 @@ def fetch_pinnacle_player_props() -> List[Dict]:
             {"primaryOnly": "false", "withSpecials": "true"},
         )
         prices_by_matchup = {}
+        market_rows_by_matchup = {}
+        if not r2_data:
+            log(f"   🔑 Pinnacle Props: markets/straight fehlgeschlagen ({status2}) — linked fallback", "WARN")
+            r2_data = _pinnacle_linked_special_markets(data)
         if r2_data:
             log(f"   🔑 Pinnacle Props: {len(r2_data)} Markt-Einträge für Quoten")
             for mk in r2_data:
                 mid = mk.get("matchupId")
-                for p in mk.get("prices", []):
+                if mid:
+                    market_rows_by_matchup.setdefault(mid, []).append(mk)
+                for p in mk.get("prices", []) or []:
                     pid = p.get("participantId")
                     if mid and pid:
-                        # Keep the whole observed price row. `points` is required for
-                        # corners/totals and was previously discarded.
                         prices_by_matchup[(mid, pid)] = p
-        else:
-            log(f"   🔑 Pinnacle Props: markets/straight fehlgeschlagen ({status2})", "WARN")
 
         props = []
         skipped_no_price = 0
@@ -22682,6 +23086,8 @@ def fetch_pinnacle_player_props() -> List[Dict]:
             starts = m.get("startTime", "") or parent.get("startTime", "")
             for part in m.get("participants", []):
                 _price_row = prices_by_matchup.get((m.get("id"), part.get("id")))
+                if _price_row is None:
+                    _price_row = _pinnacle_special_price_for_part(market_rows_by_matchup.get(m.get("id"), []), part)
                 if _price_row is None:
                     skipped_no_price += 1
                     continue
@@ -22800,7 +23206,7 @@ def _fbref_prop_edge_check(player_name, league_name, prop_name, pinnacle_prob):
     da FBref echte Spielerleistung misst, der Markt aber Verletzungen/Tagesform einpreist.
     """
     try:
-        if str(os.getenv('NETRATTLER_FAST_TIPS','')).lower() in ('1','true','yes','on'):
+        if _netrattler_fast_tips_enabled():
             return pinnacle_prob, False, False
         stats = _advanced_props_manager.scrape_fbref_advanced_stats(league_name)
     except Exception:
@@ -23012,8 +23418,8 @@ def run_pinnacle_props_bot(win_start_utc=None, win_end_utc=None, ch_tz=None, top
     from datetime import datetime as _dt2
     props = fetch_pinnacle_player_props()
     if not props:
-        log("🔑 Pinnacle Props: keine Specials verfügbar")
-        return 0
+        log("🔑 Pinnacle Props: keine Specials verfügbar — Extra-Quellen laufen weiter", "WARN")
+        props = []
 
     # Diagnose der tatsächlich angebotenen Special-Märkte.
     _raw_category_counts = {}
@@ -23163,8 +23569,7 @@ def run_pinnacle_props_bot(win_start_utc=None, win_end_utc=None, ch_tz=None, top
         )
 
     if not valid:
-        log("🔑 Pinnacle Props: keine Props im Zeitfenster")
-        return 0
+        log("🔑 Pinnacle Props: keine Pinnacle-Props im Zeitfenster — Extra-Quellen laufen weiter")
 
     # 🌍 WM-Diagnose: wie viele valide Props/Matches sind World Cup?
     _wc_props = [p for p in valid if "world cup" in p.get("league", "").lower() or "fifa" in p.get("league", "").lower()]
@@ -24241,7 +24646,7 @@ def _get_real_odds_any_source(home, away, league_name="", match_id=None, tip_dat
     # sources without blocking every match for another ~8-16 seconds.
     try:
         if match_id and not (result.get("btts_yes") and result.get("over_25")):
-            _fast = str(os.getenv("NETRATTLER_FAST_TIPS", "false")).lower() in ("1", "true", "yes", "on")
+            _fast = _netrattler_fast_tips_enabled()
             _merge(fetch_pinnacle_match_odds(match_id, include_specials=not _fast), "pinnacle")
     except Exception:
         pass
@@ -24267,7 +24672,7 @@ def _get_real_odds_any_source(home, away, league_name="", match_id=None, tip_dat
             pass
 
     # 3) Kambi-Fallback für BTTS (schnelles HTTP)
-    if (str(os.getenv("NETRATTLER_FAST_TIPS", "false")).lower() not in ("1", "true", "yes", "on")
+    if (not _netrattler_fast_tips_enabled()
             and not result.get("btts_yes") and _odds_source_available("kambi")):
         try:
             _kb = _fetch_btts_odd_kambi(home, away)
@@ -24602,6 +25007,22 @@ def get_bet365_quote_any_source(tip: Dict, odds_data: Optional[List] = None) -> 
 
     market = tip.get("market") or tip.get("market_type") or "btts"
 
+    # Prefer the quote already attached by the observed-odds adapter.  This is
+    # especially important for BTTS+O2.5 / HT / 1X2, where mapping the market
+    # back to a generic BTTS endpoint can silently compare against the wrong price.
+    if not bool(tip.get("_no_real_odds", False)):
+        try:
+            q = float(str(tip.get("oddsYes", "0")).replace(",", "."))
+            if q > 1.0:
+                return q, str(tip.get("_source") or "observed_tip")
+        except Exception:
+            pass
+
+    # A combo is valid only when the SAME combined market was observed. Never
+    # synthesize a same-game quote by multiplying BTTS and O2.5 singles.
+    if market == "combo":
+        return None, "no_observed_combo"
+
     # 1. Pinnacle Scraper (kostenlos!)
     try:
         quote = get_pinnacle_quote_for_market(home, away, market)
@@ -24645,11 +25066,6 @@ def get_bet365_quote_any_source(tip: Dict, odds_data: Optional[List] = None) -> 
             "draw": [("1x2", "draw")],
             "away_win": [("1x2", "away")],
         }
-        if market == "combo":
-            qb = get_best_quote_from_supabase(home, away, "btts", "yes")
-            qo = get_best_quote_from_supabase(home, away, "totals", "over_2_5")
-            if qb and qo:
-                return round(float(qb[0]) * float(qo[0]), 4), f"odds_history:{qb[1]}+{qo[1]}"
         for hist_market, selection in lookup.get(market, []):
             found = get_best_quote_from_supabase(home, away, hist_market, selection)
             if found and found[0] > 1.0:
@@ -24715,7 +25131,7 @@ def filter_tips_by_edge(tips: List[Dict], market: str = "btts",
 
         if not market_quote:
             stats["no_quote"] += 1
-            if require_bet365:
+            if require_bet365 or (_real_odds_only_enabled() and bool(tip.get("_no_real_odds", True))):
                 continue
             try:
                 market_quote = float(str(tip.get("oddsYes", "0")).replace(",", "."))
@@ -25664,7 +26080,7 @@ def main():
     import time as _gtime
     global _NETRATTLER_RUN_START, _NETRATTLER_RUN_BUDGET
     _NETRATTLER_RUN_START = _gtime.time()
-    _NETRATTLER_RUN_BUDGET = int(env("NETRATTLER_GLOBAL_BUDGET_SEC", "720"))  # 15 Min hart
+    _NETRATTLER_RUN_BUDGET = _stable_budget("NETRATTLER_GLOBAL_BUDGET_SEC", 840, stable_min=780)  # stable core: enough room for source fallbacks
 
     check_config()
     check_rotation_schedule()
@@ -25809,6 +26225,7 @@ def main():
         "no_quote_after_model": 0,
     }
     log("🌐 Team-Odds Priorität: Free/Bulk → OddsPapi → Pinnacle → Sofa/Kambi/Scraper (nur echte Quoten)")
+    log(f"🧱 STABLE CORE: {'AN' if NETRATTLER_STABLE_CORE else 'AUS'} · FAST effektiv={'AN' if _netrattler_fast_tips_enabled() else 'AUS'} · Modell/Stats unabhängig von Odds")
     log("📊 Pinnacle Matchups laden...")
     try:
         _PINNACLE_MATCHUPS = fetch_pinnacle_matchups()
@@ -25864,12 +26281,16 @@ def main():
         log(f"   ⏰ Fenster-Untergrenze angepasst: {_win_start_utc.strftime('%H:%M')} → {now_utc.strftime('%H:%M')} UTC (Run startet spät im Fenster)")
         _win_start_utc = now_utc
     if _PINNACLE_MATCHUPS:
+        try:
+            _prefetch_ml_history_from_supabase(_PINNACLE_MATCHUPS, target_date, _win_start_utc, _win_end_utc)
+        except Exception as _mhp:
+            log(f"   🧠 ML-History preload Fehler: {str(_mhp)[:80]}", "WARN")
         log(f"🎰 Analysiere {len(_PINNACLE_MATCHUPS)} Pinnacle Matches...")
         from datetime import datetime as _pdt
         _processed_this_run = set()  # 🆕 Sicherheitsnetz gegen Restduplikate innerhalb des Runs
         import time as _tmod
         _loop_start = _tmod.time()
-        _budget_sec = int(env("NETRATTLER_ANALYSIS_BUDGET_SEC", "600"))  # 10 Min Match-Analyse
+        _budget_sec = _stable_budget("NETRATTLER_ANALYSIS_BUDGET_SEC", 600, stable_min=600)  # known-good core gets full analysis window
         for pm in _PINNACLE_MATCHUPS:
             if _tmod.time() - _loop_start > _budget_sec or _budget_exceeded():
                 log(f"   ⏱️ Zeit-Budget erreicht nach {len(_processed_this_run)} Matches — sende bisherige Tipps")
@@ -25962,7 +26383,7 @@ def main():
                     # 🆕 football-data.co.uk: echte BTTS/Over-Raten für ~20 Top-Vereinsligen
                     # ⚡ FAST-MODE: überspringen (langsam, ~2 Calls/Match). Das trainierte
                     # XGBoost-Modell hat diese Muster bereits gelernt → nicht nötig live.
-                    _fast_stats = str(os.getenv("NETRATTLER_FAST_TIPS", "")).lower() in ("1","true","yes","on")
+                    _fast_stats = _netrattler_fast_tips_enabled()
                     try:
                         _fh = None if _fast_stats else get_fd_co_uk_team_stats(home, league_name)
                         _fa = None if _fast_stats else get_fd_co_uk_team_stats(away, league_name)
@@ -25987,20 +26408,20 @@ def main():
                         if _ml:
                             _ml_match = _ml
                             _has_independent_model = True
-                            # 80% ML-Modell, 20% bisherige Schätzung (Absicherung bei Nischenteams)
-                            prob_b = int(0.80 * _ml.get("btts_pct", prob_b) + 0.20 * prob_b)
-                            prob_o = int(0.80 * _ml.get("over25_pct", prob_o) + 0.20 * prob_o)
-                            log(f"      🤖 XGBoost: BTTS {_ml.get('btts_pct')}%, Over2.5 {_ml.get('over25_pct')}% "
-                                f"→ final {prob_b}%/{prob_o}%")
+                            prob_b = int(round(float(_ml.get("btts_pct", 0) or 0)))
+                            prob_o = int(round(float(_ml.get("over25_pct", 0) or 0)))
+                            log(f"      🤖 {_ml.get('source','MODEL')}: BTTS {_ml.get('btts_pct')}%, Over2.5 {_ml.get('over25_pct')}% "
+                                f"· History {_ml.get('history_games_home',0)}/{_ml.get('history_games_away',0)} → {prob_b}%/{prob_o}%")
                         else:
                             # Fallback: Elo + Poisson Formel
                             _elo = get_elo_poisson_prediction(home, away, league_name)
                             if _elo:
                                 _has_independent_model = True
-                                prob_b = int(0.70 * prob_b + 0.30 * _elo["btts_pct"])
-                                prob_o = int(0.70 * prob_o + 0.30 * _elo["over25_pct"])
+                                _ml_match = _elo
+                                prob_b = int(round(float(_elo["btts_pct"])))
+                                prob_o = int(round(float(_elo["over25_pct"])))
                                 log(f"      🧠 Elo-Fallback: {home}({_elo['elo_home']:.0f}) vs {away}({_elo['elo_away']:.0f}) "
-                                    f"BTTS {_elo['btts_pct']}% → final {prob_b}%")
+                                    f"BTTS {_elo['btts_pct']}% · O2.5 {_elo['over25_pct']}%")
                     except Exception:
                         pass
 
@@ -26010,8 +26431,7 @@ def main():
                 # 03.09.-Ablauf wurden dagegen die echten Marktpreise abgefragt und
                 # erst danach Probability/Value/Edge gefiltert. Deshalb nur noch
                 # Diagnose hier — KEIN continue vor den realen Quotenquellen.
-                _fast_real = str(env("NETRATTLER_FAST_TIPS", "false")).lower() in ("1", "true", "yes", "on") \
-                    and str(env("NETRATTLER_REQUIRE_REAL_ODDS", "true")).lower() in ("1", "true", "yes", "on")
+                _fast_real = _netrattler_fast_tips_enabled() and _real_odds_only_enabled()
                 _p1x2 = max(
                     float((_ml_match or {}).get("home_win_pct", 0) or 0),
                     float((_ml_match or {}).get("draw_pct", 0) or 0),
@@ -26098,7 +26518,7 @@ def main():
                     pass
 
                 # BTTS Tipp — nur Value Bets (Quote >=1.70 + echter Edge)
-                if prob_b >= MIN_PROBABILITY and "btts" in tips_by_market and _is_value_bet(btts_yes, prob_b) and (_real_btts_odd or str(env("NETRATTLER_REQUIRE_REAL_ODDS", "true")).lower() not in ("1","true","yes","on")):
+                if _has_independent_model and prob_b >= MIN_PROBABILITY and "btts" in tips_by_market and _is_value_bet(btts_yes, prob_b) and (_real_btts_odd or not _real_odds_only_enabled()):
                     tip_btts = {
                         "match": mn, "league": league_name or "Pinnacle",
                         "time": tstr, "tip": "YES",
@@ -26115,7 +26535,7 @@ def main():
                     log(f"      ✅ BTTS YES @ {btts_yes} ({prob_b}%)")
 
                 # Over 2.5 Tipp — nur Value Bets
-                if prob_o >= MIN_PROBABILITY and "over25" in tips_by_market and _is_value_bet(over25, prob_o) and (_real_over_odd or str(env("NETRATTLER_REQUIRE_REAL_ODDS", "true")).lower() not in ("1","true","yes","on")):
+                if _has_independent_model and prob_o >= MIN_PROBABILITY and "over25" in tips_by_market and _is_value_bet(over25, prob_o) and (_real_over_odd or not _real_odds_only_enabled()):
                     tip_over25 = {
                         "match": mn, "league": league_name or "Pinnacle",
                         "time": tstr, "tip": "YES",
@@ -26131,7 +26551,7 @@ def main():
                     _pin_diag["tips"] += 1
 
                 # 🔥 Combo: BTTS + Over 2.5 (stark korreliert)
-                if prob_b >= MIN_PROBABILITY and prob_o >= MIN_PROBABILITY and "combo" in tips_by_market:
+                if _has_independent_model and prob_b >= MIN_PROBABILITY and prob_o >= MIN_PROBABILITY and "combo" in tips_by_market:
                     combo_prob = min(prob_b, prob_o) - 5
                     # Never synthesize a bookmaker combo price from two singles.
                     combo_odds = float((ro or {}).get("btts_over25_combo") or 0)
@@ -26163,7 +26583,7 @@ def main():
                     except Exception:
                         pass
                     # REAL_ODDS_ONLY: no synthetic HT odds fallback.
-                    if btts_ht_prob >= MIN_PROBABILITY and _is_value_bet(btts_ht_odds, btts_ht_prob) and (_real_btts_ht_odd or str(env("NETRATTLER_REQUIRE_REAL_ODDS", "true")).lower() not in ("1","true","yes","on")):
+                    if btts_ht_prob >= MIN_PROBABILITY and _is_value_bet(btts_ht_odds, btts_ht_prob) and (_real_btts_ht_odd or not _real_odds_only_enabled()):
                         tip_btts_ht = {
                             "match": mn, "league": league_name or "Pinnacle",
                             "time": tstr, "tip": "BTTS HT (Beide Teams treffen 1.HZ)",
@@ -26188,7 +26608,7 @@ def main():
                     except Exception:
                         pass
                     # REAL_ODDS_ONLY: no synthetic HT odds fallback.
-                    if o15_prob >= MIN_PROBABILITY and "over15_ht" in tips_by_market and _is_value_bet(o15_odds, o15_prob) and (_real_over15_ht_odd or str(env("NETRATTLER_REQUIRE_REAL_ODDS", "true")).lower() not in ("1","true","yes","on")):
+                    if o15_prob >= MIN_PROBABILITY and "over15_ht" in tips_by_market and _is_value_bet(o15_odds, o15_prob) and (_real_over15_ht_odd or not _real_odds_only_enabled()):
                         tip_o15_ht = {
                             "match": mn, "league": league_name or "Pinnacle",
                             "time": tstr, "tip": "Over 1.5 Tore HT",
@@ -26257,7 +26677,7 @@ def main():
     # (ESPN/FotMob/etc. liefern aus GitHub Actions eh 0 — spart ~5 Min Actions-Minuten)
     _skip_league_loop = False
     try:
-        _fast_tips_now = str(env("NETRATTLER_FAST_TIPS", "false")).lower() in ["1", "true", "yes", "on"]
+        _fast_tips_now = _netrattler_fast_tips_enabled()
         if _fast_tips_now and env("FORCE_LEAGUE_LOOP", "false").lower() not in ["1", "true", "yes"]:
             _skip_league_loop = True
             log("⚡ FAST: langsame Liga-Fallbackschleife komplett übersprungen — Props/Builder laufen danach aus Pinnacle/Supabase")
@@ -26267,7 +26687,12 @@ def main():
     except Exception:
         pass
 
+    _league_fallback_started = time.time()
+    _league_fallback_budget = _stable_budget("NETRATTLER_LEAGUE_FALLBACK_BUDGET_SEC", 180, stable_min=180)
     for league in ([] if _skip_league_loop else active_leagues):
+        if _budget_exceeded() or (time.time() - _league_fallback_started) >= _league_fallback_budget:
+            log(f"⏱️ Liga-Fallback Budget erreicht ({_league_fallback_budget}s) — weiter zu Telegram/Props statt Timeout")
+            break
         log(f"╔══ Liga: {league} ══╗")
 
         try:
@@ -26409,14 +26834,18 @@ def main():
                 for _mk in list(tips_by_market.keys()):
                     _orig = tips_by_market.get(_mk, [])
                     _filt = _ft.get(_mk, [])
-                    # Wenn Filter alles verwirft (keine echten Quoten) → Original behalten
                     if _filt:
                         tips_by_market[_mk] = _filt
                     else:
+                        # Hard invariant: in REAL_ODDS_ONLY mode an empty edge result stays empty.
+                        # Older code restored the originals here, which could reintroduce model/fair
+                        # prices as if they were bookmaker quotes.
+                        if _real_odds_only_enabled():
+                            tips_by_market[_mk] = []
                         if not _orig:
                             log(f"   🎯 Edge Filter [{_mk}]: keine Kandidaten vor Edge-Filter")
                         else:
-                            log(f"   🎯 Edge Filter [{_mk}]: {len(_orig)} Kandidaten, aber keine Edge-qualifizierte Quote")
+                            log(f"   🎯 Edge Filter [{_mk}]: {len(_orig)} Kandidaten, aber keine Edge-qualifizierte echte Quote")
                 log(f"   🎯 Edge Filter angewendet (mit Pinnacle-Fallback)")
         except Exception as _efe:
             log(f"   🎯 Edge Filter übersprungen: {str(_efe)[:60]}")
@@ -26442,7 +26871,7 @@ def main():
         # Verhindert 20-Min-Timeout bei vielen Ligen (FD.co.uk + ELO pro Liga).
         import time as _tmod
         _loop_start = _tmod.time()
-        _budget_sec = int(env("NETRATTLER_ANALYSIS_BUDGET_SEC", "600"))  # 10 Min
+        _budget_sec = _stable_budget("NETRATTLER_ANALYSIS_BUDGET_SEC", 600, stable_min=600)
         for pm in _PINNACLE_MATCHUPS:
             if _tmod.time() - _loop_start > _budget_sec or _budget_exceeded():
                 log(f"   ⏱️ Zeit-Budget erreicht — Analyse gestoppt, sende bisherige Tipps")
@@ -26746,7 +27175,7 @@ if __name__ == "__main__":
             except Exception:
                 pass
             os._exit(124)
-        _wd = int(os.getenv("NETRATTLER_HARD_WATCHDOG_SEC", "480"))  # 8 Min hard ceiling
+        _wd = _stable_budget("NETRATTLER_HARD_WATCHDOG_SEC", 1050, stable_min=900)  # leave headroom inside 20-min Actions job
         if hasattr(_sig, "SIGALRM"):
             _sig.signal(_sig.SIGALRM, _hard_timeout)
             _sig.alarm(_wd)
