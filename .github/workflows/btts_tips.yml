@@ -39,6 +39,7 @@ jobs:
           pip install \
             requests \
             python-dotenv \
+            playwright \
             beautifulsoup4 \
             lxml \
             google-generativeai \
@@ -52,30 +53,35 @@ jobs:
             numpy \
             pandas \
             scikit-learn
+          playwright install chromium --with-deps
 
       - name: Compile and core tests
 
         run: |
 
-          python -m py_compile btts_bot.py netrattler_builder_engine.py netrattler_settlement_v16_final.py netrattler_source_hub.py netrattler_identity_hub.py netrattler_feature_hub.py
+          python -m py_compile btts_bot.py netrattler_builder_engine.py netrattler_prop_sources.py netrattler_free_odds.py netrattler_settlement_v16_final.py netrattler_source_hub.py netrattler_identity_hub.py netrattler_feature_hub.py
 
           python test_netrattler_core.py
+          python test_source_hub_v30.py
 
 
       - name: Run Tips Bot 🤖
         env:
-          # ── ⚡ SPEED: Tipp-Lauf schnell halten (Stats sammelt der Scraper separat) ──
-          NETRATTLER_FAST_TIPS:       "true"
-          NETRATTLER_STATBUNKER_MAX_LOOKUPS: "4"
-          NETRATTLER_LINEUP_MAX:      "6"
-          # Team-market analysis gets a strict budget; slow harvesters run separately.
-          NETRATTLER_ANALYSIS_BUDGET_SEC: "240"
-          NETRATTLER_HARD_WATCHDOG_SEC:   "480"
-          NETRATTLER_CORNERS_BUDGET_SEC:  "45"
-          NETRATTLER_CORNERS_MAX_MATCHES: "80"
-          NETRATTLER_CORNERS_MAX_SEND:    "12"
-          NETRATTLER_CORNER_MIN_EDGE:     "0.02"
-          NETRATTLER_LEGACY_SCORER:       "false"
+          # ── 🧱 STABLE CORE: funktionierende Analyse bleibt immer aktiv ──
+          # Neue Quellen sind Fallbacks/Adapter und dürfen die Modell-/Statistikbasis nicht abschalten.
+          NETRATTLER_STABLE_CORE:     "true"
+          NETRATTLER_FAST_TIPS:       "false"
+          NETRATTLER_REQUIRE_REAL_ODDS: "true"
+          NETRATTLER_REAL_ODDS_ONLY:  "true"
+          NETRATTLER_STATBUNKER_MAX_LOOKUPS: "25"
+          NETRATTLER_LINEUP_MAX:      "20"
+          NETRATTLER_ML_PREFETCH_BUDGET_SEC: "30"
+          NETRATTLER_PIN_SPECIAL_BUDGET_SEC: "30"
+          NETRATTLER_CORNERS_BUDGET_SEC: "45"
+          NETRATTLER_LEAGUE_FALLBACK_BUDGET_SEC: "180"
+          NETRATTLER_ANALYSIS_BUDGET_SEC: "600"
+          NETRATTLER_GLOBAL_BUDGET_SEC: "840"
+          NETRATTLER_HARD_WATCHDOG_SEC: "1050"
           # ── KI APIs ──
           GEMINI_API_KEYS:            ${{ secrets.GEMINI_API_KEYS }}
           GROQ_API_KEYS:              ${{ secrets.GROQ_API_KEYS }}
@@ -108,7 +114,6 @@ jobs:
           TELEGRAM_GROUP_LATE_GOALS:  ${{ secrets.TELEGRAM_GROUP_LATE_GOALS }}
           TELEGRAM_GROUP_STATS:       ${{ secrets.TELEGRAM_GROUP_STATS }}
           TELEGRAM_GROUP_PLAYER_PROPS: ${{ secrets.TELEGRAM_GROUP_PLAYER_PROPS }}
-          TELEGRAM_GROUP_PROPS:       ${{ secrets.TELEGRAM_GROUP_PROPS }}
           TELEGRAM_GROUP_BUILDER:     ${{ secrets.TELEGRAM_GROUP_BUILDER }}
           # ── Supabase ──
           SUPABASE_URL:               ${{ secrets.SUPABASE_URL }}
@@ -119,13 +124,8 @@ jobs:
           RUN_MODE:                   ${{ github.event.inputs.mode || 'tips' }}
           ENABLE_SETTLEMENT:          "false"
           ENABLE_ADVANCED_PROPS:      "true"
-          # Nur beobachtete Buchmacherquoten senden; keine Modell-/Fallback-Quoten.
-          NETRATTLER_REQUIRE_REAL_ODDS: "true"
-          NETRATTLER_REAL_ODDS_ONLY:    "true"
-          NETRATTLER_PROP_BUILDER_MIN_EDGE: "0.02"
-          PROP_STATS_MAX_ROWS:          "500"
-          ENABLE_SUPABASE_PROP_STATS: "0"
-          MAX_LEAGUES_PER_RUN:        "20"
+          ENABLE_SUPABASE_PROP_STATS: "1"
+          MAX_LEAGUES_PER_RUN:        "0"
           PARALLEL_WORKERS:           "10"
           AI_SLEEP_SECONDS:           "0.1"
           GROQ_SLEEP_SECONDS:         "0.5"
