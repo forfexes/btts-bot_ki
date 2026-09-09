@@ -67,7 +67,7 @@ def _cffi_get_json(url, timeout=8, params=None):
 RESULT_USE_SOFASCORE = os.getenv("RESULT_USE_SOFASCORE", "false").lower() in {"1", "true", "yes", "on"}
 RESULT_USE_ESPN = os.getenv("RESULT_USE_ESPN", "true").lower() not in {"0", "false", "no"}
 RESULT_USE_OPENLIGADB = os.getenv("RESULT_USE_OPENLIGADB", "true").lower() not in {"0", "false", "no"}
-DAYS = int(os.getenv("SETTLEMENT_DAYS", "14"))
+DAYS = int(os.getenv("SETTLEMENT_DAYS", "7"))
 LIMIT = int(os.getenv("SETTLEMENT_LIMIT", "1200"))
 UPDATE_SOURCE_TIPS = os.getenv("UPDATE_SOURCE_TIPS", "true").lower() not in {"0", "false", "no"}
 SEND_PENDING_SUMMARY = os.getenv("SEND_PENDING_SUMMARY", "false").lower() in {"1", "true", "yes"}
@@ -81,14 +81,16 @@ GROUPS = {
     "combo": os.getenv("TELEGRAM_GROUP_COMBO") or os.getenv("TELEGRAM_GROUP_COMBOS") or TG_DEFAULT,
     "btts_ht": os.getenv("TELEGRAM_GROUP_BTTS_HT") or TG_DEFAULT,
     "over15_ht": os.getenv("TELEGRAM_GROUP_OVER15_HT") or os.getenv("TELEGRAM_GROUP_STATS") or TG_DEFAULT,
-    "builder": os.getenv("TELEGRAM_GROUP_BUILDER") or os.getenv("TELEGRAM_GROUP_PROPS") or TG_DEFAULT,
-    "props": os.getenv("TELEGRAM_GROUP_PROPS") or TG_DEFAULT,
+    "builder": os.getenv("TELEGRAM_GROUP_BUILDER") or os.getenv("TELEGRAM_GROUP_PLAYER_PROPS") or os.getenv("TELEGRAM_GROUP_PROPS") or TG_DEFAULT,
+    "props": os.getenv("TELEGRAM_GROUP_PLAYER_PROPS") or os.getenv("TELEGRAM_GROUP_PROPS") or TG_DEFAULT,
     "corners": os.getenv("TELEGRAM_GROUP_CORNERS") or os.getenv("TELEGRAM_GROUP_STATS") or TG_DEFAULT,
+    "scorer": os.getenv("TELEGRAM_GROUP_LATE_GOALS") or TG_DEFAULT,
+    "1x2": os.getenv("TELEGRAM_GROUP_1X2") or os.getenv("TELEGRAM_GROUP_LATE_GOALS") or TG_DEFAULT,
     "stats": os.getenv("TELEGRAM_GROUP_STATS") or TG_DEFAULT,
     "default": TG_DEFAULT,
 }
 
-GROUP_ORDER = ["btts", "over25", "combo", "btts_ht", "over15_ht", "builder", "props", "corners"]
+GROUP_ORDER = ["btts", "over25", "combo", "btts_ht", "over15_ht", "1x2", "scorer", "builder", "props", "corners"]
 
 # Nur tatsächlich gesendete Tipps. player_prop_db ist ein Kandidaten-/Datenpool und
 # wird absichtlich NICHT komplett als Tipp ausgewertet.
@@ -432,6 +434,10 @@ def group_of(row: Dict[str, Any]) -> str:
         return "over15_ht"
     if any(x in low for x in ("corner", "corners", "ecken")):
         return "corners"
+    if any(x in low for x in ("1x2", "heimsieg", "auswärtssieg", "auswaertssieg", "unentschieden")):
+        return "1x2"
+    if any(x in low for x in ("scorer", "goalscorer", "to score")):
+        return "scorer"
     if any(x in low for x in ("player", "booked", "carded", "shot", "sot", "foul", "tackle")):
         return "props"
     if ("over" in low and "2.5" in low) or "over25" in low:
@@ -505,7 +511,7 @@ def include_tip(row: Dict[str, Any]) -> bool:
     _mk = str(anyv(data, ["market", "market_group", "type"], "")).lower()
     _is_reset_market = any(m and m in _mk for m in _reset_markets.split(","))
     if _st in ("won", "win", "lost", "loss") and _is_reset_market and \
-       str(os.getenv("NETRATTLER_RESETTLE_BROKEN", "true")).lower() in ("1", "true", "yes", "on"):
+       str(os.getenv("NETRATTLER_RESETTLE_BROKEN", "false")).lower() in ("1", "true", "yes", "on"):
         pass  # → wird neu bewertet (nicht ausgeschlossen)
     elif _st not in ("pending",) and not (_reset_void and _st == "void"):
         return False
@@ -821,7 +827,7 @@ def load_results(dates: Sequence[str]) -> List[Dict[str, Any]]:
         # Sonst fehlen Ergebnisse für exotische Ligen (Belarus, Usbekistan...),
         # die nicht in match_results stehen → Tipps bleiben ewig pending.
         # Nur überspringen, wenn explizit deaktiviert.
-        _always_fallback = str(os.getenv("NETRATTLER_ALWAYS_FALLBACK_RESULTS", "true")).lower() in ("1", "true", "yes", "on")
+        _always_fallback = str(os.getenv("NETRATTLER_ALWAYS_FALLBACK_RESULTS", "false")).lower() in ("1", "true", "yes", "on")
         if day_db_rows >= min_db_rows and not _always_fallback:
             log(f"Public Result-Fallback {day} übersprungen ({day_db_rows} DB-Results vorhanden)")
             continue
@@ -1150,7 +1156,7 @@ def settle_tip(tip: Dict[str, Any], results: Sequence[Dict[str, Any]], player_st
         reason = f"{wins}/{len(legs)} Legs gewonnen · {losses} verloren · {pending} offen"
     else:
         category = category_of(tip)
-        if category and group in {"props", "corners"}:
+        if category and group in {"props", "scorer", "corners"}:
             status, reason = settle_player_market(tip, player_stats, result)
         elif result:
             status, reason = settle_score_market(tip, result)
@@ -1420,10 +1426,19 @@ def main() -> None:
     existing = existing_settlements()
     previous = existing_status_map(existing)
     tips = load_tips()
+    if not tips:
+        log("Keine offenen/neu zu bewertenden Tipps — Result/API/Player-Stats Schritte übersprungen")
+        return
     dates = sorted({row_date(tip) for tip in tips})
     log(f"Dates: {dates}")
     results = load_results(dates)
-    player_stats = load_player_stats(dates)
+    _tip_groups = {group_of(tip) for tip in tips}
+    _needs_player_stats = bool(_tip_groups & {"props", "player_props", "scorer", "builder", "prop_builder"})
+    if _needs_player_stats:
+        player_stats = load_player_stats(dates)
+    else:
+        player_stats = []
+        log("Player-Stats übersprungen: keine offenen Player-Prop/Builder-Tipps")
 
     settled = [settle_tip(tip, results, player_stats) for tip in tips]
     log(f"Counts: {dict(Counter(x['status'] for x in settled))}")
