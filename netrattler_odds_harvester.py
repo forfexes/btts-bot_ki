@@ -595,7 +595,7 @@ def collect_oddsharvester(target_date: Optional[str] = None) -> List[Dict[str, A
         ]]
         for cmd in commands:
             try:
-                subprocess.run(cmd, cwd=root, check=False, timeout=int(os.getenv("ODDSHARVESTER_TIMEOUT", "900")), capture_output=True, text=True)
+                subprocess.run(cmd, cwd=root, check=False, timeout=int(os.getenv("ODDSHARVESTER_TIMEOUT", "150")), capture_output=True, text=True)
             except (FileNotFoundError, subprocess.TimeoutExpired) as exc:
                 log(f"OddsHarvester unavailable: {str(exc)[:120]}", "WARN")
                 return []
@@ -653,7 +653,7 @@ def collect_bet365_public(target_date: Optional[str] = None) -> List[Dict[str, A
 
             page.on("response", capture)
             page.goto(os.getenv("BET365_PUBLIC_URL", "https://www.bet365.com/#/AC/B1/C1/D1002/E908/F10/"), wait_until="domcontentloaded", timeout=90000)
-            page.wait_for_timeout(int(os.getenv("BET365_WAIT_MS", "12000")))
+            page.wait_for_timeout(int(os.getenv("BET365_WAIT_MS", "5000")))
             responses.append(page.content())
             browser.close()
     except Exception as exc:
@@ -753,21 +753,47 @@ def collect_betfair_official(target_date: Optional[str] = None) -> List[Dict[str
 
 
 def collect_live_all(target_date: Optional[str]) -> List[Dict[str, Any]]:
+    """Collect fast JSON/API sources first; launch Playwright scrapers only as fallback.
+
+    The old implementation paid the OddsPortal + Bet365 browser cost on every run even
+    when Pinnacle already supplied thousands of rows. That duplicated coverage and was
+    the main reason the odds workflow took several minutes.
+    """
     rows: List[Dict[str, Any]] = []
-    collectors = [
+
+    fast_collectors = [
         ("Pinnacle guest", lambda: collect_pinnacle_live(target_date)),
         ("The Odds API", lambda: collect_the_odds_api(target_date)),
-        ("OddsHarvester/OddsPortal", lambda: collect_oddsharvester(target_date)),
-        ("Bet365 direct public", lambda: collect_bet365_public(target_date)),
         ("Betfair official", lambda: collect_betfair_official(target_date)),
     ]
-    for name, fn in collectors:
+    for name, fn in fast_collectors:
         try:
-            got = fn() or []
+            rows.extend(fn() or [])
         except Exception as exc:
             log(f"{name}: {str(exc)[:120]}; next source", "WARN")
-            got = []
-        rows.extend(got)
+
+    rows = _dedupe(rows)
+    try:
+        fallback_min = max(0, int(os.getenv("ODDS_SLOW_FALLBACK_MIN_ROWS", "500")))
+    except Exception:
+        fallback_min = 500
+    force_slow = os.getenv("ODDS_FORCE_SLOW_SOURCES", "false").lower() in {"1", "true", "yes", "on"}
+
+    allow_slow = os.getenv("ODDS_ALLOW_SLOW_SOURCES", "true").lower() in {"1", "true", "yes", "on"}
+    if allow_slow and (force_slow or len(rows) < fallback_min):
+        log(f"Slow odds fallback aktiv: fast_rows={len(rows)} < {fallback_min} oder force={force_slow}")
+        for name, fn in [
+            ("OddsHarvester/OddsPortal", lambda: collect_oddsharvester(target_date)),
+            ("Bet365 direct public", lambda: collect_bet365_public(target_date)),
+        ]:
+            try:
+                rows.extend(fn() or [])
+            except Exception as exc:
+                log(f"{name}: {str(exc)[:120]}; next source", "WARN")
+    else:
+        reason = "deaktiviert" if not allow_slow else f"{len(rows)} Fast-Source Rows reichen"
+        log(f"Slow Playwright odds sources übersprungen: {reason}", "OK")
+
     return _dedupe(rows)
 
 
