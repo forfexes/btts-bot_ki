@@ -26,7 +26,7 @@ concurrency:
 jobs:
   master:
     runs-on: ubuntu-latest
-    timeout-minutes: 240
+    timeout-minutes: 75
     steps:
       - uses: actions/checkout@v4
 
@@ -173,7 +173,7 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
-          python -m pip install --upgrade pip
+          export PIP_DISABLE_PIP_VERSION_CHECK=1
           MODE="${{ steps.mode.outputs.mode }}"
 
           case "$MODE" in
@@ -185,7 +185,6 @@ jobs:
                 "rapidfuzz>=3,<4" \
                 "beautifulsoup4>=4.12,<5" \
                 "cloudscraper>=1.2.71,<2" \
-                "playwright>=1.45,<2" \
                 "scikit-learn>=1.5,<2"
               ;;
             learning)
@@ -226,7 +225,7 @@ jobs:
           PY
 
       - name: Resolve Playwright version
-        if: contains(fromJSON('["daily","full"]'), steps.mode.outputs.mode)
+        if: steps.mode.outputs.mode == 'full'
         id: playwright-version
         shell: bash
         run: |
@@ -236,7 +235,7 @@ jobs:
           echo "PLAYWRIGHT VERSION $VERSION"
 
       - name: Restore Chromium browser cache
-        if: contains(fromJSON('["daily","full"]'), steps.mode.outputs.mode)
+        if: steps.mode.outputs.mode == 'full'
         id: playwright-browser-cache
         uses: actions/cache@v4
         with:
@@ -244,11 +243,11 @@ jobs:
           key: playwright-chromium-${{ runner.os }}-${{ steps.playwright-version.outputs.version }}
 
       - name: Install Chromium browser
-        if: contains(fromJSON('["daily","full"]'), steps.mode.outputs.mode) && steps.playwright-browser-cache.outputs.cache-hit != 'true'
+        if: steps.mode.outputs.mode == 'full' && steps.playwright-browser-cache.outputs.cache-hit != 'true'
         run: python -m playwright install chromium
 
       - name: Verify Chromium launch
-        if: contains(fromJSON('["daily","full"]'), steps.mode.outputs.mode)
+        if: steps.mode.outputs.mode == 'full'
         shell: bash
         run: |
           python - <<'PY'
@@ -337,7 +336,7 @@ jobs:
           echo "COMPILE OK mode=$MODE files=${#files[@]}"
 
       - name: Core regression test
-        if: contains(fromJSON('["daily","full"]'), steps.mode.outputs.mode)
+        if: steps.mode.outputs.mode == 'full'
         shell: bash
         run: |
           set -euo pipefail
@@ -345,6 +344,7 @@ jobs:
           python test_netrattler_core.py
 
       - name: Source discovery and quarantine lab
+        timeout-minutes: 15
         if: contains(fromJSON('["full","sources"]'), steps.mode.outputs.mode)
         env:
           SUPABASE_URL: ${{ secrets.SUPABASE_URL }}
@@ -357,6 +357,7 @@ jobs:
           BETFAIR_SESSION_TOKEN: ${{ secrets.BETFAIR_SESSION_TOKEN }}
         run: NETRATTLER_LEARNING_MODE=sources python netrattler_learning_engine.py
       - name: Safe generic data ingestion
+        timeout-minutes: 10
         # Historical GitHub datasets run only for full/source maintenance.
         # Daily mode is reserved for fresh player stats, odds and learning.
         if: contains(fromJSON('["full","sources"]'), steps.mode.outputs.mode)
@@ -371,6 +372,7 @@ jobs:
           BETFAIR_SESSION_TOKEN: ${{ secrets.BETFAIR_SESSION_TOKEN }}
         run: python netrattler_generic_repo_ingestor.py
       - name: Player stats and results
+        timeout-minutes: 8
         if: contains(fromJSON('["daily","full"]'), steps.mode.outputs.mode)
         env:
           SUPABASE_URL: ${{ secrets.SUPABASE_URL }}
@@ -388,9 +390,11 @@ jobs:
           if [[ "${{ steps.mode.outputs.mode }}" == "daily" ]]; then
             export USE_SOCCERDATA=false
             export USE_STATSBOMB=false
+            export USE_FBREF=false
           fi
           python scrape_player_stats.py --yesterday
       - name: Compact current odds
+        timeout-minutes: 6
         if: contains(fromJSON('["daily","full"]'), steps.mode.outputs.mode)
         env:
           SUPABASE_URL: ${{ secrets.SUPABASE_URL }}
@@ -408,6 +412,7 @@ jobs:
         run: |
           python netrattler_closing_odds_capture_v35.py --snapshot-type current
       - name: Temporal models and champion promotion
+        timeout-minutes: 25
         if: contains(fromJSON('["full","train"]'), steps.mode.outputs.mode)
         env:
           SUPABASE_URL: ${{ secrets.SUPABASE_URL }}
@@ -434,6 +439,7 @@ jobs:
         run: python netrattler_bet365_player_props.py --date today
 
       - name: Settlement learning, calibration and risk policy
+        timeout-minutes: 8
         if: contains(fromJSON('["daily","full","learning"]'), steps.mode.outputs.mode)
         env:
           SUPABASE_URL: ${{ secrets.SUPABASE_URL }}
