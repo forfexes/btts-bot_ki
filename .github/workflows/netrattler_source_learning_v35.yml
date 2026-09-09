@@ -10,7 +10,7 @@ concurrency:
 jobs:
   learn:
     runs-on: ubuntu-latest
-    timeout-minutes: 120
+    timeout-minutes: 35
     steps:
       - uses: actions/checkout@v4
 
@@ -26,8 +26,10 @@ jobs:
           restore-keys: |
             netrattler-source-cache-${{ runner.os }}-
 
-      - name: Install
-        run: pip install requests pandas python-dateutil numpy scikit-learn
+      - name: Install minimal learning runtime
+        run: |
+          export PIP_DISABLE_PIP_VERSION_CHECK=1
+          pip install requests pandas python-dateutil numpy scikit-learn
 
       - name: Compile V36D modules
         run: |
@@ -48,25 +50,28 @@ jobs:
         run: python netrattler_schema_check_v36.py
 
       - name: Discover and test free football sources
+        timeout-minutes: 12
         env:
           SUPABASE_URL: ${{ secrets.SUPABASE_URL }}
           SUPABASE_KEY: ${{ secrets.SUPABASE_KEY }}
           SUPABASE_SERVICE_ROLE_KEY: ${{ secrets.SUPABASE_SERVICE_ROLE_KEY }}
           GITHUB_TOKEN: ${{ github.token }}
-          NETRATTLER_MAX_DISCOVERY_REPOS: "80"
+          NETRATTLER_MAX_DISCOVERY_REPOS: "30"
         run: NETRATTLER_LEARNING_MODE=sources python netrattler_learning_engine.py
 
       - name: Ingest promoted free data files
+        timeout-minutes: 8
         env:
           SUPABASE_URL: ${{ secrets.SUPABASE_URL }}
           SUPABASE_KEY: ${{ secrets.SUPABASE_KEY }}
           SUPABASE_SERVICE_ROLE_KEY: ${{ secrets.SUPABASE_SERVICE_ROLE_KEY }}
           GITHUB_TOKEN: ${{ github.token }}
-          NETRATTLER_GENERIC_MAX_FILES: "30"
-          NETRATTLER_GENERIC_MAX_ROWS_PER_FILE: "5000"
+          NETRATTLER_GENERIC_MAX_FILES: "12"
+          NETRATTLER_GENERIC_MAX_ROWS_PER_FILE: "2500"
         run: python netrattler_generic_repo_ingestor.py
 
       - name: Learn from settlements and rebuild policy
+        timeout-minutes: 8
         env:
           SUPABASE_URL: ${{ secrets.SUPABASE_URL }}
           SUPABASE_KEY: ${{ secrets.SUPABASE_KEY }}
