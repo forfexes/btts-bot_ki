@@ -987,7 +987,11 @@ def _safe_fit_classifier(base_model, X, y, model_name, prefer_calibration=True):
         base_model.fit(X, y_arr)
         return base_model
 
-    n_splits = max(2, min(3, minority))
+    try:
+        requested_folds = max(2, min(3, int(os.getenv("NETRATTLER_CALIBRATION_FOLDS", "2"))))
+    except Exception:
+        requested_folds = 2
+    n_splits = max(2, min(requested_folds, minority))
     cv = StratifiedKFold(n_splits=n_splits, shuffle=True, random_state=42)
 
     try:
@@ -1103,7 +1107,8 @@ def train_model(df, target_col, model_name):
 
     # XGBoost-Parameter
     base_model = xgb.XGBClassifier(
-        n_estimators=300,
+        n_estimators=int(os.getenv("NETRATTLER_XGB_ESTIMATORS", "200")),
+        tree_method="hist",
         max_depth=4,
         learning_rate=0.05,
         subsample=0.8,
@@ -1421,7 +1426,8 @@ def train_player_prop_model(dfp, stat, line, model_name):
     print(f"   Positiv-Rate: {y.mean():.1%}")
 
     base_model = xgb.XGBClassifier(
-        n_estimators=220,
+        n_estimators=int(os.getenv("NETRATTLER_PLAYER_XGB_ESTIMATORS", "160")),
+        tree_method="hist",
         max_depth=3,
         learning_rate=0.05,
         subsample=0.85,
