@@ -797,8 +797,17 @@ def collect_live_all(target_date: Optional[str]) -> List[Dict[str, Any]]:
     return _dedupe(rows)
 
 
-def get_best_quote_from_supabase(home: str, away: str, market: str, selection: str = "") -> Optional[Tuple[float, str]]:
-    """Runtime helper for btts_bot / builder fallback with tolerant team matching."""
+_BEST_QUOTE_CACHE: Dict[Tuple[str, str, str, str, str], Optional[Tuple[float, str]]] = {}
+
+
+def get_best_quote_from_supabase(
+    home: str, away: str, market: str, selection: str = "", target_date: Optional[str] = None
+) -> Optional[Tuple[float, str]]:
+    """Fast runtime lookup of the best OBSERVED quote for one current match.
+
+    Uses tolerant team matching, market aliases and (when known) match_date so an old
+    meeting between the same teams cannot leak into today's price. Returns bookmaker.
+    """
     if not SUPABASE_URL or not SUPABASE_KEY:
         return None
 
@@ -808,17 +817,43 @@ def get_best_quote_from_supabase(home: str, away: str, market: str, selection: s
             value = value.replace(token, " ")
         return re.sub(r"\s+", " ", value).strip()
 
+    aliases = {
+        "totals": ["totals", "totals_2_5"],
+        "totals_2_5": ["totals_2_5", "totals"],
+        "over25": ["totals_2_5", "totals"],
+        "btts": ["btts", "both_teams_to_score"],
+        "1x2": ["1x2", "h2h"],
+        "btts_1h": ["btts_1h", "btts_ht"],
+        "btts_ht": ["btts_1h", "btts_ht"],
+        "totals_1h": ["totals_1h", "over15_ht"],
+        "over15_ht": ["totals_1h", "over15_ht"],
+        "btts_and_totals": ["btts_and_totals", "btts_over25_combo", "combo"],
+    }
+    mk_list = aliases.get(str(market).lower(), [str(market).lower()])
     hn, an = norm_team(home), norm_team(away)
+    day = str(target_date or "")[:10]
+    ck = (hn, an, "|".join(mk_list), str(selection or "").lower(), day)
+    if ck in _BEST_QUOTE_CACHE:
+        return _BEST_QUOTE_CACHE[ck]
+
     htoken = next((x for x in hn.split() if len(x) >= 4), hn.split()[0] if hn.split() else hn)
     atoken = next((x for x in an.split() if len(x) >= 4), an.split()[0] if an.split() else an)
     params = {
-        "select": "home_team,away_team,bookmaker,selection,odds,market,captured_date",
+        "select": "home_team,away_team,bookmaker,selection,odds,market,captured_date,match_date",
         "home_team": f"ilike.*{htoken}*", "away_team": f"ilike.*{atoken}*",
-        "market": f"eq.{market}", "order": "captured_date.desc,odds.desc", "limit": "100",
+        "market": f"in.({','.join(mk_list)})", "order": "captured_date.desc,odds.desc", "limit": "120",
     }
+    if day:
+        params["match_date"] = f"eq.{day}"
     try:
-        r = requests.get(f"{SUPABASE_URL}/rest/v1/odds_history", headers=_sb_headers(), params=params, timeout=12)
+        r = requests.get(f"{SUPABASE_URL}/rest/v1/odds_history", headers=_sb_headers(), params=params, timeout=5)
+        # Backward-compatible schema fallback if match_date is absent in an older table.
+        if not r.ok and day and r.status_code in (400, 404):
+            params.pop("match_date", None)
+            params["select"] = "home_team,away_team,bookmaker,selection,odds,market,captured_date"
+            r = requests.get(f"{SUPABASE_URL}/rest/v1/odds_history", headers=_sb_headers(), params=params, timeout=5)
         if not r.ok:
+            _BEST_QUOTE_CACHE[ck] = None
             return None
         candidates = []
         for row in r.json():
@@ -827,14 +862,25 @@ def get_best_quote_from_supabase(home: str, away: str, market: str, selection: s
             away_ok = an == ra or an in ra or ra in an or bool(set(an.split()) & set(ra.split()))
             if not (home_ok and away_ok):
                 continue
-            if selection and str(row.get("selection", "")).lower() != selection.lower():
+            if day and row.get("match_date") and str(row.get("match_date"))[:10] != day:
                 continue
-            candidates.append(row)
+            if selection and str(row.get("selection", "")).lower() != str(selection).lower():
+                continue
+            try:
+                q = float(row.get("odds") or 0)
+            except (TypeError, ValueError):
+                continue
+            if q > 1.0:
+                candidates.append(row)
         if not candidates:
+            _BEST_QUOTE_CACHE[ck] = None
             return None
         best = max(candidates, key=lambda x: float(x.get("odds") or 0))
-        return float(best["odds"]), str(best.get("bookmaker") or "odds_history")
+        out = (float(best["odds"]), str(best.get("bookmaker") or "odds_history"))
+        _BEST_QUOTE_CACHE[ck] = out
+        return out
     except Exception:
+        _BEST_QUOTE_CACHE[ck] = None
         return None
 
 
