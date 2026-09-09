@@ -39,12 +39,6 @@ SOURCE_WEIGHT = {
     "statz.ai": 0.92,
     "scoutingstats": 0.90,
     "pinnacle": 0.88,
-    "kambi": 0.86,
-    "unibet": 0.86,
-    "1xbet": 0.84,
-    "melbet": 0.82,
-    "oddspedia": 0.80,
-    "bet365": 0.90,
     "supabasedb:pinnacle": 0.86,
     "statsbomb": 0.84,
     "fotmob": 0.78,
@@ -255,7 +249,6 @@ def normalize_prop(row: Dict[str, Any]) -> Optional[PropLeg]:
     explicit_estimated = str(row.get("estimated") or "").lower() in {"1", "true", "yes", "on"}
     bookmaker_tokens = (
         "pinnacle", "bet365", "betfair", "oddsportal", "oddsharvester",
-        "kambi", "unibet", "betsson", "1xbet", "melbet", "oddspedia",
         "bookmaker", "sportsbook",
     )
     observed_bookmaker = odds > 1 and any(token in source_text for token in bookmaker_tokens)
@@ -1847,6 +1840,17 @@ def _v31_is_real_player_leg(leg: PropLeg) -> bool:
     p = norm(leg.player)
     if not p or p in _GENERIC_PLAYERS_V31:
         return False
+    # Defense-in-depth: team-card markets can masquerade as player props.
+    try:
+        _parts = str(leg.match or "").split(" vs ", 1)
+        _teams = [norm(x) for x in _parts if x]
+        if any(p == t or (len(p) >= 5 and p in t) or (len(t) >= 4 and t in p) for t in _teams if t):
+            return False
+        from difflib import SequenceMatcher as _SeqMatcher
+        if any(_SeqMatcher(None, p, t).ratio() >= 0.78 for t in _teams if t):
+            return False
+    except Exception:
+        pass
     # Team props kommen manchmal als "Argentina To Score?" / "England To Score?"
     # in score-Kategorie rein. Diese nicht als Spielerprop behandeln.
     m = norm(leg.market)
@@ -1878,9 +1882,8 @@ def _v31_has_observed_bookmaker_odds(leg: PropLeg) -> bool:
         return False
     source = norm(leg.source)
     return any(token in source for token in {
-        "pinnacle", "bet365", "betfair", "oddsportal", "oddsharvester",
-        "kambi", "unibet", "betsson", "1xbet", "melbet", "oddspedia",
-        "bookmaker", "sportsbook",
+        "pinnacle", "bet365", "betfair", "oddsportal",
+        "oddsharvester", "bookmaker", "sportsbook",
     })
 
 
