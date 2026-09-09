@@ -17,7 +17,7 @@ on:
 jobs:
   scrape:
     runs-on: ubuntu-latest
-    timeout-minutes: 90
+    timeout-minutes: 25
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-python@v5
@@ -26,11 +26,8 @@ jobs:
           cache: "pip"
       - name: Install all free source dependencies
         run: |
-          python -m pip install --upgrade pip
           pip install curl_cffi
           pip install -r requirements.txt || true
-          pip install -r requirements_all_source.txt
-          pip install oddsharvester || pip install git+https://github.com/jordantete/OddsHarvester.git || true
           python -m playwright install chromium --with-deps
       - name: Compile
         run: python -m py_compile scrape_player_stats.py netrattler_odds_harvester.py
@@ -48,17 +45,19 @@ jobs:
           BETFAIR_SESSION_TOKEN: ${{ secrets.BETFAIR_SESSION_TOKEN }}
           USE_SOFASCORE: "true"
           USE_FOTMOB: "true"
-          USE_STATSBOMB: "true"
-          USE_FBREF: "true"
-          USE_SOCCERDATA: "true"
-          ENABLE_SOCCERDATA: "1"
-          USE_GITHUB_OPEN_SOURCES: "true"
-          USE_ODDSHARVESTER_STYLE: "true"
-          ENABLE_ODDSHARVESTER: "true"
-          ENABLE_BET365_PUBLIC: "true"
-          ENABLE_REEP_IDENTITY: "true"
-          SOURCE_MAX_EVENTS: "100"
+          USE_STATSBOMB: "false"
+          USE_FBREF: "false"
+          USE_SOCCERDATA: "false"
+          ENABLE_SOCCERDATA: "0"
+          USE_GITHUB_OPEN_SOURCES: "false"
+          USE_ODDSHARVESTER_STYLE: "false"
+          ENABLE_ODDSHARVESTER: "false"
+          ENABLE_BET365_PUBLIC: "false"
+          ENABLE_REEP_IDENTITY: "false"
+          SOURCE_MAX_EVENTS: "80"
           SOURCE_SLEEP: "0.08"
+          DAILY_RESULTS_PARALLEL_WORKERS: "4"
+          DAILY_STATS_PARALLEL_WORKERS: "2"
         run: |
           if [ -n "${{ github.event.inputs.date }}" ]; then ARGS="--date ${{ github.event.inputs.date }}"; else ARGS="--yesterday"; fi
           if [ "${{ github.event.inputs.results_only }}" = "true" ]; then ARGS="$ARGS --results-only"; fi
