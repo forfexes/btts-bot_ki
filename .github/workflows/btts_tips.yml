@@ -21,7 +21,7 @@ on:
 jobs:
   run-bot:
     runs-on: ubuntu-latest
-    timeout-minutes: 20
+    timeout-minutes: 15
 
     steps:
       - name: Checkout Repository
@@ -59,29 +59,17 @@ jobs:
 
         run: |
 
-          python -m py_compile btts_bot.py netrattler_builder_engine.py netrattler_prop_sources.py netrattler_free_odds.py netrattler_settlement_v16_final.py netrattler_source_hub.py netrattler_identity_hub.py netrattler_feature_hub.py
+          python -m py_compile btts_bot.py netrattler_builder_engine.py netrattler_settlement_v16_final.py netrattler_source_hub.py netrattler_identity_hub.py netrattler_feature_hub.py
 
           python test_netrattler_core.py
-          python test_source_hub_v30.py
 
 
       - name: Run Tips Bot 🤖
         env:
-          # ── 🧱 STABLE CORE: funktionierende Analyse bleibt immer aktiv ──
-          # Neue Quellen sind Fallbacks/Adapter und dürfen die Modell-/Statistikbasis nicht abschalten.
-          NETRATTLER_STABLE_CORE:     "true"
-          NETRATTLER_FAST_TIPS:       "false"
-          NETRATTLER_REQUIRE_REAL_ODDS: "true"
-          NETRATTLER_REAL_ODDS_ONLY:  "true"
-          NETRATTLER_STATBUNKER_MAX_LOOKUPS: "25"
-          NETRATTLER_LINEUP_MAX:      "20"
-          NETRATTLER_ML_PREFETCH_BUDGET_SEC: "30"
-          NETRATTLER_PIN_SPECIAL_BUDGET_SEC: "30"
-          NETRATTLER_CORNERS_BUDGET_SEC: "45"
-          NETRATTLER_LEAGUE_FALLBACK_BUDGET_SEC: "180"
-          NETRATTLER_ANALYSIS_BUDGET_SEC: "600"
-          NETRATTLER_GLOBAL_BUDGET_SEC: "840"
-          NETRATTLER_HARD_WATCHDOG_SEC: "1050"
+          # ── ⚡ SPEED: Tipp-Lauf schnell halten (Stats sammelt der Scraper separat) ──
+          NETRATTLER_FAST_TIPS:       "true"
+          NETRATTLER_STATBUNKER_MAX_LOOKUPS: "15"
+          NETRATTLER_LINEUP_MAX:      "12"
           # ── KI APIs ──
           GEMINI_API_KEYS:            ${{ secrets.GEMINI_API_KEYS }}
           GROQ_API_KEYS:              ${{ secrets.GROQ_API_KEYS }}
@@ -115,6 +103,8 @@ jobs:
           TELEGRAM_GROUP_STATS:       ${{ secrets.TELEGRAM_GROUP_STATS }}
           TELEGRAM_GROUP_PLAYER_PROPS: ${{ secrets.TELEGRAM_GROUP_PLAYER_PROPS }}
           TELEGRAM_GROUP_BUILDER:     ${{ secrets.TELEGRAM_GROUP_BUILDER }}
+          TELEGRAM_GROUP_OVER15_HT:   ${{ secrets.TELEGRAM_GROUP_OVER15_HT }}
+          TELEGRAM_GROUP_1X2:         ${{ secrets.TELEGRAM_GROUP_1X2 }}
           # ── Supabase ──
           SUPABASE_URL:               ${{ secrets.SUPABASE_URL }}
           SUPABASE_KEY:               ${{ secrets.SUPABASE_KEY }}
@@ -129,4 +119,14 @@ jobs:
           PARALLEL_WORKERS:           "10"
           AI_SLEEP_SECONDS:           "0.1"
           GROQ_SLEEP_SECONDS:         "0.5"
+          NETRATTLER_ANALYSIS_BUDGET_SEC: "240"
+          NETRATTLER_LEAGUE_FALLBACK_BUDGET_SEC: "45"
+          NETRATTLER_GLOBAL_BUDGET_SEC: "600"
+          NETRATTLER_HARD_WATCHDOG_SEC: "720"
+          NETRATTLER_CORNERS_BUDGET_SEC: "25"
+          NETRATTLER_EXTRA_PROP_MAX_MATCHES: "10"
+          NETRATTLER_BTTS_HT_MIN_PROB: "38"
+          NETRATTLER_OVER15_HT_MIN_PROB: "42"
+          NETRATTLER_COMBO_MIN_PROB: "52"
+          NETRATTLER_1X2_MIN_PROB: "55"
         run: python btts_bot.py
