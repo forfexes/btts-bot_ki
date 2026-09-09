@@ -8,19 +8,18 @@ on:
 jobs:
   harvest:
     runs-on: ubuntu-latest
-    timeout-minutes: 120
+    timeout-minutes: 45
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-python@v5
         with:
           python-version: "3.11"
           cache: "pip"
-      - name: Install every free adapter
+      - name: Install source adapters
         run: |
-          python -m pip install --upgrade pip
           pip install -r requirements_all_source.txt
-          pip install oddsharvester || pip install git+https://github.com/jordantete/OddsHarvester.git || true
-          python -m playwright install chromium --with-deps
+          # Browser/bookmaker adapters are intentionally not installed here; the dedicated
+          # Odds Harvester owns those sources, avoiding duplicate Chromium setup/work.
       - name: Compile
         run: python -m py_compile netrattler_all_source_harvester.py netrattler_source_hub.py netrattler_odds_harvester.py
       - name: Run all sources; failed source continues to next
@@ -37,11 +36,13 @@ jobs:
           ENABLE_SOCCERDATA: "1"
           ENABLE_ODDSHARVESTER: "true"
           ENABLE_BET365_PUBLIC: "true"
-          MAX_STATSBOMB_MATCHES: "80"
-          MAX_OPENFOOTBALL_FILES: "180"
-          MAX_FILES_PER_GITHUB_REPO: "25"
-          MAX_FOOTBALL_DATA_ROWS_PER_CSV: "2000"
-          SEASONS: "2526,2425,2324,2223,2122"
+          MAX_STATSBOMB_MATCHES: "40"
+          MAX_OPENFOOTBALL_FILES: "80"
+          MAX_FILES_PER_GITHUB_REPO: "15"
+          MAX_FOOTBALL_DATA_ROWS_PER_CSV: "1000"
+          SEASONS: "2526,2425,2324"
+          HARVEST_PARALLEL_WORKERS: "4"
+          ALL_SOURCE_INCLUDE_ODDS: "false"
         run: python netrattler_all_source_harvester.py
       - uses: actions/upload-artifact@v4
         if: always()
