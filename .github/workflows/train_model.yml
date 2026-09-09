@@ -8,7 +8,7 @@ on:
 jobs:
   train:
     runs-on: ubuntu-latest
-    timeout-minutes: 90
+    timeout-minutes: 45
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-python@v5
@@ -29,6 +29,9 @@ jobs:
           TELEGRAM_BOT_TOKEN: ${{ secrets.TELEGRAM_BOT_TOKEN }}
           TELEGRAM_CHAT_ID: ${{ secrets.TELEGRAM_CHAT_ID }}
           FD_START_YEAR: "2010"
+          NETRATTLER_XGB_ESTIMATORS: "200"
+          NETRATTLER_PLAYER_XGB_ESTIMATORS: "160"
+          NETRATTLER_CALIBRATION_FOLDS: "2"
         run: |
           python train_model.py
           python netrattler_autolearn_v36.py --train || true
