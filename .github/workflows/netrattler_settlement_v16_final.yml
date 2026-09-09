@@ -12,7 +12,7 @@ concurrency:
 jobs:
   settle:
     runs-on: ubuntu-latest
-    timeout-minutes: 60
+    timeout-minutes: 20
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-python@v5
@@ -24,6 +24,10 @@ jobs:
       - name: Settle per group and learn from newly closed picks
         env:
           RESULT_USE_SOFASCORE: "true"
+          SETTLEMENT_DAYS: "7"
+          NETRATTLER_RESETTLE_BROKEN: "false"
+          NETRATTLER_ALWAYS_FALLBACK_RESULTS: "false"
+          RESULT_HTTP_TIMEOUT: "6"
           SUPABASE_URL: ${{ secrets.SUPABASE_URL }}
           SUPABASE_KEY: ${{ secrets.SUPABASE_KEY }}
           ODDSPAPI_KEY: ${{ secrets.ODDSPAPI_KEY }}
@@ -39,8 +43,11 @@ jobs:
           TELEGRAM_GROUP_OVER15_HT: ${{ secrets.TELEGRAM_GROUP_OVER15_HT }}
           TELEGRAM_GROUP_BUILDER: ${{ secrets.TELEGRAM_GROUP_BUILDER }}
           TELEGRAM_GROUP_PROPS: ${{ secrets.TELEGRAM_GROUP_PROPS }}
+          TELEGRAM_GROUP_PLAYER_PROPS: ${{ secrets.TELEGRAM_GROUP_PLAYER_PROPS }}
           TELEGRAM_GROUP_CORNERS: ${{ secrets.TELEGRAM_GROUP_CORNERS }}
           TELEGRAM_GROUP_STATS: ${{ secrets.TELEGRAM_GROUP_STATS }}
+          TELEGRAM_GROUP_LATE_GOALS: ${{ secrets.TELEGRAM_GROUP_LATE_GOALS }}
+          TELEGRAM_GROUP_1X2: ${{ secrets.TELEGRAM_GROUP_1X2 }}
           NETRATTLER_AUTO_LEARN_AFTER_SETTLEMENT: "true"
           UPDATE_SOURCE_TIPS: "true"
           SEND_PENDING_SUMMARY: "false"
