@@ -14,6 +14,7 @@ from pathlib import Path
 from collections import defaultdict
 from datetime import datetime, timezone, timedelta
 from typing import Any, Dict, List, Optional
+from concurrent.futures import ThreadPoolExecutor, as_completed
 import requests
 
 SUPABASE_URL  = os.environ.get("SUPABASE_URL", "")
@@ -471,12 +472,25 @@ def scrape_results(date_str: str) -> int:
     """Holt Ergebnisse aus allen Quellen und speichert in match_results."""
     print(f"\n📅 Scrape Ergebnisse für {date_str}")
     all_results = []
-    all_results.extend(fetch_espn_results(date_str))
-    all_results.extend(fetch_thesportsdb_results(date_str))
-    all_results.extend(fetch_openfootball_results(date_str))
-    all_results.extend(fetch_fifa_results(date_str))  # FIFA WM/Turniere
-    all_results.extend(fetch_github_open_source_results(date_str))  # ALL GitHub result repos
-    all_results.extend(fetch_livescore_api_results(date_str))       # free endpoint if configured
+    # Result sources are independent HTTP feeds. Parallel execution prevents one blocked
+    # endpoint timeout from serially delaying every other source.
+    result_jobs = [
+        ("ESPN", lambda: fetch_espn_results(date_str)),
+        ("TheSportsDB", lambda: fetch_thesportsdb_results(date_str)),
+        ("OpenFootball", lambda: fetch_openfootball_results(date_str)),
+        ("FIFA", lambda: fetch_fifa_results(date_str)),
+        ("GitHub open results", lambda: fetch_github_open_source_results(date_str)),
+        ("LiveScore API", lambda: fetch_livescore_api_results(date_str)),
+    ]
+    workers = max(1, min(6, int(os.environ.get("DAILY_RESULTS_PARALLEL_WORKERS", "4"))))
+    with ThreadPoolExecutor(max_workers=workers) as pool:
+        futures = {pool.submit(fn): name for name, fn in result_jobs}
+        for fut in as_completed(futures):
+            name = futures[fut]
+            try:
+                all_results.extend(fut.result() or [])
+            except Exception as exc:
+                print(f"  ⚠️  {name}: {str(exc)[:100]}")
 
     # Deduplizieren (ESPN hat Vorrang weil vollständiger)
     seen = set()
@@ -1888,9 +1902,24 @@ def scrape_player_stats(date_str: str) -> int:
         source_counts["OddsHarvester + Bet365 + other bookies"] = 0
         print("  ℹ️  Odds im Player-Stats-Lauf deaktiviert — eigener Odds-Schritt folgt")
 
-    # Aktuelle Matchdaten zuerst
-    add_source("SofaScore", lambda: scrape_sofascore_date(date_str))
-    add_source("FotMob direct API / davidrocha9-fotmob-scraper fallback", lambda: scrape_fotmob_date(date_str))
+    # Aktuelle Matchdaten zuerst. SofaScore/FotMob sind unabhängig und normalerweise
+    # der teuerste Teil des Daily-Runs, daher parallel statt seriell.
+    current_jobs = [
+        ("SofaScore", lambda: scrape_sofascore_date(date_str)),
+        ("FotMob direct API / davidrocha9-fotmob-scraper fallback", lambda: scrape_fotmob_date(date_str)),
+    ]
+    current_workers = max(1, min(2, int(os.environ.get("DAILY_STATS_PARALLEL_WORKERS", "2"))))
+    with ThreadPoolExecutor(max_workers=current_workers) as pool:
+        futures = {pool.submit(fn): name for name, fn in current_jobs}
+        for fut in as_completed(futures):
+            name = futures[fut]
+            try:
+                rows = fut.result() or []
+            except Exception as exc:
+                print(f"  ⚠️  {name}: {str(exc)[:120]}")
+                rows = []
+            all_rows.extend(rows)
+            source_counts[name] = len(rows)
 
     # GitHub Player Dataset + research catalog. salimt supplies data; eddwebster is source discovery/catalog.
     add_source("GitHub player dataset: salimt/football-datasets", lambda: scrape_github_player_datasets(date_str))
