@@ -130,8 +130,10 @@ TELEGRAM_GROUPS = {
     "combos": env("TELEGRAM_GROUP_COMBOS", TELEGRAM_CHAT_ID),
 
     "btts_ht": env("TELEGRAM_GROUP_BTTS_HT", TELEGRAM_CHAT_ID),
-    "over15_ht": (env("TELEGRAM_GROUP_OVER15_HT") or env("TELEGRAM_GROUP_BTTS_HT") or TELEGRAM_CHAT_ID),
-    "1x2": (env("TELEGRAM_GROUP_1X2") or env("TELEGRAM_GROUP_LATE_GOALS") or TELEGRAM_CHAT_ID),
+    # Fixed routing: Over 1.5 HT belongs in the BTTS-HT channel.
+    "over15_ht": env("TELEGRAM_GROUP_BTTS_HT", TELEGRAM_CHAT_ID),
+    # Fixed routing: 1X2 belongs in Goal Hunter / Late Goals.
+    "1x2": env("TELEGRAM_GROUP_LATE_GOALS", TELEGRAM_CHAT_ID),
 
     # Deine bestehenden Secret-Namen:
     # TELEGRAM_GROUP_HZ_LIVE    = NETRATTLER CORNER SNIPER
@@ -7165,15 +7167,9 @@ def generate_multi_combo_bets(all_tips, num_tips=3):
     for t in all_tips:
         try:
             odds = float(str(t.get("oddsYes", t.get("odds", 0)) or 0).replace(",", "."))
-            # 🆕 Fallback: wenn kein echter Odds, fairOdds aus Wahrscheinlichkeit nutzen
-            if odds < 1.40:
-                fair = float(str(t.get("fairOdds", 0) or 0).replace(",", "."))
-                prob = int(t.get("probability", 0) or 0)
-                if fair >= 1.40:
-                    odds = fair
-                elif prob >= 55:
-                    odds = round(100 / prob, 2)  # z.B. 67% → 1.49
-            if odds >= 1.40:
+            # Multi-Combos dürfen ausschließlich echte Bookmaker-Quoten verwenden.
+            # fairOdds / 100-probability sind Modellwerte und keine platzierbaren Quoten.
+            if odds >= 1.40 and not bool(t.get("_no_real_odds", False)):
                 normalized.append({
                     "match": t.get("match", ""),
                     "league": t.get("league", ""),
@@ -7190,10 +7186,11 @@ def generate_multi_combo_bets(all_tips, num_tips=3):
     if not normalized:
         return None
 
-    # Sortiere nach Confidence + Probability
+    # Multi-Combos: zuerst die höchste Wahrscheinlichkeit, Confidence nur als Tie-Breaker.
+    # Dadurch werden marktübergreifend die stärksten Einzel-Tipps gemischt.
     sorted_tips = sorted(
         normalized,
-        key=lambda x: (x.get("confidence", 0), x.get("probability", 0)),
+        key=lambda x: (x.get("probability", 0), x.get("confidence", 0)),
         reverse=True
     )
 
@@ -17272,15 +17269,9 @@ def generate_multi_combo_bets(all_tips, num_tips=3):
     for t in all_tips:
         try:
             odds = float(str(t.get("oddsYes", t.get("odds", 0)) or 0).replace(",", "."))
-            # 🆕 Fallback: wenn kein echter Odds, fairOdds aus Wahrscheinlichkeit nutzen
-            if odds < 1.40:
-                fair = float(str(t.get("fairOdds", 0) or 0).replace(",", "."))
-                prob = int(t.get("probability", 0) or 0)
-                if fair >= 1.40:
-                    odds = fair
-                elif prob >= 55:
-                    odds = round(100 / prob, 2)  # z.B. 67% → 1.49
-            if odds >= 1.40:
+            # Multi-Combos dürfen ausschließlich echte Bookmaker-Quoten verwenden.
+            # fairOdds / 100-probability sind Modellwerte und keine platzierbaren Quoten.
+            if odds >= 1.40 and not bool(t.get("_no_real_odds", False)):
                 normalized.append({
                     "match": t.get("match", ""),
                     "league": t.get("league", ""),
@@ -17297,10 +17288,15 @@ def generate_multi_combo_bets(all_tips, num_tips=3):
     if not normalized:
         return None
 
-    # Sortiere nach Confidence + Probability
+    # Multi-Combos: höchste Wahrscheinlichkeit zuerst; Confidence/learned weight nur Tie-Breaker.
     sorted_tips = sorted(
         normalized,
-        key=lambda x: (float(x.get("confidence",0) or 0) * _ntr_learned_weight(x.get("market",""), x.get("league","") or x.get("competition","")), x.get("probability", 0)),
+        key=lambda x: (
+            x.get("probability", 0),
+            float(x.get("confidence", 0) or 0) * _ntr_learned_weight(
+                x.get("market", ""), x.get("league", "") or x.get("competition", "")
+            ),
+        ),
         reverse=True
     )
 
