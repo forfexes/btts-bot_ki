@@ -38,14 +38,20 @@ except Exception:  # pragma: no cover
 # ------------------------------------------------------------------
 # HTTP-Helfer: nutzt cloudscraper falls vorhanden, sonst requests.
 # ------------------------------------------------------------------
+_HTTP_SESSION = None
+
 def _session():
+    global _HTTP_SESSION
+    if _HTTP_SESSION is not None:
+        return _HTTP_SESSION
     try:
         import cloudscraper as _cs
-        return _cs.create_scraper()
+        _HTTP_SESSION = _cs.create_scraper()
     except Exception:
         if requests is None:
             return None
-        return requests.Session()
+        _HTTP_SESSION = requests.Session()
+    return _HTTP_SESSION
 
 
 _HEADERS = {
@@ -57,7 +63,7 @@ _HEADERS = {
 }
 
 
-def _get_json(url: str, params: Optional[dict] = None, timeout: int = 12):
+def _get_json(url: str, params: Optional[dict] = None, timeout: int = 8):
     sess = _session()
     if sess is None:
         return None
@@ -74,6 +80,32 @@ def _get_json(url: str, params: Optional[dict] = None, timeout: int = 12):
 # Gemeinsamer Kategorie-Mapper (quellen-unabhaengig).
 # Haelt die Kategorien synchron mit _SHARP_PLAYER_CATS_V31 im Builder.
 # ------------------------------------------------------------------
+def _norm_name(value: str) -> str:
+    return re.sub(r"[^a-z0-9]+", " ", str(value or "").lower()).strip()
+
+
+def _valid_player_candidate(player: str, home: str, away: str) -> bool:
+    """Reject team/generic selections that a sportsbook exposed as player-shaped props."""
+    p = _norm_name(player)
+    h = _norm_name(home)
+    a = _norm_name(away)
+    if not p or p in {"over", "under", "yes", "no", "home", "away", "draw", "team", "player"}:
+        return False
+    if p == h or p == a:
+        return False
+    if len(p) >= 5 and ((h and p in h) or (a and p in a)):
+        return False
+    if (len(h) >= 4 and h in p) or (len(a) >= 4 and a in p):
+        return False
+    try:
+        from difflib import SequenceMatcher
+        if any(SequenceMatcher(None, p, t).ratio() >= 0.78 for t in (h, a) if t):
+            return False
+    except Exception:
+        pass
+    return True
+
+
 def map_category(text: str) -> str:
     low = str(text or "").lower()
     # Team-/Matchmaerkte zuerst aussortieren.
@@ -107,8 +139,6 @@ def map_category(text: str) -> str:
         return "score"
     if "assist" in low:
         return "assist"
-    if "corner" in low:
-        return "corners"
     if "save" in low:
         return "saves"
     if "offside" in low:
@@ -146,6 +176,8 @@ _KAMBI_HOSTS = [
     "https://eu-offering-api.kambicdn.com",
     "https://e0-api.kambi.com",
 ]
+_KAMBI_LIST_CACHE: Dict[tuple, Any] = {}
+_KAMBI_OFFER_CACHE: Dict[tuple, Any] = {}
 
 
 def fetch_kambi_player_props(home: str, away: str, brand: str = "ub") -> List[Dict[str, Any]]:
@@ -154,10 +186,13 @@ def fetch_kambi_player_props(home: str, away: str, brand: str = "ub") -> List[Di
     event_id = None
     host_used = None
     for host in _KAMBI_HOSTS:
-        data = _get_json(
-            f"{host}/offering/v2018/{brand}/listView/football/all/all/all/matches.json",
-            params={"lang": "en_GB", "market": "GB"},
-        )
+        _lk = (host, brand)
+        if _lk not in _KAMBI_LIST_CACHE:
+            _KAMBI_LIST_CACHE[_lk] = _get_json(
+                f"{host}/offering/v2018/{brand}/listView/football/all/all/all/matches.json",
+                params={"lang": "en_GB", "market": "GB"},
+            )
+        data = _KAMBI_LIST_CACHE.get(_lk)
         if not data:
             continue
         events = data.get("events") or []
@@ -176,10 +211,13 @@ def fetch_kambi_player_props(home: str, away: str, brand: str = "ub") -> List[Di
     if not event_id or not host_used:
         return []
 
-    offer = _get_json(
-        f"{host_used}/offering/v2018/{brand}/betoffer/event/{event_id}.json",
-        params={"lang": "en_GB", "market": "GB"},
-    )
+    _ok = (host_used, brand, str(event_id))
+    if _ok not in _KAMBI_OFFER_CACHE:
+        _KAMBI_OFFER_CACHE[_ok] = _get_json(
+            f"{host_used}/offering/v2018/{brand}/betoffer/event/{event_id}.json",
+            params={"lang": "en_GB", "market": "GB"},
+        )
+    offer = _KAMBI_OFFER_CACHE.get(_ok)
     if not offer:
         return []
 
@@ -201,6 +239,8 @@ def fetch_kambi_player_props(home: str, away: str, brand: str = "ub") -> List[Di
                 continue
             line = oc.get("line")
             line = float(line) / 1000.0 if line else _line_from(oc.get("label", ""), 0.5)
+            if not _valid_player_candidate(player, home, away):
+                continue
             props.append({
                 "player": player, "team": "", "match": match_name, "league": "",
                 "market": crit, "category": cat, "line": line, "odds": odds,
@@ -214,6 +254,8 @@ def fetch_kambi_player_props(home: str, away: str, brand: str = "ub") -> List[Di
 #   LineFeed-JSON. Groesste Prop-Tiefe, aber Bot-Schutz auf Single-IP.
 # ==================================================================
 _1X_HOSTS = ["https://1xbet.com", "https://ind.1xbet.com", "https://melbet.com"]
+_1X_LIST_CACHE: Dict[str, Any] = {}
+_1X_GAME_CACHE: Dict[tuple, Any] = {}
 # 1xbet bet-group IDs fuer Player-Props (aus dem LineFeed-Schema):
 _1X_PLAYER_GROUPS = {
     2059: "shots", 2060: "sot", 2061: "fouls", 2062: "tackles",
@@ -227,10 +269,12 @@ def fetch_1xbet_player_props(home: str, away: str) -> List[Dict[str, Any]]:
     event_id = None
     host_used = None
     for host in _1X_HOSTS:
-        data = _get_json(
-            f"{host}/LineFeed/Get1x2_VZip",
-            params={"sports": 1, "count": 500, "lng": "en", "mode": 4, "country": 1},
-        )
+        if host not in _1X_LIST_CACHE:
+            _1X_LIST_CACHE[host] = _get_json(
+                f"{host}/LineFeed/Get1x2_VZip",
+                params={"sports": 1, "count": 500, "lng": "en", "mode": 4, "country": 1},
+            )
+        data = _1X_LIST_CACHE.get(host)
         if not data:
             continue
         for g in (data.get("Value") or []):
@@ -245,10 +289,13 @@ def fetch_1xbet_player_props(home: str, away: str) -> List[Dict[str, Any]]:
     if not event_id or not host_used:
         return []
 
-    game = _get_json(
-        f"{host_used}/LineFeed/GetGameZip",
-        params={"id": event_id, "lng": "en", "cfview": 0, "grMode": 4, "country": 1},
-    )
+    _gk = (host_used, str(event_id))
+    if _gk not in _1X_GAME_CACHE:
+        _1X_GAME_CACHE[_gk] = _get_json(
+            f"{host_used}/LineFeed/GetGameZip",
+            params={"id": event_id, "lng": "en", "cfview": 0, "grMode": 4, "country": 1},
+        )
+    game = _1X_GAME_CACHE.get(_gk)
     if not game:
         return []
     val = game.get("Value") or {}
@@ -269,6 +316,8 @@ def fetch_1xbet_player_props(home: str, away: str) -> List[Dict[str, Any]]:
                 if not player or odds <= 1.20:
                     continue
                 line = e.get("P") if isinstance(e.get("P"), (int, float)) else _line_from(e.get("PN", ""), 0.5)
+                if not _valid_player_candidate(player, home, away):
+                    continue
                 props.append({
                     "player": str(player), "team": "", "match": match_name, "league": "",
                     "market": grp.get("GS", cat), "category": cat,
@@ -285,6 +334,8 @@ def fetch_1xbet_player_props(home: str, away: str) -> List[Dict[str, Any]]:
 #   Oeffentliche JSON-API; aggregiert viele Buchmacher inkl. Player-Props.
 # ==================================================================
 _ODDSPEDIA_HOSTS = ["https://oddspedia.com", "https://www.oddspedia.com"]
+_ODDSPEDIA_LIST_CACHE: Dict[str, Any] = {}
+_ODDSPEDIA_ODDS_CACHE: Dict[tuple, Any] = {}
 
 
 def fetch_oddspedia_player_props(home: str, away: str) -> List[Dict[str, Any]]:
@@ -293,10 +344,12 @@ def fetch_oddspedia_player_props(home: str, away: str) -> List[Dict[str, Any]]:
     match_id = None
     host_used = None
     for host in _ODDSPEDIA_HOSTS:
-        data = _get_json(
-            f"{host}/api/v1/getMatchList",
-            params={"sport": "football", "type": "upcoming", "language": "en"},
-        )
+        if host not in _ODDSPEDIA_LIST_CACHE:
+            _ODDSPEDIA_LIST_CACHE[host] = _get_json(
+                f"{host}/api/v1/getMatchList",
+                params={"sport": "football", "type": "upcoming", "language": "en"},
+            )
+        data = _ODDSPEDIA_LIST_CACHE.get(host)
         if not data:
             continue
         rows = (data.get("data") or {}).get("matchList") or data.get("data") or []
@@ -313,10 +366,13 @@ def fetch_oddspedia_player_props(home: str, away: str) -> List[Dict[str, Any]]:
     if not match_id or not host_used:
         return []
 
-    offers = _get_json(
-        f"{host_used}/api/v1/getMatchOdds",
-        params={"matchId": match_id, "oddType": "player", "language": "en"},
-    )
+    _mk = (host_used, str(match_id))
+    if _mk not in _ODDSPEDIA_ODDS_CACHE:
+        _ODDSPEDIA_ODDS_CACHE[_mk] = _get_json(
+            f"{host_used}/api/v1/getMatchOdds",
+            params={"matchId": match_id, "oddType": "player", "language": "en"},
+        )
+    offers = _ODDSPEDIA_ODDS_CACHE.get(_mk)
     if not offers:
         return []
     match_name = f"{home} vs {away}"
@@ -336,6 +392,8 @@ def fetch_oddspedia_player_props(home: str, away: str) -> List[Dict[str, Any]]:
             except (TypeError, ValueError):
                 continue
             if not player or odds <= 1.20:
+                continue
+            if not _valid_player_candidate(player, home, away):
                 continue
             props.append({
                 "player": str(player), "team": "", "match": match_name, "league": "",
@@ -378,6 +436,8 @@ def fetch_footymetrics_player_props(home: str, away: str) -> List[Dict[str, Any]
                 continue
             if not player or odds <= 1.20:
                 continue
+            if not _valid_player_candidate(player, home, away):
+                continue
             props.append({
                 "player": str(player), "team": "", "match": match_name, "league": "",
                 "market": label, "category": cat,
@@ -406,19 +466,8 @@ def collect_extra_player_props(
             except Exception:
                 pass
 
-    def _kambi_best(h, a):
-        best=[]
-        # Unibet first; only fan out to sister brands when coverage is sparse.
-        for brand in _KAMBI_BRANDS:
-            rows=fetch_kambi_player_props(h,a,brand=brand) or []
-            if len(rows)>len(best):
-                best=rows
-            if len(best)>=8:
-                break
-        return best
-
     sources = [
-        ("kambi", _kambi_best),
+        ("kambi", lambda h, a: fetch_kambi_player_props(h, a, brand="ub")),
         ("oddspedia", lambda h, a: fetch_oddspedia_player_props(h, a)),
         ("footymetrics", lambda h, a: fetch_footymetrics_player_props(h, a)),
         ("1xbet", lambda h, a: fetch_1xbet_player_props(h, a)),
@@ -426,11 +475,6 @@ def collect_extra_player_props(
     out: List[Dict[str, Any]] = []
     per_source: Dict[str, int] = {}
 
-    try:
-        import os as _os
-        max_matches = int(_os.getenv("NETRATTLER_EXTRA_PROP_MAX_MATCHES", str(max_matches)))
-    except Exception:
-        pass
     for fx in (fixtures or [])[:max_matches]:
         home = str(fx.get("home", "")).strip()
         away = str(fx.get("away", "")).strip()
