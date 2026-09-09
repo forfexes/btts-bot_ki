@@ -969,24 +969,53 @@ def main() -> int:
     if not SUPABASE_URL or not SUPABASE_KEY:
         log("SUPABASE_URL/SUPABASE_KEY fehlen — Script läuft, aber Supabase Inserts schlagen fehl.", "WARN")
 
-    jobs = [
-        ("known_sources", collect_known_sources),
-        ("github_discovery", collect_github_discovery),
-        ("football_data_uk", collect_football_data_uk),
-        ("statsbomb_open_data", collect_statsbomb_open_data),
-        ("openfootball", collect_openfootball),
-        ("openligadb", collect_openligadb),
-        ("thesportsdb", collect_thesportsdb),
-        ("soccerdata_all_adapters", collect_soccerdata_optional),
-        ("bookmaker_odds_all_fallbacks", collect_bookmaker_odds),
-    ]
-
-    for name, fn in jobs:
+    # Discovery/registry work stays sequential because it updates shared source state.
+    for name, fn in [("known_sources", collect_known_sources), ("github_discovery", collect_github_discovery)]:
         log(f"--- {name} ---")
         try:
             fn()
         except Exception as e:
             log(f"{name} HARD FAIL: {str(e)[:240]}", "ERROR")
+
+    # Independent historical/public feeds are IO-bound; running them concurrently avoids
+    # adding every network timeout serially. Each collector already has its own error guard.
+    parallel_jobs = [
+        ("football_data_uk", collect_football_data_uk),
+        ("statsbomb_open_data", collect_statsbomb_open_data),
+        ("openfootball", collect_openfootball),
+        ("openligadb", collect_openligadb),
+        ("thesportsdb", collect_thesportsdb),
+    ]
+    try:
+        workers = max(1, min(6, int(os.getenv("HARVEST_PARALLEL_WORKERS", "4"))))
+    except Exception:
+        workers = 4
+    with ThreadPoolExecutor(max_workers=workers) as pool:
+        futures = {pool.submit(fn): name for name, fn in parallel_jobs}
+        for fut in as_completed(futures):
+            name = futures[fut]
+            try:
+                fut.result()
+            except Exception as e:
+                log(f"{name} HARD FAIL: {str(e)[:240]}", "ERROR")
+
+    # soccerdata is optional/heavy and can have process/global caches: keep it isolated.
+    log("--- soccerdata_all_adapters ---")
+    try:
+        collect_soccerdata_optional()
+    except Exception as e:
+        log(f"soccerdata_all_adapters HARD FAIL: {str(e)[:240]}", "ERROR")
+
+    # Bookmaker collection has its own dedicated Odds Harvester workflow. Do not pay
+    # the same Playwright cost here unless explicitly requested.
+    if os.getenv("ALL_SOURCE_INCLUDE_ODDS", "false").lower() in {"1", "true", "yes", "on"}:
+        log("--- bookmaker_odds_all_fallbacks ---")
+        try:
+            collect_bookmaker_odds()
+        except Exception as e:
+            log(f"bookmaker_odds_all_fallbacks HARD FAIL: {str(e)[:240]}", "ERROR")
+    else:
+        log("Bookmaker odds übersprungen — eigener Odds-Harvester ist aktiv")
 
     write_local_summary()
     run_source_hub_v30()
@@ -996,3 +1025,4 @@ def main() -> int:
 
 if __name__ == "__main__":
     raise SystemExit(main())
+from concurrent.futures import ThreadPoolExecutor, as_completed
