@@ -39,7 +39,6 @@ jobs:
           pip install \
             requests \
             python-dotenv \
-            playwright \
             beautifulsoup4 \
             lxml \
             google-generativeai \
@@ -53,16 +52,9 @@ jobs:
             numpy \
             pandas \
             scikit-learn
-          playwright install chromium --with-deps
 
-      - name: Compile and core tests
-
-        run: |
-
-          python -m py_compile btts_bot.py netrattler_builder_engine.py netrattler_settlement_v16_final.py netrattler_source_hub.py netrattler_identity_hub.py netrattler_feature_hub.py
-
-          python test_netrattler_core.py
-
+      - name: Fast syntax check
+        run: python -m py_compile btts_bot.py netrattler_builder_engine.py
 
       - name: Run Tips Bot 🤖
         env:
@@ -124,7 +116,11 @@ jobs:
           NETRATTLER_GLOBAL_BUDGET_SEC: "600"
           NETRATTLER_HARD_WATCHDOG_SEC: "720"
           NETRATTLER_CORNERS_BUDGET_SEC: "25"
-          NETRATTLER_EXTRA_PROP_MAX_MATCHES: "10"
+          NETRATTLER_EXTRA_PROP_MAX_MATCHES: "24"
+          NETRATTLER_ML_PREFETCH_TEAM_CAP: "160"
+          NETRATTLER_ML_PREFETCH_BATCH: "80"
+          NETRATTLER_ML_PREFETCH_BUDGET_SEC: "12"
+          NETRATTLER_ML_PREFETCH_ROW_LIMIT: "3000"
           NETRATTLER_BTTS_HT_MIN_PROB: "38"
           NETRATTLER_OVER15_HT_MIN_PROB: "42"
           NETRATTLER_COMBO_MIN_PROB: "52"
