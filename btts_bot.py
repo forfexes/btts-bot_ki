@@ -279,6 +279,9 @@ def _market_min_probability(market: str) -> float:
         return float(defaults.get(key, MIN_PROBABILITY))
 MIN_ODDS = float(env("MIN_ODDS", "1.70"))
 MAX_ODDS = float(env("MAX_ODDS", "3.0"))
+# FIX24: Team single markets are intentionally capped at 3.00 regardless of external env drift.
+TEAM_SINGLE_MAX_ODDS = min(3.0, MAX_ODDS)
+NETRATTLER_BUILD_ID = "FIX24-2026-09-10"
 MIN_CONFIDENCE = int(env("MIN_CONFIDENCE", "3"))
 # 🆕 Nur HIGH + OK Value (LOW fliegt raus)
 MIN_VALUE_RATING = env("MIN_VALUE_RATING", "OK")  # HIGH, OK, oder LOW
@@ -297,14 +300,30 @@ def _is_value_bet(odds, prob_pct):
         return False
     if o < MIN_ODDS_VALUE:
         return False
-    # 🚫 Obergrenze: unrealistische Quoten für Team-Märkte blocken.
-    # Over 2.5/BTTS/1X2 gehen real nie über ~8. Höhere Werte = Parsing-Fehler.
-    _max = float(env("NETRATTLER_MAX_SINGLE_ODDS", "8.0"))
+    # 🚫 Obergrenze: die globale MAX_ODDS-Grenze muss auch hier wirklich gelten.
+    # Der alte Code dokumentierte Quote 1.70-3.00, akzeptierte intern aber bis 8.00
+    # und ließ dadurch falsch gemappte BTTS-Quoten wie 6.92/7.97 als Value durch.
+    _max = min(float(TEAM_SINGLE_MAX_ODDS), float(env("NETRATTLER_MAX_SINGLE_ODDS", str(TEAM_SINGLE_MAX_ODDS))))
     if o > _max:
         return False
     implied = 1 / o if o > 0 else 1
     edge = (p - implied) * 100
     return edge >= 3  # mind. 3% Edge über der Quoten-implizierten Wahrscheinlichkeit
+
+
+def _sanitize_team_quote(value, market=""):
+    """Return a safe observed single-market decimal odd or 0.
+    FIX24 defense-in-depth: wrong market mappings must never reach tip generation.
+    """
+    try:
+        o = float(str(value).replace(",", "."))
+    except Exception:
+        return 0.0
+    lo = 1.02 if str(market).lower() == "1x2" else 1.20
+    hi = TEAM_SINGLE_MAX_ODDS
+    if not (lo <= o <= hi):
+        return 0.0
+    return round(o, 4)
 
 
 def _is_junk_league(league_name="", home="", away="") -> bool:
@@ -2158,17 +2177,29 @@ def fetch_sofascore_fixtures(league_name, target_date):
         except:
             pass
         
-        r = session.get(url, timeout=15)
-        
-        if r.status_code in [403, 429, 503]:
-            if PLAYWRIGHT_AVAILABLE:
+        # Schneller 3-Stufen-Pfad: requests-Session → curl_cffi JSON helper →
+        # Playwright nur außerhalb FAST und nur wenn wirklich verfügbar.
+        try:
+            r = session.get(url, timeout=8)
+            if r.ok:
+                data = r.json()
+            else:
+                data = None
+        except Exception:
+            r = None
+            data = None
+
+        if not data:
+            data, _status, _host = _sofascore_get_json(
+                f"/sport/football/scheduled-events/{date_str}", timeout=8
+            )
+
+        if not data:
+            status = getattr(r, "status_code", None)
+            if status in [403, 429, 503] and PLAYWRIGHT_AVAILABLE and not _netrattler_fast_tips_enabled():
                 return pw_get_sofascore_fixtures(league_name, target_date)
             return []
-        
-        if not r.ok:
-            return []
-        
-        data = r.json()
+
         events = data.get("events", [])
         
         if not events:
@@ -4725,13 +4756,17 @@ def scrape_with_playwright(url, wait_for=None, timeout=8000):
     if cache_key in PLAYWRIGHT_CACHE:
         return PLAYWRIGHT_CACHE[cache_key]
 
-    # ⚡ FAST-MODE (Tipp-Lauf): GAR KEIN Scraping — nicht curl_cffi, nicht Playwright.
-    # Quoten kommen aus der OddsPapi-API, Stats sammelt der separate Scraper.
-    # Das verhindert, dass 25 Scrape-Aufrufe × viele Matches den Lauf ausbremsen.
+    # ⚡ FAST-MODE: curl_cffi bleibt als leichter TLS-/HTTP-Fallback erlaubt,
+    # Playwright/Chromium bleibt im Tipp-Lauf deaktiviert. So vermeiden wir
+    # Browser-Minuten, verlieren aber nicht alle 403-geschützten JSON/HTML-Quellen.
     if _netrattler_fast_tips_enabled():
+        html = _curl_cffi_get(url, timeout=min(8, max(4, int(timeout / 1000))))
+        if html:
+            PLAYWRIGHT_CACHE[cache_key] = html
+            return html
         return None
 
-    # 1) 🚀 curl_cffi zuerst (schnell, kein Browser) — nur im Scraper-Lauf (nicht Fast)
+    # 1) 🚀 curl_cffi zuerst (schnell, kein Browser)
     html = _curl_cffi_get(url, timeout=max(8, int(timeout / 1000)))
     if html:
         PLAYWRIGHT_CACHE[cache_key] = html
@@ -18087,36 +18122,21 @@ def send_top_tips(tips_by_market, target_date):
                 "avg_goals_away": avg_g_a,
             }
 
-            # Prüfe ob bereits in Supabase
-            tip_id_check = tip_data.get("tip_id", "")
-            already_exists = False
-            if tip_id_check and SUPABASE_URL and SUPABASE_KEY:
+            # Der Tages-Duplikatcache wurde bereits einmal vor dem Versand aus Supabase
+            # vorgeladen. Ein zweiter GET pro Tipp war redundant und kostete bei 90+ Tipps
+            # Minuten. Nach mark_tip_sent() direkt speichern; Duplikate werden vorher
+            # zuverlässig durch is_duplicate_tip()/Tagescache abgefangen.
+            save_result = save_to_supabase(tip_data)
+            # CLV Tracking
+            if NETRATTLER_PRO:
                 try:
-                    r_check = requests.get(
-                        f"{SUPABASE_URL}/rest/v1/tips",
-                        headers={"apikey": SUPABASE_KEY, "Authorization": f"Bearer {SUPABASE_KEY}"},
-                        params={"tip_id": f"eq.{tip_id_check}", "select": "id", "limit": "1"},
-                        timeout=5,
-                    )
-                    if r_check.ok and r_check.json():
-                        already_exists = True
+                    log_tip_for_clv(tip_data)
                 except Exception:
                     pass
-
-            if already_exists:
-                log(f"   ⏭️ Supabase: bereits vorhanden {tip_data.get('match','?')}")
+            if save_result:
+                saved += 1
             else:
-                save_result = save_to_supabase(tip_data)
-                # CLV Tracking
-                if NETRATTLER_PRO:
-                    try:
-                        log_tip_for_clv(tip_data)
-                    except Exception:
-                        pass
-                if save_result:
-                    saved += 1
-                else:
-                    log(f"   ⚠️ Supabase save fehlgeschlagen für {tip_data.get('match','?')}", "WARN")
+                log(f"   ⚠️ Supabase save fehlgeschlagen für {tip_data.get('match','?')}", "WARN")
 
         value_count = sum(1 for r in tips if r.get("valueRating") == "HIGH")
 
@@ -24052,13 +24072,23 @@ def run_pinnacle_props_bot(win_start_utc=None, win_end_utc=None, ch_tz=None, top
         if _pm:
             _ml_prob_set = 0
             _sb_lookups = 0
-            _SB_LOOKUP_CAP = int(os.getenv("NETRATTLER_STATBUNKER_MAX_LOOKUPS", "4"))
+            _SB_LOOKUP_CAP = 0 if _netrattler_fast_tips_enabled() else int(os.getenv("NETRATTLER_STATBUNKER_MAX_LOOKUPS", "4"))
             _target_players = [
                 r.get("player", "") for r in _NTR_BUILDER_PROP_POOL
                 if isinstance(r, dict)
                 and float(r.get("odds", 0) or 0) > 1.0
                 and _mlp.model_for(r.get("category", ""), r.get("line", 0.5)) is not None
             ]
+            if _netrattler_fast_tips_enabled():
+                _cap = int(env("NETRATTLER_FAST_PLAYER_ML_CAP", "16"))
+                _seen_tp, _capped_tp = set(), []
+                for _p in _target_players:
+                    _np = _normalize_name(_p)
+                    if _np and _np not in _seen_tp:
+                        _seen_tp.add(_np); _capped_tp.append(_p)
+                    if len(_capped_tp) >= _cap:
+                        break
+                _target_players = _capped_tp
             _prefetched = _prefetch_supabase_player_avg_stats(_target_players)
             if _target_players:
                 log(f"   🗄️ Supabase Player-Stats targeted: {_prefetched}/{len(set(p for p in _target_players if p))} Spieler vorgeladen")
@@ -24068,6 +24098,8 @@ def run_pinnacle_props_bot(win_start_utc=None, win_end_utc=None, ch_tz=None, top
                     continue
                 _player = _row.get("player", "")
                 if not _player:
+                    continue
+                if _netrattler_fast_tips_enabled() and _target_players and _normalize_name(_player) not in {_normalize_name(x) for x in _target_players}:
                     continue
                 try:
                     _avg = get_supabase_player_avg_stats(_player)
@@ -25494,6 +25526,21 @@ def integrate_edge_filter_into_pipeline(tips_by_market: Dict[str, List[Dict]],
     if not EDGE_FILTER_ENABLED:
         return {"filtered_tips": tips_by_market, "combos": [], "stats": {}}
 
+    # One Supabase odds_history preload for the whole card. Without this, every
+    # candidate did its own GET (90+ calls in the 09.09 evening run).
+    try:
+        from netrattler_odds_harvester import preload_best_quotes_from_supabase
+        _days = []
+        for _mk, _rows in (tips_by_market or {}).items():
+            for _t in (_rows or []):
+                _d = str(_t.get("_kickoff") or _t.get("date") or "")[:10]
+                if _d and _d not in _days:
+                    _days.append(_d)
+        for _d in _days[:2]:
+            preload_best_quotes_from_supabase(_d)
+    except Exception:
+        pass
+
     filtered = {}
     total_before = 0
     total_after = 0
@@ -26266,6 +26313,7 @@ def _budget_exceeded():
 def main():
     log("=" * 60)
     log("AI TIPP BOT - ALL-IN-ONE EDITION")
+    log(f"🧩 Build: {NETRATTLER_BUILD_ID} · Team-Quote {MIN_ODDS:.2f}-{TEAM_SINGLE_MAX_ODDS:.2f}")
     log("=" * 60)
     # ⏱️ GLOBALER Watchdog: eine Startzeit für den ganzen Lauf. Alle Analyse-Loops
     # teilen dieses Budget → verhindert 20-Min-Timeout (GitHub-Limit).
@@ -26410,6 +26458,7 @@ def main():
         "quote_btts": 0,
         "quote_over25": 0,
         "quote_1x2": 0,
+        "1x2_prob_reject": 0, "1x2_odds_reject": 0, "1x2_edge_reject": 0,
         "quote_ht": 0,
         "tips": 0,
         "no_model": 0,
@@ -26691,16 +26740,20 @@ def main():
                         # (prob_b/prob_o) behalten! Sonst wird prob durch implied-odds
                         # überschrieben (~52%) und fällt unter MIN_PROBABILITY → keine Tipps.
                         _ro_source = str(ro.get("_source") or "pinnacle")
-                        if ro.get("btts_yes"):
-                            btts_yes = ro["btts_yes"]; _real_btts_odd = True; _real_btts_source = _ro_source
-                        if ro.get("over_25"):
-                            over25 = ro["over_25"]; _real_over_odd = True; _real_over_source = _ro_source
-                        _real_btts_ht_odd = bool(ro.get("btts_yes_ht"))
-                        _real_over15_ht_odd = bool(ro.get("over_15_ht") or ro.get("over15_ht"))
-                        if ro.get("btts_yes_ht"):
-                            btts_ht_odds = ro["btts_yes_ht"]; _real_btts_ht_source = _ro_source
-                        if ro.get("over_15_ht") or ro.get("over15_ht"):
-                            o15_odds = ro.get("over_15_ht") or ro.get("over15_ht"); _real_over15_ht_source = _ro_source
+                        _qb = _sanitize_team_quote(ro.get("btts_yes"), "btts")
+                        _qo = _sanitize_team_quote(ro.get("over_25"), "over25")
+                        _qbh = _sanitize_team_quote(ro.get("btts_yes_ht"), "btts_ht")
+                        _qoh = _sanitize_team_quote(ro.get("over_15_ht") or ro.get("over15_ht"), "over15_ht")
+                        if _qb:
+                            btts_yes = _qb; _real_btts_odd = True; _real_btts_source = _ro_source
+                        if _qo:
+                            over25 = _qo; _real_over_odd = True; _real_over_source = _ro_source
+                        _real_btts_ht_odd = bool(_qbh)
+                        _real_over15_ht_odd = bool(_qoh)
+                        if _qbh:
+                            btts_ht_odds = _qbh; _real_btts_ht_source = _ro_source
+                        if _qoh:
+                            o15_odds = _qoh; _real_over15_ht_source = _ro_source
                         if any(ro.get(k) for k in ("btts_yes", "over_25", "home", "draw", "away", "btts_yes_ht", "over_15_ht", "over15_ht")):
                             _pin_diag["quote_any"] += 1
                         if ro.get("btts_yes"): _pin_diag["quote_btts"] += 1
@@ -26875,7 +26928,25 @@ def main():
                         ]
                         # bestes Outcome nach höchster EDGE wählen (nicht nur Wahrscheinlichkeit)
                         _min_1x2_odd = float(env("NETRATTLER_1X2_MIN_ODDS", "1.70"))
-                        _cands = [(s, l, o, p) for s, l, o, p in _picks_1x2 if o and o >= _min_1x2_odd and p]
+                        _cands = []
+                        for _s, _l, _o, _p in _picks_1x2:
+                            try:
+                                _of = float(str(_o).replace(",", "."))
+                                _pf = float(_p or 0)
+                            except (TypeError, ValueError):
+                                continue
+                            if _pf < _market_min_probability("1x2"):
+                                _pin_diag["1x2_prob_reject"] += 1
+                                continue
+                            if not (_min_1x2_odd <= _of <= TEAM_SINGLE_MAX_ODDS) or not _quote_is_sane("1x2", _of):
+                                _pin_diag["1x2_odds_reject"] += 1
+                                continue
+                            _edge_1x2 = (_pf / 100.0) - (1.0 / _of)
+                            _min_edge_1x2 = float(env("NETRATTLER_1X2_MIN_EDGE", "0.02"))
+                            if _edge_1x2 < _min_edge_1x2:
+                                _pin_diag["1x2_edge_reject"] += 1
+                                continue
+                            _cands.append((_s, _l, _of, _pf))
                         if _cands:
                             # Edge = Modell-Prob - implied Prob; höchste Edge gewinnt
                             _best_1x2 = max(_cands, key=lambda x: (x[3] / 100.0) - (1.0 / x[2]))
@@ -26883,7 +26954,7 @@ def main():
                         else:
                             _sel = _label = _odd = _prob = None
                         _sharp_1x2 = bool(_league_prior_fallback and _odd and _prob >= float(env("NETRATTLER_1X2_SHARP_MIN_PROB", "58")))
-                        if _odd and _prob >= _market_min_probability("1x2") and (_is_value_bet(_odd, _prob) or _sharp_1x2):
+                        if _odd and _prob >= _market_min_probability("1x2") and (_sharp_1x2 or (((_prob/100.0) - (1.0/_odd)) >= float(env("NETRATTLER_1X2_MIN_EDGE", "0.02")))):
                             tip_1x2 = {
                                 "match": mn, "league": league_name or "Pinnacle",
                                 "time": tstr, "tip": _label,
@@ -26905,6 +26976,7 @@ def main():
         log(f"🎰 Pinnacle fertig: {pinnacle_tips_count} Tipps generiert")
         log(f"   🔎 Teammarkt-Diagnose: Modell-Support={_pin_diag['model_supported']} · ohne Modell={_pin_diag['no_model']} · Hauptmarkt-Schwelle={MIN_PROBABILITY}% · Odds-Lookups={_pin_diag['odds_lookup']} · ohne Quote danach={_pin_diag['no_quote_after_model']} · Quote-any={_pin_diag['quote_any']} · BTTS={_pin_diag['quote_btts']} · O2.5={_pin_diag['quote_over25']} · 1X2={_pin_diag['quote_1x2']} · HT={_pin_diag['quote_ht']} · echte Tipps={_pin_diag['tips']}")
         log(f"   🎚️ Markt-Schwellen: BTTS={_market_min_probability('btts'):.0f}% · O2.5={_market_min_probability('over25'):.0f}% · Combo={_market_min_probability('combo'):.0f}% · BTTS-HT={_market_min_probability('btts_ht'):.0f}% · O1.5-HT={_market_min_probability('over15_ht'):.0f}% · 1X2={_market_min_probability('1x2'):.0f}%")
+        log(f"   🏆 1X2-Rejects: prob={_pin_diag['1x2_prob_reject']} · odds={_pin_diag['1x2_odds_reject']} · edge={_pin_diag['1x2_edge_reject']}")
         try:
             import netrattler_oddspapi as _op
             _st = _op.call_stats()
