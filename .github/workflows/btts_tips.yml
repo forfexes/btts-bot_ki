@@ -60,8 +60,8 @@ jobs:
         env:
           # ── ⚡ SPEED: Tipp-Lauf schnell halten (Stats sammelt der Scraper separat) ──
           NETRATTLER_FAST_TIPS:       "true"
-          NETRATTLER_STATBUNKER_MAX_LOOKUPS: "15"
-          NETRATTLER_LINEUP_MAX:      "12"
+          NETRATTLER_STATBUNKER_MAX_LOOKUPS: "0"
+          NETRATTLER_LINEUP_MAX:      "8"
           # ── KI APIs ──
           GEMINI_API_KEYS:            ${{ secrets.GEMINI_API_KEYS }}
           GROQ_API_KEYS:              ${{ secrets.GROQ_API_KEYS }}
@@ -125,4 +125,8 @@ jobs:
           NETRATTLER_OVER15_HT_MIN_PROB: "42"
           NETRATTLER_COMBO_MIN_PROB: "52"
           NETRATTLER_1X2_MIN_PROB: "55"
+          MAX_ODDS:                    "3.0"
+          NETRATTLER_MAX_SINGLE_ODDS: "3.0"
+          NETRATTLER_1X2_MIN_EDGE:    "0.02"
+          NETRATTLER_FAST_PLAYER_ML_CAP: "16"
         run: python btts_bot.py
