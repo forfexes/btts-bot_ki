@@ -249,7 +249,8 @@ def normalize_prop(row: Dict[str, Any]) -> Optional[PropLeg]:
     explicit_estimated = str(row.get("estimated") or "").lower() in {"1", "true", "yes", "on"}
     bookmaker_tokens = (
         "pinnacle", "bet365", "betfair", "oddsportal", "oddsharvester",
-        "bookmaker", "sportsbook",
+        "kambi", "unibet", "1xbet", "melbet", "odds_api", "oddsapi",
+        "oddspapi", "oddspedia", "footymetrics", "bookmaker", "sportsbook",
     )
     observed_bookmaker = odds > 1 and any(token in source_text for token in bookmaker_tokens)
     if odds <= 1:
@@ -1882,8 +1883,9 @@ def _v31_has_observed_bookmaker_odds(leg: PropLeg) -> bool:
         return False
     source = norm(leg.source)
     return any(token in source for token in {
-        "pinnacle", "bet365", "betfair", "oddsportal",
-        "oddsharvester", "bookmaker", "sportsbook",
+        "pinnacle", "bet365", "betfair", "oddsportal", "oddsharvester",
+        "kambi", "unibet", "1xbet", "melbet", "odds_api", "oddsapi",
+        "oddspapi", "oddspedia", "footymetrics", "bookmaker", "sportsbook",
     })
 
 
