@@ -1980,9 +1980,8 @@ def _v31_make(style: str, variant: str, legs: List[PropLeg], match_date: str, st
     pick = _make_builder(style, variant, legs, match_date, stake)
     if not pick:
         return None
-    # Player-Prop Builder: only observed bookmaker quotes, positive edge and 5.00+.
-    if pick.total_odds > float(os.getenv("NETRATTLER_SHARP_PROP_MAX_ODDS", "30")):
-        return None
+    # Player-Prop Builder: keine harte Gesamtquoten-Obergrenze.
+    # Entscheidend ist die Qualitaet jedes einzelnen Legs (echte Quote, Modell-Wahrscheinlichkeit, Edge).
     if not _v31_valid_prop_builder(pick):
         return None
     return pick
@@ -2508,8 +2507,9 @@ def build_builder_picks(
         x for x in props
         if _v31_valid_prop_leg(x)
         and x.odds >= 1.35
-        and x.odds <= float(os.getenv("NETRATTLER_SHARP_PROP_LEG_MAX_ODDS", "25"))
-        and x.probability >= float(os.getenv("NETRATTLER_SHARP_PROP_MIN_PROB", "0.30"))
+        # Keine harte Leg-Quote-Obergrenze: hohe Quote ist erlaubt, wenn das Modell
+        # das Leg trotzdem als wahrscheinlich + Value einstuft.
+        and x.probability >= float(os.getenv("NETRATTLER_SHARP_PROP_MIN_PROB", "0.60"))
     ]
 
     focused: List[BuilderPick] = []
@@ -2531,7 +2531,7 @@ def build_builder_picks(
     for pick in legacy:
         # Legacy may still create useful combinations, but every leg must pass
         # the same strict player-prop rules. Never fall back to team markets.
-        if pick.total_odds <= 80 and _v31_valid_prop_builder(pick):
+        if _v31_valid_prop_builder(pick):
             legacy_filtered.append(pick)
 
     candidates = [
@@ -2587,7 +2587,7 @@ def build_builder_picks(
 
         existing_sigs = {"|".join(sorted(f"{norm(x.player)}:{x.category}" for x in p.legs)) for p in selected}
         for pick in screenshot:
-            if pick.total_odds > float(os.getenv("NETRATTLER_SHARP_PROP_MAX_ODDS", "30")) or not _v31_valid_prop_builder(pick):
+            if not _v31_valid_prop_builder(pick):
                 continue
             sig = "|".join(sorted(f"{norm(x.player)}:{x.category}" for x in pick.legs))
             if sig not in existing_sigs:
