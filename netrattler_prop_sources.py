@@ -63,17 +63,28 @@ _HEADERS = {
 }
 
 
-def _get_json(url: str, params: Optional[dict] = None, timeout: int = 8):
+def _get_json(url: str, params: Optional[dict] = None, timeout: int = 6):
+    """Fast JSON fetch: requests/cloudscraper first, curl_cffi Chrome fallback on 403/429/block."""
     sess = _session()
-    if sess is None:
-        return None
+    status = None
+    if sess is not None:
+        try:
+            r = sess.get(url, params=params or {}, headers=_HEADERS, timeout=timeout)
+            status = getattr(r, "status_code", None)
+            if getattr(r, "ok", False):
+                return r.json()
+        except Exception:
+            pass
+    # GitHub datacenter IPs are often rejected by plain requests even when the
+    # public JSON endpoint itself is reachable. curl_cffi is much cheaper than Chromium.
     try:
-        r = sess.get(url, params=params or {}, headers=_HEADERS, timeout=timeout)
-        if not r.ok:
-            return None
-        return r.json()
+        from curl_cffi import requests as _creq
+        r = _creq.get(url, params=params or {}, headers=_HEADERS, impersonate="chrome", timeout=timeout)
+        if r.status_code == 200:
+            return r.json()
     except Exception:
-        return None
+        pass
+    return None
 
 
 # ------------------------------------------------------------------
@@ -454,11 +465,14 @@ def collect_extra_player_props(
     log: Optional[Callable[[str], Any]] = None,
     max_matches: int = 12,
 ) -> List[Dict[str, Any]]:
+    """Collect real player props with category-depth first, not raw row count.
+
+    Kambi brands do not expose identical player markets. We therefore merge a few
+    brands per selected match and then add 1xbet/Oddspedia/FootyMetrics only when
+    they contribute additional categories. Everything is deduped by player+market+line.
     """
-    fixtures: Liste von {"home","away"} (optional "league").
-    Gibt alle Player-Props aller erreichbaren Quellen zurueck.
-    Jede Quelle ist gekapselt — Fehler einer Quelle stoppt die Kette nicht.
-    """
+    from collections import Counter
+
     def _log(m):
         if log:
             try:
@@ -466,33 +480,95 @@ def collect_extra_player_props(
             except Exception:
                 pass
 
-    sources = [
-        ("kambi", lambda h, a: fetch_kambi_player_props(h, a, brand="ub")),
-        ("oddspedia", lambda h, a: fetch_oddspedia_player_props(h, a)),
-        ("footymetrics", lambda h, a: fetch_footymetrics_player_props(h, a)),
-        ("1xbet", lambda h, a: fetch_1xbet_player_props(h, a)),
-    ]
-    out: List[Dict[str, Any]] = []
+    out_best: Dict[tuple, Dict[str, Any]] = {}
     per_source: Dict[str, int] = {}
+    per_cat: Counter = Counter()
+    matched_matches = set()
+
+    def _add(rows, home, away, league, source_name):
+        added = 0
+        for row in rows or []:
+            if not isinstance(row, dict):
+                continue
+            row = dict(row)
+            row["league"] = row.get("league") or league or ""
+            row["match"] = row.get("match") or f"{home} vs {away}"
+            cat = row.get("category") or map_category(row.get("market", ""))
+            if cat == "other":
+                continue
+            row["category"] = cat
+            try:
+                odds = float(row.get("odds") or 0)
+                line = float(row.get("line") or 0.5)
+            except (TypeError, ValueError):
+                continue
+            if odds <= 1.20 or not _valid_player_candidate(row.get("player", ""), home, away):
+                continue
+            key = (_norm_name(row.get("player", "")), _norm_name(row.get("match", "")), cat, round(line, 2))
+            prev = out_best.get(key)
+            if prev is None or float(prev.get("odds") or 0) < odds:
+                out_best[key] = row
+            added += 1
+            per_cat[cat] += 1
+        if added:
+            per_source[source_name] = per_source.get(source_name, 0) + added
+            matched_matches.add(f"{home} vs {away}")
+        return added
+
+    desired_depth = {"sot", "shots", "fouls", "fouls_won", "tackles_committed", "tackles_received", "yellow_cards", "score", "assist"}
 
     for fx in (fixtures or [])[:max_matches]:
         home = str(fx.get("home", "")).strip()
         away = str(fx.get("away", "")).strip()
+        league = str(fx.get("league", "")).strip()
         if not home or not away:
             continue
-        for name, fn in sources:
-            try:
-                rows = fn(home, away) or []
-            except Exception as exc:
-                _log(f"   🔌 {name} Fehler ({home} vs {away}): {str(exc)[:60]}")
-                rows = []
-            if rows:
-                out.extend(rows)
-                per_source[name] = per_source.get(name, 0) + len(rows)
 
+        before_cats = set(per_cat)
+        local_cats = set()
+        # Kambi market depth differs by brand. Merge brands but stop early once
+        # a match already has broad coverage, keeping runtime bounded.
+        for brand in _KAMBI_BRANDS:
+            try:
+                rows = fetch_kambi_player_props(home, away, brand=brand) or []
+            except Exception as exc:
+                _log(f"   🔌 kambi_{brand} Fehler ({home} vs {away}): {str(exc)[:60]}")
+                rows = []
+            _add(rows, home, away, league, f"kambi_{brand}")
+            local_cats.update((r.get("category") or map_category(r.get("market", ""))) for r in rows if isinstance(r, dict))
+            local_cats.discard("other")
+            if len(local_cats & desired_depth) >= 5 and len(rows) >= 10:
+                break
+
+        # 1xbet is the best chance for tackles/fouls/shots depth, so try it next.
+        try:
+            rows = fetch_1xbet_player_props(home, away) or []
+        except Exception as exc:
+            _log(f"   🔌 1xbet Fehler ({home} vs {away}): {str(exc)[:60]}")
+            rows = []
+        _add(rows, home, away, league, "1xbet")
+        local_cats.update((r.get("category") or map_category(r.get("market", ""))) for r in rows if isinstance(r, dict))
+
+        # Aggregator fallbacks only if the match still lacks breadth.
+        if len(local_cats & desired_depth) < 5:
+            for name, fn in (
+                ("oddspedia", fetch_oddspedia_player_props),
+                ("footymetrics", fetch_footymetrics_player_props),
+            ):
+                try:
+                    rows = fn(home, away) or []
+                except Exception as exc:
+                    _log(f"   🔌 {name} Fehler ({home} vs {away}): {str(exc)[:60]}")
+                    rows = []
+                _add(rows, home, away, league, name)
+                local_cats.update((r.get("category") or map_category(r.get("market", ""))) for r in rows if isinstance(r, dict))
+
+    out = list(out_best.values())
     if per_source:
-        summary = ", ".join(f"{k}={v}" for k, v in per_source.items())
-        _log(f"   🔌 Extra-Prop-Quellen: {summary} ({len(out)} Legs gesamt)")
+        summary = ", ".join(f"{k}={v}" for k, v in sorted(per_source.items()))
+        cats = ", ".join(f"{k}={v}" for k, v in per_cat.most_common())
+        _log(f"   🔌 Extra-Prop-Quellen: {summary} · unique={len(out)} · matches={len(matched_matches)}")
+        _log(f"   🔌 Extra-Prop-Kategorien: {cats}")
     return out
 
 
