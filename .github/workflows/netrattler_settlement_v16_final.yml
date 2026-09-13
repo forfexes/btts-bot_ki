@@ -24,10 +24,14 @@ jobs:
       - name: Settle per group and learn from newly closed picks
         env:
           RESULT_USE_SOFASCORE: "true"
-          SETTLEMENT_DAYS: "7"
-          NETRATTLER_RESETTLE_BROKEN: "false"
-          NETRATTLER_ALWAYS_FALLBACK_RESULTS: "false"
+          SETTLEMENT_DAYS: "14"
+          NETRATTLER_RESETTLE_BROKEN: "true"
+          NETRATTLER_ALWAYS_FALLBACK_RESULTS: "true"
           RESULT_HTTP_TIMEOUT: "6"
+          SETTLEMENT_LIMIT: "3000"
+          RESULT_PUBLIC_FALLBACK_IF_DB_ROWS_LT: "999999"
+          NETRATTLER_RESETTLE_VOID: "true"
+          NETRATTLER_RESETTLE_MARKETS: "btts_ht,over15_ht,corners,combo,builder,props,player_prop,scorer,1x2"
           SUPABASE_URL: ${{ secrets.SUPABASE_URL }}
           SUPABASE_KEY: ${{ secrets.SUPABASE_KEY }}
           ODDSPAPI_KEY: ${{ secrets.ODDSPAPI_KEY }}
