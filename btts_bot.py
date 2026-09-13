@@ -281,7 +281,7 @@ MIN_ODDS = float(env("MIN_ODDS", "1.70"))
 MAX_ODDS = float(env("MAX_ODDS", "3.0"))
 # FIX24: Team single markets are intentionally capped at 3.00 regardless of external env drift.
 TEAM_SINGLE_MAX_ODDS = min(3.0, MAX_ODDS)
-NETRATTLER_BUILD_ID = "FIX29-2026-09-13"
+NETRATTLER_BUILD_ID = "FIX31-2026-09-13"
 MIN_CONFIDENCE = int(env("MIN_CONFIDENCE", "3"))
 # 🆕 Nur HIGH + OK Value (LOW fliegt raus)
 MIN_VALUE_RATING = env("MIN_VALUE_RATING", "OK")  # HIGH, OK, oder LOW
@@ -20914,6 +20914,27 @@ def run_corners_and_scorer_bots(target_date, active_leagues, odds_data_cache, fi
     corner_index = _pinnacle_corner_quotes_by_match() if (group_hz and real_only) else {}
     if group_hz and real_only:
         log(f"   🔵 Echte Pinnacle-Corner-Matches: {len(corner_index)}")
+        # If Arcadia has no match-total corner lines, reuse Kambi's already-cached
+        # event offers from the prop pass. This preserves REAL_ODDS_ONLY.
+        try:
+            from netrattler_prop_sources import collect_extra_corner_odds
+            _corner_fx=[]
+            _major=("champions league","premier league","la liga","serie a","bundesliga","ligue 1","eredivisie","primeira liga","mls")
+            for _lg in active_leagues:
+                for _fx in (fixtures_cache.get(_lg,[]) or []):
+                    if not isinstance(_fx,dict): continue
+                    _row=dict(_fx); _row["league"]=_row.get("league") or _lg
+                    _corner_fx.append(_row)
+            _corner_fx.sort(key=lambda x: sum(t in f"{x.get('league','')} {x.get('home','')} {x.get('away','')}".lower() for t in _major), reverse=True)
+            for _cq in collect_extra_corner_odds(_corner_fx, log=log, max_matches=int(env("NETRATTLER_CORNER_EXTRA_MATCHES","30"))):
+                _h,_a=str(_cq.get("home","")).strip(),str(_cq.get("away","")).strip()
+                if not _h or not _a: continue
+                _k=f"{normalize_team_name(_h)}|{normalize_team_name(_a)}"
+                _item={"line":float(_cq.get("line") or 0),"odds":float(_cq.get("odds") or 0),"source":str(_cq.get("source") or "kambi")}
+                if _item not in corner_index.setdefault(_k,[]): corner_index[_k].append(_item)
+            log(f"   🔵 Corner-Matches nach Fallback: {len(corner_index)}")
+        except Exception as _ce:
+            log(f"   🔵 Corner-Fallback Fehler: {str(_ce)[:80]}","WARN")
     corners_tips, scorer_tips, seen, scanned = [], [], set(), 0
     for league in active_leagues:
         if _time.monotonic()-started >= budget or scanned >= max_matches: break
@@ -20942,7 +20963,7 @@ def run_corners_and_scorer_bots(target_date, active_leagues, odds_data_cache, fi
         if group_late and legacy_scorer and not real_only and _time.monotonic()-started < budget:
             log(f"   ⚽ Legacy-Scorer für {league} deaktiviert im Standardprofil; Player Props sind primär", "INFO")
     if real_only and group_late:
-        log("   ⚽ Legacy-Scorer übersprungen: REAL_ODDS_ONLY — echte Scorer-Quoten laufen über Player Props/Builder")
+        log("   ⚽ Goal Hunter nutzt direkte echte Scorer-Props aus dem ML-Prop-Pfad (Legacy aus)")
     corners_tips.sort(key=lambda t:(float(t.get("edge",0) or 0),float(t.get("probability",0) or 0)),reverse=True)
     corners_tips=corners_tips[:max(1,int(os.getenv("NETRATTLER_CORNERS_MAX_SEND","12")))]
     if corners_tips and group_hz:
@@ -20952,9 +20973,10 @@ def run_corners_and_scorer_bots(target_date, active_leagues, odds_data_cache, fi
             try:
                 save_to_supabase({**tip,"tip_id":f"corners_{tip.get('match','?')}_{target_date}".replace(" ","_"),"date":str(target_date),"market":"corners","status":"pending","group_key":"corners","pick_type":"corners","telegram_chat_id":str(group_hz),"telegram_msg_id":mid,"message_text":msg[:3500],"probability":tip.get("probability",0),"confidence":tip.get("confidence",3)})
             except Exception: pass
+    _direct_scorers=int(getattr(run_pinnacle_props_bot,"_last_scorer_sent",0) or 0)
     run_corners_and_scorer_bots._last_corners=len(corners_tips)
-    run_corners_and_scorer_bots._last_scorer=0
-    log(f"🔵⚽ Corners/Scorer fertig: corners={len(corners_tips)}, scorer=0, scanned={scanned}, {_time.monotonic()-started:.1f}s")
+    run_corners_and_scorer_bots._last_scorer=_direct_scorers
+    log(f"🔵⚽ Corners/Scorer fertig: corners={len(corners_tips)}, scorer={_direct_scorers}, scanned={scanned}, {_time.monotonic()-started:.1f}s")
 
 
 # ============================================================
@@ -23644,6 +23666,7 @@ def run_pinnacle_props_bot(win_start_utc=None, win_end_utc=None, ch_tz=None, top
     """Bet Builder Style: Pro Spiel 2-4 Legs kombiniert → Prop Hunter Kanal.
     Quellen: Pinnacle (echte Quoten) + FBref (unabhängige Stats) für Cross-Validation."""
     from datetime import datetime as _dt2
+    run_pinnacle_props_bot._last_scorer_sent = 0
     props = fetch_pinnacle_player_props()
     if not props:
         log("🔑 Pinnacle Props: keine Specials verfügbar — Extra-Quellen laufen weiter", "WARN")
@@ -24289,6 +24312,26 @@ def run_pinnacle_props_bot(win_start_utc=None, win_end_utc=None, ch_tz=None, top
                     _ml_prob_set += 1
             if _ml_prob_set:
                 log(f"   🧠 Player-XGBoost: {_pm} Modelle geladen · {_ml_prob_set} Props mit echter Modell-Wahrscheinlichkeit versehen")
+                try:
+                    _bands = {">=60%": 0, "55-60%": 0, "50-55%": 0, "<50%": 0}
+                    _cats55 = {}
+                    for _pr in _NTR_BUILDER_PROP_POOL:
+                        if not isinstance(_pr, dict) or not _pr.get("ml_backed"):
+                            continue
+                        _pp = float(_pr.get("probability", 0) or 0)
+                        if _pp > 1: _pp /= 100.0
+                        if _pp >= 0.60: _bands[">=60%"] += 1
+                        elif _pp >= 0.55: _bands["55-60%"] += 1
+                        elif _pp >= 0.50: _bands["50-55%"] += 1
+                        else: _bands["<50%"] += 1
+                        if _pp >= 0.55:
+                            _cc = str(_pr.get("category") or "other")
+                            _cats55[_cc] = _cats55.get(_cc, 0) + 1
+                    log("   🧠 Prop-Prob-Bänder: " + " · ".join(f"{k}={v}" for k,v in _bands.items()))
+                    if _cats55:
+                        log("   🧠 Props >=55% nach Markt: " + ", ".join(f"{k}={v}" for k,v in sorted(_cats55.items(), key=lambda kv: kv[1], reverse=True)))
+                except Exception:
+                    pass
                 # 🪜 ROLLEN-STAFFELUNG (Nate-Style 3+/2+/1+) mit ECHTEN Quoten:
                 # Pro Spieler+Kategorie das höchste Linien-Leg bevorzugen, das der
                 # Buchmacher wirklich anbietet UND das Modell mind. min_conf deckt.
@@ -24337,12 +24380,12 @@ def run_pinnacle_props_bot(win_start_utc=None, win_end_utc=None, ch_tz=None, top
                         or TELEGRAM_CHAT_ID)
         _goal_hunter_chat = (TELEGRAM_GROUPS.get("scorer") or TELEGRAM_GROUPS.get("goal_hunter")
                              or TELEGRAM_GROUPS.get("late_goals") or _single_chat)
-        _single_min_prob = float(env("NETRATTLER_PLAYER_PROP_MIN_PROB", "0.60"))
+        _single_min_prob = float(env("NETRATTLER_PLAYER_PROP_MIN_PROB", "0.55"))
         if _single_min_prob > 1:
             _single_min_prob /= 100.0
-        _single_min_edge = float(env("NETRATTLER_PLAYER_PROP_MIN_EDGE", "0.05"))
+        _single_min_edge = float(env("NETRATTLER_PLAYER_PROP_MIN_EDGE", "0.03"))
         _single_min_odds = float(env("NETRATTLER_PLAYER_PROP_MIN_ODDS", "1.50"))
-        _single_max_odds = float(env("NETRATTLER_PLAYER_PROP_MAX_ODDS", "10.0"))
+        _single_max_odds = float(env("NETRATTLER_PLAYER_PROP_MAX_ODDS", "0"))
         _single_max = int(env("NETRATTLER_MAX_PLAYER_PROPS_PER_RUN", "12"))
         _bookmaker_tokens = (
             "pinnacle", "bet365", "kambi", "unibet", "1xbet", "melbet",
@@ -24366,12 +24409,18 @@ def run_pinnacle_props_bot(win_start_utc=None, win_end_utc=None, ch_tz=None, top
                 continue
             if _prob > 1:
                 _prob /= 100.0
-            if not (_single_min_odds <= _odd <= _single_max_odds):
+            _is_scorer_row = _cat in {"score", "first_scorer", "last_scorer"}
+            _row_min_prob = float(env("NETRATTLER_SCORER_MIN_PROB", "0.35")) if _is_scorer_row else _single_min_prob
+            _row_min_edge = float(env("NETRATTLER_SCORER_MIN_EDGE", "0.03")) if _is_scorer_row else _single_min_edge
+            _row_min_odds = float(env("NETRATTLER_SCORER_MIN_ODDS", "1.70")) if _is_scorer_row else _single_min_odds
+            if _row_min_prob > 1: _row_min_prob /= 100.0
+            if _row_min_edge > 1: _row_min_edge /= 100.0
+            if _odd < _row_min_odds or (_single_max_odds > 0 and _odd > _single_max_odds):
                 continue
-            if _prob < _single_min_prob:
+            if _prob < _row_min_prob:
                 continue
             _edge = _prob - (1.0 / _odd)
-            if _edge < _single_min_edge:
+            if _edge < _row_min_edge:
                 continue
             _player = str(_row.get("player") or "").strip()
             _match = str(_row.get("match") or "").strip()
@@ -24383,12 +24432,19 @@ def run_pinnacle_props_bot(win_start_utc=None, win_end_utc=None, ch_tz=None, top
             if _key not in _single_best or _score > _single_best[_key][0]:
                 _single_best[_key] = (_score, _row, _edge, _prob, _odd)
 
-        _single_candidates = sorted(
+        _all_single_candidates = sorted(
             _single_best.values(),
             key=lambda item: (item[2], item[3]),
             reverse=True,
-        )[:max(0, _single_max)]
+        )
+        _scorer_max = int(env("NETRATTLER_MAX_SCORER_PROPS_PER_RUN", "8"))
+        _scorer_candidates = [x for x in _all_single_candidates if str(x[1].get("category") or "") in {"score","first_scorer","last_scorer"}][:max(0,_scorer_max)]
+        _other_candidates = [x for x in _all_single_candidates if str(x[1].get("category") or "") not in {"score","first_scorer","last_scorer"}][:max(0,_single_max)]
+        # Dedicated Goal-Hunter quota prevents high-edge SOT/cards from crowding
+        # scorers out of the global top-N list.
+        _single_candidates = _scorer_candidates + _other_candidates
         _single_sent = 0
+        _scorer_sent = 0
         if _single_candidates and not _single_chat:
             log(f"   🎯 Player Props: {len(_single_candidates)} Value-Kandidaten, aber kein Telegram-Ziel", "WARN")
         elif _single_chat:
@@ -24429,6 +24485,8 @@ def run_pinnacle_props_bot(win_start_utc=None, win_end_utc=None, ch_tz=None, top
                 )
                 _mid = send_telegram(_msg, chat_id=_target_chat)
                 _single_sent += 1
+                if _is_scorer:
+                    _scorer_sent += 1
                 try:
                     save_to_supabase({
                         "tip_id": _tip_id,
@@ -24454,10 +24512,12 @@ def run_pinnacle_props_bot(win_start_utc=None, win_end_utc=None, ch_tz=None, top
                     })
                 except Exception as _se:
                     log(f"   ⚠️ Player Prop DB-Save fehlgeschlagen: {str(_se)[:100]}", "WARN")
+        run_pinnacle_props_bot._last_scorer_sent = _scorer_sent
         log(
             f"   🎯 Player Props Value: {_single_sent} gesendet / "
-            f"{len(_single_candidates)} Kandidaten "
-            f"(minProb={_single_min_prob*100:.0f}%, minEdge={_single_min_edge*100:.0f}%)"
+            f"{len(_single_candidates)} Kandidaten · Scorer={len(_scorer_candidates)} "
+            f"(Props minProb={_single_min_prob*100:.0f}%, minEdge={_single_min_edge*100:.0f}% · "
+            f"Scorer minProb={float(env('NETRATTLER_SCORER_MIN_PROB','0.35'))*100:.0f}%)"
         )
     except Exception as _spe:
         log(f"   🎯 Player Props Value Error: {type(_spe).__name__}: {str(_spe)[:120]}", "WARN")
@@ -27041,73 +27101,70 @@ def main():
                         pinnacle_tips_count += 1
                         _pin_diag["tips"] += 1
 
-                # 🏆 1X2 (Sieger-Tipp): stärkste Modelle (home/draw/away AUC 0.73-0.74).
-                # Nur mit echter Quote (ro) + Modell-Wahrscheinlichkeit.
+                # 🏆 1X2 (Sieger-Tipp): real quote + model VALUE or conservative
+                # model/market CONSENSUS. The consensus tier exists so strong favourites
+                # are not silently lost merely because 1X2 models are less decisive than
+                # binary goal models. It is labelled SHARP, not VALUE, and uses 0.5u.
                 try:
                     if "1x2" in tips_by_market and ro:
                         _ml_1x2 = dict(_ml_match or {})
-                        if _league_prior_fallback and not any(_ml_1x2.get(k) for k in ("home_win_pct","draw_pct","away_win_pct")):
-                            # For 1X2 there is no useful league-only team prior. Use the
-                            # no-vig three-way Pinnacle consensus as a SHARP probability.
-                            # This tier is not advertised as model value; it must clear a
-                            # stronger probability floor and observed price requirements.
-                            try:
-                                _ih = 1.0 / float(ro.get("home") or 0)
-                                _id = 1.0 / float(ro.get("draw") or 0)
-                                _ia = 1.0 / float(ro.get("away") or 0)
-                                _sm = _ih + _id + _ia
-                                if _sm > 0:
-                                    _ml_1x2.update({"home_win_pct": 100*_ih/_sm, "draw_pct": 100*_id/_sm, "away_win_pct": 100*_ia/_sm})
-                            except Exception:
-                                pass
                         _picks_1x2 = [
                             ("home", "Heimsieg", ro.get("home"), _ml_1x2.get("home_win_pct", 0)),
                             ("draw", "Unentschieden", ro.get("draw"), _ml_1x2.get("draw_pct", 0)),
                             ("away", "Auswärtssieg", ro.get("away"), _ml_1x2.get("away_win_pct", 0)),
                         ]
-                        # bestes Outcome nach höchster EDGE wählen (nicht nur Wahrscheinlichkeit)
-                        _min_1x2_odd = float(env("NETRATTLER_1X2_MIN_ODDS", "1.70"))
-                        _cands = []
-                        for _s, _l, _o, _p in _picks_1x2:
+                        _inv=[]
+                        for _s,_l,_o,_p in _picks_1x2:
                             try:
-                                _of = float(str(_o).replace(",", "."))
-                                _pf = float(_p or 0)
-                            except (TypeError, ValueError):
+                                _of=float(str(_o).replace(",",".")); _inv.append((_s,1.0/_of if _of>1 else 0.0))
+                            except Exception:
+                                _inv.append((_s,0.0))
+                        _vig=sum(v for _,v in _inv)
+                        _market_prob={k:(100.0*v/_vig if _vig>0 else 0.0) for k,v in _inv}
+                        _min_1x2_odd=float(env("NETRATTLER_1X2_MIN_ODDS","1.55"))
+                        _min_model_prob=_market_min_probability("1x2")
+                        _min_edge=float(env("NETRATTLER_1X2_MIN_EDGE","0.01"))
+                        _cons_min=float(env("NETRATTLER_1X2_CONSENSUS_MIN_PROB","58"))
+                        _cons_model_floor=float(env("NETRATTLER_1X2_CONSENSUS_MODEL_FLOOR","50"))
+                        _cons_max_gap=float(env("NETRATTLER_1X2_CONSENSUS_MAX_GAP","10"))
+                        _cons_max_odds=float(env("NETRATTLER_1X2_CONSENSUS_MAX_ODDS","2.10"))
+                        _cands=[]
+                        for _s,_l,_o,_p in _picks_1x2:
+                            try:
+                                _of=float(str(_o).replace(",",".")); _pf=float(_p or 0); _mp=float(_market_prob.get(_s,0) or 0)
+                            except (TypeError,ValueError):
                                 continue
-                            if _pf < _market_min_probability("1x2"):
-                                _pin_diag["1x2_prob_reject"] += 1
+                            if not (_min_1x2_odd <= _of <= TEAM_SINGLE_MAX_ODDS) or not _quote_is_sane("1x2",_of):
+                                _pin_diag["1x2_odds_reject"] += 1; continue
+                            _edge=(_pf/100.0)-(1.0/_of) if _pf>0 else -1.0
+                            _model_value=bool(_pf >= _min_model_prob and _edge >= _min_edge)
+                            _consensus=bool(
+                                _mp >= _cons_min and _of <= _cons_max_odds and
+                                ((_pf >= _cons_model_floor and abs(_pf-_mp) <= _cons_max_gap) or _pf <= 0)
+                            )
+                            if not (_model_value or _consensus):
+                                if _pf < _min_model_prob and not _consensus: _pin_diag["1x2_prob_reject"] += 1
+                                elif _edge < _min_edge and not _consensus: _pin_diag["1x2_edge_reject"] += 1
                                 continue
-                            if not (_min_1x2_odd <= _of <= TEAM_SINGLE_MAX_ODDS) or not _quote_is_sane("1x2", _of):
-                                _pin_diag["1x2_odds_reject"] += 1
-                                continue
-                            _edge_1x2 = (_pf / 100.0) - (1.0 / _of)
-                            _min_edge_1x2 = float(env("NETRATTLER_1X2_MIN_EDGE", "0.02"))
-                            if _edge_1x2 < _min_edge_1x2:
-                                _pin_diag["1x2_edge_reject"] += 1
-                                continue
-                            _cands.append((_s, _l, _of, _pf))
+                            _rating="VALUE" if _model_value else "SHARP"
+                            _tip_prob=_pf if _model_value else ((_pf*0.6+_mp*0.4) if _pf>0 else _mp)
+                            _cands.append((_s,_l,_of,_tip_prob,_rating,_edge,_mp))
                         if _cands:
-                            # Edge = Modell-Prob - implied Prob; höchste Edge gewinnt
-                            _best_1x2 = max(_cands, key=lambda x: (x[3] / 100.0) - (1.0 / x[2]))
-                            _sel, _label, _odd, _prob = _best_1x2
-                        else:
-                            _sel = _label = _odd = _prob = None
-                        _sharp_1x2 = bool(_league_prior_fallback and _odd and _prob >= float(env("NETRATTLER_1X2_SHARP_MIN_PROB", "58")))
-                        if _odd and _prob >= _market_min_probability("1x2") and (_sharp_1x2 or (((_prob/100.0) - (1.0/_odd)) >= float(env("NETRATTLER_1X2_MIN_EDGE", "0.02")))):
-                            tip_1x2 = {
-                                "match": mn, "league": league_name or "Pinnacle",
-                                "time": tstr, "tip": _label,
-                                "probability": _prob, "confidence": 3,
-                                "oddsYes": _odd, "fairOdds": round(100 / _prob, 2),
-                                "valueRating": ("SHARP" if _sharp_1x2 else "VALUE"), "units": (0.5 if _sharp_1x2 else 1.0), "market": "1x2",
-                                "reasoning": (f"Pinnacle no-vig Markt-Konsens | {league_name}" if _sharp_1x2 else f"Modell + Pinnacle Value | {league_name}"),
-                                "_source": ro.get("_source", "pinnacle"), "_kickoff": _ko_sort,
+                            # VALUE first by edge; otherwise strongest consensus probability.
+                            _best_1x2=max(_cands,key=lambda x:(1 if x[4]=="VALUE" else 0, x[5] if x[4]=="VALUE" else x[3], -x[2]))
+                            _sel,_label,_odd,_prob,_rating,_edge_raw,_mp=_best_1x2
+                            tip_1x2={
+                                "match":mn,"league":league_name or "Pinnacle","time":tstr,"tip":_label,
+                                "probability":round(_prob,1),"confidence":3,"oddsYes":_odd,
+                                "fairOdds":round(100/_prob,2) if _prob else 0,
+                                "valueRating":_rating,"units":(1.0 if _rating=="VALUE" else 0.5),"market":"1x2",
+                                "reasoning":(f"Modell + Pinnacle Value | {league_name}" if _rating=="VALUE" else f"Modell + Pinnacle Markt-Konsens | {league_name}"),
+                                "_source":ro.get("_source","pinnacle"),"_kickoff":_ko_sort,
                             }
                             tips_by_market["1x2"].append(tip_1x2)
-                            pinnacle_tips_count += 1
-                            _pin_diag["tips"] += 1
-                except Exception:
-                    pass
+                            pinnacle_tips_count += 1; _pin_diag["tips"] += 1
+                except Exception as _1x2e:
+                    log(f"   🏆 1X2 Fehler: {str(_1x2e)[:80]}","WARN")
 
                 total_analyzed += 1
             except Exception as pe:
