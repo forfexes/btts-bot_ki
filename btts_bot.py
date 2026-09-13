@@ -281,7 +281,7 @@ MIN_ODDS = float(env("MIN_ODDS", "1.70"))
 MAX_ODDS = float(env("MAX_ODDS", "3.0"))
 # FIX24: Team single markets are intentionally capped at 3.00 regardless of external env drift.
 TEAM_SINGLE_MAX_ODDS = min(3.0, MAX_ODDS)
-NETRATTLER_BUILD_ID = "FIX24-2026-09-10"
+NETRATTLER_BUILD_ID = "FIX26-2026-09-13"
 MIN_CONFIDENCE = int(env("MIN_CONFIDENCE", "3"))
 # 🆕 Nur HIGH + OK Value (LOW fliegt raus)
 MIN_VALUE_RATING = env("MIN_VALUE_RATING", "OK")  # HIGH, OK, oder LOW
@@ -289,38 +289,56 @@ MIN_VALUE_RATING = env("MIN_VALUE_RATING", "OK")  # HIGH, OK, oder LOW
 MIN_ODDS_VALUE = MIN_ODDS  # Alias — globale Mindestquote für "nur Value Bets"
 
 
-def _is_value_bet(odds, prob_pct):
-    """True nur wenn MIN_ODDS <= Quote <= MAX_ODDS UND echte Edge (Value Bet).
-    Global verfügbar — wird von allen Tipp-generierenden Funktionen genutzt.
-    Die Obergrenze verhindert absurde Fehl-Quoten (z.B. Over 2.5 @ 160 = Parsing-Bug)."""
+def _market_max_odds(market=""):
+    """Safe observed-price ceiling per market.
+
+    FIX24 correctly capped normal team singles at 3.00, but accidentally applied the
+    same ceiling to naturally higher-priced BTTS-HT and BTTS+O2.5 combined markets.
+    That starved both channels. Keep the hard 3.00 guard for normal singles while
+    allowing realistic special-market prices.
+    """
+    m = str(market or "").lower()
+    defaults = {
+        "btts": TEAM_SINGLE_MAX_ODDS,
+        "over25": TEAM_SINGLE_MAX_ODDS,
+        "over15_ht": TEAM_SINGLE_MAX_ODDS,
+        "1x2": TEAM_SINGLE_MAX_ODDS,
+        "btts_ht": 4.50,
+        "combo": 6.00,
+    }
+    env_keys = {
+        "btts_ht": "NETRATTLER_BTTS_HT_MAX_ODDS",
+        "combo": "NETRATTLER_COMBO_MAX_ODDS",
+    }
+    base = float(defaults.get(m, TEAM_SINGLE_MAX_ODDS))
+    try:
+        return float(env(env_keys.get(m, "NETRATTLER_MAX_SINGLE_ODDS"), str(base)))
+    except Exception:
+        return base
+
+
+def _is_value_bet(odds, prob_pct, market=""):
+    """True only for a sane observed price with positive model edge."""
     try:
         o = float(str(odds).replace(",", "."))
         p = float(prob_pct) / 100
     except Exception:
         return False
-    if o < MIN_ODDS_VALUE:
-        return False
-    # 🚫 Obergrenze: die globale MAX_ODDS-Grenze muss auch hier wirklich gelten.
-    # Der alte Code dokumentierte Quote 1.70-3.00, akzeptierte intern aber bis 8.00
-    # und ließ dadurch falsch gemappte BTTS-Quoten wie 6.92/7.97 als Value durch.
-    _max = min(float(TEAM_SINGLE_MAX_ODDS), float(env("NETRATTLER_MAX_SINGLE_ODDS", str(TEAM_SINGLE_MAX_ODDS))))
-    if o > _max:
+    if o < MIN_ODDS_VALUE or o > _market_max_odds(market):
         return False
     implied = 1 / o if o > 0 else 1
     edge = (p - implied) * 100
-    return edge >= 3  # mind. 3% Edge über der Quoten-implizierten Wahrscheinlichkeit
+    return edge >= 3
 
 
 def _sanitize_team_quote(value, market=""):
-    """Return a safe observed single-market decimal odd or 0.
-    FIX24 defense-in-depth: wrong market mappings must never reach tip generation.
-    """
+    """Return a safe observed decimal odd or 0, using market-specific bounds."""
     try:
         o = float(str(value).replace(",", "."))
     except Exception:
         return 0.0
     lo = 1.02 if str(market).lower() == "1x2" else 1.20
-    hi = TEAM_SINGLE_MAX_ODDS
+    hi = _market_max_odds(market)
     if not (lo <= o <= hi):
         return 0.0
     return round(o, 4)
@@ -17769,6 +17787,7 @@ def send_top_tips(tips_by_market, target_date):
         return
 
     saved = 0
+    _pending_tip_saves = []
     prefetch_sent_tips_for_date(target_date)
 
     for market_id, tips in tips_by_market.items():
@@ -18126,22 +18145,39 @@ def send_top_tips(tips_by_market, target_date):
             # vorgeladen. Ein zweiter GET pro Tipp war redundant und kostete bei 90+ Tipps
             # Minuten. Nach mark_tip_sent() direkt speichern; Duplikate werden vorher
             # zuverlässig durch is_duplicate_tip()/Tagescache abgefangen.
-            save_result = save_to_supabase(tip_data)
-            # CLV Tracking
+            # Queue DB writes. Telegram remains sequential to preserve message order, but
+            # Supabase inserts are independent and can be flushed concurrently afterwards.
+            _pending_tip_saves.append(tip_data)
             if NETRATTLER_PRO:
                 try:
                     log_tip_for_clv(tip_data)
                 except Exception:
                     pass
-            if save_result:
-                saved += 1
-            else:
-                log(f"   ⚠️ Supabase save fehlgeschlagen für {tip_data.get('match','?')}", "WARN")
 
         value_count = sum(1 for r in tips if r.get("valueRating") == "HIGH")
 
         # Kein Footer - direkt Tipps ohne Zusammenfassung
 
+    if _pending_tip_saves:
+        try:
+            from concurrent.futures import ThreadPoolExecutor, as_completed
+            _workers = max(2, min(8, int(env("NETRATTLER_SUPABASE_SAVE_WORKERS", "6"))))
+            with ThreadPoolExecutor(max_workers=_workers) as _ex:
+                _futs = {_ex.submit(save_to_supabase, _td): _td for _td in _pending_tip_saves}
+                for _fu in as_completed(_futs):
+                    _td = _futs[_fu]
+                    try:
+                        if _fu.result():
+                            saved += 1
+                        else:
+                            log(f"   ⚠️ Supabase save fehlgeschlagen für {_td.get('match','?')}", "WARN")
+                    except Exception as _be:
+                        log(f"   ⚠️ Supabase parallel save: {str(_be)[:80]}", "WARN")
+        except Exception as _qe:
+            log(f"   ⚠️ Parallel-Save Fallback: {str(_qe)[:80]}", "WARN")
+            for _td in _pending_tip_saves:
+                if save_to_supabase(_td):
+                    saved += 1
     log(f"Gespeichert in Supabase: {saved}")
 
 
@@ -23940,7 +23976,7 @@ def run_pinnacle_props_bot(win_start_utc=None, win_end_utc=None, ch_tz=None, top
                     _ntr_collect_prop(
                         _pl, "", _sofa_match, "", _grp,
                         category=_cat, line=_line, odds=_od,
-                        probability=(1.0 / _od * 0.95) if _od > 1 else 0,
+                        probability=0.0,  # kein Fake-Modell aus Bookmaker-Quote; ML/History setzt echte Wahrscheinlichkeit
                         source="bet365_sofascore", games=0,
                     )
                     _sofa_pool_added += 1
@@ -23991,11 +24027,33 @@ def run_pinnacle_props_bot(win_start_utc=None, win_end_utc=None, ch_tz=None, top
         if _extra_fixtures:
             # Kambi list feeds are cached once; spend the small offer budget on fixtures
             # most likely to have player markets instead of the first 10 arbitrary games.
-            _major_tokens = ("premier", "champions", "europa", "serie", "bundesliga", "liga",
-                             "eredivisie", "cup", "super", "mls", "uefa", "world", "international")
+            _major_tokens = ("champions league", "europa league", "premier league", "la liga", "serie a",
+                             "bundesliga", "ligue 1", "eredivisie", "mls", "uefa", "world cup",
+                             "cup", "super", "international")
+            # Candidate-first enrichment: matches that already produced the strongest team-model
+            # candidates are queried for player props first. This prevents a PSG/UCL type match
+            # from being missed merely because it was not among the first arbitrary fixtures.
+            _team_candidate_score = {}
+            try:
+                for _mk, _rows in (tips_by_market or {}).items():
+                    for _tr in (_rows or []):
+                        _mn = str(_tr.get("match") or "").strip().lower()
+                        if not _mn:
+                            continue
+                        _p = float(_tr.get("probability", 0) or 0)
+                        _team_candidate_score[_mn] = max(_team_candidate_score.get(_mn, 0.0), _p)
+            except Exception:
+                pass
             def _fx_score(_fx):
-                _txt = (str(_fx.get("league", "")) + " " + str(_fx.get("home", "")) + " " + str(_fx.get("away", ""))).lower()
-                return sum(1 for _t in _major_tokens if _t in _txt)
+                _home = str(_fx.get("home", "")).strip()
+                _away = str(_fx.get("away", "")).strip()
+                _match = f"{_home} vs {_away}".lower()
+                _league = str(_fx.get("league", "")).lower()
+                _txt = f"{_league} {_match}"
+                _major = sum(1 for _t in _major_tokens if _t in _txt)
+                _cand = _team_candidate_score.get(_match, 0.0)
+                # model candidate dominates; competition strength breaks ties
+                return (_cand, _major)
             _extra_fixtures = sorted(_extra_fixtures, key=_fx_score, reverse=True)
             _extra_added = 0
             for _xp in collect_extra_player_props(_extra_fixtures, log=log, max_matches=int(env("NETRATTLER_EXTRA_PROP_MAX_MATCHES", "24"))):
@@ -24012,7 +24070,7 @@ def run_pinnacle_props_bot(win_start_utc=None, win_end_utc=None, ch_tz=None, top
                     _xp.get("player", ""), _xp.get("team", ""), _xp.get("match", ""),
                     _xp.get("league", ""), _xp.get("market", ""),
                     category=_cat, line=float(_xp.get("line", 0.5) or 0.5), odds=_od,
-                    probability=(1.0 / _od * 0.95) if _od > 1 else 0,
+                    probability=0.0,  # kein Fake-Modell aus Bookmaker-Quote; ML/History setzt echte Wahrscheinlichkeit
                     source=_xp.get("source", "extra"), games=0,
                 )
                 _extra_added += 1
@@ -24080,7 +24138,7 @@ def run_pinnacle_props_bot(win_start_utc=None, win_end_utc=None, ch_tz=None, top
                 and _mlp.model_for(r.get("category", ""), r.get("line", 0.5)) is not None
             ]
             if _netrattler_fast_tips_enabled():
-                _cap = int(env("NETRATTLER_FAST_PLAYER_ML_CAP", "16"))
+                _cap = int(env("NETRATTLER_FAST_PLAYER_ML_CAP", "48"))
                 _seen_tp, _capped_tp = set(), []
                 for _p in _target_players:
                     _np = _normalize_name(_p)
@@ -26797,7 +26855,7 @@ def main():
                     pass
 
                 # BTTS Tipp — nur Value Bets (Quote >=1.70 + echter Edge)
-                if _has_independent_model and prob_b >= _market_min_probability("btts") and "btts" in tips_by_market and _is_value_bet(btts_yes, prob_b) and (_real_btts_odd or not _real_odds_only_enabled()):
+                if _has_independent_model and prob_b >= _market_min_probability("btts") and "btts" in tips_by_market and _is_value_bet(btts_yes, prob_b, "btts") and (_real_btts_odd or not _real_odds_only_enabled()):
                     tip_btts = {
                         "match": mn, "league": league_name or "Pinnacle",
                         "time": tstr, "tip": "YES",
@@ -26814,7 +26872,7 @@ def main():
                     log(f"      ✅ BTTS YES @ {btts_yes} ({prob_b}%)")
 
                 # Over 2.5 Tipp — nur Value Bets
-                if _has_independent_model and prob_o >= _market_min_probability("over25") and "over25" in tips_by_market and _is_value_bet(over25, prob_o) and (_real_over_odd or not _real_odds_only_enabled()):
+                if _has_independent_model and prob_o >= _market_min_probability("over25") and "over25" in tips_by_market and _is_value_bet(over25, prob_o, "over25") and (_real_over_odd or not _real_odds_only_enabled()):
                     tip_over25 = {
                         "match": mn, "league": league_name or "Pinnacle",
                         "time": tstr, "tip": "YES",
@@ -26835,7 +26893,7 @@ def main():
                     # Never synthesize a bookmaker combo price from two singles.
                     combo_odds = float((ro or {}).get("btts_over25_combo") or 0)
                     _combo_real = bool(combo_odds)
-                    if combo_prob >= _market_min_probability("combo") and _is_value_bet(combo_odds, combo_prob) and _combo_real:
+                    if combo_prob >= _market_min_probability("combo") and _is_value_bet(combo_odds, combo_prob, "combo") and _combo_real:
                         tip_combo = {
                             "match": mn, "league": league_name or "Pinnacle",
                             "time": tstr, "tip": "BTTS + Over 2.5",
@@ -26862,7 +26920,7 @@ def main():
                     except Exception:
                         pass
                     # REAL_ODDS_ONLY: no synthetic HT odds fallback.
-                    if btts_ht_prob >= _market_min_probability("btts_ht") and _is_value_bet(btts_ht_odds, btts_ht_prob) and (_real_btts_ht_odd or not _real_odds_only_enabled()):
+                    if btts_ht_prob >= _market_min_probability("btts_ht") and _is_value_bet(btts_ht_odds, btts_ht_prob, "btts_ht") and (_real_btts_ht_odd or not _real_odds_only_enabled()):
                         tip_btts_ht = {
                             "match": mn, "league": league_name or "Pinnacle",
                             "time": tstr, "tip": "BTTS HT (Beide Teams treffen 1.HZ)",
@@ -26887,7 +26945,7 @@ def main():
                     except Exception:
                         pass
                     # REAL_ODDS_ONLY: no synthetic HT odds fallback.
-                    if o15_prob >= _market_min_probability("over15_ht") and "over15_ht" in tips_by_market and _is_value_bet(o15_odds, o15_prob) and (_real_over15_ht_odd or not _real_odds_only_enabled()):
+                    if o15_prob >= _market_min_probability("over15_ht") and "over15_ht" in tips_by_market and _is_value_bet(o15_odds, o15_prob, "over15_ht") and (_real_over15_ht_odd or not _real_odds_only_enabled()):
                         tip_o15_ht = {
                             "match": mn, "league": league_name or "Pinnacle",
                             "time": tstr, "tip": "Over 1.5 Tore HT",
