@@ -569,6 +569,8 @@ def collect_extra_player_props(
         cats = ", ".join(f"{k}={v}" for k, v in per_cat.most_common())
         _log(f"   🔌 Extra-Prop-Quellen: {summary} · unique={len(out)} · matches={len(matched_matches)}")
         _log(f"   🔌 Extra-Prop-Kategorien: {cats}")
+    else:
+        _log(f"   🔌 Extra-Prop-Quellen: 0 Props aus {min(len(fixtures or []), max_matches)} geprüften Fixtures")
     return out
 
 
