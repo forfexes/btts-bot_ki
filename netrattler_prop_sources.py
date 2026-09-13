@@ -403,6 +403,95 @@ def fetch_kambi_match_corners(home: str, away: str, brand: str = "ub") -> List[D
     return out
 
 
+
+def fetch_kambi_team_specials(home: str, away: str, brand: str = "ub") -> Dict[str, float]:
+    """Observed Kambi team/special prices used when Pinnacle specials are blocked.
+
+    Returns only bookmaker-observed prices; it never synthesizes a combo from
+    separate markets. Supported keys: btts_yes, btts_yes_ht,
+    btts_over25_combo, over_15_ht.
+    """
+    event_id = None
+    host_used = None
+    for host in _KAMBI_HOSTS:
+        _lk = (host, brand)
+        if _lk not in _KAMBI_LIST_CACHE:
+            _KAMBI_LIST_CACHE[_lk] = _get_json(
+                f"{host}/offering/v2018/{brand}/listView/football/all/all/all/matches.json",
+                params={"lang": "en_GB", "market": "GB"},
+            )
+        data = _KAMBI_LIST_CACHE.get(_lk)
+        if not data:
+            continue
+        for ev in data.get("events") or []:
+            e = ev.get("event") or ev
+            name = e.get("name") or e.get("englishName") or ""
+            home_n = e.get("homeName") or ""
+            away_n = e.get("awayName") or ""
+            combo = f"{home_n} {away_n}".strip() or name.replace(" - ", " ")
+            if _teams_match(combo, home, away):
+                event_id = e.get("id")
+                host_used = host
+                break
+        if event_id:
+            break
+    if not event_id or not host_used:
+        return {}
+
+    _ok = (host_used, brand, str(event_id))
+    if _ok not in _KAMBI_OFFER_CACHE:
+        _KAMBI_OFFER_CACHE[_ok] = _get_json(
+            f"{host_used}/offering/v2018/{brand}/betoffer/event/{event_id}.json",
+            params={"lang": "en_GB", "market": "GB"},
+        )
+    offer = _KAMBI_OFFER_CACHE.get(_ok)
+    if not offer:
+        return {}
+
+    out: Dict[str, float] = {}
+    for bo in offer.get("betOffers") or []:
+        crit = str((bo.get("criterion") or {}).get("label", "") or "")
+        low = crit.lower()
+        outcomes = bo.get("outcomes") or []
+        is_first_half = any(t in low for t in ("1st half", "first half", "1st-half", "first-half", "1h"))
+        is_btts = ("both teams to score" in low or "both teams score" in low or "both to score" in low)
+        is_combo_criterion = is_btts and any(t in low for t in ("total goals", "over/under", "over 2.5", "and total"))
+
+        for oc in outcomes:
+            label = str(oc.get("label") or oc.get("type") or "")
+            olow = label.lower()
+            try:
+                odds = float(oc.get("odds", 0) or 0) / 1000.0
+            except (TypeError, ValueError):
+                continue
+            if odds <= 1.05:
+                continue
+
+            # Exact BTTS full-time / first-half Yes.
+            if is_btts and not is_combo_criterion and (olow in {"yes", "ja"} or olow.startswith("yes ")):
+                key = "btts_yes_ht" if is_first_half else "btts_yes"
+                if odds > out.get(key, 0):
+                    out[key] = round(odds, 3)
+
+            # Observed combined market only. Never multiply separate prices.
+            combo_text = f"{low} {olow}"
+            if (is_combo_criterion or ("both teams" in combo_text and "score" in combo_text)) and "over 2.5" in combo_text:
+                if "yes" in combo_text or "both teams" in combo_text:
+                    if odds > out.get("btts_over25_combo", 0):
+                        out["btts_over25_combo"] = round(odds, 3)
+
+            # First-half Over 1.5 goals.
+            if is_first_half and any(t in low for t in ("total goals", "goals over/under", "over/under goals", "goals")):
+                raw_line = oc.get("line")
+                try:
+                    line = float(raw_line) / 1000.0 if raw_line not in (None, "", 0) else _line_from(label, 0.0)
+                except (TypeError, ValueError):
+                    line = _line_from(label, 0.0)
+                if (olow.startswith("over") or str(oc.get("type") or "").upper() == "O") and abs(line - 1.5) <= 0.11:
+                    if odds > out.get("over_15_ht", 0):
+                        out["over_15_ht"] = round(odds, 3)
+    return out
+
 def collect_extra_corner_odds(fixtures: List[Dict[str, str]], log: Optional[Callable[[str], Any]] = None, max_matches: int = 24) -> List[Dict[str, Any]]:
     """Collect observed match-total corner odds from Kambi brands, bounded for runtime."""
     def _log(m):
@@ -631,7 +720,12 @@ def collect_extra_player_props(
             _add(rows, home, away, league, f"kambi_{brand}")
             local_cats.update((r.get("category") or map_category(r.get("market", ""))) for r in rows if isinstance(r, dict))
             local_cats.discard("other")
-            if len(local_cats & desired_depth) >= 5 and len(rows) >= 10:
+            _has_tackle = bool(local_cats & {"tackles_committed", "tackles_received"})
+            _has_foul = bool(local_cats & {"fouls", "fouls_won"})
+            # Do not stop at the first brand just because it has five categories.
+            # The screenshots/user target specifically needs contact markets, and
+            # Kambi brands can expose different fouls/tackles menus for the same event.
+            if len(local_cats & desired_depth) >= 6 and _has_tackle and _has_foul and len(rows) >= 10:
                 break
 
         # 1xbet is the best chance for tackles/fouls/shots depth, so try it next.
@@ -671,6 +765,7 @@ def collect_extra_player_props(
 __all__ = [
     "fetch_kambi_player_props",
     "fetch_kambi_match_corners",
+    "fetch_kambi_team_specials",
     "collect_extra_corner_odds",
     "fetch_1xbet_player_props",
     "fetch_oddspedia_player_props",
