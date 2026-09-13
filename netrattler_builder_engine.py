@@ -1874,8 +1874,8 @@ def _v31_min_edge() -> float:
 
 
 def _v31_min_total_odds() -> float:
-    value = as_float(os.getenv("NETRATTLER_PROP_BUILDER_MIN_ODDS", "5.0"), 5.0)
-    return max(5.0, value)
+    value = as_float(os.getenv("NETRATTLER_PROP_BUILDER_MIN_ODDS", "4.0"), 4.0)
+    return max(4.0, value)
 
 
 def _v31_has_observed_bookmaker_odds(leg: PropLeg) -> bool:
@@ -1906,9 +1906,10 @@ def _v31_valid_prop_builder(pick: BuilderPick) -> bool:
         return False
     if pick.estimated_odds:
         return False
-    # Mindestens 1 Leg muss valide sein (nicht alle müssen strict valide sein)
+    # Jeder Leg muss echte Bookmaker-Quote + positive/zulässige Edge haben.
+    # Kein "ein schlechter Leg darf mitlaufen" mehr.
     valid_legs = [l for l in pick.legs if _v31_valid_prop_leg(l)]
-    return len(valid_legs) >= max(1, len(pick.legs) - 1)
+    return len(valid_legs) == len(pick.legs)
 
 def _v31_leg_score(leg: PropLeg) -> float:
     base = float(leg.quality or 0.0)
@@ -1963,6 +1964,11 @@ def _v31_make(style: str, variant: str, legs: List[PropLeg], match_date: str, st
     legs = [x for x in legs if x and _v31_is_real_player_leg(x)]
     if len(legs) < 2:
         return None
+    # Same-game Builder müssen echte Markt-Diversität haben; keine zwei/drei
+    # fast identischen Scorer/SOT-Legs als "Builder" verkaufen.
+    if len({norm(x.match) for x in legs}) == 1 and "LADDER" not in (style + " " + variant).upper():
+        if len({x.category for x in legs}) < 2:
+            return None
     # sort for readability: scorer -> shots/SOT -> cards/fouls/tackles
     order = {
         "score": 0, "first_scorer": 0, "last_scorer": 0,
@@ -1975,7 +1981,7 @@ def _v31_make(style: str, variant: str, legs: List[PropLeg], match_date: str, st
     if not pick:
         return None
     # Player-Prop Builder: only observed bookmaker quotes, positive edge and 5.00+.
-    if pick.total_odds > float(os.getenv("NETRATTLER_SHARP_PROP_MAX_ODDS", "80")):
+    if pick.total_odds > float(os.getenv("NETRATTLER_SHARP_PROP_MAX_ODDS", "30")):
         return None
     if not _v31_valid_prop_builder(pick):
         return None
@@ -2503,7 +2509,7 @@ def build_builder_picks(
         if _v31_valid_prop_leg(x)
         and x.odds >= 1.35
         and x.odds <= float(os.getenv("NETRATTLER_SHARP_PROP_LEG_MAX_ODDS", "25"))
-        and x.probability >= float(os.getenv("NETRATTLER_SHARP_PROP_MIN_PROB", "0.15"))
+        and x.probability >= float(os.getenv("NETRATTLER_SHARP_PROP_MIN_PROB", "0.30"))
     ]
 
     focused: List[BuilderPick] = []
@@ -2513,10 +2519,13 @@ def build_builder_picks(
 
     # Legacy Engine als Fallback, aber nur echte Spieler-Builder bevorzugen.
     legacy: List[BuilderPick] = []
-    try:
-        legacy = _ORIGINAL_BUILD_BUILDER_PICKS_V30(raw_props, match_contexts, run_date, max_count * 2)
-    except Exception:
-        legacy = []
+    # Legacy-Builder erzeugte wiederholt generische/überteuerte Kombinationen.
+    # Standardmäßig AUS; nur explizit als Notfall-Fallback aktivierbar.
+    if str(os.getenv("NETRATTLER_ENABLE_LEGACY_PROP_BUILDER", "false")).lower() in {"1", "true", "yes", "on"} and not focused:
+        try:
+            legacy = _ORIGINAL_BUILD_BUILDER_PICKS_V30(raw_props, match_contexts, run_date, max_count * 2)
+        except Exception:
+            legacy = []
 
     legacy_filtered = []
     for pick in legacy:
@@ -2562,23 +2571,28 @@ def build_builder_picks(
         if len(selected) >= max_count:
             break
 
-    # 🆕 Screenshot-Builder parallel hinzufügen (JK-Style, nicht durch V31-Filter)
-    all_props = deduplicate_props(raw_props)
-    screenshot: List[BuilderPick] = []
-    screenshot.extend(_team_correlation_builders(all_props, run_date))
-    screenshot.extend(_high_odds_booking_builder(all_props, run_date))
-    screenshot.extend(_fouls_tackles_combo_builder(all_props, run_date))
-    screenshot.extend(_jk_multi_shot_builder(all_props, run_date))
-    screenshot.extend(_outside_box_sot_builder(all_props, run_date))
-    screenshot.extend(_full_profile_builder(all_props, run_date))
-    screenshot.extend(_goalscorer_combo_builder(all_props, run_date))
+    # Alte Screenshot-/JK-Builder waren die Quelle für unmodellierte 40-80x Kombis.
+    # Standardmäßig AUS. Wenn später explizit aktiviert, müssen sie trotzdem den
+    # gleichen V31-Real-Odds/Edge/Max-Odds-Filter bestehen.
+    if str(os.getenv("NETRATTLER_ENABLE_SCREENSHOT_BUILDERS", "false")).lower() in {"1", "true", "yes", "on"}:
+        all_props = deduplicate_props(raw_props)
+        screenshot: List[BuilderPick] = []
+        screenshot.extend(_team_correlation_builders(all_props, run_date))
+        screenshot.extend(_high_odds_booking_builder(all_props, run_date))
+        screenshot.extend(_fouls_tackles_combo_builder(all_props, run_date))
+        screenshot.extend(_jk_multi_shot_builder(all_props, run_date))
+        screenshot.extend(_outside_box_sot_builder(all_props, run_date))
+        screenshot.extend(_full_profile_builder(all_props, run_date))
+        screenshot.extend(_goalscorer_combo_builder(all_props, run_date))
 
-    existing_sigs = {"|".join(sorted(f"{norm(x.player)}:{x.category}" for x in p.legs)) for p in selected}
-    for pick in screenshot:
-        sig = "|".join(sorted(f"{norm(x.player)}:{x.category}" for x in pick.legs))
-        if sig not in existing_sigs:
-            existing_sigs.add(sig)
-            selected.append(pick)
+        existing_sigs = {"|".join(sorted(f"{norm(x.player)}:{x.category}" for x in p.legs)) for p in selected}
+        for pick in screenshot:
+            if pick.total_odds > float(os.getenv("NETRATTLER_SHARP_PROP_MAX_ODDS", "30")) or not _v31_valid_prop_builder(pick):
+                continue
+            sig = "|".join(sorted(f"{norm(x.player)}:{x.category}" for x in pick.legs))
+            if sig not in existing_sigs:
+                existing_sigs.add(sig)
+                selected.append(pick)
 
     return selected
 
