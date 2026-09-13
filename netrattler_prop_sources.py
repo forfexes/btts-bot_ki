@@ -337,6 +337,100 @@ def fetch_1xbet_player_props(home: str, away: str) -> List[Dict[str, Any]]:
     return props
 
 
+
+def fetch_kambi_match_corners(home: str, away: str, brand: str = "ub") -> List[Dict[str, Any]]:
+    """Observed Kambi match-total corner prices for Corner Sniper.
+
+    Reuses the same cached Kambi event/offer payload as player props, so calling
+    this after player-prop collection is normally cache-only. No synthetic odds.
+    """
+    event_id = None
+    host_used = None
+    for host in _KAMBI_HOSTS:
+        _lk = (host, brand)
+        if _lk not in _KAMBI_LIST_CACHE:
+            _KAMBI_LIST_CACHE[_lk] = _get_json(
+                f"{host}/offering/v2018/{brand}/listView/football/all/all/all/matches.json",
+                params={"lang": "en_GB", "market": "GB"},
+            )
+        data = _KAMBI_LIST_CACHE.get(_lk)
+        if not data:
+            continue
+        for ev in data.get("events") or []:
+            e = ev.get("event") or ev
+            name = e.get("name") or e.get("englishName") or ""
+            home_n = e.get("homeName") or ""
+            away_n = e.get("awayName") or ""
+            combo = f"{home_n} {away_n}".strip() or name.replace(" - ", " ")
+            if _teams_match(combo, home, away):
+                event_id = e.get("id")
+                host_used = host
+                break
+        if event_id:
+            break
+    if not event_id or not host_used:
+        return []
+    _ok = (host_used, brand, str(event_id))
+    if _ok not in _KAMBI_OFFER_CACHE:
+        _KAMBI_OFFER_CACHE[_ok] = _get_json(
+            f"{host_used}/offering/v2018/{brand}/betoffer/event/{event_id}.json",
+            params={"lang": "en_GB", "market": "GB"},
+        )
+    offer = _KAMBI_OFFER_CACHE.get(_ok)
+    if not offer:
+        return []
+    out=[]
+    for bo in offer.get("betOffers") or []:
+        crit = str((bo.get("criterion") or {}).get("label", ""))
+        low = crit.lower()
+        # Match-total corners only. Exclude team/player/handicap/1H markets because
+        # Corner Sniper's probability model is for full-match total corners.
+        if "corner" not in low or any(tok in low for tok in ("team corner", "player corner", "1st half", "first half", "handicap")):
+            continue
+        for oc in bo.get("outcomes") or []:
+            lab = str(oc.get("label") or oc.get("type") or "")
+            if not lab.lower().startswith("over"):
+                continue
+            try:
+                odds = float(oc.get("odds", 0) or 0) / 1000.0
+                raw_line = oc.get("line")
+                line = float(raw_line) / 1000.0 if raw_line not in (None, "", 0) else _line_from(lab, 0.0)
+            except (TypeError, ValueError):
+                continue
+            if odds <= 1.05 or not (6.5 <= line <= 14.5):
+                continue
+            out.append({"home":home,"away":away,"match":f"{home} vs {away}","line":line,"odds":odds,"source":f"kambi_{brand}"})
+    return out
+
+
+def collect_extra_corner_odds(fixtures: List[Dict[str, str]], log: Optional[Callable[[str], Any]] = None, max_matches: int = 24) -> List[Dict[str, Any]]:
+    """Collect observed match-total corner odds from Kambi brands, bounded for runtime."""
+    def _log(m):
+        if log:
+            try: log(m)
+            except Exception: pass
+    best={}
+    checked=0
+    matched=set()
+    for fx in (fixtures or [])[:max_matches]:
+        home=str(fx.get("home","")).strip(); away=str(fx.get("away","")).strip()
+        if not home or not away: continue
+        checked += 1
+        for brand in _KAMBI_BRANDS:
+            try: rows=fetch_kambi_match_corners(home,away,brand=brand) or []
+            except Exception: rows=[]
+            for row in rows:
+                key=(_norm_name(home),_norm_name(away),round(float(row.get("line") or 0),2))
+                prev=best.get(key)
+                if prev is None or float(row.get("odds") or 0) > float(prev.get("odds") or 0):
+                    best[key]=row
+                matched.add(f"{home} vs {away}")
+            if rows:
+                break
+    out=list(best.values())
+    _log(f"   🔵 Extra Corner Odds: {len(out)} Linien · {len(matched)} Matches · {checked} Fixtures geprüft")
+    return out
+
 # ==================================================================
 # Einheitliche Sammel-Funktion: probiert alle Quellen der Reihe nach.
 # ==================================================================
@@ -576,6 +670,8 @@ def collect_extra_player_props(
 
 __all__ = [
     "fetch_kambi_player_props",
+    "fetch_kambi_match_corners",
+    "collect_extra_corner_odds",
     "fetch_1xbet_player_props",
     "fetch_oddspedia_player_props",
     "fetch_footymetrics_player_props",
