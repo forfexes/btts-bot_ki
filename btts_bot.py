@@ -281,7 +281,7 @@ MIN_ODDS = float(env("MIN_ODDS", "1.70"))
 MAX_ODDS = float(env("MAX_ODDS", "3.0"))
 # FIX24: Team single markets are intentionally capped at 3.00 regardless of external env drift.
 TEAM_SINGLE_MAX_ODDS = min(3.0, MAX_ODDS)
-NETRATTLER_BUILD_ID = "FIX31-2026-09-13"
+NETRATTLER_BUILD_ID = "FIX32-2026-09-13"
 MIN_CONFIDENCE = int(env("MIN_CONFIDENCE", "3"))
 # 🆕 Nur HIGH + OK Value (LOW fliegt raus)
 MIN_VALUE_RATING = env("MIN_VALUE_RATING", "OK")  # HIGH, OK, oder LOW
@@ -24233,16 +24233,18 @@ def run_pinnacle_props_bot(win_start_utc=None, win_end_utc=None, ch_tz=None, top
         _pm = _mlp.load_player_models(SUPABASE_URL, SUPABASE_KEY)
         if _pm:
             _ml_prob_set = 0
+            _history_prob_set = 0
+            _history_prob_by_cat = {}
             _sb_lookups = 0
             _SB_LOOKUP_CAP = 0 if _netrattler_fast_tips_enabled() else int(os.getenv("NETRATTLER_STATBUNKER_MAX_LOOKUPS", "4"))
             _target_players = [
                 r.get("player", "") for r in _NTR_BUILDER_PROP_POOL
                 if isinstance(r, dict)
                 and float(r.get("odds", 0) or 0) > 1.0
-                and _mlp.model_for(r.get("category", ""), r.get("line", 0.5)) is not None
+                and str(r.get("category") or "") in _REAL_PLAYER_BUILDER_CATS
             ]
             if _netrattler_fast_tips_enabled():
-                _cap = int(env("NETRATTLER_FAST_PLAYER_ML_CAP", "48"))
+                _cap = int(env("NETRATTLER_FAST_PLAYER_ML_CAP", "96"))
                 _seen_tp, _capped_tp = set(), []
                 for _p in _target_players:
                     _np = _normalize_name(_p)
@@ -24296,6 +24298,21 @@ def run_pinnacle_props_bot(win_start_utc=None, win_end_utc=None, ch_tz=None, top
                 except Exception:
                     _ctx = None
                 _mprob = _mlp.predict_player_prop(_avg, _cat, _row.get("line", 0.5), _ctx)
+                _hprob = None
+                try:
+                    _hprob = _mlp.empirical_player_prop_probability(_avg, _cat, _row.get("line", 0.5))
+                except Exception:
+                    _hprob = None
+                # Independent history model is deliberately conservative. It can rescue
+                # an under-confident classifier but never uses the bookmaker implied price.
+                _final_prob = _mprob
+                if _hprob is not None:
+                    _hist_conservative = float(_hprob) * 0.92
+                    if _final_prob is None or _hist_conservative > float(_final_prob):
+                        _final_prob = _hist_conservative
+                        _row["probability_source"] = "history_poisson" if _mprob is None else "xgb+history"
+                    _history_prob_set += 1
+                    _history_prob_by_cat[_cat] = _history_prob_by_cat.get(_cat, 0) + 1
                 # 🪜 Modell-bevorzugte Linie NUR merken (nicht Quote fälschen).
                 # Die echte Hochstufung passiert unten pool-weit über reale Quoten.
                 try:
@@ -24306,12 +24323,15 @@ def run_pinnacle_props_bot(win_start_utc=None, win_end_utc=None, ch_tz=None, top
                         _row["model_best_prob"] = _best[1]
                 except Exception:
                     pass
-                if _mprob is not None:
-                    _row["probability"] = round(_mprob, 4)
+                if _final_prob is not None:
+                    _row["probability"] = round(float(_final_prob), 4)
                     _row["ml_backed"] = True
+                    _row["history_backed"] = bool(_hprob is not None)
                     _ml_prob_set += 1
             if _ml_prob_set:
-                log(f"   🧠 Player-XGBoost: {_pm} Modelle geladen · {_ml_prob_set} Props mit echter Modell-Wahrscheinlichkeit versehen")
+                log(f"   🧠 Player-XGBoost/History: {_pm} Modelle geladen · {_ml_prob_set} Props modelliert · History-Signal={_history_prob_set}")
+                if _history_prob_by_cat:
+                    log("   📚 History-Model nach Markt: " + ", ".join(f"{k}={v}" for k,v in sorted(_history_prob_by_cat.items(), key=lambda kv: kv[1], reverse=True)[:10]))
                 try:
                     _bands = {">=60%": 0, "55-60%": 0, "50-55%": 0, "<50%": 0}
                     _cats55 = {}
@@ -24362,7 +24382,7 @@ def run_pinnacle_props_bot(win_start_utc=None, win_end_utc=None, ch_tz=None, top
                 except Exception as _lae:
                     log(f"   🪜 Staffelung übersprungen: {str(_lae)[:60]}", "WARN")
             else:
-                log(f"   🧠 Player-XGBoost: {_pm} Modelle geladen · 0 Props gematcht (keine Spielerhistorie in player_avg_stats — bei kleinen Ligen normal)")
+                log(f"   🧠 Player-XGBoost/History: {_pm} Modelle geladen · 0 Props gematcht (keine Spielerhistorie in player_avg_stats — bei kleinen Ligen normal)")
         else:
             log("   🧠 Player-XGBoost: keine Modelle geladen (Fallback: implied-odds)", "WARN")
     except Exception as _mle:
@@ -25276,6 +25296,48 @@ def _fetch_btts_odd_kambi(home: str, away: str):
     return None
 
 
+
+
+_KAMBI_TEAM_SPECIAL_CACHE = {}
+
+def _fetch_kambi_team_specials_bounded(home: str, away: str) -> dict:
+    """Bounded real-odds fallback for BTTS/combo/HT specials.
+
+    Reuses Kambi caches from netrattler_prop_sources and never fabricates a
+    combined price. This path is specifically for runs where Pinnacle's
+    markets/straight endpoint flips to HTTP 403.
+    """
+    key = (_normalize_name(home), _normalize_name(away))
+    if key in _KAMBI_TEAM_SPECIAL_CACHE:
+        return dict(_KAMBI_TEAM_SPECIAL_CACHE[key])
+    cap = max(0, int(env("NETRATTLER_KAMBI_SPECIAL_MAX_MATCHES", "24")))
+    used = int(getattr(_fetch_kambi_team_specials_bounded, "_used", 0))
+    if used >= cap:
+        return {}
+    setattr(_fetch_kambi_team_specials_bounded, "_used", used + 1)
+    best = {}
+    try:
+        from netrattler_prop_sources import fetch_kambi_team_specials, _KAMBI_BRANDS
+        for brand in _KAMBI_BRANDS:
+            try:
+                row = fetch_kambi_team_specials(home, away, brand=brand) or {}
+            except Exception:
+                row = {}
+            for k, v in row.items():
+                try:
+                    vf = float(v or 0)
+                except (TypeError, ValueError):
+                    continue
+                if vf > 1.05 and vf > float(best.get(k) or 0):
+                    best[k] = vf
+            # Stop once the important trio is present; otherwise continue brands
+            # because BTTS HT/combo menus vary by operator.
+            if all(best.get(k) for k in ("btts_yes", "btts_yes_ht", "btts_over25_combo")):
+                break
+    except Exception:
+        best = {}
+    _KAMBI_TEAM_SPECIAL_CACHE[key] = dict(best)
+    return best
 
 def get_pinnacle_match_odds(home_team: str, away_team: str,
                               league_hint: Optional[str] = None) -> Optional[Dict]:
@@ -26966,21 +27028,43 @@ def main():
                 except Exception:
                     pass
 
-                # 🔌 BTTS-Quoten-Fallback: Pinnacle blockt BTTS oft (403) → Kambi/Oddspedia.
-                if (not _fast_real and not _real_btts_odd
-                        and str(env("NETRATTLER_BTTS_ODDS_FALLBACK", "true")).lower() in ("1","true","yes","on")):
-                    try:
-                        import netrattler_prop_sources as _ps
-                        _extra = _ps.collect_extra_player_props  # reuse session/helpers
-                        # BTTS ist ein Team-Markt; wir holen ihn über die Kambi-Team-Quote
-                        _kb = _fetch_btts_odd_kambi(home, away)
-                        if _kb and _kb > 1.2:
-                            btts_yes = _kb
-                            # Quote ist Marktpreis; Modellwahrscheinlichkeit bleibt unabhängig.
-                            _real_btts_odd = True
-                            _real_btts_source = "kambi"
-                    except Exception:
-                        pass
+                # 🔌 TEAM-SPECIAL-FALLBACK: Pinnacle specials/markets may flip to 403
+                # between runs. Query Kambi only for model-relevant matches and with a
+                # strict global cap. Real observed prices only; combined odds are never
+                # synthesized from separate legs.
+                try:
+                    _model_bh = float((_ml_match or {}).get("btts_ht_pct", 0) or 0)
+                    _need_special = (
+                        (not _real_btts_odd and prob_b >= _market_min_probability("btts"))
+                        or (prob_b >= _market_min_probability("combo") and prob_o >= _market_min_probability("combo")
+                            and not float((ro or {}).get("btts_over25_combo") or 0))
+                        or (not _real_btts_ht_odd and _model_bh >= _market_min_probability("btts_ht"))
+                    )
+                    if _need_special and str(env("NETRATTLER_KAMBI_SPECIAL_FALLBACK", "true")).lower() in ("1","true","yes","on"):
+                        _ks = _fetch_kambi_team_specials_bounded(home, away)
+                        if _ks:
+                            ro = dict(ro or {})
+                            ro.setdefault("_source", "kambi")
+                            for _kk in ("btts_yes", "btts_yes_ht", "btts_over25_combo", "over_15_ht"):
+                                if _ks.get(_kk) and not ro.get(_kk):
+                                    ro[_kk] = _ks[_kk]
+                            _qb = _sanitize_team_quote(ro.get("btts_yes"), "btts")
+                            _qbh = _sanitize_team_quote(ro.get("btts_yes_ht"), "btts_ht")
+                            _qoh = _sanitize_team_quote(ro.get("over_15_ht"), "over15_ht")
+                            if _qb and not _real_btts_odd:
+                                btts_yes = _qb; _real_btts_odd = True; _real_btts_source = "kambi"
+                                _pin_diag["quote_btts"] += 1
+                            if _qbh and not _real_btts_ht_odd:
+                                btts_ht_odds = _qbh; _real_btts_ht_odd = True; _real_btts_ht_source = "kambi"
+                                _pin_diag["quote_ht"] += 1
+                            if _qoh and not _real_over15_ht_odd:
+                                o15_odds = _qoh; _real_over15_ht_odd = True; _real_over15_ht_source = "kambi"
+                                _pin_diag["quote_ht"] += 1
+                            if any(_ks.get(k) for k in ("btts_yes","btts_yes_ht","btts_over25_combo","over_15_ht")):
+                                _pin_diag["quote_any"] += 1
+                                log(f"      🔌 Kambi Specials: {home} vs {away} → {','.join(k for k,v in _ks.items() if v)}")
+                except Exception as _kse:
+                    log(f"      🔌 Kambi Specials Fallback übersprungen: {str(_kse)[:70]}", "WARN")
 
                 mn = f"{home} vs {away}"
                 tstr = "TBD"
