@@ -67,8 +67,8 @@ def _cffi_get_json(url, timeout=8, params=None):
 RESULT_USE_SOFASCORE = os.getenv("RESULT_USE_SOFASCORE", "false").lower() in {"1", "true", "yes", "on"}
 RESULT_USE_ESPN = os.getenv("RESULT_USE_ESPN", "true").lower() not in {"0", "false", "no"}
 RESULT_USE_OPENLIGADB = os.getenv("RESULT_USE_OPENLIGADB", "true").lower() not in {"0", "false", "no"}
-DAYS = int(os.getenv("SETTLEMENT_DAYS", "7"))
-LIMIT = int(os.getenv("SETTLEMENT_LIMIT", "1200"))
+DAYS = int(os.getenv("SETTLEMENT_DAYS", "14"))
+LIMIT = int(os.getenv("SETTLEMENT_LIMIT", "3000"))
 UPDATE_SOURCE_TIPS = os.getenv("UPDATE_SOURCE_TIPS", "true").lower() not in {"0", "false", "no"}
 SEND_PENDING_SUMMARY = os.getenv("SEND_PENDING_SUMMARY", "false").lower() in {"1", "true", "yes"}
 NOW = datetime.now(timezone.utc)
@@ -827,7 +827,7 @@ def load_results(dates: Sequence[str]) -> List[Dict[str, Any]]:
         # Sonst fehlen Ergebnisse für exotische Ligen (Belarus, Usbekistan...),
         # die nicht in match_results stehen → Tipps bleiben ewig pending.
         # Nur überspringen, wenn explizit deaktiviert.
-        _always_fallback = str(os.getenv("NETRATTLER_ALWAYS_FALLBACK_RESULTS", "false")).lower() in ("1", "true", "yes", "on")
+        _always_fallback = str(os.getenv("NETRATTLER_ALWAYS_FALLBACK_RESULTS", "true")).lower() in ("1", "true", "yes", "on")
         if day_db_rows >= min_db_rows and not _always_fallback:
             log(f"Public Result-Fallback {day} übersprungen ({day_db_rows} DB-Results vorhanden)")
             continue
@@ -895,8 +895,17 @@ def find_result(tip: Dict[str, Any], results: Sequence[Dict[str, Any]]) -> Optio
             score += 0.15
         if score > best_score:
             best_score = score
-            best = {"home": home, "away": away, "home_score": hs, "away_score": aw, "raw": row, "match_score": score}
-    return best if best and best_score >= 0.66 else None
+            _rd = unpack(row)
+            best = {
+                "home": home, "away": away, "home_score": hs, "away_score": aw,
+                "home_score_ht": anyv(_rd, ["home_score_ht", "HTHG", "halftime_home", "intHomeScoreHT"], None),
+                "away_score_ht": anyv(_rd, ["away_score_ht", "HTAG", "halftime_away", "intAwayScoreHT"], None),
+                "raw": row, "match_score": score,
+                "result_source": row.get("_result_table", "unknown") if isinstance(row, dict) else "unknown",
+            }
+    if best and best_score >= 0.66:
+        return best
+    return None
 
 
 def player_name(row: Dict[str, Any]) -> str:
@@ -1008,16 +1017,24 @@ def settle_score_market(tip: Dict[str, Any], result: Dict[str, Any]) -> Tuple[st
 
     if "btts ht" in low or "btts_ht" in low:
         raw = unpack(result.get("raw") or {})
-        hth = as_int(anyv(raw, ["HTHG", "home_score_ht", "halftime_home", "intHomeScoreHT"], -1), -1)
-        hta = as_int(anyv(raw, ["HTAG", "away_score_ht", "halftime_away", "intAwayScoreHT"], -1), -1)
+        hth = as_int(result.get("home_score_ht"), -1)
+        hta = as_int(result.get("away_score_ht"), -1)
+        if hth < 0:
+            hth = as_int(anyv(raw, ["HTHG", "home_score_ht", "halftime_home", "intHomeScoreHT"], -1), -1)
+        if hta < 0:
+            hta = as_int(anyv(raw, ["HTAG", "away_score_ht", "halftime_away", "intAwayScoreHT"], -1), -1)
         if hth < 0 or hta < 0:
             return "pending", "Halbzeit-Resultat fehlt"
         return ("win" if hth > 0 and hta > 0 else "loss", f"HT {hth}:{hta}")
 
     if "over 1.5 ht" in low or "over15_ht" in low:
         raw = unpack(result.get("raw") or {})
-        hth = as_int(anyv(raw, ["HTHG", "home_score_ht", "halftime_home", "intHomeScoreHT"], -1), -1)
-        hta = as_int(anyv(raw, ["HTAG", "away_score_ht", "halftime_away", "intAwayScoreHT"], -1), -1)
+        hth = as_int(result.get("home_score_ht"), -1)
+        hta = as_int(result.get("away_score_ht"), -1)
+        if hth < 0:
+            hth = as_int(anyv(raw, ["HTHG", "home_score_ht", "halftime_home", "intHomeScoreHT"], -1), -1)
+        if hta < 0:
+            hta = as_int(anyv(raw, ["HTAG", "away_score_ht", "halftime_away", "intAwayScoreHT"], -1), -1)
         if hth < 0 or hta < 0:
             return "pending", "Halbzeit-Resultat fehlt"
         return ("win" if hth + hta > 1.5 else "loss", f"HT {hth}:{hta}")
