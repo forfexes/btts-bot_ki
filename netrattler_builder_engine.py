@@ -425,8 +425,10 @@ def _make_builder(style: str, variant: str, legs: List[PropLeg], match_date: str
         return None
     odds = total_odds(legs)
     min_odds = as_float(os.getenv("NETRATTLER_BUILDER_MIN_ODDS", "1.75"), 1.75)
-    max_odds = as_float(os.getenv("NETRATTLER_BUILDER_MAX_ODDS", "150"), 150.0)
-    if odds < min_odds or odds > max_odds:
+    max_odds = as_float(os.getenv("NETRATTLER_BUILDER_MAX_ODDS", "0"), 0.0)
+    # 0/negative = unlimited. High total odds are not a rejection reason by themselves;
+    # every leg still has to pass real-odds, model-probability and edge validation.
+    if odds < min_odds or (max_odds > 0 and odds > max_odds):
         return None
     # Einsatz automatisch nach Risikostufe. Explizit kleinere Stakes bleiben erhalten.
     auto_stake = 0.75 if odds <= 3.5 else 0.50 if odds <= 10 else 0.25 if odds <= 25 else 0.10
@@ -1874,8 +1876,29 @@ def _v31_min_edge() -> float:
 
 
 def _v31_min_total_odds() -> float:
-    value = as_float(os.getenv("NETRATTLER_PROP_BUILDER_MIN_ODDS", "4.0"), 4.0)
-    return max(4.0, value)
+    value = as_float(os.getenv("NETRATTLER_PROP_BUILDER_MIN_ODDS", "2.5"), 2.5)
+    return max(1.5, value)
+
+
+def _v31_min_prob_for_leg(leg: PropLeg) -> float:
+    """Category-aware confidence floor for builder legs.
+
+    Goal/card markets naturally have lower base rates than 1+ shots or 2+ fouls;
+    a single global 55% floor made 892 real props collapse to zero builders.
+    We still require positive model-vs-bookmaker edge for every leg.
+    """
+    base = as_float(os.getenv("NETRATTLER_SHARP_PROP_MIN_PROB", "0.50"), 0.50)
+    if base > 1:
+        base /= 100.0
+    floors = {
+        "score": 0.38, "first_scorer": 0.32, "last_scorer": 0.32,
+        "yellow_cards": 0.42,
+        "fouls": 0.50, "fouls_won": 0.50,
+        "tackles": 0.50, "tackles_committed": 0.50, "tackles_received": 0.50,
+        "shots": 0.52, "sot": 0.52, "sot_outside_box": 0.48, "shots_outside_box": 0.48,
+        "assist": 0.30, "offsides": 0.45,
+    }
+    return max(0.25, min(0.80, floors.get(leg.category, base)))
 
 
 def _v31_has_observed_bookmaker_odds(leg: PropLeg) -> bool:
@@ -2507,9 +2530,9 @@ def build_builder_picks(
         x for x in props
         if _v31_valid_prop_leg(x)
         and x.odds >= 1.35
-        # Keine harte Leg-Quote-Obergrenze: hohe Quote ist erlaubt, wenn das Modell
-        # das Leg trotzdem als wahrscheinlich + Value einstuft.
-        and x.probability >= float(os.getenv("NETRATTLER_SHARP_PROP_MIN_PROB", "0.60"))
+        # No hard upper odds limit. Confidence floor is category-aware so common
+        # contact/shot props are not killed by the lower base rate of scorers/cards.
+        and x.probability >= _v31_min_prob_for_leg(x)
     ]
 
     focused: List[BuilderPick] = []
