@@ -19,6 +19,7 @@ zurueck. Kann den Lauf nie brechen.
 from __future__ import annotations
 
 from typing import Any, Dict, List, Optional
+import math
 
 try:
     import requests
@@ -178,6 +179,97 @@ def predict_player_prop(
         return None
 
 
+
+def empirical_player_prop_probability(avg_stats: Dict[str, Any], category: str, line: float) -> Optional[float]:
+    """History-backed Poisson probability for an observed player-prop line.
+
+    This is an independent statistical model built from the player's stored
+    per-match averages. It is used as a fallback/calibration signal when the
+    trained classifier is missing or clearly under-confident. No bookmaker
+    implied probability is used. A small category prior is blended in so tiny
+    samples do not create unrealistic 80-90% probabilities.
+    """
+    if not avg_stats:
+        return None
+    key_map = {
+        "shots": ("shots",),
+        "sot": ("sot", "shots_on_target"),
+        "sot_outside_box": ("sot", "shots_on_target"),
+        "score": ("goals",),
+        "first_scorer": ("goals",),
+        "last_scorer": ("goals",),
+        "assist": ("assists",),
+        "passes": ("passes",),
+        "tackles": ("tackles",),
+        "tackles_committed": ("tackles",),
+        "tackles_received": ("tackles_received", "tackles"),
+        "fouls": ("fouls_committed", "fouls"),
+        "fouls_committed": ("fouls_committed", "fouls"),
+        "fouls_won": ("fouls_won",),
+        "yellow_cards": ("yellow_cards", "cards"),
+        "cards": ("yellow_cards", "cards"),
+        "saves": ("saves",),
+        "offsides": ("offsides",),
+    }
+    priors = {
+        "shots": 1.8, "sot": 0.75, "sot_outside_box": 0.20,
+        "score": 0.28, "first_scorer": 0.28, "last_scorer": 0.28,
+        "assist": 0.18, "passes": 28.0,
+        "tackles": 1.6, "tackles_committed": 1.6, "tackles_received": 1.4,
+        "fouls": 1.35, "fouls_committed": 1.35, "fouls_won": 1.25,
+        "yellow_cards": 0.22, "cards": 0.22, "saves": 2.2, "offsides": 0.45,
+    }
+    row = None
+    for key in key_map.get(category, (category,)):
+        cand = avg_stats.get(key)
+        if cand and cand.get("avg") is not None:
+            row = cand
+            break
+    if not row:
+        return None
+    try:
+        avg = float(row.get("avg") or 0)
+        games = max(0.0, float(row.get("games") or 0))
+        ln = float(line if line is not None else 0.5)
+    except (TypeError, ValueError):
+        return None
+    if avg <= 0 or games <= 0:
+        return None
+
+    # 2+ may arrive as line=2 while Over 1.5 arrives as line=1.5.
+    if ln <= 0.5:
+        need = 1
+    elif abs(ln - round(ln)) < 1e-6:
+        need = max(1, int(round(ln)))
+    else:
+        need = max(1, int(math.floor(ln)) + 1)
+
+    prior = float(priors.get(category, max(0.15, min(avg, 2.0))))
+    prior_games = 5.0
+    lam = (avg * games + prior * prior_games) / (games + prior_games)
+    lam = max(0.01, min(lam, 60.0))
+
+    # Poisson survival P(X >= need). For very large pass lines, use a normal
+    # approximation to avoid long factorial sums.
+    if need > 15:
+        sd = max(1.0, math.sqrt(lam))
+        z = ((need - 0.5) - lam) / sd
+        prob = 0.5 * math.erfc(z / math.sqrt(2.0))
+    else:
+        cdf = 0.0
+        term = math.exp(-lam)
+        cdf += term
+        for k in range(1, need):
+            term *= lam / k
+            cdf += term
+        prob = 1.0 - cdf
+
+    # Mild sample-size confidence haircut; large samples are nearly untouched.
+    confidence = min(1.0, games / 10.0)
+    neutral = 0.50 if need <= 2 else 0.35
+    prob = neutral * (1.0 - confidence) + prob * confidence
+    return max(0.03, min(0.95, float(prob)))
+
 def loaded_model_count() -> int:
     return len(_MODEL_CACHE)
 
@@ -232,4 +324,5 @@ def best_line_for_role(
 __all__ = [
     "PLAYER_FEATURE_COLS", "load_player_models", "predict_player_prop",
     "build_player_features", "model_for", "loaded_model_count",
+    "empirical_player_prop_probability",
 ]
