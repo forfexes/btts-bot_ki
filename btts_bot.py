@@ -281,7 +281,7 @@ MIN_ODDS = float(env("MIN_ODDS", "1.70"))
 MAX_ODDS = float(env("MAX_ODDS", "3.0"))
 # FIX24: Team single markets are intentionally capped at 3.00 regardless of external env drift.
 TEAM_SINGLE_MAX_ODDS = min(3.0, MAX_ODDS)
-NETRATTLER_BUILD_ID = "FIX26-2026-09-13"
+NETRATTLER_BUILD_ID = "FIX29-2026-09-13"
 MIN_CONFIDENCE = int(env("MIN_CONFIDENCE", "3"))
 # 🆕 Nur HIGH + OK Value (LOW fliegt raus)
 MIN_VALUE_RATING = env("MIN_VALUE_RATING", "OK")  # HIGH, OK, oder LOW
@@ -308,7 +308,7 @@ def _market_max_odds(market=""):
     }
     env_keys = {
         "btts_ht": "NETRATTLER_BTTS_HT_MAX_ODDS",
-        "combo": "NETRATTLER_COMBO_MAX_ODDS",
+        "combo": "NETRATTLER_TEAM_COMBO_MAX_ODDS",
     }
     base = float(defaults.get(m, TEAM_SINGLE_MAX_ODDS))
     try:
@@ -23145,6 +23145,74 @@ def _pinnacle_linked_special_markets(matchups):
     return out
 
 
+def _pinnacle_related_special_matchups(parent_matchups):
+    """Recover specials when Pinnacle blocks the global withSpecials payload.
+
+    Uses the already-working normal matchup feed and asks only a bounded set of
+    high-value/upcoming parent matches for their related markets. This avoids
+    making the entire BTTS/BTTS-HT/Player-Prop pipeline depend on one global
+    endpoint that intermittently returns 403 on GitHub runners.
+    """
+    import time as _time
+    cached = getattr(_pinnacle_related_special_matchups, "_run_cache", None)
+    if isinstance(cached, list):
+        return cached
+    major_tokens = (
+        "champions league", "europa league", "conference league", "premier league",
+        "la liga", "serie a", "bundesliga", "ligue 1", "eredivisie", "mls",
+        "primeira liga", "uefa", "world cup", "copa libertadores", "sudamericana"
+    )
+    rows = []
+    now = datetime.now(timezone.utc)
+    horizon = now + timedelta(hours=float(env("NETRATTLER_PIN_SPECIAL_HORIZON_HOURS", "36")))
+    for m in parent_matchups or []:
+        mid = m.get("match_id") or m.get("id")
+        if not mid:
+            continue
+        starts = m.get("starts") or m.get("startTime") or ""
+        dt = None
+        if starts:
+            try:
+                dt = datetime.fromisoformat(str(starts).replace("Z", "+00:00"))
+            except Exception:
+                pass
+        if dt and (dt < now - timedelta(hours=2) or dt > horizon):
+            continue
+        league = str(m.get("league_name") or (m.get("league") or {}).get("name", "")).lower()
+        home = str(m.get("home") or "").lower()
+        away = str(m.get("away") or "").lower()
+        major = sum(1 for tok in major_tokens if tok in f"{league} {home} {away}")
+        rows.append((major, dt or horizon + timedelta(days=1), int(mid)))
+    rows.sort(key=lambda x: (-x[0], x[1]))
+    cap = max(8, int(env("NETRATTLER_PIN_RELATED_SPECIAL_CAP", "36")))
+    budget = max(8.0, float(env("NETRATTLER_PIN_RELATED_SPECIAL_BUDGET_SEC", "25")))
+    timeout = max(2.0, float(env("NETRATTLER_PIN_RELATED_SPECIAL_TIMEOUT", "3.0")))
+    out = []; attempted = 0; ok = 0; started = _time.monotonic()
+    for _major, _dt, mid in rows[:cap]:
+        if _time.monotonic() - started > budget:
+            break
+        attempted += 1
+        data, _status = _pinnacle_get_json(
+            f"{PINNACLE_BASE}/matchups/{mid}/related",
+            {"brandId": "0"}, timeout=timeout, allow_playwright=False,
+        )
+        if not isinstance(data, list):
+            continue
+        specials = [x for x in data if isinstance(x, dict) and x.get("type") == "special"]
+        if specials:
+            out.extend(specials); ok += 1
+    # de-duplicate by special matchup id
+    dedup = {}; noid = []
+    for row in out:
+        rid = row.get("id")
+        if rid is None: noid.append(row)
+        else: dedup[str(rid)] = row
+    out = list(dedup.values()) + noid
+    log(f"   🔑 Pinnacle Related-Special Fallback: {ok}/{attempted} Parents · {len(out)} Specials · {_time.monotonic()-started:.1f}s")
+    _pinnacle_related_special_matchups._run_cache = out
+    return out
+
+
 def fetch_pinnacle_player_props() -> List[Dict]:
     """Player/Team Specials von Pinnacle (echte Quoten), pro Lauf gecacht."""
     _cache = getattr(fetch_pinnacle_player_props, "_run_cache", None)
@@ -23156,9 +23224,18 @@ def fetch_pinnacle_player_props() -> List[Dict]:
             {"withSpecials": "true", "brandId": "0"},
         )
         if not data:
-            log(f"   🔑 Pinnacle Props: matchups fehlgeschlagen ({status})", "WARN")
-            return []
-        log(f"   🔑 Pinnacle Props: {len(data)} Einträge total (inkl. normale Matches)")
+            log(f"   🔑 Pinnacle Props: globale Specials fehlgeschlagen ({status}) — related fallback", "WARN")
+            try:
+                _parents = _PINNACLE_MATCHUPS or fetch_pinnacle_matchups()
+                data = _pinnacle_related_special_matchups(_parents)
+            except Exception as _rse:
+                log(f"   🔑 Pinnacle Related-Special Fallback Fehler: {str(_rse)[:80]}", "WARN")
+                data = []
+            if not data:
+                log("   🔑 Pinnacle Props: keine Specials nach Fallback — Extra-Quellen laufen weiter", "WARN")
+                fetch_pinnacle_player_props._run_cache = []
+                return []
+        log(f"   🔑 Pinnacle Props: {len(data)} Einträge total (inkl. normale/related Specials)")
 
         # Specials zählen nach Typ/Kategorie für Diagnose
         special_count = sum(1 for m in data if m.get("type") == "special")
@@ -23559,7 +23636,7 @@ def _ntr_builder_leg_line(leg, icons, indent=""):
         return f"{indent}{icon} <b>{player}</b> — {label}{fbref}{either}"
     return f"{indent}{icon} {label}{fbref}{either}"
 
-def run_pinnacle_props_bot(win_start_utc=None, win_end_utc=None, ch_tz=None, top_btts_tips=None, fixtures_cache=None) -> int:
+def run_pinnacle_props_bot(win_start_utc=None, win_end_utc=None, ch_tz=None, top_btts_tips=None, fixtures_cache=None, team_candidate_tips=None) -> int:
     """
     Pinnacle Player Props Bot.
     top_btts_tips: Beste BTTS-Tipps aus Hauptanalyse (als zusätzliche Bet-Builder-Legs).
@@ -24035,13 +24112,14 @@ def run_pinnacle_props_bot(win_start_utc=None, win_end_utc=None, ch_tz=None, top
             # from being missed merely because it was not among the first arbitrary fixtures.
             _team_candidate_score = {}
             try:
-                for _mk, _rows in (tips_by_market or {}).items():
-                    for _tr in (_rows or []):
-                        _mn = str(_tr.get("match") or "").strip().lower()
-                        if not _mn:
-                            continue
-                        _p = float(_tr.get("probability", 0) or 0)
-                        _team_candidate_score[_mn] = max(_team_candidate_score.get(_mn, 0.0), _p)
+                for _tr in (team_candidate_tips or top_btts_tips or []):
+                    if not isinstance(_tr, dict):
+                        continue
+                    _mn = str(_tr.get("match") or "").strip().lower()
+                    if not _mn:
+                        continue
+                    _p = float(_tr.get("probability", 0) or 0)
+                    _team_candidate_score[_mn] = max(_team_candidate_score.get(_mn, 0.0), _p)
             except Exception:
                 pass
             def _fx_score(_fx):
@@ -24052,11 +24130,14 @@ def run_pinnacle_props_bot(win_start_utc=None, win_end_utc=None, ch_tz=None, top
                 _txt = f"{_league} {_match}"
                 _major = sum(1 for _t in _major_tokens if _t in _txt)
                 _cand = _team_candidate_score.get(_match, 0.0)
-                # model candidate dominates; competition strength breaks ties
-                return (_cand, _major)
+                # FIX28: player-prop coverage first, model score second.
+                # Kambi/1xbet offer deep markets much more often for major competitions.
+                # Previously a 67% minor-league team tip outranked PSG/UCL and exhausted
+                # the fixture cap before any SOT/tackle/foul markets were queried.
+                return (1 if _major else 0, _major, _cand)
             _extra_fixtures = sorted(_extra_fixtures, key=_fx_score, reverse=True)
             _extra_added = 0
-            for _xp in collect_extra_player_props(_extra_fixtures, log=log, max_matches=int(env("NETRATTLER_EXTRA_PROP_MAX_MATCHES", "24"))):
+            for _xp in collect_extra_player_props(_extra_fixtures, log=log, max_matches=int(env("NETRATTLER_EXTRA_PROP_MAX_MATCHES", "60"))):
                 _cat = _xp.get("category") or _ntr_prop_category(_xp.get("market", ""))
                 if _cat == "other":
                     continue
@@ -27309,6 +27390,12 @@ def main():
                 ch_tz=_ch_tz,
                 top_btts_tips=_top_btts_for_props,
                 fixtures_cache=_fixtures_cache,
+                team_candidate_tips=[
+                    _tip
+                    for _rows in tips_by_market.values()
+                    for _tip in (_rows or [])
+                    if isinstance(_tip, dict)
+                ],
             )
         except Exception as _ppe:
             log(
@@ -27477,7 +27564,7 @@ def main():
                 # 🚫 Quoten-Deckel: absurde Mega-Combos (>500) rausfiltern —
                 # 11er-Ketten mit Quote 1000+ sind sinnlos (~0% Trefferchance).
                 _combo_odds = float(combo.get("total_odds", 0) or 0)
-                _combo_max = float(env("NETRATTLER_COMBO_MAX_ODDS", "500"))
+                _combo_max = float(env("NETRATTLER_MULTI_COMBO_MAX_ODDS", "500"))
                 if _combo_odds > _combo_max:
                     log(f"   ⏭️ Combo {n} übersprungen (Quote {_combo_odds:.0f} > {_combo_max:.0f} = Lottery)")
                     continue
