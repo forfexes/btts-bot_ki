@@ -518,12 +518,52 @@ def include_tip(row: Dict[str, Any]) -> bool:
     return row_date(row) >= (TODAY - timedelta(days=DAYS)).isoformat()
 
 
+def _recent_table_rows(table: str, limit: int) -> List[Dict[str, Any]]:
+    """Load newest rows with pagination.
+
+    A plain PostgREST LIMIT can return an arbitrary/old first page on large tables.
+    Settlement then never even sees some recent pending tips. Try the most likely
+    timestamp columns per table and paginate; fall back to unordered paging if a
+    schema does not expose those columns.
+    """
+    page = min(1000, max(100, limit))
+    order_candidates = {
+        "tips": ["created_at.desc", "date.desc", "match_date.desc"],
+        "ml_tips": ["created_at.desc", "date.desc", "match_date.desc"],
+        "netrattler_builder_picks": ["created_at.desc", "date.desc", "match_date.desc"],
+    }.get(table, ["created_at.desc", "date.desc"])
+    chosen = None
+    first = []
+    for order in order_candidates:
+        first = sb_get(table, {"select": "*", "limit": str(page), "offset": "0", "order": order}, quiet=True)
+        if first:
+            chosen = order
+            break
+    if not first:
+        first = sb_get(table, {"select": "*", "limit": str(page), "offset": "0"}, quiet=True)
+    rows = list(first or [])
+    offset = len(rows)
+    while len(rows) < limit and len(first) == page:
+        params = {"select": "*", "limit": str(min(page, limit-len(rows))), "offset": str(offset)}
+        if chosen:
+            params["order"] = chosen
+        part = sb_get(table, params, quiet=True)
+        if not part:
+            break
+        rows.extend(part)
+        offset += len(part)
+        first = part
+        if len(part) < page:
+            break
+    return rows[:limit]
+
+
 def load_tips() -> List[Dict[str, Any]]:
     output: List[Dict[str, Any]] = []
     for table in TIP_TABLES:
-        rows = sb_get(table, {"select": "*", "limit": str(LIMIT)}, quiet=True)
+        rows = _recent_table_rows(table, LIMIT)
         if rows:
-            log(f"Tip-Tabelle {table}: {len(rows)} Rows geladen")
+            log(f"Tip-Tabelle {table}: {len(rows)} Rows geladen (recent/paged)")
         for row in rows:
             if include_tip(row):
                 item = dict(row)
@@ -531,7 +571,7 @@ def load_tips() -> List[Dict[str, Any]]:
                 output.append(item)
     seen = set()
     clean = []
-    for row in output:
+    for row in sorted(output, key=lambda r: row_date(r), reverse=True):
         key = (row.get("_table"), tip_id(row))
         if key not in seen:
             seen.add(key)
