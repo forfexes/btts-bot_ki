@@ -107,6 +107,9 @@ class PropLeg:
     games: int = 0
     quality: float = 0.0
     estimated: bool = False
+    probability_source: str = ""
+    ml_backed: bool = False
+    history_backed: bool = False
 
     def key(self) -> Tuple[str, str, str, float]:
         return (norm(self.player), norm(self.match), self.category, round(self.line, 2))
@@ -274,6 +277,9 @@ def normalize_prop(row: Dict[str, Any]) -> Optional[PropLeg]:
         games=as_int(row.get("games") or row.get("sb_games")),
         quality=quality_score(row),
         estimated=estimated,
+        probability_source=str(row.get("probability_source") or "")[:40],
+        ml_backed=bool(row.get("ml_backed")),
+        history_backed=bool(row.get("history_backed")),
     )
 
 
@@ -1913,13 +1919,42 @@ def _v31_has_observed_bookmaker_odds(leg: PropLeg) -> bool:
 
 
 def _v31_valid_prop_leg(leg: PropLeg) -> bool:
-    # line >= 0 erlaubt binary Props (To Score, To Be Booked etc.) mit line=0
-    return (
-        _v31_is_real_player_leg(leg)
-        and _v31_has_observed_bookmaker_odds(leg)
-        and _v31_edge(leg) > _v31_min_edge()
-        and leg.line >= 0
-    )
+    """Strict V34 leg gate.
+
+    A builder leg must be model-backed, independently priced and plausible.
+    This prevents two bad patterns seen live:
+    - probability copied from the bookmaker implied price (Fair == Quote, Edge ~0)
+    - extreme model/market mismatches such as 25.00 odds with a 43% model probability,
+      which are much more likely to be a market/player mapping issue than real value.
+    High odds are NOT capped; they are accepted when the model signal is credible.
+    """
+    if not (_v31_is_real_player_leg(leg) and _v31_has_observed_bookmaker_odds(leg) and leg.line >= 0):
+        return False
+    if not leg.ml_backed:
+        return False
+    if leg.probability < _v31_min_prob_for_leg(leg):
+        return False
+    edge = _v31_edge(leg)
+    min_edge = max(_v31_min_edge(), as_float(os.getenv("NETRATTLER_PROP_BUILDER_MIN_EDGE", "0.02"), 0.02))
+    if edge < min_edge:
+        return False
+    implied = 1.0 / leg.odds if leg.odds > 1 else 1.0
+    # Reject near-bookmaker-derived probabilities: if fair odds are essentially the same
+    # as the offered price, there is no independent value signal.
+    if abs(float(leg.probability or 0) - implied) < 0.0075:
+        return False
+    # No hard odds ceiling. Instead reject implausible uncorroborated outliers.
+    # A model probability more than 4x the market implied probability or >30pp absolute
+    # advantage needs corroboration from history as well as the main model.
+    ratio = (float(leg.probability or 0) / implied) if implied > 0 else 99.0
+    max_ratio = as_float(os.getenv("NETRATTLER_PROP_BUILDER_MAX_MODEL_MARKET_RATIO", "4.0"), 4.0)
+    max_gap = as_float(os.getenv("NETRATTLER_PROP_BUILDER_MAX_ABS_EDGE", "0.30"), 0.30)
+    # Extreme discrepancies are quarantined even when history is present; a second
+    # statistical model is not a second bookmaker confirmation. This prevents stale
+    # or mis-mapped markets from being advertised as giant value.
+    if ratio > max_ratio or edge > max_gap:
+        return False
+    return True
 
 
 def _v31_valid_prop_builder(pick: BuilderPick) -> bool:
@@ -2654,7 +2689,7 @@ def _v31_reason(leg: PropLeg) -> str:
         base = "Tor-/Rollen-Profil"
     else:
         base = "Player-Prop Profil"
-    edge_txt = f"Edge {e*100:+.1f}%" if e else "Fair"
+    edge_txt = f"Edge {e*100:+.1f}%"
     return f"{base} · {edge_txt}"
 
 def format_builder_message(pick: BuilderPick) -> str:
