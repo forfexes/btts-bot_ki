@@ -33,28 +33,33 @@ jobs:
           python-version: "3.11"
           cache: "pip"
 
-      - name: Install Dependencies
+      - name: Install Runtime Dependencies (lean)
+        env:
+          PIP_DISABLE_PIP_VERSION_CHECK: "1"
         run: |
-          pip install --upgrade pip
-          pip install \
+          # btts_bot talks to Gemini/Groq/OpenRouter/Supabase via HTTP requests,
+          # so their large Python SDKs are unnecessary in the tips job.
+          # Install XGBoost without dependencies to avoid the ~342 MB CUDA/NCCL
+          # package on CPU-only GitHub runners; numpy/scipy/sklearn are installed
+          # explicitly just above it.
+          python -m pip install --prefer-binary \
             requests \
             python-dotenv \
             beautifulsoup4 \
             lxml \
-            google-generativeai \
-            groq \
-            openai \
-            anthropic \
-            supabase \
-            xgboost \
             cloudscraper \
             curl_cffi \
             numpy \
-            pandas \
+            scipy \
             scikit-learn
+          python -m pip install --prefer-binary --no-deps "xgboost==3.2.0"
 
       - name: Fast syntax check
-        run: python -m py_compile btts_bot.py netrattler_builder_engine.py
+        run: |
+          python -m py_compile btts_bot.py netrattler_builder_engine.py
+          for f in netrattler_identity_hub.py netrattler_ml_player.py netrattler_prop_sources.py netrattler_source_hub.py netrattler_stat_sources.py; do
+            [ ! -f "$f" ] || python -m py_compile "$f"
+          done
 
       - name: Run Tips Bot 🤖
         env:
@@ -117,6 +122,8 @@ jobs:
           NETRATTLER_HARD_WATCHDOG_SEC: "720"
           NETRATTLER_CORNERS_BUDGET_SEC: "25"
           NETRATTLER_EXTRA_PROP_MAX_MATCHES: "60"
+          NETRATTLER_KAMBI_SPECIAL_FALLBACK: "true"
+          NETRATTLER_KAMBI_SPECIAL_MAX_MATCHES: "24"
           NETRATTLER_ML_PREFETCH_TEAM_CAP: "160"
           NETRATTLER_ML_PREFETCH_BATCH: "80"
           NETRATTLER_ML_PREFETCH_BUDGET_SEC: "12"
@@ -143,16 +150,19 @@ jobs:
           NETRATTLER_MAX_SCORER_PROPS_PER_RUN: "8"
           NETRATTLER_CORNER_EXTRA_MATCHES: "30"
           NETRATTLER_CORNER_MIN_EDGE: "0.02"
-          NETRATTLER_FAST_PLAYER_ML_CAP: "48"
+          NETRATTLER_FAST_PLAYER_ML_CAP: "96"
           NETRATTLER_PIN_RELATED_SPECIAL_CAP: "36"
           NETRATTLER_PIN_RELATED_SPECIAL_BUDGET_SEC: "25"
           NETRATTLER_PIN_RELATED_SPECIAL_TIMEOUT: "3.0"
-          NETRATTLER_SHARP_PROP_MIN_PROB: "0.55"
+          NETRATTLER_SHARP_PROP_MIN_PROB: "0.50"
           NETRATTLER_PLAYER_PROP_MIN_PROB: "0.55"
           NETRATTLER_PLAYER_PROP_MIN_EDGE: "0.03"
           NETRATTLER_PLAYER_PROP_MAX_ODDS: "0"
           NETRATTLER_BUILDER_MAX_ODDS: "0"
-          NETRATTLER_PROP_BUILDER_MIN_ODDS: "4.0"
+          NETRATTLER_PROP_BUILDER_MIN_ODDS: "2.5"
+          NETRATTLER_PROP_BUILDER_MIN_EDGE: "0.02"
+          NETRATTLER_PROP_BUILDER_MAX_MODEL_MARKET_RATIO: "4.0"
+          NETRATTLER_PROP_BUILDER_MAX_ABS_EDGE: "0.30"
           NETRATTLER_ENABLE_LEGACY_PROP_BUILDER: "false"
           NETRATTLER_ENABLE_SCREENSHOT_BUILDERS: "false"
         run: python btts_bot.py
