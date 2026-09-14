@@ -281,7 +281,7 @@ MIN_ODDS = float(env("MIN_ODDS", "1.70"))
 MAX_ODDS = float(env("MAX_ODDS", "3.0"))
 # FIX24: Team single markets are intentionally capped at 3.00 regardless of external env drift.
 TEAM_SINGLE_MAX_ODDS = min(3.0, MAX_ODDS)
-NETRATTLER_BUILD_ID = "FIX33-2026-09-13"
+NETRATTLER_BUILD_ID = "FIX39-2026-09-15"
 MIN_CONFIDENCE = int(env("MIN_CONFIDENCE", "3"))
 # 🆕 Nur HIGH + OK Value (LOW fliegt raus)
 MIN_VALUE_RATING = env("MIN_VALUE_RATING", "OK")  # HIGH, OK, oder LOW
@@ -24306,6 +24306,8 @@ def run_pinnacle_props_bot(win_start_utc=None, win_end_utc=None, ch_tz=None, top
                 # Independent history model is deliberately conservative. It can rescue
                 # an under-confident classifier but never uses the bookmaker implied price.
                 _final_prob = _mprob
+                if _mprob is not None:
+                    _row["probability_source"] = "xgboost"
                 if _hprob is not None:
                     _hist_conservative = float(_hprob) * 0.92
                     if _final_prob is None or _hist_conservative > float(_final_prob):
@@ -26618,10 +26620,21 @@ def main():
         pass
 
     now_utc = datetime.now(timezone.utc)
-    target_date = now_utc.date()
+    # NETRATTLER schedules and betting windows are defined in Swiss local time.
+    # Around 22:00-23:59 UTC Switzerland is already on the next calendar day;
+    # using UTC.date() here caused the bot to analyse/save yesterday's fixtures.
+    try:
+        from zoneinfo import ZoneInfo as _ZI_MAIN
+        _ch_tz_main = _ZI_MAIN("Europe/Zurich")
+    except Exception:
+        # Linux/Python 3.11 GitHub runners always have zoneinfo; this is only a
+        # defensive fallback for unusual local environments.
+        _ch_tz_main = timezone(timedelta(hours=2))
+    now_ch = now_utc.astimezone(_ch_tz_main)
+    target_date = now_ch.date()
     hour_utc = now_utc.hour
 
-    log(f"⏰ {now_utc.strftime('%H:%M')} UTC | 📅 {target_date}")
+    log(f"⏰ {now_utc.strftime('%H:%M')} UTC | {now_ch.strftime('%H:%M')} CH | 📅 {target_date}")
 
     # 🏆 SETTLEMENT ZUERST - Ergebnisse von gestern/heute prüfen
     run_mode = env("RUN_MODE", "tips")  # "tips", "settlement", "both", "live"
@@ -26676,7 +26689,7 @@ def main():
                 "https://v3.football.api-sports.io/fixtures",
                 headers={"x-rapidapi-key": API_FOOTBALL_KEY,
                          "x-rapidapi-host": "v3.football.api-sports.io"},
-                params={"date": target_date.strftime("%Y-%m-%d"), "timezone": "UTC"},
+                params={"date": target_date.strftime("%Y-%m-%d"), "timezone": "Europe/Zurich"},
                 timeout=15
             )
             if _af_r.ok:
