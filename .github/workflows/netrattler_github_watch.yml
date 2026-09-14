@@ -1,0 +1,48 @@
+name: NETRATTLER GitHub Watch
+
+on:
+  workflow_dispatch:
+  schedule:
+    # Twice monthly (1st and 15th); lightweight check only.
+    - cron: "23 5 1,15 * *"
+
+permissions:
+  contents: read
+
+concurrency:
+  group: netrattler-github-watch
+  cancel-in-progress: true
+
+jobs:
+  watch:
+    runs-on: ubuntu-latest
+    timeout-minutes: 8
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+          cache: "pip"
+      - name: Install lightweight dependency
+        run: pip install requests
+      - name: Compile
+        run: python -m py_compile netrattler_github_watch.py
+      - name: Track relevant football/odds repositories
+        env:
+          SUPABASE_URL: ${{ secrets.SUPABASE_URL }}
+          SUPABASE_KEY: ${{ secrets.SUPABASE_KEY }}
+          SUPABASE_SERVICE_ROLE_KEY: ${{ secrets.SUPABASE_SERVICE_ROLE_KEY }}
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          TELEGRAM_TOKEN: ${{ secrets.TELEGRAM_TOKEN }}
+          TELEGRAM_GROUP_STATS: ${{ secrets.TELEGRAM_GROUP_STATS }}
+          TELEGRAM_CHAT_ID: ${{ secrets.TELEGRAM_CHAT_ID }}
+          GITHUB_WATCH_NOTIFY_MIN_SCORE: "3"
+          GITHUB_WATCH_ALWAYS_NOTIFY: "false"
+        run: python netrattler_github_watch.py
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: netrattler-github-watch-summary
+          path: netrattler_github_watch_summary.json
+          if-no-files-found: ignore
+          retention-days: 14
