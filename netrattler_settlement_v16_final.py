@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """
-NETRATTLER Settlement FINAL V21
+NETRATTLER Settlement FINAL V23
 ===============================
 
 Dateiname bleibt absichtlich stabil: netrattler_settlement_v16_final.py
@@ -66,6 +66,8 @@ def _cffi_get_json(url, timeout=8, params=None):
     return None
 RESULT_USE_SOFASCORE = os.getenv("RESULT_USE_SOFASCORE", "false").lower() in {"1", "true", "yes", "on"}
 RESULT_USE_ESPN = os.getenv("RESULT_USE_ESPN", "true").lower() not in {"0", "false", "no"}
+RESULT_USE_FOTMOB = os.getenv("RESULT_USE_FOTMOB", "true").lower() not in {"0", "false", "no"}
+FOTMOB_DETAIL_MAX = int(os.getenv("FOTMOB_DETAIL_MAX", "40"))
 RESULT_USE_OPENLIGADB = os.getenv("RESULT_USE_OPENLIGADB", "true").lower() not in {"0", "false", "no"}
 DAYS = int(os.getenv("SETTLEMENT_DAYS", "14"))
 LIMIT = int(os.getenv("SETTLEMENT_LIMIT", "3000"))
@@ -625,6 +627,92 @@ def _append_result(output: List[Dict[str, Any]], source: str, day: str, home: An
     output.append(row)
 
 
+
+
+_FOTMOB_DETAIL_CACHE: Dict[str, Dict[str, Any]] = {}
+_FOTMOB_DETAIL_USED = 0
+
+def _fotmob_results(day: str) -> List[Dict[str, Any]]:
+    """Key-free FotMob daily results. One request per day, no browser required."""
+    if not RESULT_USE_FOTMOB:
+        return []
+    output: List[Dict[str, Any]] = []
+    date_param = day.replace("-", "")
+    data = None
+    for url in ("https://www.fotmob.com/api/matches", "https://www.fotmob.com/api/data/matches"):
+        data = _cffi_get_json(url, params={"date": date_param}, timeout=RESULT_HTTP_TIMEOUT)
+        if data:
+            break
+    if not data:
+        log(f"FotMob {day}: keine Daten", "WARN")
+        return output
+    leagues = data.get("leagues") or []
+    matches = []
+    for league in leagues:
+        for m in league.get("matches") or []:
+            if isinstance(m, dict):
+                matches.append(m)
+    # Some wrappers/proxies flatten the response.
+    if isinstance(data.get("matches"), list):
+        matches.extend(x for x in data.get("matches") if isinstance(x, dict))
+    for m in matches:
+        status = m.get("status") or {}
+        if not (status.get("finished") or str(status.get("reason") or "").upper() in {"FT","AET","AP"}):
+            continue
+        home = m.get("home") or {}; away = m.get("away") or {}
+        hs = home.get("score") if isinstance(home, dict) else None
+        aw = away.get("score") if isinstance(away, dict) else None
+        raw = dict(m)
+        raw["_fotmob_match_id"] = m.get("id") or m.get("matchId")
+        _append_result(output, "FotMob", day,
+                       home.get("name") if isinstance(home, dict) else home,
+                       away.get("name") if isinstance(away, dict) else away,
+                       hs, aw, raw)
+    return output
+
+def _fotmob_match_detail(match_id: Any) -> Dict[str, Any]:
+    """Bounded lazy FotMob detail fetch, used only when a corner settlement lacks stats."""
+    global _FOTMOB_DETAIL_USED
+    key = str(match_id or "").strip()
+    if not key:
+        return {}
+    if key in _FOTMOB_DETAIL_CACHE:
+        return _FOTMOB_DETAIL_CACHE[key]
+    if _FOTMOB_DETAIL_USED >= max(0, FOTMOB_DETAIL_MAX):
+        return {}
+    _FOTMOB_DETAIL_USED += 1
+    data = None
+    for url in ("https://www.fotmob.com/api/matchDetails", "https://www.fotmob.com/api/data/matchDetails"):
+        data = _cffi_get_json(url, params={"matchId": key}, timeout=RESULT_HTTP_TIMEOUT)
+        if data:
+            break
+    _FOTMOB_DETAIL_CACHE[key] = data if isinstance(data, dict) else {}
+    return _FOTMOB_DETAIL_CACHE[key]
+
+def _fotmob_corner_pair(result: Dict[str, Any]) -> Optional[Tuple[float, float]]:
+    raw = unpack(result.get("raw") or result)
+    match_id = anyv(raw, ["_fotmob_match_id", "matchId", "id"], None)
+    detail = _fotmob_match_detail(match_id)
+    if not detail:
+        return None
+    periods = (((detail.get("content") or {}).get("stats") or {}).get("Periods") or {})
+    all_period = periods.get("All") or periods.get("ALL") or {}
+    stats_rows = all_period.get("stats") or []
+    for row in stats_rows:
+        if not isinstance(row, dict):
+            continue
+        title = str(row.get("title") or row.get("name") or "").lower()
+        if "corner" not in title:
+            continue
+        vals = row.get("stats") or row.get("values") or []
+        if isinstance(vals, list) and len(vals) >= 2:
+            try:
+                return float(vals[0]), float(vals[1])
+            except (TypeError, ValueError):
+                continue
+    return None
+
+
 def _sofascore_results(day: str) -> List[Dict[str, Any]]:
     if not RESULT_USE_SOFASCORE:
         return []
@@ -749,17 +837,27 @@ def public_results(day: str) -> List[Dict[str, Any]]:
     output: List[Dict[str, Any]] = []
     source_counts: Counter = Counter()
 
-    # 🍋 OddsPapi zuerst (API, Endstand + HT, kein Block) — nutzt gecachten Fixtures-Call
-    try:
-        import netrattler_oddspapi as _op
-        for r in _op.get_results(day):
-            _append_result(output, "OddsPapi", day, r.get("home"), r.get("away"),
-                           r.get("home_score"), r.get("away_score"), r,
-                           r.get("ht_home"), r.get("ht_away"))
-    except Exception as exc:
-        log(f"OddsPapi results {day}: {str(exc)[:80]}", "WARN")
+    # FAST settlement: Quellen mit bekanntem Block/Rate-Limit nicht 13x pro Run verschwenden.
+    # Sie koennen per ENV jederzeit wieder aktiviert werden.
+    if str(os.getenv("RESULT_USE_ODDSPAPI", "false")).lower() in ("1", "true", "yes", "on"):
+        try:
+            import netrattler_oddspapi as _op
+            for r in _op.get_results(day):
+                _append_result(output, "OddsPapi", day, r.get("home"), r.get("away"),
+                               r.get("home_score"), r.get("away_score"), r,
+                               r.get("ht_home"), r.get("ht_away"))
+        except Exception as exc:
+            log(f"OddsPapi results {day}: {str(exc)[:80]}", "WARN")
 
-    for getter in (_sofascore_results, _espn_results, _openligadb_results, _windrawwin_results):
+    getters = []
+    if RESULT_USE_FOTMOB:
+        getters.append(_fotmob_results)
+    if RESULT_USE_SOFASCORE:
+        getters.append(_sofascore_results)
+    getters.extend((_espn_results, _openligadb_results))
+    if str(os.getenv("RESULT_USE_WINDRAWWIN", "false")).lower() in ("1", "true", "yes", "on"):
+        getters.append(_windrawwin_results)
+    for getter in getters:
         rows = getter(day)
         output.extend(rows)
 
@@ -919,7 +1017,19 @@ def find_result(tip: Dict[str, Any], results: Sequence[Dict[str, Any]]) -> Optio
     tip_home, tip_away, tip_match = match_parts(tip)
     tip_day = row_date(tip)
     best, best_score = None, 0.0
-    for row in results:
+    # Build a date index once per results object. This avoids rescanning all result
+    # rows for every one of thousands of tips.
+    cache = getattr(find_result, "_day_index_cache", {})
+    cache_key = id(results)
+    day_index = cache.get(cache_key)
+    if day_index is None:
+        day_index = defaultdict(list)
+        for _row in results:
+            day_index[row_date(_row)].append(_row)
+        cache = {cache_key: day_index}
+        setattr(find_result, "_day_index_cache", cache)
+    candidates = day_index.get(tip_day) or results
+    for row in candidates:
         home, away, hs, aw = score_row(row)
         if hs is None or aw is None:
             continue
@@ -975,7 +1085,17 @@ def find_player_stat(leg: Dict[str, Any], stats: Sequence[Dict[str, Any]]) -> Op
     _, _, wanted_match = match_parts(leg)
     wanted_day = row_date(leg)
     best, best_score = None, 0.0
-    for row in stats:
+    cache = getattr(find_player_stat, "_day_index_cache", {})
+    cache_key = id(stats)
+    day_index = cache.get(cache_key)
+    if day_index is None:
+        day_index = defaultdict(list)
+        for _row in stats:
+            day_index[row_date(_row)].append(_row)
+        cache = {cache_key: day_index}
+        setattr(find_player_stat, "_day_index_cache", cache)
+    candidates = day_index.get(wanted_day) or stats
+    for row in candidates:
         p_score = similarity(wanted_player, player_name(row))
         if p_score < 0.55:
             continue
@@ -1108,7 +1228,10 @@ def team_corner_value(leg: Dict[str, Any], result: Dict[str, Any]) -> Optional[f
     home_corners = anyv(raw, ["home_corners", "corners_home", "HC", "homeCorners"], None)
     away_corners = anyv(raw, ["away_corners", "corners_away", "AC", "awayCorners"], None)
     if home_corners in (None, "") or away_corners in (None, ""):
-        return None
+        pair = _fotmob_corner_pair(result)
+        if pair is None:
+            return None
+        home_corners, away_corners = pair
     home_corners, away_corners = as_float(home_corners), as_float(away_corners)
     data = unpack(leg)
     team = str(anyv(data, ["team", "selection_team"], ""))
@@ -1474,8 +1597,8 @@ def send_roi_report(history: Sequence[Dict[str, Any]]) -> None:
 
 
 def main() -> None:
-    log("⚽ NETRATTLER Settlement FINAL V21 startet")
-    log(f"Config: SofaScore={'ON' if RESULT_USE_SOFASCORE else 'OFF'} · Timeout={RESULT_HTTP_TIMEOUT}s · Limit={LIMIT}")
+    log("⚽ NETRATTLER Settlement FINAL V23 FAST+FOTMOB startet")
+    log(f"Config: FotMob={'ON' if RESULT_USE_FOTMOB else 'OFF'} · SofaScore={'ON' if RESULT_USE_SOFASCORE else 'OFF'} · Timeout={RESULT_HTTP_TIMEOUT}s · Limit={LIMIT}")
     if not SUPABASE_URL or not SUPABASE_KEY:
         log("SUPABASE_URL oder SUPABASE_KEY fehlt", "ERROR")
         raise SystemExit(2)
@@ -1489,10 +1612,12 @@ def main() -> None:
     dates = sorted({row_date(tip) for tip in tips})
     log(f"Dates: {dates}")
     results = load_results(dates)
-    _tip_groups = {group_of(tip) for tip in tips}
-    _needs_player_stats = bool(_tip_groups & {"props", "player_props", "scorer", "builder", "prop_builder"})
-    if _needs_player_stats:
-        player_stats = load_player_stats(dates)
+    _player_groups = {"props", "player_props", "scorer", "builder", "prop_builder"}
+    _player_tips = [tip for tip in tips if group_of(tip) in _player_groups]
+    if _player_tips:
+        player_dates = sorted({row_date(tip) for tip in _player_tips})
+        log(f"Player-Stats nur fuer relevante Tage: {player_dates} ({len(_player_tips)} Player/Builder-Tipps)")
+        player_stats = load_player_stats(player_dates)
     else:
         player_stats = []
         log("Player-Stats übersprungen: keine offenen Player-Prop/Builder-Tipps")
@@ -1527,7 +1652,7 @@ def main() -> None:
         send_roi_report(history)
     else:
         log("ROI-Report uebersprungen (keine neuen Abschluesse in diesem Lauf)")
-    log("✅ NETRATTLER Settlement FINAL V21 fertig")
+    log("✅ NETRATTLER Settlement FINAL V23 fertig")
 
 
 if __name__ == "__main__":
