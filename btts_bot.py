@@ -1,3 +1,4 @@
+from typing import List, Dict, Optional, Tuple, Any
 """
 AI TIPP BOT - GITHUB SINGLE FILE EDITION
 =======================================
@@ -23,10 +24,6 @@ TELEGRAM_GROUP_STATS=...
 SUPABASE_URL=...
 SUPABASE_KEY=...
 """
-
-from __future__ import annotations
-from typing import List, Dict, Optional, Tuple, Any
-
 
 import os
 import re
@@ -58,37 +55,6 @@ def env_list(name: str) -> list[str]:
     return [x.strip() for x in value.split(",") if x.strip()]
 
 
-# ============================================================
-# 🧱 STABLE CORE POLICY
-# ============================================================
-# Audit 06-09/2026: the later global FAST switch disabled the exact live-stat /
-# model fallbacks that were active in the known-good 03.09 run.  Source adapters
-# are allowed to fail independently, but they must never switch off the model core.
-# Stable core is ON by default and deliberately wins over a stale FAST env var.
-_TRUE_ENV = {"1", "true", "yes", "on"}
-NETRATTLER_STABLE_CORE = env("NETRATTLER_STABLE_CORE", "true").lower() in _TRUE_ENV
-
-def _netrattler_fast_tips_enabled() -> bool:
-    """Runtime-I/O fast mode; it does not disable the stable model/stat core.
-
-    STABLE_CORE previously forced this to False, so the workflow's FAST=true had no
-    effect and expensive HTTP/Playwright fallbacks still ran.
-    """
-    return env("NETRATTLER_FAST_TIPS", "false").lower() in _TRUE_ENV
-
-def _real_odds_only_enabled() -> bool:
-    return env("NETRATTLER_REAL_ODDS_ONLY", env("NETRATTLER_REQUIRE_REAL_ODDS", "true")).lower() in _TRUE_ENV
-
-def _stable_budget(name: str, default: int, stable_min: int = 0) -> int:
-    try:
-        value = int(env(name, str(default)))
-    except Exception:
-        value = int(default)
-    if NETRATTLER_STABLE_CORE and stable_min:
-        value = max(value, int(stable_min))
-    return value
-
-
 GEMINI_API_KEYS = env_list("GEMINI_API_KEYS")
 GROQ_API_KEYS = env_list("GROQ_API_KEYS")
 ODDS_API_KEYS = env_list("ODDS_API_KEYS")
@@ -108,11 +74,6 @@ if not API_FOOTBALL_KEYS:
     single_key = env("API_FOOTBALL_KEY")
     if single_key:
         API_FOOTBALL_KEYS = [single_key]
-# API-Football deaktiviert (Konto gesperrt, nicht mehr benoetigt: Pinnacle/Kambi/ML decken ab).
-# Alle API-Football-Calls sind auf `if not API_FOOTBALL_KEYS` gegated -> werden uebersprungen.
-# Per ENABLE_API_FOOTBALL=true wieder aktivierbar, falls das Konto je entsperrt wird.
-if env("ENABLE_API_FOOTBALL", "false").lower() not in ("1", "true", "yes", "on"):
-    API_FOOTBALL_KEYS = []
 # Erster Key für Backwards-Kompatibilität
 API_FOOTBALL_KEY = API_FOOTBALL_KEYS[0] if API_FOOTBALL_KEYS else ""
 
@@ -130,10 +91,7 @@ TELEGRAM_GROUPS = {
     "combos": env("TELEGRAM_GROUP_COMBOS", TELEGRAM_CHAT_ID),
 
     "btts_ht": env("TELEGRAM_GROUP_BTTS_HT", TELEGRAM_CHAT_ID),
-    # Fixed routing: Over 1.5 HT belongs in the BTTS-HT channel.
     "over15_ht": env("TELEGRAM_GROUP_BTTS_HT", TELEGRAM_CHAT_ID),
-    # Fixed routing: 1X2 belongs in Goal Hunter / Late Goals.
-    "1x2": env("TELEGRAM_GROUP_LATE_GOALS", TELEGRAM_CHAT_ID),
 
     # Deine bestehenden Secret-Namen:
     # TELEGRAM_GROUP_HZ_LIVE    = NETRATTLER CORNER SNIPER
@@ -146,17 +104,9 @@ TELEGRAM_GROUPS = {
 
     "stats": env("TELEGRAM_GROUP_STATS", TELEGRAM_CHAT_ID),
 
-    # IMPORTANT: GitHub secrets can exist as empty env vars. os.getenv(..., default)
-    # then does NOT use the default, so use explicit `or` fallbacks.
-    "advanced_props": (env("TELEGRAM_GROUP_PLAYER_PROPS") or env("TELEGRAM_GROUP_BUILDER")
-                       or env("TELEGRAM_GROUP_STATS") or TELEGRAM_CHAT_ID
-                       or env("TELEGRAM_GROUP_COMBOS") or env("TELEGRAM_GROUP_LATE_GOALS")),
-    "props": (env("TELEGRAM_GROUP_PLAYER_PROPS") or env("TELEGRAM_GROUP_BUILDER")
-              or env("TELEGRAM_GROUP_STATS") or TELEGRAM_CHAT_ID
-              or env("TELEGRAM_GROUP_COMBOS") or env("TELEGRAM_GROUP_LATE_GOALS")),
-    "builder": (env("TELEGRAM_GROUP_BUILDER") or env("TELEGRAM_GROUP_PLAYER_PROPS")
-                or env("TELEGRAM_GROUP_STATS") or TELEGRAM_CHAT_ID
-                or env("TELEGRAM_GROUP_COMBOS") or env("TELEGRAM_GROUP_LATE_GOALS")),
+    "advanced_props": env("TELEGRAM_GROUP_PLAYER_PROPS", env("TELEGRAM_GROUP_BUILDER", env("TELEGRAM_GROUP_STATS", TELEGRAM_CHAT_ID))),
+    "props": env("TELEGRAM_GROUP_PLAYER_PROPS", env("TELEGRAM_GROUP_BUILDER", env("TELEGRAM_GROUP_STATS", TELEGRAM_CHAT_ID))),
+    "builder": env("TELEGRAM_GROUP_BUILDER", env("TELEGRAM_GROUP_PLAYER_PROPS", env("TELEGRAM_GROUP_STATS", TELEGRAM_CHAT_ID))),
 }
 
 
@@ -248,40 +198,11 @@ def get_dynamic_season(league_id=None, league_name=None):
     return 2025
 
 SUPABASE_URL = env("SUPABASE_URL")
-SUPABASE_KEY = env("SUPABASE_SERVICE_ROLE_KEY") or env("SUPABASE_KEY")
+SUPABASE_KEY = env("SUPABASE_KEY")
 
 MIN_PROBABILITY = int(env("MIN_PROBABILITY", "67"))  # 🆕 Hybrid: 67% (zwischen 65-69)
-
-# Market-specific probability floors. First-half/combined markets naturally have
-# lower absolute hit rates than full-match BTTS/O2.5; using the global 67% floor
-# made valid real-odds markets unreachable even when the model showed positive EV.
-def _market_min_probability(market: str) -> float:
-    defaults = {
-        "btts": 67.0,
-        "over25": 67.0,
-        "combo": 52.0,
-        "btts_ht": 38.0,
-        "over15_ht": 42.0,
-        "1x2": 55.0,
-    }
-    envs = {
-        "btts": "NETRATTLER_BTTS_MIN_PROB",
-        "over25": "NETRATTLER_OVER25_MIN_PROB",
-        "combo": "NETRATTLER_COMBO_MIN_PROB",
-        "btts_ht": "NETRATTLER_BTTS_HT_MIN_PROB",
-        "over15_ht": "NETRATTLER_OVER15_HT_MIN_PROB",
-        "1x2": "NETRATTLER_1X2_MIN_PROB",
-    }
-    key = str(market or "").lower()
-    try:
-        return float(env(envs.get(key, "MIN_PROBABILITY"), str(defaults.get(key, MIN_PROBABILITY))))
-    except Exception:
-        return float(defaults.get(key, MIN_PROBABILITY))
 MIN_ODDS = float(env("MIN_ODDS", "1.70"))
 MAX_ODDS = float(env("MAX_ODDS", "3.0"))
-# FIX24: Team single markets are intentionally capped at 3.00 regardless of external env drift.
-TEAM_SINGLE_MAX_ODDS = min(3.0, MAX_ODDS)
-NETRATTLER_BUILD_ID = "FIX39-2026-09-15"
 MIN_CONFIDENCE = int(env("MIN_CONFIDENCE", "3"))
 # 🆕 Nur HIGH + OK Value (LOW fliegt raus)
 MIN_VALUE_RATING = env("MIN_VALUE_RATING", "OK")  # HIGH, OK, oder LOW
@@ -289,82 +210,23 @@ MIN_VALUE_RATING = env("MIN_VALUE_RATING", "OK")  # HIGH, OK, oder LOW
 MIN_ODDS_VALUE = MIN_ODDS  # Alias — globale Mindestquote für "nur Value Bets"
 
 
-def _market_max_odds(market=""):
-    """Safe observed-price ceiling per market.
-
-    FIX24 correctly capped normal team singles at 3.00, but accidentally applied the
-    same ceiling to naturally higher-priced BTTS-HT and BTTS+O2.5 combined markets.
-    That starved both channels. Keep the hard 3.00 guard for normal singles while
-    allowing realistic special-market prices.
-    """
-    m = str(market or "").lower()
-    defaults = {
-        "btts": TEAM_SINGLE_MAX_ODDS,
-        "over25": TEAM_SINGLE_MAX_ODDS,
-        "over15_ht": TEAM_SINGLE_MAX_ODDS,
-        "1x2": TEAM_SINGLE_MAX_ODDS,
-        "btts_ht": 4.50,
-        "combo": 6.00,
-    }
-    env_keys = {
-        "btts_ht": "NETRATTLER_BTTS_HT_MAX_ODDS",
-        "combo": "NETRATTLER_TEAM_COMBO_MAX_ODDS",
-    }
-    base = float(defaults.get(m, TEAM_SINGLE_MAX_ODDS))
-    try:
-        return float(env(env_keys.get(m, "NETRATTLER_MAX_SINGLE_ODDS"), str(base)))
-    except Exception:
-        return base
-
-
-def _is_value_bet(odds, prob_pct, market=""):
-    """True only for a sane observed price with positive model edge."""
+def _is_value_bet(odds, prob_pct):
+    """True nur wenn Quote >= MIN_ODDS_VALUE UND echte Edge vorhanden (Value Bet).
+    Global verfügbar — wird von allen Tipp-generierenden Funktionen genutzt
+    (Pinnacle-Block, Corners, Props/Bet Builder)."""
     try:
         o = float(str(odds).replace(",", "."))
         p = float(prob_pct) / 100
     except Exception:
         return False
-    if o < MIN_ODDS_VALUE or o > _market_max_odds(market):
+    if o < MIN_ODDS_VALUE:
         return False
     implied = 1 / o if o > 0 else 1
     edge = (p - implied) * 100
-    return edge >= 3
+    return edge >= 3  # mind. 3% Edge über der Quoten-implizierten Wahrscheinlichkeit
 
 
-def _sanitize_team_quote(value, market=""):
-    """Return a safe observed decimal odd or 0, using market-specific bounds."""
-    try:
-        o = float(str(value).replace(",", "."))
-    except Exception:
-        return 0.0
-    lo = 1.02 if str(market).lower() == "1x2" else 1.20
-    hi = _market_max_odds(market)
-    if not (lo <= o <= hi):
-        return 0.0
-    return round(o, 4)
-
-
-def _is_junk_league(league_name="", home="", away="") -> bool:
-    """Zentrale Müll-Liga-Erkennung: Jugend/Frauen/Reserve/Zweitmannschaften.
-    Wird von ALLEN Kanälen genutzt (Pinnacle, Corners, Scorer). Env: NETRATTLER_JUNK_FILTER."""
-    if str(env("NETRATTLER_JUNK_FILTER", "true")).lower() not in ("1", "true", "yes", "on"):
-        return False
-    _ll = str(league_name or "").lower()
-    _junk = ["u23", "u21", "u20", "u19", "u18", "u17", "u16", "youth", "jugend",
-             "women", "frauen", "féminin", "feminin", "womens", "ladies", "female",
-             "reserve", "reserves", "development", "academy", "primavera",
-             "regionalliga", "elite league", "professional development",
-             "next pro", "mls next", "juvenil", "sub-20", "sub20", "u-20", "u-21"]
-    if any(_kw in _ll for _kw in _junk):
-        return True
-    _h, _a = str(home or "").strip(), str(away or "").strip()
-    if _h.endswith(" II") or _a.endswith(" II") or _h.endswith(" B") or _a.endswith(" B") \
-       or _h.endswith(" U21") or _a.endswith(" U21") or _h.endswith(" U20") or _a.endswith(" U20"):
-        return True
-    return False
-
-
-MARKETS_TO_RUN = ["btts", "over25", "combo", "btts_ht", "over15_ht", "1x2"]
+MARKETS_TO_RUN = ["btts", "over25", "combo", "btts_ht", "over15_ht"]
 
 # ============================================================
 # AUTO LIGA SWITCH
@@ -1295,10 +1157,6 @@ MARKET_INFO = {
         "name": "⏰ Over 1.5 HT",
         "instr": "Analysiere Over 1.5 Tore in der 1. Halbzeit.",
     },
-    "1x2": {
-        "name": "🏆 Sieger (1X2)",
-        "instr": "Analysiere den Spielausgang (Heimsieg/Unentschieden/Auswärtssieg).",
-    },
 }
 
 
@@ -2195,29 +2053,17 @@ def fetch_sofascore_fixtures(league_name, target_date):
         except:
             pass
         
-        # Schneller 3-Stufen-Pfad: requests-Session → curl_cffi JSON helper →
-        # Playwright nur außerhalb FAST und nur wenn wirklich verfügbar.
-        try:
-            r = session.get(url, timeout=8)
-            if r.ok:
-                data = r.json()
-            else:
-                data = None
-        except Exception:
-            r = None
-            data = None
-
-        if not data:
-            data, _status, _host = _sofascore_get_json(
-                f"/sport/football/scheduled-events/{date_str}", timeout=8
-            )
-
-        if not data:
-            status = getattr(r, "status_code", None)
-            if status in [403, 429, 503] and PLAYWRIGHT_AVAILABLE and not _netrattler_fast_tips_enabled():
+        r = session.get(url, timeout=15)
+        
+        if r.status_code in [403, 429, 503]:
+            if PLAYWRIGHT_AVAILABLE:
                 return pw_get_sofascore_fixtures(league_name, target_date)
             return []
-
+        
+        if not r.ok:
+            return []
+        
+        data = r.json()
         events = data.get("events", [])
         
         if not events:
@@ -2292,39 +2138,6 @@ def fetch_sofascore_fixtures(league_name, target_date):
         return []
 
 
-def _sofascore_get_json(path: str, timeout: int = 12):
-    """SofaScore JSON via TLS fingerprint; mirror/proxy fallback on 403/429."""
-    path = "/" + str(path or "").lstrip("/")
-    hosts = [
-        "https://api.sofascore.com/api/v1",
-        "https://api.sofascore.app/api/v1",
-        "https://www.sofascore.com/api/v1",
-    ]
-    headers = {
-        "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 Chrome/124.0.0.0 Safari/537.36",
-        "Accept": "application/json, text/plain, */*",
-        "Referer": "https://www.sofascore.com/",
-        "Origin": "https://www.sofascore.com",
-    }
-    last_status = None
-    for base in hosts:
-        try:
-            url = base + path
-            try:
-                from curl_cffi import requests as _cr
-                r = _cr.get(url, headers=headers, timeout=timeout, impersonate="chrome")
-            except Exception:
-                r = requests.get(url, headers=headers, timeout=timeout)
-            last_status = getattr(r, "status_code", None)
-            if getattr(r, "ok", False):
-                data = r.json()
-                if data is not None:
-                    return data, last_status, base
-        except Exception:
-            continue
-    return None, last_status, ""
-
-
 def fetch_sofascore_all_today(target_date):
     """
     Holt ALLE heutigen Spiele von SofaScore auf einmal.
@@ -2341,13 +2154,34 @@ def fetch_sofascore_all_today(target_date):
     
     try:
         date_str = str(target_date)
-        data, _status, _host = _sofascore_get_json(f"/sport/football/scheduled-events/{date_str}", timeout=12)
-        if not data:
-            if _status in [403, 429, 503]:
-                log(f"   ℹ️  SofaScore All blockiert ({_status}) nach TLS/Mirror-Fallback", "INFO")
+        url = f"https://api.sofascore.com/api/v1/sport/football/scheduled-events/{date_str}"
+        
+        import random as _random2
+        _ua_list2 = [
+            "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/121.0.0.0 Safari/537.36",
+            "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 Chrome/120.0.0.0 Safari/537.36",
+            "Mozilla/5.0 (Windows NT 10.0; Win64; x64; rv:122.0) Gecko/20100101 Firefox/122.0",
+        ]
+        r = requests.get(
+            url,
+            headers={
+                "User-Agent": _random2.choice(_ua_list2),
+                "Accept": "application/json, text/plain, */*",
+                "Accept-Language": "en-US,en;q=0.9",
+                "Referer": "https://www.sofascore.com/",
+                "Origin": "https://www.sofascore.com",
+            },
+            timeout=20,
+        )
+        
+        if r.status_code in [403, 429, 503]:
+            log(f"   ℹ️  SofaScore All blockiert ({r.status_code})", "INFO")
             return {}
-        if _host and "api.sofascore.com" not in _host:
-            log(f"   🛟 SofaScore Mirror aktiv: {_host}")
+        
+        if not r.ok:
+            return {}
+        
+        data = r.json()
         events = data.get("events", [])
         
         if not events:
@@ -4750,49 +4584,17 @@ except ImportError:
 
 PLAYWRIGHT_CACHE = {}
 
-def _curl_cffi_get(url, timeout=12):
-    """🚀 Schnelles Scraping mit curl_cffi (Chrome-TLS-Impersonation).
-    Umgeht die meisten 403/429-Blocks OHNE Browser-Start — viel schneller als
-    Playwright. Aus der Quellen-Analyse: die Methode, die bei SofaScore/OddsPortal/
-    FBref durchkommt. Gibt HTML-Text oder None."""
-    try:
-        from curl_cffi import requests as _creq
-        r = _creq.get(url, impersonate="chrome", timeout=timeout)
-        if r.status_code == 200 and r.text:
-            return r.text
-    except Exception:
-        pass
-    return None
-
-
 def scrape_with_playwright(url, wait_for=None, timeout=8000):
     """
-    Holt eine Seite. NEU: erst curl_cffi (schnell, TLS-Impersonation), dann
-    Playwright nur als letzter Fallback. Umgeht Blocks ohne Browser-Overhead.
+    Scrapt eine Seite mit echtem Chromium Browser.
+    Umgeht 403 Blocks von SofaScore, Transfermarkt etc.
     """
+    if not PLAYWRIGHT_AVAILABLE:
+        return None
+
     cache_key = f"pw_{url}"
     if cache_key in PLAYWRIGHT_CACHE:
         return PLAYWRIGHT_CACHE[cache_key]
-
-    # ⚡ FAST-MODE: curl_cffi bleibt als leichter TLS-/HTTP-Fallback erlaubt,
-    # Playwright/Chromium bleibt im Tipp-Lauf deaktiviert. So vermeiden wir
-    # Browser-Minuten, verlieren aber nicht alle 403-geschützten JSON/HTML-Quellen.
-    if _netrattler_fast_tips_enabled():
-        html = _curl_cffi_get(url, timeout=min(8, max(4, int(timeout / 1000))))
-        if html:
-            PLAYWRIGHT_CACHE[cache_key] = html
-            return html
-        return None
-
-    # 1) 🚀 curl_cffi zuerst (schnell, kein Browser)
-    html = _curl_cffi_get(url, timeout=max(8, int(timeout / 1000)))
-    if html:
-        PLAYWRIGHT_CACHE[cache_key] = html
-        return html
-
-    # 2) Playwright nur als letzter Fallback
-    if not PLAYWRIGHT_AVAILABLE:
-        return None
 
     try:
         with sync_playwright() as p:
@@ -5227,10 +5029,6 @@ BETEXPLORER_CACHE = {}
 
 def get_betexplorer_odds(home_team, away_team, league_name):
     """Historische Opening/Closing Odds von BetExplorer"""
-    # ⚡ FAST-MODE: Betexplorer komplett überspringen (Playwright 429 → 18s/Match Timeout).
-    # Quoten kommen aus OddsPapi, historische Odds braucht der Tipp-Lauf nicht.
-    if _netrattler_fast_tips_enabled():
-        return None
     cache_key = f"be_{home_team}_{away_team}"
     if cache_key in BETEXPLORER_CACHE:
         return BETEXPLORER_CACHE[cache_key]
@@ -6366,68 +6164,8 @@ _NTR_ML_MODEL_TS = 0
 def _ntr_ml_headers():
     return {"apikey": SUPABASE_KEY, "Authorization": f"Bearer {SUPABASE_KEY}", "Content-Type": "application/json"}
 
-
-# ── GELERNTE MARKT-/LIGA-GEWICHTE (aus netrattler_learning_weights) ──────────
-# Die Learning-Engine lernt aus abgerechneten Tipps, welche Märkte/Ligen
-# funktionieren (weight 0.65–1.35, 1.0 = neutral). Hier konsumiert der Tipp-Bot
-# das: Tipps in stark-performenden Markt/Liga-Kombis werden bevorzugt,
-# schwache abgewertet. So lernen ALLE Kanäle (nicht nur die Builder).
-_NTR_LEARNED_WEIGHTS = None
-
-
-def _ntr_load_learned_weights():
-    global _NTR_LEARNED_WEIGHTS
-    if _NTR_LEARNED_WEIGHTS is not None:
-        return _NTR_LEARNED_WEIGHTS
-    _NTR_LEARNED_WEIGHTS = {"market": {}, "league": {}, "source": {}}
-    if not SUPABASE_URL or not SUPABASE_KEY:
-        return _NTR_LEARNED_WEIGHTS
-    try:
-        import requests as _rq
-        r = _rq.get(
-            f"{SUPABASE_URL}/rest/v1/netrattler_learning_weights",
-            headers={"apikey": SUPABASE_KEY, "Authorization": f"Bearer {SUPABASE_KEY}"},
-            params={"select": "dimension,weight_key,weight,winrate,roi,n", "limit": "5000"},
-            timeout=20,
-        )
-        if r.ok:
-            _min_n = int(env("NETRATTLER_LEARNED_WEIGHT_MIN_N", "20") or 20)
-            for row in r.json():
-                dim = str(row.get("dimension", ""))
-                if dim not in _NTR_LEARNED_WEIGHTS:
-                    continue
-                # nur Gewichte mit ausreichender Stichprobe anwenden
-                if int(row.get("n", 0) or 0) < _min_n:
-                    continue
-                key = str(row.get("weight_key", "")).lower().strip()
-                try:
-                    _NTR_LEARNED_WEIGHTS[dim][key] = float(row.get("weight", 1.0) or 1.0)
-                except (TypeError, ValueError):
-                    continue
-    except Exception:
-        pass
-    return _NTR_LEARNED_WEIGHTS
-
-
-def _ntr_learned_weight(market: str = "", league: str = "") -> float:
-    """Kombiniertes gelerntes Gewicht (Markt × Liga), geometrisch gemittelt →
-    bleibt nahe 1.0, wenn wenig/keine Daten. Env-Schalter: NETRATTLER_APPLY_LEARNED_WEIGHTS."""
-    if str(env("NETRATTLER_APPLY_LEARNED_WEIGHTS", "true")).lower() not in ("1", "true", "yes", "on"):
-        return 1.0
-    w = _ntr_load_learned_weights()
-    mw = w.get("market", {}).get(str(market).lower().strip(), 1.0)
-    lw = w.get("league", {}).get(str(league).lower().strip(), 1.0)
-    try:
-        return float((mw * lw) ** 0.5)  # geometrisches Mittel
-    except (TypeError, ValueError):
-        return 1.0
-
 def _ntr_ml_load_model(force=False):
     global _NTR_ML_MODEL_CACHE, _NTR_ML_MODEL_TS
-    # Deaktiviert: Tabelle netrattler_ml_models existiert nicht und der Footer
-    # beeinflusst die Tipps nicht (echtes ML laeuft ueber ml_models/get_ml_prediction).
-    # Frueher Ausstieg spart bei jeder Nachricht eine erfolglose Supabase-Abfrage.
-    return None
     try:
         import time as _time
         now = _time.time()
@@ -6555,98 +6293,6 @@ def _ntr_ml_enhance_message(text, chat_id=None):
     if len(raw) + len(footer) > 3900:
         return text
     return raw + footer
-
-def _ntr_weekly_roi_report(force: bool = False) -> None:
-    """Wöchentlicher ROI-Report pro Markt + Liga per Telegram — zeigt glasklar,
-    welcher Kanal Geld verdient. Läuft sonntags (oder force)."""
-    from datetime import datetime as _dt, timezone as _tz
-    if not force and _dt.now(_tz.utc).weekday() != 6:
-        return
-    if not SUPABASE_URL or not SUPABASE_KEY:
-        return
-    import requests as _rq
-    try:
-        r = _rq.get(f"{SUPABASE_URL}/rest/v1/tips",
-                   headers={"apikey": SUPABASE_KEY, "Authorization": f"Bearer {SUPABASE_KEY}"},
-                   params={"select": "market,league,status,odds", "status": "in.(won,lost)", "limit": "5000"},
-                   timeout=25)
-        if not r.ok: return
-        rows = r.json()
-    except Exception:
-        return
-    if not rows: return
-    def _bucket(key_fn):
-        agg = {}
-        for t in rows:
-            k = key_fn(t) or "?"
-            a = agg.setdefault(k, {"w":0,"l":0,"profit":0.0})
-            try: od = float(t.get("odds") or 0)
-            except (TypeError, ValueError): od = 0
-            if t.get("status") == "won":
-                a["w"] += 1; a["profit"] += (od-1) if od>1 else 0.9
-            else:
-                a["l"] += 1; a["profit"] -= 1
-        return agg
-    def _fmt(agg, title, top=8):
-        items = []
-        for k,a in agg.items():
-            n = a["w"]+a["l"]
-            if n < 5: continue
-            items.append((a["profit"]/n*100, k, n, a["w"]/n*100, a["profit"]))
-        items.sort(reverse=True)
-        if not items:
-            return f"\n<b>{title}</b>\n<i>noch zu wenig Daten</i>"
-        out = [f"\n<b>{title}</b>"]
-        for roi,k,n,wr,prof in items[:top]:
-            e = "🟢" if roi>0 else "🔴"
-            out.append(f"{e} {str(k)[:22]}: ROI {roi:+.0f}% · {wr:.0f}%WR · {n}T · {prof:+.1f}u")
-        return "\n".join(out)
-    total_n = len(rows)
-    total_profit = sum((float(t.get("odds") or 2)-1) if t.get("status")=="won" else -1 for t in rows)
-    header = f"📊 <b>NETRATTLER WOCHEN-REPORT</b>\nGesamt: {total_n} abgerechnet · ROI {total_profit/max(1,total_n)*100:+.0f}% · {total_profit:+.1f}u"
-    msg = header + _fmt(_bucket(lambda t: t.get("market")), "📈 Nach Markt") + _fmt(_bucket(lambda t: t.get("league")), "🏆 Nach Liga")
-    try:
-        send_telegram(msg, env("TELEGRAM_CHAT_ID", None)); log("📊 Wochen-ROI-Report gesendet")
-    except Exception:
-        pass
-
-
-
-def _ntr_health_check() -> dict:
-    """Prüft kritische Datenquellen vor dem Tipp-Lauf. critical=True → Telegram-Warnung,
-    damit der Bot nicht still auf leeren Daten läuft (wie die leere player_avg_stats-View)."""
-    import requests as _rq
-    msgs = []; critical = False; checks = {}
-    if not SUPABASE_URL or not SUPABASE_KEY:
-        return {"critical": False, "messages": [], "summary": "kein Supabase", "checks": {}}
-    _h = {"apikey": SUPABASE_KEY, "Authorization": f"Bearer {SUPABASE_KEY}"}
-    def _count(table):
-        try:
-            r = _rq.get(f"{SUPABASE_URL}/rest/v1/{table}", headers={**_h, "Prefer": "count=exact"},
-                       params={"select": "*", "limit": "1"}, timeout=15)
-            cr = r.headers.get("content-range", "")
-            if "/" in cr:
-                return int(cr.split("/")[-1])
-        except Exception:
-            pass
-        return -1
-    n_players = _count("player_avg_stats"); checks["players"] = n_players
-    if n_players == 0:
-        msgs.append("❌ player_avg_stats LEER — Player-Props laufen ins Leere!"); critical = True
-    elif 0 < n_players < 100:
-        msgs.append(f"⚠️ player_avg_stats nur {n_players} Zeilen — sehr dünn")
-    n_elo = _count("team_elo_history"); checks["elo"] = n_elo
-    if n_elo == 0:
-        msgs.append("⚠️ team_elo_history LEER — Rollen-System inaktiv")
-    n_models = _count("ml_models"); checks["models"] = n_models
-    if n_models == 0:
-        msgs.append("❌ ml_models LEER — keine Vorhersagen möglich!"); critical = True
-    elif 0 < n_models < 10:
-        msgs.append(f"⚠️ ml_models nur {n_models} — Training unvollständig?")
-    return {"critical": critical, "messages": msgs,
-            "summary": f"players={n_players}, elo={n_elo}, models={n_models}", "checks": checks}
-
-
 
 def send_telegram(text, chat_id=None, reply_markup=None):
     if not TELEGRAM_TOKEN:
@@ -7027,22 +6673,6 @@ def save_to_supabase(tip):
         clean_tip = {k: v for k, v in tip.items() 
                      if k in SUPABASE_FIELDS and v is not None}
 
-        # Supabase schema compatibility: these columns are INTEGER in the current
-        # NETRATTLER table.  Corner/ML models legitimately produce decimal
-        # probabilities (e.g. 99.9); sending the raw float makes PostgREST reject
-        # the entire tip with 22P02.  Normalize only integer-schema fields here.
-        for _ik in ("probability", "confidence", "builder_total_legs", "builder_won_legs"):
-            if _ik in clean_tip:
-                try:
-                    clean_tip[_ik] = int(round(float(clean_tip[_ik])))
-                except (TypeError, ValueError):
-                    clean_tip.pop(_ik, None)
-        if "telegram_msg_id" in clean_tip:
-            try:
-                clean_tip["telegram_msg_id"] = int(clean_tip["telegram_msg_id"])
-            except (TypeError, ValueError):
-                pass
-
         r = requests.post(
             f"{SUPABASE_URL}/rest/v1/tips",
             headers={
@@ -7220,9 +6850,15 @@ def generate_multi_combo_bets(all_tips, num_tips=3):
     for t in all_tips:
         try:
             odds = float(str(t.get("oddsYes", t.get("odds", 0)) or 0).replace(",", "."))
-            # Multi-Combos dürfen ausschließlich echte Bookmaker-Quoten verwenden.
-            # fairOdds / 100-probability sind Modellwerte und keine platzierbaren Quoten.
-            if odds >= 1.40 and not bool(t.get("_no_real_odds", False)):
+            # 🆕 Fallback: wenn kein echter Odds, fairOdds aus Wahrscheinlichkeit nutzen
+            if odds < 1.40:
+                fair = float(str(t.get("fairOdds", 0) or 0).replace(",", "."))
+                prob = int(t.get("probability", 0) or 0)
+                if fair >= 1.40:
+                    odds = fair
+                elif prob >= 55:
+                    odds = round(100 / prob, 2)  # z.B. 67% → 1.49
+            if odds >= 1.40:
                 normalized.append({
                     "match": t.get("match", ""),
                     "league": t.get("league", ""),
@@ -7239,11 +6875,10 @@ def generate_multi_combo_bets(all_tips, num_tips=3):
     if not normalized:
         return None
 
-    # Multi-Combos: zuerst die höchste Wahrscheinlichkeit, Confidence nur als Tie-Breaker.
-    # Dadurch werden marktübergreifend die stärksten Einzel-Tipps gemischt.
+    # Sortiere nach Confidence + Probability
     sorted_tips = sorted(
         normalized,
-        key=lambda x: (x.get("probability", 0), x.get("confidence", 0)),
+        key=lambda x: (x.get("confidence", 0), x.get("probability", 0)),
         reverse=True
     )
 
@@ -7251,22 +6886,8 @@ def generate_multi_combo_bets(all_tips, num_tips=3):
     if len(sorted_tips) < num_tips:
         return None
 
-    # Nur EIN Leg pro Spiel — verhindert korrelierte Same-Match-Legs (z.B. Over 2.5 + BTTS
-    # aus demselben Spiel), die die Quote aufblaehen und als normale Acca nicht platzierbar sind.
-    selected = []
-    _used_matches = set()
-    for tip in sorted_tips:
-        _mkey = str(tip.get("match", "")).strip().lower()
-        if not _mkey or _mkey in _used_matches:
-            continue
-        _used_matches.add(_mkey)
-        selected.append(tip)
-        if len(selected) >= num_tips:
-            break
-
-    # Nicht genug unterschiedliche Spiele fuer diese Combo-Groesse.
-    if len(selected) < num_tips:
-        return None
+    # Beste N Tipps nehmen
+    selected = sorted_tips[:num_tips]
 
     # Berechne Gesamt-Quote
     total_odds = 1.0
@@ -7828,9 +7449,6 @@ def send_top_tips(tips_by_market, target_date):
             match_name = r.get("match", "?")
 
             r["date"] = str(target_date)
-            if _real_odds_only_enabled() and bool(r.get("_no_real_odds", False)):
-                log(f"   ⛔ REAL_ODDS_ONLY: {match_name} ({market_id}) ohne beobachtete Bookmaker-Quote verworfen")
-                continue
             if not is_valid_tip(r, target_date):
                 continue
 
@@ -8783,9 +8401,9 @@ def _sofascore_events_for_date(date_str):
     except Exception as _se:
         _status = f"EXC:{str(_se)[:60]}"
 
-    log(f"   🔍 SOFA-DEBUG: {date_str} → HTTP {_status}, {len(events)} Events ({_host or 'no-host'})")
+    log(f"   🔍 SOFA-DEBUG: {date_str} → HTTP {_status}, {len(events)} Events (direkt)")
 
-    if not events and PLAYWRIGHT_AVAILABLE and not _netrattler_fast_tips_enabled():
+    if not events and PLAYWRIGHT_AVAILABLE:
         try:
             html = scrape_with_playwright(url, timeout=15000)
             if html:
@@ -9539,45 +9157,6 @@ def format_result_text(tip, result, status):
     return msg
 
 
-def get_supabase_top_scorers(home_team: str, away_team: str) -> list:
-    """Aktuelle Torschützen aus player_match_stats (Scraper-Daten, immer frisch).
-    Ersetzt veraltete openfootball-Kader (kein Messi-bei-PSG mehr).
-    Gibt nur Spieler, die KÜRZLICH für home/away gespielt haben."""
-    if not SUPABASE_URL or not SUPABASE_KEY:
-        return []
-    scorers = []
-    try:
-        import requests as _rq
-        from datetime import datetime as _dt, timedelta as _td
-        _since = (_dt.utcnow() - _td(days=120)).date().isoformat()
-        for _team in (home_team, away_team):
-            if not _team:
-                continue
-            r = _rq.get(f"{SUPABASE_URL}/rest/v1/player_avg_stats",
-                       headers={"apikey": SUPABASE_KEY, "Authorization": f"Bearer {SUPABASE_KEY}"},
-                       params={"select": "player_name,team,avg_value,games,stat_name",
-                               "stat_name": "eq.goals", "team": f"ilike.%{_team[:10]}%",
-                               "games": "gte.2", "order": "avg_value.desc", "limit": "8"},
-                       timeout=12)
-            if r.ok:
-                for row in r.json():
-                    _av = float(row.get("avg_value") or 0)
-                    if _av <= 0:
-                        continue
-                    _pn = row.get("player_name", "")
-                    _gt = int(_av * (row.get("games") or 1))
-                    scorers.append({
-                        "player": _pn, "name": _pn,
-                        "team": row.get("team", _team),
-                        "goals_per_game": round(_av, 2),
-                        "total_goals": _gt, "goals_total": _gt,
-                        "source": "supabase_current",
-                    })
-    except Exception:
-        pass
-    return scorers
-
-
 def get_supabase_player_avg_stats(player_name: str) -> dict:
     """
     Holt historische Spieler-Durchschnittswerte aus Supabase player_avg_stats View.
@@ -9604,111 +9183,6 @@ def get_supabase_player_avg_stats(player_name: str) -> dict:
     except Exception:
         _SUPABASE_PLAYER_STATS_CACHE[player_name] = {}
         return {}
-
-
-def _prefetch_supabase_player_avg_stats(player_names, chunk_size=60):
-    """Targeted preload for real-bookmaker players, with safe fuzzy fallback.
-
-    Phase 1 keeps the cheap exact `IN (...)` query. Phase 2 only runs for misses
-    and searches surnames in small OR batches, then maps returned names locally
-    using accent-insensitive/token similarity. This avoids the old 12k-row blind
-    load while fixing Pinnacle/Kambi name variants such as initials/diacritics.
-    """
-    if not SUPABASE_URL or not SUPABASE_KEY:
-        return 0
-    import difflib as _difflib
-    import unicodedata as _ud
-
-    def _pnorm(v):
-        t = _ud.normalize("NFKD", str(v or "").lower())
-        t = "".join(c for c in t if not _ud.combining(c))
-        t = re.sub(r"[^a-z0-9 ]+", " ", t)
-        return " ".join(t.split())
-
-    names=[]; seen=set()
-    for n in player_names or []:
-        n=str(n or "").strip()
-        if n and n not in seen and n not in _SUPABASE_PLAYER_STATS_CACHE:
-            seen.add(n); names.append(n)
-    if not names:
-        return 0
-
-    loaded=0
-    headers={"apikey":SUPABASE_KEY,"Authorization":f"Bearer {SUPABASE_KEY}"}
-    missing=[]
-    for i in range(0,len(names),max(1,int(chunk_size))):
-        chunk=names[i:i+max(1,int(chunk_size))]
-        escaped=[x.replace("\\","\\\\").replace(chr(34),"\\"+chr(34)) for x in chunk]
-        expr='in.('+','.join(chr(34)+x+chr(34) for x in escaped)+')'
-        grouped={n:{} for n in chunk}
-        try:
-            r=requests.get(
-                f"{SUPABASE_URL.rstrip('/')}/rest/v1/player_avg_stats",
-                headers=headers,
-                params={"player_name":expr,"select":"player_name,stat_name,avg_value,hit_rate_pct,games","limit":"5000"},
-                timeout=10,
-            )
-            if r.ok:
-                for row in r.json() or []:
-                    pn,stat=str(row.get("player_name") or ""),str(row.get("stat_name") or "")
-                    if pn and stat:
-                        grouped.setdefault(pn,{})[stat]={"avg":row.get("avg_value"),"hit_rate":row.get("hit_rate_pct"),"games":row.get("games")}
-        except Exception:
-            pass
-        for pn in chunk:
-            _SUPABASE_PLAYER_STATS_CACHE[pn]=grouped.get(pn,{})
-            if grouped.get(pn):
-                loaded+=1
-            else:
-                missing.append(pn)
-
-    # Fuzzy phase: query only surname-like tokens, batched to keep runtime/API use low.
-    fuzzy_cap=max(0,int(os.getenv("NETRATTLER_PLAYER_STATS_FUZZY_CAP","72")))
-    missing=missing[:fuzzy_cap]
-    for i in range(0,len(missing),24):
-        chunk=missing[i:i+24]
-        needles=[]
-        for name in chunk:
-            toks=[x for x in _pnorm(name).split() if len(x)>=3]
-            if toks:
-                needles.append((name,toks[-1]))
-        if not needles:
-            continue
-        or_expr='('+','.join(f"player_name.ilike.*{tok}*" for _,tok in needles)+')'
-        try:
-            r=requests.get(
-                f"{SUPABASE_URL.rstrip('/')}/rest/v1/player_avg_stats",
-                headers=headers,
-                params={"or":or_expr,"select":"player_name,stat_name,avg_value,hit_rate_pct,games","limit":"5000"},
-                timeout=10,
-            )
-            rows=r.json() if r.ok else []
-        except Exception:
-            rows=[]
-        by_actual={}
-        for row in rows or []:
-            actual=str(row.get("player_name") or "")
-            stat=str(row.get("stat_name") or "")
-            if actual and stat:
-                by_actual.setdefault(actual,{})[stat]={"avg":row.get("avg_value"),"hit_rate":row.get("hit_rate_pct"),"games":row.get("games")}
-        for requested,_surname in needles:
-            rn=_pnorm(requested)
-            rt=rn.split()
-            best=None; best_score=0.0
-            for actual,stats in by_actual.items():
-                an=_pnorm(actual); at=an.split()
-                if not an or not stats:
-                    continue
-                ratio=_difflib.SequenceMatcher(None,rn,an).ratio()
-                surname_bonus=0.12 if rt and at and rt[-1]==at[-1] else 0.0
-                initial_bonus=0.05 if rt and at and rt[0][:1]==at[0][:1] else 0.0
-                score=ratio+surname_bonus+initial_bonus
-                if score>best_score:
-                    best=(actual,stats); best_score=score
-            if best and best_score>=0.78:
-                _SUPABASE_PLAYER_STATS_CACHE[requested]=best[1]
-                loaded+=1
-    return loaded
 
 
 # ============================================================
@@ -9782,42 +9256,6 @@ def get_clubelo_ratings(target_date=None) -> dict:
     return ratings
 
 
-def _ntr_refresh_elo_history() -> int:
-    """Frischt team_elo_history mit aktuellen ClubElo-Ratings auf (heutiges Datum).
-    Nur sonntags oder via force, damit die Favorit/Außenseiter-Rollen aktuell bleiben.
-    Braucht ENABLE_CLUBELO=1 (sonst liefert get_clubelo_ratings leer)."""
-    from datetime import datetime as _dt, timezone as _tz
-    if str(env("ENABLE_ELO_REFRESH", "true")).lower() not in ("1", "true", "yes", "on"):
-        return 0
-    if not SUPABASE_URL or not SUPABASE_KEY:
-        return 0
-    ratings = get_clubelo_ratings()
-    if not ratings:
-        log("   ⚡ Elo-Refresh: keine ClubElo-Daten (ENABLE_CLUBELO=1 gesetzt?)", "WARN")
-        return 0
-    today = str(_dt.now(_tz.utc).date())
-    rows = [{"team_name": club.title(), "elo": round(elo, 1),
-             "rating_date": today, "source": "clubelo_refresh"}
-            for club, elo in ratings.items() if elo]
-    try:
-        import requests as _rq
-        # in Batches upserten (Supabase-Limit)
-        _hdr = {"apikey": SUPABASE_KEY, "Authorization": f"Bearer {SUPABASE_KEY}",
-                "Content-Type": "application/json", "Prefer": "resolution=merge-duplicates"}
-        n = 0
-        for i in range(0, len(rows), 500):
-            batch = rows[i:i+500]
-            r = _rq.post(f"{SUPABASE_URL}/rest/v1/team_elo_history",
-                        headers=_hdr, json=batch, timeout=30)
-            if r.ok:
-                n += len(batch)
-        log(f"   ⚡ Elo-History aufgefrischt: {n} Teams ({today})")
-        return n
-    except Exception as _ee:
-        log(f"   ⚡ Elo-Refresh fehlgeschlagen: {str(_ee)[:60]}", "WARN")
-        return 0
-
-
 def get_clubelo_for_match(home_team: str, away_team: str, target_date=None) -> dict:
     """Gibt ClubElo für Heim- und Auswärtsteam zurück."""
     ratings = get_clubelo_ratings(target_date)
@@ -9861,15 +9299,27 @@ def get_sofascore_odds(event_id: str) -> dict:
         return _SOFA_ODDS_CACHE[event_id]
 
     odds = {}
+    url = f"https://api.sofascore.com/api/v1/event/{event_id}/odds/provider/1/featured"
+
     try:
-        data, _status, _host = _sofascore_get_json(
-            f"/event/{event_id}/odds/provider/1/featured",
-            timeout=max(2, int(float(os.getenv("NETRATTLER_BET365_ODDS_TIMEOUT_SEC", "3"))))
-        )
-        if not data:
+        # cloudscraper falls verfügbar, sonst requests
+        try:
+            import cloudscraper as _cs
+            _sess = _cs.create_scraper()
+        except ImportError:
+            _sess = requests.Session()
+
+        headers = {
+            "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 Chrome/122.0.0.0 Safari/537.36",
+            "Accept": "application/json",
+            "Referer": "https://www.sofascore.com/",
+        }
+        r = _sess.get(url, headers=headers, timeout=12)
+        if not r.ok:
             _SOFA_ODDS_CACHE[event_id] = {}
             return {}
 
+        data = r.json()
         for market in data.get("featuredOdds", {}).get("choices", []):
             mname = (market.get("name") or "").lower()
             options = market.get("sourceOdds", [])
@@ -9923,11 +9373,24 @@ def get_sofascore_player_props(event_id: str) -> list:
         return []
 
     props = []
+    url = f"https://api.sofascore.com/api/v1/event/{event_id}/odds/provider/1/submarkets"
+
     try:
-        data, _status, _host = _sofascore_get_json(f"/event/{event_id}/odds/provider/1/submarkets", timeout=10)
-        if not data:
+        try:
+            import cloudscraper as _cs
+            _sess = _cs.create_scraper()
+        except ImportError:
+            _sess = requests.Session()
+
+        headers = {
+            "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) Chrome/122.0.0.0 Safari/537.36",
+            "Referer": "https://www.sofascore.com/",
+        }
+        r = _sess.get(url, headers=headers, timeout=12)
+        if not r.ok:
             return []
 
+        data = r.json()
         for submarket in data.get("submarkets", []):
             market_group = submarket.get("marketGroup", "")
             for market in submarket.get("choices", []):
@@ -10517,47 +9980,19 @@ def get_wsf_player_prop_odds(*args, **kwargs) -> dict:
 # Bestätigte URL-Struktur: https://www.football-data.co.uk/mmz4281/{season}/{code}.csv
 # Spalten: HS/AS=Schüsse, HST/AST=Schüsse aufs Tor, HC/AC=Ecken, HY/AY=Gelb, HF/AF=Fouls
 
-# IMPORTANT: mapping is country-aware. The old substring map treated e.g.
-# Venezuela "Primera Division" as Spain SP1 and Ecuador "Serie A" as Italy I1,
-# which produced convincing-looking but wrong features. Never do that again.
 FD_CO_UK_LEAGUE_CODES = {
-    ("england", "premier league"): "E0",
-    ("england", "championship"): "E1",
-    ("england", "league 1"): "E2",
-    ("england", "league one"): "E2",
-    ("england", "league 2"): "E3",
-    ("england", "league two"): "E3",
-    ("germany", "bundesliga"): "D1",
-    ("germany", "2. bundesliga"): "D2",
-    ("italy", "serie a"): "I1",
-    ("italy", "serie b"): "I2",
-    ("spain", "la liga"): "SP1",
-    ("spain", "primera division"): "SP1",
-    ("spain", "segunda division"): "SP2",
-    ("france", "ligue 1"): "F1",
-    ("france", "ligue 2"): "F2",
-    ("netherlands", "eredivisie"): "N1",
-    ("portugal", "primeira liga"): "P1",
-    ("scotland", "premiership"): "SC0",
-    ("turkey", "super league"): "T1",
-    ("turkey", "super lig"): "T1",
-    ("greece", "super league"): "G1",
-    ("belgium", "pro league"): "B1",
-    ("belgium", "jupiler pro league"): "B1",
+    "premier league": "E0", "championship": "E1", "league one": "E2", "league two": "E3",
+    "bundesliga": "D1", "2. bundesliga": "D2",
+    "serie a": "I1", "serie b": "I2",
+    "la liga": "SP1", "primera division": "SP1", "segunda division": "SP2",
+    "ligue 1": "F1", "ligue 2": "F2",
+    "eredivisie": "N1",
+    "primeira liga": "P1",
+    "scottish premiership": "SC0",
+    "super lig": "T1",
+    "super league greece": "G1",
+    "jupiler pro league": "B1",
 }
-
-
-def _fd_co_uk_code(league_name: str):
-    ln = str(league_name or "").lower()
-    # Pinnacle league names are normally "Country - Competition".
-    country = ln.split(" - ", 1)[0].strip() if " - " in ln else ln
-    competition = ln.split(" - ", 1)[1].strip() if " - " in ln else ln
-    # Specific 2nd divisions before generic top-division substring matches.
-    ordered = sorted(FD_CO_UK_LEAGUE_CODES.items(), key=lambda kv: len(kv[0][1]), reverse=True)
-    for (country_key, league_key), code in ordered:
-        if country_key in country and league_key in competition:
-            return code
-    return None
 
 FD_CO_UK_CACHE = {}
 
@@ -10570,64 +10005,41 @@ def _fd_co_uk_season_str():
 
 
 def _fd_co_uk_load_csv(league_name):
-    """Load current + previous Football-Data seasons, cached per real country/league.
-
-    Current-season files can temporarily be empty/404 early in a season. We therefore
-    merge the previous season as history instead of returning zero features. Exact team
-    matching later prevents promoted/relegated teams from inheriting another club's data.
-    """
-    code = _fd_co_uk_code(league_name)
+    """Lädt + parsed die Saison-CSV für eine Liga, gecacht pro Liga."""
+    ln = league_name.lower()
+    code = None
+    for key, c in FD_CO_UK_LEAGUE_CODES.items():
+        if key in ln:
+            code = c
+            break
     if not code:
         return []
-    if code in FD_CO_UK_CACHE:
-        return FD_CO_UK_CACHE[code]
 
-    cur = _fd_co_uk_season_str()
-    try:
-        sy = int("20" + cur[:2])
-        prev = f"{str(sy-1)[-2:]}{str(sy)[-2:]}"
-    except Exception:
-        prev = "2526"
+    cache_key = code
+    if cache_key in FD_CO_UK_CACHE:
+        return FD_CO_UK_CACHE[cache_key]
+
+    season = _fd_co_uk_season_str()
     rows = []
-    seen = set()
-    diag = []
-    headers = {
-        "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 Chrome/124 Safari/537.36",
-        "Accept": "text/csv,text/plain,*/*",
-        "Referer": "https://www.football-data.co.uk/",
-    }
-    for season in (prev, cur):
-        season_rows = []
-        status = None
-        url = f"https://www.football-data.co.uk/mmz4281/{season}/{code}.csv"
-        try:
-            r = requests.get(url, headers=headers, timeout=12)
-            status = getattr(r, "status_code", None)
-            if not getattr(r, "ok", False):
-                try:
-                    from curl_cffi import requests as _cr
-                    r = _cr.get(url, headers=headers, timeout=12, impersonate="chrome")
-                    status = getattr(r, "status_code", status)
-                except Exception:
-                    pass
-            if getattr(r, "ok", False) and getattr(r, "text", ""):
-                import csv as _csv, io as _io
-                for row in _csv.DictReader(_io.StringIO(r.text)):
-                    if not row.get("HomeTeam") or row.get("FTHG") in (None, ""):
-                        continue
-                    key = (row.get("Date"), row.get("HomeTeam"), row.get("AwayTeam"), row.get("FTHG"), row.get("FTAG"))
-                    if key in seen:
-                        continue
-                    seen.add(key); season_rows.append(row)
-        except Exception as exc:
-            status = f"EXC:{str(exc)[:30]}"
-        diag.append(f"{season}:{len(season_rows)}[{status}]")
-        rows.extend(season_rows)
+    try:
+        r = requests.get(
+            f"https://www.football-data.co.uk/mmz4281/{season}/{code}.csv",
+            timeout=15,
+        )
+        if r.ok and r.text:
+            import csv as _csv
+            import io as _io
+            reader = _csv.DictReader(_io.StringIO(r.text))
+            for row in reader:
+                if row.get("HomeTeam") and row.get("FTHG"):
+                    rows.append(row)
+        log(f"   🔍 FDCOUK-DEBUG: {code} ({season}) → {len(rows)} Spiele geladen")
+    except Exception as _fce:
+        log(f"   🔍 FDCOUK-DEBUG: {code} → Fehler {str(_fce)[:60]}", "WARN")
 
-    # football-data CSVs are chronological within each season; previous was appended first.
-    log(f"   🔍 FDCOUK-DEBUG: {code} {' + '.join(diag)} → {len(rows)} historische Spiele")
-    FD_CO_UK_CACHE[code] = rows
+    FD_CO_UK_CACHE[cache_key] = rows
     return rows
+
 
 def get_fd_co_uk_team_stats(team_name, league_name, last_n=10):
     """
@@ -10644,7 +10056,7 @@ def get_fd_co_uk_team_stats(team_name, league_name, last_n=10):
     for row in rows:
         h = normalize_team_name(row.get("HomeTeam", ""))
         a = normalize_team_name(row.get("AwayTeam", ""))
-        if _ml_history_team_match(team_name, row.get("HomeTeam", "")) or _ml_history_team_match(team_name, row.get("AwayTeam", "")):
+        if team_norm[:6] in h or h[:6] in team_norm or team_norm[:6] in a or a[:6] in team_norm:
             matches.append(row)
 
     if len(matches) < 3:
@@ -10708,22 +10120,6 @@ def get_fd_co_uk_team_stats(team_name, league_name, last_n=10):
 # ============================================================
 
 _ML_MODELS = {}           # {model_name: calibrated_model}
-
-# Team-Modelle, die geladen UND vorhergesagt werden (Loader + Predictor synchron,
-# damit der Supabase-Payload begrenzt bleibt und kein Timeout entsteht).
-_ML_TEAM_TARGETS = [
-    ("btts_model", "btts_pct"),
-    ("over25_model", "over25_pct"),
-    ("btts_ht_model", "btts_ht_pct"),
-    ("over15_ht_model", "over15_ht_pct"),
-    ("over15_model", "over15_pct"),
-    ("over35_model", "over35_pct"),
-    ("home_win_model", "home_win_pct"),
-    ("draw_model", "draw_pct"),
-    ("away_win_model", "away_win_pct"),
-    ("corners_over85_model", "corners_over85_pct"),
-    ("corners_over95_model", "corners_over95_pct"),
-]
 _ML_MODELS_LOADED = False # Flag, damit wir nur einmal laden
 _ML_FEATURE_COLS = [
     # Elo-Ratings
@@ -10743,18 +10139,6 @@ _ML_FEATURE_COLS = [
     "streak_win_home", "streak_win_away",
     # H2H
     "h2h_btts_rate", "h2h_avg_goals", "h2h_matches_norm",
-    # Schüsse/Ecken/Karten (aus FD.co.uk)
-    "avg_shots_home", "avg_shots_away", "total_shots_exp",
-    "avg_corners_home", "avg_corners_away", "total_corners_exp",
-    "avg_cards_home", "avg_cards_away", "total_cards_exp",
-    # Multi-source + Bookmaker Market Features
-    "source_count_norm", "stat_coverage", "odds_source_count_norm",
-    "odds_available_1x2", "market_margin_1x2",
-    "market_home_prob", "market_draw_prob", "market_away_prob",
-    "odds_available_ou25", "market_over25_prob", "market_under25_prob",
-    "pinnacle_home_delta", "pinnacle_draw_delta", "pinnacle_away_delta",
-    "bet365_home_delta", "bet365_draw_delta", "bet365_away_delta",
-    "betfair_home_delta", "betfair_draw_delta", "betfair_away_delta",
 ]
 
 # Rolling Feature-State (wird pro Run befüllt)
@@ -10776,14 +10160,11 @@ def _ml_load_models():
 
     try:
         import pickle, base64, io
-        # Nur die tatsaechlich genutzten Modelle laden statt aller 30+ —
-        # der ungefilterte Full-Blob-Request (~50 MB base64) lief in einen Read-Timeout.
-        _needed_models = ",".join(name for name, _ in _ML_TEAM_TARGETS)
         r = requests.get(
             f"{SUPABASE_URL}/rest/v1/ml_models",
             headers={"apikey": SUPABASE_KEY, "Authorization": f"Bearer {SUPABASE_KEY}"},
-            params={"select": "model_name,model_data", "model_name": f"in.({_needed_models})"},
-            timeout=60,
+            params={"select": "model_name,model_data,meta"},
+            timeout=20,
         )
         if not r.ok:
             log(f"   🤖 ML-Models: Supabase {r.status_code} — Fallback auf Elo/Poisson", "WARN")
@@ -10811,27 +10192,27 @@ def _ml_load_models():
 
 
 def _ml_get_team_form(team_name, n=10):
-    """Rolling team form from real historical matches loaded before prediction."""
+    """Holt die rolling Form-Features für ein Team aus dem aktuellen Run-State."""
     key = normalize_team_name(team_name)
     hist = _ML_TEAM_HISTORY.get(key, [])
     results = _ML_TEAM_RESULTS.get(key, [])
 
-    # These are the same neutral priors used by training when history is missing.
     if not hist:
         return {
             "btts_rate": 0.50, "o25_rate": 0.50,
-            "btts_ht_rate": 0.40, "o15ht_rate": 0.40,
-            "avg_scored": 1.35, "avg_conceded": 1.15,
+            "btts_ht_rate": 0.20, "o15ht_rate": 0.45,
+            "avg_scored": 1.30, "avg_conceded": 1.20,
             "form_pts": 0.33, "streak_win": 0.0,
-            "avg_shots": 0.0, "avg_corners": 0.0, "avg_cards": 0.0,
-            "games": 0,
         }
 
     last = hist[-n:]
     last_r = results[-5:]
-    pts = sum(3 if r == "W" else 1 if r == "D" else 0 for r in last_r)
-    form_pts = pts / 15.0 if last_r else 0.33
 
+    # Form-Punkte (W=3/D=1/L=0)
+    pts = sum(3 if r == "W" else 1 if r == "D" else 0 for r in last_r)
+    form_pts = pts / 15.0  # max 15 → normiert 0-1
+
+    # Gewinn-Streak
     streak = 0
     for r in reversed(results):
         if r == "W":
@@ -10840,63 +10221,39 @@ def _ml_get_team_form(team_name, n=10):
             break
     streak_win = min(streak / 5.0, 1.0)
 
-    def _avg(field, default=0.0):
-        vals = [float(m[field]) for m in last if m.get(field) is not None]
-        return (sum(vals) / len(vals)) if vals else float(default)
-
     return {
-        "btts_rate": _avg("btts"),
-        "o25_rate": _avg("over25"),
-        "btts_ht_rate": _avg("btts_ht", 0.40),
-        "o15ht_rate": _avg("over15_ht", 0.40),
-        "avg_scored": _avg("scored"),
-        "avg_conceded": _avg("conceded"),
+        "btts_rate": sum(m["btts"] for m in last) / len(last),
+        "o25_rate": sum(m["over25"] for m in last) / len(last),
+        "btts_ht_rate": sum(m["btts_ht"] for m in last) / len(last),
+        "o15ht_rate": sum(m["over15_ht"] for m in last) / len(last),
+        "avg_scored": sum(m["scored"] for m in last) / len(last),
+        "avg_conceded": sum(m["conceded"] for m in last) / len(last),
         "form_pts": form_pts,
         "streak_win": streak_win,
-        "avg_shots": _avg("shots"),
-        "avg_corners": _avg("corners"),
-        "avg_cards": _avg("cards"),
-        "games": len(last),
     }
 
 
-def _ml_update_team_history(home, away, home_goals, away_goals, ht_home=None, ht_away=None,
-                            home_shots=None, away_shots=None,
-                            home_corners=None, away_corners=None,
-                            home_cards=None, away_cards=None):
-    """Add one *completed* match to the rolling model state."""
-    try:
-        home_goals, away_goals = float(home_goals), float(away_goals)
-        _ht_known = ht_home not in (None, "") and ht_away not in (None, "")
-        if _ht_known:
-            ht_home = float(ht_home); ht_away = float(ht_away)
-    except (TypeError, ValueError):
-        return
+def _ml_update_team_history(home, away, home_goals, away_goals, ht_home=0, ht_away=0):
+    """Updated den Rolling-State nach einem bekannten Spiel."""
     btts = int(home_goals > 0 and away_goals > 0)
     over25 = int(home_goals + away_goals > 2)
-    btts_ht = int(ht_home > 0 and ht_away > 0) if _ht_known else None
-    o15ht = int(ht_home + ht_away > 1) if _ht_known else None
+    btts_ht = int(ht_home > 0 and ht_away > 0)
+    o15ht = int(ht_home + ht_away > 1)
 
     h_key = normalize_team_name(home)
     a_key = normalize_team_name(away)
-    if not h_key or not a_key:
-        return
 
-    def _num(v):
-        try: return float(v) if v is not None and v != "" else None
-        except (TypeError, ValueError): return None
-
+    # Match-History (für Rolling-Raten)
     _ML_TEAM_HISTORY.setdefault(h_key, []).append({
         "btts": btts, "over25": over25, "btts_ht": btts_ht, "over15_ht": o15ht,
         "scored": home_goals, "conceded": away_goals,
-        "shots": _num(home_shots), "corners": _num(home_corners), "cards": _num(home_cards),
     })
     _ML_TEAM_HISTORY.setdefault(a_key, []).append({
         "btts": btts, "over25": over25, "btts_ht": btts_ht, "over15_ht": o15ht,
         "scored": away_goals, "conceded": home_goals,
-        "shots": _num(away_shots), "corners": _num(away_corners), "cards": _num(away_cards),
     })
 
+    # Form-Ergebnisse (W/D/L)
     if home_goals > away_goals:
         _ML_TEAM_RESULTS.setdefault(h_key, []).append("W")
         _ML_TEAM_RESULTS.setdefault(a_key, []).append("L")
@@ -10907,353 +10264,109 @@ def _ml_update_team_history(home, away, home_goals, away_goals, ht_home=None, ht
         _ML_TEAM_RESULTS.setdefault(h_key, []).append("D")
         _ML_TEAM_RESULTS.setdefault(a_key, []).append("D")
 
+    # H2H-History
     h2h_key = tuple(sorted([h_key, a_key]))
-    _ML_H2H_HISTORY.setdefault(h2h_key, []).append({"btts": btts, "goals": home_goals + away_goals})
+    _ML_H2H_HISTORY.setdefault(h2h_key, []).append({
+        "btts": btts,
+        "goals": home_goals + away_goals,
+    })
 
-
-def _ml_row_score(row, *names, default=None):
-    for name in names:
-        if row.get(name) not in (None, ""):
-            try: return float(row.get(name))
-            except (TypeError, ValueError): pass
-    return default
-
-
-def _ml_date_value(row):
-    return str(row.get("match_date") or row.get("date") or row.get("game_date") or "")[:10]
-
-
-def _ml_history_team_match(a, b):
-    """Stricter than provider matching: history must never cross-contaminate clubs."""
-    from difflib import SequenceMatcher
-    def canon(x):
-        try:
-            from netrattler_identity_hub import normalize_team_name as _ih_norm
-            n = _ih_norm(x)
-        except Exception:
-            n = normalize_team_name(x)
-        repl = {"utd":"united", "st":"saint", "dep":"deportivo", "atl":"atletico"}
-        return " ".join(repl.get(t,t) for t in n.split())
-    n1, n2 = canon(a), canon(b)
-    if not n1 or not n2: return False
-    if n1 == n2: return True
-    t1, t2 = set(n1.split()), set(n2.split())
-    # A single shared token is not enough (Alpha != Alpha Opp, Manchester Utd != City).
-    common=t1 & t2
-    if len(common) >= 2 and len(common) / max(1, min(len(t1),len(t2))) >= .75:
-        return True
-    if min(len(t1),len(t2)) == 1:
-        return False
-    ratio=SequenceMatcher(None,n1,n2).ratio()
-    length_ratio=min(len(n1),len(n2))/max(len(n1),len(n2))
-    return ratio >= .90 and length_ratio >= .75
-
-
-def _ml_candidate_token(team):
-    """Conservative PostgREST search token; local identity check still decides the match."""
-    stop = {"fc","cf","club","de","the","united","city","real","sporting","deportivo","atletico","athletic","sc","ac","ca"}
-    words = re.findall(r"[a-z0-9]+", normalize_team_name(team))
-    words = [w for w in words if len(w) >= 4 and w not in stop]
-    return max(words, key=len) if words else (max(re.findall(r"[a-z0-9]+", normalize_team_name(team)), key=len, default=""))
-
-
-def _prefetch_ml_history_from_supabase(matchups, target_date, win_start_utc=None, win_end_utc=None):
-    """Load completed historical matches for the upcoming teams once per run.
-
-    This fixes the old runtime bug where `_ML_TEAM_HISTORY` was never populated and every
-    club therefore received the same neutral feature vector. Rows on/after target_date are
-    rejected locally as a second no-leakage guard.
-    """
-    if not SUPABASE_URL or not SUPABASE_KEY or not matchups:
-        return 0
-    if getattr(_prefetch_ml_history_from_supabase, "_done", False):
-        return sum(len(v) for v in _ML_TEAM_HISTORY.values())
-
-    target = str(target_date.isoformat() if hasattr(target_date, "isoformat") else target_date)[:10]
-    teams = []
-    seen = set()
-    for pm in matchups:
-        try:
-            starts = str(pm.get("starts") or "")
-            if starts and (win_start_utc or win_end_utc):
-                dt = datetime.fromisoformat(starts.replace("Z", "+00:00"))
-                if win_start_utc and dt < win_start_utc: continue
-                if win_end_utc and dt >= win_end_utc: continue
-        except Exception:
-            pass
-        for t in (pm.get("home"), pm.get("away")):
-            k = normalize_team_name(t or "")
-            if k and k not in seen:
-                seen.add(k); teams.append(str(t))
-    cap = int(env("NETRATTLER_ML_PREFETCH_TEAM_CAP", "160"))
-    teams = teams[:cap]
-    if not teams:
-        return 0
-
-    headers = {"apikey": SUPABASE_KEY, "Authorization": f"Bearer {SUPABASE_KEY}"}
-    import time as _time
-    fetched = []
-    batch_size = max(8, int(env("NETRATTLER_ML_PREFETCH_BATCH", "80")))
-    _preload_started = _time.monotonic()
-    _preload_budget = max(6.0, float(env("NETRATTLER_ML_PREFETCH_BUDGET_SEC", "12")))
-    _preload_failures = 0
-    for i in range(0, len(teams), batch_size):
-        if _time.monotonic() - _preload_started > _preload_budget or _preload_failures >= 3:
-            break
-        batch = teams[i:i+batch_size]
-        tokens = []
-        for t in batch:
-            tok = _ml_candidate_token(t)
-            if tok and tok not in tokens:
-                tokens.append(tok)
-        if not tokens:
-            continue
-        ors = []
-        for tok in tokens:
-            ors.extend([f"home_team.ilike.*{tok}*", f"away_team.ilike.*{tok}*"])
-        params = {
-            "select": "*",
-            "match_date": f"lt.{target}",
-            "or": "(" + ",".join(ors) + ")",
-            "order": "match_date.desc",
-            "limit": str(int(env("NETRATTLER_ML_PREFETCH_ROW_LIMIT", "3000"))),
-        }
-        try:
-            r = requests.get(f"{SUPABASE_URL}/rest/v1/football_historical_matches", headers=headers, params=params, timeout=5)
-            if not r.ok and getattr(r, "status_code", 0) in (400, 404):
-                # Schema compatibility fallback. Local date guard below still prevents leakage.
-                params.pop("match_date", None)
-                r = requests.get(f"{SUPABASE_URL}/rest/v1/football_historical_matches", headers=headers, params=params, timeout=5)
-            if r.ok and isinstance(r.json(), list):
-                fetched.extend(r.json()); _preload_failures = 0
-            else:
-                _preload_failures += 1
-        except Exception:
-            _preload_failures += 1
-            continue
-
-    # De-duplicate source mirrors before filling history.
-    uniq = {}
-    for row in fetched:
-        d = _ml_date_value(row)
-        if not d or d >= target:
-            continue
-        h = str(row.get("home_team") or row.get("home") or "").strip()
-        a = str(row.get("away_team") or row.get("away") or "").strip()
-        hg = _ml_row_score(row, "home_goals", "home_score", "fthg")
-        ag = _ml_row_score(row, "away_goals", "away_score", "ftag")
-        if not h or not a or hg is None or ag is None:
-            continue
-        key = (d, normalize_team_name(h), normalize_team_name(a), hg, ag)
-        uniq[key] = row
-
-    rows = sorted(uniq.values(), key=_ml_date_value)
-    candidate_keys = {normalize_team_name(t): t for t in teams}
-    used_rows = 0
-    matched_teams = set()
-    for row in rows:
-        h_raw = str(row.get("home_team") or row.get("home") or "")
-        a_raw = str(row.get("away_team") or row.get("away") or "")
-        # Only retain rows involving one of the upcoming clubs. This prevents loose SQL
-        # token searches from contaminating model history.
-        h_can = next((orig for k, orig in candidate_keys.items() if _ml_history_team_match(orig, h_raw)), None)
-        a_can = next((orig for k, orig in candidate_keys.items() if _ml_history_team_match(orig, a_raw)), None)
-        if not h_can and not a_can:
-            continue
-        home_name = h_can or h_raw
-        away_name = a_can or a_raw
-        hg = _ml_row_score(row, "home_goals", "home_score", "fthg")
-        ag = _ml_row_score(row, "away_goals", "away_score", "ftag")
-        hh = _ml_row_score(row, "ht_home_goals", "ht_home_score", "hthg", default=None)
-        ha = _ml_row_score(row, "ht_away_goals", "ht_away_score", "htag", default=None)
-        hy = _ml_row_score(row, "home_yellow")
-        ay = _ml_row_score(row, "away_yellow")
-        hcards = _ml_row_score(row, "home_cards", "cards_home")
-        acards = _ml_row_score(row, "away_cards", "cards_away")
-        hr = _ml_row_score(row, "home_red", default=0) or 0
-        ar = _ml_row_score(row, "away_red", default=0) or 0
-        _ml_update_team_history(
-            home_name, away_name, hg, ag, hh, ha,
-            home_shots=_ml_row_score(row, "home_shots", "shots_home"),
-            away_shots=_ml_row_score(row, "away_shots", "shots_away"),
-            home_corners=_ml_row_score(row, "home_corners", "corners_home"),
-            away_corners=_ml_row_score(row, "away_corners", "corners_away"),
-            home_cards=(hy + hr) if hy is not None else hcards,
-            away_cards=(ay + ar) if ay is not None else acards,
-        )
-        used_rows += 1
-        if h_can: matched_teams.add(normalize_team_name(h_can))
-        if a_can: matched_teams.add(normalize_team_name(a_can))
-
-    _prefetch_ml_history_from_supabase._done = True
-    log(f"   🧠 ML-History preload: {len(matched_teams)}/{len(teams)} Teams · {used_rows} historische Matches · Supabase")
-    return used_rows
-
-
-def _ml_seed_fd_history_for_match(home, away, league_name):
-    """Fallback history for correctly mapped football-data.co.uk leagues only."""
-    min_games = int(env("NETRATTLER_ML_MIN_HISTORY", "3"))
-    if _ml_get_team_form(home).get("games", 0) >= min_games and _ml_get_team_form(away).get("games", 0) >= min_games:
-        return
-    if not _fd_co_uk_code(league_name):
-        return
-    rows = _fd_co_uk_load_csv(league_name)
-    if not rows:
-        return
-    # Load all chronological rows involving either target team; cache prevents downloads per match.
-    for row in rows:
-        rh, ra = row.get("HomeTeam", ""), row.get("AwayTeam", "")
-        if not (_ml_history_team_match(home, rh) or _ml_history_team_match(home, ra) or _ml_history_team_match(away, rh) or _ml_history_team_match(away, ra)):
-            continue
-        try:
-            _ml_update_team_history(
-                rh, ra, float(row.get("FTHG")), float(row.get("FTAG")),
-                float(row.get("HTHG") or 0), float(row.get("HTAG") or 0),
-                home_shots=row.get("HS"), away_shots=row.get("AS"),
-                home_corners=row.get("HC"), away_corners=row.get("AC"),
-                home_cards=(float(row.get("HY") or 0)+float(row.get("HR") or 0)),
-                away_cards=(float(row.get("AY") or 0)+float(row.get("AR") or 0)),
-            )
-        except (TypeError, ValueError):
-            continue
-
-
-def _history_poisson_prediction(home_team, away_team):
-    """Independent probability model built only from completed-match history."""
-    import math
-    fh, fa = _ml_get_team_form(home_team), _ml_get_team_form(away_team)
-    min_games = int(env("NETRATTLER_ML_MIN_HISTORY", "3"))
-    if fh.get("games", 0) < min_games or fa.get("games", 0) < min_games:
-        return {}
-
-    prior = float(env("NETRATTLER_ML_PRIOR_STRENGTH", "3.0"))
-    def shrink(rate, games, base):
-        return (float(rate)*games + base*prior) / (games + prior)
-    gh, ga = fh["games"], fa["games"]
-    emp_btts = (shrink(fh["btts_rate"], gh, .50) + shrink(fa["btts_rate"], ga, .50)) / 2
-    emp_o25 = (shrink(fh["o25_rate"], gh, .50) + shrink(fa["o25_rate"], ga, .50)) / 2
-    emp_btts_ht = (shrink(fh["btts_ht_rate"], gh, .40) + shrink(fa["btts_ht_rate"], ga, .40)) / 2
-    emp_o15ht = (shrink(fh["o15ht_rate"], gh, .40) + shrink(fa["o15ht_rate"], ga, .40)) / 2
-
-    lam_h = max(.25, min(3.6, (fh["avg_scored"] + fa["avg_conceded"]) / 2 * 1.06))
-    lam_a = max(.20, min(3.4, (fa["avg_scored"] + fh["avg_conceded"]) / 2 * .98))
-    mat = []
-    phw = pdr = paw = po25 = 0.0
-    for h in range(9):
-        hp = math.exp(-lam_h) * lam_h**h / math.factorial(h)
-        for a in range(9):
-            ap = math.exp(-lam_a) * lam_a**a / math.factorial(a)
-            pr = hp*ap
-            if h > a: phw += pr
-            elif h == a: pdr += pr
-            else: paw += pr
-            if h+a > 2: po25 += pr
-    pbtts = (1-math.exp(-lam_h)) * (1-math.exp(-lam_a))
-
-    # Empirical match history is the primary source; Poisson stabilises extreme samples.
-    btts = .65*emp_btts + .35*pbtts
-    o25 = .65*emp_o25 + .35*po25
-    total_1x2 = phw+pdr+paw or 1.0
-    return {
-        "source": "history_poisson",
-        "btts_pct": round(btts*100, 1), "over25_pct": round(o25*100, 1),
-        "btts_ht_pct": round(emp_btts_ht*100, 1), "over15_ht_pct": round(emp_o15ht*100, 1),
-        "home_win_pct": round(phw/total_1x2*100, 1), "draw_pct": round(pdr/total_1x2*100, 1),
-        "away_win_pct": round(paw/total_1x2*100, 1),
-        "exp_goals_home": round(lam_h,2), "exp_goals_away": round(lam_a,2),
-        "history_games_home": gh, "history_games_away": ga,
-    }
 
 def get_ml_prediction(home_team, away_team, league_name):
-    """Independent team prediction using real history + trained XGBoost when available.
-
-    Crucially, bookmaker prices are NOT injected here. Value/edge is calculated later from
-    observed bookmaker odds, so model probability and market quote remain independent.
+    """
+    Haupt-ML-Vorhersagefunktion: baut Features + ruft XGBoost-Modell auf.
+    Gibt {} zurück wenn kein Modell geladen oder Liga nicht abgedeckt.
+    BTTS/Over2.5/BTTS-HT/Over1.5-HT Wahrscheinlichkeiten als Prozent.
     """
     _ml_load_models()
-    _ml_seed_fd_history_for_match(home_team, away_team, league_name)
 
+    if not _ML_MODELS:
+        return {}
+
+    # Elo-Ratings aus dem bestehenden System holen
+    elo_ratings = _build_elo_ratings(league_name) if league_name else {}
+    h_key = normalize_team_name(home_team)
+    a_key = normalize_team_name(away_team)
+
+    if elo_ratings:
+        if h_key not in elo_ratings:
+            h_key = next((k for k in elo_ratings if h_key[:5] in k or k[:5] in h_key), None)
+        if a_key not in elo_ratings:
+            a_key = next((k for k in elo_ratings if a_key[:5] in k or k[:5] in a_key), None)
+
+    elo_h = elo_ratings.get(h_key, ELO_RATINGS_CACHE.get("_global", {}).get(h_key, 1500)) + 60
+    elo_a = elo_ratings.get(a_key, ELO_RATINGS_CACHE.get("_global", {}).get(a_key, 1500))
+
+    # 🆕 Falls kein Elo für diese Teams (Nischenliga): martj42-Stats als Feature-Basis
+    if elo_h == 1560 and elo_a == 1500:  # = beide Default
+        h_st = get_national_team_btts_stats(home_team)
+        a_st = get_national_team_btts_stats(away_team)
+        if h_st and a_st:
+            fh["btts_rate"] = h_st.get("btts_pct", 50) / 100
+            fa["btts_rate"] = a_st.get("btts_pct", 50) / 100
+            fh["o25_rate"] = h_st.get("over25_pct", 50) / 100
+            fa["o25_rate"] = a_st.get("over25_pct", 50) / 100
+
+    # Form-Features
     fh = _ml_get_team_form(home_team)
     fa = _ml_get_team_form(away_team)
-    hist_pred = _history_poisson_prediction(home_team, away_team)
-    min_games = int(env("NETRATTLER_ML_MIN_HISTORY", "3"))
-    if fh.get("games", 0) < min_games or fa.get("games", 0) < min_games:
-        # National teams have their separate martj42 path. For clubs, neutral priors are
-        # not evidence and must never create a fake 67/68% model signal.
-        return {}
 
-    elo_ratings = _build_elo_ratings(league_name) if league_name else {}
-    h_key, a_key = normalize_team_name(home_team), normalize_team_name(away_team)
-    def _elo_lookup(key, default):
-        if key in elo_ratings: return elo_ratings[key]
-        k = next((x for x in elo_ratings if _ml_history_team_match(key, x)), None)
-        if k: return elo_ratings[k]
-        return ELO_RATINGS_CACHE.get("_global", {}).get(key, default)
-    elo_h = _elo_lookup(h_key, 1500) + 60
-    elo_a = _elo_lookup(a_key, 1500)
+    # H2H-Features aus dem Rolling-State
+    _h2h_key = tuple(sorted([normalize_team_name(home_team), normalize_team_name(away_team)]))
+    _h2h_hist = _ML_H2H_HISTORY.get(_h2h_key, [])
+    h2h_btts = sum(m["btts"] for m in _h2h_hist) / len(_h2h_hist) if _h2h_hist else 0.5
+    h2h_goals = sum(m["goals"] for m in _h2h_hist) / len(_h2h_hist) if _h2h_hist else 2.5
+    h2h_norm = min(len(_h2h_hist) / 10.0, 1.0)
 
-    h2h_key = tuple(sorted([normalize_team_name(home_team), normalize_team_name(away_team)]))
-    h2h_hist = _ML_H2H_HISTORY.get(h2h_key, [])
-    h2h_btts = sum(m["btts"] for m in h2h_hist)/len(h2h_hist) if h2h_hist else .5
-    h2h_goals = sum(m["goals"] for m in h2h_hist)/len(h2h_hist) if h2h_hist else 2.5
-    h2h_norm = min(len(h2h_hist)/10.0, 1.0)
-
-    stat_fields = [fh.get("avg_shots"), fa.get("avg_shots"), fh.get("avg_corners"), fa.get("avg_corners"), fh.get("avg_cards"), fa.get("avg_cards")]
-    stat_coverage = sum(1 for x in stat_fields if x and x > 0) / len(stat_fields)
     features = [
-        elo_h, elo_a, elo_h-elo_a,
-        fh["btts_rate"], fa["btts_rate"], (fh["btts_rate"]+fa["btts_rate"])/2,
-        fh["o25_rate"], fa["o25_rate"], (fh["o25_rate"]+fa["o25_rate"])/2,
-        fh["avg_scored"], fa["avg_scored"], fh["avg_conceded"], fa["avg_conceded"],
-        fh["avg_scored"]+fa["avg_scored"], (fh["avg_conceded"]+fa["avg_conceded"])/2,
-        fh["btts_ht_rate"], fa["btts_ht_rate"], fh["o15ht_rate"], fa["o15ht_rate"],
-        fh["form_pts"], fa["form_pts"], fh["form_pts"]-fa["form_pts"], fh["streak_win"], fa["streak_win"],
+        # Elo
+        elo_h, elo_a, elo_h - elo_a,
+        # BTTS/Over-Raten
+        fh["btts_rate"], fa["btts_rate"], (fh["btts_rate"] + fa["btts_rate"]) / 2,
+        fh["o25_rate"], fa["o25_rate"], (fh["o25_rate"] + fa["o25_rate"]) / 2,
+        # Tore
+        fh["avg_scored"], fa["avg_scored"],
+        fh["avg_conceded"], fa["avg_conceded"],
+        fh["avg_scored"] + fa["avg_scored"],
+        (fh["avg_conceded"] + fa["avg_conceded"]) / 2,
+        # HT
+        fh["btts_ht_rate"], fa["btts_ht_rate"],
+        fh["o15ht_rate"], fa["o15ht_rate"],
+        # Form-Punkte
+        fh["form_pts"], fa["form_pts"], fh["form_pts"] - fa["form_pts"],
+        fh["streak_win"], fa["streak_win"],
+        # H2H
         h2h_btts, h2h_goals, h2h_norm,
-        fh.get("avg_shots",0), fa.get("avg_shots",0), fh.get("avg_shots",0)+fa.get("avg_shots",0),
-        fh.get("avg_corners",0), fa.get("avg_corners",0), fh.get("avg_corners",0)+fa.get("avg_corners",0),
-        fh.get("avg_cards",0), fa.get("avg_cards",0), fh.get("avg_cards",0)+fa.get("avg_cards",0),
-        # Multi-source/market features: explicit MISSING values. No bookmaker leakage.
-        min((fh.get("games",0)+fa.get("games",0))/20.0, 1.0), stat_coverage, 0.0,
-        0.0, 0.0, 1/3, 1/3, 1/3,
-        0.0, 0.5, 0.5,
-        0.0,0.0,0.0, 0.0,0.0,0.0, 0.0,0.0,0.0,
+        # Schüsse/Ecken (0 = unbekannt für Nischenligen, kein Problem)
+        fh.get("avg_shots", 0.0), fa.get("avg_shots", 0.0),
+        fh.get("avg_shots", 0.0) + fa.get("avg_shots", 0.0),
+        fh.get("avg_corners", 0.0), fa.get("avg_corners", 0.0),
+        fh.get("avg_corners", 0.0) + fa.get("avg_corners", 0.0),
     ]
 
-    xgb = {}
-    if _ML_MODELS:
-        try:
-            import numpy as np
-            X=np.array(features, dtype=float).reshape(1,-1)
-            for model_name,out_key in _ML_TEAM_TARGETS:
-                if model_name in _ML_MODELS:
-                    xgb[out_key]=round(float(_ML_MODELS[model_name].predict_proba(X)[0][1])*100,1)
-        except Exception as exc:
-            log(f"   🤖 ML-Predict-Error: {str(exc)[:60]}", "WARN")
+    import numpy as np
+    X = np.array(features).reshape(1, -1)
+    result = {}
 
-    if not hist_pred and not xgb:
+    model_targets = [
+        ("btts_model", "btts_pct"),
+        ("over25_model", "over25_pct"),
+        ("btts_ht_model", "btts_ht_pct"),
+        ("over15_ht_model", "over15_ht_pct"),
+    ]
+
+    try:
+        for model_name, out_key in model_targets:
+            if model_name in _ML_MODELS:
+                prob = _ML_MODELS[model_name].predict_proba(X)[0][1]
+                result[out_key] = round(prob * 100, 1)
+        result["source"] = "xgboost"
+        result["elo_home"] = round(elo_h, 0)
+        result["elo_away"] = round(elo_a, 0)
+    except Exception as _pie:
+        log(f"   🤖 ML-Predict-Error: {str(_pie)[:60]}", "WARN")
         return {}
-    # History receives more weight because runtime intentionally withholds bookmaker odds
-    # that several training rows contained. This avoids the previous constant ~55% output.
-    result={}
-    for key in ("btts_pct","over25_pct","btts_ht_pct","over15_ht_pct","home_win_pct","draw_pct","away_win_pct"):
-        hp=hist_pred.get(key) if hist_pred else None
-        xp=xgb.get(key)
-        if hp is not None and xp is not None:
-            result[key]=round(.65*float(hp)+.35*float(xp),1)
-        elif hp is not None:
-            result[key]=float(hp)
-        elif xp is not None:
-            result[key]=float(xp)
-    # 1X2 must sum to 100 after blending.
-    sm=sum(float(result.get(k,0) or 0) for k in ("home_win_pct","draw_pct","away_win_pct"))
-    if sm>0:
-        for k in ("home_win_pct","draw_pct","away_win_pct"):
-            result[k]=round(float(result.get(k,0) or 0)/sm*100,1)
-    result.update({
-        "source":"history+xgboost" if xgb else "history_poisson",
-        "elo_home":round(elo_h,0), "elo_away":round(elo_a,0),
-        "history_games_home":fh.get("games",0), "history_games_away":fa.get("games",0),
-    })
+
     return result
 
 
@@ -11268,7 +10381,12 @@ def _build_elo_ratings(league_name):
     Baut Elo-Ratings aus der kompletten football-data.co.uk Saison-Historie
     (chronologisch durchgerechnet). Gecacht pro Liga-Code.
     """
-    code = _fd_co_uk_code(league_name)
+    ln = league_name.lower()
+    code = None
+    for key, c in FD_CO_UK_LEAGUE_CODES.items():
+        if key in ln:
+            code = c
+            break
     if not code:
         return {}
 
@@ -11347,9 +10465,9 @@ def get_elo_poisson_prediction(home_team, away_team, league_name):
 
     # Fuzzy-Suche falls exakter Key fehlt
     if h_key not in ratings:
-        h_key = next((k for k in ratings if _ml_history_team_match(home_team, k)), None)
+        h_key = next((k for k in ratings if h_key[:6] in k or k[:6] in h_key), None)
     if a_key not in ratings:
-        a_key = next((k for k in ratings if _ml_history_team_match(away_team, k)), None)
+        a_key = next((k for k in ratings if a_key[:6] in k or k[:6] in a_key), None)
     if not h_key or not a_key:
         return {}
 
@@ -11793,9 +10911,6 @@ def smart_request(url, timeout=15, use_playwright_if_blocked=True, headers=None)
     Intelligenter Request: erst direkt, dann Playwright bei 403/429/503
     Gilt für ALLE Domains!
     """
-    # ⚡ FAST-MODE: nie Playwright (verhindert 18s/Match Timeout im Tipp-Lauf)
-    if _netrattler_fast_tips_enabled():
-        use_playwright_if_blocked = False
     import random as _r
     default_headers = {
         "User-Agent": _r.choice([
@@ -11814,10 +10929,7 @@ def smart_request(url, timeout=15, use_playwright_if_blocked=True, headers=None)
     
     try:
         r = requests.get(url, headers=default_headers, timeout=timeout)
-        # ⚡ FAST-MODE: kein Playwright-Fallback im Tipp-Lauf (verhindert 18s/Match
-        # Timeout bei geblockten Seiten wie Betexplorer 429). Stats sammelt der Scraper.
-        _fast = _netrattler_fast_tips_enabled()
-        if r.status_code in [403, 429, 503, 406, 444] and use_playwright_if_blocked and not _fast:
+        if r.status_code in [403, 429, 503, 406, 444] and use_playwright_if_blocked:
             log(f"   🎭 {url[:40]}... → Playwright (Status {r.status_code})")
             html = scrape_with_playwright(url, timeout=8000)
             if html:
@@ -15884,7 +14996,7 @@ def filter_top_tips(tips, target_date, market):
     rejected = {"time": 0, "tip": 0, "prob": 0, "conf": 0, "value": 0, "odds": 0}
 
     max_odds_for_market = 4.5 if market == "btts_ht" else MAX_ODDS
-    min_odds_for_market = MIN_ODDS  # einheitlich 1.70 für ALLE Märkte (mehr Puffer als 1.6)
+    min_odds_for_market = 1.6 if market == "btts_ht" else MIN_ODDS
 
     for r in tips:
         if not is_future_game(r.get("time", ""), target_date):
@@ -17129,22 +16241,6 @@ def save_to_supabase(tip):
         clean_tip = {k: v for k, v in tip.items() 
                      if k in SUPABASE_FIELDS and v is not None}
 
-        # Supabase schema compatibility: these columns are INTEGER in the current
-        # NETRATTLER table.  Corner/ML models legitimately produce decimal
-        # probabilities (e.g. 99.9); sending the raw float makes PostgREST reject
-        # the entire tip with 22P02.  Normalize only integer-schema fields here.
-        for _ik in ("probability", "confidence", "builder_total_legs", "builder_won_legs"):
-            if _ik in clean_tip:
-                try:
-                    clean_tip[_ik] = int(round(float(clean_tip[_ik])))
-                except (TypeError, ValueError):
-                    clean_tip.pop(_ik, None)
-        if "telegram_msg_id" in clean_tip:
-            try:
-                clean_tip["telegram_msg_id"] = int(clean_tip["telegram_msg_id"])
-            except (TypeError, ValueError):
-                pass
-
         r = requests.post(
             f"{SUPABASE_URL}/rest/v1/tips",
             headers={
@@ -17322,9 +16418,15 @@ def generate_multi_combo_bets(all_tips, num_tips=3):
     for t in all_tips:
         try:
             odds = float(str(t.get("oddsYes", t.get("odds", 0)) or 0).replace(",", "."))
-            # Multi-Combos dürfen ausschließlich echte Bookmaker-Quoten verwenden.
-            # fairOdds / 100-probability sind Modellwerte und keine platzierbaren Quoten.
-            if odds >= 1.40 and not bool(t.get("_no_real_odds", False)):
+            # 🆕 Fallback: wenn kein echter Odds, fairOdds aus Wahrscheinlichkeit nutzen
+            if odds < 1.40:
+                fair = float(str(t.get("fairOdds", 0) or 0).replace(",", "."))
+                prob = int(t.get("probability", 0) or 0)
+                if fair >= 1.40:
+                    odds = fair
+                elif prob >= 55:
+                    odds = round(100 / prob, 2)  # z.B. 67% → 1.49
+            if odds >= 1.40:
                 normalized.append({
                     "match": t.get("match", ""),
                     "league": t.get("league", ""),
@@ -17341,15 +16443,10 @@ def generate_multi_combo_bets(all_tips, num_tips=3):
     if not normalized:
         return None
 
-    # Multi-Combos: höchste Wahrscheinlichkeit zuerst; Confidence/learned weight nur Tie-Breaker.
+    # Sortiere nach Confidence + Probability
     sorted_tips = sorted(
         normalized,
-        key=lambda x: (
-            x.get("probability", 0),
-            float(x.get("confidence", 0) or 0) * _ntr_learned_weight(
-                x.get("market", ""), x.get("league", "") or x.get("competition", "")
-            ),
-        ),
+        key=lambda x: (x.get("confidence", 0), x.get("probability", 0)),
         reverse=True
     )
 
@@ -17357,22 +16454,8 @@ def generate_multi_combo_bets(all_tips, num_tips=3):
     if len(sorted_tips) < num_tips:
         return None
 
-    # Nur EIN Leg pro Spiel — verhindert korrelierte Same-Match-Legs (z.B. Over 2.5 + BTTS
-    # aus demselben Spiel), die die Quote aufblaehen und als normale Acca nicht platzierbar sind.
-    selected = []
-    _used_matches = set()
-    for tip in sorted_tips:
-        _mkey = str(tip.get("match", "")).strip().lower()
-        if not _mkey or _mkey in _used_matches:
-            continue
-        _used_matches.add(_mkey)
-        selected.append(tip)
-        if len(selected) >= num_tips:
-            break
-
-    # Nicht genug unterschiedliche Spiele fuer diese Combo-Groesse.
-    if len(selected) < num_tips:
-        return None
+    # Beste N Tipps nehmen
+    selected = sorted_tips[:num_tips]
 
     # Berechne Gesamt-Quote
     total_odds = 1.0
@@ -17597,17 +16680,16 @@ def _get_market_stats_from_supabase(market_id):
 
 
 def _send_daily_auswertung_to_all_groups(stats=None):
-    # Schutz gegen Doppel-Senden innerhalb eines Runs (wird jetzt am main()-Ende
-    # unbedingt aufgerufen, plus im 0-Tipps-Zweig).
-    global _AUSWERTUNG_SENT_THIS_RUN
-    if globals().get("_AUSWERTUNG_SENT_THIS_RUN"):
-        return
-    _AUSWERTUNG_SENT_THIS_RUN = True
-
+    """
+    Sendet marktspezifische Stats in jede Gruppe im Screenshot-Format:
+    Winrate, ROI (Units), Gesamt-Tipps, Monat, Top-3-Ligen.
+    """
     from datetime import datetime as _dt3, timezone as _tz3
     now = _dt3.now(_tz3.utc)
+
+    # Saisonpause / WM-Hinweis
     if now.month == 6 and now.day < 11:
-        pause_text = f"🏆 <i>WM 2026 startet in {11-now.day} Tagen!</i>"
+        pause_text = f"🏆 <i>WM 2026 startet in {11-now.day} Tagen! Ab 11. Juni täglich Tipps.</i>"
     elif now.month in [6, 7]:
         pause_text = "<i>🌍 WM 2026 läuft — täglich Tipps!</i>"
     else:
@@ -17616,11 +16698,10 @@ def _send_daily_auswertung_to_all_groups(stats=None):
     market_groups = [
         ("btts",    TELEGRAM_GROUPS.get("btts"),    "⚽ BTTS"),
         ("over25",  TELEGRAM_GROUPS.get("over25"),  "🎯 Over 2.5"),
-        ("combo",   TELEGRAM_GROUPS.get("combo", TELEGRAM_GROUPS.get("combos")),   "🔥 BTTS + Over 2.5"),
+        ("combo",   TELEGRAM_GROUPS.get("combo"),   "🔥 BTTS + Over 2.5"),
         ("btts_ht", TELEGRAM_GROUPS.get("btts_ht"), "🕐 BTTS Halbzeit"),
         ("corners", TELEGRAM_GROUPS.get("corners", TELEGRAM_GROUPS.get("hz_live")), "🔵 Corner Sniper"),
         ("scorer",  TELEGRAM_GROUPS.get("scorer", TELEGRAM_GROUPS.get("late_goals")), "⚽ Goal Hunter"),
-        ("builder", TELEGRAM_GROUPS.get("builder", TELEGRAM_GROUPS.get("combos")), "🧱 Prop Builder"),
     ]
 
     medals = ["🥇","🥈","🥉"]
@@ -17787,23 +16868,11 @@ def send_top_tips(tips_by_market, target_date):
         return
 
     saved = 0
-    _pending_tip_saves = []
     prefetch_sent_tips_for_date(target_date)
 
     for market_id, tips in tips_by_market.items():
         if not tips:
             continue
-
-        # 🧠 GELERNTE GEWICHTE anwenden: Tipps nach Confidence × gelerntem
-        # Markt/Liga-Gewicht neu sortieren (aus abgerechneten Tipps gelernt).
-        # Neutral solange wenig Lern-Daten da sind (Gewicht ~1.0).
-        try:
-            def _weighted_conf(_t):
-                _lg = str(_t.get("league", "") or _t.get("competition", "") or _t.get("league_name", ""))
-                return float(_t.get("confidence", 0) or 0) * _ntr_learned_weight(market_id, _lg)
-            tips = sorted(tips, key=_weighted_conf, reverse=True)
-        except Exception:
-            pass
 
         target_chat = TELEGRAM_GROUPS.get(market_id, TELEGRAM_CHAT_ID)
         market_name = MARKET_INFO[market_id]["name"]
@@ -17816,9 +16885,6 @@ def send_top_tips(tips_by_market, target_date):
             match_name = r.get("match", "?")
 
             r["date"] = str(target_date)
-            if _real_odds_only_enabled() and bool(r.get("_no_real_odds", False)):
-                log(f"   ⛔ REAL_ODDS_ONLY: {match_name} ({market_id}) ohne beobachtete Bookmaker-Quote verworfen")
-                continue
             if not is_valid_tip(r, target_date):
                 continue
 
@@ -18141,43 +17207,41 @@ def send_top_tips(tips_by_market, target_date):
                 "avg_goals_away": avg_g_a,
             }
 
-            # Der Tages-Duplikatcache wurde bereits einmal vor dem Versand aus Supabase
-            # vorgeladen. Ein zweiter GET pro Tipp war redundant und kostete bei 90+ Tipps
-            # Minuten. Nach mark_tip_sent() direkt speichern; Duplikate werden vorher
-            # zuverlässig durch is_duplicate_tip()/Tagescache abgefangen.
-            # Queue DB writes. Telegram remains sequential to preserve message order, but
-            # Supabase inserts are independent and can be flushed concurrently afterwards.
-            _pending_tip_saves.append(tip_data)
-            if NETRATTLER_PRO:
+            # Prüfe ob bereits in Supabase
+            tip_id_check = tip_data.get("tip_id", "")
+            already_exists = False
+            if tip_id_check and SUPABASE_URL and SUPABASE_KEY:
                 try:
-                    log_tip_for_clv(tip_data)
+                    r_check = requests.get(
+                        f"{SUPABASE_URL}/rest/v1/tips",
+                        headers={"apikey": SUPABASE_KEY, "Authorization": f"Bearer {SUPABASE_KEY}"},
+                        params={"tip_id": f"eq.{tip_id_check}", "select": "id", "limit": "1"},
+                        timeout=5,
+                    )
+                    if r_check.ok and r_check.json():
+                        already_exists = True
                 except Exception:
                     pass
+
+            if already_exists:
+                log(f"   ⏭️ Supabase: bereits vorhanden {tip_data.get('match','?')}")
+            else:
+                save_result = save_to_supabase(tip_data)
+                # CLV Tracking
+                if NETRATTLER_PRO:
+                    try:
+                        log_tip_for_clv(tip_data)
+                    except Exception:
+                        pass
+                if save_result:
+                    saved += 1
+                else:
+                    log(f"   ⚠️ Supabase save fehlgeschlagen für {tip_data.get('match','?')}", "WARN")
 
         value_count = sum(1 for r in tips if r.get("valueRating") == "HIGH")
 
         # Kein Footer - direkt Tipps ohne Zusammenfassung
 
-    if _pending_tip_saves:
-        try:
-            from concurrent.futures import ThreadPoolExecutor, as_completed
-            _workers = max(2, min(8, int(env("NETRATTLER_SUPABASE_SAVE_WORKERS", "6"))))
-            with ThreadPoolExecutor(max_workers=_workers) as _ex:
-                _futs = {_ex.submit(save_to_supabase, _td): _td for _td in _pending_tip_saves}
-                for _fu in as_completed(_futs):
-                    _td = _futs[_fu]
-                    try:
-                        if _fu.result():
-                            saved += 1
-                        else:
-                            log(f"   ⚠️ Supabase save fehlgeschlagen für {_td.get('match','?')}", "WARN")
-                    except Exception as _be:
-                        log(f"   ⚠️ Supabase parallel save: {str(_be)[:80]}", "WARN")
-        except Exception as _qe:
-            log(f"   ⚠️ Parallel-Save Fallback: {str(_qe)[:80]}", "WARN")
-            for _td in _pending_tip_saves:
-                if save_to_supabase(_td):
-                    saved += 1
     log(f"Gespeichert in Supabase: {saved}")
 
 
@@ -18438,22 +17502,31 @@ def _sofascore_events_for_date(date_str):
     if date_str in _SOFA_EVENTS_DAY_CACHE:
         return _SOFA_EVENTS_DAY_CACHE[date_str]
 
+    url = f"https://api.sofascore.com/api/v1/sport/football/scheduled-events/{date_str}"
     events = []
     _status = None
-    _host = ""
     try:
-        _data, _status, _host = _sofascore_get_json(f"/sport/football/scheduled-events/{date_str}", timeout=10)
-        if _data:
-            events = (_data or {}).get("events", [])
+        r = requests.get(
+            url,
+            headers={
+                "User-Agent": "Mozilla/5.0 (iPhone; CPU iPhone OS 16_0 like Mac OS X) AppleWebKit/605.1.15",
+                "Accept": "application/json",
+                "Referer": "https://www.sofascore.com/",
+            },
+            timeout=15,
+        )
+        _status = r.status_code
+        if r.ok:
+            data = r.json()
+            events = data.get("events", [])
     except Exception as _se:
         _status = f"EXC:{str(_se)[:60]}"
 
     log(f"   🔍 SOFA-DEBUG: {date_str} → HTTP {_status}, {len(events)} Events (direkt)")
 
-    if not events and PLAYWRIGHT_AVAILABLE and not _netrattler_fast_tips_enabled():
+    if not events and PLAYWRIGHT_AVAILABLE:
         try:
-            _sofa_url = f"https://api.sofascore.com/api/v1/sport/football/scheduled-events/{date_str}"
-            html = scrape_with_playwright(_sofa_url, timeout=15000)
+            html = scrape_with_playwright(url, timeout=15000)
             if html:
                 import re as _re
                 m = _re.search(r'(\{.*\})', html, _re.DOTALL)
@@ -20252,29 +19325,6 @@ def run_live_bots():
 # 🔵 ECKEN ANALYSE - Corner Over/Under
 # ============================================================
 
-def _fixture_display_time(fixture):
-    """Anstosszeit als HH:MM (lokal, UTC+2) aus diversen Fixture-Feldern.
-    Ecken-Fixtures aus der Pinnacle-Injektion tragen 'starts' (ISO), nicht 'time_local'."""
-    for k in ("time_local", "time", "kickoff_local"):
-        v = str(fixture.get(k, "") or "").strip()
-        if v and v not in ("TBD", "N/A", "-", "?"):
-            return v[:5] if len(v) >= 5 and ":" in v else v
-    # ISO-Zeitstempel (starts/kickoff/start_time) → lokale HH:MM
-    for k in ("starts", "kickoff", "start_time", "commence_time", "date"):
-        raw = str(fixture.get(k, "") or "").strip()
-        if not raw or "T" not in raw:
-            continue
-        try:
-            from datetime import datetime as _dt, timezone as _tz, timedelta as _td
-            _s = raw.replace("Z", "+00:00")
-            _t = _dt.fromisoformat(_s)
-            if _t.tzinfo is None:
-                _t = _t.replace(tzinfo=_tz.utc)
-            return _t.astimezone(_tz(_td(hours=2))).strftime("%H:%M")
-        except Exception:
-            continue
-    return "TBD"
-
 CORNERS_CACHE = {}
 
 def get_team_corner_stats(team_id, league_id, season):
@@ -20339,84 +19389,61 @@ def get_team_corner_stats(team_id, league_id, season):
         return None
 
 
-def get_supabase_corner_stats(team_name: str) -> dict:
-    """Ecken-Schnitt eines Teams aus player_avg_stats (nächtlich gescrapt).
-    Schnell (Supabase-Read), kein Live-Scraping. Cache pro Lauf."""
-    if not hasattr(get_supabase_corner_stats, "_cache"):
-        get_supabase_corner_stats._cache = {}
-    _ck = str(team_name or "").lower()[:15]
-    if _ck in get_supabase_corner_stats._cache:
-        return get_supabase_corner_stats._cache[_ck]
-    result = {}
-    if SUPABASE_URL and SUPABASE_KEY and team_name:
-        try:
-            import requests as _rq
-            r = _rq.get(f"{SUPABASE_URL}/rest/v1/player_avg_stats",
-                       headers={"apikey": SUPABASE_KEY, "Authorization": f"Bearer {SUPABASE_KEY}"},
-                       params={"select": "avg_value,games", "stat_name": "eq.corners",
-                               "team": f"ilike.%{team_name[:10]}%", "order": "games.desc", "limit": "1"},
-                       timeout=8)
-            if r.ok and r.json():
-                row = r.json()[0]
-                result = {"avg_corners": float(row.get("avg_value") or 0), "games": row.get("games", 0)}
-        except Exception:
-            pass
-    get_supabase_corner_stats._cache[_ck] = result
-    return result
-
-
-def analyze_corners_tip_simple(fixture, league, real_quotes=None):
-    """Deterministische Corner-Analyse; REAL_ODDS_ONLY akzeptiert nur beobachtete Quoten."""
+def analyze_corners_tip_simple(fixture, league):
+    """
+    Vereinfachte Ecken-Analyse ohne API-Football IDs.
+    Basiert auf Liga-Durchschnitt + Poisson.
+    Sucht über mehrere Linien (7.5-12.5) die mit realistischer Quote >=1.70.
+    """
     import math
+    import random
+
+    # Liga-basierte Durchschnittswerte
     LEAGUE_AVG_CORNERS = {
         "Premier League": 10.2, "Bundesliga": 9.8, "La Liga": 9.5,
         "Serie A": 9.7, "Ligue 1": 9.3, "Eredivisie": 10.1,
         "Champions League": 9.9, "Championship": 10.5,
         "EFL League 1": 10.8, "EFL League 2": 11.0,
     }
-    avg = float(LEAGUE_AVG_CORNERS.get(league, 9.5))
-    expected = avg
-    try:
-        _hc = get_supabase_corner_stats(fixture.get("home", ""))
-        _ac = get_supabase_corner_stats(fixture.get("away", ""))
-        _h = float((_hc or {}).get("avg_corners", 0) or 0)
-        _a = float((_ac or {}).get("avg_corners", 0) or 0)
-        if _h > 0 and _a > 0:
-            expected = _h + _a
-    except Exception:
-        expected = avg
-    lam = max(1.0, expected)
-    def _over(line):
-        cum = sum((math.exp(-lam) * lam**k) / math.factorial(k) for k in range(int(float(line)) + 1))
-        return round((1 - cum) * 100, 1)
-    real_only = str(os.getenv("NETRATTLER_REAL_ODDS_ONLY", os.getenv("NETRATTLER_REQUIRE_REAL_ODDS", "true"))).lower() in {"1","true","yes","on"}
-    quotes = [q for q in (real_quotes or []) if isinstance(q, dict)]
-    if real_only and not quotes:
-        return None
+
+    avg = LEAGUE_AVG_CORNERS.get(league, 9.5)
+    expected = avg + random.uniform(-1.5, 1.5)
+    lam = expected
+
+    def poisson_over(line):
+        """P(X > line) für halbe Linien (z.B. 8.5 → Summe k=0..8 abziehen)."""
+        k_max = int(line)  # bei 8.5 → 8
+        cum = 0
+        for k in range(k_max + 1):
+            cum += (math.exp(-lam) * lam**k) / math.factorial(k)
+        return round((1 - cum) * 100)
+
+    # Mehrere Linien durchprobieren, höchste mit prob>=60% UND realistischer Buchmacher-Quote >=1.70 wählen
     candidates = []
-    for q in quotes:
-        try:
-            line, odds = float(q.get("line")), float(q.get("odds"))
-        except (TypeError, ValueError):
+    for line in [7.5, 8.5, 9.5, 10.5, 11.5]:
+        prob = poisson_over(line)
+        if prob < 60:
             continue
-        if not (6.5 <= line <= 14.5) or odds < MIN_ODDS_VALUE or odds > 6.0:
-            continue
-        prob = _over(line)
-        edge = (prob / 100.0) * odds - 1.0
-        min_edge = float(os.getenv("NETRATTLER_CORNER_MIN_EDGE", "0.02"))
-        max_edge = float(os.getenv("NETRATTLER_CORNER_MAX_EDGE", "0.35"))
-        if prob >= 60 and min_edge <= edge <= max_edge:
-            candidates.append((edge, line, prob, odds, str(q.get("source") or "pinnacle")))
-    if not candidates:
+        # Simulierte Buchmacher-Quote inkl. Marge (~7%, realistischer als reine Fair Odds)
+        book_odds = round((100 / prob) * 1.07, 2) if prob > 0 else 0
+        candidates.append((line, prob, book_odds))
+
+    # Bevorzuge die höchste Linie, die Quote >=1.70 erreicht (beste Balance Sicherheit/Value)
+    valid = [c for c in candidates if c[2] >= MIN_ODDS_VALUE]
+    if not valid:
         return None
-    edge, line, prob, odds, source = max(candidates, key=lambda x: (x[0], x[2]))
+    line, prob, book_odds = max(valid, key=lambda c: c[0])  # höchste qualifizierende Linie
+
     return {
-        "match": f"{fixture['home']} vs {fixture['away']}", "league": league,
-        "time": _fixture_display_time(fixture), "tip": f"Over {line:g} Ecken",
-        "probability": prob, "odds": round(odds,2),
-        "fair_odds": round(100/prob,2) if prob else 0, "edge": round(edge*100,1),
-        "expected_corners": round(expected,1), "market": "corners",
-        "_source": source, "_real_odds": True,
+        "match": f"{fixture['home']} vs {fixture['away']}",
+        "league": league,
+        "time": fixture.get("time_local", "TBD"),
+        "tip": f"Over {line} Ecken",
+        "probability": prob,
+        "odds": book_odds,
+        "fair_odds": round(100 / prob, 2) if prob > 0 else 0,
+        "expected_corners": round(expected, 1),
+        "market": "corners",
     }
 
 
@@ -20461,17 +19488,6 @@ def analyze_corners_tip(fixture, league):
         prob_over2 += (math.exp(-lam) * lam**k) / math.factorial(k)
     prob_over2 = round((1 - prob_over2) * 100)
 
-    # 🆕 XGBoost-Corner-Modelle einblenden (60% ML / 40% Poisson; Corner-AUC ~0.67).
-    try:
-        _mlc = get_ml_prediction(fixture.get("home", ""), fixture.get("away", ""), league)
-        if _mlc:
-            if _mlc.get("corners_over95_pct") is not None:
-                prob_over = round(0.60 * _mlc["corners_over95_pct"] + 0.40 * prob_over)
-            if _mlc.get("corners_over85_pct") is not None:
-                prob_over2 = round(0.60 * _mlc["corners_over85_pct"] + 0.40 * prob_over2)
-    except Exception:
-        pass
-
     # Besten Tipp wählen
     if prob_over >= 68:
         line_used = 9.5
@@ -20487,7 +19503,7 @@ def analyze_corners_tip(fixture, league):
     return {
         "match": f"{fixture['home']} vs {fixture['away']}",
         "league": league,
-        "time": _fixture_display_time(fixture),
+        "time": fixture.get("time_local", "TBD"),
         "tip": f"Over {line_used} Ecken",
         "probability": prob,
         "fair_odds": fair_odds,
@@ -20692,7 +19708,7 @@ def analyze_scorer_tips(fixture, league, scorers):
         tips.append({
             "match": f"{fixture['home']} vs {fixture['away']}",
             "league": league,
-            "time": _fixture_display_time(fixture),
+            "time": fixture.get("time_local", "TBD"),
             "player": scorer["name"],
             "team": scorer["team"],
             "goals_per_game": gpg,
@@ -20827,156 +19843,156 @@ def get_understat_top_scorers(league_name, season):
         return []
 
 
-def _pinnacle_corner_quotes_by_match():
-    """Echte Pinnacle Over-Corner-Specials pro Match indexieren."""
-    out = {}
-    try:
-        for p in fetch_pinnacle_player_props() or []:
-            if not isinstance(p, dict):
-                continue
-            text = f"{p.get('special_category','')} {p.get('player_prop','')} {p.get('selection','')}"
-            if _get_leg_category(text) != "corners":
-                continue
-            sel = str(p.get("selection") or "").lower().strip()
-            if not sel.startswith("over"):
-                continue
-            try:
-                odds = float(p.get("odds") or 0)
-                _raw_line = p.get("line")
-                line = float(_raw_line if _raw_line is not None else (_ntr_market_line(f"{p.get('player_prop','')} {sel}", 0) or 0))
-            except (TypeError, ValueError):
-                continue
-            match = str(p.get("match") or "")
-            # The pool also contains team/player corner specials.  The model below
-            # is a MATCH-total Poisson model (~9-11 corners), so applying it to
-            # team/player lines such as 0.5/1.0 creates impossible 600-700% edges.
-            if odds <= 1.05 or odds > 6.0 or not (6.5 <= line <= 14.5) or " vs " not in match:
-                continue
-            h,a = [x.strip() for x in match.split(" vs ",1)]
-            key = f"{normalize_team_name(h)}|{normalize_team_name(a)}"
-            out.setdefault(key, []).append({"line":line,"odds":odds,"source":"pinnacle"})
-    except Exception as exc:
-        log(f"   🔵 Pinnacle Corner-Index Fehler: {str(exc)[:80]}", "WARN")
-
-    # Kambi/other real-bookmaker corner totals collected earlier for the builder pool.
-    # These are observed prices too and let Corner Sniper run when Pinnacle has no
-    # corner specials in the Arcadia payload.
-    try:
-        for p in _NTR_BUILDER_PROP_POOL:
-            if not isinstance(p, dict) or str(p.get("category") or "") not in {"corners","match_corners"}:
-                continue
-            try:
-                odds=float(p.get("odds") or 0); line=float(p.get("line") or 0)
-            except (TypeError,ValueError):
-                continue
-            src=str(p.get("source") or "").lower()
-            match=str(p.get("match") or "")
-            if odds<=1.05 or odds>6.0 or not (6.5 <= line <= 14.5) or " vs " not in match or not any(x in src for x in ("kambi","unibet","bet365","pinnacle","1xbet","melbet","oddspedia")):
-                continue
-            h,a=[x.strip() for x in match.split(" vs ",1)]
-            key=f"{normalize_team_name(h)}|{normalize_team_name(a)}"
-            row={"line":line,"odds":odds,"source":src}
-            if row not in out.setdefault(key,[]):
-                out[key].append(row)
-    except Exception:
-        pass
-    return out
-
-def _corner_quote_lookup(index, home, away):
-    h,a = normalize_team_name(home), normalize_team_name(away)
-    rows = index.get(f"{h}|{a}") or index.get(f"{a}|{h}") or []
-    if rows:
-        return rows
-    for key, rows in index.items():
-        try:
-            kh,ka = key.split("|",1)
-            if (h==kh or (len(h)>=6 and (h[:8] in kh or kh[:8] in h))) and (a==ka or (len(a)>=6 and (a[:8] in ka or ka[:8] in a))):
-                return rows
-        except Exception:
-            pass
-    return []
-
 def run_corners_and_scorer_bots(target_date, active_leagues, odds_data_cache, fixtures_cache):
-    """Fast side-pipeline: real Corner odds only; legacy scorer excluded from REAL_ODDS runs."""
-    import time as _time
+    """
+    Hauptfunktion für Ecken + Scorer Bots.
+    Läuft parallel zum Haupt-Bot.
+    """
     group_hz = TELEGRAM_GROUPS.get("hz_live") or env("TELEGRAM_GROUP_HZ_LIVE", "")
     group_late = TELEGRAM_GROUPS.get("late_goals") or env("TELEGRAM_GROUP_LATE_GOALS", "")
+
     if not group_hz and not group_late:
-        log("Corners/Scorer: Keine Gruppen konfiguriert", "INFO"); return
-    try: prefetch_sent_tips_for_date(target_date)
-    except Exception: pass
-    started = _time.monotonic()
-    budget = max(5, int(os.getenv("NETRATTLER_CORNERS_BUDGET_SEC", "45")))
-    max_matches = max(1, int(os.getenv("NETRATTLER_CORNERS_MAX_MATCHES", "80")))
-    real_only = str(os.getenv("NETRATTLER_REAL_ODDS_ONLY", os.getenv("NETRATTLER_REQUIRE_REAL_ODDS", "true"))).lower() in {"1","true","yes","on"}
-    legacy_scorer = str(os.getenv("NETRATTLER_LEGACY_SCORER", "false")).lower() in {"1","true","yes","on"}
-    log(f"🔵⚽ Corners + Scorer Bot startet (Budget={budget}s, max={max_matches}, real_odds={real_only})...")
-    corner_index = _pinnacle_corner_quotes_by_match() if (group_hz and real_only) else {}
-    if group_hz and real_only:
-        log(f"   🔵 Echte Pinnacle-Corner-Matches: {len(corner_index)}")
-        # If Arcadia has no match-total corner lines, reuse Kambi's already-cached
-        # event offers from the prop pass. This preserves REAL_ODDS_ONLY.
-        try:
-            from netrattler_prop_sources import collect_extra_corner_odds
-            _corner_fx=[]
-            _major=("champions league","premier league","la liga","serie a","bundesliga","ligue 1","eredivisie","primeira liga","mls")
-            for _lg in active_leagues:
-                for _fx in (fixtures_cache.get(_lg,[]) or []):
-                    if not isinstance(_fx,dict): continue
-                    _row=dict(_fx); _row["league"]=_row.get("league") or _lg
-                    _corner_fx.append(_row)
-            _corner_fx.sort(key=lambda x: sum(t in f"{x.get('league','')} {x.get('home','')} {x.get('away','')}".lower() for t in _major), reverse=True)
-            for _cq in collect_extra_corner_odds(_corner_fx, log=log, max_matches=int(env("NETRATTLER_CORNER_EXTRA_MATCHES","30"))):
-                _h,_a=str(_cq.get("home","")).strip(),str(_cq.get("away","")).strip()
-                if not _h or not _a: continue
-                _k=f"{normalize_team_name(_h)}|{normalize_team_name(_a)}"
-                _item={"line":float(_cq.get("line") or 0),"odds":float(_cq.get("odds") or 0),"source":str(_cq.get("source") or "kambi")}
-                if _item not in corner_index.setdefault(_k,[]): corner_index[_k].append(_item)
-            log(f"   🔵 Corner-Matches nach Fallback: {len(corner_index)}")
-        except Exception as _ce:
-            log(f"   🔵 Corner-Fallback Fehler: {str(_ce)[:80]}","WARN")
-    corners_tips, scorer_tips, seen, scanned = [], [], set(), 0
+        log("Corners/Scorer: Keine Gruppen konfiguriert", "INFO")
+        return
+
+    try:
+        prefetch_sent_tips_for_date(target_date)
+    except Exception:
+        pass
+    log("🔵⚽ Corners + Scorer Bot startet...")
+
+    corners_count = 0
+    scorer_count = 0
+    corners_tips = []
+    scorer_tips = []
+
+    seen_corner_matches = set()  # Duplikat-Check über ALLE Ligen
+
     for league in active_leagues:
-        if _time.monotonic()-started >= budget or scanned >= max_matches: break
-        fixtures = fixtures_cache.get(league, []) or []
+        fixtures = fixtures_cache.get(league, [])
+        if not fixtures:
+            continue
+
+        league_id = API_FOOTBALL_LEAGUES.get(league)
+        now_utc = datetime.now(timezone.utc)
+        season = now_utc.year if now_utc.month > 6 else now_utc.year - 1
+
+        # Ecken-Tipps - auch ohne API-Football IDs!
         if group_hz:
             for fixture in fixtures:
-                if _time.monotonic()-started >= budget or scanned >= max_matches: break
                 try:
-                    home,away = fixture.get("home",""), fixture.get("away","")
-                    if not home or not away or _is_junk_league(league,home,away): continue
-                    quotes = _corner_quote_lookup(corner_index, home, away) if real_only else []
-                    if real_only and not quotes: continue
-                    scanned += 1
-                    key=f"{normalize_team_name(home)}|{normalize_team_name(away)}"
-                    if key in seen: continue
-                    seen.add(key)
-                    match=f"{home} vs {away}"
-                    if is_duplicate_tip(match,"corners",target_date): continue
-                    tip=analyze_corners_tip_simple(fixture,league,real_quotes=quotes)
+                    home_norm = normalize_team_name(fixture.get("home", ""))
+                    away_norm = normalize_team_name(fixture.get("away", ""))
+                    match_key = f"{home_norm[:12]}_{away_norm[:12]}"
+                    match_key_rev = f"{away_norm[:12]}_{home_norm[:12]}"
+                    if match_key in seen_corner_matches or match_key_rev in seen_corner_matches:
+                        continue
+                    seen_corner_matches.add(match_key)
+
+                    # 🆕 Duplikat zwischen Runs prüfen!
+                    match_name = f"{fixture.get('home','')} vs {fixture.get('away','')}"
+                    if is_duplicate_tip(match_name, "corners", target_date):
+                        _ntr_log_duplicate(f"   ⏭️ Ecken Duplikat: {match_name}", key="corners")
+                        continue
+
+                    tip = analyze_corners_tip_simple(fixture, league)
                     if tip:
+                        _c_odds = tip.get("odds", tip.get("fair_odds", 0))
+                        try:
+                            _c_odds_f = float(str(_c_odds).replace(",", "."))
+                        except Exception:
+                            _c_odds_f = 0
+                        if _c_odds_f < MIN_ODDS_VALUE:
+                            log(f"   ⏭️ Ecken unter 1.70 verworfen: {tip['match']} ({_c_odds_f})")
+                            continue
                         corners_tips.append(tip)
-                        log(f"   🔵 Ecken VALUE: {match} → {tip['tip']} @ {tip['odds']} ({tip['probability']}%, Edge {tip.get('edge',0)}%)")
-                except Exception as exc:
-                    log(f"   Corners Error: {str(exc)[:100]}","WARN")
-        # Legacy scorer intentionally disabled for real-odds mode. Real scorer prices go through props.
-        if group_late and legacy_scorer and not real_only and _time.monotonic()-started < budget:
-            log(f"   ⚽ Legacy-Scorer für {league} deaktiviert im Standardprofil; Player Props sind primär", "INFO")
-    if real_only and group_late:
-        log("   ⚽ Goal Hunter nutzt direkte echte Scorer-Props aus dem ML-Prop-Pfad (Legacy aus)")
-    corners_tips.sort(key=lambda t:(float(t.get("edge",0) or 0),float(t.get("probability",0) or 0)),reverse=True)
-    corners_tips=corners_tips[:max(1,int(os.getenv("NETRATTLER_CORNERS_MAX_SEND","12")))]
-    if corners_tips and group_hz:
-        send_telegram(f"🔵 <b>CORNER SNIPER</b>\n<i>📅 {target_date} · echte Quoten</i>", group_hz)
-        for tip in corners_tips:
-            msg=format_corners_message(tip); mid=send_telegram(msg,group_hz); mark_tip_sent(tip.get("match",""),"corners",target_date)
+                        corners_count += 1
+                        log(f"   🔵 Ecken: {tip['match']} → {tip['tip']} ({tip['probability']}%)")
+                except Exception as e:
+                    log(f"   Corners Error: {e}", "WARN")
+
+        # Scorer-Tipps - nutze Understat + geschätzte Werte
+        if group_late:
             try:
-                save_to_supabase({**tip,"tip_id":f"corners_{tip.get('match','?')}_{target_date}".replace(" ","_"),"date":str(target_date),"market":"corners","status":"pending","group_key":"corners","pick_type":"corners","telegram_chat_id":str(group_hz),"telegram_msg_id":mid,"message_text":msg[:3500],"probability":tip.get("probability",0),"confidence":tip.get("confidence",3)})
-            except Exception: pass
-    _direct_scorers=int(getattr(run_pinnacle_props_bot,"_last_scorer_sent",0) or 0)
-    run_corners_and_scorer_bots._last_corners=len(corners_tips)
-    run_corners_and_scorer_bots._last_scorer=_direct_scorers
-    log(f"🔵⚽ Corners/Scorer fertig: corners={len(corners_tips)}, scorer={_direct_scorers}, scanned={scanned}, {_time.monotonic()-started:.1f}s")
+                scorers = []
+
+                # 1. TheStatsAPI (neu, primäre Quelle — kein API-Football nötig)
+                if THESTATSAPI_KEYS and not scorers:
+                    scorers = tsa_get_top_scorers(league, season)
+
+                # 2. API-Football (gesperrt, bleibt als Basis)
+                if not scorers and league_id and not APIFOOTBALL_QUOTA_EXHAUSTED:
+                    scorers = get_top_scorers(league_id, season)
+
+                # 3. Understat (oft geblockt auf GitHub Actions)
+                if not scorers:
+                    scorers = get_understat_top_scorers(league, season)
+
+                # 4. Understat via Playwright
+                if not scorers and PLAYWRIGHT_AVAILABLE:
+                    scorers = pw_get_understat_scorers(league, season)
+
+                # 5. StatsBomb HTTP (kostenlos, direkt von GitHub)
+                if not scorers:
+                    scorers = get_statsbomb_top_scorers(league)
+
+                if scorers:
+                    for fixture in fixtures:
+                        home_norm = normalize_team_name(fixture.get("home", ""))
+                        away_norm = normalize_team_name(fixture.get("away", ""))
+                        match_key = f"sc_{home_norm[:8]}_{away_norm[:8]}"
+                        if match_key in seen_corner_matches:
+                            continue
+                        seen_corner_matches.add(match_key)
+
+                        # 🆕 Duplikat zwischen Runs prüfen!
+                        match_name = f"{fixture.get('home','')} vs {fixture.get('away','')}"
+                        if is_duplicate_tip(match_name, "scorer", target_date):
+                            log(f"   ⏭️ Scorer Duplikat: {match_name}")
+                            continue
+
+                        tips = analyze_scorer_tips(fixture, league, scorers)
+                        for tip in tips:
+                            scorer_tips.append(tip)
+                            scorer_count += 1
+                            log(f"   ⚽ Scorer: {tip['player']} ({tip['probability']}%)")
+            except Exception as e:
+                log(f"   Scorer Error: {e}", "WARN")
+
+    # Header + Tipps senden
+    if corners_tips and group_hz:
+        send_telegram(f"🔵 <b>CORNER SNIPER</b>\n<i>📅 {target_date}</i>", group_hz)
+        for tip in corners_tips:
+            _cmsg = format_corners_message(tip)
+            _cmid = send_telegram(_cmsg, group_hz)
+            mark_tip_sent(tip.get("match",""), "corners", target_date)
+            # Für Settlement speichern
+            try:
+                save_to_supabase({
+                    **tip,
+                    "tip_id": f"corners_{tip.get('match','?')}_{target_date}".replace(" ","_"),
+                    "date": str(target_date),
+                    "market": "corners",
+                    "status": "pending",
+                    "group_key": "corners",
+                    "pick_type": "corners",
+                    "telegram_chat_id": str(group_hz),
+                    "telegram_msg_id": _cmid,
+                    "message_text": _cmsg[:3500],
+                    "probability": tip.get("probability", 0),
+                    "confidence": tip.get("confidence", 3),
+                })
+            except Exception:
+                pass
+
+    if scorer_tips and group_late:
+        send_telegram(f"⚽ <b>SCORER TIPPS</b>\n<i>📅 {target_date}</i>", group_late)
+        for tip in scorer_tips:
+            send_telegram(format_scorer_message(tip), group_late)
+            mark_tip_sent(tip.get("match",""), "scorer", target_date)
+
+    log(f"🔵⚽ Fertig: {corners_count} Ecken Tips, {scorer_count} Scorer Tips")
+
 
 
 # ============================================================
@@ -21497,9 +20513,6 @@ class AdvancedPropsManager:
         """
         Hauptfunktion: Analysiert Advanced Props für alle Spiele einer Liga.
         """
-        # ⚡ FAST-MODE: FBref-Playwright-Scrape überspringen (Hauptzeitfresser!)
-        if _netrattler_fast_tips_enabled():
-            return []
         player_db = self.scrape_fbref_advanced_stats(league_name)
         if not player_db:
             return []
@@ -21573,7 +20586,7 @@ def _ntr_prop_category(text):
         return "btts_ht"
     if "both teams to receive a card" in low:
         return "team_cards"
-    if ("player" not in low) and (" to score?" in low or "team to score" in low):
+    if " to score?" in low or "team to score" in low:
         return "match_goals"
 
     # Team-/Matchmärkte zuerst, damit "receive a card" nicht als Player Booking endet.
@@ -21584,16 +20597,10 @@ def _ntr_prop_category(text):
     if "to qualify" in low or "qualify" in low:
         return "result"
 
-    if ("outside box" in low or "outside the box" in low or "from outside" in low) and (
-        "shot on target" in low or "shots on target" in low
-    ):
+    if "shots on target from outside" in low or "shot on target from outside" in low:
         return "sot_outside_box"
-    if ("outside box" in low or "outside the box" in low or "from outside" in low) and "shot" in low:
+    if "outside the box" in low and "shot" in low:
         return "shots_outside_box"
-    if ("total" in low or "match" in low or "team" in low) and ("shots on target" in low or "shot on target" in low):
-        return "match_sot"
-    if ("total" in low or "match" in low or "team" in low) and "shots" in low and "player" not in low:
-        return "team_shots"
     if "shots on target" in low or "shot on target" in low:
         return "sot"
     if "shot" in low:
@@ -21613,11 +20620,7 @@ def _ntr_prop_category(text):
         return "fouls_won"
     if "fouls committed" in low or "foul committed" in low or "foul" in low:
         return "fouls"
-    if (
-        "booked" in low or "receive a card" in low or "carded" in low
-        or "to be shown a card" in low or "to be carded" in low
-        or ("card" in low and "player" in low)
-    ):
+    if "booked" in low or "receive a card" in low or "carded" in low:
         return "yellow_cards"
     if "first goalscorer" in low or "first goal scorer" in low:
         return "first_scorer"
@@ -21716,41 +20719,8 @@ def _ntr_extract_player(description, selection=""):
 def _ntr_collect_prop(player, team, match_name, league, market, category=None,
                       line=None, odds=0, probability=0, source="unknown",
                       kickoff="", hit_rate=0, games=0):
-    if str(os.getenv("NETRATTLER_REAL_ODDS_ONLY", os.getenv("NETRATTLER_REQUIRE_REAL_ODDS", "true"))).lower() in {"1", "true", "yes", "on"}:
-        try:
-            if float(odds or 0) <= 1.0:
-                return
-        except (TypeError, ValueError):
-            return
     category = category or _ntr_prop_category(market)
     if category == "other" or not match_name or " vs " not in match_name:
-        return
-    # FIX18: Prop Builder is PLAYER-only. Pinnacle specials such as BTTS, team
-    # scoring, team cards and match totals can carry a selection-shaped label but
-    # are never player props. Blocking them here prevents false "120 real props".
-    if category in {"match_goals", "btts", "btts_ht", "team_cards", "result",
-                    "match_sot", "team_shots", "team_corners"}:
-        return
-    # Hard guard: sportsbook team-card/team-score selections occasionally arrive in
-    # a player-shaped payload (e.g. "AEK Athens — To Be Carded"). A player prop must
-    # not use either match team as the participant.
-    _candidate = normalize_team_name(str(player or ""))
-    _home_name, _away_name = (match_name.split(" vs ", 1) + [""])[:2]
-    _home_norm, _away_norm = normalize_team_name(_home_name), normalize_team_name(_away_name)
-    _generic = {"over", "under", "yes", "no", "home", "away", "draw", "team", "player"}
-    try:
-        from difflib import SequenceMatcher as _SeqMatcher
-        _team_like = any(
-            _SeqMatcher(None, _candidate, _tn).ratio() >= 0.78
-            for _tn in (_home_norm, _away_norm) if _tn
-        )
-    except Exception:
-        _team_like = False
-    if (not _candidate or _candidate in _generic or _team_like or
-        _candidate == _home_norm or _candidate == _away_norm or
-        (len(_candidate) >= 5 and (_candidate in _home_norm or _candidate in _away_norm)) or
-        (len(_home_norm) >= 4 and _home_norm in _candidate) or
-        (len(_away_norm) >= 4 and _away_norm in _candidate)):
         return
     row = {
         "player": str(player or market)[:100],
@@ -21811,101 +20781,6 @@ def run_advanced_props_bot(active_leagues: list, fixtures_cache: dict, target_da
         prefetch_sent_tips_for_date(target_date)
     except Exception:
         pass
-    if str(os.getenv("NETRATTLER_REAL_ODDS_ONLY", os.getenv("NETRATTLER_REQUIRE_REAL_ODDS", "true"))).lower() in {"1", "true", "yes", "on"}:
-        # FAST/REAL-ODDS path: nur echte Odds-API Player Props einsammeln.
-        # Die historischen FBref/StatsBomb/Understat/FPL-Kandidaten und die AI-Kombis
-        # darunter erzeugen keine beobachteten Quoten und werden deshalb übersprungen.
-        _added = 0
-        if ODDS_API_KEYS:
-            try:
-                for _c in get_odds_api_player_prop_candidates(fixtures_cache, target_date):
-                    _od = float(_c.get("odds", 0) or 0)
-                    if _od <= 1.0:
-                        continue
-                    _market = str(_c.get("market") or "")
-                    _cat = _ntr_prop_category(_market)
-                    if _cat == "other":
-                        _mtype = str(_c.get("mtype") or "")
-                        _cat = {
-                            "shots": "shots", "booking": "yellow_cards",
-                            "tackles": "tackles_committed",
-                        }.get(_mtype, "other")
-                    if _cat == "other":
-                        continue
-                    _ntr_collect_prop(
-                        _c.get("player", ""), _c.get("team", ""), _c.get("match", ""),
-                        _c.get("league", ""), _market, category=_cat,
-                        line=_ntr_market_line(_market, 0.5), odds=_od, probability=0,
-                        source=str(_c.get("_source") or "odds_api"),
-                        kickoff=_c.get("kickoff", ""), games=0,
-                    )
-                    _added += 1
-            except Exception as _oe:
-                log(f"🔑 OddsAPI REAL Props Error: {str(_oe)[:80]}", "WARN")
-        _bet365_added = 0
-        if SUPABASE_URL and SUPABASE_KEY:
-            try:
-                _headers = {"apikey": SUPABASE_KEY, "Authorization": f"Bearer {SUPABASE_KEY}"}
-                _params = {
-                    "select": "source,event_name,home_team,away_team,start_time,market_key,market_name,player_name,selection,line,odds,observed_at",
-                    "source": "eq.bet365_public",
-                    "order": "observed_at.desc",
-                    "limit": "500",
-                }
-                _r = requests.get(
-                    f"{SUPABASE_URL.rstrip('/')}/rest/v1/player_prop_db",
-                    headers=_headers, params=_params, timeout=10,
-                )
-                if _r.ok:
-                    for _bp in (_r.json() or []):
-                        try:
-                            _od = float(_bp.get("odds", 0) or 0)
-                        except (TypeError, ValueError):
-                            continue
-                        if _od <= 1.0:
-                            continue
-                        _h = str(_bp.get("home_team") or "").strip()
-                        _a = str(_bp.get("away_team") or "").strip()
-                        _match = f"{_h} vs {_a}" if _h and _a else str(_bp.get("event_name") or "").strip()
-                        if " vs " not in _match:
-                            _match = re.sub(r"\s+v\s+", " vs ", _match, flags=re.I)
-                        if " vs " not in _match:
-                            continue
-                        _market = str(_bp.get("market_name") or _bp.get("market_key") or "")
-                        _cat = {
-                            "shots_on_target": "sot", "shots": "shots",
-                            "tackles": "tackles_committed", "fouls_committed": "fouls",
-                            "fouled": "fouls_won", "assists": "assist",
-                            "goal_or_assist": "score", "goals": "score", "cards": "yellow_cards",
-                            "goalkeeper_saves": "saves", "headed_sot": "sot",
-                            "outside_box_sot": "sot_outside_box",
-                        }.get(str(_bp.get("market_key") or ""), _ntr_prop_category(_market))
-                        if _cat == "other":
-                            continue
-                        _line = _bp.get("line")
-                        try:
-                            _line = float(_line) if _line is not None else _ntr_market_line(_market, 0.5)
-                        except (TypeError, ValueError):
-                            _line = _ntr_market_line(_market, 0.5)
-                        _ntr_collect_prop(
-                            _bp.get("player_name", ""), "", _match, "", _market,
-                            category=_cat, line=_line, odds=_od, probability=0,
-                            source="bet365_public", kickoff=_bp.get("start_time", ""), games=0,
-                        )
-                        _bet365_added += 1
-                else:
-                    if _r.status_code == 404 and "PGRST205" in _r.text:
-                        log("🔑 Bet365 Supabase Cache: optionale Tabelle player_prop_db fehlt — Live-Quellen bleiben aktiv", "INFO")
-                    else:
-                        log(f"🔑 Bet365 Supabase Props HTTP {_r.status_code}: {_r.text[:100]}", "WARN")
-            except Exception as _be:
-                log(f"🔑 Bet365 Supabase Props Error: {str(_be)[:80]}", "WARN")
-        log(
-            f"🔑 Legacy Prop Builder übersprungen: REAL_ODDS_ONLY aktiv · "
-            f"OddsAPI echte Props={_added} · Bet365 gespeicherte Props={_bet365_added}."
-        )
-        return
-
     log("🔑 Prop Builder Bot startet...")
 
     manager = _advanced_props_manager
@@ -21979,8 +20854,6 @@ def run_advanced_props_bot(active_leagues: list, fixtures_cache: dict, target_da
         )
 
     for league in active_leagues:
-        if _budget_exceeded():
-            break
         fixtures = fixtures_cache.get(league, [])
         if not fixtures:
             continue
@@ -21993,7 +20866,7 @@ def run_advanced_props_bot(active_leagues: list, fixtures_cache: dict, target_da
             kickoff   = fixture.get("time_local", "TBD")
 
             # ── Quelle 1: FBref (alle Ligen versuchen) ──
-            if not _netrattler_fast_tips_enabled():  # Stable core keeps independent FBref fallback available
+            if True:  # Immer versuchen
                 player_db = manager.scrape_fbref_advanced_stats(league)
                 if player_db:
                     lineup  = get_sofascore_lineups(match_id, home, away) if match_id else None
@@ -22171,7 +21044,7 @@ def run_advanced_props_bot(active_leagues: list, fixtures_cache: dict, target_da
             _wanted_stats = ",".join(sorted(set(_aliases.keys())))
             _rows = []
             _page_size = 1000
-            _max_rows = int(os.environ.get("PROP_STATS_MAX_ROWS", "500"))
+            _max_rows = int(os.environ.get("PROP_STATS_MAX_ROWS", "12000"))
             _offset = 0
 
             while _offset < _max_rows:
@@ -22366,25 +21239,26 @@ def run_advanced_props_bot(active_leagues: list, fixtures_cache: dict, target_da
                 try:
                     match_name = f"{home} vs {away}"
                     kickoff = fix.get("time","TBD")
-                    props = get_player_props_for_match(home, away, league)
-                    for p in (props or [])[:12]:
+                    props = get_player_props_for_match(home, away, league, "player_props")
+                    for p in (props or [])[:8]:
                         nm = p.get("player","")
                         tm = p.get("team","")
                         if not nm:
                             continue
-                        mtype = str(p.get("market_type","")).lower()
-                        val = float(p.get("stat_value") or 0)
-                        if mtype in ("sot", "shots") and val >= 1.5:
+                        sot = float(p.get("sot_per90") or p.get("shots_per90") or 0)
+                        fl  = float(p.get("fouls_per90") or 0)
+                        yc  = float(p.get("yellow_cards_per90") or 0)
+                        if sot >= 1.5:
                             _add(shot_candidates, nm, tm, match_name, league, kickoff,
-                                 "2+ Shots on Target", val, "shots")
-                        elif mtype in ("fouls", "fouls_committed") and val >= 1.5:
+                                 "2+ Shots on Target", sot, "shots")
+                        if fl >= 1.5:
                             _add(foul_candidates, nm, tm, match_name, league, kickoff,
-                                 "2+ Fouls", val, "foul")
-                        elif mtype in ("cards", "yellow_cards", "card") and val >= 0.20:
+                                 "2+ Fouls", fl, "foul")
+                        if yc >= 0.20:
                             _add(booking_candidates, nm, tm, match_name, league, kickoff,
-                                 "Player to be Booked", val, "booking")
-                except Exception as _ppe:
-                    log(f"   ⚠️ StatsBomb-Prop-Fallback: {str(_ppe)[:60]}", "WARN")
+                                 "Player to be Booked", yc, "booking")
+                except Exception:
+                    pass
 
         total = len(foul_candidates) + len(booking_candidates) + len(shot_candidates)
         log(f"🔑 Kandidaten nach FBref: {len(foul_candidates)} Fouls · {len(booking_candidates)} Bookings · {len(shot_candidates)} Shots")
@@ -22854,7 +21728,7 @@ def _cache_set(cache: dict, key: str, data):
 
 # Shared Constants
 SUPABASE_URL = _env("SUPABASE_URL")
-SUPABASE_KEY = _env("SUPABASE_SERVICE_ROLE_KEY") or _env("SUPABASE_KEY")
+SUPABASE_KEY = _env("SUPABASE_KEY")
 ODDS_API_KEYS = [k.strip() for k in _env("ODDS_API_KEYS").split(",") if k.strip()]
 TELEGRAM_TOKEN = _env("TELEGRAM_TOKEN")
 TELEGRAM_CHAT_ID = _env("TELEGRAM_CHAT_ID")
@@ -22932,16 +21806,10 @@ _PIN_ODDS_CACHE = {}
 
 
 def _pin_american_to_decimal(a) -> float:
-    """Pinnacle/Arcadia price -> decimal odds; accepts American or decimal input."""
+    """American Odds → Dezimalquote."""
     try:
         a = float(a)
-        if 1.01 <= a <= 25.0:
-            return round(a, 2)
-        if a >= 100.0:
-            return round(1.0 + a / 100.0, 2)
-        if a <= -100.0:
-            return round(1.0 + 100.0 / abs(a), 2)
-        return 0.0
+        return round(1 + (a / 100.0 if a > 0 else 100.0 / abs(a)), 2)
     except Exception:
         return 0.0
 
@@ -23040,10 +21908,10 @@ def enrich_pinnacle_tip(tip_dict, home, away, league_name, season=2025):
     return tip_dict
 
 
-def _pinnacle_get_json(url, params, timeout=20, allow_playwright=True):
+def _pinnacle_get_json(url, params):
     """GET mit JSON-Parse. Fällt auf Playwright zurück falls requests leer/blockiert ist."""
     try:
-        r = requests.get(url, headers=PINNACLE_HEADERS, params=params, timeout=timeout)
+        r = requests.get(url, headers=PINNACLE_HEADERS, params=params, timeout=20)
         if r.ok:
             try:
                 data = r.json()
@@ -23055,26 +21923,8 @@ def _pinnacle_get_json(url, params, timeout=20, allow_playwright=True):
     except Exception as e:
         status = f"EXC:{str(e)[:40]}"
 
-    # Leichter TLS/Browser-Fingerprint-Fallback gegen Arcadia 403.
-    # curl_cffi ist im GitHub-Workflow bereits installiert und deutlich günstiger
-    # als Chromium/Playwright.
-    try:
-        from curl_cffi import requests as _cffi_requests
-        _cr = _cffi_requests.get(
-            url, headers=PINNACLE_HEADERS, params=params, timeout=timeout, impersonate="chrome"
-        )
-        if getattr(_cr, "ok", False):
-            try:
-                data = _cr.json()
-                if data:
-                    return data, "curl_cffi_ok"
-            except Exception:
-                pass
-    except Exception:
-        pass
-
-    # Letzter Fallback: Playwright, falls lokal/Workflow vorhanden.
-    if allow_playwright and PLAYWRIGHT_AVAILABLE:
+    # Fallback: Playwright (umgeht Cloudflare/Bot-Block)
+    if PLAYWRIGHT_AVAILABLE:
         try:
             from urllib.parse import urlencode
             full_url = f"{url}?{urlencode(params)}"
@@ -23096,168 +21946,17 @@ def _pinnacle_get_json(url, params, timeout=20, allow_playwright=True):
     return None, status
 
 
-def _pinnacle_special_price_for_part(market_rows, participant):
-    """Resolve a participant price from observed Arcadia market rows without inventing odds."""
-    pid = participant.get("id")
-    pname = str(participant.get("name") or "").strip().lower()
-    palign = str(participant.get("alignment") or participant.get("designation") or "").strip().lower()
-    for row in market_rows or []:
-        for pr in row.get("prices", []) or []:
-            if pid is not None and pr.get("participantId") == pid:
-                return pr
-    # Some linked-market responses omit participantId but expose designation/name.
-    for row in market_rows or []:
-        prs=row.get("prices", []) or []
-        for pr in prs:
-            txt=" ".join(str(pr.get(k) or "") for k in ("designation","name","label","participantName")).lower()
-            if pname and txt and (pname == txt or pname in txt or txt in pname):
-                return pr
-            if palign and txt and palign in txt:
-                return pr
-        parts=row.get("participants") or []
-        if len(parts)==len(prs) and participant in parts:
-            try: return prs[parts.index(participant)]
-            except Exception: pass
-    return None
-
-
-def _pinnacle_linked_special_markets(matchups):
-    """Time-bounded per-parent fallback when global withSpecials is blocked (403)."""
-    import time as _time
-    now=datetime.now(timezone.utc)
-    horizon=now+timedelta(hours=float(env("NETRATTLER_PIN_SPECIAL_HORIZON_HOURS","36")))
-    parents={}
-    for m in matchups or []:
-        if m.get("type") == "special":
-            parent=m.get("parent") or {}
-            mid=parent.get("id") or m.get("parentId")
-            starts=parent.get("startTime") or m.get("startTime")
-        else:
-            mid=m.get("id"); starts=m.get("startTime")
-        if not mid: continue
-        dt=None
-        if starts:
-            try: dt=datetime.fromisoformat(str(starts).replace("Z","+00:00"))
-            except Exception: pass
-        # Prefer current/upcoming parents; keep undated rows only as last resort.
-        if dt and (dt < now-timedelta(hours=2) or dt > horizon):
-            continue
-        if mid not in parents or (dt and parents[mid] is None):
-            parents[mid]=dt
-    ordered=sorted(parents.items(), key=lambda kv: kv[1] or horizon+timedelta(days=1))
-    cap=max(10,int(env("NETRATTLER_PIN_SPECIAL_MATCH_CAP","90")))
-    budget=max(8,float(env("NETRATTLER_PIN_SPECIAL_BUDGET_SEC","30")))
-    per_timeout=max(2,float(env("NETRATTLER_PIN_SPECIAL_TIMEOUT","3.5")))
-    out=[]; ok=0; fails=0; started=_time.monotonic()
-    attempted=0
-    for mid,_dt in ordered[:cap]:
-        if _time.monotonic()-started > budget or fails >= 4:
-            break
-        attempted += 1
-        data,status=_pinnacle_get_json(
-            f"{PINNACLE_BASE}/matchups/{mid}/markets/related/straight",
-            {"brandId":"0"}, timeout=per_timeout, allow_playwright=False,
-        )
-        if isinstance(data,list) and data:
-            out.extend(data); ok+=1; fails=0
-        else:
-            fails += 1
-    elapsed=_time.monotonic()-started
-    log(f"   🔑 Pinnacle Props Fallback: {ok}/{attempted} Parent-Matches · {len(out)} linked market rows · {elapsed:.1f}s")
-    return out
-
-
-def _pinnacle_related_special_matchups(parent_matchups):
-    """Recover specials when Pinnacle blocks the global withSpecials payload.
-
-    Uses the already-working normal matchup feed and asks only a bounded set of
-    high-value/upcoming parent matches for their related markets. This avoids
-    making the entire BTTS/BTTS-HT/Player-Prop pipeline depend on one global
-    endpoint that intermittently returns 403 on GitHub runners.
-    """
-    import time as _time
-    cached = getattr(_pinnacle_related_special_matchups, "_run_cache", None)
-    if isinstance(cached, list):
-        return cached
-    major_tokens = (
-        "champions league", "europa league", "conference league", "premier league",
-        "la liga", "serie a", "bundesliga", "ligue 1", "eredivisie", "mls",
-        "primeira liga", "uefa", "world cup", "copa libertadores", "sudamericana"
-    )
-    rows = []
-    now = datetime.now(timezone.utc)
-    horizon = now + timedelta(hours=float(env("NETRATTLER_PIN_SPECIAL_HORIZON_HOURS", "36")))
-    for m in parent_matchups or []:
-        mid = m.get("match_id") or m.get("id")
-        if not mid:
-            continue
-        starts = m.get("starts") or m.get("startTime") or ""
-        dt = None
-        if starts:
-            try:
-                dt = datetime.fromisoformat(str(starts).replace("Z", "+00:00"))
-            except Exception:
-                pass
-        if dt and (dt < now - timedelta(hours=2) or dt > horizon):
-            continue
-        league = str(m.get("league_name") or (m.get("league") or {}).get("name", "")).lower()
-        home = str(m.get("home") or "").lower()
-        away = str(m.get("away") or "").lower()
-        major = sum(1 for tok in major_tokens if tok in f"{league} {home} {away}")
-        rows.append((major, dt or horizon + timedelta(days=1), int(mid)))
-    rows.sort(key=lambda x: (-x[0], x[1]))
-    cap = max(8, int(env("NETRATTLER_PIN_RELATED_SPECIAL_CAP", "36")))
-    budget = max(8.0, float(env("NETRATTLER_PIN_RELATED_SPECIAL_BUDGET_SEC", "25")))
-    timeout = max(2.0, float(env("NETRATTLER_PIN_RELATED_SPECIAL_TIMEOUT", "3.0")))
-    out = []; attempted = 0; ok = 0; started = _time.monotonic()
-    for _major, _dt, mid in rows[:cap]:
-        if _time.monotonic() - started > budget:
-            break
-        attempted += 1
-        data, _status = _pinnacle_get_json(
-            f"{PINNACLE_BASE}/matchups/{mid}/related",
-            {"brandId": "0"}, timeout=timeout, allow_playwright=False,
-        )
-        if not isinstance(data, list):
-            continue
-        specials = [x for x in data if isinstance(x, dict) and x.get("type") == "special"]
-        if specials:
-            out.extend(specials); ok += 1
-    # de-duplicate by special matchup id
-    dedup = {}; noid = []
-    for row in out:
-        rid = row.get("id")
-        if rid is None: noid.append(row)
-        else: dedup[str(rid)] = row
-    out = list(dedup.values()) + noid
-    log(f"   🔑 Pinnacle Related-Special Fallback: {ok}/{attempted} Parents · {len(out)} Specials · {_time.monotonic()-started:.1f}s")
-    _pinnacle_related_special_matchups._run_cache = out
-    return out
-
-
 def fetch_pinnacle_player_props() -> List[Dict]:
-    """Player/Team Specials von Pinnacle (echte Quoten), pro Lauf gecacht."""
-    _cache = getattr(fetch_pinnacle_player_props, "_run_cache", None)
-    if isinstance(_cache, list):
-        return _cache
+    """Player Props Specials von Pinnacle (echte Quoten)."""
     try:
         data, status = _pinnacle_get_json(
             f"{PINNACLE_BASE}/sports/{PINNACLE_SPORT_SOCCER}/matchups",
             {"withSpecials": "true", "brandId": "0"},
         )
         if not data:
-            log(f"   🔑 Pinnacle Props: globale Specials fehlgeschlagen ({status}) — related fallback", "WARN")
-            try:
-                _parents = _PINNACLE_MATCHUPS or fetch_pinnacle_matchups()
-                data = _pinnacle_related_special_matchups(_parents)
-            except Exception as _rse:
-                log(f"   🔑 Pinnacle Related-Special Fallback Fehler: {str(_rse)[:80]}", "WARN")
-                data = []
-            if not data:
-                log("   🔑 Pinnacle Props: keine Specials nach Fallback — Extra-Quellen laufen weiter", "WARN")
-                fetch_pinnacle_player_props._run_cache = []
-                return []
-        log(f"   🔑 Pinnacle Props: {len(data)} Einträge total (inkl. normale/related Specials)")
+            log(f"   🔑 Pinnacle Props: matchups fehlgeschlagen ({status})", "WARN")
+            return []
+        log(f"   🔑 Pinnacle Props: {len(data)} Einträge total (inkl. normale Matches)")
 
         # Specials zählen nach Typ/Kategorie für Diagnose
         special_count = sum(1 for m in data if m.get("type") == "special")
@@ -23278,20 +21977,16 @@ def fetch_pinnacle_player_props() -> List[Dict]:
             {"primaryOnly": "false", "withSpecials": "true"},
         )
         prices_by_matchup = {}
-        market_rows_by_matchup = {}
-        if not r2_data:
-            log(f"   🔑 Pinnacle Props: markets/straight fehlgeschlagen ({status2}) — linked fallback", "WARN")
-            r2_data = _pinnacle_linked_special_markets(data)
         if r2_data:
             log(f"   🔑 Pinnacle Props: {len(r2_data)} Markt-Einträge für Quoten")
             for mk in r2_data:
                 mid = mk.get("matchupId")
-                if mid:
-                    market_rows_by_matchup.setdefault(mid, []).append(mk)
-                for p in mk.get("prices", []) or []:
+                for p in mk.get("prices", []):
                     pid = p.get("participantId")
                     if mid and pid:
-                        prices_by_matchup[(mid, pid)] = p
+                        prices_by_matchup[(mid, pid)] = p.get("price")
+        else:
+            log(f"   🔑 Pinnacle Props: markets/straight fehlgeschlagen ({status2})", "WARN")
 
         props = []
         skipped_no_price = 0
@@ -23313,14 +22008,11 @@ def fetch_pinnacle_player_props() -> List[Dict]:
                 "player to score", "to assist", "to be booked", "shots",
                 "shot on target", "fouls committed", "fouls won", "tackles",
                 "saves", "offsides", "passes", "interceptions", "clearances",
-                "player cards", "to be fouled", "to be carded", "to be shown a card",
-                "headed shot", "outside box", "goalkeeper saves", "player headed",
             ]
             team_builder_keywords = [
                 "either team to score", "both teams to score", "team to score",
                 " to score?", "both teams to receive a card", "to qualify",
                 "to reach the final", "1st half goals", "2nd half goals",
-                "corners", "corner kicks",
             ]
             is_player_category = "player" in cat
             is_team_category = "team" in cat or "reach the final" in cat
@@ -23335,18 +22027,10 @@ def fetch_pinnacle_player_props() -> List[Dict]:
             league_name = (m.get("league") or {}).get("name", "")
             starts = m.get("startTime", "") or parent.get("startTime", "")
             for part in m.get("participants", []):
-                _price_row = prices_by_matchup.get((m.get("id"), part.get("id")))
-                if _price_row is None:
-                    _price_row = _pinnacle_special_price_for_part(market_rows_by_matchup.get(m.get("id"), []), part)
-                if _price_row is None:
+                price = prices_by_matchup.get((m.get("id"), part.get("id")))
+                if price is None:
                     skipped_no_price += 1
                     continue
-                if isinstance(_price_row, dict):
-                    price = _price_row.get("price")
-                    _line = _price_row.get("points")
-                else:
-                    price = _price_row
-                    _line = None
                 dec = _pin_american_to_decimal(price)
                 if dec <= 1.0:
                     continue
@@ -23359,18 +22043,14 @@ def fetch_pinnacle_player_props() -> List[Dict]:
                     "league": league_name,
                     "starts": starts,
                     "special_category": cat,
-                    "line": _line,
-                    "designation": (part.get("name", "") or ""),
                     "is_team_market": bool(is_team_category or is_team_builder_description),
                 })
         if skipped_no_price:
             log(f"   🔑 Pinnacle Props: {skipped_no_price} Props ohne Preis übersprungen")
-        _log("PINNACLE", f"🔑 {len(props)} Player-/Special-Quoten geladen")
-        fetch_pinnacle_player_props._run_cache = props
+        _log("PINNACLE", f"🔑 {len(props)} Player-Prop-Quoten geladen")
         return props
     except Exception as e:
         _log("PINNACLE", f"Props Fehler: {str(e)[:80]}", "WARN")
-        fetch_pinnacle_player_props._run_cache = []
         return []
 
 
@@ -23456,8 +22136,6 @@ def _fbref_prop_edge_check(player_name, league_name, prop_name, pinnacle_prob):
     da FBref echte Spielerleistung misst, der Markt aber Verletzungen/Tagesform einpreist.
     """
     try:
-        if _netrattler_fast_tips_enabled():
-            return pinnacle_prob, False, False
         stats = _advanced_props_manager.scrape_fbref_advanced_stats(league_name)
     except Exception:
         stats = {}
@@ -23658,7 +22336,7 @@ def _ntr_builder_leg_line(leg, icons, indent=""):
         return f"{indent}{icon} <b>{player}</b> — {label}{fbref}{either}"
     return f"{indent}{icon} {label}{fbref}{either}"
 
-def run_pinnacle_props_bot(win_start_utc=None, win_end_utc=None, ch_tz=None, top_btts_tips=None, fixtures_cache=None, team_candidate_tips=None) -> int:
+def run_pinnacle_props_bot(win_start_utc=None, win_end_utc=None, ch_tz=None, top_btts_tips=None, fixtures_cache=None) -> int:
     """
     Pinnacle Player Props Bot.
     top_btts_tips: Beste BTTS-Tipps aus Hauptanalyse (als zusätzliche Bet-Builder-Legs).
@@ -23666,11 +22344,10 @@ def run_pinnacle_props_bot(win_start_utc=None, win_end_utc=None, ch_tz=None, top
     """Bet Builder Style: Pro Spiel 2-4 Legs kombiniert → Prop Hunter Kanal.
     Quellen: Pinnacle (echte Quoten) + FBref (unabhängige Stats) für Cross-Validation."""
     from datetime import datetime as _dt2
-    run_pinnacle_props_bot._last_scorer_sent = 0
     props = fetch_pinnacle_player_props()
     if not props:
-        log("🔑 Pinnacle Props: keine Specials verfügbar — Extra-Quellen laufen weiter", "WARN")
-        props = []
+        log("🔑 Pinnacle Props: keine Specials verfügbar")
+        return 0
 
     # Diagnose der tatsächlich angebotenen Special-Märkte.
     _raw_category_counts = {}
@@ -23820,7 +22497,8 @@ def run_pinnacle_props_bot(win_start_utc=None, win_end_utc=None, ch_tz=None, top
         )
 
     if not valid:
-        log("🔑 Pinnacle Props: keine Pinnacle-Props im Zeitfenster — Extra-Quellen laufen weiter")
+        log("🔑 Pinnacle Props: keine Props im Zeitfenster")
+        return 0
 
     # 🌍 WM-Diagnose: wie viele valide Props/Matches sind World Cup?
     _wc_props = [p for p in valid if "world cup" in p.get("league", "").lower() or "fifa" in p.get("league", "").lower()]
@@ -23837,10 +22515,8 @@ def run_pinnacle_props_bot(win_start_utc=None, win_end_utc=None, ch_tz=None, top
         mn = p.get("match", "?")
         by_match.setdefault(mn, []).append(p)
 
-    # 🏆 Matchwinner-Leg nur für den optionalen Legacy-Builder. Im normalen V31/V34
-    # Player-only Modus wären diese Netzwerk-Calls reine Laufzeitverschwendung.
-    _legacy_pin_builder = str(env("ENABLE_LEGACY_PINNACLE_BUILDER", "false")).lower() in ["1", "true", "yes", "on"]
-    for match_name in (list(by_match.keys()) if _legacy_pin_builder else []):
+    # 🏆 Matchwinner-Leg: echte Pinnacle 1X2-Quote pro Spiel als zusätzliche Leg-Option
+    for match_name in list(by_match.keys()):
         try:
             parts = match_name.split(" vs ")
             if len(parts) != 2:
@@ -24047,41 +22723,8 @@ def run_pinnacle_props_bot(win_start_utc=None, win_end_utc=None, ch_tz=None, top
     if _sofa_event_ids:
         _value_chat = TELEGRAM_GROUPS.get("advanced_props") or TELEGRAM_GROUPS.get("props")
         _value_sent = 0
-        _sofa_pool_added = 0
-        for match_key, ev_id in list(_sofa_event_ids.items())[:12]:
+        for match_key, ev_id in list(_sofa_event_ids.items())[:5]:
             sofa_props = get_sofascore_player_props(ev_id)
-            # 🆕 bet365-Player-Props (SofaScore Provider 1) in den Builder-Pool speisen.
-            # Das ist die fehlende Verbindung: bisher wurden diese Props nur fuer
-            # Value-Alerts genutzt, nie fuer echte Same-Game-Builder.
-            try:
-                _sofa_match = match_key.replace("_vs_", " vs ")
-                for _sp in sofa_props:
-                    _grp = str(_sp.get("market_group", ""))
-                    _lnraw = str(_sp.get("line", ""))
-                    _ll = _lnraw.lower()
-                    if "under" in _ll or _ll.strip() in {"no", "-"}:
-                        continue  # nur Over/Yes-Seite als Builder-Leg
-                    _pl = str(_sp.get("player_name", "")).strip()
-                    try:
-                        _od = float(_sp.get("odds", 0) or 0)
-                    except (TypeError, ValueError):
-                        continue
-                    if not _pl or _od <= 1.20:
-                        continue
-                    _cat = _ntr_prop_category(_grp)
-                    if _cat == "other":
-                        continue
-                    _mm = re.search(r"(\d+(?:\.\d+)?)", _lnraw)
-                    _line = float(_mm.group(1)) if _mm else 0.5
-                    _ntr_collect_prop(
-                        _pl, "", _sofa_match, "", _grp,
-                        category=_cat, line=_line, odds=_od,
-                        probability=0.0,  # kein Fake-Modell aus Bookmaker-Quote; ML/History setzt echte Wahrscheinlichkeit
-                        source="bet365_sofascore", games=0,
-                    )
-                    _sofa_pool_added += 1
-            except Exception as _sfe:
-                log(f"   💰 SofaScore->Builder-Pool Fehler: {str(_sfe)[:60]}", "WARN")
             for prop in sofa_props[:30]:
                 player = prop.get("player_name", "")
                 supabase_stats = get_supabase_player_avg_stats(player)
@@ -24107,442 +22750,6 @@ def run_pinnacle_props_bot(win_start_utc=None, win_end_utc=None, ch_tz=None, top
                     send_telegram(_msg, chat_id=_value_chat)
                     _value_sent += 1
                     log(f"   🎯 Value Alert: {player} {value_info['market']} +{value_info['edge_pct']}%")
-        if _sofa_pool_added:
-            log(f"   💰 bet365/SofaScore: {_sofa_pool_added} Player-Props in Builder-Pool eingespeist")
-
-    # 🆕 EXTRA-QUELLEN-KETTE: Kambi (Unibet/Betsson) + 1xbet-Familie.
-    # Fehlertolerant: jede Quelle in try/except, Ausfall stoppt nichts.
-    try:
-        from netrattler_prop_sources import collect_extra_player_props
-        _extra_fixtures = []
-        _seen_fx = set()
-        for league, fixtures in (fixtures_cache or {}).items():
-            for fix in (fixtures or []):
-                _h = str(fix.get("home", "")).strip()
-                _a = str(fix.get("away", "")).strip()
-                _k = f"{_h}|{_a}"
-                if _h and _a and _k not in _seen_fx:
-                    _seen_fx.add(_k)
-                    _extra_fixtures.append({"home": _h, "away": _a, "league": str(league or "")})
-        if _extra_fixtures:
-            # Kambi list feeds are cached once; spend the small offer budget on fixtures
-            # most likely to have player markets instead of the first 10 arbitrary games.
-            _major_tokens = ("champions league", "europa league", "premier league", "la liga", "serie a",
-                             "bundesliga", "ligue 1", "eredivisie", "mls", "uefa", "world cup",
-                             "cup", "super", "international")
-            # Candidate-first enrichment: matches that already produced the strongest team-model
-            # candidates are queried for player props first. This prevents a PSG/UCL type match
-            # from being missed merely because it was not among the first arbitrary fixtures.
-            _team_candidate_score = {}
-            try:
-                for _tr in (team_candidate_tips or top_btts_tips or []):
-                    if not isinstance(_tr, dict):
-                        continue
-                    _mn = str(_tr.get("match") or "").strip().lower()
-                    if not _mn:
-                        continue
-                    _p = float(_tr.get("probability", 0) or 0)
-                    _team_candidate_score[_mn] = max(_team_candidate_score.get(_mn, 0.0), _p)
-            except Exception:
-                pass
-            def _fx_score(_fx):
-                _home = str(_fx.get("home", "")).strip()
-                _away = str(_fx.get("away", "")).strip()
-                _match = f"{_home} vs {_away}".lower()
-                _league = str(_fx.get("league", "")).lower()
-                _txt = f"{_league} {_match}"
-                _major = sum(1 for _t in _major_tokens if _t in _txt)
-                _cand = _team_candidate_score.get(_match, 0.0)
-                # FIX28: player-prop coverage first, model score second.
-                # Kambi/1xbet offer deep markets much more often for major competitions.
-                # Previously a 67% minor-league team tip outranked PSG/UCL and exhausted
-                # the fixture cap before any SOT/tackle/foul markets were queried.
-                return (1 if _major else 0, _major, _cand)
-            _extra_fixtures = sorted(_extra_fixtures, key=_fx_score, reverse=True)
-            _extra_added = 0
-            for _xp in collect_extra_player_props(_extra_fixtures, log=log, max_matches=int(env("NETRATTLER_EXTRA_PROP_MAX_MATCHES", "60"))):
-                _cat = _xp.get("category") or _ntr_prop_category(_xp.get("market", ""))
-                if _cat == "other":
-                    continue
-                try:
-                    _od = float(_xp.get("odds", 0) or 0)
-                except (TypeError, ValueError):
-                    continue
-                if _od <= 1.20 or not _xp.get("player"):
-                    continue
-                _ntr_collect_prop(
-                    _xp.get("player", ""), _xp.get("team", ""), _xp.get("match", ""),
-                    _xp.get("league", ""), _xp.get("market", ""),
-                    category=_cat, line=float(_xp.get("line", 0.5) or 0.5), odds=_od,
-                    probability=0.0,  # kein Fake-Modell aus Bookmaker-Quote; ML/History setzt echte Wahrscheinlichkeit
-                    source=_xp.get("source", "extra"), games=0,
-                )
-                _extra_added += 1
-            if _extra_added:
-                log(f"   🔌 Extra-Quellen (Kambi/1xbet): {_extra_added} Player-Props in Builder-Pool eingespeist")
-    except Exception as _xse:
-        log(f"   🔌 Extra-Quellen-Kette übersprungen: {str(_xse)[:80]}", "WARN")
-
-    # 🎭 TEAM-ZUORDNUNG: jedem Leg sein Team zuweisen (via Lineups) — Basis fuer
-    # das Favorit-vs-Aussenseiter-Rollen-System im Builder. Legs ohne Team-Info
-    # (v.a. Kambi) bekommen es hier; SofaScore-Legs tragen es schon.
-    try:
-        _matches = {}
-        for _row in _NTR_BUILDER_PROP_POOL:
-            if _row.get("team"):
-                continue
-            _m = _row.get("match", "")
-            if " vs " in _m:
-                _matches.setdefault(_m, True)
-        _team_map = {}   # (match, player_norm) -> team
-        _lu_cap = int(os.getenv("NETRATTLER_LINEUP_MAX", "16"))
-        for _i, _m in enumerate(list(_matches.keys())[:_lu_cap]):
-            _h, _a = [s.strip() for s in _m.split(" vs ", 1)]
-            try:
-                _lu = get_sportdb_lineups(_h, _a, str(target_date))
-            except Exception:
-                _lu = None
-            if not _lu:
-                continue
-            for _pl in (_lu.get("home_lineup") or []):
-                _team_map[(_m, _normalize_name(_pl))] = _h
-            for _pl in (_lu.get("away_lineup") or []):
-                _team_map[(_m, _normalize_name(_pl))] = _a
-        _tagged = 0
-        if _team_map:
-            for _row in _NTR_BUILDER_PROP_POOL:
-                if _row.get("team"):
-                    continue
-                _t = _team_map.get((_row.get("match", ""), _normalize_name(_row.get("player", ""))))
-                if _t:
-                    _row["team"] = _t
-                    _tagged += 1
-            if _tagged:
-                log(f"   🎭 Team-Zuordnung: {_tagged} Legs via Lineups (Favorit/Außenseiter-Rollen aktiv)")
-    except Exception as _te:
-        log(f"   🎭 Team-Zuordnung übersprungen: {str(_te)[:70]}", "WARN")
-
-    # 🧠 PLAYER-PROP XGBOOST: echte Modell-Wahrscheinlichkeit statt implied-odds.
-    # Damit bekommt der Builder eine ECHTE Edge (Modell vs. Buchmacher).
-    try:
-        import netrattler_ml_player as _mlp
-        try:
-            import netrattler_stat_sources as _sbs
-        except Exception:
-            _sbs = None
-        _pm = _mlp.load_player_models(SUPABASE_URL, SUPABASE_KEY)
-        if _pm:
-            _ml_prob_set = 0
-            _history_prob_set = 0
-            _history_prob_by_cat = {}
-            _sb_lookups = 0
-            _SB_LOOKUP_CAP = 0 if _netrattler_fast_tips_enabled() else int(os.getenv("NETRATTLER_STATBUNKER_MAX_LOOKUPS", "4"))
-            _target_players = [
-                r.get("player", "") for r in _NTR_BUILDER_PROP_POOL
-                if isinstance(r, dict)
-                and float(r.get("odds", 0) or 0) > 1.0
-                and str(r.get("category") or "") in _REAL_PLAYER_BUILDER_CATS
-            ]
-            if _netrattler_fast_tips_enabled():
-                _cap = int(env("NETRATTLER_FAST_PLAYER_ML_CAP", "96"))
-                _seen_tp, _capped_tp = set(), []
-                for _p in _target_players:
-                    _np = _normalize_name(_p)
-                    if _np and _np not in _seen_tp:
-                        _seen_tp.add(_np); _capped_tp.append(_p)
-                    if len(_capped_tp) >= _cap:
-                        break
-                _target_players = _capped_tp
-            _prefetched = _prefetch_supabase_player_avg_stats(_target_players)
-            if _target_players:
-                log(f"   🗄️ Supabase Player-Stats targeted: {_prefetched}/{len(set(p for p in _target_players if p))} Spieler vorgeladen")
-            for _row in _NTR_BUILDER_PROP_POOL:
-                _cat = _row.get("category", "")
-                if _mlp.model_for(_cat, _row.get("line", 0.5)) is None:
-                    continue
-                _player = _row.get("player", "")
-                if not _player:
-                    continue
-                if _netrattler_fast_tips_enabled() and _target_players and _normalize_name(_player) not in {_normalize_name(x) for x in _target_players}:
-                    continue
-                try:
-                    _avg = get_supabase_player_avg_stats(_player)
-                except Exception:
-                    _avg = {}
-                # Fallback StatBunker, wenn Supabase-Historie fehlt (kleine Ligen).
-                if _sbs is not None and (not _avg or not any((v or {}).get("avg") for v in _avg.values())) and _sb_lookups < _SB_LOOKUP_CAP:
-                    _sb_lookups += 1
-                    try:
-                        _sb = _sbs.fetch_statbunker_player_stats(_player, _row.get("league", ""))
-                        if _sb:
-                            _avg = _sbs.merge_stats(_avg, _sb)
-                    except Exception:
-                        pass
-                # Rollen-Kontext (Favorit/Außenseiter) für das Modell berechnen
-                _ctx = None
-                try:
-                    import netrattler_role_context as _rc
-                    _rc.load_team_elo(SUPABASE_URL, SUPABASE_KEY)
-                    _mtch = _row.get("match", "")
-                    _tm = _row.get("team", "")
-                    if " vs " in _mtch and _tm:
-                        _hh, _aa = [s.strip() for s in _mtch.split(" vs ", 1)]
-                        _te = _rc.team_elo(_tm)
-                        _oe = _rc.team_elo(_aa if _rc._norm(_tm) == _rc._norm(_hh) else _hh)
-                        if _te is not None and _oe is not None:
-                            _ishome = 1.0 if _rc._norm(_tm) == _rc._norm(_hh) else 0.0
-                            _ctx = {
-                                "elo_diff": _te - _oe, "opponent_elo": _oe, "is_home": _ishome,
-                                "is_favorite": 1.0 if (_te - _oe + (65 if _ishome else -65)) > 0 else 0.0,
-                            }
-                except Exception:
-                    _ctx = None
-                _mprob = _mlp.predict_player_prop(_avg, _cat, _row.get("line", 0.5), _ctx)
-                _hprob = None
-                try:
-                    _hprob = _mlp.empirical_player_prop_probability(_avg, _cat, _row.get("line", 0.5))
-                except Exception:
-                    _hprob = None
-                # Independent history model is deliberately conservative. It can rescue
-                # an under-confident classifier but never uses the bookmaker implied price.
-                _final_prob = _mprob
-                if _mprob is not None:
-                    _row["probability_source"] = "xgboost"
-                if _hprob is not None:
-                    _hist_conservative = float(_hprob) * 0.92
-                    if _final_prob is None or _hist_conservative > float(_final_prob):
-                        _final_prob = _hist_conservative
-                        _row["probability_source"] = "history_poisson" if _mprob is None else "xgb+history"
-                    _history_prob_set += 1
-                    _history_prob_by_cat[_cat] = _history_prob_by_cat.get(_cat, 0) + 1
-                # 🪜 Modell-bevorzugte Linie NUR merken (nicht Quote fälschen).
-                # Die echte Hochstufung passiert unten pool-weit über reale Quoten.
-                try:
-                    _min_conf = float(os.getenv("NETRATTLER_LADDER_MIN_CONF", "0.55"))
-                    _best = _mlp.best_line_for_role(_avg, _cat, _ctx, _min_conf)
-                    if _best is not None:
-                        _row["model_best_line"] = _best[0]
-                        _row["model_best_prob"] = _best[1]
-                except Exception:
-                    pass
-                if _final_prob is not None:
-                    _row["probability"] = round(float(_final_prob), 4)
-                    _row["ml_backed"] = True
-                    _row["history_backed"] = bool(_hprob is not None)
-                    _ml_prob_set += 1
-            if _ml_prob_set:
-                log(f"   🧠 Player-XGBoost/History: {_pm} Modelle geladen · {_ml_prob_set} Props modelliert · History-Signal={_history_prob_set}")
-                if _history_prob_by_cat:
-                    log("   📚 History-Model nach Markt: " + ", ".join(f"{k}={v}" for k,v in sorted(_history_prob_by_cat.items(), key=lambda kv: kv[1], reverse=True)[:10]))
-                try:
-                    _bands = {">=60%": 0, "55-60%": 0, "50-55%": 0, "<50%": 0}
-                    _cats55 = {}
-                    for _pr in _NTR_BUILDER_PROP_POOL:
-                        if not isinstance(_pr, dict) or not _pr.get("ml_backed"):
-                            continue
-                        _pp = float(_pr.get("probability", 0) or 0)
-                        if _pp > 1: _pp /= 100.0
-                        if _pp >= 0.60: _bands[">=60%"] += 1
-                        elif _pp >= 0.55: _bands["55-60%"] += 1
-                        elif _pp >= 0.50: _bands["50-55%"] += 1
-                        else: _bands["<50%"] += 1
-                        if _pp >= 0.55:
-                            _cc = str(_pr.get("category") or "other")
-                            _cats55[_cc] = _cats55.get(_cc, 0) + 1
-                    log("   🧠 Prop-Prob-Bänder: " + " · ".join(f"{k}={v}" for k,v in _bands.items()))
-                    if _cats55:
-                        log("   🧠 Props >=55% nach Markt: " + ", ".join(f"{k}={v}" for k,v in sorted(_cats55.items(), key=lambda kv: kv[1], reverse=True)))
-                except Exception:
-                    pass
-                # 🪜 ROLLEN-STAFFELUNG (Nate-Style 3+/2+/1+) mit ECHTEN Quoten:
-                # Pro Spieler+Kategorie das höchste Linien-Leg bevorzugen, das der
-                # Buchmacher wirklich anbietet UND das Modell mind. min_conf deckt.
-                try:
-                    _min_conf = float(os.getenv("NETRATTLER_LADDER_MIN_CONF", "0.55"))
-                    _groups = {}
-                    for _row in _NTR_BUILDER_PROP_POOL:
-                        _bl = _row.get("model_best_line")
-                        if _bl is None:
-                            continue
-                        _k = (_normalize_name(_row.get("player", "")), _row.get("match", ""), _row.get("category", ""))
-                        _groups.setdefault(_k, []).append(_row)
-                    _escalated = 0
-                    for _k, _rws in _groups.items():
-                        if len(_rws) < 2:
-                            continue
-                        _bestline = max(r.get("model_best_line", 0) for r in _rws)
-                        # reale Legs auf/unter der Modell-Linie behalten, höchste bevorzugen
-                        for _r in _rws:
-                            _ln = float(_r.get("line", 0.5))
-                            if _ln == _bestline and (_r.get("model_best_prob") or 0) >= _min_conf:
-                                _r["ladder_primary"] = True
-                                _escalated += 1
-                            elif _ln < _bestline:
-                                _r["ladder_lower"] = True  # niedrigere Linie abwerten
-                    if _escalated:
-                        log(f"   🪜 Rollen-Staffelung: {_escalated} Legs auf höchste modell-gedeckte Linie gesetzt (echte Quoten)")
-                except Exception as _lae:
-                    log(f"   🪜 Staffelung übersprungen: {str(_lae)[:60]}", "WARN")
-            else:
-                log(f"   🧠 Player-XGBoost/History: {_pm} Modelle geladen · 0 Props gematcht (keine Spielerhistorie in player_avg_stats — bei kleinen Ligen normal)")
-        else:
-            log("   🧠 Player-XGBoost: keine Modelle geladen (Fallback: implied-odds)", "WARN")
-    except Exception as _mle:
-        log(f"   🧠 Player-XGBoost übersprungen: {str(_mle)[:80]}", "WARN")
-
-    # 🎯 V31 SINGLE PLAYER PROPS — echte beobachtete Quote + echte Modellwahrscheinlichkeit.
-    # Der alte Ablauf sammelte/ML-bewertete hunderte Props, sendete sie aber nur indirekt
-    # ueber Builder. Dadurch konnte ein Builder-Fehler dazu fuehren, dass trotz 1000+ echten
-    # Props kein einziger Player-Tipp auf Telegram erschien. Singles sind nun ein eigener,
-    # unabhaengiger Ausgabepfad.
-    try:
-        _single_chat = (TELEGRAM_GROUPS.get("props") or TELEGRAM_GROUPS.get("advanced_props")
-                        or TELEGRAM_GROUPS.get("builder") or TELEGRAM_GROUPS.get("stats")
-                        or TELEGRAM_GROUPS.get("combos") or TELEGRAM_GROUPS.get("late_goals")
-                        or TELEGRAM_CHAT_ID)
-        _goal_hunter_chat = (TELEGRAM_GROUPS.get("scorer") or TELEGRAM_GROUPS.get("goal_hunter")
-                             or TELEGRAM_GROUPS.get("late_goals") or _single_chat)
-        _single_min_prob = float(env("NETRATTLER_PLAYER_PROP_MIN_PROB", "0.55"))
-        if _single_min_prob > 1:
-            _single_min_prob /= 100.0
-        _single_min_edge = float(env("NETRATTLER_PLAYER_PROP_MIN_EDGE", "0.03"))
-        _single_min_odds = float(env("NETRATTLER_PLAYER_PROP_MIN_ODDS", "1.50"))
-        _single_max_odds = float(env("NETRATTLER_PLAYER_PROP_MAX_ODDS", "0"))
-        _single_max = int(env("NETRATTLER_MAX_PLAYER_PROPS_PER_RUN", "12"))
-        _bookmaker_tokens = (
-            "pinnacle", "bet365", "kambi", "unibet", "1xbet", "melbet",
-            "odds_api", "oddsapi", "the odds api", "oddspapi", "oddspedia",
-            "footymetrics", "betfair", "bookmaker", "sportsbook",
-        )
-        _single_best = {}
-        for _row in _NTR_BUILDER_PROP_POOL:
-            if not isinstance(_row, dict) or not _row.get("ml_backed"):
-                continue
-            _cat = str(_row.get("category") or "")
-            if _cat not in _REAL_PLAYER_BUILDER_CATS:
-                continue
-            _src = str(_row.get("source") or "").lower()
-            if not any(tok in _src for tok in _bookmaker_tokens):
-                continue
-            try:
-                _odd = float(_row.get("odds", 0) or 0)
-                _prob = float(_row.get("probability", 0) or 0)
-            except (TypeError, ValueError):
-                continue
-            if _prob > 1:
-                _prob /= 100.0
-            _is_scorer_row = _cat in {"score", "first_scorer", "last_scorer"}
-            _row_min_prob = float(env("NETRATTLER_SCORER_MIN_PROB", "0.35")) if _is_scorer_row else _single_min_prob
-            _row_min_edge = float(env("NETRATTLER_SCORER_MIN_EDGE", "0.03")) if _is_scorer_row else _single_min_edge
-            _row_min_odds = float(env("NETRATTLER_SCORER_MIN_ODDS", "1.70")) if _is_scorer_row else _single_min_odds
-            if _row_min_prob > 1: _row_min_prob /= 100.0
-            if _row_min_edge > 1: _row_min_edge /= 100.0
-            if _odd < _row_min_odds or (_single_max_odds > 0 and _odd > _single_max_odds):
-                continue
-            if _prob < _row_min_prob:
-                continue
-            _edge = _prob - (1.0 / _odd)
-            if _edge < _row_min_edge:
-                continue
-            _player = str(_row.get("player") or "").strip()
-            _match = str(_row.get("match") or "").strip()
-            _market = str(_row.get("market") or _row.get("category") or "").strip()
-            if not _player or not _match or not _market:
-                continue
-            _key = (_normalize_name(_player), _match.lower(), _cat, round(float(_row.get("line", 0) or 0), 2))
-            _score = (_edge, _prob, -_odd)
-            if _key not in _single_best or _score > _single_best[_key][0]:
-                _single_best[_key] = (_score, _row, _edge, _prob, _odd)
-
-        _all_single_candidates = sorted(
-            _single_best.values(),
-            key=lambda item: (item[2], item[3]),
-            reverse=True,
-        )
-        _scorer_max = int(env("NETRATTLER_MAX_SCORER_PROPS_PER_RUN", "8"))
-        _scorer_candidates = [x for x in _all_single_candidates if str(x[1].get("category") or "") in {"score","first_scorer","last_scorer"}][:max(0,_scorer_max)]
-        _other_candidates = [x for x in _all_single_candidates if str(x[1].get("category") or "") not in {"score","first_scorer","last_scorer"}][:max(0,_single_max)]
-        # Dedicated Goal-Hunter quota prevents high-edge SOT/cards from crowding
-        # scorers out of the global top-N list.
-        _single_candidates = _scorer_candidates + _other_candidates
-        _single_sent = 0
-        _scorer_sent = 0
-        if _single_candidates and not _single_chat:
-            log(f"   🎯 Player Props: {len(_single_candidates)} Value-Kandidaten, aber kein Telegram-Ziel", "WARN")
-        elif _single_chat:
-            _single_date = str(datetime.now(timezone.utc).date())
-            _icons = {
-                "score":"⚽", "first_scorer":"🥇⚽", "last_scorer":"🏁⚽", "assist":"🅰️",
-                "booked":"🟨", "yellow_cards":"🟨", "sot":"🎯", "shots":"🥅",
-                "sot_outside_box":"🎯", "shots_outside_box":"🥅", "fouls":"👊",
-                "fouls_won":"🧲", "tackles_committed":"🦵", "tackles_received":"🎯🦵",
-                "saves":"🧤", "offsides":"🚩",
-            }
-            for _score, _row, _edge, _prob, _odd in _single_candidates:
-                _player = str(_row.get("player") or "").strip()
-                _match = str(_row.get("match") or "").strip()
-                _market = str(_row.get("market") or _row.get("category") or "").strip()
-                _cat = str(_row.get("category") or "")
-                _sig = _combo_signature([{
-                    "match": _match, "market": _market,
-                    "tip": _player + "|" + str(_row.get("line", "")),
-                }], prefix="player_prop")
-                _tip_id = f"player_prop_{_single_date}_{_sig}"
-                if is_duplicate_combo(_tip_id, _single_date):
-                    continue
-                _edge_pct = round(_edge * 100.0, 1)
-                _prob_pct = round(_prob * 100.0, 1)
-                _icon = _icons.get(_cat, "🎯")
-                _is_scorer = _cat in {"score", "first_scorer", "last_scorer"}
-                _target_chat = _goal_hunter_chat if _is_scorer else _single_chat
-                _msg = (
-                    f"{_icon} <b>{'GOAL HUNTER' if _is_scorer else 'PLAYER PROP'}</b>\n"
-                    f"━━━━━━━━━━━━━━━━━━\n"
-                    f"⚽ <b>{_match}</b>\n"
-                    f"👤 <b>{_player}</b>\n"
-                    f"🎯 {_market}\n"
-                    f"💰 Quote: <b>{_odd:.2f}</b>\n"
-                    f"🧠 Modell: <b>{_prob_pct:.1f}%</b> · Edge: <b>+{_edge_pct:.1f}%</b>\n"
-                    f"📡 Quelle: {_row.get('source','pinnacle')}"
-                )
-                _mid = send_telegram(_msg, chat_id=_target_chat)
-                _single_sent += 1
-                if _is_scorer:
-                    _scorer_sent += 1
-                try:
-                    save_to_supabase({
-                        "tip_id": _tip_id,
-                        "date": _single_date,
-                        "market": ("scorer" if _is_scorer else "player_prop"),
-                        "market_name": ("⚽ Goal Hunter" if _is_scorer else "🎯 Player Prop"),
-                        "match": _match,
-                        "tip": f"{_player} — {_market}",
-                        "odds": str(round(_odd, 2)),
-                        "units": 0.5,
-                        "probability": int(round(_prob * 100)),
-                        "confidence": max(3, min(5, int(round(3 + _edge * 10)))),
-                        "status": "pending",
-                        "group_key": ("scorer" if _is_scorer else "props"),
-                        "pick_type": ("scorer" if _is_scorer else "player_prop"),
-                        "source": str(_row.get("source") or "pinnacle"),
-                        "telegram_chat_id": str(_target_chat),
-                        "telegram_msg_id": _mid,
-                        "message_text": _msg[:3500],
-                        "prop_market": _market,
-                        "player_name": _player,
-                        "line": _row.get("line"),
-                    })
-                except Exception as _se:
-                    log(f"   ⚠️ Player Prop DB-Save fehlgeschlagen: {str(_se)[:100]}", "WARN")
-        run_pinnacle_props_bot._last_scorer_sent = _scorer_sent
-        log(
-            f"   🎯 Player Props Value: {_single_sent} gesendet / "
-            f"{len(_single_candidates)} Kandidaten · Scorer={len(_scorer_candidates)} "
-            f"(Props minProb={_single_min_prob*100:.0f}%, minEdge={_single_min_edge*100:.0f}% · "
-            f"Scorer minProb={float(env('NETRATTLER_SCORER_MIN_PROB','0.35'))*100:.0f}%)"
-        )
-    except Exception as _spe:
-        log(f"   🎯 Player Props Value Error: {type(_spe).__name__}: {str(_spe)[:120]}", "WARN")
 
     # V31 CLEAN: Alte Pinnacle-Bet-Builder mit generischen Team-/Total-Goals-Legs nicht mehr senden.
     # Die echten Player-Props gehen über netrattler_builder_engine.py.
@@ -24770,454 +22977,52 @@ def fetch_pinnacle_matchups() -> List[Dict]:
         return []
 
 
-def _sofascore_event_id_for(home, away, tip_date=None):
-    """Findet die SofaScore event_id per Teamnamen (fuer Team-Markt-Quoten)."""
-    try:
-        from datetime import datetime as _dt, timezone as _tz
-        ds = tip_date or str(_dt.now(_tz.utc).date())
-        events = _sofascore_events_for_date(ds)
-        if not events:
-            return None
-        h, a = _normalize_name(home), _normalize_name(away)
-        for ev in events:
-            _h = _normalize_name((ev.get("homeTeam", {}) or {}).get("name", ""))
-            _a = _normalize_name((ev.get("awayTeam", {}) or {}).get("name", ""))
-            if not _h or not _a:
-                continue
-            if (h[:6] in _h or _h[:6] in h) and (a[:6] in _a or _a[:6] in a):
-                return ev.get("id")
-    except Exception:
-        pass
-    return None
-
-
-_ODDS_SOURCE_ROTATION = ["oddspapi", "sofascore", "kambi", "bsd", "soccerapi",
-                          "theoddsapi", "betexplorer", "oddsportal_scrape", "betfair"]
-_ODDS_SOURCE_STATUS = {}  # {source: "ok"/"ratelimited"/"failed"} pro Lauf
-_ODDS_SOURCE_MISSES = {}   # nach 5 Fehlschlägen wird die Quelle deaktiviert
-
-
-def _with_timeout(fn, seconds):
-    """Führt fn() mit hartem Timeout aus (Thread-basiert). Gibt None bei Timeout/Fehler.
-    Verhindert, dass ein hängender Scraper den ganzen Bot blockiert."""
-    import threading
-    _res = {"val": None}
-    def _run():
-        try:
-            _res["val"] = fn()
-        except Exception:
-            _res["val"] = None
-    _t = threading.Thread(target=_run, daemon=True)
-    _t.start()
-    _t.join(timeout=seconds)
-    if _t.is_alive():
-        return None  # Timeout — Thread läuft im Hintergrund weiter (daemon), blockiert nicht
-    return _res["val"]
-
-
-def _odds_source_available(source: str) -> bool:
-    """True wenn Quelle nutzbar. Deaktiviert nach 429/Fehler ODER 5 Fehlschlägen
-    (spart Zeit — probiert keine tote Quelle 100× durch)."""
-    if _ODDS_SOURCE_STATUS.get(source) in ("ratelimited", "failed"):
-        return False
-    if _ODDS_SOURCE_MISSES.get(source, 0) >= 5:
-        return False
-    return True
-
-
-def _note_miss(source: str, got_something: bool):
-    """Zählt Fehlschläge pro Quelle. Reset bei Erfolg → deaktiviert tote Quellen."""
-    if got_something:
-        _ODDS_SOURCE_MISSES[source] = 0
-    else:
-        _ODDS_SOURCE_MISSES[source] = _ODDS_SOURCE_MISSES.get(source, 0) + 1
-
-
-_PIN_TEAM_SPECIAL_QUOTES_CACHE = None
-
-
-def _pinnacle_team_special_quotes_by_match() -> Dict[str, Dict]:
-    """Index observed Pinnacle soccer specials by normalized parent match.
-
-    Reuses fetch_pinnacle_player_props(), so the large withSpecials=true payload is
-    fetched only once per process and is reused later by Player Props/Builder/Corners.
-    No synthetic prices are created here.
-    """
-    global _PIN_TEAM_SPECIAL_QUOTES_CACHE
-    if isinstance(_PIN_TEAM_SPECIAL_QUOTES_CACHE, dict):
-        return _PIN_TEAM_SPECIAL_QUOTES_CACHE
-    out: Dict[str, Dict] = {}
-    try:
-        rows = fetch_pinnacle_player_props() or []
-        for row in rows:
-            if not isinstance(row, dict):
-                continue
-            match = str(row.get("match") or "").strip()
-            if " vs " not in match:
-                continue
-            h, a = [x.strip() for x in match.split(" vs ", 1)]
-            key = f"{_normalize_name(h)}|{_normalize_name(a)}"
-            bucket = out.setdefault(key, {})
-            desc = str(row.get("player_prop") or "").lower()
-            sel = str(row.get("selection") or "").lower().strip()
-            designation = str(row.get("designation") or "").lower().strip()
-            category = str(row.get("special_category") or "").lower().strip()
-            txt = f"{category} {desc} {sel} {designation}".strip()
-            try:
-                odd = float(row.get("odds") or 0)
-            except (TypeError, ValueError):
-                odd = 0
-            if odd <= 1.0:
-                continue
-
-            is_yes = any(x in {sel, designation} for x in ("yes", "ja")) or sel.startswith("yes ")
-            has_btts = ("both teams to score" in txt or "both teams score" in txt or "btts" in txt)
-            first_half = any(x in txt for x in ("1st half", "first half", "first-half", "1h", " ht"))
-            has_o25 = any(x in txt for x in ("over 2.5", "over2.5", "o2.5", "2.5 goals"))
-            has_o15 = any(x in txt for x in ("over 1.5", "over1.5", "o1.5", "1.5 goals"))
-
-            def _best(key):
-                old=float(bucket.get(key) or 0)
-                if odd > old:
-                    bucket[key]=odd
-
-            # Combined BTTS + O2.5 specials can encode the two legs in either
-            # description OR selection (e.g. "Yes & Over 2.5").
-            if has_btts and has_o25 and (is_yes or "yes" in txt or "&" in txt or "+" in txt):
-                _best("btts_over25_combo")
-            elif has_btts and is_yes:
-                _best("btts_yes_ht" if first_half else "btts_yes")
-
-            # First-half O1.5 may be a standard total or a named special.
-            if first_half and has_o15 and ("over" in txt):
-                _best("over_15_ht")
-
-
-        cov = {
-            "btts": sum(1 for v in out.values() if v.get("btts_yes")),
-            "combo": sum(1 for v in out.values() if v.get("btts_over25_combo")),
-            "btts_ht": sum(1 for v in out.values() if v.get("btts_yes_ht")),
-            "o15ht": sum(1 for v in out.values() if v.get("over_15_ht")),
-        }
-        log(f"   🎰 Pinnacle Team-Specials: Matches={len(out)} · BTTS={cov['btts']} · BTTS+O2.5={cov['combo']} · BTTS-HT={cov['btts_ht']} · O1.5HT={cov['o15ht']}")
-    except Exception as exc:
-        log(f"   🎰 Pinnacle Team-Specials Fehler: {str(exc)[:80]}", "WARN")
-        out = {}
-    _PIN_TEAM_SPECIAL_QUOTES_CACHE = out
-    return out
-
-
-def _lookup_pinnacle_team_specials(home: str, away: str) -> Dict:
-    idx = _pinnacle_team_special_quotes_by_match()
-    h, a = _normalize_name(home), _normalize_name(away)
-    direct = idx.get(f"{h}|{a}") or idx.get(f"{a}|{h}")
-    if direct:
-        return direct
-    # Conservative fuzzy fallback for FC/AC suffix differences only.
-    for key, value in idx.items():
-        try:
-            kh, ka = key.split("|", 1)
-            if ((h == kh or (len(h) >= 6 and (h[:8] in kh or kh[:8] in h))) and
-                    (a == ka or (len(a) >= 6 and (a[:8] in ka or ka[:8] in a)))):
-                return value
-        except Exception:
-            continue
-    return {}
-
-
-def _get_real_odds_any_source(home, away, league_name="", match_id=None, tip_date=None):
-    """Observed-odds chain with free/bulk sources first and OddsPapi last.
-    Never creates synthetic bookmaker prices. Cached per match."""
-    _ck = f"{_normalize_name(home)}_{_normalize_name(away)}"
-    if not hasattr(_get_real_odds_any_source, "_cache"):
-        _get_real_odds_any_source._cache = {}
-    if _ck in _get_real_odds_any_source._cache:
-        return _get_real_odds_any_source._cache[_ck]
-    result = {"_source": None}
-    def _merge(d, src):
-        got = False
-        # Realistische Quoten-Grenzen pro Markt (blockt Parsing-Fehler wie Over 2.5 @ 160)
-        _bounds = {
-            "btts_yes": (1.2, 4.0), "over_25": (1.2, 5.0), "over25": (1.2, 5.0),
-            "btts_yes_ht": (1.5, 8.0), "btts_ht_yes": (1.5, 8.0),
-            "over15_ht": (1.5, 8.0), "over_15_ht": (1.5, 8.0),
-            "home": (1.05, 15.0), "home_win": (1.05, 15.0),
-            "draw": (2.5, 8.0),
-            "away": (1.05, 15.0), "away_win": (1.05, 15.0),
-            "btts_over25_combo": (1.20, 25.0),
-        }
-        _keys = ("btts_yes", "over_25", "over25", "btts_yes_ht", "btts_ht_yes",
-                 "over15_ht", "over_15_ht", "home", "home_win", "draw", "away", "away_win",
-                 "btts_over25_combo")
-        for k in _keys:
-            v = (d or {}).get(k)
-            try:
-                v = float(v) if v else 0
-            except (TypeError, ValueError):
-                v = 0
-            _lo, _hi = _bounds.get(k, (1.0, 15.0))
-            if _lo <= v <= _hi:
-                if k in ("over25", "over_25"):
-                    key = "over_25"
-                elif k in ("btts_yes_ht", "btts_ht_yes"):
-                    key = "btts_yes_ht"
-                elif k in ("over15_ht", "over_15_ht"):
-                    key = "over_15_ht"
-                elif k in ("home", "home_win"):
-                    key = "home"
-                elif k in ("away", "away_win"):
-                    key = "away"
-                else:
-                    key = k
-                if key not in result:
-                    result[key] = round(v, 2); got = True
-        # compatibility aliases for older callers
-        if "over_15_ht" in result: result["over15_ht"] = result["over_15_ht"]
-        if "home" in result: result["home_win"] = result["home"]
-        if "away" in result: result["away_win"] = result["away"]
-        if got and not result.get("_source"):
-            result["_source"] = src
-        return got
-
-    # 0) FREE/BULK HUB first: persisted OddsHarvester/Bet365/OddsPortal cache,
-    #    1xBet/Melbet bulk, Kambi/Unibet bulk, optional odds-api.net free key.
-    #    This runs BEFORE quota-limited OddsPapi and is process-cached.
-    try:
-        from netrattler_free_odds import get_free_odds as _ntr_get_free_odds
-        _free = _ntr_get_free_odds(home, away, str(tip_date or ""))
-        if _free:
-            _merge(_free, str(_free.get("_source") or "free_odds_hub"))
-    except Exception as _free_exc:
-        if str(os.getenv("NETRATTLER_ODDS_DEBUG", "false")).lower() in ("1","true","yes","on"):
-            log(f"   🌐 Free-Odds-Hub Fehler: {str(_free_exc)[:100]}", "WARN")
-
-    # 1) OddsPapi early fallback: this is the proven-good path from the 03.09 run.
-    # Free/bulk stays first, so quota is used only for markets still missing.
-    if (not _netrattler_fast_tips_enabled() and
-            not (result.get("btts_yes") and result.get("over_25")) and _odds_source_available("oddspapi")):
-        try:
-            import netrattler_oddspapi as _op
-            _od = _op.get_odds_for_match(home, away, tip_date)
-            if isinstance(_od, dict) and _od.get("_rate_limited"):
-                _ODDS_SOURCE_STATUS["oddspapi"] = "ratelimited"
-                log("   🍋 OddsPapi Rate-Limit → für Rest des Laufs deaktiviert")
-            else:
-                _merge(_od, "oddspapi")
-        except Exception:
-            _ODDS_SOURCE_STATUS["oddspapi"] = "failed"
-
-    # 2) Pinnacle via match_id (Fallback). In FAST mode skip the extra
-    # BTTS-special discovery request; normal 1X2/totals are enough to decide
-    # whether a candidate has an observed quote. BTTS can come from cached/other
-    # sources without blocking every match for another ~8-16 seconds.
-    try:
-        if match_id and not (result.get("btts_yes") and result.get("over_25")):
-            _fast = _netrattler_fast_tips_enabled()
-            _merge(fetch_pinnacle_match_odds(match_id, include_specials=not _fast), "pinnacle")
-    except Exception:
-        pass
-
-    # 2b) Pinnacle specials in ONE bulk call, then reused by Props/Builder/Corners.
-    # Restores BTTS / BTTS-HT / observed BTTS+O2.5 without per-match related calls.
-    try:
-        if not (result.get("btts_yes") and result.get("btts_yes_ht") and result.get("btts_over25_combo")):
-            _sp = _lookup_pinnacle_team_specials(home, away)
-            if _sp:
-                _merge(_sp, "pinnacle_specials")
-    except Exception:
-        pass
-
-    # 2) SofaScore-Fallback (nutzt gecachte Tagesliste — schnell, auch im Fast-Mode).
-    #    Läuft NUR wenn OddsPapi/Pinnacle nichts hatten (z.B. Rate-Limit 429).
-    if not (result.get("btts_yes") and result.get("over_25")):
-        try:
-            _eid = _sofascore_event_id_for(home, away, tip_date)
-            if _eid:
-                _merge(get_sofascore_odds(str(_eid)), "sofascore")
-        except Exception:
-            pass
-
-    # 3) Kambi-Fallback für BTTS (schnelles HTTP)
-    if (not _netrattler_fast_tips_enabled()
-            and not result.get("btts_yes") and _odds_source_available("kambi")):
-        try:
-            _kb = _fetch_btts_odd_kambi(home, away)
-            if _kb and 1.2 <= _kb <= 4.0:
-                result["btts_yes"] = round(_kb, 2)
-                if not result.get("_source"):
-                    result["_source"] = "kambi"
-        except Exception:
-            _ODDS_SOURCE_STATUS["kambi"] = "failed"
-
-    # 4) BSD (79+ Buchmacher, schnelles HTTP) — wenn match_id vorhanden
-    if not (result.get("btts_yes") and result.get("over_25")) and _odds_source_available("bsd"):
-        try:
-            _bsd = get_bsd_odds(match_id) if match_id else None
-            if _bsd:
-                _merge(_bsd, "bsd")
-        except Exception:
-            _ODDS_SOURCE_STATUS["bsd"] = "failed"
-
-    # 5) SoccerAPI (Namens-basiert, HTTP)
-    if not (result.get("btts_yes") and result.get("over_25")) and _odds_source_available("soccerapi"):
-        try:
-            _sa = _with_timeout(lambda: get_soccerapi_odds(home, away, tip_date), 4)
-            _note_miss("soccerapi", bool(_sa))
-            if _sa:
-                _merge(_sa, "soccerapi")
-        except Exception:
-            _ODDS_SOURCE_STATUS["soccerapi"] = "failed"
-
-    # 6) The Odds API / OddsPortal HTTP (schnell)
-    if not (result.get("btts_yes") and result.get("over_25")) and _odds_source_available("theoddsapi"):
-        try:
-            _oa = fetch_oddsportal_odds(home, away, league_name)
-            if _oa:
-                _merge(_oa, "oddsportal")
-        except Exception:
-            _ODDS_SOURCE_STATUS["theoddsapi"] = "failed"
-
-    # 7) Betexplorer (Scraper, mit HARTEM Timeout gegen Hänger)
-    if not (result.get("btts_yes") and result.get("over_25")) and _odds_source_available("betexplorer"):
-        try:
-            _bx = _with_timeout(lambda: get_betexplorer_odds(home, away, league_name), 4)
-            _note_miss("betexplorer", bool(_bx))
-            if _bx and isinstance(_bx, dict):
-                _merge(_bx, "betexplorer")
-        except Exception:
-            _ODDS_SOURCE_STATUS["betexplorer"] = "failed"
-
-    # 8) OddsPortal BTTS-Scraper (mit HARTEM Timeout)
-    if not result.get("btts_yes") and _odds_source_available("oddsportal_scrape"):
-        try:
-            _op2 = _with_timeout(lambda: scrape_oddsportal_btts(home, away, league_name, tip_date), 4)
-            _note_miss("oddsportal_scrape", bool(_op2 and _op2.get("btts_yes") if isinstance(_op2,dict) else False))
-            if _op2 and isinstance(_op2, dict) and _op2.get("btts_yes"):
-                _merge(_op2, "oddsportal_scrape")
-        except Exception:
-            _ODDS_SOURCE_STATUS["oddsportal_scrape"] = "failed"
-
-    # 9) OddsPapi wird absichtlich bereits direkt nach dem Free/Bulk-Hub
-    #    abgefragt (bewährter 03.09-Pfad). Hier kein zweiter API-Call.
-
-    # 10) Betfair (falls Event-Name matcht)
-    if not (result.get("btts_yes") and result.get("over_25")) and _odds_source_available("betfair"):
-        try:
-            _bf = _with_timeout(lambda: get_betfair_odds_api(f"{home} v {away}"), 4)
-            _note_miss("betfair", bool(_bf))
-            if _bf and isinstance(_bf, dict):
-                _merge(_bf, "betfair")
-        except Exception:
-            _ODDS_SOURCE_STATUS["betfair"] = "failed"
-
-    # zu langsam (HTTP-Suche + Playwright + Rate-Limits) bei ~1000 Matches.
-    # Nur schnelle Quellen (Pinnacle match_id + SofaScore-Tagescache) bleiben.
-
-    _get_real_odds_any_source._cache[_ck] = result
-    return result
-
-
-
-_PIN_TEAM_MARKETS_RUN_CACHE = None
-
-
-def _parse_pinnacle_team_market(market: Dict, result: Dict) -> None:
-    """Parse one observed Arcadia straight market into normalized team-market keys."""
-    try:
-        mtype = str(market.get("type", "") or "").lower()
-        try:
-            period = int(market.get("period", 0) or 0)
-        except (TypeError, ValueError):
-            period = 0
-        for price in market.get("prices", []) or []:
-            pv = _pin_american_to_decimal(price.get("price"))
-            if pv <= 1.0:
-                continue
-            des = str(price.get("designation", "") or "").lower()
-            pts = price.get("points")
-            try:
-                pts_f = float(pts) if pts is not None else None
-            except (TypeError, ValueError):
-                pts_f = None
-            if mtype == "moneyline" and period == 0:
-                if des == "home": result["home_win"] = pv
-                elif des == "draw": result["draw"] = pv
-                elif des == "away": result["away_win"] = pv
-            elif mtype == "total" and period == 0 and pts_f == 2.5:
-                if des == "over": result["over_25"] = pv
-                elif des == "under": result["under_25"] = pv
-            elif mtype == "total" and period == 1:
-                if pts_f == 1.5 and des == "over": result["over_15_ht"] = pv
-                elif pts_f == 0.5 and des == "over": result["over_05_ht"] = pv
-    except Exception:
-        return
-
-
-def _get_pinnacle_team_market_index(force: bool = False) -> Dict:
-    """Load standard soccer markets once per run and index by matchupId."""
-    global _PIN_TEAM_MARKETS_RUN_CACHE
-    if isinstance(_PIN_TEAM_MARKETS_RUN_CACHE, dict) and not force:
-        return _PIN_TEAM_MARKETS_RUN_CACHE
-    index = {}
-    try:
-        data, status = _pinnacle_get_json(
-            f"{PINNACLE_BASE}/sports/{PINNACLE_SPORT_SOCCER}/markets/straight",
-            {"primaryOnly": "false", "withSpecials": "false"},
-        )
-        if not data:
-            log(f"   🎰 Pinnacle Team-Markets Bulk fehlgeschlagen ({status})", "WARN")
-            _PIN_TEAM_MARKETS_RUN_CACHE = {}
-            return _PIN_TEAM_MARKETS_RUN_CACHE
-        for market in data:
-            mid = market.get("matchupId")
-            if mid is None:
-                continue
-            bucket = index.setdefault(str(mid), {"match_id": mid})
-            _parse_pinnacle_team_market(market, bucket)
-        cov_1x2 = sum(1 for x in index.values() if x.get("home_win") or x.get("away_win") or x.get("draw"))
-        cov_o25 = sum(1 for x in index.values() if x.get("over_25"))
-        cov_ht = sum(1 for x in index.values() if x.get("over_15_ht"))
-        log(f"   🎰 Pinnacle Team-Markets Bulk: {len(data)} Märkte · Matches={len(index)} · 1X2={cov_1x2} · O2.5={cov_o25} · O1.5HT={cov_ht}")
-    except Exception as exc:
-        log(f"   🎰 Pinnacle Team-Markets Bulk Fehler: {str(exc)[:80]}", "WARN")
-        index = {}
-    _PIN_TEAM_MARKETS_RUN_CACHE = index
-    return index
-
-
-def fetch_pinnacle_match_odds(match_id: int, include_specials: bool = True) -> Optional[Dict]:
-    """Get normalized observed Pinnacle team odds for one matchup."""
-    cache_key = f"odds_{match_id}_{1 if include_specials else 0}"
+def fetch_pinnacle_match_odds(match_id: int) -> Optional[Dict]:
+    """Holt alle Quoten für ein einzelnes Pinnacle-Match."""
+    cache_key = f"odds_{match_id}"
     cached = _cache_get(_PIN_ODDS_CACHE, cache_key)
     if cached is not None:
         return cached
 
-    result = {"match_id": match_id}
     try:
-        bulk = _get_pinnacle_team_market_index()
-        got = bulk.get(str(match_id)) if isinstance(bulk, dict) else None
-        if got:
-            result.update(got)
-    except Exception:
-        pass
+        r = requests.get(
+            f"{PINNACLE_BASE}/matchups/{match_id}/markets/related/straight",
+            headers=PINNACLE_HEADERS,
+            timeout=10,
+        )
+        if not r.ok:
+            _cache_set(_PIN_ODDS_CACHE, cache_key, None)
+            return None
 
-    if not any(result.get(k) for k in ("home_win", "draw", "away_win", "over_25", "over_15_ht")):
-        try:
-            r = requests.get(
-                f"{PINNACLE_BASE}/matchups/{match_id}/markets/related/straight",
-                headers=PINNACLE_HEADERS, timeout=(5 if not include_specials else 10),
-            )
-            if r.ok:
-                for market in r.json() or []:
-                    _parse_pinnacle_team_market(market, result)
-        except Exception:
-            pass
+        markets = r.json()
+        result = {"match_id": match_id}
 
-        # BTTS via related markets. Deliberately skipped in FAST mode because
-        # this second network chain was the dominant per-match runtime cost.
+        for market in markets:
+            mtype = market.get("type", "")
+            period = market.get("period", 0)
+            for price in market.get("prices", []):
+                pv = price.get("price")
+                des = price.get("designation", "")
+                pts = price.get("points")
+                if not pv or pv <= 1:
+                    continue
+
+                if mtype == "moneyline" and period == 0:
+                    if des == "home": result["home_win"] = round(pv, 2)
+                    elif des == "draw": result["draw"] = round(pv, 2)
+                    elif des == "away": result["away_win"] = round(pv, 2)
+                elif mtype == "total" and period == 0:
+                    if pts == 2.5:
+                        if des == "over": result["over_25"] = round(pv, 2)
+                        elif des == "under": result["under_25"] = round(pv, 2)
+                elif mtype == "total" and period == 1:
+                    if pts == 1.5:
+                        if des == "over": result["over_15_ht"] = round(pv, 2)
+                    elif pts == 0.5:
+                        if des == "over": result["over_05_ht"] = round(pv, 2)
+
+        # BTTS via related markets
         try:
-            if not include_specials:
-                raise LookupError("specials disabled in FAST mode")
             r2 = requests.get(
                 f"{PINNACLE_BASE}/matchups/{match_id}/related",
                 headers=PINNACLE_HEADERS, timeout=8,
@@ -25236,20 +23041,20 @@ def fetch_pinnacle_match_odds(match_id: int, include_specials: bool = True) -> O
                             continue
                         for m in rs.json():
                             for p in m.get("prices", []):
-                                if str(p.get("designation", "") or "").lower() == "yes":
-                                    _dec = _pin_american_to_decimal(p.get("price"))
-                                    if _dec <= 1.0:
-                                        continue
+                                if p.get("designation", "").lower() == "yes":
                                     pp = m.get("period", 0)
                                     if pp == 0:
-                                        result["btts_yes"] = _dec
+                                        result["btts_yes"] = round(p["price"], 2)
                                     elif pp == 1:
-                                        result["btts_yes_ht"] = _dec
+                                        result["btts_yes_ht"] = round(p["price"], 2)
         except Exception:
             pass
 
-    _cache_set(_PIN_ODDS_CACHE, cache_key, result)
-    return result
+        _cache_set(_PIN_ODDS_CACHE, cache_key, result)
+        return result
+    except Exception:
+        _cache_set(_PIN_ODDS_CACHE, cache_key, None)
+        return None
 
 
 def _normalize_name(name: str) -> str:
@@ -25260,86 +23065,6 @@ def _normalize_name(name: str) -> str:
         n = n.replace(x, " ")
     return " ".join(n.split())
 
-
-def _fetch_btts_odd_kambi(home: str, away: str):
-    """Best-effort BTTS-Quote (Yes) von Kambi/Unibet. None wenn nicht gefunden — bricht nie.
-    Fallback wenn Pinnacle BTTS blockt (403)."""
-    try:
-        import requests as _rq
-        for host in ["https://eu-offering-api.kambicdn.com/offering/v2018/ub",
-                     "https://eu-offering.kambicdn.org/offering/v2018/ub"]:
-            try:
-                sr = _rq.get(f"{host}/listView/football.json",
-                            params={"term": f"{home} {away}"}, timeout=8,
-                            headers={"User-Agent": "Mozilla/5.0"})
-                if not sr.ok:
-                    continue
-                for ev in (sr.json().get("events") or [])[:5]:
-                    _e = ev.get("event", ev)
-                    eid = _e.get("id")
-                    if not eid:
-                        continue
-                    br = _rq.get(f"{host}/betoffer/event/{eid}.json", timeout=8,
-                                headers={"User-Agent": "Mozilla/5.0"})
-                    if not br.ok:
-                        continue
-                    for bo in (br.json().get("betOffers") or []):
-                        crit = (bo.get("criterion", {}).get("label", "") or "").lower()
-                        if "both teams to score" in crit or "both to score" in crit:
-                            for oc in bo.get("outcomes", []):
-                                if (oc.get("label", "") or "").lower() in ("yes", "ja"):
-                                    odds = oc.get("odds")
-                                    if odds:
-                                        return round(odds / 1000.0, 2)
-            except Exception:
-                continue
-    except Exception:
-        pass
-    return None
-
-
-
-
-_KAMBI_TEAM_SPECIAL_CACHE = {}
-
-def _fetch_kambi_team_specials_bounded(home: str, away: str) -> dict:
-    """Bounded real-odds fallback for BTTS/combo/HT specials.
-
-    Reuses Kambi caches from netrattler_prop_sources and never fabricates a
-    combined price. This path is specifically for runs where Pinnacle's
-    markets/straight endpoint flips to HTTP 403.
-    """
-    key = (_normalize_name(home), _normalize_name(away))
-    if key in _KAMBI_TEAM_SPECIAL_CACHE:
-        return dict(_KAMBI_TEAM_SPECIAL_CACHE[key])
-    cap = max(0, int(env("NETRATTLER_KAMBI_SPECIAL_MAX_MATCHES", "24")))
-    used = int(getattr(_fetch_kambi_team_specials_bounded, "_used", 0))
-    if used >= cap:
-        return {}
-    setattr(_fetch_kambi_team_specials_bounded, "_used", used + 1)
-    best = {}
-    try:
-        from netrattler_prop_sources import fetch_kambi_team_specials, _KAMBI_BRANDS
-        for brand in _KAMBI_BRANDS:
-            try:
-                row = fetch_kambi_team_specials(home, away, brand=brand) or {}
-            except Exception:
-                row = {}
-            for k, v in row.items():
-                try:
-                    vf = float(v or 0)
-                except (TypeError, ValueError):
-                    continue
-                if vf > 1.05 and vf > float(best.get(k) or 0):
-                    best[k] = vf
-            # Stop once the important trio is present; otherwise continue brands
-            # because BTTS HT/combo menus vary by operator.
-            if all(best.get(k) for k in ("btts_yes", "btts_yes_ht", "btts_over25_combo")):
-                break
-    except Exception:
-        best = {}
-    _KAMBI_TEAM_SPECIAL_CACHE[key] = dict(best)
-    return best
 
 def get_pinnacle_match_odds(home_team: str, away_team: str,
                               league_hint: Optional[str] = None) -> Optional[Dict]:
@@ -25405,137 +23130,51 @@ CROSS_MATCH_MAX_COMBOS = int(_env("CROSS_MATCH_MAX_COMBOS", "5"))
 _QUOTES_CACHE = {}
 
 
-def _tip_1x2_selection(tip: Dict) -> str:
-    """Normalize a 1X2 tip to home/draw/away without guessing from bookmaker prices."""
-    txt = str(tip.get("tip") or tip.get("selection") or "").strip().lower()
-    if any(x in txt for x in ("heimsieg", "home win", " home", "1")) and "unentsch" not in txt:
-        return "home"
-    if any(x in txt for x in ("unentsch", "draw", " x")):
-        return "draw"
-    if any(x in txt for x in ("auswärtssieg", "auswaertssieg", "away win", " away", "2")):
-        return "away"
-    return ""
-
-
-def _quote_is_sane(market: str, quote: float) -> bool:
-    try:
-        q = float(quote)
-    except (TypeError, ValueError):
-        return False
-    bounds = {
-        "btts": (1.15, 5.0), "over25": (1.15, 6.0), "combo": (1.20, 30.0),
-        "btts_ht": (1.25, 12.0), "over15_ht": (1.20, 12.0), "1x2": (1.02, 25.0),
-    }
-    lo, hi = bounds.get(str(market).lower(), (1.01, 50.0))
-    return lo <= q <= hi
-
-
 def get_bet365_quote_any_source(tip: Dict, odds_data: Optional[List] = None) -> Tuple[Optional[float], str]:
-    """Return the BEST observed real bookmaker quote for a tip.
-
-    Bet365 is a preferred comparison source, but never fabricated and never required.
-    Candidates can come from the already observed quote, The Odds API bookmaker payload,
-    the persisted multi-bookmaker harvester (Bet365/Pinnacle/Betfair/etc.), Pinnacle, or
-    SofaScore provider-1 (Bet365) on-demand for a very small shortlist.
-    """
+    """Holt beste verfügbare Quote für einen Tipp."""
     match = tip.get("match", "")
     if " vs " not in match:
         return None, "no_match"
-    home, away = [x.strip() for x in match.split(" vs ", 1)]
-    market = str(tip.get("market") or tip.get("market_type") or "btts").lower()
-    one_x_two_sel = _tip_1x2_selection(tip) if market == "1x2" else ""
-    candidates: List[Tuple[float, str]] = []
+    parts = match.split(" vs ", 1)
+    home, away = parts[0].strip(), parts[1].strip()
 
-    def add(q, source):
-        try:
-            qf = float(str(q).replace(",", "."))
-        except (TypeError, ValueError):
-            return
-        if _quote_is_sane(market, qf):
-            candidates.append((round(qf, 4), str(source or "observed")))
+    market = tip.get("market") or tip.get("market_type") or "btts"
 
-    # 0) Quote attached upstream from a real market adapter.
-    if not bool(tip.get("_no_real_odds", False)):
-        add(tip.get("oddsYes"), tip.get("_source") or "observed_tip")
+    # 1. Pinnacle Scraper (kostenlos!)
+    try:
+        quote = get_pinnacle_quote_for_market(home, away, market)
+        if quote and quote > 1.0:
+            return quote, "pinnacle"
+    except Exception:
+        pass
 
-    # 1) The Odds API payload: inspect ALL supported bookmakers, not just first hit.
+    # 2. Odds Data Fallback
     if odds_data:
         h_low, a_low = home.lower(), away.lower()
-        api_market = {"btts": "btts", "over25": "totals", "1x2": "h2h"}.get(market)
+        api_market = {"btts": "btts", "over25": "totals", "combo": "btts"}.get(market, "btts")
+        point = 2.5 if market in ("over25", "combo") else None
+
         for g in odds_data:
-            gh, ga = str(g.get("home_team", "")).lower(), str(g.get("away_team", "")).lower()
+            gh, ga = g.get("home_team", "").lower(), g.get("away_team", "").lower()
             if not ((h_low in gh or gh in h_low) and (a_low in ga or ga in a_low)):
                 continue
-            for bm in g.get("bookmakers", []) or []:
-                book = str(bm.get("key") or bm.get("title") or "odds_api")
-                for m in bm.get("markets", []) or []:
-                    mk = str(m.get("key") or "").lower()
-                    if api_market and mk != api_market:
+            for bm_prio in ["bet365", "pinnacle", "smarkets", "betfair_ex_eu", "unibet"]:
+                for bm in g.get("bookmakers", []):
+                    if bm.get("key") != bm_prio:
                         continue
-                    for out in m.get("outcomes", []) or []:
-                        name = str(out.get("name") or "").lower()
-                        if market == "btts" and name == "yes": add(out.get("price"), book)
-                        elif market == "over25" and name == "over" and float(out.get("point") or 0) == 2.5: add(out.get("price"), book)
-                        elif market == "1x2":
-                            if one_x_two_sel == "home" and name == str(g.get("home_team", "")).lower(): add(out.get("price"), book)
-                            elif one_x_two_sel == "away" and name == str(g.get("away_team", "")).lower(): add(out.get("price"), book)
-                            elif one_x_two_sel == "draw" and name == "draw": add(out.get("price"), book)
+                    for m in bm.get("markets", []):
+                        if m.get("key") != api_market:
+                            continue
+                        for outcome in m.get("outcomes", []):
+                            if api_market == "btts" and outcome.get("name") == "Yes":
+                                return float(outcome.get("price", 0)), "odds_data"
+                            if api_market == "totals" and outcome.get("name") == "Over":
+                                if point and outcome.get("point") != point:
+                                    continue
+                                return float(outcome.get("price", 0)), "odds_data"
 
-    # 2) Persisted multi-bookmaker snapshot. This is the cheap Bet365 path in FAST mode.
-    try:
-        from netrattler_odds_harvester import get_best_quote_from_supabase
-        hist_lookup = {
-            "btts": ("btts", "yes"),
-            "over25": ("totals_2_5", "over_2_5"),
-            "combo": ("btts_and_totals", "yes_over_2_5"),
-            "btts_ht": ("btts_1h", "yes"),
-            "over15_ht": ("totals_1h", "over_1_5"),
-            "1x2": ("1x2", one_x_two_sel),
-        }
-        hm = hist_lookup.get(market)
-        if hm and hm[1]:
-            target_day = str(tip.get("_kickoff") or "")[:10] or None
-            found = get_best_quote_from_supabase(home, away, hm[0], hm[1], target_date=target_day)
-            if found: add(found[0], found[1])
-    except Exception:
-        pass
+    return None, "none"
 
-    # 3) Pinnacle direct/cached market lookup. For combined markets we NEVER synthesize.
-    if market != "combo":
-        pin_market = market
-        if market == "1x2":
-            pin_market = {"home": "home_win", "draw": "draw", "away": "away_win"}.get(one_x_two_sel, "")
-        if pin_market:
-            try:
-                add(get_pinnacle_quote_for_market(home, away, pin_market), "pinnacle")
-            except Exception:
-                pass
-
-    # 4) Bet365 via SofaScore provider-1, only for the tiny final candidate shortlist.
-    #    Global cap protects Actions minutes; failure never blocks the pick.
-    try:
-        enabled = str(os.getenv("NETRATTLER_BET365_ONDEMAND", "true")).lower() in {"1","true","yes","on"}
-        cap = max(0, int(os.getenv("NETRATTLER_BET365_ONDEMAND_MAX", "6")))
-        used = int(getattr(get_bet365_quote_any_source, "_bet365_used", 0))
-        if enabled and used < cap:
-            eid = _sofascore_event_id_for(home, away, str(tip.get("_kickoff") or "")[:10] or None)
-            if eid:
-                setattr(get_bet365_quote_any_source, "_bet365_used", used + 1)
-                sod = get_sofascore_odds(str(eid)) or {}
-                if market == "btts": add(sod.get("btts_yes"), "bet365_sofascore")
-                elif market == "over25": add(sod.get("over25") or sod.get("over_25"), "bet365_sofascore")
-                elif market == "btts_ht": add(sod.get("btts_ht_yes") or sod.get("btts_yes_ht"), "bet365_sofascore")
-                elif market == "over15_ht": add(sod.get("over15_ht") or sod.get("over_15_ht"), "bet365_sofascore")
-                elif market == "1x2": add(sod.get({"home":"home_win","draw":"draw","away":"away_win"}.get(one_x_two_sel,"")), "bet365_sofascore")
-    except Exception:
-        pass
-
-    if not candidates:
-        return None, "none"
-    # Best executable observed price. Edge is still computed against model/fair odds,
-    # never against another bookmaker's implied probability.
-    best_q, best_src = max(candidates, key=lambda x: x[0])
-    return best_q, best_src
 
 def calculate_edge(market_quote: float, fair_quote: float) -> float:
     """Returns Edge als Dezimal (0.08 = 8%)."""
@@ -25592,7 +23231,7 @@ def filter_tips_by_edge(tips: List[Dict], market: str = "btts",
 
         if not market_quote:
             stats["no_quote"] += 1
-            if require_bet365 or (_real_odds_only_enabled() and bool(tip.get("_no_real_odds", True))):
+            if require_bet365:
                 continue
             try:
                 market_quote = float(str(tip.get("oddsYes", "0")).replace(",", "."))
@@ -25604,26 +23243,6 @@ def filter_tips_by_edge(tips: List[Dict], market: str = "btts",
 
         edge = calculate_edge(market_quote, fair_odds)
 
-        # FIX18: 1X2 can be a transparent SHARP market-consensus pick when no
-        # independent team model exists. It is NOT labelled VALUE and therefore
-        # must not be killed by the value-edge gate that compares the same market
-        # consensus back to itself. Real quote + strong no-vig probability were
-        # already required upstream; stake stays conservative.
-        if str(tip.get("valueRating", "")).upper() == "SHARP" and str(tip_market).lower() == "1x2":
-            tip["bet365_quote"] = round(market_quote, 2)  # legacy field name
-            tip["best_quote"] = round(market_quote, 2)
-            tip["quote_source"] = source
-            tip["oddsYes"] = round(market_quote, 2)
-            tip["_source"] = source
-            tip["edge"] = 0.0
-            tip["edge_pct"] = 0.0
-            tip["edge_source"] = source
-            tip["kelly_units"] = 0.5
-            tip["value_rating"] = "🔵 SHARP"
-            filtered.append(tip)
-            stats["kept"] += 1
-            continue
-
         if edge < min_edge:
             stats["below_min"] += 1
             continue
@@ -25632,11 +23251,7 @@ def filter_tips_by_edge(tips: List[Dict], market: str = "btts",
             continue
 
         kelly = calculate_kelly_stake(edge, market_quote)
-        tip["bet365_quote"] = round(market_quote, 2)  # legacy field name
-        tip["best_quote"] = round(market_quote, 2)
-        tip["quote_source"] = source
-        tip["oddsYes"] = round(market_quote, 2)
-        tip["_source"] = source
+        tip["bet365_quote"] = round(market_quote, 2)
         tip["edge"] = round(edge, 4)
         tip["edge_pct"] = round(edge * 100, 1)
         tip["edge_source"] = source
@@ -25788,21 +23403,6 @@ def integrate_edge_filter_into_pipeline(tips_by_market: Dict[str, List[Dict]],
     """All-in-One Integration."""
     if not EDGE_FILTER_ENABLED:
         return {"filtered_tips": tips_by_market, "combos": [], "stats": {}}
-
-    # One Supabase odds_history preload for the whole card. Without this, every
-    # candidate did its own GET (90+ calls in the 09.09 evening run).
-    try:
-        from netrattler_odds_harvester import preload_best_quotes_from_supabase
-        _days = []
-        for _mk, _rows in (tips_by_market or {}).items():
-            for _t in (_rows or []):
-                _d = str(_t.get("_kickoff") or _t.get("date") or "")[:10]
-                if _d and _d not in _days:
-                    _days.append(_d)
-        for _d in _days[:2]:
-            preload_best_quotes_from_supabase(_d)
-    except Exception:
-        pass
 
     filtered = {}
     total_before = 0
@@ -26296,8 +23896,7 @@ def format_alert_message(tip: Dict, alert_level: str = "premium") -> str:
     msg += f"📈 <b>Wahrscheinlichkeit:</b> {tip.get('probability', 0)}%\n"
     msg += f"⭐ <b>Confidence:</b> {'⭐' * int(tip.get('confidence', 0))}\n\n"
     msg += f"╔═══════════════════════╗\n║ 🔥 <b>EDGE: +{edge_pct:.1f}%</b> 🔥\n╚═══════════════════════╝\n\n"
-    _qsrc = str(tip.get("quote_source") or tip.get("edge_source") or tip.get("_source") or "Bookmaker")
-    msg += f"💰 <b>Beste echte Quote:</b> {tip.get('best_quote', tip.get('bet365_quote', tip.get('oddsYes', '?')))} · {_qsrc}\n"
+    msg += f"💰 <b>Quote (Bet365):</b> {tip.get('bet365_quote', tip.get('oddsYes', '?'))}\n"
     msg += f"🎯 <b>Fair Odds:</b> {tip.get('fairOdds', tip.get('fair_odds', '?'))}\n"
     msg += f"📊 <b>Source:</b> {tip.get('edge_source', '?')}\n\n"
     kelly = tip.get('kelly_units', 1.0)
@@ -26309,8 +23908,7 @@ def format_alert_message(tip: Dict, alert_level: str = "premium") -> str:
     if tip.get("keyFactor") or tip.get("key_factor"):
         msg += f"⚡ <i>{tip.get('keyFactor') or tip.get('key_factor')}</i>\n\n"
     msg += "━━━━━━━━━━━━━━━━━━━━━━━━━\n"
-    if "bet365" in str(tip.get("quote_source") or tip.get("edge_source") or "").lower():
-        msg += "🎰 <b>Quote-Quelle:</b> Bet365\n\n"
+    msg += "🎰 <b>BET365:</b> https://www.bet365.com/#/AS/B1/\n\n"
     msg += "⚠️ <i>Premium Alerts bei ≥20% Edge. Quoten ändern sich schnell!</i>"
     return msg
 
@@ -26561,80 +24159,19 @@ if __name__ == "__main__":
     
     print("\n✅ Alle Module funktionieren!")
 
-_NETRATTLER_RUN_START = None
-_NETRATTLER_RUN_BUDGET = 900
-
-
-def _budget_exceeded():
-    """True wenn das globale Zeit-Budget des Laufs überschritten ist."""
-    import time as _t
-    if _NETRATTLER_RUN_START is None:
-        return False
-    return (_t.time() - _NETRATTLER_RUN_START) > _NETRATTLER_RUN_BUDGET
-
-
 def main():
     log("=" * 60)
     log("AI TIPP BOT - ALL-IN-ONE EDITION")
-    log(f"🧩 Build: {NETRATTLER_BUILD_ID} · Team-Quote {MIN_ODDS:.2f}-{TEAM_SINGLE_MAX_ODDS:.2f}")
     log("=" * 60)
-    # ⏱️ GLOBALER Watchdog: eine Startzeit für den ganzen Lauf. Alle Analyse-Loops
-    # teilen dieses Budget → verhindert 20-Min-Timeout (GitHub-Limit).
-    import time as _gtime
-    global _NETRATTLER_RUN_START, _NETRATTLER_RUN_BUDGET
-    _NETRATTLER_RUN_START = _gtime.time()
-    _NETRATTLER_RUN_BUDGET = _stable_budget("NETRATTLER_GLOBAL_BUDGET_SEC", 840, stable_min=780)  # stable core: enough room for source fallbacks
 
     check_config()
     check_rotation_schedule()
 
-    # 🩺 HEALTH-CHECK: kritische Datenquellen prüfen, BEVOR Tipps erzeugt werden.
-    # Verhindert, dass der Bot still auf leeren/kaputten Daten läuft (wie die
-    # leere player_avg_stats-View). Warnt per Telegram statt still Müll zu senden.
-    try:
-        _health = _ntr_health_check()
-        if _health["critical"]:
-            _warn = "🩺 <b>NETRATTLER HEALTH-WARNUNG</b>\n" + "\n".join(_health["messages"])
-            try:
-                send_telegram(_warn, env("TELEGRAM_CHAT_ID", None))
-            except Exception:
-                pass
-            log(f"🩺 HEALTH-CHECK KRITISCH: {'; '.join(_health['messages'])}", "ERROR")
-        else:
-            log(f"🩺 Health-Check OK: {_health['summary']}")
-    except Exception as _he:
-        log(f"🩺 Health-Check übersprungen: {str(_he)[:80]}", "WARN")
-
-    # 📊 Wochen-ROI-Report (nur sonntags, per Telegram)
-    try:
-        _ntr_weekly_roi_report()
-    except Exception:
-        pass
-
-    # ⚡ Elo-History auffrischen (nur sonntags, hält Favorit/Außenseiter aktuell)
-    try:
-        from datetime import datetime as _dtx, timezone as _tzx
-        if _dtx.now(_tzx.utc).weekday() == 6:
-            _ntr_refresh_elo_history()
-    except Exception:
-        pass
-
     now_utc = datetime.now(timezone.utc)
-    # NETRATTLER schedules and betting windows are defined in Swiss local time.
-    # Around 22:00-23:59 UTC Switzerland is already on the next calendar day;
-    # using UTC.date() here caused the bot to analyse/save yesterday's fixtures.
-    try:
-        from zoneinfo import ZoneInfo as _ZI_MAIN
-        _ch_tz_main = _ZI_MAIN("Europe/Zurich")
-    except Exception:
-        # Linux/Python 3.11 GitHub runners always have zoneinfo; this is only a
-        # defensive fallback for unusual local environments.
-        _ch_tz_main = timezone(timedelta(hours=2))
-    now_ch = now_utc.astimezone(_ch_tz_main)
-    target_date = now_ch.date()
+    target_date = now_utc.date()
     hour_utc = now_utc.hour
 
-    log(f"⏰ {now_utc.strftime('%H:%M')} UTC | {now_ch.strftime('%H:%M')} CH | 📅 {target_date}")
+    log(f"⏰ {now_utc.strftime('%H:%M')} UTC | 📅 {target_date}")
 
     # 🏆 SETTLEMENT ZUERST - Ergebnisse von gestern/heute prüfen
     run_mode = env("RUN_MODE", "tips")  # "tips", "settlement", "both", "live"
@@ -26689,7 +24226,7 @@ def main():
                 "https://v3.football.api-sports.io/fixtures",
                 headers={"x-rapidapi-key": API_FOOTBALL_KEY,
                          "x-rapidapi-host": "v3.football.api-sports.io"},
-                params={"date": target_date.strftime("%Y-%m-%d"), "timezone": "Europe/Zurich"},
+                params={"date": target_date.strftime("%Y-%m-%d"), "timezone": "UTC"},
                 timeout=15
             )
             if _af_r.ok:
@@ -26723,24 +24260,6 @@ def main():
     _m42_sent_today = set()  # Dedup: martj42-Match nur einmal analysieren, nicht für jede intl. Liga
 
     # ── Pinnacle global laden ──
-    # FIX6: run-scoped diagnostics must exist before any Pinnacle match is analysed.
-    _pin_diag = {
-        "model_supported": 0,
-        "model_threshold": 0,
-        "odds_lookup": 0,
-        "quote_any": 0,
-        "quote_btts": 0,
-        "quote_over25": 0,
-        "quote_1x2": 0,
-        "1x2_prob_reject": 0, "1x2_odds_reject": 0, "1x2_edge_reject": 0,
-        "quote_ht": 0,
-        "tips": 0,
-        "no_model": 0,
-        "below_threshold": 0,
-        "no_quote_after_model": 0,
-    }
-    log("🌐 Team-Odds Priorität: Free/Bulk → OddsPapi → Pinnacle → Sofa/Kambi/Scraper (nur echte Quoten)")
-    log(f"🧱 STABLE CORE: {'AN' if NETRATTLER_STABLE_CORE else 'AUS'} · FAST effektiv={'AN' if _netrattler_fast_tips_enabled() else 'AUS'} · Modell/Stats unabhängig von Odds")
     log("📊 Pinnacle Matchups laden...")
     try:
         _PINNACLE_MATCHUPS = fetch_pinnacle_matchups()
@@ -26796,20 +24315,10 @@ def main():
         log(f"   ⏰ Fenster-Untergrenze angepasst: {_win_start_utc.strftime('%H:%M')} → {now_utc.strftime('%H:%M')} UTC (Run startet spät im Fenster)")
         _win_start_utc = now_utc
     if _PINNACLE_MATCHUPS:
-        try:
-            _prefetch_ml_history_from_supabase(_PINNACLE_MATCHUPS, target_date, _win_start_utc, _win_end_utc)
-        except Exception as _mhp:
-            log(f"   🧠 ML-History preload Fehler: {str(_mhp)[:80]}", "WARN")
         log(f"🎰 Analysiere {len(_PINNACLE_MATCHUPS)} Pinnacle Matches...")
         from datetime import datetime as _pdt
         _processed_this_run = set()  # 🆕 Sicherheitsnetz gegen Restduplikate innerhalb des Runs
-        import time as _tmod
-        _loop_start = _tmod.time()
-        _budget_sec = _stable_budget("NETRATTLER_ANALYSIS_BUDGET_SEC", 240, stable_min=240)  # known-good core gets full analysis window
         for pm in _PINNACLE_MATCHUPS:
-            if _tmod.time() - _loop_start > _budget_sec or _budget_exceeded():
-                log(f"   ⏱️ Zeit-Budget erreicht nach {len(_processed_this_run)} Matches — sende bisherige Tipps")
-                break
             try:
                 home = pm.get("home", "")
                 away = pm.get("away", "")
@@ -26825,22 +24334,6 @@ def main():
                 if ("(Corners)" in home or "(Bookings)" in home
                         or "Corners" in league_name or "Bookings" in league_name):
                     continue
-
-                # 🚫 MÜLL-LIGEN-FILTER: Jugend/Reserve/Frauen/kleine Cups raus.
-                # Genau die Ligen, wo das ML-Modell keine Daten hat → pauschale
-                # Fallback-Tipps entstehen. Abschaltbar via NETRATTLER_JUNK_FILTER=false.
-                if str(env("NETRATTLER_JUNK_FILTER", "true")).lower() in ("1", "true", "yes", "on"):
-                    _ll = league_name.lower()
-                    _junk = ["u23", "u21", "u20", "u19", "u18", "u17", "youth", "jugend",
-                             "women", "frauen", "féminin", "feminin", "womens", "ladies",
-                             "reserve", "reserves", "development", "academy",
-                             "regionalliga", "u23 championship", "primavera",
-                             "elite league u21", "professional development"]
-                    # Zweitmannschaften (" II" / " B" am Ende)
-                    _second = home.strip().endswith(" II") or away.strip().endswith(" II") \
-                              or home.strip().endswith(" B") or away.strip().endswith(" B")
-                    if any(_kw in _ll for _kw in _junk) or _second:
-                        continue
 
                 # Zeitfenster: gestaffelt nach CH-Zeit (siehe oben)
                 match_dt = None
@@ -26875,12 +24368,6 @@ def main():
                     any(k in ln for k in ["world cup", "fifa", "international", "nations league", "weltmeister"])
                     or ("friendl" in ln and "club" not in ln)
                 )
-                # FAST/REAL-ODDS: only spend network time on matches backed by an
-                # independent model/stat source. Static league defaults are not enough
-                # to claim value and used to trigger slow quote lookups for niche games.
-                _has_independent_model = False
-                _league_prior_fallback = False
-                _ml_match = {}
                 if _is_intl:
                     try:
                         _sh = get_national_team_btts_stats(home)
@@ -26891,18 +24378,14 @@ def main():
                             # Mit Liga-Basis mischen (60% Team-Daten, 40% Basis)
                             prob_b = int(0.6 * _mb + 0.4 * prob_b)
                             prob_o = int(0.6 * _mo + 0.4 * prob_o)
-                            _has_independent_model = True
                             log(f"      🌍 martj42: {home} {_sh['btts_pct']}% / {away} {_sa['btts_pct']}% BTTS → {prob_b}%")
                     except Exception:
                         pass
                 else:
                     # 🆕 football-data.co.uk: echte BTTS/Over-Raten für ~20 Top-Vereinsligen
-                    # ⚡ FAST-MODE: überspringen (langsam, ~2 Calls/Match). Das trainierte
-                    # XGBoost-Modell hat diese Muster bereits gelernt → nicht nötig live.
-                    _fast_stats = _netrattler_fast_tips_enabled()
                     try:
-                        _fh = None if _fast_stats else get_fd_co_uk_team_stats(home, league_name)
-                        _fa = None if _fast_stats else get_fd_co_uk_team_stats(away, league_name)
+                        _fh = get_fd_co_uk_team_stats(home, league_name)
+                        _fa = get_fd_co_uk_team_stats(away, league_name)
                         if _fh and _fa:
                             _mb = (_fh["btts_pct"] + _fa["btts_pct"]) / 2
                             _mo = (_fh["over25_pct"] + _fa["over25_pct"]) / 2
@@ -26922,162 +24405,35 @@ def main():
 
                         _ml = get_ml_prediction(home, away, league_name)
                         if _ml:
-                            _ml_match = _ml
-                            _has_independent_model = True
-                            prob_b = int(round(float(_ml.get("btts_pct", 0) or 0)))
-                            prob_o = int(round(float(_ml.get("over25_pct", 0) or 0)))
-                            log(f"      🤖 {_ml.get('source','MODEL')}: BTTS {_ml.get('btts_pct')}%, Over2.5 {_ml.get('over25_pct')}% "
-                                f"· History {_ml.get('history_games_home',0)}/{_ml.get('history_games_away',0)} → {prob_b}%/{prob_o}%")
+                            # 80% ML-Modell, 20% bisherige Schätzung (Absicherung bei Nischenteams)
+                            prob_b = int(0.80 * _ml.get("btts_pct", prob_b) + 0.20 * prob_b)
+                            prob_o = int(0.80 * _ml.get("over25_pct", prob_o) + 0.20 * prob_o)
+                            log(f"      🤖 XGBoost: BTTS {_ml.get('btts_pct')}%, Over2.5 {_ml.get('over25_pct')}% "
+                                f"→ final {prob_b}%/{prob_o}%")
                         else:
                             # Fallback: Elo + Poisson Formel
                             _elo = get_elo_poisson_prediction(home, away, league_name)
                             if _elo:
-                                _has_independent_model = True
-                                _ml_match = _elo
-                                prob_b = int(round(float(_elo["btts_pct"])))
-                                prob_o = int(round(float(_elo["over25_pct"])))
+                                prob_b = int(0.70 * prob_b + 0.30 * _elo["btts_pct"])
+                                prob_o = int(0.70 * prob_o + 0.30 * _elo["over25_pct"])
                                 log(f"      🧠 Elo-Fallback: {home}({_elo['elo_home']:.0f}) vs {away}({_elo['elo_away']:.0f}) "
-                                    f"BTTS {_elo['btts_pct']}% · O2.5 {_elo['over25_pct']}%")
+                                    f"BTTS {_elo['btts_pct']}% → final {prob_b}%")
                     except Exception:
                         pass
 
-                # ⚡ FAST REAL-ODDS SOFT FILTER
-                # Regression-Fix: Die frühere harte Variante hat Matches OHNE
-                # XGBoost/Elo vor dem Odds-Lookup komplett verworfen. Im bewährten
-                # 03.09.-Ablauf wurden dagegen die echten Marktpreise abgefragt und
-                # erst danach Probability/Value/Edge gefiltert. Deshalb nur noch
-                # Diagnose hier — KEIN continue vor den realen Quotenquellen.
-                _fast_real = _netrattler_fast_tips_enabled() and _real_odds_only_enabled()
-                _p1x2 = max(
-                    float((_ml_match or {}).get("home_win_pct", 0) or 0),
-                    float((_ml_match or {}).get("draw_pct", 0) or 0),
-                    float((_ml_match or {}).get("away_win_pct", 0) or 0),
-                )
-                if _has_independent_model:
-                    _pin_diag["model_supported"] += 1
-                    if max(float(prob_b or 0), float(prob_o or 0), _p1x2) >= float(MIN_PROBABILITY):
-                        _pin_diag["model_threshold"] += 1
-                    else:
-                        _pin_diag["below_threshold"] += 1
-                else:
-                    _pin_diag["no_model"] += 1
-                    # FIX18: Fast fallback = bookmaker-independent league prior + ONLY the
-                    # already cached Pinnacle bulk quote. FIX15 skipped these matches
-                    # completely, which saved time but starved the bot (102/107 matches in
-                    # the 09.09 run had no per-team history). The prior is independent of
-                    # the quote; no slow scraper/API fallback is allowed for this tier.
-                    _league_prior_fallback = True
-                    _has_independent_model = True
-                    _ml_match = {
-                        "source": "league_prior_fast",
-                        "btts_pct": float(prob_b),
-                        "over25_pct": float(prob_o),
-                        "btts_ht_pct": float(env("NETRATTLER_BTTS_HT_PRIOR_PROB", "43")),
-                        "over15_ht_pct": float(env("NETRATTLER_OVER15_HT_PRIOR_PROB", "47")),
-                    }
-                    _pin_diag["model_supported"] += 1
-                    if max(float(prob_b or 0), float(prob_o or 0)) >= float(MIN_PROBABILITY):
-                        _pin_diag["model_threshold"] += 1
-
-                # Echte Odds als Upgrade — model-backed uses full chain; league-prior
-                # fallback uses only process-cached Pinnacle bulk/specials.
+                # Echte Pinnacle-Odds als Upgrade (optional, mit Schutz)
                 ro = None
-                _real_btts_odd = False
-                _real_over_odd = False
-                _real_btts_ht_odd = False
-                _real_over15_ht_odd = False
-                _real_btts_source = ""
-                _real_over_source = ""
-                _real_btts_ht_source = ""
-                _real_over15_ht_source = ""
                 try:
-                    _mid = pm.get("match_id")
-                    _pin_diag["odds_lookup"] += 1
-                    if _league_prior_fallback and _netrattler_fast_tips_enabled():
-                        # Zero per-match network calls: standard markets + specials were
-                        # loaded in bulk and are reused for every fallback match.
-                        _std = fetch_pinnacle_match_odds(_mid, include_specials=False) if _mid else {}
-                        _sp = _lookup_pinnacle_team_specials(home, away)
-                        ro = {"_source": "pinnacle_bulk"}
-                        if _std:
-                            for _src, _dst in (("home_win","home"),("draw","draw"),("away_win","away"),
-                                               ("over_25","over_25"),("over_15_ht","over_15_ht")):
-                                if _std.get(_src): ro[_dst] = _std.get(_src)
-                        if _sp:
-                            for _k in ("btts_yes","btts_yes_ht","btts_over25_combo","over_15_ht"):
-                                if _sp.get(_k): ro[_k] = _sp.get(_k)
-                        if ro.get("over_15_ht"): ro["over15_ht"] = ro["over_15_ht"]
-                    else:
-                        ro = _get_real_odds_any_source(home, away, league_name, _mid, target_date.isoformat() if hasattr(target_date, "isoformat") else None)
+                    ro = get_pinnacle_match_odds(home, away)
                     if ro:
-                        # WICHTIG: nur die echte QUOTE übernehmen, die MODELL-Wahrscheinlichkeit
-                        # (prob_b/prob_o) behalten! Sonst wird prob durch implied-odds
-                        # überschrieben (~52%) und fällt unter MIN_PROBABILITY → keine Tipps.
-                        _ro_source = str(ro.get("_source") or "pinnacle")
-                        _qb = _sanitize_team_quote(ro.get("btts_yes"), "btts")
-                        _qo = _sanitize_team_quote(ro.get("over_25"), "over25")
-                        _qbh = _sanitize_team_quote(ro.get("btts_yes_ht"), "btts_ht")
-                        _qoh = _sanitize_team_quote(ro.get("over_15_ht") or ro.get("over15_ht"), "over15_ht")
-                        if _qb:
-                            btts_yes = _qb; _real_btts_odd = True; _real_btts_source = _ro_source
-                        if _qo:
-                            over25 = _qo; _real_over_odd = True; _real_over_source = _ro_source
-                        _real_btts_ht_odd = bool(_qbh)
-                        _real_over15_ht_odd = bool(_qoh)
-                        if _qbh:
-                            btts_ht_odds = _qbh; _real_btts_ht_source = _ro_source
-                        if _qoh:
-                            o15_odds = _qoh; _real_over15_ht_source = _ro_source
-                        if any(ro.get(k) for k in ("btts_yes", "over_25", "home", "draw", "away", "btts_yes_ht", "over_15_ht", "over15_ht")):
-                            _pin_diag["quote_any"] += 1
-                        if ro.get("btts_yes"): _pin_diag["quote_btts"] += 1
-                        if ro.get("over_25"): _pin_diag["quote_over25"] += 1
-                        if any(ro.get(k) for k in ("home", "draw", "away")): _pin_diag["quote_1x2"] += 1
-                        if ro.get("btts_yes_ht") or ro.get("over_15_ht") or ro.get("over15_ht"): _pin_diag["quote_ht"] += 1
-                        if ro.get("_source") and ro["_source"] != "pinnacle":
-                            log(f"      🍋 Echte Quote via {ro['_source']}: {home} vs {away}")
-                    if not ro or not any((ro or {}).get(k) for k in ("btts_yes","over_25","home","draw","away","btts_yes_ht","over15_ht")):
-                        _pin_diag["no_quote_after_model"] += 1
+                        if ro.get("btts_yes"):
+                            btts_yes = ro["btts_yes"]
+                            prob_b = int(100 / btts_yes * 0.95)
+                        if ro.get("over_25"):
+                            over25 = ro["over_25"]
+                            prob_o = int(100 / over25 * 0.95)
                 except Exception:
                     pass
-
-                # 🔌 TEAM-SPECIAL-FALLBACK: Pinnacle specials/markets may flip to 403
-                # between runs. Query Kambi only for model-relevant matches and with a
-                # strict global cap. Real observed prices only; combined odds are never
-                # synthesized from separate legs.
-                try:
-                    _model_bh = float((_ml_match or {}).get("btts_ht_pct", 0) or 0)
-                    _need_special = (
-                        (not _real_btts_odd and prob_b >= _market_min_probability("btts"))
-                        or (prob_b >= _market_min_probability("combo") and prob_o >= _market_min_probability("combo")
-                            and not float((ro or {}).get("btts_over25_combo") or 0))
-                        or (not _real_btts_ht_odd and _model_bh >= _market_min_probability("btts_ht"))
-                    )
-                    if _need_special and str(env("NETRATTLER_KAMBI_SPECIAL_FALLBACK", "true")).lower() in ("1","true","yes","on"):
-                        _ks = _fetch_kambi_team_specials_bounded(home, away)
-                        if _ks:
-                            ro = dict(ro or {})
-                            ro.setdefault("_source", "kambi")
-                            for _kk in ("btts_yes", "btts_yes_ht", "btts_over25_combo", "over_15_ht"):
-                                if _ks.get(_kk) and not ro.get(_kk):
-                                    ro[_kk] = _ks[_kk]
-                            _qb = _sanitize_team_quote(ro.get("btts_yes"), "btts")
-                            _qbh = _sanitize_team_quote(ro.get("btts_yes_ht"), "btts_ht")
-                            _qoh = _sanitize_team_quote(ro.get("over_15_ht"), "over15_ht")
-                            if _qb and not _real_btts_odd:
-                                btts_yes = _qb; _real_btts_odd = True; _real_btts_source = "kambi"
-                                _pin_diag["quote_btts"] += 1
-                            if _qbh and not _real_btts_ht_odd:
-                                btts_ht_odds = _qbh; _real_btts_ht_odd = True; _real_btts_ht_source = "kambi"
-                                _pin_diag["quote_ht"] += 1
-                            if _qoh and not _real_over15_ht_odd:
-                                o15_odds = _qoh; _real_over15_ht_odd = True; _real_over15_ht_source = "kambi"
-                                _pin_diag["quote_ht"] += 1
-                            if any(_ks.get(k) for k in ("btts_yes","btts_yes_ht","btts_over25_combo","over_15_ht")):
-                                _pin_diag["quote_any"] += 1
-                                log(f"      🔌 Kambi Specials: {home} vs {away} → {','.join(k for k,v in _ks.items() if v)}")
-                except Exception as _kse:
-                    log(f"      🔌 Kambi Specials Fallback übersprungen: {str(_kse)[:70]}", "WARN")
 
                 mn = f"{home} vs {away}"
                 tstr = "TBD"
@@ -27093,7 +24449,7 @@ def main():
                     pass
 
                 # BTTS Tipp — nur Value Bets (Quote >=1.70 + echter Edge)
-                if _has_independent_model and prob_b >= _market_min_probability("btts") and "btts" in tips_by_market and _is_value_bet(btts_yes, prob_b, "btts") and (_real_btts_odd or not _real_odds_only_enabled()):
+                if prob_b >= MIN_PROBABILITY and "btts" in tips_by_market and _is_value_bet(btts_yes, prob_b):
                     tip_btts = {
                         "match": mn, "league": league_name or "Pinnacle",
                         "time": tstr, "tip": "YES",
@@ -27101,16 +24457,15 @@ def main():
                         "oddsYes": btts_yes, "fairOdds": round(100/prob_b, 2),
                         "valueRating": ("VALUE" if ro else "OK"), "units": 1.0, "market": "btts",
                         "reasoning": f"Pinnacle Markt-Analyse | {league_name}",
-                        "_no_real_odds": not _real_btts_odd, "_source": (_real_btts_source or "pinnacle"), "_kickoff": _ko_sort,
+                        "_no_real_odds": not bool(ro), "_source": "pinnacle", "_kickoff": _ko_sort,
                     }
                     enrich_pinnacle_tip(tip_btts, home, away, league_name)
                     tips_by_market["btts"].append(tip_btts)
                     pinnacle_tips_count += 1
-                    _pin_diag["tips"] += 1
                     log(f"      ✅ BTTS YES @ {btts_yes} ({prob_b}%)")
 
                 # Over 2.5 Tipp — nur Value Bets
-                if _has_independent_model and prob_o >= _market_min_probability("over25") and "over25" in tips_by_market and _is_value_bet(over25, prob_o, "over25") and (_real_over_odd or not _real_odds_only_enabled()):
+                if prob_o >= MIN_PROBABILITY and "over25" in tips_by_market and _is_value_bet(over25, prob_o):
                     tip_over25 = {
                         "match": mn, "league": league_name or "Pinnacle",
                         "time": tstr, "tip": "YES",
@@ -27118,20 +24473,18 @@ def main():
                         "oddsYes": over25, "fairOdds": round(100/prob_o, 2),
                         "valueRating": ("VALUE" if ro else "OK"), "units": 1.0, "market": "over25",
                         "reasoning": f"Pinnacle Markt-Analyse | {league_name}",
-                        "_no_real_odds": not _real_over_odd, "_source": (_real_over_source or "pinnacle"), "_kickoff": _ko_sort,
+                        "_no_real_odds": not bool(ro), "_source": "pinnacle", "_kickoff": _ko_sort,
                     }
                     enrich_pinnacle_tip(tip_over25, home, away, league_name)
                     tips_by_market["over25"].append(tip_over25)
                     pinnacle_tips_count += 1
-                    _pin_diag["tips"] += 1
 
                 # 🔥 Combo: BTTS + Over 2.5 (stark korreliert)
-                if _has_independent_model and prob_b >= _market_min_probability("combo") and prob_o >= _market_min_probability("combo") and "combo" in tips_by_market:
+                if prob_b >= MIN_PROBABILITY and prob_o >= MIN_PROBABILITY and "combo" in tips_by_market:
+                    # Korrelation: BTTS-Yes-Spiele sind meist auch Over 2.5
                     combo_prob = min(prob_b, prob_o) - 5
-                    # Never synthesize a bookmaker combo price from two singles.
-                    combo_odds = float((ro or {}).get("btts_over25_combo") or 0)
-                    _combo_real = bool(combo_odds)
-                    if combo_prob >= _market_min_probability("combo") and _is_value_bet(combo_odds, combo_prob, "combo") and _combo_real:
+                    combo_odds = round(btts_yes * over25 * 0.80, 2)  # Korrelationsabschlag
+                    if combo_prob >= (MIN_PROBABILITY - 10) and _is_value_bet(combo_odds, combo_prob):
                         tip_combo = {
                             "match": mn, "league": league_name or "Pinnacle",
                             "time": tstr, "tip": "BTTS + Over 2.5",
@@ -27139,12 +24492,11 @@ def main():
                             "oddsYes": combo_odds, "fairOdds": round(100/combo_prob, 2),
                             "valueRating": ("VALUE" if ro else "OK"), "units": 0.75, "market": "combo",
                             "reasoning": f"Pinnacle Combo-Analyse | {league_name}",
-                            "_no_real_odds": not _combo_real, "_source": str((ro or {}).get("_source") or "observed_combo"), "_kickoff": _ko_sort,
+                            "_no_real_odds": not bool(ro), "_source": "pinnacle", "_kickoff": _ko_sort,
                         }
                         enrich_pinnacle_tip(tip_combo, home, away, league_name)
                         tips_by_market["combo"].append(tip_combo)
                         pinnacle_tips_count += 1
-                        _pin_diag["tips"] += 1
 
                 # 🕐 HT-Tipps: BTTS HT + Over 1.5 HT (zwei separate Tipps)
                 if "btts_ht" in tips_by_market:
@@ -27154,11 +24506,16 @@ def main():
                     try:
                         if ro and ro.get("btts_yes_ht"):
                             btts_ht_odds = ro["btts_yes_ht"]
-                            btts_ht_prob = float((_ml_match or {}).get("btts_ht_pct", 0) or 0)
+                            btts_ht_prob = int(100 / btts_ht_odds * 0.95)
                     except Exception:
                         pass
-                    # REAL_ODDS_ONLY: no synthetic HT odds fallback.
-                    if btts_ht_prob >= _market_min_probability("btts_ht") and _is_value_bet(btts_ht_odds, btts_ht_prob, "btts_ht") and (_real_btts_ht_odd or not _real_odds_only_enabled()):
+                    if not btts_ht_odds:
+                        # Fallback: ~38-44% liegt BTTS HT typischerweise
+                        if prob_b >= MIN_PROBABILITY + 5:  # sehr torreiche Paarung
+                            btts_ht_odds, btts_ht_prob = 2.05, 68
+                        else:
+                            btts_ht_odds, btts_ht_prob = 2.30, 67
+                    if btts_ht_prob >= MIN_PROBABILITY and _is_value_bet(btts_ht_odds, btts_ht_prob):
                         tip_btts_ht = {
                             "match": mn, "league": league_name or "Pinnacle",
                             "time": tstr, "tip": "BTTS HT (Beide Teams treffen 1.HZ)",
@@ -27166,116 +24523,44 @@ def main():
                             "oddsYes": btts_ht_odds, "fairOdds": round(100/btts_ht_prob, 2),
                             "valueRating": ("VALUE" if (ro and ro.get("btts_yes_ht")) else "OK"), "units": 1.0, "market": "btts_ht",
                             "reasoning": f"Pinnacle HT-Analyse | {league_name}",
-                            "_no_real_odds": not _real_btts_ht_odd, "_source": (_real_btts_ht_source or "pinnacle"), "_kickoff": _ko_sort,
+                            "_no_real_odds": not bool(ro), "_source": "pinnacle", "_kickoff": _ko_sort,
                         }
                         enrich_pinnacle_tip(tip_btts_ht, home, away, league_name)
                         tips_by_market["btts_ht"].append(tip_btts_ht)
                         pinnacle_tips_count += 1
-                        _pin_diag["tips"] += 1
 
                     # --- Over 1.5 Tore HT ---
                     o15_odds = 0
                     o15_prob = 0
                     try:
-                        if ro and (ro.get("over_15_ht") or ro.get("over15_ht")):
-                            o15_odds = ro.get("over_15_ht") or ro.get("over15_ht")
-                            o15_prob = float((_ml_match or {}).get("over15_ht_pct", 0) or 0)
+                        if ro and ro.get("over_15_ht"):
+                            o15_odds = ro["over_15_ht"]
+                            o15_prob = int(100 / o15_odds * 0.95)
                     except Exception:
                         pass
-                    # REAL_ODDS_ONLY: no synthetic HT odds fallback.
-                    if o15_prob >= _market_min_probability("over15_ht") and "over15_ht" in tips_by_market and _is_value_bet(o15_odds, o15_prob, "over15_ht") and (_real_over15_ht_odd or not _real_odds_only_enabled()):
+                    if not o15_odds:
+                        if prob_o >= MIN_PROBABILITY:  # torreiche Liga
+                            o15_odds, o15_prob = 2.10, 68
+                        else:
+                            o15_odds, o15_prob = 2.40, 67
+                    if o15_prob >= MIN_PROBABILITY and "over15_ht" in tips_by_market and _is_value_bet(o15_odds, o15_prob):
                         tip_o15_ht = {
                             "match": mn, "league": league_name or "Pinnacle",
                             "time": tstr, "tip": "Over 1.5 Tore HT",
                             "probability": o15_prob, "confidence": 3,
                             "oddsYes": o15_odds, "fairOdds": round(100/o15_prob, 2),
-                            "valueRating": ("VALUE" if (ro and (ro.get("over_15_ht") or ro.get("over15_ht"))) else "OK"), "units": 1.0, "market": "over15_ht",
+                            "valueRating": ("VALUE" if (ro and ro.get("over_15_ht")) else "OK"), "units": 1.0, "market": "over15_ht",
                             "reasoning": f"Pinnacle HT-Analyse | {league_name}",
-                            "_no_real_odds": not _real_over15_ht_odd, "_source": (_real_over15_ht_source or "pinnacle"), "_kickoff": _ko_sort,
+                            "_no_real_odds": not bool(ro), "_source": "pinnacle", "_kickoff": _ko_sort,
                         }
                         enrich_pinnacle_tip(tip_o15_ht, home, away, league_name)
                         tips_by_market["over15_ht"].append(tip_o15_ht)
                         pinnacle_tips_count += 1
-                        _pin_diag["tips"] += 1
-
-                # 🏆 1X2 (Sieger-Tipp): real quote + model VALUE or conservative
-                # model/market CONSENSUS. The consensus tier exists so strong favourites
-                # are not silently lost merely because 1X2 models are less decisive than
-                # binary goal models. It is labelled SHARP, not VALUE, and uses 0.5u.
-                try:
-                    if "1x2" in tips_by_market and ro:
-                        _ml_1x2 = dict(_ml_match or {})
-                        _picks_1x2 = [
-                            ("home", "Heimsieg", ro.get("home"), _ml_1x2.get("home_win_pct", 0)),
-                            ("draw", "Unentschieden", ro.get("draw"), _ml_1x2.get("draw_pct", 0)),
-                            ("away", "Auswärtssieg", ro.get("away"), _ml_1x2.get("away_win_pct", 0)),
-                        ]
-                        _inv=[]
-                        for _s,_l,_o,_p in _picks_1x2:
-                            try:
-                                _of=float(str(_o).replace(",",".")); _inv.append((_s,1.0/_of if _of>1 else 0.0))
-                            except Exception:
-                                _inv.append((_s,0.0))
-                        _vig=sum(v for _,v in _inv)
-                        _market_prob={k:(100.0*v/_vig if _vig>0 else 0.0) for k,v in _inv}
-                        _min_1x2_odd=float(env("NETRATTLER_1X2_MIN_ODDS","1.55"))
-                        _min_model_prob=_market_min_probability("1x2")
-                        _min_edge=float(env("NETRATTLER_1X2_MIN_EDGE","0.01"))
-                        _cons_min=float(env("NETRATTLER_1X2_CONSENSUS_MIN_PROB","58"))
-                        _cons_model_floor=float(env("NETRATTLER_1X2_CONSENSUS_MODEL_FLOOR","50"))
-                        _cons_max_gap=float(env("NETRATTLER_1X2_CONSENSUS_MAX_GAP","10"))
-                        _cons_max_odds=float(env("NETRATTLER_1X2_CONSENSUS_MAX_ODDS","2.10"))
-                        _cands=[]
-                        for _s,_l,_o,_p in _picks_1x2:
-                            try:
-                                _of=float(str(_o).replace(",",".")); _pf=float(_p or 0); _mp=float(_market_prob.get(_s,0) or 0)
-                            except (TypeError,ValueError):
-                                continue
-                            if not (_min_1x2_odd <= _of <= TEAM_SINGLE_MAX_ODDS) or not _quote_is_sane("1x2",_of):
-                                _pin_diag["1x2_odds_reject"] += 1; continue
-                            _edge=(_pf/100.0)-(1.0/_of) if _pf>0 else -1.0
-                            _model_value=bool(_pf >= _min_model_prob and _edge >= _min_edge)
-                            _consensus=bool(
-                                _mp >= _cons_min and _of <= _cons_max_odds and
-                                ((_pf >= _cons_model_floor and abs(_pf-_mp) <= _cons_max_gap) or _pf <= 0)
-                            )
-                            if not (_model_value or _consensus):
-                                if _pf < _min_model_prob and not _consensus: _pin_diag["1x2_prob_reject"] += 1
-                                elif _edge < _min_edge and not _consensus: _pin_diag["1x2_edge_reject"] += 1
-                                continue
-                            _rating="VALUE" if _model_value else "SHARP"
-                            _tip_prob=_pf if _model_value else ((_pf*0.6+_mp*0.4) if _pf>0 else _mp)
-                            _cands.append((_s,_l,_of,_tip_prob,_rating,_edge,_mp))
-                        if _cands:
-                            # VALUE first by edge; otherwise strongest consensus probability.
-                            _best_1x2=max(_cands,key=lambda x:(1 if x[4]=="VALUE" else 0, x[5] if x[4]=="VALUE" else x[3], -x[2]))
-                            _sel,_label,_odd,_prob,_rating,_edge_raw,_mp=_best_1x2
-                            tip_1x2={
-                                "match":mn,"league":league_name or "Pinnacle","time":tstr,"tip":_label,
-                                "probability":round(_prob,1),"confidence":3,"oddsYes":_odd,
-                                "fairOdds":round(100/_prob,2) if _prob else 0,
-                                "valueRating":_rating,"units":(1.0 if _rating=="VALUE" else 0.5),"market":"1x2",
-                                "reasoning":(f"Modell + Pinnacle Value | {league_name}" if _rating=="VALUE" else f"Modell + Pinnacle Markt-Konsens | {league_name}"),
-                                "_source":ro.get("_source","pinnacle"),"_kickoff":_ko_sort,
-                            }
-                            tips_by_market["1x2"].append(tip_1x2)
-                            pinnacle_tips_count += 1; _pin_diag["tips"] += 1
-                except Exception as _1x2e:
-                    log(f"   🏆 1X2 Fehler: {str(_1x2e)[:80]}","WARN")
 
                 total_analyzed += 1
             except Exception as pe:
                 log(f"   ⚠️ Pinnacle Match Fehler: {str(pe)[:60]}")
         log(f"🎰 Pinnacle fertig: {pinnacle_tips_count} Tipps generiert")
-        log(f"   🔎 Teammarkt-Diagnose: Modell-Support={_pin_diag['model_supported']} · ohne Modell={_pin_diag['no_model']} · Hauptmarkt-Schwelle={MIN_PROBABILITY}% · Odds-Lookups={_pin_diag['odds_lookup']} · ohne Quote danach={_pin_diag['no_quote_after_model']} · Quote-any={_pin_diag['quote_any']} · BTTS={_pin_diag['quote_btts']} · O2.5={_pin_diag['quote_over25']} · 1X2={_pin_diag['quote_1x2']} · HT={_pin_diag['quote_ht']} · echte Tipps={_pin_diag['tips']}")
-        log(f"   🎚️ Markt-Schwellen: BTTS={_market_min_probability('btts'):.0f}% · O2.5={_market_min_probability('over25'):.0f}% · Combo={_market_min_probability('combo'):.0f}% · BTTS-HT={_market_min_probability('btts_ht'):.0f}% · O1.5-HT={_market_min_probability('over15_ht'):.0f}% · 1X2={_market_min_probability('1x2'):.0f}%")
-        log(f"   🏆 1X2-Rejects: prob={_pin_diag['1x2_prob_reject']} · odds={_pin_diag['1x2_odds_reject']} · edge={_pin_diag['1x2_edge_reject']}")
-        try:
-            import netrattler_oddspapi as _op
-            _st = _op.call_stats()
-            log(f"   🍋 OddsPapi Matching: {_st.get('hits',0)} Treffer / {_st.get('misses',0)} verfehlt · {_st.get('odds',0)} Odds-Calls")
-        except Exception:
-            pass
 
     if MAX_LEAGUES_PER_RUN > 0:
         active_leagues = active_leagues[:MAX_LEAGUES_PER_RUN]
@@ -27285,30 +24570,14 @@ def main():
     # (ESPN/FotMob/etc. liefern aus GitHub Actions eh 0 — spart ~5 Min Actions-Minuten)
     _skip_league_loop = False
     try:
-        _fast_tips_now = _netrattler_fast_tips_enabled()
-        if _fast_tips_now and env("FORCE_LEAGUE_LOOP", "false").lower() not in ["1", "true", "yes"]:
-            _skip_league_loop = True
-            log("⚡ FAST: langsame Liga-Fallbackschleife komplett übersprungen — Props/Builder laufen danach aus Pinnacle/Supabase")
-        elif pinnacle_tips_count >= 10 and env("FORCE_LEAGUE_LOOP", "false").lower() not in ["1", "true", "yes"]:
+        # 🆕 Schwelle auf 10 gesenkt (vorher 30) — auch Morgen-Runs mit wenigen Matches sparen Zeit
+        if pinnacle_tips_count >= 10 and env("FORCE_LEAGUE_LOOP", "false").lower() not in ["1", "true", "yes"]:
             _skip_league_loop = True
             log(f"⚡ Liga-Schleife übersprungen ({pinnacle_tips_count} Pinnacle-Tipps reichen) — spart ~5 Min")
-        elif (_real_odds_only_enabled() and len(_PINNACLE_MATCHUPS) >= int(env("NETRATTLER_PINNACLE_COVERAGE_SKIP_MIN", "250"))
-              and env("FORCE_LEAGUE_LOOP", "false").lower() not in ["1", "true", "yes"]):
-            # In REAL_ODDS_ONLY mode a fixture without an observed bookmaker quote
-            # cannot become a tip.  With hundreds of Pinnacle fixtures already loaded,
-            # the 399-league HTTP/Playwright sweep mostly returns zero and used 180s
-            # in the 08.09 run. Props/Builder are fed from Pinnacle fixtures afterwards.
-            _skip_league_loop = True
-            log(f"⚡ Liga-Schleife übersprungen: REAL_ODDS_ONLY + {len(_PINNACLE_MATCHUPS)} Pinnacle-Matches decken den Run ab")
     except Exception:
         pass
 
-    _league_fallback_started = time.time()
-    _league_fallback_budget = _stable_budget("NETRATTLER_LEAGUE_FALLBACK_BUDGET_SEC", 45, stable_min=45)
     for league in ([] if _skip_league_loop else active_leagues):
-        if _budget_exceeded() or (time.time() - _league_fallback_started) >= _league_fallback_budget:
-            log(f"⏱️ Liga-Fallback Budget erreicht ({_league_fallback_budget}s) — weiter zu Telegram/Props statt Timeout")
-            break
         log(f"╔══ Liga: {league} ══╗")
 
         try:
@@ -27450,18 +24719,11 @@ def main():
                 for _mk in list(tips_by_market.keys()):
                     _orig = tips_by_market.get(_mk, [])
                     _filt = _ft.get(_mk, [])
+                    # Wenn Filter alles verwirft (keine echten Quoten) → Original behalten
                     if _filt:
                         tips_by_market[_mk] = _filt
                     else:
-                        # Hard invariant: in REAL_ODDS_ONLY mode an empty edge result stays empty.
-                        # Older code restored the originals here, which could reintroduce model/fair
-                        # prices as if they were bookmaker quotes.
-                        if _real_odds_only_enabled():
-                            tips_by_market[_mk] = []
-                        if not _orig:
-                            log(f"   🎯 Edge Filter [{_mk}]: keine Kandidaten vor Edge-Filter")
-                        else:
-                            log(f"   🎯 Edge Filter [{_mk}]: {len(_orig)} Kandidaten, aber keine Edge-qualifizierte echte Quote")
+                        log(f"   🎯 Edge Filter [{_mk}]: keine Quoten — behalte {len(_orig)} Tipps")
                 log(f"   🎯 Edge Filter angewendet (mit Pinnacle-Fallback)")
         except Exception as _efe:
             log(f"   🎯 Edge Filter übersprungen: {str(_efe)[:60]}")
@@ -27475,23 +24737,10 @@ def main():
 
     send_top_tips(tips_by_market, target_date)
 
-    # 📊 Gruppen-Auswertung IMMER senden (nicht nur an tipplosen Tagen) — jede Gruppe
-    # bekommt ihre Markt-Stats. Guard in der Funktion verhindert Doppel-Senden.
-    try:
-        _send_daily_auswertung_to_all_groups()
-    except Exception as _ae:
-        log(f"Gruppen-Auswertung Error: {str(_ae)[:60]}", "WARN")
+    # 🎰 Pinnacle-Matches als Fixtures für Corners/Scorer/Props injizieren
     if _PINNACLE_MATCHUPS:
         _injected = 0
-        # ⏱️ ZEIT-BUDGET: nach X Min Match-Analyse abbrechen und senden was da ist.
-        # Verhindert 20-Min-Timeout bei vielen Ligen (FD.co.uk + ELO pro Liga).
-        import time as _tmod
-        _loop_start = _tmod.time()
-        _budget_sec = _stable_budget("NETRATTLER_ANALYSIS_BUDGET_SEC", 240, stable_min=240)
         for pm in _PINNACLE_MATCHUPS:
-            if _tmod.time() - _loop_start > _budget_sec or _budget_exceeded():
-                log(f"   ⏱️ Zeit-Budget erreicht — Analyse gestoppt, sende bisherige Tipps")
-                break
             _h, _a = pm.get("home",""), pm.get("away","")
             _ln = pm.get("league_name","")
             _st = pm.get("starts","")
@@ -27523,6 +24772,15 @@ def main():
     # Builder-Pool pro Run zurücksetzen, damit keine alten Legs erneut erscheinen.
     _NTR_BUILDER_PROP_POOL.clear()
 
+    # 🔵⚽ Ecken + Scorer Bots
+    if env("ENABLE_CORNERS_SCORER", "true").lower() in ["1", "true", "yes"]:
+        run_corners_and_scorer_bots(
+            target_date=target_date,
+            active_leagues=active_leagues,
+            odds_data_cache={},
+            fixtures_cache=_fixtures_cache,
+        )
+
     # 🔑 ADVANCED PROPS BOT
     if env("ENABLE_ADVANCED_PROPS", "true").lower() in ["1", "true", "yes"]:
         run_advanced_props_bot(
@@ -27544,12 +24802,6 @@ def main():
                 ch_tz=_ch_tz,
                 top_btts_tips=_top_btts_for_props,
                 fixtures_cache=_fixtures_cache,
-                team_candidate_tips=[
-                    _tip
-                    for _rows in tips_by_market.values()
-                    for _tip in (_rows or [])
-                    if isinstance(_tip, dict)
-                ],
             )
         except Exception as _ppe:
             log(
@@ -27566,14 +24818,10 @@ def main():
 
         # Kandidaten aus normalen Team-Tipps nur optional.
         # V31 CLEAN: Prop Builder soll echte Spielerprops senden, keine BTTS/Over-Team-Builder.
-        # V34B SANITY: PROP BUILDER ist player-only.
-        # Team-Märkte bleiben in BTTS / Over / Combo und dürfen nicht als
-        # "Player-Prop Profil" oder mit multiplizierten korrelierten Quoten erscheinen.
-        _team_builder_env = str(env("ENABLE_TEAM_LEGS_IN_PROP_BUILDER", "false")).lower() in ["1", "true", "yes", "on"]
-        if _team_builder_env:
-            log("   ⚠️ ENABLE_TEAM_LEGS_IN_PROP_BUILDER wird in V34B ignoriert: Prop Builder bleibt player-only", "WARN")
-        _allow_team_legs_for_builder = False
-        for _mk, _tips in []:
+        _allow_team_legs_for_builder = str(env("ENABLE_TEAM_LEGS_IN_PROP_BUILDER", "true")).lower() in ["1", "true", "yes", "on"]
+        if _allow_team_legs_for_builder:
+            log("   🏗️ Team-Legs im Prop Builder aktiviert (ENABLE_TEAM_LEGS_IN_PROP_BUILDER=true)")
+        for _mk, _tips in (tips_by_market.items() if _allow_team_legs_for_builder else []):
             for _t in _tips:
                 _match_n = _t.get("match", "")
                 _parts = _match_n.split(" vs ") if " vs " in _match_n else [_match_n, ""]
@@ -27586,6 +24834,8 @@ def main():
                     "category": {
                         "btts": "btts", "over25": "over_goals",
                         "corners": "team_corners", "btts_ht": "btts_ht", "over15_ht": "half_goals_1st",
+                        "1x2": "result", "combo": "btts", "cards": "match_cards",
+                        "team_cards": "team_cards", "double_chance": "double_chance",
                     }.get(_mk, "shots"),
                     "line": 0.5,
                     "odds": _t.get("odds", _t.get("oddsYes", 0)),
@@ -27647,20 +24897,11 @@ def main():
             f"≥3 Legs: {sum(1 for v in _pool_matches.values() if v >= 3)}"
         )
 
-        if len(_builder_prop_pool) >= 2:
-            _builder_chat = (TELEGRAM_GROUPS.get("advanced_props") or TELEGRAM_GROUPS.get("props")
-                             or TELEGRAM_GROUPS.get("builder") or TELEGRAM_GROUPS.get("stats")
-                             or TELEGRAM_GROUPS.get("combos") or TELEGRAM_GROUPS.get("late_goals")
-                             or TELEGRAM_CHAT_ID)
+        if len(_builder_prop_pool) >= 3:
+            _builder_chat = TELEGRAM_GROUPS.get("advanced_props") or TELEGRAM_GROUPS.get("props")
             if _builder_chat:
                 def _send_builder(msg):
-                    # 👁️ BEOBACHTUNGS-MODUS: Builder senden, aber als "Beobachtung"
-                    # markieren, bis der ROI sie bestätigt. Schutz vor -EV-Multi-Legs.
-                    # Deaktivieren mit NETRATTLER_BUILDER_OBSERVE=false.
-                    if str(env("NETRATTLER_BUILDER_OBSERVE", "true")).lower() in ("1", "true", "yes", "on"):
-                        msg = ("👁️ <b>BEOBACHTUNG</b> <i>(kein Einsatz-Tipp — Track-Record wird aufgebaut)</i>\n"
-                               + msg)
-                    return send_telegram(msg, chat_id=_builder_chat)
+                    send_telegram(msg, chat_id=_builder_chat)
 
                 _sent_n, _picks = run_builder_engine(
                     raw_props=_builder_prop_pool,
@@ -27672,22 +24913,10 @@ def main():
                     logger=lambda m: log(f"   🏗️ {m}"),
                 )
                 log(f"   🏗️ Builder Engine: {_sent_n} Builder aus {len(_builder_prop_pool)} Props gesendet")
-            else:
-                log("   🏗️ Builder Engine: kein Telegram-Ziel fuer Player Props/Builder konfiguriert", "WARN")
     except ImportError:
         log("   🏗️ netrattler_builder_engine nicht gefunden — skip", "WARN")
     except Exception as _be:
         log(f"   🏗️ Builder Engine Error: {str(_be)[:80]}", "WARN")
-
-    # 🔵⚽ Corners/legacy scorer are deliberately LAST among prediction pipelines.
-    # Player Props + Builder must never be starved by secondary market work.
-    if env("ENABLE_CORNERS_SCORER", "true").lower() in ["1", "true", "yes"]:
-        run_corners_and_scorer_bots(
-            target_date=target_date,
-            active_leagues=active_leagues,
-            odds_data_cache={},
-            fixtures_cache=_fixtures_cache,
-        )
 
     # 🆕 MULTI-COMBO SYSTEM (3,4,5,6,7,8 Tipps)
     all_tips_flat = []
@@ -27698,8 +24927,9 @@ def main():
 
     if len(all_tips_flat) >= 3:
         log("")
-        # Multi-Combos 3-11 immer erzeugen (7-11 sind die groesseren "Lottery"-Kombis).
-        _combo_sizes = [3, 4, 5, 6, 7, 8, 9, 10, 11]
+        _combo_sizes = [3, 4, 5, 6]
+        if str(env("ENABLE_LOTTERY_COMBOS", "false")).lower() in ["1", "true", "yes", "on"]:
+            _combo_sizes += [7, 8, 9, 10, 11]
         log(f"🎰 Generiere Multi-Combos ({','.join(str(x) for x in _combo_sizes)} Tipps)...")
         combo_chat = TELEGRAM_GROUPS.get("combos", TELEGRAM_CHAT_ID)  # Multi-Combos
 
@@ -27715,14 +24945,7 @@ def main():
         for n in _combo_sizes:
             combo = generate_multi_combo_bets(all_tips_flat, num_tips=n)
             if combo:
-                # 🚫 Quoten-Deckel: absurde Mega-Combos (>500) rausfiltern —
-                # 11er-Ketten mit Quote 1000+ sind sinnlos (~0% Trefferchance).
-                _combo_odds = float(combo.get("total_odds", 0) or 0)
-                _combo_max = float(env("NETRATTLER_MULTI_COMBO_MAX_ODDS", "500"))
-                if _combo_odds > _combo_max:
-                    log(f"   ⏭️ Combo {n} übersprungen (Quote {_combo_odds:.0f} > {_combo_max:.0f} = Lottery)")
-                    continue
-                # Deterministische Signatur — identische Kombi wird nicht erneut gesendet
+                # Deterministische Signatur — identische Kombi (gleiche Legs) wird nicht erneut gesendet
                 _sig = _combo_signature(combo.get("tips", []), prefix=f"combo{n}")
                 _combo_tip_id = f"combo_{n}leg_{target_date}_{_sig}".replace(" ", "_")
                 if is_duplicate_combo(_combo_tip_id, target_date):
@@ -27785,24 +25008,6 @@ def main():
 
 
 if __name__ == "__main__":
-    # ⏱️ HARTER WATCHDOG: SIGALRM unterbricht JEDE hängende Operation (Playwright,
-    # requests ohne Timeout, etc.) nach X Sekunden. Garantiert kein 20-Min-Timeout.
-    try:
-        import signal as _sig
-        def _hard_timeout(signum, frame):
-            log("⏱️ HARTER WATCHDOG: Zeitlimit erreicht — Bot wird sofort beendet", "WARN")
-            # os._exit umgeht ALLE except-Blöcke → garantierter Stopp (kein Loop fängt es ab)
-            try:
-                import sys as _s; _s.stdout.flush()
-            except Exception:
-                pass
-            os._exit(124)
-        _wd = _stable_budget("NETRATTLER_HARD_WATCHDOG_SEC", 1050, stable_min=900)  # leave headroom inside 20-min Actions job
-        if hasattr(_sig, "SIGALRM"):
-            _sig.signal(_sig.SIGALRM, _hard_timeout)
-            _sig.alarm(_wd)
-    except Exception:
-        pass
     try:
         main()
     except Exception as e:
