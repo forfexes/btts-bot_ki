@@ -1,44 +1,31 @@
-name: NETRATTLER Settlement Final V23 + V36 AutoLearning
+name: NETRATTLER Settlement Final V22 STRICT
 
 on:
   workflow_dispatch:
   schedule:
-    - cron: "20 7,15,23 * * *"  # 3×/Tag (früh/nachmittag/nacht)
-
-concurrency:
-  group: netrattler-settlement-v23-fast
-  cancel-in-progress: false
+    - cron: "20 13 * * *"
+    - cron: "20 23 * * *"
 
 jobs:
-  settle:
+  settlement:
     runs-on: ubuntu-latest
-    timeout-minutes: 20
+    timeout-minutes: 30
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-python@v5
         with:
           python-version: "3.11"
           cache: "pip"
-      - run: pip install requests numpy scikit-learn curl_cffi
-      - run: python -m py_compile netrattler_settlement_v16_final.py netrattler_learning_engine.py netrattler_autolearn_v36.py netrattler_builder_learning_v36.py
-      - name: Settle per group and learn from newly closed picks
+      - name: Install dependencies
+        run: |
+          python -m pip install --upgrade pip
+          pip install requests python-dateutil
+      - name: Compile settlement
+        run: python -m py_compile netrattler_settlement_v16_final.py
+      - name: Run Settlement V22 STRICT
         env:
-          RESULT_USE_SOFASCORE: "false"
-          RESULT_USE_FOTMOB: "true"
-          FOTMOB_DETAIL_MAX: "40"
-          SETTLEMENT_DAYS: "21"
-          NETRATTLER_RESETTLE_BROKEN: "true"
-          NETRATTLER_ALWAYS_FALLBACK_RESULTS: "true"
-          RESULT_HTTP_TIMEOUT: "4"
-          SETTLEMENT_LIMIT: "6000"
-          RESULT_PUBLIC_FALLBACK_IF_DB_ROWS_LT: "999999"
-          RESULT_USE_ODDSPAPI: "false"
-          RESULT_USE_WINDRAWWIN: "false"
-          NETRATTLER_RESETTLE_VOID: "true"
-          NETRATTLER_RESETTLE_MARKETS: "btts_ht,over15_ht,corners,combo,builder,props,player_prop,scorer,1x2"
           SUPABASE_URL: ${{ secrets.SUPABASE_URL }}
           SUPABASE_KEY: ${{ secrets.SUPABASE_KEY }}
-          ODDSPAPI_KEY: ${{ secrets.ODDSPAPI_KEY }}
           SUPABASE_SERVICE_ROLE_KEY: ${{ secrets.SUPABASE_SERVICE_ROLE_KEY }}
           TELEGRAM_TOKEN: ${{ secrets.TELEGRAM_TOKEN }}
           TELEGRAM_BOT_TOKEN: ${{ secrets.TELEGRAM_BOT_TOKEN }}
@@ -49,25 +36,18 @@ jobs:
           TELEGRAM_GROUP_COMBOS: ${{ secrets.TELEGRAM_GROUP_COMBOS }}
           TELEGRAM_GROUP_BTTS_HT: ${{ secrets.TELEGRAM_GROUP_BTTS_HT }}
           TELEGRAM_GROUP_OVER15_HT: ${{ secrets.TELEGRAM_GROUP_OVER15_HT }}
+          TELEGRAM_GROUP_STATS: ${{ secrets.TELEGRAM_GROUP_STATS }}
           TELEGRAM_GROUP_BUILDER: ${{ secrets.TELEGRAM_GROUP_BUILDER }}
           TELEGRAM_GROUP_PROPS: ${{ secrets.TELEGRAM_GROUP_PROPS }}
-          TELEGRAM_GROUP_PLAYER_PROPS: ${{ secrets.TELEGRAM_GROUP_PLAYER_PROPS }}
           TELEGRAM_GROUP_CORNERS: ${{ secrets.TELEGRAM_GROUP_CORNERS }}
-          TELEGRAM_GROUP_STATS: ${{ secrets.TELEGRAM_GROUP_STATS }}
-          TELEGRAM_GROUP_LATE_GOALS: ${{ secrets.TELEGRAM_GROUP_LATE_GOALS }}
-          TELEGRAM_GROUP_1X2: ${{ secrets.TELEGRAM_GROUP_1X2 }}
-          NETRATTLER_AUTO_LEARN_AFTER_SETTLEMENT: "true"
-          UPDATE_SOURCE_TIPS: "true"
-          SEND_PENDING_SUMMARY: "false"
+          ALLSPORTS_API_KEY: ${{ secrets.ALLSPORTS_API_KEY }}
+          FOOTBALL_DATA_API_KEYS: ${{ secrets.FOOTBALL_DATA_API_KEYS }}
+          FOOTBALL_DATA_API_KEY: ${{ secrets.FOOTBALL_DATA_API_KEY }}
+          FOOTBALLDATA_IO_API_KEY: ${{ secrets.FOOTBALLDATA_IO_API_KEY }}
+          SETTLEMENT_DAYS: "14"
+          SETTLEMENT_LIMIT: "3000"
+          RESULT_USE_SOFASCORE: "false"
+          RESULT_USE_ESPN: "true"
+          RESULT_USE_OPENLIGADB: "true"
+          RESULT_HTTP_TIMEOUT: "4"
         run: python netrattler_settlement_v16_final.py
-
-      - uses: actions/upload-artifact@v4
-        if: always()
-        with:
-          name: netrattler-v36-settlement-learning
-          path: |
-            netrattler_active_policy.json
-            netrattler_autolearn_registry.json
-            netrattler_autolearn_report.json
-            netrattler_builder_correlations.json
-          if-no-files-found: ignore
