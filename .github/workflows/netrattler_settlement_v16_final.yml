@@ -1,4 +1,4 @@
-name: NETRATTLER Settlement Final V22 STRICT
+name: NETRATTLER Settlement Final V23 HARDENED
 
 on:
   workflow_dispatch:
@@ -22,7 +22,7 @@ jobs:
           pip install requests python-dateutil
       - name: Compile settlement
         run: python -m py_compile netrattler_settlement_v16_final.py
-      - name: Run Settlement V22 STRICT
+      - name: Run Settlement V23 HARDENED
         env:
           SUPABASE_URL: ${{ secrets.SUPABASE_URL }}
           SUPABASE_KEY: ${{ secrets.SUPABASE_KEY }}
@@ -40,6 +40,8 @@ jobs:
           TELEGRAM_GROUP_BUILDER: ${{ secrets.TELEGRAM_GROUP_BUILDER }}
           TELEGRAM_GROUP_PROPS: ${{ secrets.TELEGRAM_GROUP_PROPS }}
           TELEGRAM_GROUP_CORNERS: ${{ secrets.TELEGRAM_GROUP_CORNERS }}
+          TELEGRAM_GROUP_HZ_LIVE: ${{ secrets.TELEGRAM_GROUP_HZ_LIVE }}
+          TELEGRAM_GROUP_LATE_GOALS: ${{ secrets.TELEGRAM_GROUP_LATE_GOALS }}
           ALLSPORTS_API_KEY: ${{ secrets.ALLSPORTS_API_KEY }}
           FOOTBALL_DATA_API_KEYS: ${{ secrets.FOOTBALL_DATA_API_KEYS }}
           FOOTBALL_DATA_API_KEY: ${{ secrets.FOOTBALL_DATA_API_KEY }}
@@ -50,4 +52,5 @@ jobs:
           RESULT_USE_ESPN: "true"
           RESULT_USE_OPENLIGADB: "true"
           RESULT_HTTP_TIMEOUT: "4"
+          ESPN_DISABLE_AFTER_FORBIDDEN: "true"
         run: python netrattler_settlement_v16_final.py
