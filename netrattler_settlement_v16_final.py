@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """
-NETRATTLER Settlement FINAL V22 STRICT
+NETRATTLER Settlement FINAL V23 HARDENED
 ===============================
 
 Dateiname bleibt absichtlich stabil: netrattler_settlement_v16_final.py
@@ -50,6 +50,8 @@ DAYS = int(os.getenv("SETTLEMENT_DAYS", "14"))
 LIMIT = int(os.getenv("SETTLEMENT_LIMIT", "1200"))
 UPDATE_SOURCE_TIPS = os.getenv("UPDATE_SOURCE_TIPS", "true").lower() not in {"0", "false", "no"}
 SEND_PENDING_SUMMARY = os.getenv("SEND_PENDING_SUMMARY", "false").lower() in {"1", "true", "yes"}
+ESPN_DISABLE_AFTER_FORBIDDEN = os.getenv("ESPN_DISABLE_AFTER_FORBIDDEN", "true").lower() not in {"0", "false", "no"}
+_ESPN_DISABLED_FOR_RUN = False
 NOW = datetime.now(timezone.utc)
 TODAY = NOW.date()
 TODAY_S = TODAY.isoformat()
@@ -62,12 +64,14 @@ GROUPS = {
     "over15_ht": os.getenv("TELEGRAM_GROUP_OVER15_HT") or os.getenv("TELEGRAM_GROUP_STATS") or TG_DEFAULT,
     "builder": os.getenv("TELEGRAM_GROUP_BUILDER") or os.getenv("TELEGRAM_GROUP_PROPS") or TG_DEFAULT,
     "props": os.getenv("TELEGRAM_GROUP_PROPS") or TG_DEFAULT,
-    "corners": os.getenv("TELEGRAM_GROUP_CORNERS") or os.getenv("TELEGRAM_GROUP_STATS") or TG_DEFAULT,
+    "corners": os.getenv("TELEGRAM_GROUP_CORNERS") or os.getenv("TELEGRAM_GROUP_HZ_LIVE") or os.getenv("TELEGRAM_GROUP_STATS") or TG_DEFAULT,
+    "1x2": os.getenv("TELEGRAM_GROUP_LATE_GOALS") or TG_DEFAULT,
+    "scorer": os.getenv("TELEGRAM_GROUP_LATE_GOALS") or TG_DEFAULT,
     "stats": os.getenv("TELEGRAM_GROUP_STATS") or TG_DEFAULT,
     "default": TG_DEFAULT,
 }
 
-GROUP_ORDER = ["btts", "over25", "combo", "btts_ht", "over15_ht", "builder", "props", "corners"]
+GROUP_ORDER = ["btts", "over25", "combo", "btts_ht", "over15_ht", "1x2", "scorer", "builder", "props", "corners"]
 
 # Nur tatsächlich gesendete Tipps. player_prop_db ist ein Kandidaten-/Datenpool und
 # wird absichtlich NICHT komplett als Tipp ausgewertet.
@@ -206,6 +210,27 @@ def sb_get(table: str, params: Dict[str, str], quiet: bool = True) -> List[Dict[
         return []
 
 
+
+def sb_get_paged(table: str, params: Dict[str, str], max_rows: int = 10000, page_size: int = 1000, quiet: bool = True) -> List[Dict[str, Any]]:
+    """PostgREST paging: Supabase projects often cap one response at 1000 rows."""
+    output: List[Dict[str, Any]] = []
+    offset = 0
+    base = dict(params or {})
+    base.pop("limit", None)
+    base.pop("offset", None)
+    while len(output) < max_rows:
+        ask = min(page_size, max_rows - len(output))
+        page_params = dict(base)
+        page_params["limit"] = str(ask)
+        page_params["offset"] = str(offset)
+        page = sb_get(table, page_params, quiet=quiet)
+        if not page:
+            break
+        output.extend(page)
+        if len(page) < ask:
+            break
+        offset += len(page)
+    return output
 def sb_upsert(table: str, rows: Sequence[Dict[str, Any]], conflict: str) -> int:
     if not rows:
         return 0
@@ -354,20 +379,46 @@ def format_direct_summary(settlement: Dict[str, Any]) -> str:
     return "\n".join(lines)
 
 
+
 def edit_original_tip(settlement: Dict[str, Any]) -> bool:
-    """Wenn telegram_msg_id + message_text gespeichert sind: Original-Tipp direkt editieren."""
+    """Edit original Telegram post; retry the canonical group if stored chat_id is stale.
+
+    Telegram cannot retrieve an arbitrary old message by id. If neither candidate chat owns
+    the message, send a compact result update to the canonical group so the settlement is not lost.
+    """
     if normalized_status(settlement.get("status")) not in {"win", "loss"}:
         return False
     payload = settlement.get("tip_payload") or {}
     data = unpack(payload)
-    chat_id = anyv(data, ["telegram_chat_id", "chat_id", "tg_chat_id", "channel_id"], "")
     message_id = anyv(data, ["telegram_msg_id", "telegram_message_id", "message_id", "tg_message_id"], "")
     original = str(anyv(data, ["message_text", "text", "tip_text", "message", "caption"], ""))
-    if not chat_id or not message_id or not original:
-        return False
-    edited = _strip_old_direct_summary(original) + "\n\n" + format_direct_summary(settlement)
-    return telegram_edit(str(chat_id), message_id, edited)
+    group = str(settlement.get("market_group") or group_of(payload) or "default")
+    stored_chat = str(anyv(data, ["telegram_chat_id", "chat_id", "tg_chat_id", "channel_id"], "") or "")
+    canonical_chat = str(GROUPS.get(group) or GROUPS.get("default") or "")
+    edited = (_strip_old_direct_summary(original) + "\n\n" + format_direct_summary(settlement)).strip()
 
+    if message_id and original:
+        tried = set()
+        for chat_id in (stored_chat, canonical_chat):
+            if not chat_id or chat_id in tried:
+                continue
+            tried.add(chat_id)
+            if telegram_edit(chat_id, message_id, edited):
+                return True
+
+    # Safe fallback: do not pretend the original was edited; publish a result update once.
+    if canonical_chat:
+        match = match_label(settlement)
+        status = normalized_status(settlement.get("status"))
+        icon = "✅" if status == "win" else "❌"
+        reason = str(settlement.get("reason") or "")
+        profit = settlement.get("profit_units")
+        msg = f"{icon} <b>RESULT UPDATE</b>\n{match}\n{reason}"
+        if profit is not None:
+            msg += f"\nProfit: <b>{as_float(profit):+.2f}U</b>"
+        if telegram(canonical_chat, msg):
+            log(f"Original-Tipp nicht editierbar; Result-Update gesendet: {settlement.get('tip_id')}", "WARN")
+    return False
 
 def market_text(row: Dict[str, Any]) -> str:
     data = unpack(row)
@@ -381,33 +432,38 @@ def market_text(row: Dict[str, Any]) -> str:
     return " / ".join(dict.fromkeys(values)).strip() or "Market nicht erkannt"
 
 
+
 def group_of(row: Dict[str, Any]) -> str:
     data = unpack(row)
-    explicit = str(data.get("market_group") or "").lower().strip()
+    explicit = str(data.get("market_group") or data.get("group_key") or "").lower().strip()
+    explicit_aliases = {"goal_hunter":"scorer", "late_goals":"scorer", "1x2":"1x2", "match_result":"1x2", "combos":"combo"}
+    explicit = explicit_aliases.get(explicit, explicit)
     if explicit in GROUP_ORDER:
         return explicit
-    low = " ".join(
-        str(anyv(data, [key], ""))
-        for key in ("market", "type", "bet_type", "category", "group", "channel", "selection", "pick", "message", "text", "tip_text", "title", "style")
-    ).lower()
-    if any(x in low for x in ("builder", "bet_builder", "bet builder", "shot ladder", "sot trio", "foul press", "tackle wall", "corner fusion")):
+    low = " ".join(str(anyv(data, [key], "")) for key in (
+        "market", "market_name", "pick_type", "tip", "selection", "category", "message_text", "message"
+    )).lower()
+    if any(x in low for x in ("goal hunter", "goalscorer", "anytime scorer", "to score", "scorer")):
+        return "scorer"
+    if any(x in low for x in ("1x2", "match result", "home win", "away win")) or re.search(r"(?:^|\s)(?:1|x|2)(?:\s|$)", str(data.get("tip") or "").lower()):
+        return "1x2"
+    if "builder" in low:
         return "builder"
-    if any(x in low for x in ("combo", "multi", "parlay", "acca", "same game")):
+    if any(x in low for x in ("combo", "acca", "parlay")):
         return "combo"
-    if "btts_ht" in low or "btts ht" in low or "both teams to score ht" in low:
+    if "btts" in low and ("ht" in low or "half" in low):
         return "btts_ht"
-    if "over15_ht" in low or "over 1.5 ht" in low or "over 1.5 first half" in low:
+    if ("over" in low and "1.5" in low and ("ht" in low or "half" in low)) or "over15_ht" in low:
         return "over15_ht"
     if any(x in low for x in ("corner", "corners", "ecken")):
         return "corners"
-    if any(x in low for x in ("player", "booked", "carded", "shot", "sot", "foul", "tackle")):
+    if any(x in low for x in ("player", "booked", "carded", "shot", "sot", "foul", "tackle", "save", "assist")):
         return "props"
     if ("over" in low and "2.5" in low) or "over25" in low:
         return "over25"
     if "btts" in low or "both teams" in low:
         return "btts"
     return "default"
-
 
 def match_parts(row: Dict[str, Any]) -> Tuple[str, str, str]:
     data = unpack(row)
@@ -439,7 +495,7 @@ def tip_id(row: Dict[str, Any]) -> str:
 
 
 def stable_settlement_id(row: Dict[str, Any]) -> str:
-    return hsh("netrattler-settlement-v22-strict", tip_id(row))
+    return hsh("netrattler-settlement-v23-hardened", tip_id(row))
 
 
 def source_key(row: Dict[str, Any]) -> Tuple[str, Any]:
@@ -468,29 +524,33 @@ def include_tip(row: Dict[str, Any]) -> bool:
     return row_date(row) >= (TODAY - timedelta(days=DAYS)).isoformat()
 
 
+
 def load_tips() -> List[Dict[str, Any]]:
     output: List[Dict[str, Any]] = []
+    start_day = (TODAY - timedelta(days=DAYS)).isoformat()
+    table_cfg = {
+        "tips": ("date", "date.desc"),
+        "netrattler_builder_picks": ("match_date", "match_date.desc"),
+    }
     for table in TIP_TABLES:
-        rows = sb_get(table, {"select": "*", "limit": str(LIMIT)}, quiet=True)
+        date_col, order = table_cfg.get(table, ("date", "date.desc"))
+        params = {"select": "*", date_col: f"gte.{start_day}", "order": order}
+        rows = sb_get_paged(table, params, max_rows=LIMIT, quiet=True)
         if rows:
-            log(f"Tip-Tabelle {table}: {len(rows)} Rows geladen")
+            log(f"Tip-Tabelle {table}: {len(rows)} Rows geladen (paged)")
         for row in rows:
             if include_tip(row):
-                item = dict(row)
-                item["_table"] = table
-                output.append(item)
-    seen = set()
-    clean = []
+                item = dict(row); item["_table"] = table; output.append(item)
+    seen = set(); clean = []
     for row in output:
         key = (row.get("_table"), tip_id(row))
         if key not in seen:
-            seen.add(key)
-            clean.append(row)
+            seen.add(key); clean.append(row)
+    clean.sort(key=lambda r: row_date(r), reverse=True)
     clean = clean[:LIMIT]
     log(f"Offene Tipps total: {len(clean)}")
     log(f"Offene Tipps nach Gruppen: {dict(Counter(group_of(x) for x in clean))}")
     return clean
-
 
 def score_row(row: Dict[str, Any]) -> Tuple[str, str, Optional[int], Optional[int]]:
     data = unpack(row)
@@ -564,6 +624,9 @@ def _sofascore_results(day: str) -> List[Dict[str, Any]]:
 
 
 def _espn_results(day: str) -> List[Dict[str, Any]]:
+    global _ESPN_DISABLED_FOR_RUN
+    if _ESPN_DISABLED_FOR_RUN:
+        return []
     if not RESULT_USE_ESPN:
         return []
     output: List[Dict[str, Any]] = []
@@ -721,7 +784,7 @@ def load_results(dates: Sequence[str]) -> List[Dict[str, Any]]:
         day_db_rows = 0
         for table, columns in RESULT_TABLES.items():
             for column in columns:
-                rows = sb_get(table, {"select": "*", column: f"eq.{day}", "limit": "4000"}, quiet=True)
+                rows = sb_get_paged(table, {"select": "*", column: f"eq.{day}"}, max_rows=4000, quiet=True)
                 if rows:
                     for row in rows:
                         row["_result_table"] = table
@@ -750,31 +813,110 @@ def load_results(dates: Sequence[str]) -> List[Dict[str, Any]]:
     return clean
 
 
-def load_player_stats(dates: Sequence[str]) -> List[Dict[str, Any]]:
+
+def _player_stat_category_name(value: Any) -> str:
+    s = norm(value).replace(" ", "_")
+    aliases = {
+        "shots_on_target":"sot", "shot_on_target":"sot", "sot":"sot",
+        "shots":"shots", "total_shots":"shots", "shot_attempts":"shots",
+        "fouls_committed":"fouls", "fouls":"fouls", "fouls_made":"fouls",
+        "fouls_won":"fouls_won", "fouls_drawn":"fouls_won", "fouled":"fouls_won",
+        "tackles":"tackles", "tackles_won":"tackles", "total_tackles":"tackles",
+        "saves":"saves", "goalkeeper_saves":"saves",
+        "yellow_cards":"yellow_cards", "cards":"yellow_cards", "bookings":"yellow_cards",
+        "goals":"goals", "goal":"goals", "assists":"assists", "assist":"assists",
+        "corners":"corners", "corner_kicks":"corners",
+    }
+    return aliases.get(s, s)
+
+
+def _player_requirements(tips: Sequence[Dict[str, Any]]) -> Dict[str, set]:
+    req: Dict[str, set] = defaultdict(set)
+    for tip in tips:
+        candidates = legs_of(tip) if group_of(tip) in {"combo", "builder"} else [tip]
+        for leg in candidates or [tip]:
+            merged = dict(tip); merged.update(leg if isinstance(leg, dict) else {})
+            category = category_of(merged)
+            if category in {"", "corners", "team_corners", "btts", "over_goals"}:
+                continue
+            player = str(anyv(unpack(merged), ["player", "player_name", "selection"], "")).strip()
+            if player:
+                req[row_date(merged)].add(player)
+    return req
+
+
+def _aggregate_player_rows(rows: Sequence[Dict[str, Any]], wanted_norms: Optional[set] = None) -> List[Dict[str, Any]]:
+    grouped: Dict[Tuple[str,str,str,str], Dict[str, Any]] = {}
+    for row in rows:
+        data = unpack(row)
+        player = str(anyv(data, ["player_name", "player", "name", "athlete_name"], "")).strip()
+        if not player:
+            continue
+        np = norm(player)
+        if wanted_norms and not any(np == w or np in w or w in np for w in wanted_norms):
+            continue
+        event = str(anyv(data, ["event_id", "match_id", "fixture_id", "game_id"], ""))
+        _, _, match = match_parts(row)
+        key = (row_date(row), np, norm(event or match), str(data.get("team") or data.get("team_name") or ""))
+        agg = grouped.setdefault(key, dict(row))
+        # Merge non-empty wide values instead of overwriting rich rows with zeros.
+        for k, v in row.items():
+            if v not in (None, "") and (agg.get(k) in (None, "", 0, 0.0) or k in {"raw"}):
+                agg[k] = v
+        stat_name = anyv(data, ["stat_name", "stat", "metric", "stat_type"], "")
+        stat_value = anyv(data, ["stat_value", "value", "statValue"], None)
+        if stat_name and stat_value not in (None, ""):
+            cat = _player_stat_category_name(stat_name)
+            val = as_float(stat_value, 0.0)
+            map_col = {
+                "sot":"shots_on_target", "shots":"shots", "fouls":"fouls_committed",
+                "fouls_won":"fouls_won", "tackles":"tackles", "saves":"saves",
+                "yellow_cards":"yellow_cards", "goals":"goals", "assists":"assists", "corners":"corners"
+            }.get(cat, cat)
+            if map_col:
+                agg[map_col] = max(as_float(agg.get(map_col), 0.0), val)
+    return list(grouped.values())
+
+
+def load_player_stats(tips: Sequence[Dict[str, Any]]) -> List[Dict[str, Any]]:
+    requirements = _player_requirements(tips)
+    if not requirements:
+        log("Player Stats: keine offenen Player-Props/Builder-Legs → Skip")
+        return []
     output: List[Dict[str, Any]] = []
-    for day in dates:
+    for day, players in sorted(requirements.items()):
+        wanted_norms = {norm(p) for p in players if p}
+        # Fetch only dates that actually need player settlement. Paging prevents the 1000-row cap.
         for table, columns in PLAYER_STATS_TABLES.items():
+            found_for_table = False
             for column in columns:
-                rows = sb_get(table, {"select": "*", column: f"eq.{day}", "limit": "10000"}, quiet=True)
+                rows = sb_get_paged(table, {"select": "*", column: f"eq.{day}"}, max_rows=12000, quiet=True)
                 if rows:
-                    for row in rows:
-                        row["_stats_table"] = table
-                    output.extend(rows)
-                    log(f"Player Stats {table} {day} via {column}: {len(rows)}")
+                    for row in rows: row["_stats_table"] = table
+                    filtered = _aggregate_player_rows(rows, wanted_norms)
+                    output.extend(filtered)
+                    log(f"Player Stats {table} {day}: raw={len(rows)} relevant={len(filtered)} players={len(players)}")
+                    found_for_table = True
                     break
-    # Flexible dedup by date/player/match/source.
-    best: Dict[Tuple[str, str, str], Dict[str, Any]] = {}
+            if found_for_table:
+                break
+    # Final dedup keeps one merged player/match/day row.
+    best: Dict[Tuple[str,str,str], Dict[str, Any]] = {}
     for row in output:
         data = unpack(row)
         player = norm(anyv(data, ["player_name", "player", "name", "athlete_name"], ""))
-        match = norm(anyv(data, ["match", "fixture", "event", "match_name"], ""))
-        key = (row_date(row), player, match)
+        event = norm(anyv(data, ["event_id", "match_id", "fixture_id", "game_id"], ""))
+        _, _, match = match_parts(row)
+        key = (row_date(row), player, event or norm(match))
         if player:
-            best[key] = row
+            if key in best:
+                merged = _aggregate_player_rows([best[key], row])
+                best[key] = merged[0] if merged else row
+            else:
+                best[key] = row
     clean = list(best.values())
-    log(f"Player Stats candidates: {len(clean)}")
+    log(f"Player Stats candidates relevant: {len(clean)}")
     return clean
-
 
 def _malformed_result_row(row: Dict[str, Any]) -> bool:
     """Reject structurally broken result rows before any match comparison."""
@@ -853,9 +995,10 @@ def player_name(row: Dict[str, Any]) -> str:
     return str(anyv(unpack(row), ["player_name", "player", "name", "athlete", "athlete_name", "selection"], ""))
 
 
+
 def player_stats_values(row: Dict[str, Any]) -> Dict[str, float]:
     data = unpack(row)
-    return {
+    values = {
         "shots": as_float(anyv(data, ["shots", "total_shots", "shot_total", "shot_attempts"], 0)),
         "sot": as_float(anyv(data, ["sot", "shots_on_target", "shot_on_target", "on_target"], 0)),
         "fouls": as_float(anyv(data, ["fouls_committed", "fouls", "fouls_made", "fc"], 0)),
@@ -867,27 +1010,45 @@ def player_stats_values(row: Dict[str, Any]) -> Dict[str, float]:
         "goals": as_float(anyv(data, ["goals", "goal", "goals_scored"], 0)),
         "assists": as_float(anyv(data, ["assists", "assist"], 0)),
         "corners": as_float(anyv(data, ["corners", "corner_kicks"], 0)),
+        "saves": as_float(anyv(data, ["saves", "goalkeeper_saves", "keeper_saves"], 0)),
     }
+    stat_name = anyv(data, ["stat_name", "stat", "metric", "stat_type"], "")
+    stat_value = anyv(data, ["stat_value", "value", "statValue"], None)
+    if stat_name and stat_value not in (None, ""):
+        cat = _player_stat_category_name(stat_name)
+        target = {"shots":"shots", "sot":"sot", "fouls":"fouls", "fouls_won":"fouls_won", "tackles":"tackles", "saves":"saves", "yellow_cards":"yellow_cards", "goals":"goals", "assists":"assists", "corners":"corners"}.get(cat)
+        if target:
+            values[target] = max(values.get(target, 0.0), as_float(stat_value, 0.0))
+    return values
 
 
 def find_player_stat(leg: Dict[str, Any], stats: Sequence[Dict[str, Any]]) -> Optional[Dict[str, Any]]:
     data = unpack(leg)
     wanted_player = str(anyv(data, ["player", "player_name", "selection"], ""))
-    _, _, wanted_match = match_parts(leg)
+    wanted_home, wanted_away, wanted_match = match_parts(leg)
     wanted_day = row_date(leg)
     best, best_score = None, 0.0
     for row in stats:
-        p_score = similarity(wanted_player, player_name(row))
-        if p_score < 0.55:
+        if row_date(row) != wanted_day:
             continue
-        _, _, candidate_match = match_parts(row)
-        m_score = similarity(wanted_match, candidate_match) if wanted_match and candidate_match else 0.45
-        d_score = 1.0 if row_date(row) == wanted_day else 0.0
-        score = p_score * 0.68 + m_score * 0.22 + d_score * 0.10
+        p_score = similarity(wanted_player, player_name(row))
+        if p_score < 0.72:
+            continue
+        cand_home, cand_away, candidate_match = match_parts(row)
+        if wanted_home and wanted_away and cand_home and cand_away:
+            if not (_strict_team_match(wanted_home, cand_home) and _strict_team_match(wanted_away, cand_away)):
+                continue
+            m_score = 1.0
+        elif wanted_match and candidate_match:
+            m_score = similarity(wanted_match, candidate_match)
+            if m_score < 0.78:
+                continue
+        else:
+            m_score = 0.0
+        score = p_score * 0.78 + m_score * 0.22
         if score > best_score:
             best_score, best = score, row
-    return best if best and best_score >= 0.66 else None
-
+    return best if best and best_score >= 0.74 else None
 
 def market_line(text: str, default: float = 1.0) -> float:
     low_txt = str(text).lower()
@@ -911,7 +1072,7 @@ def category_of(row: Dict[str, Any]) -> str:
         "shots_on_target": "sot", "shot_on_target": "sot", "cards": "yellow_cards",
         "booked": "yellow_cards", "fouls_committed": "fouls", "fouls_drawn": "fouls_won",
         "tackles": "tackles_committed", "tackles_made": "tackles_committed",
-        "tackled": "tackles_received", "goalscorer": "score", "corners": "corners",
+        "tackled": "tackles_received", "goalscorer": "score", "corners": "corners", "saves": "saves", "goalkeeper_saves": "saves", "keeper_saves": "saves",
     }
     explicit = aliases.get(explicit, explicit)
     if explicit:
@@ -935,6 +1096,8 @@ def category_of(row: Dict[str, Any]) -> str:
         return "tackles_received"
     if "tackle" in low:
         return "tackles_committed"
+    if "save" in low:
+        return "saves"
     if "booked" in low or "carded" in low or "yellow card" in low:
         return "yellow_cards"
     if "corner" in low or "ecken" in low:
@@ -962,6 +1125,22 @@ def settle_score_market(tip: Dict[str, Any], result: Dict[str, Any]) -> Tuple[st
         if hth < 0 or hta < 0:
             return "pending", "Halbzeit-Resultat fehlt"
         return ("win" if hth + hta > 1.5 else "loss", f"HT {hth}:{hta}")
+
+    # 1X2 / Match Result
+    selection = str(anyv(unpack(tip), ["tip", "selection", "pick", "bet"], "")).strip().lower()
+    if group_of(tip) == "1x2" or "1x2" in low or "match result" in low:
+        home_tokens = {"1", "home", "home win", "heim", "heim sieg"}
+        draw_tokens = {"x", "draw", "unentschieden"}
+        away_tokens = {"2", "away", "away win", "auswarts", "auswärtssieg", "away team"}
+        actual = "1" if hs > aw else "2" if aw > hs else "x"
+        wanted = "1" if selection in home_tokens else "x" if selection in draw_tokens else "2" if selection in away_tokens else ""
+        if not wanted:
+            # Common saved text variants like '1 @ 1.80' / 'Tip: 2'.
+            mm = re.search(r"(?:^|\b)(1|x|2)(?:\b|$)", selection, re.I)
+            wanted = mm.group(1).lower() if mm else ""
+        if not wanted:
+            return "pending", f"{hs}:{aw} · 1X2-Auswahl nicht erkannt"
+        return ("win" if wanted == actual else "loss", f"{hs}:{aw} · 1X2 {wanted.upper()} → {actual.upper()}")
 
     # Combo BTTS + Over 2.5 muss BEIDES treffen.
     if (
@@ -1110,8 +1289,10 @@ def settle_tip(tip: Dict[str, Any], results: Sequence[Dict[str, Any]], player_st
         profit = (odds - 1.0) * stake if odds else 0.0
     elif status == "loss":
         profit = -stake
-    else:
+    elif status == "void":
         profit = 0.0
+    else:
+        profit = None
 
     data = unpack(tip)
     result_home = result.get("home_score") if isinstance(result, dict) else None
@@ -1133,8 +1314,8 @@ def settle_tip(tip: Dict[str, Any], results: Sequence[Dict[str, Any]], player_st
         "reason": reason,
         "odds": odds,
         "stake": round(stake, 4),
-        "profit": round(profit, 4),
-        "profit_units": round(profit, 4),
+        "profit": round(profit, 4) if profit is not None else None,
+        "profit_units": round(profit, 4) if profit is not None else None,
         "tip_date": row_date(tip),
         "match_date": row_date(tip),
         "tip_payload": tip,
@@ -1151,13 +1332,16 @@ def settle_tip(tip: Dict[str, Any], results: Sequence[Dict[str, Any]], player_st
         "settled_at": NOW.isoformat() if status in {"win", "loss", "void"} else None,
     }
 
+
 def existing_settlements() -> List[Dict[str, Any]]:
-    return sb_get(
+    rows = sb_get_paged(
         "netrattler_settlements",
-        {"select": "*", "order": "settled_at.desc", "limit": "10000"},
+        {"select": "*", "order": "settled_at.desc.nullslast"},
+        max_rows=20000,
         quiet=True,
     )
-
+    log(f"Settlement-Historie geladen: {len(rows)} (paged)")
+    return rows
 
 def existing_status_map(rows: Sequence[Dict[str, Any]]) -> Dict[str, str]:
     output: Dict[str, str] = {}
@@ -1394,7 +1578,7 @@ def send_roi_report(history: Sequence[Dict[str, Any]]) -> None:
 
 
 def main() -> None:
-    log("⚽ NETRATTLER Settlement FINAL V22 STRICT startet")
+    log("⚽ NETRATTLER Settlement FINAL V23 HARDENED startet")
     log(f"Config: SofaScore={'ON' if RESULT_USE_SOFASCORE else 'OFF'} · Timeout={RESULT_HTTP_TIMEOUT}s · Limit={LIMIT}")
     if not SUPABASE_URL or not SUPABASE_KEY:
         log("SUPABASE_URL oder SUPABASE_KEY fehlt", "ERROR")
@@ -1406,11 +1590,13 @@ def main() -> None:
     dates = sorted({row_date(tip) for tip in tips})
     log(f"Dates: {dates}")
     results = load_results(dates)
-    player_stats = load_player_stats(dates)
+    player_stats = load_player_stats(tips)
 
     settled = [settle_tip(tip, results, player_stats) for tip in tips]
     log(f"Counts: {dict(Counter(x['status'] for x in settled))}")
     log(f"Nach Gruppen: {dict(Counter(x['market_group'] for x in settled))}")
+    pending_reasons = Counter(x.get("reason") or "" for x in settled if x.get("status") == "pending")
+    log(f"Pending-Gründe Top: {pending_reasons.most_common(12)}")
 
     newly_closed = [
         row for row in settled
@@ -1433,7 +1619,7 @@ def main() -> None:
     save_dimension_stats(history)
     send_group_reports(newly_closed, settled, history)
     send_roi_report(history)
-    log("✅ NETRATTLER Settlement FINAL V22 STRICT fertig")
+    log("✅ NETRATTLER Settlement FINAL V23 HARDENED fertig")
 
 
 if __name__ == "__main__":
