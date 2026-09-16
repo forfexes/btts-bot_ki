@@ -1,4 +1,4 @@
-name: NETRATTLER Settlement Final V23 HARDENED
+name: NETRATTLER Settlement Final V24 SELF-HEALING
 
 on:
   workflow_dispatch:
@@ -22,7 +22,7 @@ jobs:
           pip install requests python-dateutil
       - name: Compile settlement
         run: python -m py_compile netrattler_settlement_v16_final.py
-      - name: Run Settlement V23 HARDENED
+      - name: Run Settlement V24 SELF-HEALING
         env:
           SUPABASE_URL: ${{ secrets.SUPABASE_URL }}
           SUPABASE_KEY: ${{ secrets.SUPABASE_KEY }}
