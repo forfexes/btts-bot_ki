@@ -6425,7 +6425,7 @@ def prefetch_sent_tips_for_date(target_date):
                     "date": f"eq.{day}",
                     "select": "match,market,tip_id",
                     "limit": "1000",
-                    "order": "created_at.desc.nullslast",
+                    "order": "id.desc",
                 },
                 timeout=8,
             )
@@ -7779,36 +7779,18 @@ def send_top_tips(tips_by_market, target_date):
                 "avg_goals_away": avg_g_a,
             }
 
-            # Prüfe ob bereits in Supabase
-            tip_id_check = tip_data.get("tip_id", "")
-            already_exists = False
-            if tip_id_check and SUPABASE_URL and SUPABASE_KEY:
+            # FAST: Duplikate wurden vor dem Telegram-Senden bereits über den Tagescache geprüft.
+            # Kein zusätzlicher Supabase-GET pro Tipp mehr.
+            save_result = save_to_supabase(tip_data)
+            if NETRATTLER_PRO:
                 try:
-                    r_check = requests.get(
-                        f"{SUPABASE_URL}/rest/v1/tips",
-                        headers={"apikey": SUPABASE_KEY, "Authorization": f"Bearer {SUPABASE_KEY}"},
-                        params={"tip_id": f"eq.{tip_id_check}", "select": "id", "limit": "1"},
-                        timeout=5,
-                    )
-                    if r_check.ok and r_check.json():
-                        already_exists = True
+                    log_tip_for_clv(tip_data)
                 except Exception:
                     pass
-
-            if already_exists:
-                log(f"   ⏭️ Supabase: bereits vorhanden {tip_data.get('match','?')}")
+            if save_result:
+                saved += 1
             else:
-                save_result = save_to_supabase(tip_data)
-                # CLV Tracking
-                if NETRATTLER_PRO:
-                    try:
-                        log_tip_for_clv(tip_data)
-                    except Exception:
-                        pass
-                if save_result:
-                    saved += 1
-                else:
-                    log(f"   ⚠️ Supabase save fehlgeschlagen für {tip_data.get('match','?')}", "WARN")
+                log(f"   ⚠️ Supabase save fehlgeschlagen für {tip_data.get('match','?')}", "WARN")
 
         value_count = sum(1 for r in tips if r.get("valueRating") == "HIGH")
 
@@ -10177,9 +10159,17 @@ def _ml_load_models():
             if not name or not data:
                 continue
             try:
+                import warnings as _warnings
                 buf = io.BytesIO(base64.b64decode(data))
-                obj = pickle.load(buf)
-                _ML_MODELS[name] = obj["model"]
+                with _warnings.catch_warnings():
+                    _warnings.filterwarnings("ignore", message="Trying to unpickle estimator.*")
+                    obj = pickle.load(buf)
+                _model = obj["model"]
+                _expected = getattr(_model, "n_features_in_", None)
+                if _expected not in (None, 33):
+                    log(f"   🤖 ML: {name} erwartet {_expected} Features, Runtime liefert 33 — Modell übersprungen; Elo/Poisson aktiv", "WARN")
+                    continue
+                _ML_MODELS[name] = _model
             except Exception as _pe:
                 log(f"   🤖 ML: Fehler beim Laden von {name}: {str(_pe)[:60]}", "WARN")
 
@@ -13306,6 +13296,12 @@ def _af_request(endpoint, params, timeout=12):
 
             data = r.json()
             if data.get("errors"):
+                _err_text = str(data.get("errors") or "").lower()
+                if "suspended" in _err_text or "account is suspended" in _err_text:
+                    APIFOOTBALL_DEAD_KEYS.update(range(n))
+                    APIFOOTBALL_QUOTA_EXHAUSTED = True
+                    log("   ⚠️ API-Football Account gesperrt — Quelle für diesen Run deaktiviert (keine weiteren Calls)", "WARN")
+                    return None
                 log(f"   🔍 AF-DEBUG: API-Errors für {endpoint}: {data.get('errors')}", "WARN")
                 continue
 
@@ -15993,7 +15989,7 @@ def prefetch_sent_tips_for_date(target_date):
                     "date": f"eq.{day}",
                     "select": "match,market,tip_id",
                     "limit": "1000",
-                    "order": "created_at.desc.nullslast",
+                    "order": "id.desc",
                 },
                 timeout=8,
             )
@@ -17207,36 +17203,18 @@ def send_top_tips(tips_by_market, target_date):
                 "avg_goals_away": avg_g_a,
             }
 
-            # Prüfe ob bereits in Supabase
-            tip_id_check = tip_data.get("tip_id", "")
-            already_exists = False
-            if tip_id_check and SUPABASE_URL and SUPABASE_KEY:
+            # FAST: Duplikate wurden vor dem Telegram-Senden bereits über den Tagescache geprüft.
+            # Kein zusätzlicher Supabase-GET pro Tipp mehr.
+            save_result = save_to_supabase(tip_data)
+            if NETRATTLER_PRO:
                 try:
-                    r_check = requests.get(
-                        f"{SUPABASE_URL}/rest/v1/tips",
-                        headers={"apikey": SUPABASE_KEY, "Authorization": f"Bearer {SUPABASE_KEY}"},
-                        params={"tip_id": f"eq.{tip_id_check}", "select": "id", "limit": "1"},
-                        timeout=5,
-                    )
-                    if r_check.ok and r_check.json():
-                        already_exists = True
+                    log_tip_for_clv(tip_data)
                 except Exception:
                     pass
-
-            if already_exists:
-                log(f"   ⏭️ Supabase: bereits vorhanden {tip_data.get('match','?')}")
+            if save_result:
+                saved += 1
             else:
-                save_result = save_to_supabase(tip_data)
-                # CLV Tracking
-                if NETRATTLER_PRO:
-                    try:
-                        log_tip_for_clv(tip_data)
-                    except Exception:
-                        pass
-                if save_result:
-                    saved += 1
-                else:
-                    log(f"   ⚠️ Supabase save fehlgeschlagen für {tip_data.get('match','?')}", "WARN")
+                log(f"   ⚠️ Supabase save fehlgeschlagen für {tip_data.get('match','?')}", "WARN")
 
         value_count = sum(1 for r in tips if r.get("valueRating") == "HIGH")
 
@@ -22346,7 +22324,54 @@ def run_pinnacle_props_bot(win_start_utc=None, win_end_utc=None, ch_tz=None, top
     from datetime import datetime as _dt2
     props = fetch_pinnacle_player_props()
     if not props:
-        log("🔑 Pinnacle Props: keine Specials verfügbar")
+        # Pinnacle kann 403 liefern. Dann echte Kambi/1xbet-Quoten als Fallback nutzen.
+        try:
+            from netrattler_prop_sources import collect_extra_player_props
+            _fx, _seen_fx = [], set()
+            for _league, _fixtures in (fixtures_cache or {}).items():
+                for _f in (_fixtures or []):
+                    _h = str(_f.get("home") or "").strip()
+                    _a = str(_f.get("away") or "").strip()
+                    if not _h or not _a:
+                        continue
+                    _k = f"{_h}|{_a}"
+                    if _k in _seen_fx:
+                        continue
+                    _seen_fx.add(_k)
+                    _fx.append({"home": _h, "away": _a})
+            _extra = list(collect_extra_player_props(_fx[:60], log=log)) if _fx else []
+            _converted = []
+            for _xp in _extra:
+                try:
+                    _od = float(_xp.get("odds") or 0)
+                    _line = float(_xp.get("line") or 0.5)
+                except Exception:
+                    continue
+                _player = str(_xp.get("player") or "").strip()
+                _market = str(_xp.get("market") or _xp.get("category") or "").strip()
+                _match = str(_xp.get("match") or "").strip()
+                if not _player or not _market or not _match or _od <= 1.01:
+                    continue
+                _converted.append({
+                    "selection": f"Over {_line:g}",
+                    "player_prop": f"{_player} {_market} Over {_line:g}",
+                    "match": _match,
+                    "league": str(_xp.get("league") or ""),
+                    "odds": _od,
+                    "prob": max(1, min(99, int((1.0 / _od) * 95))),
+                    "special_category": str(_xp.get("category") or _market),
+                    "starts": str(_xp.get("starts") or _xp.get("commence_time") or ""),
+                    "source": str(_xp.get("source") or "extra"),
+                    "is_team_market": False,
+                })
+            props = _converted
+            if props:
+                log(f"   🔌 Pinnacle-Ausfall-Fallback: {len(props)} echte Kambi/1xbet Player-Props geladen")
+        except Exception as _xpe:
+            log(f"   🔌 Extra-Prop-Fallback Fehler: {str(_xpe)[:100]}", "WARN")
+
+    if not props:
+        log("🔑 Player Props: keine echten Specials/Quoten aus Pinnacle oder Extra-Quellen verfügbar")
         return 0
 
     # Diagnose der tatsächlich angebotenen Special-Märkte.
@@ -23217,7 +23242,11 @@ def filter_tips_by_edge(tips: List[Dict], market: str = "btts",
     stats = {"total": len(tips), "no_quote": 0, "below_min": 0, "above_max": 0, "kept": 0}
 
     for tip in tips:
-        fair_str = (tip.get("fairOdds") or tip.get("fair_odds") or tip.get("oddsYes") or "0")
+        # REAL_ODDS_ONLY: keine modellierten/abgeleiteten/synthetischen Quoten.
+        if tip.get("_no_real_odds") is True or tip.get("estimated") is True or tip.get("estimated_odds") is True:
+            stats["no_quote"] += 1
+            continue
+        fair_str = (tip.get("fairOdds") or tip.get("fair_odds") or "0")
         try:
             fair_odds = float(str(fair_str).replace(",", "."))
         except:
@@ -24492,7 +24521,7 @@ def main():
                             "oddsYes": combo_odds, "fairOdds": round(100/combo_prob, 2),
                             "valueRating": ("VALUE" if ro else "OK"), "units": 0.75, "market": "combo",
                             "reasoning": f"Pinnacle Combo-Analyse | {league_name}",
-                            "_no_real_odds": not bool(ro), "_source": "pinnacle", "_kickoff": _ko_sort,
+                            "_no_real_odds": True, "_source": "derived_combo", "_kickoff": _ko_sort,
                         }
                         enrich_pinnacle_tip(tip_combo, home, away, league_name)
                         tips_by_market["combo"].append(tip_combo)
@@ -24523,7 +24552,7 @@ def main():
                             "oddsYes": btts_ht_odds, "fairOdds": round(100/btts_ht_prob, 2),
                             "valueRating": ("VALUE" if (ro and ro.get("btts_yes_ht")) else "OK"), "units": 1.0, "market": "btts_ht",
                             "reasoning": f"Pinnacle HT-Analyse | {league_name}",
-                            "_no_real_odds": not bool(ro), "_source": "pinnacle", "_kickoff": _ko_sort,
+                            "_no_real_odds": not bool(ro and ro.get("btts_yes_ht")), "_source": "pinnacle", "_kickoff": _ko_sort,
                         }
                         enrich_pinnacle_tip(tip_btts_ht, home, away, league_name)
                         tips_by_market["btts_ht"].append(tip_btts_ht)
@@ -24551,7 +24580,7 @@ def main():
                             "oddsYes": o15_odds, "fairOdds": round(100/o15_prob, 2),
                             "valueRating": ("VALUE" if (ro and ro.get("over_15_ht")) else "OK"), "units": 1.0, "market": "over15_ht",
                             "reasoning": f"Pinnacle HT-Analyse | {league_name}",
-                            "_no_real_odds": not bool(ro), "_source": "pinnacle", "_kickoff": _ko_sort,
+                            "_no_real_odds": not bool(ro and ro.get("over_15_ht")), "_source": "pinnacle", "_kickoff": _ko_sort,
                         }
                         enrich_pinnacle_tip(tip_o15_ht, home, away, league_name)
                         tips_by_market["over15_ht"].append(tip_o15_ht)
@@ -24719,12 +24748,11 @@ def main():
                 for _mk in list(tips_by_market.keys()):
                     _orig = tips_by_market.get(_mk, [])
                     _filt = _ft.get(_mk, [])
-                    # Wenn Filter alles verwirft (keine echten Quoten) → Original behalten
-                    if _filt:
-                        tips_by_market[_mk] = _filt
-                    else:
-                        log(f"   🎯 Edge Filter [{_mk}]: keine Quoten — behalte {len(_orig)} Tipps")
-                log(f"   🎯 Edge Filter angewendet (mit Pinnacle-Fallback)")
+                    # REAL_ODDS_ONLY: ohne verifizierte Quote wird nichts gesendet.
+                    tips_by_market[_mk] = _filt or []
+                    if not _filt and _orig:
+                        log(f"   🎯 Edge Filter [{_mk}]: {len(_orig)} Tipps ohne verifizierte Real-Quote verworfen")
+                log(f"   🎯 Edge Filter angewendet (REAL_ODDS_ONLY)")
         except Exception as _efe:
             log(f"   🎯 Edge Filter übersprungen: {str(_efe)[:60]}")
 
