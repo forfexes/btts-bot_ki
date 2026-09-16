@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """
-NETRATTLER Settlement FINAL V23 HARDENED
+NETRATTLER Settlement FINAL V24 SELF-HEALING
 ===============================
 
 Dateiname bleibt absichtlich stabil: netrattler_settlement_v16_final.py
@@ -270,6 +270,99 @@ def sb_patch(table: str, column: str, value: Any, payload: Dict[str, Any]) -> bo
         return False
 
 
+def sb_patch_in(table: str, column: str, values: Sequence[Any], payload: Dict[str, Any]) -> int:
+    """Batch PATCH using PostgREST in.(...) filter; returns number of requested rows on success."""
+    vals = [str(v) for v in values if v not in (None, "")]
+    if not vals:
+        return 0
+    changed = 0
+    for start in range(0, len(vals), 100):
+        part = vals[start:start + 100]
+        # ids used here are numeric tip ids or SHA-like settlement ids; quote text safely.
+        encoded = []
+        for value in part:
+            if value.isdigit():
+                encoded.append(value)
+            else:
+                encoded.append('"' + value.replace('"', '\"') + '"')
+        try:
+            response = requests.patch(
+                f"{SUPABASE_URL}/rest/v1/{table}",
+                headers=headers("return=minimal"),
+                params={column: "in.(" + ",".join(encoded) + ")"},
+                data=json.dumps(payload, ensure_ascii=False, default=str),
+                timeout=25,
+            )
+            if response.status_code in (200, 204):
+                changed += len(part)
+            else:
+                log(f"PATCH-IN {table} {response.status_code}: {response.text[:180]}", "WARN")
+        except Exception as exc:
+            log(f"PATCH-IN {table}: {exc}", "WARN")
+    return changed
+
+
+def _genuine_void_reason(reason: Any) -> bool:
+    text = norm(str(reason or ""))
+    genuine = (
+        "cancel", "cancell", "abandon", "postpon", "annull", "abgesagt",
+        "void", "push", "walkover", "walk over", "w.o", "nicht angetreten",
+    )
+    return any(token in text for token in genuine)
+
+
+def repair_legacy_false_voids(existing: List[Dict[str, Any]]) -> int:
+    """
+    Reopens historical VOID rows that were actually unresolved/missing-data settlements.
+    True cancellations/pushes remain VOID. This is deliberately conservative on evidence,
+    but broad on the old bug: old settler used VOID for missing score/stats/open legs.
+    """
+    candidates = []
+    tip_row_ids = []
+    settlement_ids = []
+    seen_tips = set()
+    for row in existing:
+        if normalized_status(row.get("status")) != "void":
+            continue
+        reason = row.get("reason")
+        if _genuine_void_reason(reason):
+            continue
+        tid = str(row.get("tip_id") or "")
+        if not tid or tid in seen_tips:
+            continue
+        seen_tips.add(tid)
+        candidates.append(row)
+        settlement_ids.append(row.get("settlement_id"))
+        payload = row.get("tip_payload") if isinstance(row.get("tip_payload"), dict) else {}
+        if str(row.get("source_table") or payload.get("_table") or "") == "tips":
+            rid = payload.get("id")
+            if rid not in (None, ""):
+                tip_row_ids.append(rid)
+
+    if not candidates:
+        return 0
+
+    tip_payload = {
+        "status": "pending", "result": None, "settled_at": None,
+        "profit_units": None, "result_home": None, "result_away": None,
+        "result_ht_home": None, "result_ht_away": None, "checked_at": None,
+    }
+    settlement_payload = {
+        "status": "pending", "result_label": "⏳ PENDING",
+        "profit": None, "profit_units": None, "settled_at": None,
+    }
+    changed_tips = sb_patch_in("tips", "id", tip_row_ids, tip_payload)
+    changed_settlements = sb_patch_in("netrattler_settlements", "settlement_id", settlement_ids, settlement_payload)
+    for row in candidates:
+        row["status"] = "pending"
+        row["result_label"] = "⏳ PENDING"
+        row["profit"] = None
+        row["profit_units"] = None
+        row["settled_at"] = None
+    log(f"Legacy-False-VOID Self-Heal: candidates={len(candidates)} tips={changed_tips} settlements={changed_settlements}")
+    return len(candidates)
+
+
 def telegram(chat_id: str, text: str) -> bool:
     if not TG_TOKEN or not chat_id:
         return False
@@ -495,7 +588,7 @@ def tip_id(row: Dict[str, Any]) -> str:
 
 
 def stable_settlement_id(row: Dict[str, Any]) -> str:
-    return hsh("netrattler-settlement-v23-hardened", tip_id(row))
+    return hsh("netrattler-settlement-v24-self-healing", tip_id(row))
 
 
 def source_key(row: Dict[str, Any]) -> Tuple[str, Any]:
@@ -1310,7 +1403,7 @@ def settle_tip(tip: Dict[str, Any], results: Sequence[Dict[str, Any]], player_st
         "builder_style": str(data.get("style") or data.get("builder_style") or "")[:80],
         "leg_count": len(legs_of(tip)) if group in {"combo", "builder"} else 1,
         "status": status,
-        "result_label": "✅ WIN" if status == "win" else "❌ LOST" if status == "loss" else "⏳ PENDING",
+        "result_label": "✅ WIN" if status == "win" else "❌ LOST" if status == "loss" else "↩️ VOID" if status == "void" else "⏳ PENDING",
         "reason": reason,
         "odds": odds,
         "stake": round(stake, 4),
@@ -1578,13 +1671,16 @@ def send_roi_report(history: Sequence[Dict[str, Any]]) -> None:
 
 
 def main() -> None:
-    log("⚽ NETRATTLER Settlement FINAL V23 HARDENED startet")
+    log("⚽ NETRATTLER Settlement FINAL V24 SELF-HEALING startet")
     log(f"Config: SofaScore={'ON' if RESULT_USE_SOFASCORE else 'OFF'} · Timeout={RESULT_HTTP_TIMEOUT}s · Limit={LIMIT}")
     if not SUPABASE_URL or not SUPABASE_KEY:
         log("SUPABASE_URL oder SUPABASE_KEY fehlt", "ERROR")
         raise SystemExit(2)
 
     existing = existing_settlements()
+    repaired_voids = repair_legacy_false_voids(existing)
+    if repaired_voids:
+        log(f"Legacy-False-VOIDs wieder auf pending gesetzt: {repaired_voids}")
     previous = existing_status_map(existing)
     tips = load_tips()
     dates = sorted({row_date(tip) for tip in tips})
@@ -1619,7 +1715,7 @@ def main() -> None:
     save_dimension_stats(history)
     send_group_reports(newly_closed, settled, history)
     send_roi_report(history)
-    log("✅ NETRATTLER Settlement FINAL V23 HARDENED fertig")
+    log("✅ NETRATTLER Settlement FINAL V24 SELF-HEALING fertig")
 
 
 if __name__ == "__main__":
