@@ -474,11 +474,17 @@ def fetch_kambi_team_specials(home: str, away: str, brand: str = "ub") -> Dict[s
                     out[key] = round(odds, 3)
 
             # Observed combined market only. Never multiply separate prices.
+            # Kambi brands use several labels: "BTTS & Over 2.5",
+            # "Both Teams To Score / Total Goals", outcome "Yes & Over 2.5", etc.
             combo_text = f"{low} {olow}"
-            if (is_combo_criterion or ("both teams" in combo_text and "score" in combo_text)) and "over 2.5" in combo_text:
-                if "yes" in combo_text or "both teams" in combo_text:
-                    if odds > out.get("btts_over25_combo", 0):
-                        out["btts_over25_combo"] = round(odds, 3)
+            _has_btts = any(t in combo_text for t in (
+                "both teams to score", "both teams score", "both to score", "btts"
+            ))
+            _has_over25 = bool(re.search(r"(?:over|o)\s*2[\.,]5", combo_text)) or "2.5 or more" in combo_text
+            _positive = any(t in combo_text for t in ("yes", "over 2.5", "over2.5", "o2.5", "2.5 or more"))
+            if _has_btts and _has_over25 and _positive:
+                if odds > out.get("btts_over25_combo", 0):
+                    out["btts_over25_combo"] = round(odds, 3)
 
             # First-half Over 1.5 goals.
             if is_first_half and any(t in low for t in ("total goals", "goals over/under", "over/under goals", "goals")):
@@ -646,7 +652,7 @@ def fetch_footymetrics_player_props(home: str, away: str) -> List[Dict[str, Any]
 def collect_extra_player_props(
     fixtures: List[Dict[str, str]],
     log: Optional[Callable[[str], Any]] = None,
-    max_matches: int = 12,
+    max_matches: int = 60,
 ) -> List[Dict[str, Any]]:
     """Collect real player props with category-depth first, not raw row count.
 
