@@ -6294,7 +6294,31 @@ def _ntr_ml_enhance_message(text, chat_id=None):
         return text
     return raw + footer
 
+_LAST_TELEGRAM_SEND = {"chat_id": None, "message_id": None, "text": None}
+
+def _telegram_actual_chat(default_chat, message_id=None):
+    """Return the chat that actually owns the last Telegram message.
+
+    Keeps settlement editMessageText bound to the exact original post even when
+    sendMessage had to fall back to TELEGRAM_CHAT_ID.
+    """
+    try:
+        if message_id is not None and _LAST_TELEGRAM_SEND.get("message_id") == message_id:
+            return str(_LAST_TELEGRAM_SEND.get("chat_id") or default_chat or "")
+    except Exception:
+        pass
+    return str(default_chat or "")
+
+def _telegram_actual_text(default_text, message_id=None):
+    try:
+        if message_id is not None and _LAST_TELEGRAM_SEND.get("message_id") == message_id:
+            return str(_LAST_TELEGRAM_SEND.get("text") or default_text or "")
+    except Exception:
+        pass
+    return str(default_text or "")
+
 def send_telegram(text, chat_id=None, reply_markup=None):
+    global _LAST_TELEGRAM_SEND
     if not TELEGRAM_TOKEN:
         log("Telegram Token fehlt", "WARN")
         return None
@@ -6339,26 +6363,30 @@ def send_telegram(text, chat_id=None, reply_markup=None):
         payload["reply_markup"] = json.dumps(reply_markup)
 
     try:
+        actual_chat = str(payload.get("chat_id") or chat_id or "")
+        actual_text = str(payload.get("text") or text or "")
         r = requests.post(
             f"https://api.telegram.org/bot{TELEGRAM_TOKEN}/sendMessage",
             json=payload,
             timeout=15,
         )
 
+        if not r.ok and r.status_code == 400 and chat_id != TELEGRAM_CHAT_ID and TELEGRAM_CHAT_ID:
+            # One controlled channel fallback. If it succeeds, do NOT send a second duplicate.
+            log(f"⚠️ Chat {chat_id} nicht gefunden - fallback zu Main Chat", "WARN")
+            payload["chat_id"] = TELEGRAM_CHAT_ID
+            actual_chat = str(TELEGRAM_CHAT_ID)
+            r = requests.post(
+                f"https://api.telegram.org/bot{TELEGRAM_TOKEN}/sendMessage",
+                json=payload,
+                timeout=15,
+            )
+
         if not r.ok:
-            # 🆕 Fallback: Wenn Channel fehlt (400 error) → Main Chat nutzen
-            if r.status_code == 400 and chat_id != TELEGRAM_CHAT_ID:
-                log(f"⚠️ Chat {chat_id} nicht gefunden - fallback zu Main Chat", "WARN")
-                payload["chat_id"] = TELEGRAM_CHAT_ID
-                r = requests.post(
-                    f"https://api.telegram.org/bot{TELEGRAM_TOKEN}/sendMessage",
-                    json=payload,
-                    timeout=15,
-                )
-            
-            # Fallback ohne HTML-Tags
+            # Last transport fallback: same target, plain text, exactly one retry.
             payload["text"] = re.sub(r"<[^>]+>", "", text)
             payload.pop("parse_mode", None)
+            actual_text = str(payload["text"])
             r = requests.post(
                 f"https://api.telegram.org/bot{TELEGRAM_TOKEN}/sendMessage",
                 json=payload,
@@ -6366,10 +6394,18 @@ def send_telegram(text, chat_id=None, reply_markup=None):
             )
 
         if r.ok:
-            return r.json().get("result", {}).get("message_id")
+            result = r.json().get("result", {}) or {}
+            msg_id = result.get("message_id")
+            actual_chat = str((result.get("chat") or {}).get("id") or payload.get("chat_id") or actual_chat)
+            _LAST_TELEGRAM_SEND = {"chat_id": actual_chat, "message_id": msg_id, "text": actual_text}
+            return msg_id
+        log(f"Telegram send failed {r.status_code}: {r.text[:160]}", "WARN")
 
-    except Exception:
-        pass
+    except Exception as _tg_exc:
+        try:
+            log(f"Telegram send exception: {str(_tg_exc)[:100]}", "WARN")
+        except Exception:
+            pass
 
     return None
 
@@ -7759,9 +7795,9 @@ def send_top_tips(tips_by_market, target_date):
                 "away_form": r.get("awayForm", ""),
                 "reasoning": r.get("reasoning", "")[:500],
                 "key_factor": r.get("keyFactor", "")[:200],
-                "telegram_chat_id": str(target_chat),
+                "telegram_chat_id": _telegram_actual_chat(target_chat, msg_id),
                 "telegram_msg_id": msg_id,
-                "message_text": msg[:3500],  # Für Ergebnis-Anhang beim Settlement
+                "message_text": _telegram_actual_text(msg, msg_id)[:3500],  # Für Ergebnis-Anhang beim Settlement
                 "units": tip_units,
                 "status": "pending",
                 # ML Features
@@ -15877,7 +15913,31 @@ def build_inline_keyboard(odds_data, match_name):
     return {"inline_keyboard": buttons}
 
 
+_LAST_TELEGRAM_SEND = {"chat_id": None, "message_id": None, "text": None}
+
+def _telegram_actual_chat(default_chat, message_id=None):
+    """Return the chat that actually owns the last Telegram message.
+
+    Keeps settlement editMessageText bound to the exact original post even when
+    sendMessage had to fall back to TELEGRAM_CHAT_ID.
+    """
+    try:
+        if message_id is not None and _LAST_TELEGRAM_SEND.get("message_id") == message_id:
+            return str(_LAST_TELEGRAM_SEND.get("chat_id") or default_chat or "")
+    except Exception:
+        pass
+    return str(default_chat or "")
+
+def _telegram_actual_text(default_text, message_id=None):
+    try:
+        if message_id is not None and _LAST_TELEGRAM_SEND.get("message_id") == message_id:
+            return str(_LAST_TELEGRAM_SEND.get("text") or default_text or "")
+    except Exception:
+        pass
+    return str(default_text or "")
+
 def send_telegram(text, chat_id=None, reply_markup=None):
+    global _LAST_TELEGRAM_SEND
     if not TELEGRAM_TOKEN:
         log("Telegram Token fehlt", "WARN")
         return None
@@ -15914,26 +15974,30 @@ def send_telegram(text, chat_id=None, reply_markup=None):
         payload["reply_markup"] = json.dumps(reply_markup)
 
     try:
+        actual_chat = str(payload.get("chat_id") or chat_id or "")
+        actual_text = str(payload.get("text") or text or "")
         r = requests.post(
             f"https://api.telegram.org/bot{TELEGRAM_TOKEN}/sendMessage",
             json=payload,
             timeout=15,
         )
 
+        if not r.ok and r.status_code == 400 and chat_id != TELEGRAM_CHAT_ID and TELEGRAM_CHAT_ID:
+            # One controlled channel fallback. If it succeeds, do NOT send a second duplicate.
+            log(f"⚠️ Chat {chat_id} nicht gefunden - fallback zu Main Chat", "WARN")
+            payload["chat_id"] = TELEGRAM_CHAT_ID
+            actual_chat = str(TELEGRAM_CHAT_ID)
+            r = requests.post(
+                f"https://api.telegram.org/bot{TELEGRAM_TOKEN}/sendMessage",
+                json=payload,
+                timeout=15,
+            )
+
         if not r.ok:
-            # 🆕 Fallback: Wenn Channel fehlt (400 error) → Main Chat nutzen
-            if r.status_code == 400 and chat_id != TELEGRAM_CHAT_ID:
-                log(f"⚠️ Chat {chat_id} nicht gefunden - fallback zu Main Chat", "WARN")
-                payload["chat_id"] = TELEGRAM_CHAT_ID
-                r = requests.post(
-                    f"https://api.telegram.org/bot{TELEGRAM_TOKEN}/sendMessage",
-                    json=payload,
-                    timeout=15,
-                )
-            
-            # Fallback ohne HTML-Tags
+            # Last transport fallback: same target, plain text, exactly one retry.
             payload["text"] = re.sub(r"<[^>]+>", "", text)
             payload.pop("parse_mode", None)
+            actual_text = str(payload["text"])
             r = requests.post(
                 f"https://api.telegram.org/bot{TELEGRAM_TOKEN}/sendMessage",
                 json=payload,
@@ -15941,10 +16005,18 @@ def send_telegram(text, chat_id=None, reply_markup=None):
             )
 
         if r.ok:
-            return r.json().get("result", {}).get("message_id")
+            result = r.json().get("result", {}) or {}
+            msg_id = result.get("message_id")
+            actual_chat = str((result.get("chat") or {}).get("id") or payload.get("chat_id") or actual_chat)
+            _LAST_TELEGRAM_SEND = {"chat_id": actual_chat, "message_id": msg_id, "text": actual_text}
+            return msg_id
+        log(f"Telegram send failed {r.status_code}: {r.text[:160]}", "WARN")
 
-    except Exception:
-        pass
+    except Exception as _tg_exc:
+        try:
+            log(f"Telegram send exception: {str(_tg_exc)[:100]}", "WARN")
+        except Exception:
+            pass
 
     return None
 
@@ -17183,9 +17255,9 @@ def send_top_tips(tips_by_market, target_date):
                 "away_form": r.get("awayForm", ""),
                 "reasoning": r.get("reasoning", "")[:500],
                 "key_factor": r.get("keyFactor", "")[:200],
-                "telegram_chat_id": str(target_chat),
+                "telegram_chat_id": _telegram_actual_chat(target_chat, msg_id),
                 "telegram_msg_id": msg_id,
-                "message_text": msg[:3500],  # Für Ergebnis-Anhang beim Settlement
+                "message_text": _telegram_actual_text(msg, msg_id)[:3500],  # Für Ergebnis-Anhang beim Settlement
                 "units": tip_units,
                 "status": "pending",
                 # ML Features
@@ -19954,7 +20026,7 @@ def run_corners_and_scorer_bots(target_date, active_leagues, odds_data_cache, fi
                     "status": "pending",
                     "group_key": "corners",
                     "pick_type": "corners",
-                    "telegram_chat_id": str(group_hz),
+                    "telegram_chat_id": _telegram_actual_chat(group_hz, _cmid),
                     "telegram_msg_id": _cmid,
                     "message_text": _cmsg[:3500],
                     "probability": tip.get("probability", 0),
@@ -22339,7 +22411,7 @@ def run_pinnacle_props_bot(win_start_utc=None, win_end_utc=None, ch_tz=None, top
                         continue
                     _seen_fx.add(_k)
                     _fx.append({"home": _h, "away": _a})
-            _extra = list(collect_extra_player_props(_fx[:60], log=log)) if _fx else []
+            _extra = list(collect_extra_player_props(_fx[:60], log=log, max_matches=60)) if _fx else []
             _converted = []
             for _xp in _extra:
                 try:
@@ -22941,7 +23013,7 @@ def run_pinnacle_props_bot(win_start_utc=None, win_end_utc=None, ch_tz=None, top
                 ],
                 "nate_score": _builder_score,
                 "source": "pinnacle",
-                "telegram_chat_id": str(prop_chat),
+                "telegram_chat_id": _telegram_actual_chat(prop_chat, _mid),
                 "telegram_msg_id": _mid,
                 "message_text": msg[:3500],
             })
@@ -25012,7 +25084,7 @@ def main():
                                     "raw": f"{t.get('market','')} {t.get('tip', t.get('selection','YES'))}",
                                 } for t in combo.get("tips", [])
                             ],
-                            "telegram_chat_id": str(combo_chat),
+                            "telegram_chat_id": _telegram_actual_chat(combo_chat, _combo_mid),
                             "telegram_msg_id": _combo_mid,
                             "message_text": msg[:3500],
                         })
