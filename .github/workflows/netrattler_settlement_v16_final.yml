@@ -1,4 +1,4 @@
-name: NETRATTLER Settlement Final V24 SELF-HEALING
+name: NETRATTLER Settlement Final V25 MULTISOURCE
 
 on:
   workflow_dispatch:
@@ -22,7 +22,7 @@ jobs:
           pip install requests python-dateutil
       - name: Compile settlement
         run: python -m py_compile netrattler_settlement_v16_final.py
-      - name: Run Settlement V24 SELF-HEALING
+      - name: Run Settlement V25 MULTISOURCE
         env:
           SUPABASE_URL: ${{ secrets.SUPABASE_URL }}
           SUPABASE_KEY: ${{ secrets.SUPABASE_KEY }}
@@ -53,4 +53,8 @@ jobs:
           RESULT_USE_OPENLIGADB: "true"
           RESULT_HTTP_TIMEOUT: "4"
           ESPN_DISABLE_AFTER_FORBIDDEN: "true"
+          RESULT_USE_FOTMOB: "true"
+          RESULT_USE_SOFASCORE_DETAIL: "true"
+          RESULT_ENRICH_MAX_DETAILS: "120"
+          RESULT_ENRICH_TIMEOUT: "7"
         run: python netrattler_settlement_v16_final.py
