@@ -148,6 +148,15 @@ def load_player_models(supabase_url: str, supabase_key: str, timeout: int = 60) 
                 continue
             try:
                 obj = pickle.load(io.BytesIO(base64.b64decode(data)))
+                feature_cols = list(obj.get("feature_cols") or PLAYER_FEATURE_COLS) if isinstance(obj, dict) else list(PLAYER_FEATURE_COLS)
+                try:
+                    from netrattler_model_registry_v37 import features_compatible
+                    if not features_compatible(name, feature_cols):
+                        continue
+                except Exception:
+                    pass
+                if feature_cols != list(PLAYER_FEATURE_COLS):
+                    continue
                 _MODEL_CACHE[name] = obj["model"]
             except Exception:
                 continue
