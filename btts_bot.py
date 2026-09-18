@@ -14608,6 +14608,28 @@ def build_context(odds_data, fixtures, league, target_date=None):
             if src_stats and src_stats.get("xg_home"):
                 line += f"\n   🔥 SportSRC xG: {src_stats['xg_home']} / {src_stats['xg_away']}"
 
+            # 4b. Big Balls Sports Data — optional Stats/Lineup Crosscheck.
+            # Never treated as a bookmaker source; REAL_ODDS_ONLY remains unchanged.
+            try:
+                from netrattler_bigballs import get_match_context as _bb_match_context
+                bb = _bb_match_context(f["home"], f["away"], target_date)
+            except Exception:
+                bb = {}
+            if bb:
+                bb_parts = []
+                if bb.get("xg_home") is not None and bb.get("xg_away") is not None:
+                    bb_parts.append(f"xG {bb['xg_home']}/{bb['xg_away']}")
+                if bb.get("shots_home") is not None and bb.get("shots_away") is not None:
+                    bb_parts.append(f"Shots {bb['shots_home']}/{bb['shots_away']}")
+                if bb.get("sot_home") is not None and bb.get("sot_away") is not None:
+                    bb_parts.append(f"SOT {bb['sot_home']}/{bb['sot_away']}")
+                if bb_parts:
+                    line += f"\n   🟣 Big Balls: {' · '.join(bb_parts)}"
+                if bb.get("home_lineup"):
+                    line += f"\n   👕 Big Balls {f['home']} XI: {', '.join(bb['home_lineup'][:5])}..."
+                if bb.get("away_lineup"):
+                    line += f"\n   👕 Big Balls {f['away']} XI: {', '.join(bb['away_lineup'][:5])}..."
+
             # 5. OddsPortal Quoten (kein Key)
             op_odds = scrape_oddsportal_btts(f["home"], f["away"], league, target_date)
             if op_odds and op_odds.get("btts_yes"):
