@@ -96,8 +96,8 @@ TELEGRAM_GROUPS = {
     # Deine bestehenden Secret-Namen:
     # TELEGRAM_GROUP_HZ_LIVE    = NETRATTLER CORNER SNIPER
     # TELEGRAM_GROUP_LATE_GOALS = NETRATTLER GOAL HUNTER
-    "corners": env("TELEGRAM_GROUP_CORNERS", env("TELEGRAM_GROUP_HZ_LIVE", TELEGRAM_CHAT_ID)),
-    "hz_live": env("TELEGRAM_GROUP_CORNERS", env("TELEGRAM_GROUP_HZ_LIVE", TELEGRAM_CHAT_ID)),
+    "corners": env("TELEGRAM_GROUP_CORNERS") or env("TELEGRAM_GROUP_HZ_LIVE") or TELEGRAM_CHAT_ID,
+    "hz_live": env("TELEGRAM_GROUP_CORNERS") or env("TELEGRAM_GROUP_HZ_LIVE") or TELEGRAM_CHAT_ID,
     "scorer": env("TELEGRAM_GROUP_LATE_GOALS", TELEGRAM_CHAT_ID),
     "1x2": env("TELEGRAM_GROUP_LATE_GOALS", TELEGRAM_CHAT_ID),
     "goal_hunter": env("TELEGRAM_GROUP_LATE_GOALS", TELEGRAM_CHAT_ID),
@@ -105,9 +105,9 @@ TELEGRAM_GROUPS = {
 
     "stats": env("TELEGRAM_GROUP_STATS", TELEGRAM_CHAT_ID),
 
-    "advanced_props": env("TELEGRAM_GROUP_PLAYER_PROPS", env("TELEGRAM_GROUP_BUILDER", env("TELEGRAM_GROUP_STATS", TELEGRAM_CHAT_ID))),
-    "props": env("TELEGRAM_GROUP_PLAYER_PROPS", env("TELEGRAM_GROUP_BUILDER", env("TELEGRAM_GROUP_STATS", TELEGRAM_CHAT_ID))),
-    "builder": env("TELEGRAM_GROUP_BUILDER", env("TELEGRAM_GROUP_PLAYER_PROPS", env("TELEGRAM_GROUP_STATS", TELEGRAM_CHAT_ID))),
+    "advanced_props": env("TELEGRAM_GROUP_PLAYER_PROPS") or env("TELEGRAM_GROUP_BUILDER") or env("TELEGRAM_GROUP_STATS") or TELEGRAM_CHAT_ID,
+    "props": env("TELEGRAM_GROUP_PLAYER_PROPS") or env("TELEGRAM_GROUP_BUILDER") or env("TELEGRAM_GROUP_STATS") or TELEGRAM_CHAT_ID,
+    "builder": env("TELEGRAM_GROUP_BUILDER") or env("TELEGRAM_GROUP_PLAYER_PROPS") or env("TELEGRAM_GROUP_STATS") or TELEGRAM_CHAT_ID,
 }
 
 
@@ -19550,6 +19550,44 @@ def get_team_corner_stats(team_id, league_id, season):
         return None
 
 
+def _ntr_observed_corner_quotes(fixture, target_date=None):
+    """Observed full-match corner lines. Kambi first; OddsPapi only opt-in."""
+    home = str(fixture.get("home") or "").strip()
+    away = str(fixture.get("away") or "").strip()
+    out = {}
+    if not home or not away:
+        return out
+    try:
+        from netrattler_prop_sources import collect_extra_corner_odds
+        rows = collect_extra_corner_odds(
+            [{"home": home, "away": away, "league": str(fixture.get("league") or "")}],
+            log=None, max_matches=1,
+        ) or []
+        for row in rows:
+            try:
+                line = round(float(row.get("line") or 0), 2)
+                odds = float(row.get("odds") or 0)
+            except Exception:
+                continue
+            if odds > 1.05 and line > 0:
+                prev = out.get(line)
+                if prev is None or odds > prev[0]:
+                    out[line] = (odds, str(row.get("source") or "kambi"))
+    except Exception:
+        pass
+    if out or env("NETRATTLER_ENABLE_ODDSPAPI_RUNTIME", "false").lower() not in {"1", "true", "yes", "on"}:
+        return out
+    try:
+        from netrattler_oddspapi import get_corner_quote_for_match
+        for line in (7.5, 8.5, 9.5, 10.5, 11.5):
+            q = float(get_corner_quote_for_match(home, away, target_date, line) or 0)
+            if q > 1.05:
+                out[round(line, 2)] = (q, "oddspapi")
+    except Exception:
+        pass
+    return out
+
+
 def analyze_corners_tip_simple(fixture, league, target_date=None):
     """Deterministic corner model + exact observed bookmaker line.
 
@@ -19572,31 +19610,22 @@ def analyze_corners_tip_simple(fixture, league, target_date=None):
         cum = sum((math.exp(-expected) * expected**k) / math.factorial(k) for k in range(k_max + 1))
         return round((1 - cum) * 100)
 
-    try:
-        from netrattler_oddspapi import get_corner_quote_for_match
-    except Exception:
-        get_corner_quote_for_match = None
-
+    _corner_quotes = _ntr_observed_corner_quotes(fixture, target_date)
     candidates = []
     for line in (7.5, 8.5, 9.5, 10.5, 11.5):
         prob = poisson_over(line)
-        if prob < 55 or get_corner_quote_for_match is None:
+        _observed = _corner_quotes.get(round(line, 2))
+        if prob < 55 or not _observed:
             continue
-        try:
-            quote = get_corner_quote_for_match(
-                fixture.get("home", ""), fixture.get("away", ""), target_date, line
-            )
-            quote = float(quote or 0)
-        except Exception:
-            quote = 0.0
+        quote, quote_source = _observed
         if quote < MIN_ODDS_VALUE or not _is_value_bet(quote, prob):
             continue
         edge = prob / 100.0 - (1.0 / quote)
-        candidates.append((edge, line, prob, quote))
+        candidates.append((edge, line, prob, quote, quote_source))
 
     if not candidates:
         return None
-    edge, line, prob, quote = max(candidates, key=lambda item: (item[0], item[2], item[1]))
+    edge, line, prob, quote, quote_source = max(candidates, key=lambda item: (item[0], item[2], item[1]))
     return {
         "match": f"{fixture['home']} vs {fixture['away']}",
         "league": league, "time": fixture.get("time_local", "TBD"),
@@ -19606,7 +19635,7 @@ def analyze_corners_tip_simple(fixture, league, target_date=None):
         "fairOdds": round(100 / prob, 2) if prob else 0,
         "edge": round(edge, 4), "expected_corners": round(expected, 1),
         "market": "corners", "confidence": 3, "units": 1.0,
-        "valueRating": "VALUE", "_no_real_odds": False, "_source": "oddspapi",
+        "valueRating": "VALUE", "_no_real_odds": False, "_source": quote_source,
     }
 
 
@@ -19627,25 +19656,21 @@ def analyze_corners_tip(fixture, league, target_date=None):
     away_avg = (away_stats["avg_corners_for"] + away_stats["avg_corners_against"]) / 2 if away_stats else 4.5
     expected_total = max(0.5, home_avg + away_avg)
 
-    try:
-        from netrattler_oddspapi import get_corner_quote_for_match
-    except Exception:
-        return None
-
+    _corner_quotes = _ntr_observed_corner_quotes(fixture, target_date)
     candidates = []
     for line in (7.5, 8.5, 9.5, 10.5, 11.5):
         cum = sum((math.exp(-expected_total) * expected_total**k) / math.factorial(k) for k in range(int(line) + 1))
         prob = round((1 - cum) * 100)
-        try:
-            quote = float(get_corner_quote_for_match(fixture.get("home", ""), fixture.get("away", ""), target_date, line) or 0)
-        except Exception:
-            quote = 0.0
+        _observed = _corner_quotes.get(round(line, 2))
+        if not _observed:
+            continue
+        quote, quote_source = _observed
         if prob >= 55 and quote >= MIN_ODDS_VALUE and _is_value_bet(quote, prob):
             edge = prob / 100.0 - 1.0 / quote
-            candidates.append((edge, line, prob, quote))
+            candidates.append((edge, line, prob, quote, quote_source))
     if not candidates:
         return None
-    edge, line_used, prob, quote = max(candidates, key=lambda item: (item[0], item[2]))
+    edge, line_used, prob, quote, quote_source = max(candidates, key=lambda item: (item[0], item[2]))
     return {
         "match": f"{fixture['home']} vs {fixture['away']}", "league": league,
         "time": fixture.get("time_local", "TBD"), "tip": f"Over {line_used} Ecken",
@@ -19654,7 +19679,7 @@ def analyze_corners_tip(fixture, league, target_date=None):
         "edge": round(edge, 4), "expected_corners": round(expected_total, 1),
         "home_avg_corners": round(home_avg, 2), "away_avg_corners": round(away_avg, 2),
         "market": "corners", "confidence": 3, "units": 1.0, "valueRating": "VALUE",
-        "_no_real_odds": False, "_source": "oddspapi",
+        "_no_real_odds": False, "_source": quote_source,
     }
 
 
@@ -20972,6 +20997,10 @@ def _ntr_enrich_prop_pool_with_player_ml(rows: list) -> dict:
         cap = max(0, int(env("NETRATTLER_FAST_PLAYER_ML_CAP", "40")))
     except Exception:
         cap = 40
+    # No trained player models: keep only a small empirical-history fallback sample
+    # instead of burning dozens of Supabase roundtrips on every tips run.
+    if stats["models_loaded"] <= 0:
+        cap = min(cap, 24)
     if cap <= 0:
         return stats
 
@@ -22402,7 +22431,29 @@ _LEG_CATEGORY = {
 }
 
 def _get_leg_category(prop_name):
-    pn = str(prop_name or "").lower()
+    # Preserve canonical categories emitted by Kambi/1xbet/etc. before fuzzy text matching.
+    pn = re.sub(r"[_-]+", " ", str(prop_name or "").lower()).strip()
+    canonical_prefixes = (
+        ("tackles received", "tackles_received"),
+        ("tackles committed", "tackles_committed"),
+        ("shots outside box", "shots_outside_box"),
+        ("sot outside box", "sot_outside_box"),
+        ("yellow cards", "yellow_cards"),
+        ("first scorer", "first_scorer"),
+        ("last scorer", "last_scorer"),
+        ("fouls won", "fouls_won"),
+        ("score", "score"),
+        ("assist", "assist"),
+        ("booked", "booked"),
+        ("sot", "sot"),
+        ("shots", "shots"),
+        ("fouls", "fouls"),
+        ("saves", "saves"),
+        ("offsides", "offsides"),
+    )
+    for token, category in canonical_prefixes:
+        if pn == token or pn.startswith(token + " "):
+            return category
     matches = []
     for cat, keywords in _LEG_CATEGORY.items():
         for keyword in keywords:
@@ -23672,11 +23723,11 @@ def filter_tips_by_edge(tips: List[Dict], market: str = "btts",
                 line_dispersion=float(tip.get("odds_dispersion") or tip.get("line_dispersion") or 0),
             )
             if str(tip_market).lower() == "1x2":
-                # 1X2 already receives the learned probability adjustment above,
-                # but uses its own production guardrails.  Do not apply the
-                # generic policy's 55% probability / source-market hard gate a
-                # second time; that was the reason today's 130 real-odds picks
-                # became 0 Telegram picks.
+                # 1X2 is already a normalized three-way distribution. Learned
+                # source/league weights may calibrate it, but must not inflate a
+                # single outcome into an impossible artificial edge.
+                raw_1x2_p = raw_p / 100.0 if raw_p > 1 else raw_p
+                adjusted_p = max(raw_1x2_p - 0.08, min(raw_1x2_p + 0.08, adjusted_p))
                 policy_ok = (
                     adjusted_p >= (ONE_X_TWO_MIN_PROB / 100.0)
                     and float(market_quote) >= ONE_X_TWO_MIN_ODDS
@@ -24838,6 +24889,9 @@ def main():
                     any(k in ln for k in ["world cup", "fifa", "international", "nations league", "weltmeister"])
                     or ("friendl" in ln and "club" not in ln)
                 )
+                # Reuse this inference later for 1X2; the previous path ran the same
+                # expensive ML stack a second time for every match.
+                _ml = {}
                 if _is_intl:
                     try:
                         _sh = get_national_team_btts_stats(home)
@@ -25016,21 +25070,35 @@ def main():
 
                 # 🏆 1X2 -> GOAL HUNTER. Quote real, Wahrscheinlichkeit aus ML/Elo-Poisson.
                 if "1x2" in tips_by_market and ro:
-                    try:
-                        _one_x_two = get_ml_prediction(home, away, league_name) or {}
-                    except Exception:
-                        _one_x_two = {}
+                    # Use the already-computed club ML output. If unavailable/incomplete,
+                    # fill from one coherent Elo/Poisson 1X2 distribution.
+                    _one_x_two = dict(_ml or {})
                     if not all(k in _one_x_two for k in ("home_win_pct", "draw_pct", "away_win_pct")):
                         try:
                             _elo_1x2 = get_elo_poisson_prediction(home, away, league_name) or {}
                             for _k in ("home_win_pct", "draw_pct", "away_win_pct"):
-                                _one_x_two.setdefault(_k, _elo_1x2.get(_k))
+                                if _one_x_two.get(_k) in (None, ""):
+                                    _one_x_two[_k] = _elo_1x2.get(_k)
                         except Exception:
                             pass
+
+                    # These are three independent binary models; raw outputs do NOT have
+                    # to sum to 100%. Normalize before selecting a 1/X/2 outcome and edge.
+                    try:
+                        _raw_1x2 = [
+                            max(0.0, float(_one_x_two.get("home_win_pct") or 0)),
+                            max(0.0, float(_one_x_two.get("draw_pct") or 0)),
+                            max(0.0, float(_one_x_two.get("away_win_pct") or 0)),
+                        ]
+                    except Exception:
+                        _raw_1x2 = [0.0, 0.0, 0.0]
+                    _raw_sum_1x2 = sum(_raw_1x2)
+                    _norm_1x2 = ([100.0 * x / _raw_sum_1x2 for x in _raw_1x2]
+                                 if _raw_sum_1x2 > 0 else [0.0, 0.0, 0.0])
                     selections = [
-                        ("1", "home_win", float(_one_x_two.get("home_win_pct") or 0)),
-                        ("X", "draw", float(_one_x_two.get("draw_pct") or 0)),
-                        ("2", "away_win", float(_one_x_two.get("away_win_pct") or 0)),
+                        ("1", "home_win", _norm_1x2[0]),
+                        ("X", "draw", _norm_1x2[1]),
+                        ("2", "away_win", _norm_1x2[2]),
                     ]
                     selections.sort(key=lambda item: item[2], reverse=True)
                     for sel, key, sel_prob in selections:
