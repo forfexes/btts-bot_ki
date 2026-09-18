@@ -63,8 +63,8 @@ GROUPS = {
     "combo_multi": os.getenv("TELEGRAM_GROUP_COMBOS") or os.getenv("TELEGRAM_GROUP_COMBO") or TG_DEFAULT,
     "btts_ht": os.getenv("TELEGRAM_GROUP_BTTS_HT") or TG_DEFAULT,
     "over15_ht": os.getenv("TELEGRAM_GROUP_OVER15_HT") or os.getenv("TELEGRAM_GROUP_BTTS_HT") or os.getenv("TELEGRAM_GROUP_STATS") or TG_DEFAULT,
-    "builder": os.getenv("TELEGRAM_GROUP_BUILDER") or os.getenv("TELEGRAM_GROUP_PROPS") or TG_DEFAULT,
-    "props": os.getenv("TELEGRAM_GROUP_PROPS") or TG_DEFAULT,
+    "builder": os.getenv("TELEGRAM_GROUP_BUILDER") or os.getenv("TELEGRAM_GROUP_PLAYER_PROPS") or os.getenv("TELEGRAM_GROUP_PROPS") or TG_DEFAULT,
+    "props": os.getenv("TELEGRAM_GROUP_PLAYER_PROPS") or os.getenv("TELEGRAM_GROUP_PROPS") or TG_DEFAULT,
     "corners": os.getenv("TELEGRAM_GROUP_CORNERS") or os.getenv("TELEGRAM_GROUP_HZ_LIVE") or os.getenv("TELEGRAM_GROUP_STATS") or TG_DEFAULT,
     "1x2": os.getenv("TELEGRAM_GROUP_LATE_GOALS") or TG_DEFAULT,
     "scorer": os.getenv("TELEGRAM_GROUP_LATE_GOALS") or TG_DEFAULT,
@@ -461,7 +461,7 @@ def format_direct_summary(settlement: Dict[str, Any]) -> str:
     if isinstance(legs, list) and legs and group in {"combo", "combo_multi", "builder", "props"}:
         lines.append("")
         lines.append("<b>Leg-Auswertung:</b>")
-        for item in legs[:8]:
+        for item in legs[:11]:
             if not isinstance(item, dict):
                 continue
             st = normalized_status(item.get("status"))
@@ -478,7 +478,8 @@ def edit_original_tip(settlement: Dict[str, Any]) -> bool:
     """Edit original Telegram post; retry the canonical group if stored chat_id is stale.
 
     Telegram cannot retrieve an arbitrary old message by id. If neither candidate chat owns
-    the message, send a compact result update to the canonical group so the settlement is not lost.
+    the message, the default is to keep settlement silent rather than create a duplicate post.
+    A separate compact result update is available only via explicit emergency opt-in.
     """
     if normalized_status(settlement.get("status")) not in {"win", "loss"}:
         return False
@@ -500,8 +501,10 @@ def edit_original_tip(settlement: Dict[str, Any]) -> bool:
             if telegram_edit(chat_id, message_id, edited):
                 return True
 
-    # Safe fallback: do not pretend the original was edited; publish a result update once.
-    if canonical_chat:
+    # Default: result MUST stay in the same posted tip. A separate result post is
+    # only an explicit emergency fallback, never the normal path.
+    allow_separate = str(os.getenv("SETTLEMENT_ALLOW_SEPARATE_RESULT_UPDATE", "false")).lower() in {"1", "true", "yes", "on"}
+    if allow_separate and canonical_chat:
         match = match_label(settlement)
         status = normalized_status(settlement.get("status"))
         icon = "✅" if status == "win" else "❌"
@@ -511,7 +514,9 @@ def edit_original_tip(settlement: Dict[str, Any]) -> bool:
         if profit is not None:
             msg += f"\nProfit: <b>{as_float(profit):+.2f}U</b>"
         if telegram(canonical_chat, msg):
-            log(f"Original-Tipp nicht editierbar; Result-Update gesendet: {settlement.get('tip_id')}", "WARN")
+            log(f"Original-Tipp nicht editierbar; separater Fallback gesendet: {settlement.get('tip_id')}", "WARN")
+    else:
+        log(f"Original-Tipp konnte nicht editiert werden; KEIN separater Post: {settlement.get('tip_id')}", "WARN")
     return False
 
 def market_text(row: Dict[str, Any]) -> str:
@@ -1171,7 +1176,11 @@ def category_of(row: Dict[str, Any]) -> str:
         "shots_on_target": "sot", "shot_on_target": "sot", "cards": "yellow_cards",
         "booked": "yellow_cards", "fouls_committed": "fouls", "fouls_drawn": "fouls_won",
         "tackles": "tackles_committed", "tackles_made": "tackles_committed",
-        "tackled": "tackles_received", "goalscorer": "score", "corners": "corners", "saves": "saves", "goalkeeper_saves": "saves", "keeper_saves": "saves",
+        "tackled": "tackles_received", "goalscorer": "score", "corners": "corners",
+        "saves": "saves", "goalkeeper_saves": "saves", "keeper_saves": "saves",
+        "cards_total": "match_cards", "total_cards": "match_cards",
+        "shots_total": "team_shots", "total_shots": "team_shots",
+        "shots_on_target_total": "match_sot", "sot_total": "match_sot",
     }
     explicit = aliases.get(explicit, explicit)
     if explicit:
@@ -1225,9 +1234,46 @@ def settle_score_market(tip: Dict[str, Any], result: Dict[str, Any]) -> Tuple[st
             return "pending", "Halbzeit-Resultat fehlt"
         return ("win" if hth + hta > 1.5 else "loss", f"HT {hth}:{hta}")
 
+    category = category_of(tip)
+    selection = str(anyv(unpack(tip), ["tip", "selection", "pick", "bet", "player"], "")).strip().lower()
+
+    if category == "half_goals_1st":
+        raw = unpack(result.get("raw") or {})
+        hth = as_int(anyv(raw, ["HTHG", "home_score_ht", "halftime_home", "intHomeScoreHT"], -1), -1)
+        hta = as_int(anyv(raw, ["HTAG", "away_score_ht", "halftime_away", "intAwayScoreHT"], -1), -1)
+        if hth < 0 or hta < 0:
+            return "pending", "Halbzeit-Resultat fehlt"
+        value = hth + hta
+        line = as_float(anyv(unpack(tip), ["line"], 0), 0) or market_line(market_text(tip), 1.0)
+        return ("win" if value >= line else "loss", f"1.HZ Tore {value} · Linie {line:g}")
+
+    if category == "half_goals_2nd":
+        raw = unpack(result.get("raw") or {})
+        hth = as_int(anyv(raw, ["HTHG", "home_score_ht", "halftime_home", "intHomeScoreHT"], -1), -1)
+        hta = as_int(anyv(raw, ["HTAG", "away_score_ht", "halftime_away", "intAwayScoreHT"], -1), -1)
+        if hth < 0 or hta < 0:
+            return "pending", "Halbzeit-Resultat für 2.HZ fehlt"
+        value = total - hth - hta
+        line = as_float(anyv(unpack(tip), ["line"], 0), 0) or market_line(market_text(tip), 1.0)
+        return ("win" if value >= line else "loss", f"2.HZ Tore {value} · Linie {line:g}")
+
+    # Double Chance is settled from the same trusted FT score as 1X2.
+    if category == "double_chance" or "double chance" in low:
+        token = re.sub(r"[^12x]", "", selection)
+        if not token:
+            token = re.sub(r"[^12x]", "", low)
+        actual = "1" if hs > aw else "2" if aw > hs else "x"
+        wanted = None
+        for candidate in ("1x", "x2", "12"):
+            if candidate in token:
+                wanted = candidate
+                break
+        if not wanted:
+            return "pending", f"{hs}:{aw} · Double-Chance-Auswahl nicht erkannt"
+        return ("win" if actual in wanted else "loss", f"{hs}:{aw} · DC {wanted.upper()} → {actual.upper()}")
+
     # 1X2 / Match Result
-    selection = str(anyv(unpack(tip), ["tip", "selection", "pick", "bet"], "")).strip().lower()
-    if group_of(tip) == "1x2" or "1x2" in low or "match result" in low:
+    if category == "result" or group_of(tip) == "1x2" or "1x2" in low or "match result" in low:
         home_tokens = {"1", "home", "home win", "heim", "heim sieg"}
         draw_tokens = {"x", "draw", "unentschieden"}
         away_tokens = {"2", "away", "away win", "auswarts", "auswärtssieg", "away team"}
@@ -1265,21 +1311,76 @@ def settle_score_market(tip: Dict[str, Any], result: Dict[str, Any]) -> Tuple[st
     return "pending", f"{hs}:{aw} · Markt nicht erkannt"
 
 
-def team_corner_value(leg: Dict[str, Any], result: Dict[str, Any]) -> Optional[float]:
+def _result_team_pair(result: Dict[str, Any], home_keys: Sequence[str], away_keys: Sequence[str]) -> Tuple[Optional[float], Optional[float]]:
     raw = unpack(result.get("raw") or {})
-    home_corners = anyv(raw, ["home_corners", "corners_home", "HC", "homeCorners"], None)
-    away_corners = anyv(raw, ["away_corners", "corners_away", "AC", "awayCorners"], None)
-    if home_corners in (None, "") or away_corners in (None, ""):
-        return None
-    home_corners, away_corners = as_float(home_corners), as_float(away_corners)
+    home_v = anyv(raw, home_keys, None)
+    away_v = anyv(raw, away_keys, None)
+    if home_v in (None, "") or away_v in (None, ""):
+        return None, None
+    return as_float(home_v), as_float(away_v)
+
+
+def _leg_team_value(leg: Dict[str, Any], home_value: float, away_value: float, total_if_unknown: bool = True) -> Optional[float]:
     data = unpack(leg)
     team = str(anyv(data, ["team", "selection_team"], ""))
+    # Builder team legs often store the team/selection in `player` for schema compatibility.
+    if not team:
+        candidate = str(anyv(data, ["player", "selection"], ""))
+        if candidate and candidate.lower() not in {"yes", "no", "over", "under", "1", "x", "2"}:
+            team = candidate
     home, away, _ = match_parts(leg)
     if team and similarity(team, home) >= 0.75:
-        return home_corners
+        return home_value
     if team and similarity(team, away) >= 0.75:
-        return away_corners
-    return home_corners + away_corners
+        return away_value
+    return home_value + away_value if total_if_unknown else None
+
+
+def team_corner_value(leg: Dict[str, Any], result: Dict[str, Any]) -> Optional[float]:
+    home_v, away_v = _result_team_pair(
+        result,
+        ["home_corners", "corners_home", "HC", "homeCorners"],
+        ["away_corners", "corners_away", "AC", "awayCorners"],
+    )
+    if home_v is None or away_v is None:
+        return None
+    return _leg_team_value(leg, home_v, away_v, total_if_unknown=True)
+
+
+def _settle_result_stat_market(leg: Dict[str, Any], result: Dict[str, Any], category: str, line: float, text: str) -> Tuple[str, str]:
+    key_map = {
+        "team_corners": (["home_corners", "corners_home", "HC", "homeCorners"], ["away_corners", "corners_away", "AC", "awayCorners"], "Corners", True),
+        "match_corners": (["home_corners", "corners_home", "HC", "homeCorners"], ["away_corners", "corners_away", "AC", "awayCorners"], "Corners", True),
+        "corners": (["home_corners", "corners_home", "HC", "homeCorners"], ["away_corners", "corners_away", "AC", "awayCorners"], "Corners", True),
+        "team_cards": (["home_cards", "cards_home", "HY", "home_yellow", "home_yellow_cards"], ["away_cards", "cards_away", "AY", "away_yellow", "away_yellow_cards"], "Cards", True),
+        "match_cards": (["home_cards", "cards_home", "HY", "home_yellow", "home_yellow_cards"], ["away_cards", "cards_away", "AY", "away_yellow", "away_yellow_cards"], "Cards", True),
+        "team_shots": (["home_shots", "shots_home", "HS", "homeShots"], ["away_shots", "shots_away", "AS", "awayShots"], "Shots", True),
+        "match_sot": (["home_sot", "sot_home", "HST", "homeShotsOnTarget"], ["away_sot", "sot_away", "AST", "awayShotsOnTarget"], "SOT", True),
+    }
+    spec = key_map.get(category)
+    if not spec:
+        return "pending", f"Match-Markt {category or text} nicht unterstützt"
+    home_keys, away_keys, label, total_if_unknown = spec
+    home_v, away_v = _result_team_pair(result, home_keys, away_keys)
+    if home_v is None or away_v is None:
+        return "pending", f"{label}-Stats fehlen"
+
+    low = text.lower()
+    if category == "team_cards" and ("both teams" in low or "beide teams" in low):
+        threshold = max(1.0, line)
+        status = "win" if home_v >= threshold and away_v >= threshold else "loss"
+        return status, f"Cards Heim {home_v:g} · Auswärts {away_v:g} · beide ≥ {threshold:g}"
+
+    value = home_v + away_v if category.startswith("match_") else _leg_team_value(leg, home_v, away_v, total_if_unknown=total_if_unknown)
+    if value is None:
+        return "pending", f"{label}-Team nicht erkannt"
+    if "under" in low:
+        status = "win" if value < line else "loss"
+        op = "<"
+    else:
+        status = "win" if value >= line else "loss"
+        op = "≥"
+    return status, f"{label} {value:g} · {op} {line:g}"
 
 
 def settle_player_market(leg: Dict[str, Any], stats: Sequence[Dict[str, Any]], result: Optional[Dict[str, Any]]) -> Tuple[str, str]:
@@ -1287,13 +1388,15 @@ def settle_player_market(leg: Dict[str, Any], stats: Sequence[Dict[str, Any]], r
     text = market_text(leg)
     line = as_float(anyv(unpack(leg), ["line"], 0), 0) or market_line(text, 1.0)
 
-    if category in {"corners", "team_corners"}:
+    if category in {"corners", "team_corners", "match_corners", "team_cards", "match_cards", "team_shots", "match_sot"}:
         if not result:
-            return "pending", "Match-Resultat für Corners fehlt"
-        value = team_corner_value(leg, result)
-        if value is None:
-            return "pending", "Corner-Stats fehlen"
-        return ("win" if value >= line else "loss", f"Corners {value:g} · Linie {line:g}")
+            return "pending", "Match-Resultat/Stats fehlen"
+        return _settle_result_stat_market(leg, result, category, line, text)
+
+    if category in {"btts", "btts_ht", "over_goals", "half_goals_1st", "half_goals_2nd", "match_goals", "result", "double_chance"}:
+        if not result:
+            return "pending", "Match-Resultat fehlt"
+        return settle_score_market(leg, result)
 
     row = find_player_stat(leg, stats)
     if not row:
@@ -1361,8 +1464,6 @@ def settle_tip(tip: Dict[str, Any], results: Sequence[Dict[str, Any]], player_st
             category = category_of(merged)
             if category or group == "builder":
                 status, reason = settle_player_market(merged, player_stats, leg_result)
-                if status == "pending" and category in {"btts", "over_goals", ""} and leg_result:
-                    status, reason = settle_score_market(merged, leg_result)
             elif leg_result:
                 status, reason = settle_score_market(merged, leg_result)
             else:
