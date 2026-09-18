@@ -43,7 +43,7 @@ _DEFAULT_POLICY: Dict[str, Any] = {
         "single_max_units": 1.0,
         "builder_max_units": 0.4,
         "lottery_max_units": 0.05,
-        "max_builder_legs": 6,
+        "max_builder_legs": 9,
         "max_daily_singles": 20,
         "max_daily_builders": 8,
         "kelly_fraction": 0.25,
@@ -296,9 +296,9 @@ def risk_state() -> Dict[str, Any]:
 
 def max_builder_legs() -> int:
     try:
-        return max(2, min(11, int(risk_state().get("max_builder_legs", 6))))
+        return max(3, min(9, int(risk_state().get("max_builder_legs", 9))))
     except (TypeError, ValueError):
-        return 6
+        return 9
 
 
 def max_daily_singles() -> int:
