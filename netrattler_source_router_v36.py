@@ -8,13 +8,31 @@ import os
 import tempfile
 import time
 from dataclasses import dataclass
-from datetime import datetime, timezone
+from datetime import datetime, timezone, timedelta
 from pathlib import Path
 from typing import Any, Callable, Dict, Iterable, List, Mapping, Optional, Sequence, Tuple
 
 from netrattler_learning_engine import SupabaseRest, stable_hash
 
 CACHE_DIR = Path(os.getenv("NETRATTLER_SOURCE_CACHE_DIR", ".netrattler_cache"))
+_FAILURES: Dict[str, int] = {}
+_OPEN_UNTIL: Dict[str, datetime] = {}
+
+def _policy_weight(source: str) -> float:
+    try:
+        from netrattler_runtime_policy import source_weight
+        return float(source_weight(source))
+    except Exception:
+        return 1.0
+
+def _circuit_open(source: str) -> bool:
+    until = _OPEN_UNTIL.get(source)
+    if not until:
+        return False
+    if datetime.now(timezone.utc) >= until:
+        _OPEN_UNTIL.pop(source, None); _FAILURES[source] = 0
+        return False
+    return True
 
 
 def _utc() -> str:
@@ -78,6 +96,9 @@ def run_source(
 ) -> SourceResult:
     started = time.monotonic()
     error = ""
+    if _circuit_open(source):
+        rows = load_last_good(source, max_cache_age_hours)
+        return SourceResult(source, "circuit_open_cached" if rows else "circuit_open", rows, 0, "circuit breaker open", bool(rows))
     rows: List[Dict[str, Any]] = []
     try:
         raw = fetch() or []
@@ -93,17 +114,25 @@ def run_source(
     if rows:
         save_last_good(source, rows)
         status = "active"
+        _FAILURES[source] = 0
+        _OPEN_UNTIL.pop(source, None)
     else:
         rows = load_last_good(source, max_cache_age_hours)
         cached = bool(rows)
         status = "cached" if cached else ("blocked" if error else "empty")
+        if error or status == "blocked":
+            _FAILURES[source] = _FAILURES.get(source, 0) + 1
+            threshold = max(1, int(os.getenv("NETRATTLER_SOURCE_BREAKER_FAILURES", "2")))
+            if _FAILURES[source] >= threshold:
+                minutes = max(5, int(os.getenv("NETRATTLER_SOURCE_BREAKER_MINUTES", "20")))
+                _OPEN_UNTIL[source] = datetime.now(timezone.utc) + timedelta(minutes=minutes)
     latency = int((time.monotonic() - started) * 1000)
     db = db or SupabaseRest()
     if db.enabled:
         db.upsert("netrattler_source_tests", [{
             "test_id": stable_hash(source, datetime.now(timezone.utc).strftime("%Y-%m-%dT%H"))[:40],
             "source_id": stable_hash(source)[:32], "status": status,
-            "trust_score": 0.75 if status == "active" else 0.58 if status == "cached" else 0.20,
+            "trust_score": max(0.05, min(1.0, _policy_weight(source) * (0.85 if status == "active" else 0.65 if status == "cached" else 0.25))),
             "latency_ms": latency,
             "details": {"rows": len(rows), "error": error[:500], "cached": cached},
             "tested_at": _utc(),
@@ -117,7 +146,9 @@ def first_available(
     max_cache_age_hours: float = 24.0,
 ) -> SourceResult:
     last = SourceResult("none", "empty", [], 0)
-    for name, fetch in jobs:
+    indexed = list(enumerate(jobs))
+    indexed.sort(key=lambda item: (-_policy_weight(item[1][0]), item[0]))
+    for _, (name, fetch) in indexed:
         result = run_source(name, fetch, max_cache_age_hours=max_cache_age_hours)
         print(f"SOURCE ROUTER {name}: {result.status} rows={len(result.rows)} latency={result.latency_ms}ms")
         last = result
