@@ -20,8 +20,11 @@ jobs:
         run: |
           python -m pip install --upgrade pip
           pip install requests python-dateutil
-      - name: Compile settlement
-        run: python -m py_compile netrattler_settlement_v16_final.py
+      - name: Compile settlement + learning feedback
+        run: |
+          python -m py_compile netrattler_settlement_v16_final.py \
+            netrattler_learning_engine.py netrattler_autolearn_v36.py \
+            netrattler_builder_learning_v36.py netrattler_runtime_policy.py
       - name: Run Settlement V25 MULTISOURCE
         env:
           SUPABASE_URL: ${{ secrets.SUPABASE_URL }}
@@ -39,6 +42,7 @@ jobs:
           TELEGRAM_GROUP_STATS: ${{ secrets.TELEGRAM_GROUP_STATS }}
           TELEGRAM_GROUP_BUILDER: ${{ secrets.TELEGRAM_GROUP_BUILDER }}
           TELEGRAM_GROUP_PROPS: ${{ secrets.TELEGRAM_GROUP_PROPS }}
+          TELEGRAM_GROUP_PLAYER_PROPS: ${{ secrets.TELEGRAM_GROUP_PLAYER_PROPS }}
           TELEGRAM_GROUP_CORNERS: ${{ secrets.TELEGRAM_GROUP_CORNERS }}
           TELEGRAM_GROUP_HZ_LIVE: ${{ secrets.TELEGRAM_GROUP_HZ_LIVE }}
           TELEGRAM_GROUP_LATE_GOALS: ${{ secrets.TELEGRAM_GROUP_LATE_GOALS }}
@@ -57,4 +61,14 @@ jobs:
           RESULT_USE_SOFASCORE_DETAIL: "true"
           RESULT_ENRICH_MAX_DETAILS: "120"
           RESULT_ENRICH_TIMEOUT: "7"
+          SETTLEMENT_ALLOW_SEPARATE_RESULT_UPDATE: "false"
         run: python netrattler_settlement_v16_final.py
+      - name: Learn immediately from newly settled picks
+        if: success()
+        env:
+          SUPABASE_URL: ${{ secrets.SUPABASE_URL }}
+          SUPABASE_KEY: ${{ secrets.SUPABASE_KEY }}
+          SUPABASE_SERVICE_ROLE_KEY: ${{ secrets.SUPABASE_SERVICE_ROLE_KEY }}
+          NETRATTLER_LEARNING_MODE: "learning"
+        run: python netrattler_learning_engine.py
+
