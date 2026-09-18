@@ -217,6 +217,40 @@ ONE_X_TWO_MIN_PROB = float(env("NETRATTLER_1X2_MIN_PROB", "52"))
 ONE_X_TWO_MIN_EDGE = float(env("NETRATTLER_1X2_MIN_EDGE", "0.01"))
 ONE_X_TWO_MIN_ODDS = float(env("NETRATTLER_1X2_MIN_ODDS", "1.55"))
 
+# V37 market-specific production gates.  The old global 67% gate predates the
+# calibrated ML blend and made several markets mathematically unreachable.
+BTTS_MIN_PROB = float(env("NETRATTLER_BTTS_MIN_PROB", "58"))
+BTTS_MIN_EDGE = float(env("NETRATTLER_BTTS_MIN_EDGE", "0.08"))
+BTTS_MIN_ODDS = float(env("NETRATTLER_BTTS_MIN_ODDS", str(MIN_ODDS_VALUE)))
+OVER25_MIN_PROB = float(env("NETRATTLER_OVER25_MIN_PROB", "58"))
+OVER25_MIN_EDGE = float(env("NETRATTLER_OVER25_MIN_EDGE", "0.08"))
+OVER25_MIN_ODDS = float(env("NETRATTLER_OVER25_MIN_ODDS", str(MIN_ODDS_VALUE)))
+COMBO_MIN_PROB = float(env("NETRATTLER_COMBO_MIN_PROB", "55"))
+COMBO_MIN_EDGE = float(env("NETRATTLER_COMBO_MIN_EDGE", "0.05"))
+COMBO_MIN_ODDS = float(env("NETRATTLER_COMBO_MIN_ODDS", "2.20"))
+BTTS_HT_MIN_PROB = float(env("NETRATTLER_BTTS_HT_MIN_PROB", "38"))
+BTTS_HT_MIN_EDGE = float(env("NETRATTLER_BTTS_HT_MIN_EDGE", "0.05"))
+BTTS_HT_MIN_ODDS = float(env("NETRATTLER_BTTS_HT_MIN_ODDS", str(MIN_ODDS_VALUE)))
+OVER15_HT_MIN_PROB = float(env("NETRATTLER_OVER15_HT_MIN_PROB", "42"))
+OVER15_HT_MIN_EDGE = float(env("NETRATTLER_OVER15_HT_MIN_EDGE", "0.05"))
+OVER15_HT_MIN_ODDS = float(env("NETRATTLER_OVER15_HT_MIN_ODDS", str(MIN_ODDS_VALUE)))
+CORNER_MIN_PROB = float(env("NETRATTLER_CORNER_MIN_PROB", "55"))
+CORNER_MIN_EDGE = float(env("NETRATTLER_CORNER_MIN_EDGE", "0.02"))
+CORNER_MIN_ODDS = float(env("NETRATTLER_CORNER_MIN_ODDS", "1.60"))
+
+
+def _is_market_value_bet(odds, prob_pct, min_odds, min_edge):
+    try:
+        o = float(str(odds).replace(",", "."))
+        p = float(prob_pct) / 100.0
+        min_o = float(min_odds)
+        min_e = float(min_edge)
+    except Exception:
+        return False
+    if o < min_o or o <= 1:
+        return False
+    return (p - (1.0 / o)) >= min_e
+
 
 def _is_value_bet(odds, prob_pct):
     """True nur wenn Quote >= MIN_ODDS_VALUE UND echte Edge vorhanden (Value Bet).
@@ -19615,10 +19649,10 @@ def analyze_corners_tip_simple(fixture, league, target_date=None):
     for line in (7.5, 8.5, 9.5, 10.5, 11.5):
         prob = poisson_over(line)
         _observed = _corner_quotes.get(round(line, 2))
-        if prob < 55 or not _observed:
+        if prob < CORNER_MIN_PROB or not _observed:
             continue
         quote, quote_source = _observed
-        if quote < MIN_ODDS_VALUE or not _is_value_bet(quote, prob):
+        if not _is_market_value_bet(quote, prob, CORNER_MIN_ODDS, CORNER_MIN_EDGE):
             continue
         edge = prob / 100.0 - (1.0 / quote)
         candidates.append((edge, line, prob, quote, quote_source))
@@ -19665,7 +19699,7 @@ def analyze_corners_tip(fixture, league, target_date=None):
         if not _observed:
             continue
         quote, quote_source = _observed
-        if prob >= 55 and quote >= MIN_ODDS_VALUE and _is_value_bet(quote, prob):
+        if prob >= CORNER_MIN_PROB and _is_market_value_bet(quote, prob, CORNER_MIN_ODDS, CORNER_MIN_EDGE):
             edge = prob / 100.0 - 1.0 / quote
             candidates.append((edge, line, prob, quote, quote_source))
     if not candidates:
@@ -20049,6 +20083,8 @@ def run_corners_and_scorer_bots(target_date, active_leagues, odds_data_cache, fi
     scorer_count = 0
     corners_tips = []
     scorer_tips = []
+    corner_checked = 0
+    corner_max_matches = max(1, int(env("NETRATTLER_CORNER_EXTRA_MATCHES", "30")))
 
     seen_corner_matches = set()  # Duplikat-Check über ALLE Ligen
 
@@ -20062,8 +20098,11 @@ def run_corners_and_scorer_bots(target_date, active_leagues, odds_data_cache, fi
         season = now_utc.year if now_utc.month > 6 else now_utc.year - 1
 
         # Ecken-Tipps - auch ohne API-Football IDs!
-        if group_hz:
+        if group_hz and corner_checked < corner_max_matches:
             for fixture in fixtures:
+                if corner_checked >= corner_max_matches:
+                    break
+                corner_checked += 1
                 try:
                     home_norm = normalize_team_name(fixture.get("home", ""))
                     away_norm = normalize_team_name(fixture.get("away", ""))
@@ -20086,8 +20125,8 @@ def run_corners_and_scorer_bots(target_date, active_leagues, odds_data_cache, fi
                             _c_odds_f = float(str(_c_odds).replace(",", "."))
                         except Exception:
                             _c_odds_f = 0
-                        if _c_odds_f < MIN_ODDS_VALUE:
-                            log(f"   ⏭️ Ecken unter 1.70 verworfen: {tip['match']} ({_c_odds_f})")
+                        if _c_odds_f < CORNER_MIN_ODDS:
+                            log(f"   ⏭️ Ecken unter Mindestquote {CORNER_MIN_ODDS:.2f} verworfen: {tip['match']} ({_c_odds_f})")
                             continue
                         corners_tips.append(tip)
                         corners_count += 1
@@ -20194,7 +20233,7 @@ def run_corners_and_scorer_bots(target_date, active_leagues, odds_data_cache, fi
     run_corners_and_scorer_bots._last_scorer = scorer_count
     run_corners_and_scorer_bots._last_corner_tips = [dict(t) for t in corners_tips]
     run_corners_and_scorer_bots._last_scorer_tips = [dict(t) for t in scorer_tips]
-    log(f"🔵⚽ Fertig: {corners_count} Ecken Tips, {scorer_count} Scorer Tips")
+    log(f"🔵⚽ Fertig: {corners_count} Ecken Tips, {scorer_count} Scorer Tips · Corners geprüft={corner_checked}/{corner_max_matches}")
 
 
 
@@ -23663,11 +23702,16 @@ def filter_tips_by_edge(tips: List[Dict], market: str = "btts",
         return tips
 
     market_key = str(market or "").lower()
-    # Goal Hunter has dedicated, deliberately lower thresholds configured in
-    # btts_tips.yml.  Previously these env vars were present but unused, so the
-    # generic runtime policy rejected nearly every valid 1X2 candidate.
+    _market_edges = {
+        "1x2": ONE_X_TWO_MIN_EDGE,
+        "btts": BTTS_MIN_EDGE,
+        "over25": OVER25_MIN_EDGE,
+        "combo": COMBO_MIN_EDGE,
+        "btts_ht": BTTS_HT_MIN_EDGE,
+        "over15_ht": OVER15_HT_MIN_EDGE,
+    }
     if min_edge is None:
-        min_edge = ONE_X_TWO_MIN_EDGE if market_key == "1x2" else EDGE_FILTER_MIN_EDGE
+        min_edge = _market_edges.get(market_key, EDGE_FILTER_MIN_EDGE)
     if max_edge is None:
         max_edge = EDGE_FILTER_MAX_EDGE
     require_bet365 = EDGE_FILTER_REQUIRE_BET365 if require_bet365 is None else require_bet365
@@ -23722,16 +23766,23 @@ def filter_tips_by_edge(tips: List[Dict], market: str = "btts",
                 consensus_sources=int(tip.get("consensus_sources") or 0),
                 line_dispersion=float(tip.get("odds_dispersion") or tip.get("line_dispersion") or 0),
             )
-            if str(tip_market).lower() == "1x2":
-                # 1X2 is already a normalized three-way distribution. Learned
-                # source/league weights may calibrate it, but must not inflate a
-                # single outcome into an impossible artificial edge.
-                raw_1x2_p = raw_p / 100.0 if raw_p > 1 else raw_p
-                adjusted_p = max(raw_1x2_p - 0.08, min(raw_1x2_p + 0.08, adjusted_p))
-                policy_ok = (
-                    adjusted_p >= (ONE_X_TWO_MIN_PROB / 100.0)
-                    and float(market_quote) >= ONE_X_TWO_MIN_ODDS
-                )
+            _tmk = str(tip_market).lower()
+            _core_thresholds = {
+                "1x2": (ONE_X_TWO_MIN_PROB / 100.0, ONE_X_TWO_MIN_ODDS),
+                "btts": (BTTS_MIN_PROB / 100.0, BTTS_MIN_ODDS),
+                "over25": (OVER25_MIN_PROB / 100.0, OVER25_MIN_ODDS),
+                "combo": (COMBO_MIN_PROB / 100.0, COMBO_MIN_ODDS),
+                "btts_ht": (BTTS_HT_MIN_PROB / 100.0, BTTS_HT_MIN_ODDS),
+                "over15_ht": (OVER15_HT_MIN_PROB / 100.0, OVER15_HT_MIN_ODDS),
+            }
+            if _tmk in _core_thresholds:
+                # Core markets already have calibrated market-specific gates.
+                # Keep learning as a small calibration only; do not let the old
+                # generic 55% policy make HT markets impossible.
+                raw_core_p = raw_p / 100.0 if raw_p > 1 else raw_p
+                adjusted_p = max(raw_core_p - 0.08, min(raw_core_p + 0.08, adjusted_p))
+                _min_p, _min_o = _core_thresholds[_tmk]
+                policy_ok = adjusted_p >= _min_p and float(market_quote) >= _min_o
             else:
                 policy_ok = allow_pick(
                     adjusted_p, float(market_quote), market=tip_market, league=league,
@@ -24959,6 +25010,42 @@ def main():
                 except Exception:
                     pass
 
+                # HT / exact-combo quote fallback: Kambi brands often expose these
+                # specials when Pinnacle Guest does not.  Bound the number of fresh
+                # event lookups per run; the offer cache is then reused by corners/props.
+                try:
+                    _need_specials = (
+                        not (ro or {}).get("btts_yes_ht")
+                        or not (ro or {}).get("over_15_ht")
+                        or not (ro or {}).get("btts_over25_yes")
+                    )
+                    _strong_for_specials = (
+                        prob_b >= max(BTTS_MIN_PROB, 55)
+                        or prob_o >= max(OVER25_MIN_PROB, 55)
+                    )
+                    if _need_specials and _strong_for_specials:
+                        if "_NTR_KAMBI_SPECIAL_LOOKUPS" not in globals():
+                            globals()["_NTR_KAMBI_SPECIAL_LOOKUPS"] = 0
+                        _max_special_lookups = int(env("NETRATTLER_HT_KAMBI_MAX_MATCHES", "30"))
+                        if globals()["_NTR_KAMBI_SPECIAL_LOOKUPS"] < _max_special_lookups:
+                            from netrattler_prop_sources import fetch_kambi_team_specials
+                            _ks = fetch_kambi_team_specials(home, away, brand="ub") or {}
+                            globals()["_NTR_KAMBI_SPECIAL_LOOKUPS"] += 1
+                            if _ks:
+                                if ro is None:
+                                    ro = {}
+                                if not ro.get("btts_yes_ht") and _ks.get("btts_yes_ht"):
+                                    ro["btts_yes_ht"] = float(_ks["btts_yes_ht"])
+                                    ro["_btts_ht_source"] = "kambi_ub"
+                                if not ro.get("over_15_ht") and _ks.get("over_15_ht"):
+                                    ro["over_15_ht"] = float(_ks["over_15_ht"])
+                                    ro["_over15_ht_source"] = "kambi_ub"
+                                if not ro.get("btts_over25_yes") and _ks.get("btts_over25_combo"):
+                                    ro["btts_over25_yes"] = float(_ks["btts_over25_combo"])
+                                    ro["_combo_source"] = "kambi_ub"
+                except Exception:
+                    pass
+
                 mn = f"{home} vs {away}"
                 tstr = "TBD"
                 _ko_sort = "9999"
@@ -24973,7 +25060,7 @@ def main():
                     pass
 
                 # BTTS Tipp — nur Value Bets (Quote >=1.70 + echter Edge)
-                if prob_b >= MIN_PROBABILITY and "btts" in tips_by_market and _is_value_bet(btts_yes, prob_b):
+                if prob_b >= BTTS_MIN_PROB and "btts" in tips_by_market and _is_market_value_bet(btts_yes, prob_b, BTTS_MIN_ODDS, BTTS_MIN_EDGE):
                     tip_btts = {
                         "match": mn, "league": league_name or "Pinnacle",
                         "time": tstr, "tip": "YES",
@@ -24989,7 +25076,7 @@ def main():
                     log(f"      ✅ BTTS YES @ {btts_yes} ({prob_b}%)")
 
                 # Over 2.5 Tipp — nur Value Bets
-                if prob_o >= MIN_PROBABILITY and "over25" in tips_by_market and _is_value_bet(over25, prob_o):
+                if prob_o >= OVER25_MIN_PROB and "over25" in tips_by_market and _is_market_value_bet(over25, prob_o, OVER25_MIN_ODDS, OVER25_MIN_EDGE):
                     tip_over25 = {
                         "match": mn, "league": league_name or "Pinnacle",
                         "time": tstr, "tip": "YES",
@@ -25005,14 +25092,14 @@ def main():
 
                 # 🔥 Combo: BTTS + Over 2.5 — NUR beobachtete Kombi-Quote.
                 # Keine Multiplikation einzelner Legs und kein Korrelationsfaktor als Quote.
-                if prob_b >= MIN_PROBABILITY and prob_o >= MIN_PROBABILITY and "combo" in tips_by_market:
+                if prob_b >= BTTS_MIN_PROB and prob_o >= OVER25_MIN_PROB and "combo" in tips_by_market:
                     combo_odds = 0.0
                     try:
                         combo_odds = float((ro or {}).get("btts_over25_yes") or 0)
                     except Exception:
                         combo_odds = 0.0
                     combo_prob = max(1, min(prob_b, prob_o) - 5)
-                    if combo_odds > 1 and combo_prob >= (MIN_PROBABILITY - 10) and _is_value_bet(combo_odds, combo_prob):
+                    if combo_odds > 1 and combo_prob >= COMBO_MIN_PROB and _is_market_value_bet(combo_odds, combo_prob, COMBO_MIN_ODDS, COMBO_MIN_EDGE):
                         tip_combo = {
                             "match": mn, "league": league_name or "Pinnacle",
                             "time": tstr, "tip": "BTTS + Over 2.5",
@@ -25021,7 +25108,7 @@ def main():
                             "fairOdds": round(100/combo_prob, 2),
                             "valueRating": "VALUE", "units": 0.75, "market": "combo",
                             "reasoning": f"Pinnacle beobachtete BTTS+O2.5 Quote | {league_name}",
-                            "_no_real_odds": False, "_source": "pinnacle:related", "_kickoff": _ko_sort,
+                            "_no_real_odds": False, "_source": str((ro or {}).get("_combo_source") or "pinnacle:related"), "_kickoff": _ko_sort,
                         }
                         enrich_pinnacle_tip(tip_combo, home, away, league_name)
                         tips_by_market["combo"].append(tip_combo)
@@ -25035,7 +25122,7 @@ def main():
                         btts_ht_odds = 0.0
                     # konservative Modellableitung aus FT-Modell, nicht aus der Quote selbst
                     btts_ht_prob = max(1, min(95, int(prob_b * 0.62)))
-                    if btts_ht_odds > 1 and btts_ht_prob >= int(env("NETRATTLER_BTTS_HT_MIN_PROB", "38")) and _is_value_bet(btts_ht_odds, btts_ht_prob):
+                    if btts_ht_odds > 1 and btts_ht_prob >= BTTS_HT_MIN_PROB and _is_market_value_bet(btts_ht_odds, btts_ht_prob, BTTS_HT_MIN_ODDS, BTTS_HT_MIN_EDGE):
                         tip_btts_ht = {
                             "match": mn, "league": league_name or "Pinnacle",
                             "time": tstr, "tip": "BTTS HT (Beide Teams treffen 1.HZ)",
@@ -25043,7 +25130,7 @@ def main():
                             "oddsYes": btts_ht_odds, "odds": btts_ht_odds, "fairOdds": round(100/btts_ht_prob, 2),
                             "valueRating": "VALUE", "units": 1.0, "market": "btts_ht",
                             "reasoning": f"Pinnacle beobachtete HT-Quote | {league_name}",
-                            "_no_real_odds": False, "_source": "pinnacle", "_kickoff": _ko_sort,
+                            "_no_real_odds": False, "_source": str((ro or {}).get("_btts_ht_source") or "pinnacle"), "_kickoff": _ko_sort,
                         }
                         enrich_pinnacle_tip(tip_btts_ht, home, away, league_name)
                         tips_by_market["btts_ht"].append(tip_btts_ht)
@@ -25054,7 +25141,7 @@ def main():
                     except Exception:
                         o15_odds = 0.0
                     o15_prob = max(1, min(95, int(prob_o * 0.64)))
-                    if o15_odds > 1 and "over15_ht" in tips_by_market and o15_prob >= int(env("NETRATTLER_OVER15_HT_MIN_PROB", "42")) and _is_value_bet(o15_odds, o15_prob):
+                    if o15_odds > 1 and "over15_ht" in tips_by_market and o15_prob >= OVER15_HT_MIN_PROB and _is_market_value_bet(o15_odds, o15_prob, OVER15_HT_MIN_ODDS, OVER15_HT_MIN_EDGE):
                         tip_o15_ht = {
                             "match": mn, "league": league_name or "Pinnacle",
                             "time": tstr, "tip": "Over 1.5 Tore HT",
@@ -25062,7 +25149,7 @@ def main():
                             "oddsYes": o15_odds, "odds": o15_odds, "fairOdds": round(100/o15_prob, 2),
                             "valueRating": "VALUE", "units": 1.0, "market": "over15_ht",
                             "reasoning": f"Pinnacle beobachtete HT-Quote | {league_name}",
-                            "_no_real_odds": False, "_source": "pinnacle", "_kickoff": _ko_sort,
+                            "_no_real_odds": False, "_source": str((ro or {}).get("_over15_ht_source") or "pinnacle"), "_kickoff": _ko_sort,
                         }
                         enrich_pinnacle_tip(tip_o15_ht, home, away, league_name)
                         tips_by_market["over15_ht"].append(tip_o15_ht)
