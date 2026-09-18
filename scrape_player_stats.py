@@ -897,7 +897,16 @@ def fetch_github_open_source_results(date_str: str) -> List[Dict[str, Any]]:
                 elif lower.endswith((".csv", ".tsv")):
                     parsed = _parse_csv_results(raw, date_str, label)
                 elif lower.endswith(".txt"):
-                    parsed = _parse_football_txt_results(raw, date_str, label, repo)
+                    # Football.TXT repositories contain many historical seasons. A bare
+                    # "Sep 17" heading is not enough to prove it belongs to target year.
+                    # Require explicit target-year evidence in the file path/content before
+                    # assigning target date; this prevents old matches being written as today.
+                    target_year = date_str[:4]
+                    year_evidence = target_year in lower or target_year in raw
+                    if year_evidence:
+                        parsed = _parse_football_txt_results(raw, date_str, label, repo)
+                    else:
+                        parsed = []
                 if parsed:
                     rows.extend(parsed)
                     hit += len(parsed)
