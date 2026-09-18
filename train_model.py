@@ -31,7 +31,84 @@ from sklearn.calibration import CalibratedClassifierCV
 from sklearn.metrics import brier_score_loss, roc_auc_score
 
 SUPABASE_URL = os.environ.get("SUPABASE_URL", "")
-SUPABASE_KEY = os.environ.get("SUPABASE_KEY", "")
+SUPABASE_KEY = os.environ.get("SUPABASE_SERVICE_ROLE_KEY") or os.environ.get("SUPABASE_KEY", "")
+
+_TRAINING_FINGERPRINT = ""
+_TRAINING_STATE_SAMPLES = 0
+_INPUT_STATE_FINGERPRINT = ""
+_INPUT_STATE_SAMPLES = 0
+
+def _supabase_count_state(table: str) -> dict:
+    """Cheap state probe used before expensive model fitting."""
+    if not SUPABASE_URL or not SUPABASE_KEY:
+        return {"table": table, "count": -1}
+    headers = {
+        "apikey": SUPABASE_KEY, "Authorization": f"Bearer {SUPABASE_KEY}",
+        "Prefer": "count=exact", "Range": "0-0",
+    }
+    try:
+        r = requests.get(
+            f"{SUPABASE_URL.rstrip('/')}/rest/v1/{table}", headers=headers,
+            params={"select": "*", "limit": "1"}, timeout=10,
+        )
+        if not r.ok:
+            return {"table": table, "count": -1}
+        content_range = str(r.headers.get("content-range") or "")
+        count = int(content_range.rsplit("/", 1)[-1]) if "/" in content_range and content_range.rsplit("/", 1)[-1].isdigit() else len(r.json() or [])
+        row = (r.json() or [{}])[0] if isinstance(r.json(), list) else {}
+        latest = row.get("match_date") or row.get("date") or row.get("created_at") or row.get("collected_at") or ""
+        return {"table": table, "count": count, "latest": str(latest)}
+    except Exception:
+        return {"table": table, "count": -1}
+
+def _quick_input_guard() -> tuple[bool, str, str, int]:
+    """Cheap Supabase-only guard before downloading/rebuilding the full history frame.
+
+    Weekly Actions can exit in seconds when the normalized input tables have not
+    changed. First install/no DB access remains fail-open and performs full training.
+    """
+    try:
+        from netrattler_model_registry_v37 import training_fingerprint, should_retrain
+    except Exception:
+        return True, "registry-unavailable", "", 0
+    if not SUPABASE_URL or not SUPABASE_KEY:
+        return True, "no-supabase", "", 0
+    tables = ("match_results", "football_historical_matches", "player_match_stats", "odds_history")
+    states = [_supabase_count_state(table) for table in tables]
+    if all(int(item.get("count", -1) or -1) < 0 for item in states):
+        return True, "input-probe-unavailable", "", 0
+    samples = sum(max(0, int(item.get("count", 0) or 0)) for item in states)
+    fp = training_fingerprint(rows=samples, columns=tables, extra=states)
+    should, reason = should_retrain(
+        "input_probe", fp, samples,
+        min_new_samples=int(os.getenv("NETRATTLER_RETRAIN_MIN_NEW_SAMPLES", "75")),
+        max_age_days=int(os.getenv("NETRATTLER_RETRAIN_MAX_AGE_DAYS", "14")),
+    )
+    return should, reason, fp, samples
+
+
+def _training_guard(df) -> tuple[bool, str, str, int]:
+    """Return (train?, reason, fingerprint, sample_state)."""
+    try:
+        from netrattler_model_registry_v37 import training_fingerprint, should_retrain
+    except Exception:
+        return True, "registry-unavailable", "", len(df)
+    player_state = _supabase_count_state("player_match_stats")
+    result_state = _supabase_count_state("match_results")
+    max_date = ""
+    try:
+        max_date = str(pd.to_datetime(df["date"], errors="coerce").max())
+    except Exception:
+        pass
+    extra = {"player": player_state, "results": result_state}
+    samples = len(df) + max(0, int(player_state.get("count", 0) or 0))
+    fp = training_fingerprint(rows=len(df), columns=list(df.columns), max_date=max_date, extra=extra)
+    should, reason = should_retrain(
+        "all_models", fp, samples,
+        min_new_samples=int(os.getenv("NETRATTLER_RETRAIN_MIN_NEW_SAMPLES", "75")),
+        max_age_days=int(os.getenv("NETRATTLER_RETRAIN_MAX_AGE_DAYS", "14")),
+    )
+    return should, reason, fp, samples
 
 # ── Datenquellen ──────────────────────────────────────────────────────────────
 OPENFOOTBALL_SOURCES = [
@@ -1017,36 +1094,29 @@ def _safe_auc(y_true, proba):
 # 4. MODELL TRAINIEREN
 # ═══════════════════════════════════════════════════════════════════════════════
 
+# IMPORTANT: keep this exactly aligned with btts_bot._ML_FEATURE_COLS.
+# Runtime now reproduces the same team/stat/market context and the model registry
+# rejects stale signatures before inference.
 FEATURE_COLS = [
-    # Elo-Ratings
-    "elo_home", "elo_away", "elo_diff",
-    # BTTS/Over-Raten (rolling)
-    "btts_rate_home", "btts_rate_away", "btts_rate_combined",
-    "o25_rate_home", "o25_rate_away", "o25_rate_combined",
-    # Tore erzielt/kassiert
-    "avg_scored_home", "avg_scored_away",
-    "avg_conceded_home", "avg_conceded_away",
-    "exp_goals", "avg_conceded_combined",
-    # Halbzeit-Features
-    "btts_ht_rate_home", "btts_ht_rate_away",
-    "o15ht_rate_home", "o15ht_rate_away",
-    # Form-Punkte (W=3/D=1/L=0)
-    "form_pts_home", "form_pts_away", "form_pts_diff",
-    "streak_win_home", "streak_win_away",
-    # H2H-History
-    "h2h_btts_rate", "h2h_avg_goals", "h2h_matches_norm",
-    # Schüsse/Ecken/Karten
-    "avg_shots_home", "avg_shots_away", "total_shots_exp",
-    "avg_corners_home", "avg_corners_away", "total_corners_exp",
-    "avg_cards_home", "avg_cards_away", "total_cards_exp",
-    # Multi-source + bookmaker market features
-    "source_count_norm", "stat_coverage", "odds_source_count_norm",
-    "odds_available_1x2", "market_margin_1x2",
-    "market_home_prob", "market_draw_prob", "market_away_prob",
-    "odds_available_ou25", "market_over25_prob", "market_under25_prob",
-    "pinnacle_home_delta", "pinnacle_draw_delta", "pinnacle_away_delta",
-    "bet365_home_delta", "bet365_draw_delta", "bet365_away_delta",
-    "betfair_home_delta", "betfair_draw_delta", "betfair_away_delta",
+    'elo_home', 'elo_away', 'elo_diff',
+    'btts_rate_home', 'btts_rate_away', 'btts_rate_combined',
+    'o25_rate_home', 'o25_rate_away', 'o25_rate_combined',
+    'avg_scored_home', 'avg_scored_away', 'avg_conceded_home',
+    'avg_conceded_away', 'exp_goals', 'avg_conceded_combined',
+    'btts_ht_rate_home', 'btts_ht_rate_away', 'o15ht_rate_home',
+    'o15ht_rate_away', 'form_pts_home', 'form_pts_away',
+    'form_pts_diff', 'streak_win_home', 'streak_win_away',
+    'h2h_btts_rate', 'h2h_avg_goals', 'h2h_matches_norm',
+    'avg_shots_home', 'avg_shots_away', 'total_shots_exp',
+    'avg_corners_home', 'avg_corners_away', 'total_corners_exp',
+    'avg_cards_home', 'avg_cards_away', 'total_cards_exp',
+    'source_count_norm', 'stat_coverage', 'odds_source_count_norm',
+    'odds_available_1x2', 'market_margin_1x2', 'market_home_prob',
+    'market_draw_prob', 'market_away_prob', 'odds_available_ou25',
+    'market_over25_prob', 'market_under25_prob', 'pinnacle_home_delta',
+    'pinnacle_draw_delta', 'pinnacle_away_delta', 'bet365_home_delta',
+    'bet365_draw_delta', 'bet365_away_delta', 'betfair_home_delta',
+    'betfair_draw_delta', 'betfair_away_delta',
 ]
 
 
@@ -1142,6 +1212,8 @@ def train_model(df, target_col, model_name):
         "training_samples": len(X),
         "positive_rate": round(float(y.mean()), 3),
         "trained_at": datetime.now(timezone.utc).isoformat(),
+        "training_fingerprint": _TRAINING_FINGERPRINT or None,
+        "model_family": "match",
     }
 
 
@@ -1187,6 +1259,14 @@ def save_model_to_supabase(model, meta):
 
     else:
         print(f"   ❌ Supabase-Fehler {r.status_code}: {r.text[:200]}")
+
+    # Additive V37 registry: feature signature + metrics + dataset fingerprint.
+    try:
+        from netrattler_model_registry_v37 import register_model
+        if register_model(meta, storage_table="ml_models", status="active"):
+            print(f"   🧾 Registry aktualisiert: {meta['model_name']}")
+    except Exception:
+        pass
 
 
 # ═══════════════════════════════════════════════════════════════════════════════
@@ -1459,6 +1539,7 @@ def train_player_prop_model(dfp, stat, line, model_name):
         "training_samples": int(len(X)),
         "positive_rate": round(float(y.mean()), 3),
         "trained_at": datetime.now(timezone.utc).isoformat(),
+        "training_fingerprint": _TRAINING_FINGERPRINT or None,
     }
     return calibrated, meta
 
@@ -1505,8 +1586,25 @@ if __name__ == "__main__":
     print("🧠 NETRATTLER ML-Training startet — TRAIN ALL SOURCES + ODDS V34...")
     print(f"   Zeitstempel: {datetime.now(timezone.utc).isoformat()}")
 
+    # V37 stage-1 retraining guard: skip even the expensive history/source load when
+    # normalized Supabase input state is unchanged. Fail-open on first install/outage.
+    _quick_train, _quick_reason, _INPUT_STATE_FINGERPRINT, _INPUT_STATE_SAMPLES = _quick_input_guard()
+    print(f"🧾 Input Guard: {_quick_reason} | fingerprint={_INPUT_STATE_FINGERPRINT or 'n/a'}")
+    if not _quick_train:
+        print("✅ Input-Tabellen unverändert — kompletter Trainingslauf übersprungen.")
+        raise SystemExit(0)
+
     # Daten laden
     df = load_all_matches()
+
+    # V37 stage-2 retraining guard: after normalization, expensive feature+XGB
+    # work is skipped when no meaningful new training state exists.
+    global_guard = _training_guard(df)
+    _do_train, _guard_reason, _TRAINING_FINGERPRINT, _TRAINING_STATE_SAMPLES = global_guard
+    print(f"🧾 Retrain Guard: {_guard_reason} | fingerprint={_TRAINING_FINGERPRINT or 'n/a'}")
+    if not _do_train:
+        print("✅ Trainingsdaten unverändert/zu wenig neu — teures Retraining übersprungen.")
+        raise SystemExit(0)
 
     # Features berechnen
     print("\n📊 Berechne Elo-Ratings...")
@@ -1610,6 +1708,20 @@ if __name__ == "__main__":
             "reason": str(e)[:500],
             "trained_at": datetime.now(timezone.utc).isoformat(),
         }
+
+    try:
+        from netrattler_model_registry_v37 import save_training_state
+        save_training_state(
+            "all_models", _TRAINING_FINGERPRINT, _TRAINING_STATE_SAMPLES,
+            metadata={"models": len(all_meta), "completed_at": datetime.now(timezone.utc).isoformat()},
+        )
+        if _INPUT_STATE_FINGERPRINT:
+            save_training_state(
+                "input_probe", _INPUT_STATE_FINGERPRINT, _INPUT_STATE_SAMPLES,
+                metadata={"models": len(all_meta), "completed_at": datetime.now(timezone.utc).isoformat()},
+            )
+    except Exception:
+        pass
 
     print("\n" + "="*60)
     print("✅ Training abgeschlossen!")
