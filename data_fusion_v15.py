@@ -78,8 +78,10 @@ def _split_match(match: str) -> Tuple[str, str]:
     return match.strip(), ""
 
 
-def _rest_get(supabase_url: str, supabase_key: str, table: str, params: Dict[str, str], timeout: int = 8) -> List[Dict[str, Any]]:
+def _rest_get(supabase_url: str, supabase_key: str, table: str, params: Dict[str, str], timeout: int = 0) -> List[Dict[str, Any]]:
     try:
+        if not timeout:
+            timeout = int(_env("DATA_FUSION_V15_TIMEOUT", "4"))
         r = requests.get(
             f"{supabase_url.rstrip('/')}/rest/v1/{table}",
             headers={"apikey": supabase_key, "Authorization": f"Bearer {supabase_key}"},
