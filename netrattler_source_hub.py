@@ -64,6 +64,11 @@ class SourceAdapter:
 
 
 SOURCES: Tuple[SourceAdapter, ...] = (
+    SourceAdapter(
+        "bigballs", "bigballsdata.com", "features",
+        "authenticated football fixtures/lineups/match stats/player season stats; never synthetic odds",
+        "ENABLE_BIGBALLS", bool(os.getenv("BIGBALLS_API_KEY") or os.getenv("BBS_API_KEY")), "", "API terms"
+    ),
     SourceAdapter("soccerdata", "probberechts/soccerdata", "player_stats", "FBref/SofaScore/ESPN/Understat/WhoScored/ClubElo wrapper", "ENABLE_SOCCERDATA", True, "soccerdata", "Apache-2.0"),
     SourceAdapter("statsbomb_open_data", "statsbomb/open-data", "event_data", "historical event/player features", "ENABLE_STATSBOMB", True, "", "open-data terms", urls=("https://raw.githubusercontent.com/statsbomb/open-data/master/data/competitions.json",)),
     SourceAdapter("fotmob_scraper", "davidrocha9/fotmob-scraper", "player_stats", "FotMob fixtures/squads/player stats/Supabase sync pattern", "ENABLE_FOTMOB", True, "", "check-upstream"),
@@ -87,11 +92,12 @@ SOURCES: Tuple[SourceAdapter, ...] = (
 )
 
 FEATURE_RECIPES: Dict[str, Dict[str, Any]] = {
-    "xg_xa": {"source": "football_analytics/understat/statsbomb", "markets": ["score", "assist", "shots", "sot"]},
+    "xg_xa": {"source": "bigballs/football_analytics/understat/statsbomb", "markets": ["score", "assist", "shots", "sot"]},
     "xthreat": {"source": "football_analytics/socceraction", "markets": ["passes", "progressive_carries", "assist"]},
     "pressing": {"source": "statsbomb/open-data", "markets": ["tackles_committed", "fouls", "interceptions"]},
-    "duels": {"source": "statsbomb/open-data/fotmob", "markets": ["tackles_received", "fouls_won", "aerial_duels"]},
+    "duels": {"source": "bigballs/statsbomb/open-data/fotmob", "markets": ["tackles_received", "fouls_won", "aerial_duels"]},
     "identity": {"source": "reep/openfootball_players/openfootball_clubs", "markets": ["all"]},
+    "lineups": {"source": "bigballs/fotmob/sofascore", "markets": ["all"]},
     "clv": {"source": "pinnacle/oddsharvester", "markets": ["all"]},
 }
 
