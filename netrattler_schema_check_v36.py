@@ -24,6 +24,8 @@ REQUIRED = [
     "netrattler_autolearn_models",
     "netrattler_builder_pair_models",
     "netrattler_exposure_ledger",
+    "netrattler_coverage_watchdog",
+    "netrattler_market_discovery",
 ]
 
 def main() -> None:
@@ -51,10 +53,10 @@ def main() -> None:
 
     if missing:
         print("MISSING TABLES:", ", ".join(missing))
-        print("Run sql/netrattler_v36b_complete_learning_schema.sql in Supabase SQL Editor.")
+        print("Run sql/netrattler_v37_self_maintenance_schema.sql in Supabase SQL Editor.")
         raise SystemExit(2)
 
-    print(f"V36B SCHEMA CHECK OK tables={len(REQUIRED)}")
+    print(f"V37 SELF-MAINTENANCE SCHEMA CHECK OK tables={len(REQUIRED)}")
 
 if __name__ == "__main__":
     main()
