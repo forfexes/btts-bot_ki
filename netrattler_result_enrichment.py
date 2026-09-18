@@ -56,6 +56,7 @@ def _sofa_stat_map(payload: Dict[str, Any]) -> Dict[str, Any]:
             if key in {"cornerkicks","corners"}: out.update(home_corners=h, away_corners=a)
             elif key in {"totalshots","shots"}: out.update(home_shots=h, away_shots=a)
             elif key in {"shotsontarget","shotsongoal"}: out.update(home_sot=h, away_sot=a)
+            elif key in {"yellowcards","cards","totalcards"}: out.update(home_cards=h, away_cards=a)
             elif key in {"expectedgoals","expectedgoalsxg","xg"}: out.update(home_xg=h, away_xg=a)
     return out
 
@@ -90,6 +91,7 @@ def _fotmob_flat_stats(payload: Dict[str, Any]) -> Dict[str, Any]:
             if key in {"corners","cornerkicks"}: out.update(home_corners=h,away_corners=a)
             elif key in {"totalshots","shots"}: out.update(home_shots=h,away_shots=a)
             elif key in {"shotsongoal","shotsontarget"}: out.update(home_sot=h,away_sot=a)
+            elif key in {"yellowcards","cards","totalcards"}: out.update(home_cards=h,away_cards=a)
             elif key in {"expectedgoalsxg","expectedgoals","xg"}: out.update(home_xg=h,away_xg=a)
     return out
 
