@@ -12,7 +12,7 @@ from pathlib import Path
 from typing import Any, Dict, Iterable, List, Optional, Tuple
 import requests
 
-BET365_URL=os.getenv('BET365_FOOTBALL_URL','https://www.bet365.com/')
+BET365_URL=(os.getenv('BET365_FOOTBALL_URL') or 'https://www.bet365.com/hub/en-gb/football').strip()
 BET365_EVENT_URLS=[x.strip() for x in os.getenv('BET365_EVENT_URLS','').split(',') if x.strip()]
 SUPABASE_URL=os.getenv('SUPABASE_URL','').rstrip('/')
 SUPABASE_KEY=os.getenv('SUPABASE_SERVICE_ROLE_KEY') or os.getenv('SUPABASE_KEY','')
@@ -121,6 +121,10 @@ def dedupe(rows:List[Dict[str,Any]])->List[Dict[str,Any]]:
 def collect() -> List[Dict[str,Any]]:
     from playwright.sync_api import sync_playwright
     rows=[]; payloads=[]; urls=[]
+    seeds=[]
+    for u in (BET365_EVENT_URLS + [BET365_URL, 'https://www.bet365.com/hub/en-gb/football', 'https://www.bet365.com/hub/en-us/football']):
+        if u and u not in seeds:
+            seeds.append(u)
     def on_response(resp):
         u=resp.url.lower()
         if any(x in u for x in ('api','event','sport','market','coupon')):
@@ -134,7 +138,7 @@ def collect() -> List[Dict[str,Any]]:
         browser=p.chromium.launch(headless=True,args=['--no-sandbox','--disable-dev-shm-usage'])
         page=browser.new_page(locale='en-GB',viewport={'width':1440,'height':1200})
         page.on('response',on_response)
-        targets=list(BET365_EVENT_URLS or [BET365_URL])
+        targets=list(seeds)
         visited=set()
         deadline=time.time()+TIMEOUT
         while targets and len(visited)<MAX_EVENTS and time.time()<=deadline:
@@ -150,13 +154,22 @@ def collect() -> List[Dict[str,Any]]:
                     'a',
                     """els=>els.map(e=>e.href).filter(h=>
                       h && /bet365/i.test(h) &&
-                      new RegExp('(football|soccer|event|fixture|match|AC/B1)','i').test(h)
+                      new RegExp('(football|soccer|event|fixture|match|sports/football|AC/B1)','i').test(h)
                     )""",
                 )
                 urls.extend(discovered)
                 for link in discovered:
                     if link not in visited and link not in targets:
                         targets.append(link)
+                # Bet365 is an SPA and many event routes are attached to clickable
+                # elements rather than normal anchors. Collect those routes too.
+                spa_links=page.evaluate("""() => Array.from(document.querySelectorAll('[href],[data-url],[data-event-id]')).map(e => e.href || e.getAttribute('data-url') || '').filter(Boolean)""")
+                for link in spa_links:
+                    if link.startswith('/'):
+                        link='https://www.bet365.com'+link
+                    if re.search(r'(football|soccer|event|fixture|match|AC/B1)', link, re.I) and link not in visited and link not in targets:
+                        targets.append(link)
+                        urls.append(link)
                 for script in page.locator('script').all():
                     try:
                         t=script.text_content(timeout=1000) or ''
