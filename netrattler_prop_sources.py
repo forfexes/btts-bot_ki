@@ -87,6 +87,17 @@ def _get_json(url: str, params: Optional[dict] = None, timeout: int = 6):
     return None
 
 
+
+
+def _learned_source_weight(source: str) -> float:
+    """Settlement-learned source priority; unknown sources stay neutral."""
+    try:
+        from netrattler_runtime_policy import source_weight
+        return float(source_weight(source))
+    except Exception:
+        return 1.0
+
+
 # ------------------------------------------------------------------
 # Gemeinsamer Kategorie-Mapper (quellen-unabhaengig).
 # Haelt die Kategorien synchron mit _SHARP_PLAYER_CATS_V31 im Builder.
@@ -717,7 +728,8 @@ def collect_extra_player_props(
         local_cats = set()
         # Kambi market depth differs by brand. Merge brands but stop early once
         # a match already has broad coverage, keeping runtime bounded.
-        for brand in _KAMBI_BRANDS:
+        _brands = sorted(_KAMBI_BRANDS, key=lambda b: _learned_source_weight(f"kambi_{b}"), reverse=True)
+        for brand in _brands:
             try:
                 rows = fetch_kambi_player_props(home, away, brand=brand) or []
             except Exception as exc:
@@ -745,10 +757,12 @@ def collect_extra_player_props(
 
         # Aggregator fallbacks only if the match still lacks breadth.
         if len(local_cats & desired_depth) < 5:
-            for name, fn in (
+            _fallbacks = [
                 ("oddspedia", fetch_oddspedia_player_props),
                 ("footymetrics", fetch_footymetrics_player_props),
-            ):
+            ]
+            _fallbacks.sort(key=lambda item: _learned_source_weight(item[0]), reverse=True)
+            for name, fn in _fallbacks:
                 try:
                     rows = fn(home, away) or []
                 except Exception as exc:
@@ -759,7 +773,10 @@ def collect_extra_player_props(
 
     out = list(out_best.values())
     if per_source:
-        summary = ", ".join(f"{k}={v}" for k, v in sorted(per_source.items()))
+        summary = ", ".join(
+            f"{k}={v}@w{_learned_source_weight(k):.2f}"
+            for k, v in sorted(per_source.items(), key=lambda item: _learned_source_weight(item[0]), reverse=True)
+        )
         cats = ", ".join(f"{k}={v}" for k, v in per_cat.most_common())
         _log(f"   🔌 Extra-Prop-Quellen: {summary} · unique={len(out)} · matches={len(matched_matches)}")
         _log(f"   🔌 Extra-Prop-Kategorien: {cats}")
