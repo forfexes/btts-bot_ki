@@ -111,6 +111,8 @@ jobs:
           SUPABASE_KEY:               ${{ secrets.SUPABASE_KEY }}
           ODDSPAPI_KEY:               ${{ secrets.ODDSPAPI_KEY }}
           SUPABASE_SERVICE_ROLE_KEY:  ${{ secrets.SUPABASE_SERVICE_ROLE_KEY }}
+          BIGBALLS_API_KEY:        ${{ secrets.BIGBALLS_API_KEY }}
+          BBS_API_KEY:             ${{ secrets.BBS_API_KEY }}
           # ── Bot Einstellungen ──
           RUN_MODE:                   ${{ github.event.inputs.mode || 'tips' }}
           ENABLE_SETTLEMENT:          "false"
