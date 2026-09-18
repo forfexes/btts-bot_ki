@@ -210,6 +210,13 @@ MIN_VALUE_RATING = env("MIN_VALUE_RATING", "OK")  # HIGH, OK, oder LOW
 
 MIN_ODDS_VALUE = MIN_ODDS  # Alias — globale Mindestquote für "nur Value Bets"
 
+# Goal Hunter / 1X2 has its own production thresholds. These values already
+# exist in the GitHub workflow; V37 now consumes them instead of accidentally
+# forcing the generic 55% / 3% runtime-policy gate onto 1X2.
+ONE_X_TWO_MIN_PROB = float(env("NETRATTLER_1X2_MIN_PROB", "52"))
+ONE_X_TWO_MIN_EDGE = float(env("NETRATTLER_1X2_MIN_EDGE", "0.01"))
+ONE_X_TWO_MIN_ODDS = float(env("NETRATTLER_1X2_MIN_ODDS", "1.55"))
+
 
 def _is_value_bet(odds, prob_pct):
     """True nur wenn Quote >= MIN_ODDS_VALUE UND echte Edge vorhanden (Value Bet).
@@ -23604,8 +23611,14 @@ def filter_tips_by_edge(tips: List[Dict], market: str = "btts",
     if not EDGE_FILTER_ENABLED:
         return tips
 
-    min_edge = EDGE_FILTER_MIN_EDGE if min_edge is None else min_edge
-    max_edge = EDGE_FILTER_MAX_EDGE if max_edge is None else max_edge
+    market_key = str(market or "").lower()
+    # Goal Hunter has dedicated, deliberately lower thresholds configured in
+    # btts_tips.yml.  Previously these env vars were present but unused, so the
+    # generic runtime policy rejected nearly every valid 1X2 candidate.
+    if min_edge is None:
+        min_edge = ONE_X_TWO_MIN_EDGE if market_key == "1x2" else EDGE_FILTER_MIN_EDGE
+    if max_edge is None:
+        max_edge = EDGE_FILTER_MAX_EDGE
     require_bet365 = EDGE_FILTER_REQUIRE_BET365 if require_bet365 is None else require_bet365
     if not tips:
         _NTR_EDGE_FILTER_STATS[market] = {"total": 0, "no_quote": 0, "below_min": 0, "above_max": 0, "policy_reject": 0, "kept": 0}
@@ -23658,10 +23671,21 @@ def filter_tips_by_edge(tips: List[Dict], market: str = "btts",
                 consensus_sources=int(tip.get("consensus_sources") or 0),
                 line_dispersion=float(tip.get("odds_dispersion") or tip.get("line_dispersion") or 0),
             )
-            policy_ok = allow_pick(
-                adjusted_p, float(market_quote), market=tip_market, league=league,
-                source=source, player=player, min_edge=0.0, already_adjusted=True,
-            )
+            if str(tip_market).lower() == "1x2":
+                # 1X2 already receives the learned probability adjustment above,
+                # but uses its own production guardrails.  Do not apply the
+                # generic policy's 55% probability / source-market hard gate a
+                # second time; that was the reason today's 130 real-odds picks
+                # became 0 Telegram picks.
+                policy_ok = (
+                    adjusted_p >= (ONE_X_TWO_MIN_PROB / 100.0)
+                    and float(market_quote) >= ONE_X_TWO_MIN_ODDS
+                )
+            else:
+                policy_ok = allow_pick(
+                    adjusted_p, float(market_quote), market=tip_market, league=league,
+                    source=source, player=player, min_edge=0.0, already_adjusted=True,
+                )
             policy_stake = stake_for_single(
                 adjusted_p, float(market_quote), market=tip_market, league=league,
                 source=source, player=player, already_adjusted=True,
@@ -25014,7 +25038,15 @@ def main():
                             q = float(ro.get(key) or 0)
                         except Exception:
                             q = 0.0
-                        if sel_prob <= 0 or q <= 1 or not _is_value_bet(q, sel_prob):
+                        if sel_prob <= 0 or q <= 1:
+                            continue
+                        _implied_1x2 = (1.0 / q) if q > 1 else 1.0
+                        _edge_1x2 = (sel_prob / 100.0) - _implied_1x2
+                        if (
+                            sel_prob < ONE_X_TWO_MIN_PROB
+                            or q < ONE_X_TWO_MIN_ODDS
+                            or _edge_1x2 < ONE_X_TWO_MIN_EDGE
+                        ):
                             continue
                         tip_1x2 = {
                             "match": mn, "league": league_name or "Pinnacle", "time": tstr,
@@ -25208,7 +25240,14 @@ def main():
                     # REAL_ODDS_ONLY: ohne verifizierte Quote wird nichts gesendet.
                     tips_by_market[_mk] = _filt or []
                     if not _filt and _orig:
-                        log(f"   🎯 Edge Filter [{_mk}]: {len(_orig)} Tipps ohne verifizierte Real-Quote verworfen")
+                        _es = _NTR_EDGE_FILTER_STATS.get(_mk, {})
+                        log(
+                            f"   🎯 Edge Filter [{_mk}]: 0/{len(_orig)} behalten "
+                            f"(no_quote={_es.get('no_quote', 0)}, "
+                            f"below={_es.get('below_min', 0)}, "
+                            f"policy={_es.get('policy_reject', 0)}, "
+                            f"above={_es.get('above_max', 0)})"
+                        )
                 log(f"   🎯 Edge Filter angewendet (REAL_ODDS_ONLY)")
         except Exception as _efe:
             log(f"   🎯 Edge Filter übersprungen: {str(_efe)[:60]}")
