@@ -86,14 +86,16 @@ if not get_bot_info():
 
 # Alle Gruppen inkl. BTTS+2.5
 groups = {
-    "BTTS Gruppe":    os.getenv("TELEGRAM_GROUP_BTTS", ""),
+    "BTTS":           os.getenv("TELEGRAM_GROUP_BTTS", ""),
     "Over 2.5":       os.getenv("TELEGRAM_GROUP_OVER25", ""),
-    "BTTS +2.5":      os.getenv("TELEGRAM_GROUP_COMBO", "") or os.getenv("TELEGRAM_GROUP_COMBOS", ""),
-    "Combos":         os.getenv("TELEGRAM_GROUP_COMBOS", ""),
-    "BTTS HT":        os.getenv("TELEGRAM_GROUP_BTTS_HT", ""),
+    "BTTS + Over 2.5": os.getenv("TELEGRAM_GROUP_COMBO", ""),
+    "Multi Combos":   os.getenv("TELEGRAM_GROUP_COMBOS", ""),
+    "BTTS HT / O1.5 HT": os.getenv("TELEGRAM_GROUP_BTTS_HT", ""),
+    "Corner Sniper":  os.getenv("TELEGRAM_GROUP_CORNERS", "") or os.getenv("TELEGRAM_GROUP_HZ_LIVE", ""),
+    "Goal Hunter / 1X2": os.getenv("TELEGRAM_GROUP_LATE_GOALS", ""),
+    "Player Props":   os.getenv("TELEGRAM_GROUP_PLAYER_PROPS", "") or os.getenv("TELEGRAM_GROUP_PROPS", ""),
+    "Builder":        os.getenv("TELEGRAM_GROUP_BUILDER", ""),
     "Stats":          os.getenv("TELEGRAM_GROUP_STATS", ""),
-    "Corner Sniper":  os.getenv("TELEGRAM_GROUP_HZ_LIVE", ""),
-    "Goal Hunter":    os.getenv("TELEGRAM_GROUP_LATE_GOALS", ""),
     "Main Chat":      os.getenv("TELEGRAM_CHAT_ID", ""),
 }
 
