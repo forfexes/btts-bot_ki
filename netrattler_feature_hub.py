@@ -26,9 +26,9 @@ def feature_plan_for_market(market: str) -> List[str]:
 def source_priority_for_market(market: str) -> List[str]:
     market = str(market or "").lower()
     if market in {"shots", "sot", "score", "assist"}:
-        return ["pinnacle", "fotmob", "sofascore", "fbref", "understat", "statsbomb"]
+        return ["pinnacle", "fotmob", "sofascore", "bigballs", "fbref", "understat", "statsbomb"]
     if market in {"fouls", "fouls_won", "tackles_committed", "tackles_received", "yellow_cards"}:
-        return ["pinnacle", "fotmob", "sofascore", "statsbomb", "fbref"]
+        return ["pinnacle", "fotmob", "sofascore", "bigballs", "statsbomb", "fbref"]
     if market in {"btts", "over_goals", "team_corners", "team_cards"}:
-        return ["pinnacle", "football-data.co.uk", "clubelo", "openfootball", "espn"]
+        return ["pinnacle", "bigballs", "football-data.co.uk", "clubelo", "openfootball", "espn"]
     return ["pinnacle", "supabase", "soccerdata", "openfootball"]
