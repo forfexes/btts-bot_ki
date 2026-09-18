@@ -20,7 +20,7 @@ jobs:
           python -m pip install --upgrade pip
           pip install -r requirements_train.txt
       - name: Compile
-        run: python -m py_compile train_model.py netrattler_autolearn_v36.py
+        run: python -m py_compile train_model.py netrattler_autolearn_v36.py netrattler_model_registry_v37.py
       - name: Train from all normalized source tables and bookmaker odds
         env:
           SUPABASE_URL: ${{ secrets.SUPABASE_URL }}
@@ -32,6 +32,8 @@ jobs:
           NETRATTLER_XGB_ESTIMATORS: "200"
           NETRATTLER_PLAYER_XGB_ESTIMATORS: "160"
           NETRATTLER_CALIBRATION_FOLDS: "2"
+          NETRATTLER_RETRAIN_MIN_NEW_SAMPLES: "75"
+          NETRATTLER_RETRAIN_MAX_AGE_DAYS: "14"
         run: |
           python train_model.py
           python netrattler_autolearn_v36.py --train || true
