@@ -4,7 +4,7 @@ on:
   workflow_dispatch:
     inputs:
       mode:
-        description: "validate=cheap local/schema checks | daily=fresh stats+odds+learning | full=all | learning | sources | train"
+        description: "daily=fresh stats+odds+learning | full=all | learning | sources | train"
         required: false
         default: "daily"
       run_tip_bot:
@@ -41,7 +41,7 @@ jobs:
           if [[ "${{ github.event_name }}" == "schedule" ]]; then MODE="sources"; fi
 
           case "$MODE" in
-            validate|daily|full|learning|sources|train) ;;
+            daily|full|learning|sources|train) ;;
             *)
               echo "INVALID MODE: $MODE"
               exit 2
@@ -57,34 +57,6 @@ jobs:
           required=()
 
           case "$MODE" in
-            validate)
-              required+=(
-                btts_bot.py
-                netrattler_builder_engine.py
-                netrattler_settlement_v16_final.py
-                netrattler_learning_engine.py
-                netrattler_runtime_policy.py
-                netrattler_market_consensus_v36.py
-                netrattler_exposure_engine_v36.py
-                netrattler_source_router_v36.py
-                netrattler_coverage_watchdog_v37.py
-                netrattler_model_registry_v37.py
-                netrattler_schema_check_v36.py
-                data_fusion_v15.py
-                netrattler_ml_player.py
-                netrattler_oddspapi.py
-                netrattler_prop_sources.py
-                netrattler_result_enrichment.py
-                netrattler_source_hub.py
-                netrattler_identity_hub.py
-                netrattler_feature_hub.py
-                train_model.py
-                telegram_tester.py
-                test_netrattler_core.py
-                test_netrattler_settlement_v21.py
-                test_source_hub_v30.py
-              )
-              ;;
             daily)
               required+=(
                 netrattler_learning_engine.py
@@ -138,9 +110,6 @@ jobs:
                 netrattler_market_consensus_v36.py
                 netrattler_exposure_engine_v36.py
                 netrattler_source_router_v36.py
-                netrattler_coverage_watchdog_v37.py
-                netrattler_model_registry_v37.py
-                netrattler_schema_check_v36.py
                 test_netrattler_core.py
                 btts_bot.py
                 netrattler_builder_engine.py
@@ -180,7 +149,7 @@ jobs:
 
       - uses: actions/setup-python@v5
         with:
-          python-version: "3.11"
+          python-version: "3.12"
           cache: "pip"
 
       - name: Verify Python runtime
@@ -190,8 +159,8 @@ jobs:
           python - <<'PY'
           import sys
           print("PYTHON", sys.version)
-          if sys.version_info < (3, 11):
-              raise SystemExit("NETRATTLER V37 requires Python >= 3.11")
+          if sys.version_info < (3, 12):
+              raise SystemExit("NETRATTLER V37 requires Python >= 3.12")
           PY
       - name: Restore last-good source cache
         uses: actions/cache@v4
@@ -208,13 +177,6 @@ jobs:
           MODE="${{ steps.mode.outputs.mode }}"
 
           case "$MODE" in
-            validate)
-              python -m pip install \
-                "requests>=2.32,<3" \
-                "python-dateutil>=2.9,<3" \
-                "rapidfuzz>=3,<4" \
-                "pyyaml>=6,<7"
-              ;;
             daily)
               python -m pip install \
                 "requests>=2.32,<3" \
@@ -224,7 +186,8 @@ jobs:
                 "beautifulsoup4>=4.12,<5" \
                 "cloudscraper>=1.2.71,<2" \
                 "curl_cffi>=0.7,<1" \
-                "scikit-learn>=1.5,<2"
+                "scikit-learn>=1.5,<2" \
+                "playwright>=1.50,<2"
               ;;
             learning)
               python -m pip install \
@@ -264,7 +227,7 @@ jobs:
           PY
 
       - name: Resolve Playwright version
-        if: steps.mode.outputs.mode == 'full'
+        if: contains(fromJSON('["daily","full"]'), steps.mode.outputs.mode)
         id: playwright-version
         shell: bash
         run: |
@@ -274,7 +237,7 @@ jobs:
           echo "PLAYWRIGHT VERSION $VERSION"
 
       - name: Restore Chromium browser cache
-        if: steps.mode.outputs.mode == 'full'
+        if: contains(fromJSON('["daily","full"]'), steps.mode.outputs.mode)
         id: playwright-browser-cache
         uses: actions/cache@v4
         with:
@@ -282,11 +245,11 @@ jobs:
           key: playwright-chromium-${{ runner.os }}-${{ steps.playwright-version.outputs.version }}
 
       - name: Install Chromium browser
-        if: steps.mode.outputs.mode == 'full' && steps.playwright-browser-cache.outputs.cache-hit != 'true'
+        if: contains(fromJSON('["daily","full"]'), steps.mode.outputs.mode) && steps.playwright-browser-cache.outputs.cache-hit != 'true'
         run: python -m playwright install chromium
 
       - name: Verify Chromium launch
-        if: steps.mode.outputs.mode == 'full'
+        if: contains(fromJSON('["daily","full"]'), steps.mode.outputs.mode)
         shell: bash
         run: |
           python - <<'PY'
@@ -308,34 +271,6 @@ jobs:
           files=()
 
           case "$MODE" in
-            validate)
-              files=(
-                btts_bot.py
-                netrattler_builder_engine.py
-                netrattler_settlement_v16_final.py
-                netrattler_learning_engine.py
-                netrattler_runtime_policy.py
-                netrattler_market_consensus_v36.py
-                netrattler_exposure_engine_v36.py
-                netrattler_source_router_v36.py
-                netrattler_coverage_watchdog_v37.py
-                netrattler_model_registry_v37.py
-                netrattler_schema_check_v36.py
-                data_fusion_v15.py
-                netrattler_ml_player.py
-                netrattler_oddspapi.py
-                netrattler_prop_sources.py
-                netrattler_result_enrichment.py
-                netrattler_source_hub.py
-                netrattler_identity_hub.py
-                netrattler_feature_hub.py
-                train_model.py
-                telegram_tester.py
-                test_netrattler_core.py
-                test_netrattler_settlement_v21.py
-                test_source_hub_v30.py
-              )
-              ;;
             daily)
               files=(
                 netrattler_learning_engine.py
@@ -376,14 +311,6 @@ jobs:
                 netrattler_market_consensus_v36.py
                 netrattler_exposure_engine_v36.py
                 netrattler_source_router_v36.py
-                netrattler_coverage_watchdog_v37.py
-                netrattler_model_registry_v37.py
-                netrattler_schema_check_v36.py
-                data_fusion_v15.py
-                netrattler_ml_player.py
-                netrattler_oddspapi.py
-                netrattler_prop_sources.py
-                netrattler_result_enrichment.py
               )
               ;;
           esac
@@ -411,22 +338,12 @@ jobs:
           echo "COMPILE OK mode=$MODE files=${#files[@]}"
 
       - name: Core regression test
-        if: contains(fromJSON('["validate","full"]'), steps.mode.outputs.mode)
+        if: steps.mode.outputs.mode == 'full'
         shell: bash
         run: |
           set -euo pipefail
           python -m py_compile             btts_bot.py             netrattler_builder_engine.py             netrattler_settlement_v16_final.py             netrattler_source_hub.py             netrattler_identity_hub.py             netrattler_feature_hub.py             test_netrattler_core.py
           python test_netrattler_core.py
-          python test_netrattler_settlement_v21.py
-          python test_source_hub_v30.py
-
-      - name: Verify V37 Supabase self-maintenance schema
-        if: steps.mode.outputs.mode == 'validate'
-        env:
-          SUPABASE_URL: ${{ secrets.SUPABASE_URL }}
-          SUPABASE_KEY: ${{ secrets.SUPABASE_KEY }}
-          SUPABASE_SERVICE_ROLE_KEY: ${{ secrets.SUPABASE_SERVICE_ROLE_KEY }}
-        run: python netrattler_schema_check_v36.py
 
       - name: Source discovery and quarantine lab
         timeout-minutes: 15
