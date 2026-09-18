@@ -284,3 +284,67 @@ def get_results(target_date=None) -> List[Dict[str, Any]]:
 __all__ = ["get_fixtures", "get_match_odds", "find_fixture",
            "get_odds_for_match", "enrich_fixtures_with_ids", "get_results",
            "call_stats"]
+
+
+def get_corner_quote_for_match(home: str, away: str, target_date=None, line: float = 9.5) -> Optional[float]:
+    """Best-effort real OddsPapi corner-total quote for an exact offered line.
+
+    Market 10208 is documented by the existing integration as Corners O/U. The
+    API has used more than one payload shape, so this parser only accepts an
+    observed active price whose observed point/line equals the requested line.
+    It never derives a quote for a different line.
+    """
+    fx = find_fixture(home, away, target_date)
+    if not fx or requests is None or not _key():
+        return None
+    fixture_id = fx.get("fixtureId")
+    if not fixture_id:
+        return None
+    cache_key = f"corners:{fixture_id}:{line}"
+    if cache_key in _ODDS_CACHE:
+        value = _ODDS_CACHE[cache_key]
+        return value if isinstance(value, (int, float)) and value > 1 else None
+    if _CALL_COUNT["odds"] >= int(os.getenv("NETRATTLER_ODDSPAPI_MAX_CALLS", "40")):
+        return None
+    data = _get("odds", {"fixtureId": fixture_id})
+    _CALL_COUNT["odds"] += 1
+    if not isinstance(data, dict) or data.get("_rate_limited"):
+        _ODDS_CACHE[cache_key] = None
+        return None
+    markets = _best_book_markets(data.get("bookmakerOdds", {}))
+    market = markets.get("10208") or markets.get(10208)
+    if not isinstance(market, dict):
+        _ODDS_CACHE[cache_key] = None
+        return None
+    outcomes = market.get("outcomes") or {}
+    iterable = outcomes.values() if isinstance(outcomes, dict) else outcomes if isinstance(outcomes, list) else []
+    best = None
+    for outcome in iterable:
+        if not isinstance(outcome, dict):
+            continue
+        players = outcome.get("players") or {}
+        plist = players.values() if isinstance(players, dict) else players if isinstance(players, list) else [outcome]
+        for player in plist:
+            if not isinstance(player, dict) or not player.get("active", True):
+                continue
+            designation = str(player.get("designation") or outcome.get("designation") or player.get("name") or outcome.get("name") or "").lower()
+            if "over" not in designation and designation not in {"o", "1"}:
+                continue
+            point = player.get("point")
+            if point is None: point = player.get("line")
+            if point is None: point = player.get("handicap")
+            if point is None: point = outcome.get("point")
+            if point is None: point = outcome.get("line")
+            try:
+                if point is None or abs(float(point) - float(line)) > 0.01:
+                    continue
+                price = float(player.get("price") or outcome.get("price") or 0)
+            except Exception:
+                continue
+            if price > 1 and (best is None or price > best):
+                best = round(price, 3)
+    _ODDS_CACHE[cache_key] = best
+    return best
+
+
+__all__.append("get_corner_quote_for_match")
