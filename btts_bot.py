@@ -6752,8 +6752,22 @@ def save_to_supabase(tip):
             "profit_units", "actual_value",
         ]
         
-        clean_tip = {k: v for k, v in tip.items() 
+        clean_tip = {k: v for k, v in tip.items()
                      if k in SUPABASE_FIELDS and v is not None}
+
+        # Supabase tips schema uses INTEGER for these fields. New calibrated
+        # probabilities can be floats (59.0 / 31.44); normalize before POST.
+        _integer_fields = {
+            "probability", "confidence", "weekday", "hour",
+            "builder_total_legs", "builder_won_legs",
+            "elo_home", "elo_away", "elo_diff",
+        }
+        for _field in _integer_fields:
+            if _field in clean_tip and clean_tip[_field] not in (None, ""):
+                try:
+                    clean_tip[_field] = int(round(float(clean_tip[_field])))
+                except (TypeError, ValueError):
+                    clean_tip.pop(_field, None)
 
         r = requests.post(
             f"{SUPABASE_URL}/rest/v1/tips",
@@ -6944,7 +6958,12 @@ def generate_multi_combo_bets(all_tips, num_tips=3):
                     "match": t.get("match", ""),
                     "league": t.get("league", ""),
                     "market": t.get("market", "btts"),
-                    "tip": t.get("tip", "YES"),
+                    "tip": t.get("tip", t.get("selection", "YES")),
+                    "selection": t.get("selection", t.get("tip", "YES")),
+                    "line": t.get("line"),
+                    "player": t.get("player", t.get("player_name", "")),
+                    "team": t.get("team", ""),
+                    "category": t.get("category", ""),
                     "odds": odds,
                     "confidence": int(t.get("confidence", 0)),
                     "value_rating": t.get("valueRating", t.get("value_rating", "OK")),
@@ -7072,7 +7091,14 @@ def format_combo_telegram_message(combo):
         market_emoji = {"btts": "⚽", "over25": "🎯", "combo": "🔥", "btts_ht": "🕐", "over15_ht": "⏰", "corners": "🔵"}.get(_mk, "💎")
         market_label = {"btts": "BTTS", "over25": "Over 2.5", "combo": "BTTS+O2.5", "btts_ht": "BTTS HT", "over15_ht": "O1.5 HT", "corners": "Corners"}.get(_mk, str(_mk).upper())
         odds_val = tip.get("odds", tip.get("oddsYes", "?"))
-        msg += f"{i}. {market_emoji} <b>{tip.get('match','?')}</b> · {market_label} @ {odds_val}\n"
+        _selection = str(tip.get("selection") or tip.get("tip") or market_label).strip()
+        if _mk == "corners" and (_selection.lower() in {"corners", "ecken", "yes", ""}):
+            _line = tip.get("line")
+            if _line is None:
+                continue  # Ungültiges Corner-Leg niemals anzeigen/senden.
+            _selection = f"Over {_line} Ecken"
+        display_pick = _selection if _selection and _selection.upper() != "YES" else market_label
+        msg += f"{i}. {market_emoji} <b>{tip.get('match','?')}</b> · {display_pick} @ {odds_val}\n"
 
     msg += "\n━━━━━━━━━━━━━━━━━━\n"
     msg += "<i>💡 REAL_ODDS Cross-Match Combo · pro Spiel maximal ein Leg.</i>"
@@ -16429,8 +16455,22 @@ def save_to_supabase(tip):
             "profit_units", "actual_value",
         ]
         
-        clean_tip = {k: v for k, v in tip.items() 
+        clean_tip = {k: v for k, v in tip.items()
                      if k in SUPABASE_FIELDS and v is not None}
+
+        # Supabase tips schema uses INTEGER for these fields. New calibrated
+        # probabilities can be floats (59.0 / 31.44); normalize before POST.
+        _integer_fields = {
+            "probability", "confidence", "weekday", "hour",
+            "builder_total_legs", "builder_won_legs",
+            "elo_home", "elo_away", "elo_diff",
+        }
+        for _field in _integer_fields:
+            if _field in clean_tip and clean_tip[_field] not in (None, ""):
+                try:
+                    clean_tip[_field] = int(round(float(clean_tip[_field])))
+                except (TypeError, ValueError):
+                    clean_tip.pop(_field, None)
 
         r = requests.post(
             f"{SUPABASE_URL}/rest/v1/tips",
@@ -16621,7 +16661,12 @@ def generate_multi_combo_bets(all_tips, num_tips=3):
                     "match": t.get("match", ""),
                     "league": t.get("league", ""),
                     "market": t.get("market", "btts"),
-                    "tip": t.get("tip", "YES"),
+                    "tip": t.get("tip", t.get("selection", "YES")),
+                    "selection": t.get("selection", t.get("tip", "YES")),
+                    "line": t.get("line"),
+                    "player": t.get("player", t.get("player_name", "")),
+                    "team": t.get("team", ""),
+                    "category": t.get("category", ""),
                     "odds": odds,
                     "confidence": int(t.get("confidence", 0)),
                     "value_rating": t.get("valueRating", t.get("value_rating", "OK")),
@@ -16749,7 +16794,14 @@ def format_combo_telegram_message(combo):
         market_emoji = {"btts": "⚽", "over25": "🎯", "combo": "🔥", "btts_ht": "🕐", "over15_ht": "⏰", "corners": "🔵"}.get(_mk, "💎")
         market_label = {"btts": "BTTS", "over25": "Over 2.5", "combo": "BTTS+O2.5", "btts_ht": "BTTS HT", "over15_ht": "O1.5 HT", "corners": "Corners"}.get(_mk, str(_mk).upper())
         odds_val = tip.get("odds", tip.get("oddsYes", "?"))
-        msg += f"{i}. {market_emoji} <b>{tip.get('match','?')}</b> · {market_label} @ {odds_val}\n"
+        _selection = str(tip.get("selection") or tip.get("tip") or market_label).strip()
+        if _mk == "corners" and (_selection.lower() in {"corners", "ecken", "yes", ""}):
+            _line = tip.get("line")
+            if _line is None:
+                continue
+            _selection = f"Over {_line} Ecken"
+        display_pick = _selection if _selection and _selection.upper() != "YES" else market_label
+        msg += f"{i}. {market_emoji} <b>{tip.get('match','?')}</b> · {display_pick} @ {odds_val}\n"
 
     msg += "\n━━━━━━━━━━━━━━━━━━\n"
     msg += "<i>💡 REAL_ODDS Cross-Match Combo · pro Spiel maximal ein Leg.</i>"
@@ -19663,7 +19715,7 @@ def analyze_corners_tip_simple(fixture, league, target_date=None):
     return {
         "match": f"{fixture['home']} vs {fixture['away']}",
         "league": league, "time": fixture.get("time_local", "TBD"),
-        "tip": f"Over {line} Ecken", "probability": prob,
+        "tip": f"Over {line} Ecken", "selection": f"Over {line} Ecken", "line": float(line), "probability": prob,
         "odds": round(quote, 3), "oddsYes": round(quote, 3),
         "fair_odds": round(100 / prob, 2) if prob else 0,
         "fairOdds": round(100 / prob, 2) if prob else 0,
@@ -19708,6 +19760,7 @@ def analyze_corners_tip(fixture, league, target_date=None):
     return {
         "match": f"{fixture['home']} vs {fixture['away']}", "league": league,
         "time": fixture.get("time_local", "TBD"), "tip": f"Over {line_used} Ecken",
+        "selection": f"Over {line_used} Ecken", "line": float(line_used),
         "probability": prob, "odds": round(quote, 3), "oddsYes": round(quote, 3),
         "fair_odds": round(100 / prob, 2), "fairOdds": round(100 / prob, 2),
         "edge": round(edge, 4), "expected_corners": round(expected_total, 1),
@@ -23581,6 +23634,12 @@ EDGE_FILTER_ENABLED = _env_bool("EDGE_FILTER_ENABLED", "true")
 EDGE_FILTER_MIN_EDGE = _env_float("EDGE_FILTER_MIN_EDGE", 0.08)
 EDGE_FILTER_MAX_EDGE = _env_float("EDGE_FILTER_MAX_EDGE", 0.50)
 EDGE_FILTER_REQUIRE_BET365 = _env_bool("EDGE_FILTER_REQUIRE_BET365", "false")
+
+# SAFE ROLLBACK STEP 1
+# V37 learning/policy remains installed, but is not allowed to mutate or block
+# production picks until the regression suite proves parity with the legacy path.
+NETRATTLER_V37_SHADOW_MODE = _env_bool("NETRATTLER_V37_SHADOW_MODE", "true")
+NETRATTLER_V37_COMPARE = _env_bool("NETRATTLER_V37_COMPARE", "false")
 CROSS_MATCH_COMBOS = _env_bool("CROSS_MATCH_COMBOS", "true")
 CROSS_MATCH_MIN_SCORE = int(_env("CROSS_MATCH_MIN_SCORE", "7"))
 CROSS_MATCH_MAX_COMBOS = int(_env("CROSS_MATCH_MAX_COMBOS", "5"))
@@ -23835,6 +23894,100 @@ def filter_tips_by_edge(tips: List[Dict], market: str = "btts",
     _log("EDGE", f"[{market}]: {stats['kept']}/{stats['total']} kept "
                   f"(no_quote={stats['no_quote']} below={stats['below_min']} policy={stats['policy_reject']})")
     return filtered
+
+
+
+def filter_tips_legacy_safe(tips: List[Dict], market: str = "btts",
+                            odds_data: Optional[List] = None) -> List[Dict]:
+    """Production-safe final validator used during V37 rollback.
+
+    Restores the pre-V37 contract:
+      candidate -> exact observed quote -> market-specific probability/odds/edge -> send.
+
+    It deliberately does NOT:
+      - call runtime-policy probability calibration,
+      - reject a pick because its edge is "too high",
+      - overwrite the model probability after the candidate was generated.
+
+    REAL_ODDS_ONLY remains mandatory. Estimated lines/prices are never published.
+    """
+    market_key = str(market or "").lower()
+    thresholds = {
+        "1x2": (ONE_X_TWO_MIN_PROB, ONE_X_TWO_MIN_ODDS, ONE_X_TWO_MIN_EDGE),
+        "btts": (BTTS_MIN_PROB, BTTS_MIN_ODDS, BTTS_MIN_EDGE),
+        "over25": (OVER25_MIN_PROB, OVER25_MIN_ODDS, OVER25_MIN_EDGE),
+        "combo": (COMBO_MIN_PROB, COMBO_MIN_ODDS, COMBO_MIN_EDGE),
+        "btts_ht": (BTTS_HT_MIN_PROB, BTTS_HT_MIN_ODDS, BTTS_HT_MIN_EDGE),
+        "over15_ht": (OVER15_HT_MIN_PROB, OVER15_HT_MIN_ODDS, OVER15_HT_MIN_EDGE),
+        "corners": (CORNER_MIN_PROB, CORNER_MIN_ODDS, CORNER_MIN_EDGE),
+    }
+    min_prob, min_odds, min_edge = thresholds.get(
+        market_key, (float(MIN_PROBABILITY), float(MIN_ODDS_VALUE), float(EDGE_FILTER_MIN_EDGE))
+    )
+    stats = {"total": len(tips or []), "no_quote": 0, "below_min": 0,
+             "above_max": 0, "policy_reject": 0, "kept": 0}
+    out = []
+    for tip in tips or []:
+        if tip.get("estimated") is True or tip.get("estimated_odds") is True:
+            stats["no_quote"] += 1
+            continue
+
+        tip_market = str(tip.get("market") or market_key)
+        quote, source = get_bet365_quote_any_source({**tip, "market": tip_market}, odds_data)
+        if not quote and tip.get("_no_real_odds") is not True:
+            try:
+                carried = float(str(tip.get("oddsYes") or tip.get("odds") or 0).replace(",", "."))
+            except Exception:
+                carried = 0.0
+            if carried > 1.0:
+                quote = carried
+                source = str(tip.get("_source") or tip.get("bookie") or "observed")
+        try:
+            quote = float(quote or 0)
+        except Exception:
+            quote = 0.0
+        if quote <= 1.0:
+            stats["no_quote"] += 1
+            continue
+
+        try:
+            raw_prob = float(tip.get("probability") or tip.get("model_prob") or 0)
+        except Exception:
+            raw_prob = 0.0
+        prob01 = raw_prob / 100.0 if raw_prob > 1 else raw_prob
+        prob_pct = prob01 * 100.0
+        if prob01 <= 0 or prob_pct < float(min_prob) or quote < float(min_odds):
+            stats["below_min"] += 1
+            continue
+
+        # Same edge definition used when the candidate is created: model probability
+        # minus bookmaker implied probability. No upper-edge kill switch.
+        edge = prob01 - (1.0 / quote)
+        if edge < float(min_edge):
+            stats["below_min"] += 1
+            continue
+
+        row = dict(tip)
+        row["raw_probability"] = round(prob01, 6)
+        row["calibrated_probability"] = round(prob01, 6)
+        row["probability"] = round(prob_pct, 1)
+        row["fairOdds"] = round(1.0 / prob01, 2)
+        row["oddsYes"] = round(quote, 3)
+        row["odds"] = round(quote, 3)
+        row["_no_real_odds"] = False
+        row["_source"] = source or row.get("_source") or "observed"
+        row["edge"] = round(edge, 4)
+        row["edge_pct"] = round(edge * 100.0, 1)
+        row["edge_source"] = row["_source"]
+        row["quote_rechecked_at"] = datetime.now(timezone.utc).isoformat()
+        row["value_rating"] = "🔥 HIGH" if edge >= 0.20 else "💚 OK" if edge >= 0.12 else "🟡 LOW"
+        out.append(row)
+        stats["kept"] += 1
+
+    _NTR_EDGE_FILTER_STATS[market] = dict(stats)
+    _log("EDGE", f"[SAFE:{market}] {stats['kept']}/{stats['total']} kept "
+                 f"(no_quote={stats['no_quote']} below={stats['below_min']})")
+    return out
 
 
 # Anti-Correlation Check
@@ -25369,43 +25522,75 @@ def main():
         log(f"📊 API-Football Calls verbraucht: {APIFOOTBALL_CALL_COUNTER}/{APIFOOTBALL_MAX_CALLS_PER_RUN}")
     log("Sende an Telegram + Supabase...")
 
-    # V37 data fusion: historische Team-/Liga-/Elo-/Injury-Kontexte fließen in
-    # die Modellwahrscheinlichkeit ein, niemals in Lines/Quoten. Fehlende Tabellen sind non-fatal.
-    try:
-        from data_fusion_v15 import apply_data_fusion_to_tips
-        tips_by_market = apply_data_fusion_to_tips(
-            tips_by_market, SUPABASE_URL, SUPABASE_KEY,
-            log=lambda m: log(m),
-        )
-    except Exception as _df_exc:
-        log(f"🧠 Data Fusion V15 übersprungen: {str(_df_exc)[:100]}", "WARN")
+    # V37 Data Fusion is shadow-only during rollback. It may learn/diagnose, but
+    # production probabilities stay on the proven candidate path.
+    if NETRATTLER_V37_SHADOW_MODE:
+        log("🛡️ SAFE ROLLBACK: V37 Data Fusion = SHADOW (blockiert/verändert keine Tipps)")
+        if NETRATTLER_V37_COMPARE:
+            try:
+                import copy as _copy
+                from data_fusion_v15 import apply_data_fusion_to_tips
+                _shadow_fused = apply_data_fusion_to_tips(
+                    _copy.deepcopy(tips_by_market), SUPABASE_URL, SUPABASE_KEY,
+                    log=lambda m: log(f"[SHADOW] {m}"),
+                )
+                _shadow_changed = sum(
+                    1 for _mk in tips_by_market for _a, _b in zip(tips_by_market.get(_mk, []), _shadow_fused.get(_mk, []))
+                    if _a.get("probability") != _b.get("probability")
+                )
+                log(f"   🧪 V37 Data-Fusion Vergleich: {_shadow_changed} Probability-Änderungen (nicht produktiv)")
+            except Exception as _df_exc:
+                log(f"   🧪 V37 Data-Fusion Shadow übersprungen: {str(_df_exc)[:100]}", "WARN")
+    else:
+        try:
+            from data_fusion_v15 import apply_data_fusion_to_tips
+            tips_by_market = apply_data_fusion_to_tips(
+                tips_by_market, SUPABASE_URL, SUPABASE_KEY,
+                log=lambda m: log(m),
+            )
+        except Exception as _df_exc:
+            log(f"🧠 Data Fusion V15 übersprungen: {str(_df_exc)[:100]}", "WARN")
 
     # Coverage snapshot before REAL_ODDS/edge validation.
     _ntr_coverage_before = {k: list(v or []) for k, v in tips_by_market.items()}
 
-    # ── NETRATTLER PRO: Edge Filter ──
+    # ── Final production validation ──
+    # SAFE ROLLBACK: the V37 runtime policy is shadow-only. The proven candidate
+    # logic remains master and we only re-check REAL_ODDS + market-specific value.
     if NETRATTLER_PRO:
         try:
-            _ef = integrate_edge_filter_into_pipeline(tips_by_market)
-            _ft = _ef.get("filtered_tips") if isinstance(_ef, dict) else None
-            if _ft:
-                for _mk in list(tips_by_market.keys()):
-                    _orig = tips_by_market.get(_mk, [])
-                    _filt = _ft.get(_mk, [])
-                    # REAL_ODDS_ONLY: ohne verifizierte Quote wird nichts gesendet.
-                    tips_by_market[_mk] = _filt or []
-                    if not _filt and _orig:
-                        _es = _NTR_EDGE_FILTER_STATS.get(_mk, {})
-                        log(
-                            f"   🎯 Edge Filter [{_mk}]: 0/{len(_orig)} behalten "
-                            f"(no_quote={_es.get('no_quote', 0)}, "
-                            f"below={_es.get('below_min', 0)}, "
-                            f"policy={_es.get('policy_reject', 0)}, "
-                            f"above={_es.get('above_max', 0)})"
-                        )
-                log(f"   🎯 Edge Filter angewendet (REAL_ODDS_ONLY)")
+            if NETRATTLER_V37_SHADOW_MODE:
+                _before_safe = {k: len(v or []) for k, v in tips_by_market.items()}
+                _safe_filtered = {}
+                for _mk, _orig in tips_by_market.items():
+                    _safe_filtered[_mk] = filter_tips_legacy_safe(_orig, market=_mk)
+                tips_by_market = _safe_filtered
+                _after_safe = {k: len(v or []) for k, v in tips_by_market.items()}
+                log("   🛡️ SAFE FINAL: V37 Runtime-Policy/MAX-EDGE blockieren keine Produktion")
+                log("   🛡️ Regression counts: " + ", ".join(
+                    f"{k}={_before_safe.get(k,0)}→{_after_safe.get(k,0)}" for k in _before_safe
+                ))
+
+                # Optional compare is diagnostics only and never replaces production output.
+                if NETRATTLER_V37_COMPARE:
+                    try:
+                        import copy as _copy
+                        _shadow_ef = integrate_edge_filter_into_pipeline(_copy.deepcopy(_ntr_coverage_before))
+                        _shadow_ft = _shadow_ef.get("filtered_tips", {}) if isinstance(_shadow_ef, dict) else {}
+                        log("   🧪 V37 Policy Shadow: " + ", ".join(
+                            f"{k}={len(_shadow_ft.get(k,[]) or [])}" for k in _ntr_coverage_before
+                        ))
+                    except Exception as _shadow_exc:
+                        log(f"   🧪 V37 Policy Shadow übersprungen: {str(_shadow_exc)[:80]}", "WARN")
+            else:
+                _ef = integrate_edge_filter_into_pipeline(tips_by_market)
+                _ft = _ef.get("filtered_tips") if isinstance(_ef, dict) else None
+                if _ft is not None:
+                    for _mk in list(tips_by_market.keys()):
+                        tips_by_market[_mk] = _ft.get(_mk, []) or []
+                log("   🎯 V37 Edge/Runtime Policy produktiv angewendet")
         except Exception as _efe:
-            log(f"   🎯 Edge Filter übersprungen: {str(_efe)[:60]}")
+            log(f"   🎯 Final-Filter Fehler: {str(_efe)[:80]}", "WARN")
 
     # ⏰ Sortierung nach Anstosszeit (früheste zuerst)
     for _mk in tips_by_market:
