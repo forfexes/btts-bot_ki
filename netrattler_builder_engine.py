@@ -132,7 +132,6 @@ class BuilderPick:
     estimated_odds: bool
     match_date: str
     market_group: str = "builder"
-    family: str = "player"
 
     @property
     def leg_count(self) -> int:
@@ -145,7 +144,6 @@ class BuilderPick:
             "style": self.style,
             "variant": self.variant,
             "market_group": self.market_group,
-            "builder_family": self.family,
             "match_date": self.match_date,
             "status": "pending",
             "stake": self.stake,
@@ -191,18 +189,21 @@ def market_line(market: str, fallback: float = 1.0) -> float:
 
 
 def probability_from_row(row: Dict[str, Any]) -> float:
-    # Explicit model probability wins. Historical hit rate is a fallback, not a
-    # reason to inflate a trained model by simply taking the largest number.
-    for key in ("model_prob", "calibrated_probability", "probability", "prob", "hit_rate"):
-        value = as_float(row.get(key))
+    candidates = [
+        as_float(row.get("model_prob")),
+        as_float(row.get("probability")),
+        as_float(row.get("prob")),
+        as_float(row.get("hit_rate")),
+    ]
+    normalized = []
+    for value in candidates:
         if value <= 0:
             continue
-        value = value / 100.0 if value > 1 else value
-        return max(0.05, min(0.95, value))
+        normalized.append(value / 100.0 if value > 1 else value)
+    if normalized:
+        return max(0.05, min(0.95, max(normalized)))
     odds = as_float(row.get("odds"))
     if odds > 1:
-        # This fallback is intentionally neutral to the edge filter: without an
-        # independent probability, implied odds alone cannot create value.
         return max(0.05, min(0.90, 1.0 / odds))
     return 0.50
 
@@ -268,48 +269,31 @@ def normalize_prop(row: Dict[str, Any]) -> Optional[PropLeg]:
     estimated = bool(row.get("estimated") or row.get("estimated_odds"))
     if estimated:
         return None
-    # A decimal number from a statistical/model source is not automatically a bookmaker quote.
-    # Accept explicit observed evidence or a known odds/bookmaker source; reject stat-only sources.
-    source_text = norm(row.get("bookmaker") or row.get("source") or "")
-    explicit_observed = bool(row.get("real_observed_line") or row.get("observed_odds") or row.get("bookmaker"))
-    known_price_tokens = (
-        "pinnacle", "bet365", "odds api", "odds_api", "oddspapi", "kambi", "unibet",
-        "betfair", "smarkets", "betano", "bwin", "888sport", "betsson", "williamhill",
-        "1xbet", "22bet", "betway", "odds_data", "bookmaker", "supabasedb pinnacle",
-    )
-    stat_only_tokens = ("fotmob", "statsbomb", "fbref", "sofascore", "understat", "statbunker", "advanced_props")
-    if not explicit_observed and any(token in source_text for token in stat_only_tokens):
-        return None
-    if not explicit_observed and source_text and not any(token in source_text for token in known_price_tokens):
-        # Unknown source may still be valid in old data, but only when it explicitly says the line was observed.
-        return None
-    # V37: settlement-learned calibration/source/market/league/player weights.
-    # Failure is deliberately neutral so the builder remains usable offline.
-    try:
-        from netrattler_runtime_policy import adjust_probability, allow_pick
-        probability = float(adjust_probability(
-            probability, market=category or market, league=row.get("league", ""),
-            source=row.get("bookmaker") or row.get("source", ""), player=player, odds=odds,
-            line=line, book_consensus=as_float(row.get("book_consensus")),
-            consensus_sources=as_int(row.get("consensus_sources")),
-            line_dispersion=as_float(row.get("odds_dispersion") or row.get("line_dispersion")),
-        ))
-        if not allow_pick(
-            probability, odds, market=category or market, league=row.get("league", ""),
-            source=row.get("bookmaker") or row.get("source", ""), player=player,
-            min_edge=as_float(os.getenv("NETRATTLER_BUILDER_MIN_LEG_EDGE", "2.0"), 2.0) / 100.0,
-            already_adjusted=True,
-        ):
-            return None
-    except Exception:
-        pass
+    fair_odds = as_float(row.get("fair_odds")) or (1.0 / probability if probability > 0 else 0.0)
 
-    fair_odds = (1.0 / probability if probability > 0 else 0.0)
-    edge = (probability - (1.0 / odds)) * 100.0 if odds > 1 else -100.0
-    min_edge = as_float(os.getenv("NETRATTLER_BUILDER_MIN_LEG_EDGE", "2.0"), 2.0)
-    max_edge = as_float(os.getenv("NETRATTLER_BUILDER_MAX_LEG_EDGE", "35.0"), 35.0)
-    if edge < min_edge or edge > max_edge:
-        return None
+    # SAFE ROLLBACK: before the FIX36 strict-edge gate, real observed player
+    # props were allowed into the Builder pool even when no independent player
+    # model/history was available. V37 accidentally converted those to implied
+    # probability -> 0% edge -> rejected 623/624 legs. Restore compatibility.
+    _independent_values = [
+        as_float(row.get("model_prob")), as_float(row.get("probability")),
+        as_float(row.get("prob")), as_float(row.get("hit_rate")),
+    ]
+    has_independent_probability = any(v > 0 for v in _independent_values)
+    edge = as_float(row.get("edge_pct") or row.get("edge"))
+    if 0 < abs(edge) < 1:
+        edge *= 100.0
+    if edge == 0 and probability > 0 and has_independent_probability:
+        edge = (probability * odds - 1.0) * 100.0
+    elif not has_independent_probability:
+        edge = 0.0  # do not pretend bookmaker-implied probability is model edge
+
+    strict_edge = str(os.getenv("NETRATTLER_BUILDER_STRICT_EDGE", "false")).lower() in {"1", "true", "yes", "on"}
+    if strict_edge:
+        min_edge = as_float(os.getenv("NETRATTLER_BUILDER_MIN_LEG_EDGE", "2.0"), 2.0)
+        max_edge = as_float(os.getenv("NETRATTLER_BUILDER_MAX_LEG_EDGE", "35.0"), 35.0)
+        if edge < min_edge or edge > max_edge:
+            return None
     return PropLeg(
         player=player[:100],
         team=str(row.get("team") or "")[:100],
@@ -458,62 +442,30 @@ def _derive_lower_line(leg: PropLeg, line: int, market_name: str, probability_fl
 
 
 def _make_builder(style: str, variant: str, legs: List[PropLeg], match_date: str, stake: float = 0.5) -> Optional[BuilderPick]:
-    # Production builders are intentionally 3-9 legs. Two-leg correlations remain
-    # useful as learning inputs, but are not published as builders.
-    try:
-        from netrattler_runtime_policy import max_builder_legs, stake_for_builder
-        dynamic_max = max_builder_legs()
-    except Exception:
-        dynamic_max = 9
-        stake_for_builder = None
-    max_legs = min(9, max(3, as_int(os.getenv("NETRATTLER_BUILDER_MAX_LEGS", str(dynamic_max)), dynamic_max)))
-    if len(legs) < 3 or len(legs) > max_legs or not valid_builder(legs, min_legs=3):
+    if not valid_builder(legs):
         return None
     odds = total_odds(legs)
     min_odds = as_float(os.getenv("NETRATTLER_BUILDER_MIN_ODDS", "1.75"), 1.75)
     max_odds = as_float(os.getenv("NETRATTLER_BUILDER_MAX_ODDS", "0"), 0.0)
     if odds < min_odds or (max_odds > 0 and odds > max_odds):
         return None
-    min_leg_edge = as_float(os.getenv("NETRATTLER_BUILDER_MIN_LEG_EDGE", "2.0"), 2.0)
-    if any(x.estimated or x.edge < min_leg_edge for x in legs):
+    if any(x.estimated for x in legs):
         return None
-
-    player_flags = [x.category in PLAYER_CATEGORIES and x.category not in TEAM_CATEGORIES for x in legs]
-    team_flags = [x.category in TEAM_CATEGORIES for x in legs]
-    family = "player" if all(player_flags) else "match" if all(team_flags) else "mixed"
-
-    # Learned pair correlations change risk/stake only — never the displayed quote.
-    correlation_penalty = 0.0
-    try:
-        from netrattler_builder_learning_v36 import joint_probability
-        _joint, factor, samples = joint_probability(legs)
-        if samples >= as_int(os.getenv("NETRATTLER_BUILDER_PAIR_MIN_SAMPLES", "20"), 20):
-            correlation_penalty = min(0.45, abs(1.0 - float(factor)))
-    except Exception:
-        pass
-
-    avg_edge = sum(max(0.0, x.edge) for x in legs) / max(1, len(legs)) / 100.0
-    if stake_for_builder is not None:
-        learned_stake = stake_for_builder(
-            odds, len(legs), average_edge=avg_edge, builder_type=f"{family}:{style}",
-            correlation_penalty=correlation_penalty,
-        )
-        if learned_stake <= 0:
-            return None
-        stake = min(float(stake or learned_stake), float(learned_stake))
-    else:
-        auto_stake = 0.75 if odds <= 3.5 else 0.50 if odds <= 10 else 0.25 if odds <= 25 else 0.10
-        stake = min(stake, auto_stake) if stake else auto_stake
-
-    # Common display tier, independent of the specialized style name.
-    avg_prob = sum(x.probability for x in legs) / max(1, len(legs))
-    tier = "SAFE" if len(legs) <= 4 and avg_prob >= 0.62 else "VALUE" if len(legs) <= 6 else "AGGRESSIVE"
-    if not variant.upper().startswith(("SAFE", "VALUE", "AGGRESSIVE")):
-        variant = f"{tier} · {variant}"
+    _strict_edge = str(os.getenv("NETRATTLER_BUILDER_STRICT_EDGE", "false")).lower() in {"1", "true", "yes", "on"}
+    if _strict_edge and any(x.edge < as_float(os.getenv("NETRATTLER_BUILDER_MIN_LEG_EDGE", "2.0"), 2.0) for x in legs):
+        return None
+    # Einsatz automatisch nach Risikostufe. Explizit kleinere Stakes bleiben erhalten.
+    auto_stake = 0.75 if odds <= 3.5 else 0.50 if odds <= 10 else 0.25 if odds <= 25 else 0.10
+    stake = min(stake, auto_stake) if stake else auto_stake
     return BuilderPick(
         builder_id=builder_signature(style + variant, legs, match_date),
-        style=style, variant=variant, legs=legs, total_odds=odds, stake=round(stake, 2),
-        estimated_odds=False, match_date=match_date, family=family,
+        style=style,
+        variant=variant,
+        legs=legs,
+        total_odds=odds,
+        stake=stake,
+        estimated_odds=any(x.estimated for x in legs),
+        match_date=match_date,
     )
 
 
@@ -1289,12 +1241,7 @@ def build_builder_picks(
     match_date: Optional[str] = None,
     max_builders: Optional[int] = None,
 ) -> List[BuilderPick]:
-    try:
-        from netrattler_market_consensus_v36 import enrich as _consensus_enrich
-        enriched_rows = _consensus_enrich(raw_props)
-    except Exception:
-        enriched_rows = [dict(x) for x in raw_props if isinstance(x, dict)]
-    props = deduplicate_props(enriched_rows)
+    props = deduplicate_props(raw_props)
     run_date = match_date or date.today().isoformat()
     max_count = max_builders or as_int(os.getenv("NETRATTLER_MAX_BUILDERS_PER_RUN", "30"), 30)
 
@@ -1383,7 +1330,6 @@ def format_builder_message(pick: BuilderPick) -> str:
     lines = [
         f"🏗️ <b>NETRATTLER {pick.style}</b>",
         f"<b>{pick.variant}</b>",
-        f"🧩 Familie: <b>{pick.family.upper()}</b>",
         sep,
     ]
     MARKET_LABELS = {
@@ -1397,7 +1343,7 @@ def format_builder_message(pick: BuilderPick) -> str:
     for index, leg in enumerate(pick.legs, 1):
         icon = CATEGORY_ICON.get(leg.category, "🎯")
         match_suffix = "" if same_match else f" · {leg.match}"
-        source_note = " ~" if leg.estimated else f" · Edge {leg.edge:+.1f}%"
+        source_note = " ~" if leg.estimated else (f" · Edge {leg.edge:+.1f}%" if abs(leg.edge) >= 0.1 else " · echte Quote")
         # Zeige nur den lesbaren Namen, nicht die market_id
         market_label = MARKET_LABELS.get(leg.market, leg.market)
         display_name = leg.player if leg.player and leg.player != leg.market else market_label
@@ -1458,19 +1404,11 @@ def run_builder_engine(
     supabase_key: str = "",
     logger: Optional[Callable[[str], Any]] = None,
 ) -> Tuple[int, List[BuilderPick]]:
-    try:
-        from netrattler_market_consensus_v36 import enrich as _consensus_enrich
-        enriched_rows = _consensus_enrich(raw_props)
-    except Exception:
-        enriched_rows = [dict(x) for x in raw_props if isinstance(x, dict)]
-    normalized = deduplicate_props(enriched_rows)
-    picks = build_builder_picks(enriched_rows, match_contexts, match_date)
-    try:
-        from netrattler_exposure_engine_v36 import ExposureManager
-        exposure = ExposureManager(supabase_url, supabase_key)
-    except Exception:
-        exposure = None
+    normalized = deduplicate_props(raw_props)
+    picks = build_builder_picks(raw_props, match_contexts, match_date)
     if logger:
+        _strict = str(os.getenv("NETRATTLER_BUILDER_STRICT_EDGE", "false")).lower() in {"1", "true", "yes", "on"}
+        logger(f"MASTER BUILDER mode={'STRICT_EDGE' if _strict else 'COMPAT_REAL_ODDS'}")
         category_counts: Dict[str, int] = {}
         match_counts: Dict[str, int] = {}
         for leg in normalized:
@@ -1492,13 +1430,6 @@ def run_builder_engine(
         )
     sent = 0
     for pick in picks:
-        if exposure is not None:
-            allowed_stake = exposure.adjust_builder(pick, pick.stake)
-            if allowed_stake <= 0:
-                if logger:
-                    logger(f"MASTER BUILDER exposure cap: {pick.builder_id}")
-                continue
-            pick.stake = allowed_stake
         persisted = persist_builder_pick(pick, supabase_url, supabase_key)
         if persisted is False:
             if logger:
@@ -1507,8 +1438,6 @@ def run_builder_engine(
         try:
             send_message(format_builder_message(pick))
             sent += 1
-            if exposure is not None:
-                exposure.record_builder(pick, pick.stake)
             if logger:
                 logger(f"MASTER BUILDER {pick.style} {pick.variant}: {pick.leg_count}L @ {pick.total_odds:.2f} | DB={persisted}")
         except Exception as exc:
