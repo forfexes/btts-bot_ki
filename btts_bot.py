@@ -6363,7 +6363,30 @@ def _telegram_actual_text(default_text, message_id=None):
         pass
     return str(default_text or "")
 
-def send_telegram(text, chat_id=None, reply_markup=None):
+_TELEGRAM_CHAT_LAST_SENT_AT = {}
+
+def _ntr_telegram_rate_wait(chat_id):
+    """Per-chat pacing to stay below Telegram group flood limits."""
+    import time as _time
+    try:
+        interval = max(0.0, float(os.getenv("NETRATTLER_TELEGRAM_CHAT_INTERVAL_SEC", "3.2")))
+    except Exception:
+        interval = 3.2
+    if interval <= 0:
+        return
+    key = str(chat_id or "")
+    now = _time.monotonic()
+    last = float(_TELEGRAM_CHAT_LAST_SENT_AT.get(key, 0.0) or 0.0)
+    wait = interval - (now - last)
+    if wait > 0:
+        _time.sleep(wait)
+
+def _ntr_send_telegram_impl(text, chat_id=None, reply_markup=None):
+    """Reliable Telegram sender with flood-control and 429 retry.
+
+    Important production contract: a 429 is never followed by an immediate
+    plain-text retry. We honor Telegram's retry_after and resend the same message.
+    """
     global _LAST_TELEGRAM_SEND
     if not TELEGRAM_TOKEN:
         log("Telegram Token fehlt", "WARN")
@@ -6371,7 +6394,6 @@ def send_telegram(text, chat_id=None, reply_markup=None):
 
     if chat_id is None:
         chat_id = TELEGRAM_CHAT_ID
-
     if not chat_id:
         log("Telegram Chat ID fehlt", "WARN")
         return None
@@ -6383,15 +6405,6 @@ def send_telegram(text, chat_id=None, reply_markup=None):
             log(f"Stats-Footer übersprungen: {str(_ntr_e)[:60]}", "WARN")
         except Exception:
             pass
-
-    try:
-        text = _ntr_ml_enhance_message(text, chat_id)
-    except Exception as _ntr_ml_e:
-        try:
-            log(f"ML-Footer übersprungen: {str(_ntr_ml_e)[:60]}", "WARN")
-        except Exception:
-            pass
-
     try:
         text = _ntr_strip_duplicate_group_footer(text)
     except Exception:
@@ -6403,57 +6416,95 @@ def send_telegram(text, chat_id=None, reply_markup=None):
         "parse_mode": "HTML",
         "disable_web_page_preview": True,
     }
-
-    # 🆕 Inline-Buttons hinzufügen wenn vorhanden
     if reply_markup:
         payload["reply_markup"] = json.dumps(reply_markup)
 
     try:
-        actual_chat = str(payload.get("chat_id") or chat_id or "")
-        actual_text = str(payload.get("text") or text or "")
-        r = requests.post(
-            f"https://api.telegram.org/bot{TELEGRAM_TOKEN}/sendMessage",
-            json=payload,
-            timeout=15,
-        )
+        max_retries = max(0, min(4, int(os.getenv("NETRATTLER_TELEGRAM_429_RETRIES", "2"))))
+    except Exception:
+        max_retries = 2
 
-        if not r.ok and r.status_code == 400 and chat_id != TELEGRAM_CHAT_ID and TELEGRAM_CHAT_ID:
-            # One controlled channel fallback. If it succeeds, do NOT send a second duplicate.
-            log(f"⚠️ Chat {chat_id} nicht gefunden - fallback zu Main Chat", "WARN")
-            payload["chat_id"] = TELEGRAM_CHAT_ID
-            actual_chat = str(TELEGRAM_CHAT_ID)
+    fallback_used = False
+    plain_used = False
+    attempt_429 = 0
+    actual_text = str(payload.get("text") or text or "")
+
+    while True:
+        try:
+            _ntr_telegram_rate_wait(payload.get("chat_id"))
+            import time as _time
             r = requests.post(
                 f"https://api.telegram.org/bot{TELEGRAM_TOKEN}/sendMessage",
                 json=payload,
-                timeout=15,
+                timeout=20,
             )
-
-        if not r.ok:
-            # Last transport fallback: same target, plain text, exactly one retry.
-            payload["text"] = re.sub(r"<[^>]+>", "", text)
-            payload.pop("parse_mode", None)
-            actual_text = str(payload["text"])
-            r = requests.post(
-                f"https://api.telegram.org/bot{TELEGRAM_TOKEN}/sendMessage",
-                json=payload,
-                timeout=15,
-            )
+            _TELEGRAM_CHAT_LAST_SENT_AT[str(payload.get("chat_id") or "")] = _time.monotonic()
+        except Exception as _tg_exc:
+            try:
+                log(f"Telegram send exception: {str(_tg_exc)[:100]}", "WARN")
+            except Exception:
+                pass
+            return None
 
         if r.ok:
-            result = r.json().get("result", {}) or {}
+            try:
+                result = r.json().get("result", {}) or {}
+            except Exception:
+                result = {}
             msg_id = result.get("message_id")
-            actual_chat = str((result.get("chat") or {}).get("id") or payload.get("chat_id") or actual_chat)
-            _LAST_TELEGRAM_SEND = {"chat_id": actual_chat, "message_id": msg_id, "text": actual_text}
+            actual_chat = str((result.get("chat") or {}).get("id") or payload.get("chat_id") or "")
+            _LAST_TELEGRAM_SEND = {
+                "chat_id": actual_chat,
+                "message_id": msg_id,
+                "text": actual_text,
+            }
             return msg_id
+
+        # Telegram flood control: honor server retry_after before any other fallback.
+        if r.status_code == 429 and attempt_429 < max_retries:
+            attempt_429 += 1
+            retry_after = 5
+            try:
+                body = r.json() or {}
+                retry_after = int((body.get("parameters") or {}).get("retry_after") or 5)
+            except Exception:
+                m = re.search(r"retry after\s+(\d+)", str(getattr(r, "text", "")), re.I)
+                if m:
+                    retry_after = int(m.group(1))
+            retry_after = max(1, min(120, retry_after))
+            log(
+                f"⏳ Telegram 429 · warte {retry_after + 1}s "
+                f"(Retry {attempt_429}/{max_retries})",
+                "WARN",
+            )
+            _time.sleep(retry_after + 1)
+            continue
+
+        # Invalid/missing target: one controlled fallback to main chat.
+        if (
+            r.status_code == 400
+            and not fallback_used
+            and str(payload.get("chat_id")) != str(TELEGRAM_CHAT_ID or "")
+            and TELEGRAM_CHAT_ID
+        ):
+            fallback_used = True
+            log(f"⚠️ Chat {payload.get('chat_id')} nicht gefunden - fallback zu Main Chat", "WARN")
+            payload["chat_id"] = TELEGRAM_CHAT_ID
+            continue
+
+        # HTML parse error etc.: exactly one plain-text retry. Never use this for 429.
+        if not plain_used and r.status_code in (400, 422):
+            plain_used = True
+            payload["text"] = re.sub(r"<[^>]+>", "", str(text))
+            payload.pop("parse_mode", None)
+            actual_text = str(payload["text"])
+            continue
+
         log(f"Telegram send failed {r.status_code}: {r.text[:160]}", "WARN")
+        return None
 
-    except Exception as _tg_exc:
-        try:
-            log(f"Telegram send exception: {str(_tg_exc)[:100]}", "WARN")
-        except Exception:
-            pass
-
-    return None
+def send_telegram(text, chat_id=None, reply_markup=None):
+    return _ntr_send_telegram_impl(text, chat_id, reply_markup)
 
 
 
@@ -6934,56 +6985,82 @@ def get_overall_stats():
 
 
 def generate_multi_combo_bets(all_tips, num_tips=3):
-    """
-    🆕 Generiert automatisch Multi-Combos aus den besten Tipps.
-    num_tips: 3, 4, 5, 6, 7 oder 8 Tipps pro Combo
+    """Generate cross-match multi-combos from validated REAL-ODDS tips.
+
+    Stability rules:
+    - one leg per match;
+    - no synthetic/fair odds;
+    - market-specific sanity caps block malformed bookmaker prices;
+    - absurd combined prices are rejected instead of posted to Telegram.
     """
     if not all_tips:
         return None
 
-    # Alle Tipps normalisieren (oddsYes → odds)
+    def _leg_cap(market):
+        caps = {
+            "btts": 4.0,
+            "over25": 4.5,
+            "combo": 8.0,
+            "btts_ht": 8.0,
+            "over15_ht": 6.0,
+            "1x2": 4.0,
+            "corners": 6.0,
+            "scorer": 30.0,
+        }
+        try:
+            fallback = max(2.0, float(env("NETRATTLER_MULTI_COMBO_MAX_LEG_ODDS", "12.0")))
+        except Exception:
+            fallback = 12.0
+        return float(caps.get(str(market or "").lower(), fallback))
+
     normalized = []
     for t in all_tips:
         try:
+            market = str(t.get("market", "btts") or "btts").lower()
             odds = float(str(t.get("oddsYes", t.get("odds", 0)) or 0).replace(",", "."))
-            # V37 REAL_ODDS_ONLY: niemals Fair-Odds/Probability als Buchmacherquote einsetzen.
             if t.get("_no_real_odds") is True:
                 continue
-            if odds >= 1.40:
-                _prob = float(t.get("probability", 0) or 0)
-                _prob = _prob / 100.0 if _prob > 1 else _prob
-                if _prob <= 0 or _prob <= (1.0 / odds):
-                    continue
-                normalized.append({
-                    "match": t.get("match", ""),
-                    "league": t.get("league", ""),
-                    "market": t.get("market", "btts"),
-                    "tip": t.get("tip", t.get("selection", "YES")),
-                    "selection": t.get("selection", t.get("tip", "YES")),
-                    "line": t.get("line"),
-                    "player": t.get("player", t.get("player_name", "")),
-                    "team": t.get("team", ""),
-                    "category": t.get("category", ""),
-                    "odds": odds,
-                    "confidence": int(t.get("confidence", 0)),
-                    "value_rating": t.get("valueRating", t.get("value_rating", "OK")),
-                    "probability": float(t.get("probability", 0) or 0),
-                    "edge_pct": float(t.get("edge_pct", 0) or 0),
-                    "source": t.get("_source") or t.get("source") or "observed",
-                })
+            if odds < 1.40 or odds > _leg_cap(market):
+                continue
+
+            prob = float(t.get("probability", 0) or 0)
+            prob01 = prob / 100.0 if prob > 1 else prob
+            if prob01 <= 0 or prob01 <= (1.0 / odds):
+                continue
+
+            # Sanity check: if a normal market suddenly claims hundreds of percent
+            # expected return, the quote/parser is almost certainly malformed.
+            ev_pct = (prob01 * odds - 1.0) * 100.0
+            if market != "scorer" and ev_pct > 200.0:
+                continue
+
+            normalized.append({
+                "match": t.get("match", ""),
+                "league": t.get("league", ""),
+                "market": market,
+                "tip": t.get("tip", t.get("selection", "YES")),
+                "selection": t.get("selection", t.get("tip", "YES")),
+                "line": t.get("line"),
+                "player": t.get("player", t.get("player_name", "")),
+                "team": t.get("team", ""),
+                "category": t.get("category", ""),
+                "odds": odds,
+                "confidence": int(float(t.get("confidence", 0) or 0)),
+                "value_rating": t.get("valueRating", t.get("value_rating", "OK")),
+                "probability": prob,
+                "edge_pct": float(t.get("edge_pct", t.get("edge", 0)) or 0),
+                "source": t.get("_source") or t.get("source") or "observed",
+            })
         except Exception:
             continue
 
     if not normalized:
         return None
 
-    # Multi-Combos folgen dem Nutzerziel: höchste Wahrscheinlichkeit zuerst,
-    # Edge als Tie-Breaker. Ein Match darf nur einmal vorkommen, weil eine
-    # Same-Game-Gesamtquote ohne echte SGP-Quote nicht synthetisiert werden darf.
     sorted_tips = sorted(
         normalized,
         key=lambda x: (x.get("probability", 0), x.get("edge_pct", 0), x.get("confidence", 0)),
-        reverse=True
+        reverse=True,
     )
     selected = []
     used_matches = set()
@@ -6995,22 +7072,26 @@ def generate_multi_combo_bets(all_tips, num_tips=3):
         selected.append(tip)
         if len(selected) >= num_tips:
             break
+
     if len(selected) < num_tips:
         return None
 
-    # Cross-match accumulator: product of REAL observed leg quotes is valid;
-    # same-game legs were excluded above. Track hit probability separately.
     total_odds = 1.0
     combined_probability = 1.0
     for tip in selected:
-        total_odds *= tip.get("odds", 1.0)
+        total_odds *= float(tip.get("odds", 1.0) or 1.0)
         p = float(tip.get("probability", 0) or 0)
         p = p / 100.0 if p > 1 else p
         combined_probability *= max(0.0, min(1.0, p))
 
-    avg_confidence = sum(t.get("confidence", 0) for t in selected) / len(selected)
+    try:
+        max_total_odds = max(10.0, float(env("NETRATTLER_MULTI_COMBO_MAX_TOTAL_ODDS", "5000")))
+    except Exception:
+        max_total_odds = 5000.0
+    if total_odds > max_total_odds:
+        return None
 
-    # Combo Label basierend auf Anzahl
+    avg_confidence = sum(t.get("confidence", 0) for t in selected) / len(selected)
     labels = {
         3: ("🥉 COMBO 3", "Einsteiger-Kombi"),
         4: ("🥈 COMBO 4", "Solide Kombi"),
@@ -7023,8 +7104,6 @@ def generate_multi_combo_bets(all_tips, num_tips=3):
         11: ("👑 COMBO 11", "Maximal-Kombi"),
     }
     label, desc = labels.get(num_tips, (f"🎲 COMBO {num_tips}", "Multi-Kombi"))
-
-    # Stake Suggestion (weniger bei mehr Tipps)
     stakes = {3: 5, 4: 4, 5: 3, 6: 2, 7: 2, 8: 1, 9: 0.75, 10: 0.5, 11: 0.5}
     stake = stakes.get(num_tips, 1)
 
@@ -7786,6 +7865,9 @@ def send_top_tips(tips_by_market, target_date):
                 msg += f"\n🏆 Empfehlung: <b>{best_bookie}</b> · Quote {best_odds}"
 
             msg_id = send_telegram(msg, target_chat)
+            if msg_id is None:
+                log(f"   ⚠️ Telegram nicht zugestellt — Tipp bleibt ungesendet: {match_name} [{market_id}]", "WARN")
+                continue
             mark_tip_sent(match_name, market_id, target_date)
 
             # ============================================================
@@ -10507,6 +10589,7 @@ def get_ml_prediction(home_team, away_team, league_name):
     result = {}
     model_targets = [("btts_model", "btts_pct"), ("over25_model", "over25_pct"),
                      ("btts_ht_model", "btts_ht_pct"), ("over15_ht_model", "over15_ht_pct"),
+                     ("btts_over25_combo_model", "btts_over25_combo_pct"),
                      ("home_win_model", "home_win_pct"), ("draw_model", "draw_pct"),
                      ("away_win_model", "away_win_pct")]
     try:
@@ -16086,88 +16169,7 @@ def _telegram_actual_text(default_text, message_id=None):
     return str(default_text or "")
 
 def send_telegram(text, chat_id=None, reply_markup=None):
-    global _LAST_TELEGRAM_SEND
-    if not TELEGRAM_TOKEN:
-        log("Telegram Token fehlt", "WARN")
-        return None
-
-    if chat_id is None:
-        chat_id = TELEGRAM_CHAT_ID
-
-    if not chat_id:
-        log("Telegram Chat ID fehlt", "WARN")
-        return None
-
-    try:
-        text = _ntr_enhance_message_with_stats(text, chat_id)
-    except Exception as _ntr_e:
-        try:
-            log(f"Stats-Footer übersprungen: {str(_ntr_e)[:60]}", "WARN")
-        except Exception:
-            pass
-
-    try:
-        text = _ntr_strip_duplicate_group_footer(text)
-    except Exception:
-        pass
-
-    payload = {
-        "chat_id": chat_id,
-        "text": text,
-        "parse_mode": "HTML",
-        "disable_web_page_preview": True,
-    }
-
-    # 🆕 Inline-Buttons hinzufügen wenn vorhanden
-    if reply_markup:
-        payload["reply_markup"] = json.dumps(reply_markup)
-
-    try:
-        actual_chat = str(payload.get("chat_id") or chat_id or "")
-        actual_text = str(payload.get("text") or text or "")
-        r = requests.post(
-            f"https://api.telegram.org/bot{TELEGRAM_TOKEN}/sendMessage",
-            json=payload,
-            timeout=15,
-        )
-
-        if not r.ok and r.status_code == 400 and chat_id != TELEGRAM_CHAT_ID and TELEGRAM_CHAT_ID:
-            # One controlled channel fallback. If it succeeds, do NOT send a second duplicate.
-            log(f"⚠️ Chat {chat_id} nicht gefunden - fallback zu Main Chat", "WARN")
-            payload["chat_id"] = TELEGRAM_CHAT_ID
-            actual_chat = str(TELEGRAM_CHAT_ID)
-            r = requests.post(
-                f"https://api.telegram.org/bot{TELEGRAM_TOKEN}/sendMessage",
-                json=payload,
-                timeout=15,
-            )
-
-        if not r.ok:
-            # Last transport fallback: same target, plain text, exactly one retry.
-            payload["text"] = re.sub(r"<[^>]+>", "", text)
-            payload.pop("parse_mode", None)
-            actual_text = str(payload["text"])
-            r = requests.post(
-                f"https://api.telegram.org/bot{TELEGRAM_TOKEN}/sendMessage",
-                json=payload,
-                timeout=15,
-            )
-
-        if r.ok:
-            result = r.json().get("result", {}) or {}
-            msg_id = result.get("message_id")
-            actual_chat = str((result.get("chat") or {}).get("id") or payload.get("chat_id") or actual_chat)
-            _LAST_TELEGRAM_SEND = {"chat_id": actual_chat, "message_id": msg_id, "text": actual_text}
-            return msg_id
-        log(f"Telegram send failed {r.status_code}: {r.text[:160]}", "WARN")
-
-    except Exception as _tg_exc:
-        try:
-            log(f"Telegram send exception: {str(_tg_exc)[:100]}", "WARN")
-        except Exception:
-            pass
-
-    return None
+    return _ntr_send_telegram_impl(text, chat_id, reply_markup)
 
 
 
@@ -16637,56 +16639,82 @@ def get_overall_stats():
 
 
 def generate_multi_combo_bets(all_tips, num_tips=3):
-    """
-    🆕 Generiert automatisch Multi-Combos aus den besten Tipps.
-    num_tips: 3, 4, 5, 6, 7 oder 8 Tipps pro Combo
+    """Generate cross-match multi-combos from validated REAL-ODDS tips.
+
+    Stability rules:
+    - one leg per match;
+    - no synthetic/fair odds;
+    - market-specific sanity caps block malformed bookmaker prices;
+    - absurd combined prices are rejected instead of posted to Telegram.
     """
     if not all_tips:
         return None
 
-    # Alle Tipps normalisieren (oddsYes → odds)
+    def _leg_cap(market):
+        caps = {
+            "btts": 4.0,
+            "over25": 4.5,
+            "combo": 8.0,
+            "btts_ht": 8.0,
+            "over15_ht": 6.0,
+            "1x2": 4.0,
+            "corners": 6.0,
+            "scorer": 30.0,
+        }
+        try:
+            fallback = max(2.0, float(env("NETRATTLER_MULTI_COMBO_MAX_LEG_ODDS", "12.0")))
+        except Exception:
+            fallback = 12.0
+        return float(caps.get(str(market or "").lower(), fallback))
+
     normalized = []
     for t in all_tips:
         try:
+            market = str(t.get("market", "btts") or "btts").lower()
             odds = float(str(t.get("oddsYes", t.get("odds", 0)) or 0).replace(",", "."))
-            # V37 REAL_ODDS_ONLY: niemals Fair-Odds/Probability als Buchmacherquote einsetzen.
             if t.get("_no_real_odds") is True:
                 continue
-            if odds >= 1.40:
-                _prob = float(t.get("probability", 0) or 0)
-                _prob = _prob / 100.0 if _prob > 1 else _prob
-                if _prob <= 0 or _prob <= (1.0 / odds):
-                    continue
-                normalized.append({
-                    "match": t.get("match", ""),
-                    "league": t.get("league", ""),
-                    "market": t.get("market", "btts"),
-                    "tip": t.get("tip", t.get("selection", "YES")),
-                    "selection": t.get("selection", t.get("tip", "YES")),
-                    "line": t.get("line"),
-                    "player": t.get("player", t.get("player_name", "")),
-                    "team": t.get("team", ""),
-                    "category": t.get("category", ""),
-                    "odds": odds,
-                    "confidence": int(t.get("confidence", 0)),
-                    "value_rating": t.get("valueRating", t.get("value_rating", "OK")),
-                    "probability": float(t.get("probability", 0) or 0),
-                    "edge_pct": float(t.get("edge_pct", 0) or 0),
-                    "source": t.get("_source") or t.get("source") or "observed",
-                })
+            if odds < 1.40 or odds > _leg_cap(market):
+                continue
+
+            prob = float(t.get("probability", 0) or 0)
+            prob01 = prob / 100.0 if prob > 1 else prob
+            if prob01 <= 0 or prob01 <= (1.0 / odds):
+                continue
+
+            # Sanity check: if a normal market suddenly claims hundreds of percent
+            # expected return, the quote/parser is almost certainly malformed.
+            ev_pct = (prob01 * odds - 1.0) * 100.0
+            if market != "scorer" and ev_pct > 200.0:
+                continue
+
+            normalized.append({
+                "match": t.get("match", ""),
+                "league": t.get("league", ""),
+                "market": market,
+                "tip": t.get("tip", t.get("selection", "YES")),
+                "selection": t.get("selection", t.get("tip", "YES")),
+                "line": t.get("line"),
+                "player": t.get("player", t.get("player_name", "")),
+                "team": t.get("team", ""),
+                "category": t.get("category", ""),
+                "odds": odds,
+                "confidence": int(float(t.get("confidence", 0) or 0)),
+                "value_rating": t.get("valueRating", t.get("value_rating", "OK")),
+                "probability": prob,
+                "edge_pct": float(t.get("edge_pct", t.get("edge", 0)) or 0),
+                "source": t.get("_source") or t.get("source") or "observed",
+            })
         except Exception:
             continue
 
     if not normalized:
         return None
 
-    # Multi-Combos folgen dem Nutzerziel: höchste Wahrscheinlichkeit zuerst,
-    # Edge als Tie-Breaker. Ein Match darf nur einmal vorkommen, weil eine
-    # Same-Game-Gesamtquote ohne echte SGP-Quote nicht synthetisiert werden darf.
     sorted_tips = sorted(
         normalized,
         key=lambda x: (x.get("probability", 0), x.get("edge_pct", 0), x.get("confidence", 0)),
-        reverse=True
+        reverse=True,
     )
     selected = []
     used_matches = set()
@@ -16698,22 +16726,26 @@ def generate_multi_combo_bets(all_tips, num_tips=3):
         selected.append(tip)
         if len(selected) >= num_tips:
             break
+
     if len(selected) < num_tips:
         return None
 
-    # Cross-match accumulator: product of REAL observed leg quotes is valid;
-    # same-game legs were excluded above. Track hit probability separately.
     total_odds = 1.0
     combined_probability = 1.0
     for tip in selected:
-        total_odds *= tip.get("odds", 1.0)
+        total_odds *= float(tip.get("odds", 1.0) or 1.0)
         p = float(tip.get("probability", 0) or 0)
         p = p / 100.0 if p > 1 else p
         combined_probability *= max(0.0, min(1.0, p))
 
-    avg_confidence = sum(t.get("confidence", 0) for t in selected) / len(selected)
+    try:
+        max_total_odds = max(10.0, float(env("NETRATTLER_MULTI_COMBO_MAX_TOTAL_ODDS", "5000")))
+    except Exception:
+        max_total_odds = 5000.0
+    if total_odds > max_total_odds:
+        return None
 
-    # Combo Label basierend auf Anzahl
+    avg_confidence = sum(t.get("confidence", 0) for t in selected) / len(selected)
     labels = {
         3: ("🥉 COMBO 3", "Einsteiger-Kombi"),
         4: ("🥈 COMBO 4", "Solide Kombi"),
@@ -16726,8 +16758,6 @@ def generate_multi_combo_bets(all_tips, num_tips=3):
         11: ("👑 COMBO 11", "Maximal-Kombi"),
     }
     label, desc = labels.get(num_tips, (f"🎲 COMBO {num_tips}", "Multi-Kombi"))
-
-    # Stake Suggestion (weniger bei mehr Tipps)
     stakes = {3: 5, 4: 4, 5: 3, 6: 2, 7: 2, 8: 1, 9: 0.75, 10: 0.5, 11: 0.5}
     stake = stakes.get(num_tips, 1)
 
@@ -17348,6 +17378,9 @@ def send_top_tips(tips_by_market, target_date):
                 msg += f"\n🏆 Empfehlung: <b>{best_bookie}</b> · Quote {best_odds}"
 
             msg_id = send_telegram(msg, target_chat)
+            if msg_id is None:
+                log(f"   ⚠️ Telegram nicht zugestellt — Tipp bleibt ungesendet: {match_name} [{market_id}]", "WARN")
+                continue
             mark_tip_sent(match_name, market_id, target_date)
 
             # ============================================================
@@ -20244,6 +20277,9 @@ def run_corners_and_scorer_bots(target_date, active_leagues, odds_data_cache, fi
         for tip in corners_tips:
             _cmsg = format_corners_message(tip)
             _cmid = send_telegram(_cmsg, group_hz)
+            if _cmid is None:
+                log(f"   ⚠️ Corner Telegram nicht zugestellt — nicht als gesendet markieren: {tip.get('match','?')}", "WARN")
+                continue
             mark_tip_sent(tip.get("match",""), "corners", target_date)
             # Für Settlement speichern
             try:
@@ -20269,6 +20305,9 @@ def run_corners_and_scorer_bots(target_date, active_leagues, odds_data_cache, fi
         for tip in scorer_tips:
             _smsg = format_scorer_message(tip)
             _smid = send_telegram(_smsg, group_late)
+            if _smid is None:
+                log(f"   ⚠️ Scorer Telegram nicht zugestellt — nicht als gesendet markieren: {tip.get('match','?')}", "WARN")
+                continue
             mark_tip_sent(tip.get("match",""), "scorer", target_date)
             try:
                 save_to_supabase({
@@ -21061,42 +21100,41 @@ def _ntr_collect_prop(player, team, match_name, league, market, category=None,
 
 
 def _ntr_enrich_prop_pool_with_player_ml(rows: list) -> dict:
-    """Attach an independent player probability before REAL_ODDS builder selection.
+    """Attach independent player probabilities before REAL_ODDS builder selection.
 
-    Uses the trained player models when compatible, with empirical historical
-    probability as fallback. Bookmaker odds are never used as the model signal.
-    The function is capped and failure-tolerant to keep GitHub Actions runtime low.
+    STEP2 stability fix:
+    - identify the actually required player models first;
+    - load only those blobs from Supabase in small batches;
+    - keep empirical history as fallback;
+    - never use bookmaker implied probability as the model signal.
     """
-    stats = {"eligible": 0, "models_loaded": 0, "enriched": 0, "empirical": 0, "missing_stats": 0}
+    stats = {
+        "eligible": 0, "models_loaded": 0, "enriched": 0,
+        "empirical": 0, "missing_stats": 0, "required_models": 0,
+        "load_error": "",
+    }
     if not rows or not SUPABASE_URL or not SUPABASE_KEY:
         return stats
-    try:
-        from netrattler_ml_player import (
-            load_player_models, predict_player_prop, empirical_player_prop_probability,
-        )
-        stats["models_loaded"] = int(load_player_models(SUPABASE_URL, SUPABASE_KEY, timeout=8) or 0)
-    except Exception:
-        return stats
 
     try:
-        from netrattler_role_context import load_team_elo, team_elo, favorite
-        load_team_elo(SUPABASE_URL, SUPABASE_KEY)
-    except Exception:
-        team_elo = lambda _x: None
-        favorite = lambda _h, _a: None
+        from netrattler_ml_player import (
+            load_player_models, predict_player_prop,
+            empirical_player_prop_probability, model_for,
+            player_model_load_status,
+        )
+    except Exception as exc:
+        stats["load_error"] = f"import: {str(exc)[:120]}"
+        return stats
 
     try:
         cap = max(0, int(env("NETRATTLER_FAST_PLAYER_ML_CAP", "40")))
     except Exception:
         cap = 40
-    # No trained player models: keep only a small empirical-history fallback sample
-    # instead of burning dozens of Supabase roundtrips on every tips run.
-    if stats["models_loaded"] <= 0:
-        cap = min(cap, 24)
     if cap <= 0:
         return stats
 
-    # Prioritize real-priced rows with the strongest sample/price relevance.
+    # Build the candidate set before loading models so we do not download
+    # 18 large blobs when this run only needs 3-6 categories.
     candidates = []
     seen = set()
     for row in rows:
@@ -21107,16 +21145,70 @@ def _ntr_enrich_prop_pool_with_player_ml(rows: list) -> dict:
             continue
         player = str(row.get("player") or "").strip()
         category = str(row.get("category") or "").strip()
-        if not player or category in {"btts", "btts_ht", "over_goals", "result", "double_chance", "team_corners", "match_corners", "team_cards", "match_cards"}:
+        if not player or category in {
+            "btts", "btts_ht", "over_goals", "result", "double_chance",
+            "team_corners", "match_corners", "team_cards", "match_cards",
+            "match_goals", "half_goals_1st", "half_goals_2nd",
+        }:
             continue
-        key = (normalize_team_name(player), str(row.get("match") or ""), category, float(row.get("line") or 0))
+        try:
+            line = float(row.get("line") or 0.5)
+        except Exception:
+            line = 0.5
+        key = (normalize_team_name(player), str(row.get("match") or ""), category, line)
         if key in seen:
             continue
         seen.add(key)
         candidates.append(row)
-    candidates.sort(key=lambda r: (int(r.get("games") or 0), float(r.get("odds") or 0)), reverse=True)
+
+    candidates.sort(
+        key=lambda r: (
+            int(float(r.get("games") or 0)),
+            float(r.get("odds") or 0),
+        ),
+        reverse=True,
+    )
     candidates = candidates[:cap]
     stats["eligible"] = len(candidates)
+    if not candidates:
+        return stats
+
+    required = []
+    for row in candidates:
+        try:
+            name = model_for(str(row.get("category") or ""), float(row.get("line") or 0.5))
+        except Exception:
+            name = None
+        if name and name not in required:
+            required.append(name)
+    stats["required_models"] = len(required)
+
+    try:
+        stats["models_loaded"] = int(
+            load_player_models(
+                SUPABASE_URL,
+                SUPABASE_KEY,
+                timeout=20,
+                model_names=required or None,
+                batch_size=3,
+            ) or 0
+        )
+        _status = player_model_load_status() or {}
+        stats["load_error"] = str(_status.get("error") or "")[:220]
+    except Exception as exc:
+        stats["load_error"] = f"load: {str(exc)[:180]}"
+
+    # If model loading genuinely fails, limit only the expensive history fallback.
+    if stats["models_loaded"] <= 0:
+        candidates = candidates[:min(len(candidates), 24)]
+        stats["eligible"] = len(candidates)
+
+    try:
+        from netrattler_role_context import load_team_elo, team_elo, favorite
+        load_team_elo(SUPABASE_URL, SUPABASE_KEY)
+    except Exception:
+        team_elo = lambda _x: None
+        favorite = lambda _h, _a: None
 
     for row in candidates:
         player = str(row.get("player") or "").strip()
@@ -21124,12 +21216,14 @@ def _ntr_enrich_prop_pool_with_player_ml(rows: list) -> dict:
         if not avg_stats:
             stats["missing_stats"] += 1
             continue
+
         match = str(row.get("match") or "")
         home, away = (match.split(" vs ", 1) + [""])[:2] if " vs " in match else ("", "")
         pteam = normalize_team_name(row.get("team") or "")
         hnorm, anorm = normalize_team_name(home), normalize_team_name(away)
         is_home = 1.0 if pteam and pteam == hnorm else 0.0
         opponent = away if is_home else home if pteam and pteam == anorm else ""
+
         try:
             te = float(team_elo(row.get("team") or "") or 1500.0)
             oe = float(team_elo(opponent) or 1500.0)
@@ -21142,8 +21236,13 @@ def _ntr_enrich_prop_pool_with_player_ml(rows: list) -> dict:
             "is_home": is_home,
             "is_favorite": 1.0 if fav and normalize_team_name(fav) == pteam else 0.0,
         }
+
         category = str(row.get("category") or "")
-        line = float(row.get("line") or 0.5)
+        try:
+            line = float(row.get("line") or 0.5)
+        except Exception:
+            line = 0.5
+
         model_p = None
         empirical_p = None
         try:
@@ -21154,6 +21253,7 @@ def _ntr_enrich_prop_pool_with_player_ml(rows: list) -> dict:
             empirical_p = empirical_player_prop_probability(avg_stats, category, line)
         except Exception:
             pass
+
         if model_p is not None and empirical_p is not None:
             probability = 0.75 * float(model_p) + 0.25 * float(empirical_p)
             source = "player_ml+history"
@@ -21166,12 +21266,14 @@ def _ntr_enrich_prop_pool_with_player_ml(rows: list) -> dict:
             stats["empirical"] += 1
         else:
             continue
+
         probability = max(0.03, min(0.95, probability))
         row["model_prob"] = round(probability, 6)
         row["probability"] = round(probability, 6)
         row["probability_source"] = source
         row["player_context"] = context
         stats["enriched"] += 1
+
     return stats
 
 
@@ -25182,20 +25284,31 @@ def main():
                         _max_special_lookups = int(env("NETRATTLER_HT_KAMBI_MAX_MATCHES", "30"))
                         if globals()["_NTR_KAMBI_SPECIAL_LOOKUPS"] < _max_special_lookups:
                             from netrattler_prop_sources import fetch_kambi_team_specials
-                            _ks = fetch_kambi_team_specials(home, away, brand="ub") or {}
+                            _merged_ks = {}
+                            _merged_src = {}
+                            # Try the same Kambi brand family already used successfully
+                            # by the Player-Prop collector. Stop early once all specials exist.
+                            for _brand in ("ub", "bs", "888", "nb"):
+                                _ks = fetch_kambi_team_specials(home, away, brand=_brand) or {}
+                                for _key in ("btts_yes_ht", "over_15_ht", "btts_over25_combo"):
+                                    if not _merged_ks.get(_key) and _ks.get(_key):
+                                        _merged_ks[_key] = float(_ks[_key])
+                                        _merged_src[_key] = f"kambi_{_brand}"
+                                if all(_merged_ks.get(_k) for _k in ("btts_yes_ht", "over_15_ht", "btts_over25_combo")):
+                                    break
                             globals()["_NTR_KAMBI_SPECIAL_LOOKUPS"] += 1
-                            if _ks:
+                            if _merged_ks:
                                 if ro is None:
                                     ro = {}
-                                if not ro.get("btts_yes_ht") and _ks.get("btts_yes_ht"):
-                                    ro["btts_yes_ht"] = float(_ks["btts_yes_ht"])
-                                    ro["_btts_ht_source"] = "kambi_ub"
-                                if not ro.get("over_15_ht") and _ks.get("over_15_ht"):
-                                    ro["over_15_ht"] = float(_ks["over_15_ht"])
-                                    ro["_over15_ht_source"] = "kambi_ub"
-                                if not ro.get("btts_over25_yes") and _ks.get("btts_over25_combo"):
-                                    ro["btts_over25_yes"] = float(_ks["btts_over25_combo"])
-                                    ro["_combo_source"] = "kambi_ub"
+                                if not ro.get("btts_yes_ht") and _merged_ks.get("btts_yes_ht"):
+                                    ro["btts_yes_ht"] = _merged_ks["btts_yes_ht"]
+                                    ro["_btts_ht_source"] = _merged_src.get("btts_yes_ht", "kambi")
+                                if not ro.get("over_15_ht") and _merged_ks.get("over_15_ht"):
+                                    ro["over_15_ht"] = _merged_ks["over_15_ht"]
+                                    ro["_over15_ht_source"] = _merged_src.get("over_15_ht", "kambi")
+                                if not ro.get("btts_over25_yes") and _merged_ks.get("btts_over25_combo"):
+                                    ro["btts_over25_yes"] = _merged_ks["btts_over25_combo"]
+                                    ro["_combo_source"] = _merged_src.get("btts_over25_combo", "kambi")
                 except Exception:
                     pass
 
@@ -25251,7 +25364,13 @@ def main():
                         combo_odds = float((ro or {}).get("btts_over25_yes") or 0)
                     except Exception:
                         combo_odds = 0.0
-                    combo_prob = max(1, min(prob_b, prob_o) - 5)
+                    try:
+                        combo_prob = float((_ml or {}).get("btts_over25_combo_pct") or 0)
+                    except Exception:
+                        combo_prob = 0.0
+                    if combo_prob <= 0:
+                        combo_prob = max(1.0, float(min(prob_b, prob_o) - 5))
+                    combo_prob = max(1.0, min(95.0, combo_prob))
                     if combo_odds > 1 and combo_prob >= COMBO_MIN_PROB and _is_market_value_bet(combo_odds, combo_prob, COMBO_MIN_ODDS, COMBO_MIN_EDGE):
                         tip_combo = {
                             "match": mn, "league": league_name or "Pinnacle",
@@ -25273,8 +25392,15 @@ def main():
                         btts_ht_odds = float((ro or {}).get("btts_yes_ht") or 0)
                     except Exception:
                         btts_ht_odds = 0.0
-                    # konservative Modellableitung aus FT-Modell, nicht aus der Quote selbst
-                    btts_ht_prob = max(1, min(95, int(prob_b * 0.62)))
+                    # Prefer the dedicated HT model trained in Supabase.
+                    # Only fall back to the conservative FT-derived estimate.
+                    try:
+                        btts_ht_prob = float((_ml or {}).get("btts_ht_pct") or 0)
+                    except Exception:
+                        btts_ht_prob = 0.0
+                    if btts_ht_prob <= 0:
+                        btts_ht_prob = float(prob_b) * 0.62
+                    btts_ht_prob = max(1.0, min(95.0, btts_ht_prob))
                     if btts_ht_odds > 1 and btts_ht_prob >= BTTS_HT_MIN_PROB and _is_market_value_bet(btts_ht_odds, btts_ht_prob, BTTS_HT_MIN_ODDS, BTTS_HT_MIN_EDGE):
                         tip_btts_ht = {
                             "match": mn, "league": league_name or "Pinnacle",
@@ -25293,7 +25419,13 @@ def main():
                         o15_odds = float((ro or {}).get("over_15_ht") or 0)
                     except Exception:
                         o15_odds = 0.0
-                    o15_prob = max(1, min(95, int(prob_o * 0.64)))
+                    try:
+                        o15_prob = float((_ml or {}).get("over15_ht_pct") or 0)
+                    except Exception:
+                        o15_prob = 0.0
+                    if o15_prob <= 0:
+                        o15_prob = float(prob_o) * 0.64
+                    o15_prob = max(1.0, min(95.0, o15_prob))
                     if o15_odds > 1 and "over15_ht" in tips_by_market and o15_prob >= OVER15_HT_MIN_PROB and _is_market_value_bet(o15_odds, o15_prob, OVER15_HT_MIN_ODDS, OVER15_HT_MIN_EDGE):
                         tip_o15_ht = {
                             "match": mn, "league": league_name or "Pinnacle",
@@ -25715,11 +25847,15 @@ def main():
         # Vor der Edge-Auswahl: unabhängige Player-ML/Historie anwenden.
         _pml = _ntr_enrich_prop_pool_with_player_ml(_NTR_BUILDER_PROP_POOL)
         if _pml.get("eligible"):
-            log(
-                f"   🧠 Player ML: models={_pml.get('models_loaded',0)} · "
+            _pml_msg = (
+                f"   🧠 Player ML: models={_pml.get('models_loaded',0)} "
+                f"(required={_pml.get('required_models',0)}) · "
                 f"eligible={_pml.get('eligible',0)} · enriched={_pml.get('enriched',0)} · "
                 f"history_fallback={_pml.get('empirical',0)}"
             )
+            if _pml.get("load_error"):
+                _pml_msg += f" · load={str(_pml.get('load_error'))[:120]}"
+            log(_pml_msg)
         _builder_prop_pool.extend(_NTR_BUILDER_PROP_POOL)
 
         # Match-Kontexte für Same-Match-/Underdog-/Narrative-Builder.
@@ -25775,7 +25911,7 @@ def main():
             _builder_chat = TELEGRAM_GROUPS.get("advanced_props") or TELEGRAM_GROUPS.get("props")
             if _builder_chat:
                 def _send_builder(msg):
-                    send_telegram(msg, chat_id=_builder_chat)
+                    return send_telegram(msg, chat_id=_builder_chat)
 
                 _sent_n, _picks = run_builder_engine(
                     raw_props=_builder_prop_pool,
@@ -25841,6 +25977,9 @@ def main():
                 msg = format_combo_telegram_message(combo)
                 if msg:
                     _combo_mid = send_telegram(msg, combo_chat)
+                    if _combo_mid is None:
+                        log(f"   ⚠️ Combo {n} Telegram nicht zugestellt — nicht speichern", "WARN")
+                        continue
                     generated += 1
                     try:
                         save_to_supabase({
