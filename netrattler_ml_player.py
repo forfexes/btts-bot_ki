@@ -57,6 +57,7 @@ _ALL_PLAYER_MODELS = sorted({m for tbl in _LINE_MODELS.values() for m in tbl.val
 
 _MODEL_CACHE: Dict[str, Any] = {}
 _LOADED = False
+_LAST_LOAD_ERROR = ""
 
 
 def model_for(category: str, line: float) -> Optional[str]:
@@ -122,47 +123,112 @@ def build_player_features(avg_stats: Dict[str, Any], context: Optional[Dict[str,
     ]
 
 
-def load_player_models(supabase_url: str, supabase_key: str, timeout: int = 60) -> int:
-    """Laedt die 18 Player-Modelle gefiltert aus ml_models. Idempotent + gecacht."""
-    global _LOADED
-    if _LOADED:
-        return len(_MODEL_CACHE)
-    _LOADED = True
+def load_player_models(
+    supabase_url: str,
+    supabase_key: str,
+    timeout: int = 20,
+    model_names: Optional[List[str]] = None,
+    batch_size: int = 3,
+    force: bool = False,
+) -> int:
+    """Load player models incrementally from Supabase.
+
+    The old implementation requested every ~450 KB model blob in one response
+    with an 8s timeout and set the loaded flag *before* success. A single timeout
+    therefore left the whole run at models=0 permanently.
+
+    This version only downloads required models when provided, uses small
+    batches, keeps successful partial loads, and never marks a failed attempt as
+    complete.
+    """
+    global _LOADED, _LAST_LOAD_ERROR
     if not supabase_url or not supabase_key or requests is None:
-        return 0
+        _LAST_LOAD_ERROR = "missing Supabase credentials or requests"
+        return len(_MODEL_CACHE)
+
+    wanted = list(dict.fromkeys(model_names or _ALL_PLAYER_MODELS))
+    wanted = [name for name in wanted if name in _ALL_PLAYER_MODELS]
+    if not wanted:
+        return len(_MODEL_CACHE)
+
+    if force:
+        for name in wanted:
+            _MODEL_CACHE.pop(name, None)
+
+    missing = [name for name in wanted if name not in _MODEL_CACHE]
+    if not missing:
+        _LOADED = all(name in _MODEL_CACHE for name in _ALL_PLAYER_MODELS)
+        _LAST_LOAD_ERROR = ""
+        return len(_MODEL_CACHE)
+
+    try:
+        batch_size = max(1, min(5, int(batch_size or 3)))
+    except Exception:
+        batch_size = 3
+    try:
+        timeout = max(10, int(timeout or 20))
+    except Exception:
+        timeout = 20
+
+    errors: List[str] = []
     try:
         import pickle, base64, io
-        names = ",".join(_ALL_PLAYER_MODELS)
-        r = requests.get(
-            f"{supabase_url}/rest/v1/ml_models",
-            headers={"apikey": supabase_key, "Authorization": f"Bearer {supabase_key}"},
-            params={"select": "model_name,model_data", "model_name": f"in.({names})"},
-            timeout=timeout,
-        )
-        if not r.ok:
-            return 0
-        for row in r.json():
-            name = row.get("model_name", "")
-            data = row.get("model_data", "")
-            if not name or not data:
-                continue
+        for start in range(0, len(missing), batch_size):
+            chunk = missing[start:start + batch_size]
+            names = ",".join(chunk)
             try:
-                obj = pickle.load(io.BytesIO(base64.b64decode(data)))
-                feature_cols = list(obj.get("feature_cols") or PLAYER_FEATURE_COLS) if isinstance(obj, dict) else list(PLAYER_FEATURE_COLS)
-                try:
-                    from netrattler_model_registry_v37 import features_compatible
-                    if not features_compatible(name, feature_cols):
-                        continue
-                except Exception:
-                    pass
-                if feature_cols != list(PLAYER_FEATURE_COLS):
-                    continue
-                _MODEL_CACHE[name] = obj["model"]
-            except Exception:
+                r = requests.get(
+                    f"{supabase_url}/rest/v1/ml_models",
+                    headers={"apikey": supabase_key, "Authorization": f"Bearer {supabase_key}"},
+                    params={
+                        "select": "model_name,model_data",
+                        "model_name": f"in.({names})",
+                        "limit": str(len(chunk)),
+                    },
+                    timeout=timeout,
+                )
+            except Exception as exc:
+                errors.append(f"{chunk[0]}.. request {type(exc).__name__}: {str(exc)[:90]}")
                 continue
-    except Exception:
-        return 0
+
+            if not r.ok:
+                errors.append(f"{chunk[0]}.. HTTP {r.status_code}: {str(getattr(r, 'text', ''))[:90]}")
+                continue
+
+            try:
+                rows = r.json() or []
+            except Exception as exc:
+                errors.append(f"{chunk[0]}.. bad json: {str(exc)[:90]}")
+                continue
+
+            for row in rows:
+                name = str(row.get("model_name") or "")
+                data = row.get("model_data") or ""
+                if name not in wanted or not data:
+                    continue
+                try:
+                    obj = pickle.load(io.BytesIO(base64.b64decode(data)))
+                    model = obj.get("model") if isinstance(obj, dict) else None
+                    if model is not None:
+                        _MODEL_CACHE[name] = model
+                except Exception as exc:
+                    errors.append(f"{name} unpickle {type(exc).__name__}: {str(exc)[:80]}")
+
+    except Exception as exc:
+        errors.append(f"loader {type(exc).__name__}: {str(exc)[:100]}")
+
+    _LOADED = all(name in _MODEL_CACHE for name in _ALL_PLAYER_MODELS)
+    _LAST_LOAD_ERROR = "; ".join(errors)[:800]
     return len(_MODEL_CACHE)
+
+
+def player_model_load_status() -> Dict[str, Any]:
+    return {
+        "loaded": len(_MODEL_CACHE),
+        "complete": bool(_LOADED),
+        "error": _LAST_LOAD_ERROR,
+        "models": sorted(_MODEL_CACHE.keys()),
+    }
 
 
 def predict_player_prop(
