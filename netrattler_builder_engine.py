@@ -233,6 +233,63 @@ def quality_score(row: Dict[str, Any]) -> float:
     )
 
 
+def is_bookmaker_source(source: str) -> bool:
+    s = norm(source).replace(" ", "")
+    tokens = (
+        "pinnacle", "kambi", "bet365", "1xbet", "oddspedia",
+        "oddsapi", "oddspapi", "betfair", "unibet", "betsson",
+        "nordicbet", "888", "sportsbook", "bookmaker", "observed",
+    )
+    return any(token.replace(" ", "") in s for token in tokens)
+
+
+def max_sane_leg_odds(category: str) -> float:
+    """Sanity ceiling for one observed decimal quote.
+
+    This is not a value filter. It only prevents parser/unit mistakes (e.g.
+    145.0 being treated as a normal BTTS/corner/result leg) from poisoning
+    builders and multi-combos.
+    """
+    category = str(category or "").lower()
+    caps = {
+        "btts": 6.0, "btts_ht": 10.0, "over_goals": 8.0,
+        "half_goals_1st": 10.0, "half_goals_2nd": 10.0,
+        "result": 8.0, "double_chance": 5.0,
+        "team_corners": 10.0, "corners": 10.0, "match_corners": 10.0,
+        "team_cards": 12.0, "match_cards": 12.0,
+        "team_shots": 12.0, "match_sot": 12.0, "match_goals": 10.0,
+        "shots": 15.0, "sot": 15.0, "sot_outside_box": 20.0,
+        "shots_outside_box": 20.0, "fouls": 20.0, "fouls_won": 20.0,
+        "tackles": 20.0, "tackles_committed": 20.0, "tackles_received": 20.0,
+        "yellow_cards": 25.0, "offsides": 20.0, "goalkeeper_saves": 20.0,
+        "assist": 25.0, "score_assist": 30.0,
+        "score": 35.0, "first_scorer": 50.0, "last_scorer": 50.0,
+    }
+    try:
+        fallback = max(2.0, as_float(os.getenv("NETRATTLER_BUILDER_MAX_LEG_ODDS", "25.0"), 25.0))
+    except Exception:
+        fallback = 25.0
+    return float(caps.get(category, fallback))
+
+
+def max_sane_builder_odds(style: str, variant: str) -> float:
+    """Style-aware total-odds ceiling.
+
+    High-risk/lottery families keep a wide ceiling, while anything labelled
+    SAFE/VALUE from match markets must remain a normal usable builder.
+    """
+    env_global = as_float(os.getenv("NETRATTLER_BUILDER_MAX_ODDS", "0"), 0.0)
+    if env_global > 0:
+        return env_global
+
+    tag = f"{style} {variant}".upper()
+    if any(x in tag for x in ("LOTTERY", "HIGH ODDS", "BOOKING LADDER", "HIGH LINE")):
+        return max(100.0, as_float(os.getenv("NETRATTLER_BUILDER_LOTTERY_MAX_ODDS", "5000"), 5000.0))
+    if any(x in tag for x in ("MATCH BUILDER", "TEAM BUILDER", "SAME MATCH AVAILABLE", "CORNER FUSION")):
+        return max(10.0, as_float(os.getenv("NETRATTLER_BUILDER_STANDARD_MAX_ODDS", "75"), 75.0))
+    return max(25.0, as_float(os.getenv("NETRATTLER_BUILDER_FALLBACK_MAX_ODDS", "250"), 250.0))
+
+
 def normalize_prop(row: Dict[str, Any]) -> Optional[PropLeg]:
     player = str(row.get("player") or row.get("selection") or "").strip()
     match = str(row.get("match") or row.get("fixture") or "").strip()
@@ -264,7 +321,9 @@ def normalize_prop(row: Dict[str, Any]) -> Optional[PropLeg]:
     # Builder bets require a real offered bookmaker price. Never turn fair/model odds into a quote.
     odds = as_float(row.get("odds") or row.get("pinnacle_odds") or row.get("bookmaker_odds") or row.get("decimal_odds"))
     probability = probability_from_row(row)
-    if odds <= 1:
+    if odds <= 1 or odds > max_sane_leg_odds(category):
+        return None
+    if not is_bookmaker_source(str(row.get("source") or "")):
         return None
     estimated = bool(row.get("estimated") or row.get("estimated_odds"))
     if estimated:
@@ -445,9 +504,12 @@ def _make_builder(style: str, variant: str, legs: List[PropLeg], match_date: str
     if not valid_builder(legs):
         return None
     odds = total_odds(legs)
-    min_odds = as_float(os.getenv("NETRATTLER_BUILDER_MIN_ODDS", "1.75"), 1.75)
-    max_odds = as_float(os.getenv("NETRATTLER_BUILDER_MAX_ODDS", "0"), 0.0)
-    if odds < min_odds or (max_odds > 0 and odds > max_odds):
+    min_odds = max(
+        as_float(os.getenv("NETRATTLER_BUILDER_MIN_ODDS", "1.75"), 1.75),
+        as_float(os.getenv("NETRATTLER_PROP_BUILDER_MIN_ODDS", "0"), 0.0),
+    )
+    max_odds = max_sane_builder_odds(style, variant)
+    if odds < min_odds or odds > max_odds:
         return None
     if any(x.estimated for x in legs):
         return None
@@ -1245,6 +1307,19 @@ def build_builder_picks(
     run_date = match_date or date.today().isoformat()
     max_count = max_builders or as_int(os.getenv("NETRATTLER_MAX_BUILDERS_PER_RUN", "30"), 30)
 
+    # Stable production default: Prop Builder is PLAYER-PROP only.
+    # Team/match markets (BTTS, goals, corners, 1X2) already have their own
+    # single-tip + multi-combo pipeline and must not leak into the Player Builder.
+    # They can be re-enabled later behind an explicit opt-in once regression-tested.
+    _allow_team = str(os.getenv("NETRATTLER_BUILDER_ALLOW_TEAM_MARKETS", "false")).lower() in {"1", "true", "yes", "on"}
+    if not _allow_team:
+        props = [p for p in props if p.category in PLAYER_CATEGORIES and p.category != "result"]
+
+    # A known negative edge is never a publishable builder leg. edge=0 remains
+    # allowed in COMPAT mode only for real bookmaker rows lacking an independent
+    # player model/history signal.
+    props = [p for p in props if p.edge >= 0]
+
     candidates: List[BuilderPick] = []
     candidates.extend(_shot_ladders(props, match_contexts or [], run_date))
     candidates.extend(_goalkeeper_save_builders(props, run_date))
@@ -1369,11 +1444,10 @@ def _supabase_headers(key: str, prefer: str = "resolution=merge-duplicates,retur
     }
 
 
-def persist_builder_pick(pick: BuilderPick, supabase_url: str, supabase_key: str) -> Optional[bool]:
-    """Return True for a newly stored pick, False if it already exists, None on DB failure/offline."""
+def builder_pick_exists(pick: BuilderPick, supabase_url: str, supabase_key: str) -> Optional[bool]:
     if not supabase_url or not supabase_key:
         return None
-    base = supabase_url.rstrip('/')
+    base = supabase_url.rstrip("/")
     try:
         existing = requests.get(
             f"{base}/rest/v1/netrattler_builder_picks",
@@ -1381,8 +1455,28 @@ def persist_builder_pick(pick: BuilderPick, supabase_url: str, supabase_key: str
             params={"builder_id": f"eq.{pick.builder_id}", "select": "builder_id", "limit": "1"},
             timeout=8,
         )
-        if existing.ok and existing.json():
-            return False
+        if not existing.ok:
+            return None
+        return bool(existing.json())
+    except Exception:
+        return None
+
+
+def persist_builder_pick(
+    pick: BuilderPick,
+    supabase_url: str,
+    supabase_key: str,
+    check_existing: bool = True,
+) -> Optional[bool]:
+    """Return True for a newly stored pick, False if it exists, None on DB failure/offline."""
+    if not supabase_url or not supabase_key:
+        return None
+    base = supabase_url.rstrip("/")
+    try:
+        if check_existing:
+            exists = builder_pick_exists(pick, supabase_url, supabase_key)
+            if exists is True:
+                return False
         response = requests.post(
             f"{base}/rest/v1/netrattler_builder_picks",
             headers=_supabase_headers(supabase_key),
@@ -1428,18 +1522,32 @@ def run_builder_engine(
                 )[:12]
             )
         )
+
     sent = 0
     for pick in picks:
-        persisted = persist_builder_pick(pick, supabase_url, supabase_key)
-        if persisted is False:
+        # Check duplicate before Telegram, but write only after a confirmed send.
+        # A Telegram 429 must never create a DB row that blocks the retry next run.
+        exists = builder_pick_exists(pick, supabase_url, supabase_key)
+        if exists is True:
             if logger:
                 logger(f"MASTER BUILDER duplicate skipped: {pick.builder_id}")
             continue
         try:
-            send_message(format_builder_message(pick))
+            send_result = send_message(format_builder_message(pick))
+            if send_result is None or send_result is False:
+                if logger:
+                    logger(f"MASTER BUILDER send failed/no message_id: {pick.style} {pick.variant}")
+                continue
+
+            persisted = persist_builder_pick(
+                pick, supabase_url, supabase_key, check_existing=False
+            )
             sent += 1
             if logger:
-                logger(f"MASTER BUILDER {pick.style} {pick.variant}: {pick.leg_count}L @ {pick.total_odds:.2f} | DB={persisted}")
+                logger(
+                    f"MASTER BUILDER {pick.style} {pick.variant}: "
+                    f"{pick.leg_count}L @ {pick.total_odds:.2f} | DB={persisted}"
+                )
         except Exception as exc:
             if logger:
                 logger(f"MASTER BUILDER send failed: {exc}")
@@ -1451,6 +1559,7 @@ __all__ = [
     "BuilderPick",
     "build_builder_picks",
     "format_builder_message",
+    "builder_pick_exists",
     "persist_builder_pick",
     "run_builder_engine",
     "market_line",
