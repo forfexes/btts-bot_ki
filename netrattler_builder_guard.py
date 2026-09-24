@@ -12,8 +12,13 @@ Rules:
 - Trained player models are used only on exact supported lines.
 - Builder edge is displayed as probability-point edge (model p - implied p),
   consistent with the main bot, not EV ROI percentage.
-- Modelled legs below the configured minimum edge are rejected; bookmaker-only
-  legs without an independent probability remain eligible for compatibility.
+- Modelled legs below the configured minimum edge are rejected.
+- Implausibly large model-vs-market gaps are rejected as parser/model mismatch.
+- Bookmaker-only legs without an independent probability remain eligible for
+  compatibility, but never receive an invented model edge.
+- The old LLM Advanced-Props builder, which displayed estimated combo prices,
+  is disabled on the production guard path; observed Kambi/Pinnacle/etc props
+  collected later by the main pipeline remain active.
 """
 from __future__ import annotations
 
@@ -50,6 +55,17 @@ def _as_float(value: Any, default: float = 0.0) -> float:
         return float(str(value).replace(",", "."))
     except (TypeError, ValueError):
         return default
+
+
+def _edge_pp_limit() -> float:
+    raw = _as_float(os.getenv("NETRATTLER_PROP_BUILDER_MAX_ABS_EDGE", "0.30"), 0.30)
+    if raw <= 0:
+        return 0.0
+    return raw * 100.0 if raw <= 1.0 else raw
+
+
+def _model_market_ratio_limit() -> float:
+    return max(0.0, _as_float(os.getenv("NETRATTLER_PROP_BUILDER_MAX_MODEL_MARKET_RATIO", "4.0"), 4.0))
 
 
 def _is_multi_player(player: str, market: str) -> bool:
@@ -118,6 +134,8 @@ def model_for_exact(category: str, line: float):
     table = player_ml._LINE_MODELS.get(category)
     if not table:
         return None
+    # These categories currently have no dedicated trained model.  Do not use
+    # a semantically similar single-player/full-match proxy.
     if category in {"first_scorer", "last_scorer", "sot_outside_box", "tackles_received"}:
         return None
     try:
@@ -155,14 +173,31 @@ def normalize_prop_safe(row: Dict[str, Any]):
 
     if has_independent and leg.odds > 1:
         implied = 1.0 / leg.odds
+        if implied <= 0:
+            return None
         edge_pp = (leg.probability - implied) * 100.0
+
         min_edge_raw = _as_float(os.getenv("NETRATTLER_PROP_BUILDER_MIN_EDGE", "0.02"), 0.02)
         min_edge_pp = min_edge_raw * 100.0 if 0 < min_edge_raw <= 1 else min_edge_raw
         if edge_pp < min_edge_pp:
             return None
+
+        # A giant edge is much more likely to be a semantic/line/model mismatch
+        # than a genuine sportsbook error.  Reject rather than publish it.
+        max_edge_pp = _edge_pp_limit()
+        if max_edge_pp > 0 and abs(edge_pp) > max_edge_pp:
+            return None
+
+        ratio_limit = _model_market_ratio_limit()
+        model_market_ratio = leg.probability / implied
+        if ratio_limit > 0 and model_market_ratio > ratio_limit:
+            return None
+
         fair = 1.0 / leg.probability if leg.probability > 0 else 0.0
         leg = replace(leg, edge=round(edge_pp, 2), fair_odds=round(fair, 2))
     else:
+        # Observed bookmaker-only prop: usable for compatibility, but never
+        # pretend bookmaker implied probability is an independent model edge.
         leg = replace(leg, edge=0.0)
 
     return leg
@@ -173,6 +208,20 @@ builder.normalize_prop = normalize_prop_safe
 
 def main() -> None:
     import btts_bot
+
+    # The legacy Advanced-Props function asks an LLM to construct builders and
+    # displays estimated combined prices (e.g. "~8/1").  That violates the
+    # production REAL_ODDS_ONLY contract.  The main pipeline's observed
+    # Pinnacle/Kambi/1xbet/Oddspedia props run after this call, so only the
+    # estimated legacy builder is disabled here.
+    def _legacy_estimated_builder_disabled(*_args, **_kwargs):
+        try:
+            btts_bot.log("🔑 Legacy Advanced-Props LLM Builder übersprungen — REAL_ODDS_ONLY")
+        except Exception:
+            pass
+        return None
+
+    btts_bot.run_advanced_props_bot = _legacy_estimated_builder_disabled
     btts_bot.main()
 
 
