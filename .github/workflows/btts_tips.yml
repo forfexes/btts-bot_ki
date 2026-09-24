@@ -111,8 +111,8 @@ jobs:
           SUPABASE_KEY:               ${{ secrets.SUPABASE_KEY }}
           ODDSPAPI_KEY:               ${{ secrets.ODDSPAPI_KEY }}
           SUPABASE_SERVICE_ROLE_KEY:  ${{ secrets.SUPABASE_SERVICE_ROLE_KEY }}
-          BIGBALLS_API_KEY:        ${{ secrets.BIGBALLS_API_KEY }}
-          BBS_API_KEY:             ${{ secrets.BBS_API_KEY }}
+          BIGBALLS_API_KEY:           ${{ secrets.BIGBALLS_API_KEY }}
+          BBS_API_KEY:                ${{ secrets.BBS_API_KEY }}
           # ── Bot Einstellungen ──
           RUN_MODE:                   ${{ github.event.inputs.mode || 'tips' }}
           ENABLE_SETTLEMENT:          "false"
@@ -130,18 +130,25 @@ jobs:
           NETRATTLER_EXTRA_PROP_MAX_MATCHES: "60"
           NETRATTLER_KAMBI_SPECIAL_FALLBACK: "true"
           NETRATTLER_KAMBI_SPECIAL_MAX_MATCHES: "24"
+          NETRATTLER_HT_KAMBI_MAX_MATCHES: "24"
           NETRATTLER_ML_PREFETCH_TEAM_CAP: "160"
           NETRATTLER_ML_PREFETCH_BATCH: "80"
           NETRATTLER_ML_PREFETCH_BUDGET_SEC: "12"
           NETRATTLER_ML_PREFETCH_ROW_LIMIT: "3000"
-          NETRATTLER_BTTS_HT_MIN_PROB: "38"
-          NETRATTLER_OVER15_HT_MIN_PROB: "42"
-          NETRATTLER_COMBO_MIN_PROB: "52"
+          # HT/Combo: quote discovery should not be blocked by the old high
+          # probability gate. Real bookmaker odds + positive edge still decide.
+          NETRATTLER_BTTS_HT_MIN_PROB: "32"
+          NETRATTLER_BTTS_HT_MIN_EDGE: "0.02"
+          NETRATTLER_OVER15_HT_MIN_PROB: "35"
+          NETRATTLER_OVER15_HT_MIN_EDGE: "0.02"
+          NETRATTLER_COMBO_MIN_PROB: "45"
+          NETRATTLER_COMBO_MIN_EDGE: "0.02"
+          NETRATTLER_COMBO_COMPONENT_MIN_PROB: "45"
           NETRATTLER_1X2_MIN_PROB: "52"
           MAX_ODDS:                    "3.0"
           NETRATTLER_TEAM_COMBO_MAX_ODDS: "6.0"
           NETRATTLER_MULTI_COMBO_MAX_ODDS: "500"
-          NETRATTLER_BTTS_HT_MAX_ODDS:  "4.5"
+          NETRATTLER_BTTS_HT_MAX_ODDS: "4.5"
           NETRATTLER_SUPABASE_SAVE_WORKERS: "6"
           NETRATTLER_MAX_SINGLE_ODDS: "3.0"
           NETRATTLER_1X2_MIN_EDGE:    "0.01"
