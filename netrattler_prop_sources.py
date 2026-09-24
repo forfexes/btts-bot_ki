@@ -87,17 +87,6 @@ def _get_json(url: str, params: Optional[dict] = None, timeout: int = 6):
     return None
 
 
-
-
-def _learned_source_weight(source: str) -> float:
-    """Settlement-learned source priority; unknown sources stay neutral."""
-    try:
-        from netrattler_runtime_policy import source_weight
-        return float(source_weight(source))
-    except Exception:
-        return 1.0
-
-
 # ------------------------------------------------------------------
 # Gemeinsamer Kategorie-Mapper (quellen-unabhaengig).
 # Haelt die Kategorien synchron mit _SHARP_PLAYER_CATS_V31 im Builder.
@@ -415,6 +404,88 @@ def fetch_kambi_match_corners(home: str, away: str, brand: str = "ub") -> List[D
 
 
 
+def _extract_kambi_team_specials(offer: Dict[str, Any]) -> Dict[str, float]:
+    """Parse observed Kambi special markets from one event offer payload.
+
+    Kambi labels are not identical across brands.  Keep the parser permissive
+    on wording but strict on the actual selection: only observed outcome odds
+    are returned; no synthetic/multiplied prices are ever created.
+    """
+    out: Dict[str, float] = {}
+    for bo in (offer or {}).get("betOffers") or []:
+        crit = str((bo.get("criterion") or {}).get("label", "") or "")
+        low = crit.lower().replace("½", "1/2")
+        outcomes = bo.get("outcomes") or []
+        period = str(bo.get("period") or bo.get("betOfferType", {}).get("name") or "").lower()
+        combined_market_text = f"{low} {period}"
+        is_first_half = any(t in combined_market_text for t in (
+            "1st half", "first half", "1st-half", "first-half", "1h",
+            "half time", "halftime", "1. half", "1 half",
+        ))
+        is_btts = any(t in low for t in (
+            "both teams to score", "both teams score", "both to score", "btts",
+        ))
+        is_combo_criterion = is_btts and any(t in low for t in (
+            "total goals", "over/under", "over 2.5", "and total", "& total",
+        ))
+
+        for oc in outcomes:
+            label = str(oc.get("label") or oc.get("type") or "")
+            olow = label.lower().strip()
+            try:
+                raw_odds = float(oc.get("odds", 0) or 0)
+            except (TypeError, ValueError):
+                continue
+            # Kambi API normally returns milli-decimal (e.g. 1850 -> 1.85),
+            # but a few white-label mirrors expose decimal already.
+            odds = raw_odds / 1000.0 if raw_odds > 100 else raw_odds
+            if odds <= 1.05 or odds > 100.0:
+                continue
+
+            raw_line = oc.get("line")
+            try:
+                line = float(raw_line) / 1000.0 if raw_line not in (None, "", 0) else _line_from(label, 0.0)
+            except (TypeError, ValueError):
+                line = _line_from(label, 0.0)
+
+            outcome_text = f"{low} {olow}"
+            positive_yes = (
+                olow in {"yes", "ja"}
+                or olow.startswith("yes ")
+                or " yes " in f" {olow} "
+            )
+
+            # Exact BTTS full-time / first-half Yes.
+            if is_btts and not is_combo_criterion and positive_yes:
+                key = "btts_yes_ht" if is_first_half else "btts_yes"
+                if odds > out.get(key, 0):
+                    out[key] = round(odds, 3)
+
+            # Observed BTTS + Over 2.5 combined market only.  Some brands put
+            # the 2.5 line in oc.line and label the outcome merely "Yes & Over".
+            _has_btts = any(t in outcome_text for t in (
+                "both teams to score", "both teams score", "both to score", "btts"
+            ))
+            _has_over_word = any(t in outcome_text for t in ("over", "2.5 or more", "3 or more"))
+            _has_25_text = bool(re.search(r"(?:over|o)\s*2[\.,]5", outcome_text)) or "2.5 or more" in outcome_text
+            _has_25_line = abs(line - 2.5) <= 0.11
+            _positive_combo = positive_yes or "yes & over" in outcome_text or "yes and over" in outcome_text
+            if _has_btts and (_has_25_text or (_has_over_word and _has_25_line)) and _positive_combo:
+                if odds > out.get("btts_over25_combo", 0):
+                    out["btts_over25_combo"] = round(odds, 3)
+
+            # First-half Over 1.5 goals.  Period can be encoded either in the
+            # criterion or in the offer metadata, line either in label or oc.line.
+            goal_market = any(t in low for t in (
+                "total goals", "goals over/under", "over/under goals", "goals", "total"
+            ))
+            is_over = olow.startswith("over") or str(oc.get("type") or "").upper() in {"O", "OVER"}
+            if is_first_half and goal_market and is_over and abs(line - 1.5) <= 0.11:
+                if odds > out.get("over_15_ht", 0):
+                    out["over_15_ht"] = round(odds, 3)
+    return out
+
+
 def fetch_kambi_team_specials(home: str, away: str, brand: str = "ub") -> Dict[str, float]:
     """Observed Kambi team/special prices used when Pinnacle specials are blocked.
 
@@ -458,56 +529,7 @@ def fetch_kambi_team_specials(home: str, away: str, brand: str = "ub") -> Dict[s
     offer = _KAMBI_OFFER_CACHE.get(_ok)
     if not offer:
         return {}
-
-    out: Dict[str, float] = {}
-    for bo in offer.get("betOffers") or []:
-        crit = str((bo.get("criterion") or {}).get("label", "") or "")
-        low = crit.lower()
-        outcomes = bo.get("outcomes") or []
-        is_first_half = any(t in low for t in ("1st half", "first half", "1st-half", "first-half", "1h"))
-        is_btts = ("both teams to score" in low or "both teams score" in low or "both to score" in low)
-        is_combo_criterion = is_btts and any(t in low for t in ("total goals", "over/under", "over 2.5", "and total"))
-
-        for oc in outcomes:
-            label = str(oc.get("label") or oc.get("type") or "")
-            olow = label.lower()
-            try:
-                odds = float(oc.get("odds", 0) or 0) / 1000.0
-            except (TypeError, ValueError):
-                continue
-            if odds <= 1.05:
-                continue
-
-            # Exact BTTS full-time / first-half Yes.
-            if is_btts and not is_combo_criterion and (olow in {"yes", "ja"} or olow.startswith("yes ")):
-                key = "btts_yes_ht" if is_first_half else "btts_yes"
-                if odds > out.get(key, 0):
-                    out[key] = round(odds, 3)
-
-            # Observed combined market only. Never multiply separate prices.
-            # Kambi brands use several labels: "BTTS & Over 2.5",
-            # "Both Teams To Score / Total Goals", outcome "Yes & Over 2.5", etc.
-            combo_text = f"{low} {olow}"
-            _has_btts = any(t in combo_text for t in (
-                "both teams to score", "both teams score", "both to score", "btts"
-            ))
-            _has_over25 = bool(re.search(r"(?:over|o)\s*2[\.,]5", combo_text)) or "2.5 or more" in combo_text
-            _positive = any(t in combo_text for t in ("yes", "over 2.5", "over2.5", "o2.5", "2.5 or more"))
-            if _has_btts and _has_over25 and _positive:
-                if odds > out.get("btts_over25_combo", 0):
-                    out["btts_over25_combo"] = round(odds, 3)
-
-            # First-half Over 1.5 goals.
-            if is_first_half and any(t in low for t in ("total goals", "goals over/under", "over/under goals", "goals")):
-                raw_line = oc.get("line")
-                try:
-                    line = float(raw_line) / 1000.0 if raw_line not in (None, "", 0) else _line_from(label, 0.0)
-                except (TypeError, ValueError):
-                    line = _line_from(label, 0.0)
-                if (olow.startswith("over") or str(oc.get("type") or "").upper() == "O") and abs(line - 1.5) <= 0.11:
-                    if odds > out.get("over_15_ht", 0):
-                        out["over_15_ht"] = round(odds, 3)
-    return out
+    return _extract_kambi_team_specials(offer)
 
 def collect_extra_corner_odds(fixtures: List[Dict[str, str]], log: Optional[Callable[[str], Any]] = None, max_matches: int = 24) -> List[Dict[str, Any]]:
     """Collect observed match-total corner odds from Kambi brands, bounded for runtime."""
@@ -728,8 +750,7 @@ def collect_extra_player_props(
         local_cats = set()
         # Kambi market depth differs by brand. Merge brands but stop early once
         # a match already has broad coverage, keeping runtime bounded.
-        _brands = sorted(_KAMBI_BRANDS, key=lambda b: _learned_source_weight(f"kambi_{b}"), reverse=True)
-        for brand in _brands:
+        for brand in _KAMBI_BRANDS:
             try:
                 rows = fetch_kambi_player_props(home, away, brand=brand) or []
             except Exception as exc:
@@ -757,12 +778,10 @@ def collect_extra_player_props(
 
         # Aggregator fallbacks only if the match still lacks breadth.
         if len(local_cats & desired_depth) < 5:
-            _fallbacks = [
+            for name, fn in (
                 ("oddspedia", fetch_oddspedia_player_props),
                 ("footymetrics", fetch_footymetrics_player_props),
-            ]
-            _fallbacks.sort(key=lambda item: _learned_source_weight(item[0]), reverse=True)
-            for name, fn in _fallbacks:
+            ):
                 try:
                     rows = fn(home, away) or []
                 except Exception as exc:
@@ -773,10 +792,7 @@ def collect_extra_player_props(
 
     out = list(out_best.values())
     if per_source:
-        summary = ", ".join(
-            f"{k}={v}@w{_learned_source_weight(k):.2f}"
-            for k, v in sorted(per_source.items(), key=lambda item: _learned_source_weight(item[0]), reverse=True)
-        )
+        summary = ", ".join(f"{k}={v}" for k, v in sorted(per_source.items()))
         cats = ", ".join(f"{k}={v}" for k, v in per_cat.most_common())
         _log(f"   🔌 Extra-Prop-Quellen: {summary} · unique={len(out)} · matches={len(matched_matches)}")
         _log(f"   🔌 Extra-Prop-Kategorien: {cats}")
