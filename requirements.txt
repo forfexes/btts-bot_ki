@@ -11,4 +11,3 @@ scipy
 scikit-learn
 joblib
 playwright
-xgboost==3.2.0
