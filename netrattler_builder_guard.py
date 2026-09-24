@@ -1,29 +1,23 @@
 #!/usr/bin/env python3
-"""NETRATTLER runtime safety guard for player-prop builders.
+"""NETRATTLER runtime safety guard for player-prop builders and quote sanity.
 
-This wrapper leaves the stable production pipeline untouched and only hardens
-player-prop normalization before ``btts_bot.main()`` runs.
-
-Rules:
-- REAL_ODDS_ONLY remains untouched.
+Production rules enforced here:
+- REAL_ODDS_ONLY remains mandatory.
+- Pinnacle Arcadia prices are converted from American to decimal before use.
 - Multi-player / specialty markets are not fed into single-player ML models.
 - First-half player props are excluded until dedicated HT player models exist.
 - Binary player markets use line=0.5, never bogus ``Over 1`` labels.
+- Generic outcome labels such as ``Over 0.5`` are never accepted as player names.
 - Trained player models are used only on exact supported lines.
-- Builder edge is displayed as probability-point edge (model p - implied p),
-  consistent with the main bot, not EV ROI percentage.
-- Modelled legs below the configured minimum edge are rejected.
-- Implausibly large model-vs-market gaps are rejected as parser/model mismatch.
-- Bookmaker-only legs without an independent probability remain eligible for
-  compatibility, but never receive an invented model edge.
-- The old LLM Advanced-Props builder, which displayed estimated combo prices,
-  is disabled on the production guard path; observed Kambi/Pinnacle/etc props
-  collected later by the main pipeline remain active.
+- Modelled builder edge is model probability minus bookmaker implied probability.
+- Implausibly large player-model gaps are rejected as parser/model mismatch.
+- The old LLM Advanced-Props builder with estimated combo prices is disabled.
 """
 from __future__ import annotations
 
 import math
 import os
+import re
 from dataclasses import replace
 from typing import Any, Dict, List
 
@@ -48,6 +42,10 @@ _CLEAN_BINARY_MARKET = {
     "last_scorer": "Last Goalscorer",
     "score_assist": "To Score or Assist",
 }
+_GENERIC_PLAYER_RE = re.compile(
+    r"^(?:over|under)?\s*[+-]?\d+(?:[\.,]\d+)?(?:\s*(?:goals?|shots?|cards?|tackles?|fouls?))?$",
+    re.I,
+)
 
 
 def _as_float(value: Any, default: float = 0.0) -> float:
@@ -55,6 +53,21 @@ def _as_float(value: Any, default: float = 0.0) -> float:
         return float(str(value).replace(",", "."))
     except (TypeError, ValueError):
         return default
+
+
+def _pinnacle_decimal(value: Any) -> float:
+    """Convert Pinnacle Arcadia American prices to decimal; keep decimal input."""
+    try:
+        v = float(value)
+    except (TypeError, ValueError):
+        return 0.0
+    if v <= -100.0:
+        return round(1.0 + 100.0 / abs(v), 4)
+    if v >= 100.0:
+        return round(1.0 + v / 100.0, 4)
+    if 1.001 <= v <= 100.0:
+        return round(v, 4)
+    return 0.0
 
 
 def _edge_pp_limit() -> float:
@@ -71,6 +84,18 @@ def _model_market_ratio_limit() -> float:
 def _is_multi_player(player: str, market: str) -> bool:
     text = f" {player} {market} ".lower()
     return any(term in text for term in _MULTI_PLAYER_TERMS)
+
+
+def _is_generic_player_label(player: str) -> bool:
+    text = str(player or "").strip()
+    low = text.lower()
+    if not text or low in {"over", "under", "yes", "no", "home", "away", "draw", "player", "total"}:
+        return True
+    if _GENERIC_PLAYER_RE.match(text):
+        return True
+    if low.startswith("over ") or low.startswith("under "):
+        return True
+    return False
 
 
 def _is_unsupported_specialty(category: str, market: str) -> bool:
@@ -102,6 +127,8 @@ def _sanitize_row(row: Dict[str, Any]) -> Dict[str, Any] | None:
 
     if not player or not market:
         return out
+    if _is_generic_player_label(player):
+        return None
     if _is_multi_player(player, market):
         return None
     if _is_unsupported_specialty(category, market):
@@ -134,8 +161,6 @@ def model_for_exact(category: str, line: float):
     table = player_ml._LINE_MODELS.get(category)
     if not table:
         return None
-    # These categories currently have no dedicated trained model.  Do not use
-    # a semantically similar single-player/full-match proxy.
     if category in {"first_scorer", "last_scorer", "sot_outside_box", "tackles_received"}:
         return None
     try:
@@ -182,8 +207,6 @@ def normalize_prop_safe(row: Dict[str, Any]):
         if edge_pp < min_edge_pp:
             return None
 
-        # A giant edge is much more likely to be a semantic/line/model mismatch
-        # than a genuine sportsbook error.  Reject rather than publish it.
         max_edge_pp = _edge_pp_limit()
         if max_edge_pp > 0 and abs(edge_pp) > max_edge_pp:
             return None
@@ -196,8 +219,6 @@ def normalize_prop_safe(row: Dict[str, Any]):
         fair = 1.0 / leg.probability if leg.probability > 0 else 0.0
         leg = replace(leg, edge=round(edge_pp, 2), fair_odds=round(fair, 2))
     else:
-        # Observed bookmaker-only prop: usable for compatibility, but never
-        # pretend bookmaker implied probability is an independent model edge.
         leg = replace(leg, edge=0.0)
 
     return leg
@@ -206,14 +227,126 @@ def normalize_prop_safe(row: Dict[str, Any]):
 builder.normalize_prop = normalize_prop_safe
 
 
+def _install_pinnacle_guard(bot) -> None:
+    """Replace the buggy direct Pinnacle reader that treated American odds as decimal."""
+    def fetch_pinnacle_match_odds_safe(match_id: int):
+        cache_key = f"odds_{match_id}"
+        cached = bot._cache_get(bot._PIN_ODDS_CACHE, cache_key)
+        if cached is not None:
+            return cached
+        try:
+            r = bot.requests.get(
+                f"{bot.PINNACLE_BASE}/matchups/{match_id}/markets/related/straight",
+                headers=bot.PINNACLE_HEADERS,
+                timeout=10,
+            )
+            if not r.ok:
+                bot._cache_set(bot._PIN_ODDS_CACHE, cache_key, None)
+                return None
+
+            result = {"match_id": match_id}
+            for market in r.json() or []:
+                mtype = str(market.get("type") or "").lower()
+                period = int(market.get("period") or 0)
+                for price in market.get("prices") or []:
+                    pv = _pinnacle_decimal(price.get("price"))
+                    des = str(price.get("designation") or "").lower()
+                    pts = price.get("points")
+                    if pv <= 1:
+                        continue
+                    if mtype == "moneyline" and period == 0:
+                        if des == "home":
+                            result["home_win"] = pv
+                        elif des == "draw":
+                            result["draw"] = pv
+                        elif des == "away":
+                            result["away_win"] = pv
+                    elif mtype == "total" and period == 0 and pts == 2.5:
+                        if des == "over":
+                            result["over_25"] = pv
+                        elif des == "under":
+                            result["under_25"] = pv
+                    elif mtype == "total" and period == 1:
+                        if pts == 1.5 and des == "over":
+                            result["over_15_ht"] = pv
+                        elif pts == 0.5 and des == "over":
+                            result["over_05_ht"] = pv
+
+            try:
+                r2 = bot.requests.get(
+                    f"{bot.PINNACLE_BASE}/matchups/{match_id}/related",
+                    headers=bot.PINNACLE_HEADERS,
+                    timeout=8,
+                )
+                if r2.ok:
+                    for sub in r2.json() or []:
+                        desc = str((sub.get("special") or {}).get("description") or sub.get("description") or "").lower()
+                        is_btts = "both teams to score" in desc or "btts" in desc
+                        is_combo = is_btts and ("over 2.5" in desc or "over 2,5" in desc or "2.5 goals" in desc)
+                        if not is_btts:
+                            continue
+                        sub_id = sub.get("id")
+                        if not sub_id:
+                            continue
+                        rs = bot.requests.get(
+                            f"{bot.PINNACLE_BASE}/matchups/{sub_id}/markets/straight",
+                            headers=bot.PINNACLE_HEADERS,
+                            timeout=8,
+                        )
+                        if not rs.ok:
+                            continue
+                        for m in rs.json() or []:
+                            pp = int(m.get("period") or 0)
+                            for p in m.get("prices") or []:
+                                designation = str(p.get("designation") or "").lower()
+                                if designation not in {"yes", "over", "home"} and "yes" not in designation:
+                                    continue
+                                observed = _pinnacle_decimal(p.get("price"))
+                                if observed <= 1:
+                                    continue
+                                if is_combo and pp == 0:
+                                    result["btts_over25_yes"] = observed
+                                elif pp == 0:
+                                    result["btts_yes"] = observed
+                                elif pp == 1:
+                                    result["btts_yes_ht"] = observed
+            except Exception:
+                pass
+
+            bot._cache_set(bot._PIN_ODDS_CACHE, cache_key, result)
+            return result
+        except Exception:
+            bot._cache_set(bot._PIN_ODDS_CACHE, cache_key, None)
+            return None
+
+    bot.fetch_pinnacle_match_odds = fetch_pinnacle_match_odds_safe
+
+    # Respect the configured cap for normal match singles after quote conversion.
+    original_filter = bot.filter_tips_legacy_safe
+
+    def filter_tips_legacy_safe_guarded(tips, market="btts", odds_data=None):
+        rows = original_filter(tips, market=market, odds_data=odds_data)
+        market_key = str(market or "").lower()
+        if market_key not in {"1x2", "btts", "over25"}:
+            return rows
+        max_single = _as_float(os.getenv("NETRATTLER_MAX_SINGLE_ODDS", "0"), 0.0)
+        if max_single <= 0:
+            return rows
+        clean = []
+        for row in rows:
+            q = _as_float(row.get("odds") or row.get("oddsYes"), 0.0)
+            if 1.0 < q <= max_single:
+                clean.append(row)
+        return clean
+
+    bot.filter_tips_legacy_safe = filter_tips_legacy_safe_guarded
+
+
 def main() -> None:
     import btts_bot
 
-    # The legacy Advanced-Props function asks an LLM to construct builders and
-    # displays estimated combined prices (e.g. "~8/1").  That violates the
-    # production REAL_ODDS_ONLY contract.  The main pipeline's observed
-    # Pinnacle/Kambi/1xbet/Oddspedia props run after this call, so only the
-    # estimated legacy builder is disabled here.
+    _install_pinnacle_guard(btts_bot)
+
     def _legacy_estimated_builder_disabled(*_args, **_kwargs):
         try:
             btts_bot.log("🔑 Legacy Advanced-Props LLM Builder übersprungen — REAL_ODDS_ONLY")
