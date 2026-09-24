@@ -124,7 +124,10 @@ jobs:
           if [[ "${{ github.event.inputs.run_tip_bot }}" == "true" ]]; then
             required+=(
               btts_bot.py
+              netrattler_builder_guard.py
               netrattler_builder_engine.py
+              netrattler_ml_player.py
+              netrattler_prop_sources.py
               netrattler_runtime_policy.py
               netrattler_market_consensus_v36.py
               netrattler_exposure_engine_v36.py
@@ -209,6 +212,7 @@ jobs:
 
           if [[ "${{ github.event.inputs.run_tip_bot }}" == "true" && -f requirements.txt ]]; then
             python -m pip install -r requirements.txt
+            python -m pip install --prefer-binary --no-deps "xgboost==3.2.0"
           fi
 
           if [[ "$MODE" == "full" ]]; then
@@ -318,7 +322,10 @@ jobs:
           if [[ "${{ github.event.inputs.run_tip_bot }}" == "true" ]]; then
             files+=(
               btts_bot.py
+              netrattler_builder_guard.py
               netrattler_builder_engine.py
+              netrattler_ml_player.py
+              netrattler_prop_sources.py
               netrattler_runtime_policy.py
               netrattler_market_consensus_v36.py
               netrattler_exposure_engine_v36.py
@@ -473,7 +480,17 @@ jobs:
           TELEGRAM_GROUP_BUILDER: ${{ secrets.TELEGRAM_GROUP_BUILDER }}
           TELEGRAM_GROUP_PROPS: ${{ secrets.TELEGRAM_GROUP_PROPS }}
           TELEGRAM_GROUP_STATS: ${{ secrets.TELEGRAM_GROUP_STATS }}
-        run: python btts_bot.py
+          RUN_MODE: "tips"
+          NETRATTLER_HT_KAMBI_MAX_MATCHES: "24"
+          NETRATTLER_BTTS_HT_MIN_PROB: "32"
+          NETRATTLER_BTTS_HT_MIN_EDGE: "0.02"
+          NETRATTLER_OVER15_HT_MIN_PROB: "35"
+          NETRATTLER_OVER15_HT_MIN_EDGE: "0.02"
+          NETRATTLER_COMBO_MIN_PROB: "45"
+          NETRATTLER_COMBO_MIN_EDGE: "0.02"
+          NETRATTLER_COMBO_COMPONENT_MIN_PROB: "45"
+          NETRATTLER_PROP_BUILDER_MIN_EDGE: "0.02"
+        run: python netrattler_builder_guard.py
       - uses: actions/upload-artifact@v4
         if: always()
         with:
