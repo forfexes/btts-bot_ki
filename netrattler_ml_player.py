@@ -131,15 +131,15 @@ def load_player_models(
     batch_size: int = 3,
     force: bool = False,
 ) -> int:
-    """Load player models incrementally from Supabase.
+    """Load player models incrementally from Supabase with per-model fallback.
 
-    The old implementation requested every ~450 KB model blob in one response
-    with an 8s timeout and set the loaded flag *before* success. A single timeout
-    therefore left the whole run at models=0 permanently.
-
-    This version only downloads required models when provided, uses small
-    batches, keeps successful partial loads, and never marks a failed attempt as
-    complete.
+    STEP3 hardening:
+    - only required blobs are requested;
+    - small batched ``in.(...)`` requests are attempted first;
+    - if a batch times out, returns no rows, or misses one model, each missing
+      model is retried with ``eq.<model_name>``;
+    - successful partial loads stay cached;
+    - one failed request never poisons the whole process with models=0.
     """
     global _LOADED, _LAST_LOAD_ERROR
     if not supabase_url or not supabase_key or requests is None:
@@ -170,57 +170,89 @@ def load_player_models(
     except Exception:
         timeout = 20
 
+    import pickle, base64, io
     errors: List[str] = []
-    try:
-        import pickle, base64, io
-        for start in range(0, len(missing), batch_size):
-            chunk = missing[start:start + batch_size]
+
+    def _decode_rows(rows: List[Dict[str, Any]], allowed: set[str]) -> set[str]:
+        loaded: set[str] = set()
+        for row in rows or []:
+            name = str(row.get("model_name") or "")
+            data = row.get("model_data") or ""
+            if name not in allowed or not data:
+                continue
+            try:
+                obj = pickle.load(io.BytesIO(base64.b64decode(data)))
+                model = obj.get("model") if isinstance(obj, dict) else obj
+                if model is not None:
+                    _MODEL_CACHE[name] = model
+                    loaded.add(name)
+            except Exception as exc:
+                errors.append(f"{name} unpickle {type(exc).__name__}: {str(exc)[:80]}")
+        return loaded
+
+    def _request(params: Dict[str, str], req_timeout: int):
+        return requests.get(
+            f"{supabase_url}/rest/v1/ml_models",
+            headers={"apikey": supabase_key, "Authorization": f"Bearer {supabase_key}"},
+            params=params,
+            timeout=req_timeout,
+        )
+
+    for start in range(0, len(missing), batch_size):
+        chunk = missing[start:start + batch_size]
+        allowed = set(chunk)
+        loaded_here: set[str] = set()
+
+        # Fast path: one request for a small batch.
+        try:
             names = ",".join(chunk)
-            try:
-                r = requests.get(
-                    f"{supabase_url}/rest/v1/ml_models",
-                    headers={"apikey": supabase_key, "Authorization": f"Bearer {supabase_key}"},
-                    params={
-                        "select": "model_name,model_data",
-                        "model_name": f"in.({names})",
-                        "limit": str(len(chunk)),
-                    },
-                    timeout=timeout,
-                )
-            except Exception as exc:
-                errors.append(f"{chunk[0]}.. request {type(exc).__name__}: {str(exc)[:90]}")
-                continue
-
-            if not r.ok:
+            r = _request({
+                "select": "model_name,model_data",
+                "model_name": f"in.({names})",
+                "limit": str(len(chunk)),
+            }, timeout)
+            if r.ok:
+                try:
+                    loaded_here |= _decode_rows(r.json() or [], allowed)
+                except Exception as exc:
+                    errors.append(f"{chunk[0]}.. bad json: {str(exc)[:90]}")
+            else:
                 errors.append(f"{chunk[0]}.. HTTP {r.status_code}: {str(getattr(r, 'text', ''))[:90]}")
-                continue
+        except Exception as exc:
+            errors.append(f"{chunk[0]}.. request {type(exc).__name__}: {str(exc)[:90]}")
 
+        # Robust fallback: retry each missing model by exact name.  This also
+        # handles Supabase/PostgREST deployments where a large base64 batch is
+        # slow even though single-row downloads work.
+        still_missing = [name for name in chunk if name not in loaded_here and name not in _MODEL_CACHE]
+        for name in still_missing:
             try:
-                rows = r.json() or []
-            except Exception as exc:
-                errors.append(f"{chunk[0]}.. bad json: {str(exc)[:90]}")
-                continue
-
-            for row in rows:
-                name = str(row.get("model_name") or "")
-                data = row.get("model_data") or ""
-                if name not in wanted or not data:
+                r = _request({
+                    "select": "model_name,model_data",
+                    "model_name": f"eq.{name}",
+                    "limit": "1",
+                }, max(timeout, 25))
+                if not r.ok:
+                    errors.append(f"{name} HTTP {r.status_code}: {str(getattr(r, 'text', ''))[:90]}")
                     continue
                 try:
-                    obj = pickle.load(io.BytesIO(base64.b64decode(data)))
-                    model = obj.get("model") if isinstance(obj, dict) else None
-                    if model is not None:
-                        _MODEL_CACHE[name] = model
+                    got = _decode_rows(r.json() or [], {name})
                 except Exception as exc:
-                    errors.append(f"{name} unpickle {type(exc).__name__}: {str(exc)[:80]}")
-
-    except Exception as exc:
-        errors.append(f"loader {type(exc).__name__}: {str(exc)[:100]}")
+                    errors.append(f"{name} bad json: {str(exc)[:90]}")
+                    got = set()
+                if name not in got:
+                    errors.append(f"{name} not returned")
+            except Exception as exc:
+                errors.append(f"{name} request {type(exc).__name__}: {str(exc)[:90]}")
 
     _LOADED = all(name in _MODEL_CACHE for name in _ALL_PLAYER_MODELS)
-    _LAST_LOAD_ERROR = "; ".join(errors)[:800]
+    unresolved = [name for name in wanted if name not in _MODEL_CACHE]
+    if unresolved:
+        errors.append("unresolved=" + ",".join(unresolved[:8]))
+    _LAST_LOAD_ERROR = "; ".join(errors)[:1200]
+    if not unresolved:
+        _LAST_LOAD_ERROR = ""
     return len(_MODEL_CACHE)
-
 
 def player_model_load_status() -> Dict[str, Any]:
     return {
