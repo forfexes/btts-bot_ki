@@ -56,7 +56,7 @@ jobs:
 
       - name: Fast syntax check
         run: |
-          python -m py_compile btts_bot.py netrattler_builder_engine.py data_fusion_v15.py \
+          python -m py_compile btts_bot.py netrattler_builder_engine.py netrattler_builder_guard.py data_fusion_v15.py \
             netrattler_runtime_policy.py netrattler_market_consensus_v36.py \
             netrattler_exposure_engine_v36.py netrattler_coverage_watchdog_v37.py \
             netrattler_model_registry_v37.py netrattler_oddspapi.py
@@ -186,4 +186,4 @@ jobs:
           NETRATTLER_PROP_BUILDER_MAX_ABS_EDGE: "0.30"
           NETRATTLER_ENABLE_LEGACY_PROP_BUILDER: "false"
           NETRATTLER_ENABLE_SCREENSHOT_BUILDERS: "false"
-        run: python btts_bot.py
+        run: python netrattler_builder_guard.py
