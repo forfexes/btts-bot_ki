@@ -12,6 +12,8 @@ Production rules enforced here:
 - Modelled builder edge is model probability minus bookmaker implied probability.
 - Implausibly large player-model gaps are rejected as parser/model mismatch.
 - The old LLM Advanced-Props builder with estimated combo prices is disabled.
+- Cross-match combos 3-11 use the best validated tips across all groups, including
+  independently modelled player props, with a different market mix per leg count.
 """
 from __future__ import annotations
 
@@ -53,6 +55,13 @@ def _as_float(value: Any, default: float = 0.0) -> float:
         return float(str(value).replace(",", "."))
     except (TypeError, ValueError):
         return default
+
+
+def _prob01(value: Any) -> float:
+    p = _as_float(value, 0.0)
+    if p > 1.0:
+        p /= 100.0
+    return min(0.999, max(0.0, p))
 
 
 def _pinnacle_decimal(value: Any) -> float:
@@ -342,10 +351,234 @@ def _install_pinnacle_guard(bot) -> None:
     bot.filter_tips_legacy_safe = filter_tips_legacy_safe_guarded
 
 
+def _combo_group(row: Dict[str, Any]) -> str:
+    market = str(row.get("market") or "").lower()
+    if market in {"btts", "over25", "combo", "btts_ht", "over15_ht", "1x2", "corners", "scorer"}:
+        return market
+    if market == "player_prop" or row.get("player"):
+        return "player_prop"
+    return market or "other"
+
+
+def _combo_quality(row: Dict[str, Any], num_tips: int = 3) -> float:
+    q = _as_float(row.get("odds") or row.get("oddsYes"), 0.0)
+    p = _prob01(row.get("probability") or row.get("model_prob") or row.get("prob"))
+    edge_pp = _as_float(row.get("edge_pct"), 0.0)
+    if edge_pp == 0.0 and q > 1 and p > 0:
+        edge_pp = (p - 1.0 / q) * 100.0
+    confidence = _as_float(row.get("confidence"), 3.0)
+    score = p * 100.0 + max(-10.0, min(30.0, edge_pp)) * 1.20 + confidence * 1.5
+    # Longer accumulators should prefer stronger/lower-odds legs so 9-11 legs
+    # can still fit inside the configured total-odds safety cap.
+    if q > 1 and num_tips >= 7:
+        score -= math.log(q) * (num_tips - 6) * 5.0
+    return score
+
+
+def _player_prop_combo_candidates(bot) -> List[Dict[str, Any]]:
+    """Expose only independently modelled REAL-ODDS player props to cross-match combos."""
+    out: List[Dict[str, Any]] = []
+    min_prob = _as_float(os.getenv("NETRATTLER_PLAYER_PROP_MIN_PROB", "0.55"), 0.55)
+    if min_prob > 1:
+        min_prob /= 100.0
+    min_edge = _as_float(os.getenv("NETRATTLER_PROP_BUILDER_MIN_EDGE", "0.02"), 0.02)
+    if min_edge > 1:
+        min_edge /= 100.0
+
+    for raw in list(getattr(bot, "_NTR_BUILDER_PROP_POOL", []) or []):
+        if not isinstance(raw, dict):
+            continue
+        safe = _sanitize_row(raw)
+        if safe is None:
+            continue
+        q = _as_float(safe.get("odds"), 0.0)
+        if q <= 1 or safe.get("real_observed_line") is False:
+            continue
+
+        p_raw = safe.get("model_prob")
+        if p_raw in (None, "", 0, 0.0):
+            p_raw = safe.get("probability") or safe.get("prob") or safe.get("hit_rate")
+        p = _prob01(p_raw)
+        if p < min_prob:
+            continue
+        edge = p - (1.0 / q)
+        if edge < min_edge:
+            continue
+
+        player = str(safe.get("player") or "").strip()
+        market_label = str(safe.get("market") or safe.get("category") or "Player Prop").strip()
+        if not player or _is_generic_player_label(player):
+            continue
+        category = str(safe.get("category") or "player_prop").lower()
+        market = "scorer" if category in {"score", "first_scorer", "last_scorer"} else "player_prop"
+        selection = f"{player} — {market_label}"
+        out.append({
+            "match": safe.get("match", ""),
+            "league": safe.get("league", ""),
+            "market": market,
+            "tip": selection,
+            "selection": selection,
+            "player": player,
+            "category": category,
+            "line": safe.get("line"),
+            "odds": q,
+            "oddsYes": q,
+            "probability": round(p * 100.0, 2),
+            "confidence": 3,
+            "edge": round(edge, 6),
+            "edge_pct": round(edge * 100.0, 2),
+            "_no_real_odds": False,
+            "_source": safe.get("source") or "observed_player_prop",
+        })
+    return out
+
+
+def _install_multi_combo_guard(bot) -> None:
+    """Build 3-11 leg variants from the best validated tips across every group."""
+    original_generate = bot.generate_multi_combo_bets
+
+    profiles = [
+        ["btts", "over25", "corners", "1x2", "player_prop", "btts_ht", "over15_ht", "combo", "scorer"],
+        ["player_prop", "1x2", "btts_ht", "over25", "corners", "btts", "scorer", "combo", "over15_ht"],
+        ["corners", "combo", "scorer", "btts", "over15_ht", "player_prop", "1x2", "over25", "btts_ht"],
+        ["1x2", "btts", "player_prop", "over25", "btts_ht", "corners", "combo", "scorer", "over15_ht"],
+    ]
+
+    def generate_all_groups_combo(all_tips, num_tips=3):
+        try:
+            n = max(3, min(11, int(num_tips)))
+        except Exception:
+            n = 3
+
+        pool: List[Dict[str, Any]] = [dict(x) for x in (all_tips or []) if isinstance(x, dict)]
+        pool.extend(_player_prop_combo_candidates(bot))
+
+        # Deduplicate exact selections while retaining the strongest version.
+        best: Dict[tuple, Dict[str, Any]] = {}
+        for row in pool:
+            q = _as_float(row.get("odds") or row.get("oddsYes"), 0.0)
+            p = _prob01(row.get("probability") or row.get("model_prob") or row.get("prob"))
+            match = str(row.get("match") or "").strip()
+            selection = str(row.get("selection") or row.get("tip") or "").strip()
+            if not match or " vs " not in match or q <= 1 or p <= 0 or row.get("_no_real_odds") is True:
+                continue
+            key = (
+                match.lower(), _combo_group(row), selection.lower(),
+                str(row.get("player") or "").lower(), str(row.get("line") or ""),
+            )
+            prev = best.get(key)
+            if prev is None or _combo_quality(row, n) > _combo_quality(prev, n):
+                best[key] = row
+        pool = list(best.values())
+        if len(pool) < n:
+            return original_generate(all_tips, num_tips=n)
+
+        by_group: Dict[str, List[Dict[str, Any]]] = {}
+        for row in pool:
+            by_group.setdefault(_combo_group(row), []).append(row)
+        for rows in by_group.values():
+            rows.sort(key=lambda r: _combo_quality(r, n), reverse=True)
+
+        profile = profiles[(n - 3) % len(profiles)]
+        selected: List[Dict[str, Any]] = []
+        used_matches = set()
+        used_keys = set()
+
+        def add_row(row: Dict[str, Any]) -> bool:
+            match_key = str(row.get("match") or "").lower().strip()
+            key = (
+                match_key, _combo_group(row),
+                str(row.get("selection") or row.get("tip") or "").lower(),
+            )
+            if not match_key or match_key in used_matches or key in used_keys:
+                return False
+            selected.append(row)
+            used_matches.add(match_key)
+            used_keys.add(key)
+            return True
+
+        # First pass deliberately rotates groups, preventing the old corner-only
+        # nesting (3L subset of 4L subset of 5L) and producing distinct variants.
+        for group in profile:
+            if len(selected) >= n:
+                break
+            for row in by_group.get(group, []):
+                if add_row(row):
+                    break
+
+        # Fill remaining slots with the strongest unused tips from every group.
+        if len(selected) < n:
+            remaining = sorted(pool, key=lambda r: _combo_quality(r, n), reverse=True)
+            for row in remaining:
+                if len(selected) >= n:
+                    break
+                add_row(row)
+
+        if len(selected) < n:
+            return None
+
+        # Respect the existing combined-odds cap. If the diversified selection is
+        # too expensive, rebuild with quality/odds efficiency for long combos.
+        cap = _as_float(
+            os.getenv("NETRATTLER_MULTI_COMBO_MAX_TOTAL_ODDS")
+            or os.getenv("NETRATTLER_MULTI_COMBO_MAX_ODDS", "500"),
+            500.0,
+        )
+        product = 1.0
+        for row in selected:
+            product *= _as_float(row.get("odds") or row.get("oddsYes"), 1.0)
+        if cap > 0 and product > cap:
+            selected = []
+            used_matches.clear()
+            efficiency = sorted(
+                pool,
+                key=lambda r: (
+                    _combo_quality(r, n) / max(1.0, math.log(max(1.0001, _as_float(r.get("odds") or r.get("oddsYes"), 1.01))) + 1.0),
+                    _combo_quality(r, n),
+                ),
+                reverse=True,
+            )
+            running = 1.0
+            for row in efficiency:
+                if len(selected) >= n:
+                    break
+                q = _as_float(row.get("odds") or row.get("oddsYes"), 0.0)
+                match_key = str(row.get("match") or "").lower().strip()
+                if q <= 1 or not match_key or match_key in used_matches:
+                    continue
+                # Keep room under the hard cap; for the final slot exact cap applies.
+                if cap > 0 and running * q > cap:
+                    continue
+                selected.append(row)
+                used_matches.add(match_key)
+                running *= q
+            if len(selected) < n:
+                return None
+
+        result = original_generate(selected, num_tips=n)
+        if result:
+            groups = []
+            for row in result.get("tips", []) or []:
+                g = _combo_group(row)
+                if g not in groups:
+                    groups.append(g)
+            result["combo_variant"] = f"mix-{(n - 3) % len(profiles) + 1}"
+            result["source_groups"] = groups
+            result["desc"] = f"ALL-GROUPS MIX · {', '.join(groups)}"
+            try:
+                bot.log(f"🎰 Combo {n}: All-Groups Mix · {', '.join(groups)}")
+            except Exception:
+                pass
+        return result
+
+    bot.generate_multi_combo_bets = generate_all_groups_combo
+
+
 def main() -> None:
     import btts_bot
 
     _install_pinnacle_guard(btts_bot)
+    _install_multi_combo_guard(btts_bot)
 
     def _legacy_estimated_builder_disabled(*_args, **_kwargs):
         try:
