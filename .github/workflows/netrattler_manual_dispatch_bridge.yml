@@ -1,0 +1,21 @@
+name: NETRATTLER Manual Dispatch Bridge
+
+on:
+  push:
+    branches:
+      - main
+    paths:
+      - '.github/workflows/netrattler_manual_dispatch_bridge.yml'
+
+permissions:
+  actions: write
+  contents: read
+
+jobs:
+  dispatch:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Dispatch current NETRATTLER tips workflow
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: gh workflow run btts_tips.yml --ref main -f mode=tips
