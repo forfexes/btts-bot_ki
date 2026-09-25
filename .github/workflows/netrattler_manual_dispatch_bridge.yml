@@ -18,4 +18,4 @@ jobs:
       - name: Dispatch current NETRATTLER tips workflow
         env:
           GH_TOKEN: ${{ github.token }}
-        run: gh workflow run btts_tips.yml --ref main -f mode=tips
+        run: gh workflow run btts_tips.yml -R forfexes/btts-bot_ki --ref main -f mode=tips
