@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import py_compile
+import unittest
 
 
 def main():
@@ -25,6 +26,7 @@ def main():
         "test_netrattler_result_enrichment.py",
         "test_netrattler_fotmob_results.py",
         "test_netrattler_settlement_runner.py",
+        "test_netrattler_settlement_v21.py",
     ]
     for path in critical:
         py_compile.compile(path, doraise=True)
@@ -39,6 +41,7 @@ def main():
     import test_netrattler_result_enrichment as result_enrichment
     import test_netrattler_fotmob_results as fotmob_results
     import test_netrattler_settlement_runner as settlement_runner
+    import test_netrattler_settlement_v21 as settlement_v21
 
     source_health.main()
     builder_guard.main()
@@ -48,7 +51,13 @@ def main():
     result_enrichment.main()
     fotmob_results.main()
     settlement_runner.main()
-    print("OK: NETRATTLER consolidated hardtest passed (source health + REAL_ODDS guard + Builder concepts + routing + settlement result parsers)")
+
+    suite = unittest.defaultTestLoader.loadTestsFromTestCase(settlement_v21.SettlementV21Tests)
+    result = unittest.TextTestRunner(verbosity=0).run(suite)
+    if not result.wasSuccessful():
+        raise SystemExit("NETRATTLER settlement V/X regression failed")
+
+    print("OK: NETRATTLER consolidated hardtest passed (source health + REAL_ODDS guard + Builder concepts + routing + in-tip V/X settlement + result parsers)")
 
 
 if __name__ == "__main__":
