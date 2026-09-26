@@ -63,6 +63,7 @@ jobs:
                 netrattler_autolearn_v36.py
                 netrattler_builder_learning_v36.py
                 scrape_player_stats.py
+                netrattler_fotmob_results.py
                 netrattler_odds_harvester.py
                 netrattler_closing_odds_capture_v35.py
                 test_netrattler_core.py
@@ -103,6 +104,7 @@ jobs:
                 netrattler_generic_repo_ingestor.py
                 netrattler_closing_odds_capture_v35.py
                 scrape_player_stats.py
+                netrattler_fotmob_results.py
                 netrattler_odds_harvester.py
                 train_model.py
                 netrattler_autolearn_v36.py
@@ -126,6 +128,10 @@ jobs:
               btts_bot.py
               netrattler_builder_guard.py
               netrattler_builder_engine.py
+              netrattler_builder_styles.py
+              netrattler_builder_concepts_v2.py
+              netrattler_runtime_patch.py
+              netrattler_hardtest.py
               netrattler_ml_player.py
               netrattler_prop_sources.py
               netrattler_runtime_policy.py
@@ -281,6 +287,7 @@ jobs:
                 netrattler_autolearn_v36.py
                 netrattler_builder_learning_v36.py
                 scrape_player_stats.py
+                netrattler_fotmob_results.py
                 netrattler_odds_harvester.py
                 netrattler_closing_odds_capture_v35.py
               )
@@ -308,6 +315,7 @@ jobs:
                 netrattler_generic_repo_ingestor.py
                 netrattler_closing_odds_capture_v35.py
                 scrape_player_stats.py
+                netrattler_fotmob_results.py
                 netrattler_odds_harvester.py
                 train_model.py
                 netrattler_autolearn_v36.py
@@ -324,6 +332,10 @@ jobs:
               btts_bot.py
               netrattler_builder_guard.py
               netrattler_builder_engine.py
+              netrattler_builder_styles.py
+              netrattler_builder_concepts_v2.py
+              netrattler_runtime_patch.py
+              netrattler_hardtest.py
               netrattler_ml_player.py
               netrattler_prop_sources.py
               netrattler_runtime_policy.py
@@ -349,7 +361,7 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
-          python -m py_compile             btts_bot.py             netrattler_builder_engine.py             netrattler_settlement_v16_final.py             netrattler_source_hub.py             netrattler_identity_hub.py             netrattler_feature_hub.py             test_netrattler_core.py
+          python -m py_compile btts_bot.py netrattler_builder_engine.py netrattler_settlement_v16_final.py netrattler_source_hub.py netrattler_identity_hub.py netrattler_feature_hub.py test_netrattler_core.py
           python test_netrattler_core.py
 
       - name: Source discovery and quarantine lab
@@ -367,8 +379,6 @@ jobs:
         run: NETRATTLER_LEARNING_MODE=sources python netrattler_learning_engine.py
       - name: Safe generic data ingestion
         timeout-minutes: 10
-        # Historical GitHub datasets run only for full/source maintenance.
-        # Daily mode is reserved for fresh player stats, odds and learning.
         if: contains(fromJSON('["full","sources"]'), steps.mode.outputs.mode)
         env:
           SUPABASE_URL: ${{ secrets.SUPABASE_URL }}
@@ -393,7 +403,9 @@ jobs:
           BETFAIR_APP_KEY: ${{ secrets.BETFAIR_APP_KEY }}
           BETFAIR_SESSION_TOKEN: ${{ secrets.BETFAIR_SESSION_TOKEN }}
         run: |
-          # Odds have a separate step. Daily mode also skips the slow soccerdata/TLS fallback.
+          # Persist the same FotMob scores our stats scraper can already reach,
+          # then collect detailed player stats. Settlement consumes match_results.
+          python netrattler_fotmob_results.py --yesterday
           export USE_ODDSHARVESTER_STYLE=false
           export IDENTITY_REFERENCE_HEALTHCHECK=false
           if [[ "${{ steps.mode.outputs.mode }}" == "daily" ]]; then
@@ -414,8 +426,6 @@ jobs:
           ODDS_API_KEY: ${{ secrets.ODDS_API_KEY }}
           BETFAIR_APP_KEY: ${{ secrets.BETFAIR_APP_KEY }}
           BETFAIR_SESSION_TOKEN: ${{ secrets.BETFAIR_SESSION_TOKEN }}
-          # OddsHarvester/OddsPortal only duplicates team markets here and
-          # consumed the full timeout. Keep it for FULL maintenance, not DAILY.
           ENABLE_ODDSHARVESTER: "false"
           BET365_WAIT_MS: "4000"
         run: |
@@ -477,6 +487,10 @@ jobs:
           TELEGRAM_GROUP_COMBO: ${{ secrets.TELEGRAM_GROUP_COMBO }}
           TELEGRAM_GROUP_COMBOS: ${{ secrets.TELEGRAM_GROUP_COMBOS }}
           TELEGRAM_GROUP_BTTS_HT: ${{ secrets.TELEGRAM_GROUP_BTTS_HT }}
+          TELEGRAM_GROUP_HZ_LIVE: ${{ secrets.TELEGRAM_GROUP_HZ_LIVE }}
+          TELEGRAM_GROUP_CORNERS: ${{ secrets.TELEGRAM_GROUP_CORNERS }}
+          TELEGRAM_GROUP_LATE_GOALS: ${{ secrets.TELEGRAM_GROUP_LATE_GOALS }}
+          TELEGRAM_GROUP_PLAYER_PROPS: ${{ secrets.TELEGRAM_GROUP_PLAYER_PROPS }}
           TELEGRAM_GROUP_BUILDER: ${{ secrets.TELEGRAM_GROUP_BUILDER }}
           TELEGRAM_GROUP_PROPS: ${{ secrets.TELEGRAM_GROUP_PROPS }}
           TELEGRAM_GROUP_STATS: ${{ secrets.TELEGRAM_GROUP_STATS }}
@@ -490,7 +504,12 @@ jobs:
           NETRATTLER_COMBO_MIN_EDGE: "0.02"
           NETRATTLER_COMBO_COMPONENT_MIN_PROB: "45"
           NETRATTLER_PROP_BUILDER_MIN_EDGE: "0.02"
-        run: python netrattler_builder_guard.py
+          NETRATTLER_PROP_BUILDER_MAX_MODEL_MARKET_RATIO: "4.0"
+          NETRATTLER_PROP_BUILDER_MAX_ABS_EDGE: "0.30"
+          NETRATTLER_ENABLE_LEGACY_PROP_BUILDER: "false"
+        run: |
+          python netrattler_hardtest.py
+          python -c "import netrattler_runtime_patch as patch; patch.install_pre_guard(); import btts_bot; patch.install_bot(btts_bot); import netrattler_builder_guard as guard; import netrattler_builder_styles as styles; import netrattler_builder_concepts_v2 as concepts; styles.install(); concepts.install(); guard.main()"
       - uses: actions/upload-artifact@v4
         if: always()
         with:
