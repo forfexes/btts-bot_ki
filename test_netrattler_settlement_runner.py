@@ -7,10 +7,11 @@ import types
 from pathlib import Path
 
 
-def test_1x2_settlement_route():
+def test_settlement_routes():
     fake = types.ModuleType("netrattler_settlement_v16_final")
     fake.TG_DEFAULT = "AI"
-    fake.GROUPS = {"1x2": "LATE", "scorer": "LATE"}
+    fake.GROUPS = {"1x2": "LATE", "scorer": "LATE", "btts_ht": "HT", "over15_ht": "OTHER"}
+    fake.send_roi_report = lambda _history: "old-global-report"
     fake.main = lambda: None
     old = sys.modules.get("netrattler_settlement_v16_final")
     sys.modules["netrattler_settlement_v16_final"] = fake
@@ -23,6 +24,8 @@ def test_1x2_settlement_route():
         module.install_routing()
         assert fake.GROUPS["1x2"] == "AI"
         assert fake.GROUPS["scorer"] == "LATE"
+        assert fake.GROUPS["over15_ht"] == "HT"
+        assert fake.send_roi_report([]) is None
     finally:
         if old is None:
             sys.modules.pop("netrattler_settlement_v16_final", None)
@@ -31,8 +34,8 @@ def test_1x2_settlement_route():
 
 
 def main():
-    test_1x2_settlement_route()
-    print("OK: settlement 1X2 -> Telegram AI, scorer stays Late Goals")
+    test_settlement_routes()
+    print("OK: 1X2 -> AI, HT shared group, no mixed global ROI report")
 
 
 if __name__ == "__main__":
