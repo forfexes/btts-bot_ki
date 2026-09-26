@@ -24,6 +24,7 @@ _ORIG_BUILD = None
 
 CONTACT = {"fouls", "fouls_won", "tackles", "tackles_committed", "tackles_received"}
 ATTACK = {"shots", "sot", "score_assist", "score", "assist"}
+EXTRA_STYLES = ("CONTACT MIX", "ATTACK CONTACT MIX", "HIGH LINE MIX", "SHOT BOMB")
 
 
 def _f(value, default=0.0):
@@ -80,7 +81,6 @@ def _attack_contact_mix(rows: Sequence[builder.PropLeg], match_date: str) -> Lis
         (attack[:2] + contact[:3], 5, "ATTACK + CONTACT 5L", 0.20),
     ]
     for legs, size, label, stake in configs:
-        # Resolve duplicate players/categories conservatively.
         chosen: List[builder.PropLeg] = []
         for leg in legs:
             if leg.key() in {x.key() for x in chosen}:
@@ -97,7 +97,6 @@ def _attack_contact_mix(rows: Sequence[builder.PropLeg], match_date: str) -> Lis
 
 def _high_line(rows: Sequence[builder.PropLeg], match_date: str) -> List[builder.BuilderPick]:
     # Bookmaker totals use the actual O/U line: O1.5 == 2+, O2.5 == 3+.
-    # Therefore the first true "higher" ladder step begins at 1.5, not 2.0.
     thresholds = {
         "shots": 1.5,
         "sot": 1.5,
@@ -158,17 +157,43 @@ def install() -> None:
 
     def build(raw_props, match_contexts=None, match_date=None, max_builders=None):
         run_date = match_date or builder.date.today().isoformat()
-        base = list(_ORIG_BUILD(raw_props, match_contexts, run_date, max_builders=max_builders))
-        extras = _extra(raw_props, run_date)
-        seen = {x.builder_id for x in base}
-        for pick in extras:
-            if pick.builder_id not in seen:
-                base.append(pick)
-                seen.add(pick.builder_id)
         cap = max_builders or builder.as_int(os.getenv("NETRATTLER_MAX_BUILDERS_PER_RUN", "30"), 30)
-        # The base style layer has already ranked its picks; extras are appended in
-        # conservative-to-risky order and never displace a previously qualified pick.
-        return base[:cap]
+        base = list(_ORIG_BUILD(raw_props, match_contexts, run_date, max_builders=cap))
+        extras = _extra(raw_props, run_date)
+
+        # Reserve at most one slot for each genuinely available new concept so a
+        # full legacy/premium pool cannot silently hide Shot Bomb/High-Line etc.
+        reserved: List[builder.BuilderPick] = []
+        for style in EXTRA_STYLES:
+            pick = next((x for x in extras if x.style == style), None)
+            if pick is not None:
+                reserved.append(pick)
+        reserved = reserved[:cap]
+        reserved_ids = {x.builder_id for x in reserved}
+
+        combined: List[builder.BuilderPick] = []
+        seen = set(reserved_ids)
+        base_slots = max(0, cap - len(reserved))
+        for pick in base:
+            if pick.builder_id in seen:
+                continue
+            combined.append(pick)
+            seen.add(pick.builder_id)
+            if len(combined) >= base_slots:
+                break
+        combined.extend(reserved)
+
+        # If the reserved styles did not consume the cap, fill with additional
+        # qualified variants without changing REAL_ODDS_ONLY semantics.
+        if len(combined) < cap:
+            for pick in base + extras:
+                if pick.builder_id in seen:
+                    continue
+                combined.append(pick)
+                seen.add(pick.builder_id)
+                if len(combined) >= cap:
+                    break
+        return combined
 
     builder.build_builder_picks = build
     _INSTALLED = True
