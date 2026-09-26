@@ -56,7 +56,8 @@ jobs:
 
       - name: Fast syntax check
         run: |
-          python -m py_compile btts_bot.py netrattler_builder_engine.py netrattler_builder_guard.py netrattler_builder_styles.py test_netrattler_builder_guard.py test_netrattler_builder_styles.py data_fusion_v15.py \
+          python -m py_compile btts_bot.py netrattler_builder_engine.py netrattler_builder_guard.py netrattler_builder_styles.py netrattler_builder_concepts_v2.py netrattler_runtime_patch.py \
+            test_netrattler_builder_guard.py test_netrattler_builder_styles.py test_netrattler_builder_concepts_v2.py test_netrattler_runtime_patch.py data_fusion_v15.py \
             netrattler_runtime_policy.py netrattler_market_consensus_v36.py \
             netrattler_exposure_engine_v36.py netrattler_coverage_watchdog_v37.py \
             netrattler_model_registry_v37.py netrattler_oddspapi.py
@@ -69,6 +70,12 @@ jobs:
 
       - name: Screenshot builder styles regression
         run: python test_netrattler_builder_styles.py
+
+      - name: Builder concepts V2 regression
+        run: python test_netrattler_builder_concepts_v2.py
+
+      - name: Runtime routing and Kambi parser regression
+        run: python test_netrattler_runtime_patch.py
 
       - name: Run Tips Bot 🤖
         env:
@@ -111,7 +118,6 @@ jobs:
           TELEGRAM_GROUP_PLAYER_PROPS: ${{ secrets.TELEGRAM_GROUP_PLAYER_PROPS }}
           TELEGRAM_GROUP_BUILDER:     ${{ secrets.TELEGRAM_GROUP_BUILDER }}
           TELEGRAM_GROUP_OVER15_HT:   ${{ secrets.TELEGRAM_GROUP_OVER15_HT }}
-          TELEGRAM_GROUP_1X2:         ${{ secrets.TELEGRAM_GROUP_1X2 }}
           # ── Supabase ──
           SUPABASE_URL:               ${{ secrets.SUPABASE_URL }}
           SUPABASE_KEY:               ${{ secrets.SUPABASE_KEY }}
@@ -194,4 +200,5 @@ jobs:
           NETRATTLER_PROP_BUILDER_MAX_ABS_EDGE: "0.30"
           NETRATTLER_ENABLE_LEGACY_PROP_BUILDER: "false"
           NETRATTLER_ENABLE_SCREENSHOT_BUILDERS: "false"
-        run: python -c "import netrattler_builder_guard as guard; import netrattler_builder_styles as styles; styles.install(); guard.main()"
+        run: |
+          python -c "import netrattler_runtime_patch as patch; patch.install_pre_guard(); import btts_bot; patch.install_bot(btts_bot); import netrattler_builder_guard as guard; import netrattler_builder_styles as styles; import netrattler_builder_concepts_v2 as concepts; styles.install(); concepts.install(); guard.main()"
