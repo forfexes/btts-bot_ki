@@ -24,6 +24,7 @@ def main():
         "test_netrattler_runtime_patch.py",
         "test_netrattler_result_enrichment.py",
         "test_netrattler_fotmob_results.py",
+        "test_netrattler_settlement_runner.py",
     ]
     for path in critical:
         py_compile.compile(path, doraise=True)
@@ -37,6 +38,7 @@ def main():
     import test_netrattler_builder_concepts_v2 as builder_concepts
     import test_netrattler_result_enrichment as result_enrichment
     import test_netrattler_fotmob_results as fotmob_results
+    import test_netrattler_settlement_runner as settlement_runner
 
     source_health.main()
     builder_guard.main()
@@ -45,6 +47,7 @@ def main():
     builder_concepts.main()
     result_enrichment.main()
     fotmob_results.main()
+    settlement_runner.main()
     print("OK: NETRATTLER consolidated hardtest passed (source health + REAL_ODDS guard + Builder concepts + routing + settlement result parsers)")
 
 
