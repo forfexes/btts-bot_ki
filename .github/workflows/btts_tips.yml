@@ -56,8 +56,10 @@ jobs:
 
       - name: Fast syntax check
         run: |
-          python -m py_compile btts_bot.py netrattler_builder_engine.py netrattler_builder_guard.py netrattler_builder_styles.py netrattler_builder_concepts_v2.py netrattler_runtime_patch.py \
-            test_netrattler_builder_guard.py test_netrattler_builder_styles.py test_netrattler_builder_concepts_v2.py test_netrattler_runtime_patch.py data_fusion_v15.py \
+          python -m py_compile btts_bot.py netrattler_builder_engine.py netrattler_builder_guard.py netrattler_builder_styles.py netrattler_builder_concepts_v2.py netrattler_runtime_patch.py netrattler_hardtest.py \
+            test_netrattler_builder_guard.py test_netrattler_builder_styles.py test_netrattler_builder_concepts_v2.py test_netrattler_runtime_patch.py \
+            netrattler_result_enrichment.py netrattler_fotmob_results.py netrattler_settlement_runner.py \
+            test_netrattler_result_enrichment.py test_netrattler_fotmob_results.py test_netrattler_settlement_runner.py data_fusion_v15.py \
             netrattler_runtime_policy.py netrattler_market_consensus_v36.py \
             netrattler_exposure_engine_v36.py netrattler_coverage_watchdog_v37.py \
             netrattler_model_registry_v37.py netrattler_oddspapi.py
@@ -65,17 +67,8 @@ jobs:
             [ ! -f "$f" ] || python -m py_compile "$f"
           done
 
-      - name: Builder guard regression
-        run: python test_netrattler_builder_guard.py
-
-      - name: Screenshot builder styles regression
-        run: python test_netrattler_builder_styles.py
-
-      - name: Builder concepts V2 regression
-        run: python test_netrattler_builder_concepts_v2.py
-
-      - name: Runtime routing and Kambi parser regression
-        run: python test_netrattler_runtime_patch.py
+      - name: Consolidated NETRATTLER hardtest
+        run: python netrattler_hardtest.py
 
       - name: Run Tips Bot 🤖
         env:
