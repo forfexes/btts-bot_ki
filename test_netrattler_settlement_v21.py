@@ -81,6 +81,30 @@ class SettlementV21Tests(unittest.TestCase):
             rows = mod._sofascore_results("2026-07-01")
         self.assertEqual((rows[0]["home_score"], rows[0]["away_score"]), (2, 1))
 
+    def test_same_post_success_edits_original_with_vx_result(self):
+        settlement = {
+            "tip_id": "t-success", "status": "win", "market_group": "btts",
+            "profit": 0.8, "profit_units": 0.8, "reason": "BTTS getroffen",
+            "tip_payload": {
+                "market": "btts", "match": "A vs B",
+                "telegram_chat_id": "123", "telegram_msg_id": 44,
+                "message_text": "Original tip",
+            },
+            "match_result": {"home_score": 1, "away_score": 1, "raw": {}},
+        }
+        calls = []
+        def fake_edit(chat_id, message_id, text):
+            calls.append((str(chat_id), int(message_id), text))
+            return True
+        with patch.dict(os.environ, {"SETTLEMENT_ALLOW_SEPARATE_RESULT_UPDATE": "false"}), \
+             patch.dict(mod.GROUPS, {"btts": "123"}), \
+             patch.object(mod, "telegram_edit", side_effect=fake_edit), \
+             patch.object(mod, "telegram", return_value=True) as send_mock:
+            self.assertTrue(mod.edit_original_tip(settlement))
+            send_mock.assert_not_called()
+        self.assertEqual(calls[0][0:2], ("123", 44))
+        self.assertIn("Original tip", calls[0][2])
+        self.assertTrue("✅" in calls[0][2] or " V" in calls[0][2])
 
     def test_same_post_default_does_not_send_separate_result(self):
         settlement = {
