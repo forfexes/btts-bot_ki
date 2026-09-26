@@ -84,7 +84,7 @@ print("=" * 50)
 if not get_bot_info():
     exit(1)
 
-# Alle Gruppen inkl. BTTS+2.5
+# 1X2 belongs to Telegram AI/Main Chat; Goal Hunter stays in Late Goals.
 groups = {
     "BTTS":           os.getenv("TELEGRAM_GROUP_BTTS", ""),
     "Over 2.5":       os.getenv("TELEGRAM_GROUP_OVER25", ""),
@@ -92,11 +92,11 @@ groups = {
     "Multi Combos":   os.getenv("TELEGRAM_GROUP_COMBOS", ""),
     "BTTS HT / O1.5 HT": os.getenv("TELEGRAM_GROUP_BTTS_HT", ""),
     "Corner Sniper":  os.getenv("TELEGRAM_GROUP_CORNERS", "") or os.getenv("TELEGRAM_GROUP_HZ_LIVE", ""),
-    "Goal Hunter / 1X2": os.getenv("TELEGRAM_GROUP_LATE_GOALS", ""),
+    "Goal Hunter":    os.getenv("TELEGRAM_GROUP_LATE_GOALS", ""),
+    "1X2 / Telegram AI": os.getenv("TELEGRAM_CHAT_ID", ""),
     "Player Props":   os.getenv("TELEGRAM_GROUP_PLAYER_PROPS", "") or os.getenv("TELEGRAM_GROUP_PROPS", ""),
     "Builder":        os.getenv("TELEGRAM_GROUP_BUILDER", ""),
     "Stats":          os.getenv("TELEGRAM_GROUP_STATS", ""),
-    "Main Chat":      os.getenv("TELEGRAM_CHAT_ID", ""),
 }
 
 print("\n📤 Teste alle Gruppen:")
