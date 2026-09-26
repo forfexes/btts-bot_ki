@@ -30,7 +30,10 @@ jobs:
           pip install -r requirements.txt || true
           python -m playwright install chromium --with-deps
       - name: Compile
-        run: python -m py_compile scrape_player_stats.py netrattler_odds_harvester.py
+        run: |
+          python -m py_compile scrape_player_stats.py netrattler_odds_harvester.py \
+            netrattler_fotmob_results.py test_netrattler_fotmob_results.py
+          python test_netrattler_fotmob_results.py
       - name: Run every source with fallback
         env:
           SUPABASE_URL: ${{ secrets.SUPABASE_URL }}
@@ -59,6 +62,7 @@ jobs:
           DAILY_RESULTS_PARALLEL_WORKERS: "4"
           DAILY_STATS_PARALLEL_WORKERS: "2"
         run: |
-          if [ -n "${{ github.event.inputs.date }}" ]; then ARGS="--date ${{ github.event.inputs.date }}"; else ARGS="--yesterday"; fi
+          if [ -n "${{ github.event.inputs.date }}" ]; then ARGS="--date ${{ github.event.inputs.date }}"; FOTMOB_ARGS="--date ${{ github.event.inputs.date }}"; else ARGS="--yesterday"; FOTMOB_ARGS="--yesterday"; fi
           if [ "${{ github.event.inputs.results_only }}" = "true" ]; then ARGS="$ARGS --results-only"; fi
+          python netrattler_fotmob_results.py $FOTMOB_ARGS
           python scrape_player_stats.py $ARGS
