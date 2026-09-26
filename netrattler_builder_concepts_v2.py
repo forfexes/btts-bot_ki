@@ -96,14 +96,16 @@ def _attack_contact_mix(rows: Sequence[builder.PropLeg], match_date: str) -> Lis
 
 
 def _high_line(rows: Sequence[builder.PropLeg], match_date: str) -> List[builder.BuilderPick]:
+    # Bookmaker totals use the actual O/U line: O1.5 == 2+, O2.5 == 3+.
+    # Therefore the first true "higher" ladder step begins at 1.5, not 2.0.
     thresholds = {
-        "shots": 2.0,
-        "sot": 1.0,
-        "fouls": 2.0,
-        "fouls_won": 2.0,
-        "tackles": 2.0,
-        "tackles_committed": 2.0,
-        "tackles_received": 2.0,
+        "shots": 1.5,
+        "sot": 1.5,
+        "fouls": 1.5,
+        "fouls_won": 1.5,
+        "tackles": 1.5,
+        "tackles_committed": 1.5,
+        "tackles_received": 1.5,
     }
     high = [
         x for x in rows
@@ -121,7 +123,8 @@ def _high_line(rows: Sequence[builder.PropLeg], match_date: str) -> List[builder
 
 
 def _shot_bomb(rows: Sequence[builder.PropLeg], match_date: str) -> List[builder.BuilderPick]:
-    shots = [x for x in rows if x.category == "shots" and x.line >= 2.0 and _modelled(x)]
+    # Screenshot concept: 2+/3+ shots = bookmaker O1.5/O2.5 lines.
+    shots = [x for x in rows if x.category == "shots" and x.line >= 1.5 and _modelled(x)]
     legs = _distinct(shots, 5)
     out: List[builder.BuilderPick] = []
     for size, label, stake in ((3, "SHOT BOMB 3L", 0.20), (4, "SHOT BOMB 4L", 0.10), (5, "SHOT BOMB 5L", 0.05)):
