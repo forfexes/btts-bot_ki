@@ -29,18 +29,21 @@ def test_extra_concepts_real_odds_only():
     os.environ["NETRATTLER_BUILDER_MIN_ODDS"] = "2.0"
     styles.install()
     concepts.install()
+    # Raw bookmaker thresholds: O1.5 means 2+, O2.5 means 3+.
     raw = [
-        row("P1", "shots", 2.0, 1.90, 0.66),
-        row("P2", "shots", 2.0, 1.85, 0.65),
-        row("P3", "shots", 3.0, 2.40, 0.50),
-        row("P4", "shots", 2.0, 1.80, 0.67),
-        row("P5", "shots", 2.0, 1.95, 0.62),
-        row("P6", "fouls", 2.0, 1.85, 0.64),
-        row("P7", "fouls_won", 2.0, 1.90, 0.62),
-        row("P8", "tackles_committed", 2.0, 1.80, 0.68),
-        row("P9", "sot", 1.0, 1.75, 0.68),
+        row("P1", "shots", 1.5, 1.90, 0.66),
+        row("P2", "shots", 1.5, 1.85, 0.65),
+        row("P3", "shots", 2.5, 2.40, 0.50),
+        row("P4", "shots", 1.5, 1.80, 0.67),
+        row("P5", "shots", 1.5, 1.95, 0.62),
+        row("P6", "fouls", 1.5, 1.85, 0.64),
+        row("P7", "fouls_won", 1.5, 1.90, 0.62),
+        row("P8", "tackles_committed", 1.5, 1.80, 0.68),
+        row("P9", "sot", 1.5, 1.75, 0.68),
     ]
-    picks = builder.build_builder_picks(raw, match_date="2026-09-26", max_builders=60)
+    # Small cap deliberately proves the wrapper reserves one slot for every
+    # available new screenshot family rather than silently truncating them.
+    picks = builder.build_builder_picks(raw, match_date="2026-09-26", max_builders=8)
     styles_found = {p.style for p in picks}
     assert "SHOT BOMB" in styles_found, styles_found
     assert "CONTACT MIX" in styles_found, styles_found
@@ -56,7 +59,7 @@ def test_extra_concepts_real_odds_only():
 
 
 def test_estimated_or_unmodelled_never_enters_new_concepts():
-    bad = row("Bad", "shots", 3.0, 3.0, 0.0)
+    bad = row("Bad", "shots", 2.5, 3.0, 0.0)
     leg = builder.normalize_prop(bad)
     # With no independent probability the engine explicitly keeps edge at zero.
     assert leg is not None and leg.edge == 0
