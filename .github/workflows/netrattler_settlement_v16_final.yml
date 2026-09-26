@@ -23,13 +23,14 @@ jobs:
       - name: Compile settlement + learning feedback
         run: |
           python -m py_compile netrattler_settlement_v16_final.py netrattler_settlement_runner.py \
-            netrattler_result_enrichment.py test_netrattler_result_enrichment.py test_netrattler_settlement_v21.py \
+            netrattler_result_enrichment.py test_netrattler_result_enrichment.py test_netrattler_settlement_v21.py test_netrattler_settlement_runner.py \
             netrattler_learning_engine.py netrattler_autolearn_v36.py \
             netrattler_builder_learning_v36.py netrattler_runtime_policy.py
       - name: Settlement regression
         run: |
           python test_netrattler_settlement_v21.py
           python test_netrattler_result_enrichment.py
+          python test_netrattler_settlement_runner.py
       - name: Run Settlement V25 MULTISOURCE
         env:
           SUPABASE_URL: ${{ secrets.SUPABASE_URL }}
