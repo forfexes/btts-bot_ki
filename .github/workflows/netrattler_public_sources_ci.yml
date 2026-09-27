@@ -7,6 +7,7 @@ on:
       - "netrattler_source_probe.py"
       - "netrattler_public_source_features.py"
       - "netrattler_quote_source_probe.py"
+      - "netrattler_web_odds_diag.py"
       - ".github/workflows/netrattler_public_sources_ci.yml"
   workflow_dispatch:
 
@@ -24,9 +25,11 @@ jobs:
           python -m pip install --prefer-binary requests beautifulsoup4 cloudscraper curl_cffi playwright
           python -m playwright install --with-deps chromium
       - name: Compile
-        run: python -m py_compile netrattler_source_probe.py netrattler_public_source_features.py netrattler_quote_source_probe.py netrattler_prop_sources.py
+        run: python -m py_compile netrattler_source_probe.py netrattler_public_source_features.py netrattler_quote_source_probe.py netrattler_web_odds_diag.py netrattler_prop_sources.py
       - name: Probe keyless bookmaker feeds
         run: python netrattler_quote_source_probe.py
+      - name: Inspect reachable OddsPortal and Flashscore HTML structure
+        run: python netrattler_web_odds_diag.py
       - name: Probe public football and odds websites
         env:
           NETRATTLER_SOURCE_PROBE_BROWSER: "1"
@@ -42,6 +45,7 @@ jobs:
           name: netrattler-public-source-probe
           path: |
             netrattler_quote_source_probe.json
+            netrattler_web_odds_diag.json
             netrattler_source_probe.json
             netrattler_public_source_summary.json
           if-no-files-found: ignore
