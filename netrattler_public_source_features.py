@@ -11,7 +11,7 @@ import json, os, re, time
 from datetime import datetime, timezone
 import requests
 
-UA="NETRATTLER-PublicFeatures/1.2 (+https://github.com/forfexes/btts-bot_ki)"
+UA="NETRATTLER-PublicFeatures/1.3 (+https://github.com/forfexes/btts-bot_ki)"
 TIMEOUT=int(os.getenv("NETRATTLER_PUBLIC_SOURCE_TIMEOUT","20"))
 USE_BROWSER=os.getenv("NETRATTLER_PUBLIC_SOURCE_BROWSER","1")=="1"
 
@@ -26,6 +26,11 @@ SOURCES={
  "oddsportal":"https://www.oddsportal.com/football/",
  "betexplorer":"https://www.betexplorer.com/football/",
  "flashscore":"https://www.flashscore.com/football/",
+ # 2026-09-27: new candidates; shadow/probe only until runner evidence is good.
+ "datamb_radars":"https://datamb.football/radars/",
+ "statz_ai":"https://statz.ai/",
+ "thestatsdontlie_macarthur":"https://www.thestatsdontlie.com/football/rest-of-the-world/australia/macarthur-fc/",
+ "playmakerstats":"https://www.playmakerstats.com/",
 }
 
 def fetch_public(url):
@@ -60,11 +65,14 @@ def text_features(html):
       "has_lineups":("lineup" in low or "aufstellung" in low),
       "has_corners":("corner" in low or "eckb" in low),
       "has_cards":("yellow card" in low or "red card" in low or "karten" in low),
+      "has_shots":("shots" in low or "schüsse" in low),
+      "has_fouls":("fouls" in low or "fouled" in low),
+      "has_xg":("expected goals" in low or "xg" in low),
       "has_btts":("btts" in low or "both teams to score" in low),
       "has_over25":("over 2.5" in low or "2.5 goals" in low),
       "has_1x2":("1x2" in low or "match result" in low),
       "has_player_props":("player props" in low or "player shots" in low or "shots on target" in low or "goalscorer" in low or "player tackles" in low),
-      "has_prop_model":("model probability" in low or "fair odds" in low or "hit rate" in low or "confidence" in low),
+      "has_prop_model":("model probability" in low or "fair odds" in low or "hit rate" in low or "confidence" in low or "projection" in low),
       "has_bookmaker":("bookmaker" in low or "bet365" in low or "pinnacle" in low or "unibet" in low),
       "has_odds":("odds" in low or "quoten" in low),
     }
