@@ -1,9 +1,14 @@
 #!/usr/bin/env python3
-"""Use fresh observed odds_history rows as one more REAL_ODDS_ONLY fallback.
+"""Final REAL_ODDS_ONLY fallback layer for NETRATTLER.
 
-This bridges the asynchronous odds collectors (Pinnacle/The Odds API/AiScore/etc.)
-with the fast tips job. It never creates model/fair/default odds. The guard fills
-only a market that is still missing after the normal runtime chain.
+After Pinnacle and the fast runtime fallbacks, this guard fills still-missing team
+markets from two observed-only sources:
+1) multi-brand Kambi (Unibet/Betsson/888/NordicBet),
+2) fresh Supabase odds_history rows written by asynchronous collectors such as
+   The Odds API and AiScore.
+
+It never creates fair/model/default odds and never overwrites an already valid
+observed price returned by an earlier layer.
 """
 from __future__ import annotations
 
@@ -15,6 +20,11 @@ from datetime import datetime, timezone
 from typing import Any, Dict, Iterable, List, Mapping, Optional, Tuple
 
 import requests
+
+try:
+    import netrattler_kambi_team_odds as kambi_team
+except Exception:  # optional/fault isolated
+    kambi_team = None
 
 SUPABASE_URL = (os.getenv("SUPABASE_URL") or "").rstrip("/")
 SUPABASE_KEY = os.getenv("SUPABASE_SERVICE_ROLE_KEY") or os.getenv("SUPABASE_KEY") or ""
@@ -57,7 +67,6 @@ def _fresh(row: Mapping[str, Any]) -> bool:
     raw = row.get("raw") if isinstance(row.get("raw"), dict) else {}
     stamp = raw.get("captured_at") or raw.get("timestamp") or raw.get("updated_at")
     if not stamp:
-        # Query itself is restricted to today's captured_date.
         return True
     try:
         dt = datetime.fromisoformat(str(stamp).replace("Z", "+00:00"))
@@ -108,24 +117,18 @@ def _field_for_row(row: Mapping[str, Any]) -> Optional[str]:
         line_f = float(line) if line not in (None, "") else None
     except Exception:
         line_f = None
-
     if market in {"1x2", "h2h", "moneyline"}:
-        if selection in {"home", "1"}: return "home_win"
-        if selection in {"draw", "x"}: return "draw"
-        if selection in {"away", "2"}: return "away_win"
-    if market in {"btts", "both_teams_to_score"} or ("btts" in market and "ht" not in market and "half" not in market):
-        if selection in {"yes", "y"}: return "btts_yes"
+        return {"home": "home_win", "1": "home_win", "draw": "draw", "x": "draw", "away": "away_win", "2": "away_win"}.get(selection)
+    if market in {"btts", "both_teams_to_score"} or ("btts" in market and "ht" not in market and "half" not in market and "combo" not in market and "over" not in market):
+        return "btts_yes" if selection in {"yes", "y"} else None
     if market in {"btts_ht", "btts_1h"} or ("btts" in market and ("ht" in market or "half" in market)):
-        if selection in {"yes", "y"}: return "btts_yes_ht"
-    if market in {"totals_2_5", "over_under_2_5"} or ("2_5" in market and "corner" not in market):
-        if selection.startswith("over"):
-            return "over_25"
+        return "btts_yes_ht" if selection in {"yes", "y"} else None
     if market in {"totals_ht_1_5", "over_under_ht_1_5"} or (("1_5" in market or line_f == 1.5) and ("ht" in market or "half" in market)):
-        if selection.startswith("over"):
-            return "over_15_ht"
-    if ("btts" in market and ("over25" in market or "over_2_5" in market or "over2_5" in market or "combo" in market)):
-        if selection in {"yes", "yes_over", "btts_over", "over"} or "yes" in selection:
-            return "btts_over25_yes"
+        return "over_15_ht" if selection.startswith("over") else None
+    if market in {"totals_2_5", "over_under_2_5"} or ("2_5" in market and "corner" not in market):
+        return "over_25" if selection.startswith("over") else None
+    if "btts" in market and ("over25" in market or "over_2_5" in market or "over2_5" in market or "combo" in market):
+        return "btts_over25_yes" if ("yes" in selection or selection in {"over", "btts_over"}) else None
     return None
 
 
@@ -144,13 +147,39 @@ def best_observed_for_match(home: str, away: str, rows: Optional[Iterable[Mappin
         if p > best.get(field, 0.0):
             best[field] = p
             source = str(row.get("bookmaker") or row.get("source") or "odds_history")
-            srcroot = str(row.get("source") or "")
-            sources[field] = f"{srcroot}:{source}" if srcroot and srcroot != source else source
+            root = str(row.get("source") or "")
+            sources[field] = f"{root}:{source}" if root and root != source else source
     return best, sources
 
 
+def _fill_missing(odds: Dict[str, Any], observed: Mapping[str, Any], sources: Mapping[str, str]) -> List[str]:
+    added: List[str] = []
+    for field, value in observed.items():
+        hi = 60.0 if field == "btts_over25_yes" else 30.0
+        if _price(odds.get(field), hi) is not None:
+            continue
+        p = _price(value, hi)
+        if p is None:
+            continue
+        odds[field] = p
+        added.append(field)
+        source = sources.get(field, "observed_fallback")
+        odds.setdefault("_ntr_field_sources", {})[field] = source
+        if field == "btts_yes":
+            odds.pop("_btts_quote_missing", None)
+        elif field == "over_25":
+            odds.pop("_over25_quote_missing", None)
+        elif field == "btts_yes_ht":
+            odds["_btts_ht_source"] = source
+        elif field == "over_15_ht":
+            odds["_over15_ht_source"] = source
+        elif field == "btts_over25_yes":
+            odds["_combo_source"] = source
+    return added
+
+
 def install(bot) -> None:
-    """Wrap the already-guarded quote lookup and fill only still-missing fields."""
+    """Wrap the already-guarded quote lookup with observed-only final fallbacks."""
     global _INSTALLED
     original = getattr(bot, "get_pinnacle_match_odds", None)
     if not callable(original) or getattr(original, "_ntr_odds_cache_guard", False):
@@ -160,25 +189,26 @@ def install(bot) -> None:
         global _LOGGED
         raw = original(home, away, *args, **kwargs)
         odds = dict(raw) if isinstance(raw, dict) else {}
-        observed, sources = best_observed_for_match(home, away)
-        added = []
-        for field, value in observed.items():
-            current = _price(odds.get(field), 60.0 if field == "btts_over25_yes" else 30.0)
-            # 1.00 from the fail-closed guard counts as missing.
-            if current is not None:
-                continue
-            odds[field] = value
-            added.append(field)
-            odds.setdefault("_ntr_field_sources", {})[field] = sources.get(field, "odds_history")
-            if field == "btts_yes": odds.pop("_btts_quote_missing", None)
-            elif field == "over_25": odds.pop("_over25_quote_missing", None)
-            elif field == "btts_yes_ht": odds["_btts_ht_source"] = sources.get(field, "odds_history")
-            elif field == "over_15_ht": odds["_over15_ht_source"] = sources.get(field, "odds_history")
-            elif field == "btts_over25_yes": odds["_combo_source"] = sources.get(field, "odds_history")
-        if added and _LOGGED < int(os.getenv("NETRATTLER_ODDS_CACHE_LOG_LIMIT", "20")):
+        all_added: List[Tuple[str, str]] = []
+
+        # Multi-brand Kambi first: live bookmaker offers, no key.
+        if kambi_team is not None:
             try:
-                detail = ", ".join(f"{f}={sources.get(f, 'odds_history')}" for f in added)
-                bot.log(f"   🗄️ Odds-History Fallback {home} vs {away}: {detail}")
+                k_odds, k_sources = kambi_team.get_multi_brand_team_odds(home, away)
+                for field in _fill_missing(odds, k_odds, k_sources):
+                    all_added.append((field, k_sources.get(field, "kambi")))
+            except Exception:
+                pass
+
+        # Then fresh persisted prices (AiScore, The Odds API, etc.).
+        observed, sources = best_observed_for_match(home, away)
+        for field in _fill_missing(odds, observed, sources):
+            all_added.append((field, sources.get(field, "odds_history")))
+
+        if all_added and _LOGGED < int(os.getenv("NETRATTLER_ODDS_CACHE_LOG_LIMIT", "20")):
+            try:
+                detail = ", ".join(f"{field}={source}" for field, source in all_added)
+                bot.log(f"   🗄️ Final Real-Odds Fallback {home} vs {away}: {detail}")
                 _LOGGED += 1
             except Exception:
                 pass
