@@ -29,8 +29,7 @@ import time
 import unicodedata
 from datetime import date, datetime, timezone
 from pathlib import Path
-from typing import Any, Dict, Iterable, List, Mapping, Optional, Sequence, Tuple
-from urllib.parse import urljoin
+from typing import Any, Dict, List, Mapping, Optional, Sequence, Tuple
 
 import requests
 
@@ -98,9 +97,6 @@ def extract_h2h_features_from_text(text: str, home: str = "", away: str = "") ->
         "has_odds_words": "odds" in low or "asian handicap" in low or "o/u" in low,
     }
 
-    # AiScore server-rendered H2H pages currently expose sentences such as:
-    # Last 5 , Team Win 2 , Draw 1 , Lose 2 , Score Win Prob: 40.00% ,
-    # Asian Handicap Win%: 40.0% Total Goals Over%: 20.0%
     pattern = re.compile(
         r"Last\s*5\s*,\s*(?P<team>.*?)\s+Win\s+(?P<win>\d+)\s*,\s*Draw\s+(?P<draw>\d+)\s*,\s*Lose\s+(?P<lose>\d+)"
         r".*?Score\s+Win\s+Prob:\s*(?P<winprob>\d+(?:\.\d+)?)%"
@@ -155,26 +151,56 @@ def _line_from_text(text: Any) -> Optional[float]:
         return None
 
 
-def _classify_market(market_text: str, selection_text: str, line: Optional[float]) -> Optional[Tuple[str, str, Optional[float]]]:
+def _same_team(selection: str, team: str) -> bool:
+    s, t = _norm(selection), _norm(team)
+    if not s or not t:
+        return False
+    return s == t or s in t or t in s
+
+
+def _classify_market(
+    market_text: str,
+    selection_text: str,
+    line: Optional[float],
+    home: str = "",
+    away: str = "",
+) -> Optional[Tuple[str, str, Optional[float]]]:
     m = _norm(market_text)
     s = _norm(selection_text)
     if not m or not s:
         return None
 
-    # 1X2 / match result
     if any(token in m for token in ("1x2", "match result", "full time result", "match winner", "three way")):
-        if s in {"1", "home", "home win"}: return ("1x2", "home", None)
-        if s in {"x", "draw", "tie"}: return ("1x2", "draw", None)
-        if s in {"2", "away", "away win"}: return ("1x2", "away", None)
+        if s in {"1", "home", "home win"} or _same_team(selection_text, home):
+            return ("1x2", "home", None)
+        if s in {"x", "draw", "tie"}:
+            return ("1x2", "draw", None)
+        if s in {"2", "away", "away win"} or _same_team(selection_text, away):
+            return ("1x2", "away", None)
 
-    # Both teams to score, full-time or first half.
-    if "btts" in m or ("both teams" in m and "score" in m):
+    is_btts = "btts" in m or ("both teams" in m and "score" in m)
+    combo_context = is_btts and any(t in m for t in ("over 2 5", "total goals", "and over", "plus over", "btts over"))
+    combo_selection = any(t in s for t in ("yes over 2 5", "yes and over", "yes over", "btts over"))
+    if combo_context and combo_selection:
+        observed_line = line if line is not None else (_line_from_text(selection_text) or _line_from_text(market_text))
+        if observed_line is not None and abs(observed_line - 2.5) <= 0.01:
+            return ("btts_over25_combo", "yes", 2.5)
+
+    if is_btts:
         if s not in {"yes", "y", "no", "n"}:
             return None
         market = "btts_ht" if any(t in m for t in ("first half", "1st half", "half time", "halftime", "1h")) else "btts"
         return (market, "yes" if s in {"yes", "y"} else "no", None)
 
-    # Totals. Exact line is mandatory.
+    # Corners must be checked before generic totals because many feeds label this
+    # market "Total Corners".
+    if "corner" in m:
+        observed_line = line if line is not None else _line_from_text(market_text)
+        side = "over" if s.startswith("over") or s == "o" else "under" if s.startswith("under") or s == "u" else None
+        if observed_line is None or not side:
+            return None
+        return (f"corners_{str(observed_line).replace('.', '_')}", f"{side}_{str(observed_line).replace('.', '_')}", observed_line)
+
     if any(token in m for token in ("over under", "total goals", "goals total", "total")):
         observed_line = line if line is not None else _line_from_text(market_text)
         if observed_line is None:
@@ -187,15 +213,6 @@ def _classify_market(market_text: str, selection_text: str, line: Optional[float
             return ("totals_ht_1_5", f"{side}_1_5", 1.5)
         return (f"totals_{str(observed_line).replace('.', '_')}", f"{side}_{str(observed_line).replace('.', '_')}", observed_line)
 
-    # Corners: never convert one line into another.
-    if "corner" in m:
-        observed_line = line if line is not None else _line_from_text(market_text)
-        side = "over" if s.startswith("over") or s == "o" else "under" if s.startswith("under") or s == "u" else None
-        if observed_line is None or not side:
-            return None
-        return (f"corners_{str(observed_line).replace('.', '_')}", f"{side}_{str(observed_line).replace('.', '_')}", observed_line)
-
-    # Explicit player props: keep only clearly player-labelled markets.
     player_tokens = ("player", "shots", "shot on target", "tackle", "foul", "card", "assist", "goalscorer", "to score")
     if any(t in m for t in player_tokens) and any(t in m for t in ("player", "shot", "tackle", "foul", "card", "assist", "scorer", "score")):
         observed_line = line if line is not None else _line_from_text(selection_text)
@@ -204,11 +221,7 @@ def _classify_market(market_text: str, selection_text: str, line: Optional[float
 
 
 def extract_observed_odds_from_json(payload: Any, home: str, away: str, source_url: str = "") -> List[Dict[str, Any]]:
-    """Recursively parse explicit labelled bookmaker prices from captured JSON.
-
-    The parser is intentionally fail-closed. A numeric value alone is never an odds
-    row. It needs market context + selection + a decimal price within sane bounds.
-    """
+    """Recursively parse explicit labelled bookmaker prices from captured JSON."""
     rows: List[Dict[str, Any]] = []
     seen = set()
 
@@ -252,7 +265,7 @@ def extract_observed_odds_from_json(payload: Any, home: str, away: str, source_u
         market_text = str(ctx.get("market") or "")
         selection_text = str(selection or "")
         if price is not None and market_text and selection_text:
-            classified = _classify_market(market_text, selection_text, line)
+            classified = _classify_market(market_text, selection_text, line, home, away)
             if classified:
                 market, normalized_selection, normalized_line = classified
                 bookmaker = str(ctx.get("bookmaker") or "aiscore_displayed")
@@ -272,7 +285,6 @@ def extract_observed_odds_from_json(payload: Any, home: str, away: str, source_u
                         "source_url": source_url,
                     })
 
-        # Recurse after inheriting market/bookmaker context.
         for value in obj.values():
             if isinstance(value, (dict, list)):
                 walk(value, ctx)
@@ -282,7 +294,6 @@ def extract_observed_odds_from_json(payload: Any, home: str, away: str, source_u
 
 
 def _json_scripts(html: str) -> List[Any]:
-    """Parse embedded application/json / Next-style JSON blocks when present."""
     out = []
     try:
         from bs4 import BeautifulSoup
@@ -311,7 +322,6 @@ def _requests_html(url: str) -> Tuple[str, Optional[int]]:
 
 
 def _browser_page(url: str) -> Tuple[str, List[Any], Optional[int]]:
-    """Render one public page and capture JSON/XHR payloads. No bypass logic."""
     try:
         from playwright.sync_api import sync_playwright
     except Exception:
@@ -358,7 +368,6 @@ def candidate_urls(home: str, away: str) -> List[str]:
 
 
 def collect_match(home: str, away: str, use_browser: bool = True) -> Dict[str, Any]:
-    """Collect public AiScore context for one exact fixture."""
     result: Dict[str, Any] = {
         "home": home,
         "away": away,
@@ -421,7 +430,6 @@ def _pair_from_href(href: str, label: str = "") -> Optional[Tuple[str, str]]:
 
 
 def discover_matches(limit: int = 60, use_browser: bool = True) -> List[Tuple[str, str]]:
-    """Best-effort discovery from AiScore's public football/today page."""
     urls = [f"{BASE}/football", BASE + "/"]
     pairs: List[Tuple[str, str]] = []
     seen = set()
