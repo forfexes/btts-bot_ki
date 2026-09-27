@@ -1,0 +1,54 @@
+name: NETRATTLER AiScore Public Collector
+
+on:
+  workflow_dispatch:
+    inputs:
+      limit:
+        description: "Maximum AiScore matches"
+        required: false
+        default: "40"
+  schedule:
+    - cron: "10 9 * * *"      # before daily 09:30 UTC tips run
+    - cron: "35 12 * * 6,0"  # before weekend 13:00 UTC tips run
+    - cron: "35 15 * * 6,0"  # before weekend 16:00 UTC tips run
+    - cron: "35 18 * * *"     # before daily 19:00 UTC tips run
+
+jobs:
+  aiscore:
+    runs-on: ubuntu-latest
+    timeout-minutes: 25
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+          cache: "pip"
+
+      - name: Install keyless browser collector
+        run: |
+          python -m pip install --prefer-binary requests beautifulsoup4 lxml playwright
+          python -m playwright install --with-deps chromium
+
+      - name: Compile + parser tests
+        run: |
+          python -m py_compile netrattler_aiscore.py test_netrattler_aiscore.py
+          python test_netrattler_aiscore.py
+
+      - name: Collect public AiScore H2H / lineups / explicit observed odds
+        env:
+          SUPABASE_URL: ${{ secrets.SUPABASE_URL }}
+          SUPABASE_KEY: ${{ secrets.SUPABASE_KEY }}
+          SUPABASE_SERVICE_ROLE_KEY: ${{ secrets.SUPABASE_SERVICE_ROLE_KEY }}
+          NETRATTLER_AISCORE_MAX_MATCHES: ${{ github.event.inputs.limit || '40' }}
+          NETRATTLER_AISCORE_TIMEOUT: "12"
+          NETRATTLER_AISCORE_BROWSER_WAIT_MS: "1800"
+          NETRATTLER_AISCORE_MATCH_SLEEP: "0.25"
+        run: python netrattler_aiscore.py --limit "${{ github.event.inputs.limit || '40' }}"
+
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: netrattler-aiscore-snapshot
+          path: netrattler_aiscore_snapshot.json
+          if-no-files-found: ignore
