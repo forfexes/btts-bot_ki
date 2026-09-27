@@ -1,22 +1,14 @@
 #!/usr/bin/env python3
 """NETRATTLER AiScore public collector (keyless, conservative).
 
-Purpose
--------
-AiScore is useful for public match pages, H2H/form context, lineups and bookmaker
-odds shown on a match page. This adapter deliberately separates *features* from
-*production odds*:
+AiScore is used for public H2H/form/lineup context and, only when explicitly
+labelled in captured public JSON/XHR, observed bookmaker odds. Unknown numbers,
+model/fair odds and guessed/default prices are never accepted as bookmaker odds.
 
-* H2H/form/lineup signals may be stored as ML/shadow features.
-* An odds row is accepted only when the captured JSON contains an explicit
-  market label, selection and decimal price. Unknown/unlabelled numbers are
-  ignored. No fair odds, defaults or inferred prices are created.
-* No CAPTCHA/Cloudflare bypass and no login automation. Normal public requests
-  are tried first; optional Playwright/Chromium renders the same public pages.
-
-The browser collector also listens to public JSON/XHR responses while a match
-page is open. This avoids depending on one undocumented endpoint name while
-still requiring explicit market/selection/price fields before a quote is saved.
+Discovery is intentionally redundant: public AiScore football links first, then
+Pinnacle's public guest soccer matchups as fixture seeds. Pinnacle is only used
+for the team names in that fallback; the AiScore data still comes from AiScore.
+No CAPTCHA/Cloudflare bypass and no login automation are performed.
 """
 from __future__ import annotations
 
@@ -27,7 +19,7 @@ import os
 import re
 import time
 import unicodedata
-from datetime import date, datetime, timezone
+from datetime import date, datetime, timedelta, timezone
 from pathlib import Path
 from typing import Any, Dict, List, Mapping, Optional, Sequence, Tuple
 
@@ -45,10 +37,21 @@ HEADERS = {
     "Accept-Language": "en-US,en;q=0.9",
 }
 TIMEOUT = float(os.getenv("NETRATTLER_AISCORE_TIMEOUT", "15"))
-BROWSER_WAIT_MS = int(os.getenv("NETRATTLER_AISCORE_BROWSER_WAIT_MS", "2200"))
+BROWSER_WAIT_MS = int(os.getenv("NETRATTLER_AISCORE_BROWSER_WAIT_MS", "1800"))
 SNAPSHOT = Path(os.getenv("NETRATTLER_AISCORE_SNAPSHOT", "netrattler_aiscore_snapshot.json"))
 SUPABASE_URL = (os.getenv("SUPABASE_URL") or "").rstrip("/")
 SUPABASE_KEY = os.getenv("SUPABASE_SERVICE_ROLE_KEY") or os.getenv("SUPABASE_KEY") or ""
+
+PINNACLE_BASE = os.getenv("PINNACLE_BASE", "https://guest.api.arcadia.pinnacle.com/0.1")
+PINNACLE_GUEST_KEY = os.getenv("PINNACLE_GUEST_KEY", "CmX2KcMrXuFmNg6YFbmTxE0y9CIrOi0R")
+PINNACLE_HEADERS = {
+    "x-api-key": PINNACLE_GUEST_KEY,
+    "Content-Type": "application/json",
+    "User-Agent": UA,
+    "Referer": "https://www.pinnacle.com/",
+    "Origin": "https://www.pinnacle.com",
+    "Accept": "application/json",
+}
 
 
 def log(message: str, level: str = "INFO") -> None:
@@ -88,7 +91,7 @@ def _page_text(html: str) -> str:
 
 
 def extract_h2h_features_from_text(text: str, home: str = "", away: str = "") -> Dict[str, Any]:
-    """Parse only explicit AiScore summary text; does not guess missing numbers."""
+    """Parse only explicit AiScore H2H/form summary text."""
     raw = re.sub(r"\s+", " ", str(text or "")).strip()
     low = raw.lower()
     out: Dict[str, Any] = {
@@ -96,7 +99,6 @@ def extract_h2h_features_from_text(text: str, home: str = "", away: str = "") ->
         "has_lineups": "lineup" in low,
         "has_odds_words": "odds" in low or "asian handicap" in low or "o/u" in low,
     }
-
     pattern = re.compile(
         r"Last\s*5\s*,\s*(?P<team>.*?)\s+Win\s+(?P<win>\d+)\s*,\s*Draw\s+(?P<draw>\d+)\s*,\s*Lose\s+(?P<lose>\d+)"
         r".*?Score\s+Win\s+Prob:\s*(?P<winprob>\d+(?:\.\d+)?)%"
@@ -118,15 +120,14 @@ def extract_h2h_features_from_text(text: str, home: str = "", away: str = "") ->
     if blocks:
         out["last5"] = blocks
         for side, team in (("home", home), ("away", away)):
-            if not team:
-                continue
             nt = _norm(team)
-            best = next((b for b in blocks if nt and (nt in _norm(b["team"]) or _norm(b["team"]) in nt)), None)
+            if not nt:
+                continue
+            best = next((b for b in blocks if nt in _norm(b["team"]) or _norm(b["team"]) in nt), None)
             if best:
                 out[f"{side}_last5_win_prob_pct"] = best["win_prob_pct"]
                 out[f"{side}_last5_over_pct"] = best["over_pct"]
                 out[f"{side}_last5_ah_win_pct"] = best["asian_handicap_win_pct"]
-
     m = re.search(r"In\s+the\s+last\s+(\d+)\s+matches", raw, flags=re.I)
     if m:
         out["h2h_n"] = int(m.group(1))
@@ -153,9 +154,7 @@ def _line_from_text(text: Any) -> Optional[float]:
 
 def _same_team(selection: str, team: str) -> bool:
     s, t = _norm(selection), _norm(team)
-    if not s or not t:
-        return False
-    return s == t or s in t or t in s
+    return bool(s and t and (s == t or s in t or t in s))
 
 
 def _classify_market(
@@ -172,11 +171,11 @@ def _classify_market(
 
     if any(token in m for token in ("1x2", "match result", "full time result", "match winner", "three way")):
         if s in {"1", "home", "home win"} or _same_team(selection_text, home):
-            return ("1x2", "home", None)
+            return "1x2", "home", None
         if s in {"x", "draw", "tie"}:
-            return ("1x2", "draw", None)
+            return "1x2", "draw", None
         if s in {"2", "away", "away win"} or _same_team(selection_text, away):
-            return ("1x2", "away", None)
+            return "1x2", "away", None
 
     is_btts = "btts" in m or ("both teams" in m and "score" in m)
     combo_context = is_btts and any(t in m for t in ("over 2 5", "total goals", "and over", "plus over", "btts over"))
@@ -184,22 +183,22 @@ def _classify_market(
     if combo_context and combo_selection:
         observed_line = line if line is not None else (_line_from_text(selection_text) or _line_from_text(market_text))
         if observed_line is not None and abs(observed_line - 2.5) <= 0.01:
-            return ("btts_over25_combo", "yes", 2.5)
+            return "btts_over25_combo", "yes", 2.5
 
     if is_btts:
         if s not in {"yes", "y", "no", "n"}:
             return None
         market = "btts_ht" if any(t in m for t in ("first half", "1st half", "half time", "halftime", "1h")) else "btts"
-        return (market, "yes" if s in {"yes", "y"} else "no", None)
+        return market, "yes" if s in {"yes", "y"} else "no", None
 
-    # Corners must be checked before generic totals because many feeds label this
-    # market "Total Corners".
+    # Corners must precede generic totals because many feeds say "Total Corners".
     if "corner" in m:
         observed_line = line if line is not None else _line_from_text(market_text)
         side = "over" if s.startswith("over") or s == "o" else "under" if s.startswith("under") or s == "u" else None
         if observed_line is None or not side:
             return None
-        return (f"corners_{str(observed_line).replace('.', '_')}", f"{side}_{str(observed_line).replace('.', '_')}", observed_line)
+        tag = str(observed_line).replace(".", "_")
+        return f"corners_{tag}", f"{side}_{tag}", observed_line
 
     if any(token in m for token in ("over under", "total goals", "goals total", "total")):
         observed_line = line if line is not None else _line_from_text(market_text)
@@ -210,21 +209,21 @@ def _classify_market(
             return None
         first_half = any(t in m for t in ("first half", "1st half", "half time", "halftime", "1h"))
         if first_half and abs(observed_line - 1.5) <= 0.01:
-            return ("totals_ht_1_5", f"{side}_1_5", 1.5)
-        return (f"totals_{str(observed_line).replace('.', '_')}", f"{side}_{str(observed_line).replace('.', '_')}", observed_line)
+            return "totals_ht_1_5", f"{side}_1_5", 1.5
+        tag = str(observed_line).replace(".", "_")
+        return f"totals_{tag}", f"{side}_{tag}", observed_line
 
     player_tokens = ("player", "shots", "shot on target", "tackle", "foul", "card", "assist", "goalscorer", "to score")
-    if any(t in m for t in player_tokens) and any(t in m for t in ("player", "shot", "tackle", "foul", "card", "assist", "scorer", "score")):
+    if any(t in m for t in player_tokens):
         observed_line = line if line is not None else _line_from_text(selection_text)
-        return (f"player_prop:{m[:80]}", s[:120], observed_line)
+        return f"player_prop:{m[:80]}", s[:120], observed_line
     return None
 
 
 def extract_observed_odds_from_json(payload: Any, home: str, away: str, source_url: str = "") -> List[Dict[str, Any]]:
-    """Recursively parse explicit labelled bookmaker prices from captured JSON."""
+    """Recursively parse only explicit labelled bookmaker prices from captured JSON."""
     rows: List[Dict[str, Any]] = []
     seen = set()
-
     market_keys = ("market", "marketname", "market_name", "bettype", "bet_type", "criterion", "groupname", "group_name")
     book_keys = ("bookmaker", "bookmakername", "bookmaker_name", "provider", "company", "sportsbook")
     selection_keys = ("selection", "outcome", "label", "name", "designation", "option", "choice", "title")
@@ -238,7 +237,6 @@ def extract_observed_odds_from_json(payload: Any, home: str, away: str, source_u
             return
         if not isinstance(obj, dict):
             return
-
         ctx = dict(context)
         own_market = _first(obj, market_keys)
         if isinstance(own_market, dict):
@@ -251,8 +249,7 @@ def extract_observed_odds_from_json(payload: Any, home: str, away: str, source_u
         if isinstance(own_book, (str, int, float)) and str(own_book).strip():
             ctx["bookmaker"] = str(own_book)
 
-        raw_price = _first(obj, price_keys)
-        price = _decimal(raw_price)
+        price = _decimal(_first(obj, price_keys))
         selection = _first(obj, selection_keys)
         if isinstance(selection, dict):
             selection = _first(selection, ("name", "label", "title"))
@@ -273,18 +270,12 @@ def extract_observed_odds_from_json(payload: Any, home: str, away: str, source_u
                 if key not in seen:
                     seen.add(key)
                     rows.append({
-                        "source": "aiscore",
-                        "bookmaker": bookmaker,
-                        "home_team": home,
-                        "away_team": away,
-                        "market": market,
-                        "selection": normalized_selection,
-                        "line": normalized_line,
-                        "odds": price,
-                        "observed": True,
-                        "source_url": source_url,
+                        "source": "aiscore", "bookmaker": bookmaker,
+                        "home_team": home, "away_team": away,
+                        "market": market, "selection": normalized_selection,
+                        "line": normalized_line, "odds": price,
+                        "observed": True, "source_url": source_url,
                     })
-
         for value in obj.values():
             if isinstance(value, (dict, list)):
                 walk(value, ctx)
@@ -294,18 +285,16 @@ def extract_observed_odds_from_json(payload: Any, home: str, away: str, source_u
 
 
 def _json_scripts(html: str) -> List[Any]:
-    out = []
+    out: List[Any] = []
     try:
         from bs4 import BeautifulSoup
         soup = BeautifulSoup(html or "", "html.parser")
         for script in soup.find_all("script"):
-            typ = str(script.get("type") or "").lower()
-            sid = str(script.get("id") or "")
+            typ, sid = str(script.get("type") or "").lower(), str(script.get("id") or "")
             if "json" not in typ and sid not in {"__NEXT_DATA__", "__NUXT_DATA__"}:
                 continue
-            raw = script.string or script.get_text() or ""
             try:
-                out.append(json.loads(raw))
+                out.append(json.loads(script.string or script.get_text() or ""))
             except Exception:
                 pass
     except Exception:
@@ -326,7 +315,6 @@ def _browser_page(url: str) -> Tuple[str, List[Any], Optional[int]]:
         from playwright.sync_api import sync_playwright
     except Exception:
         return "", [], None
-
     payloads: List[Any] = []
     status = None
     try:
@@ -360,26 +348,24 @@ def _browser_page(url: str) -> Tuple[str, List[Any], Optional[int]]:
 
 
 def candidate_urls(home: str, away: str) -> List[str]:
-    slug = f"{_slug(home)}-vs-{_slug(away)}"
-    return [
-        f"{BASE}/head-to-head/soccer-{slug}",
-        f"{BASE}/live/football-{slug}",
-    ]
+    h, a = _slug(home), _slug(away)
+    # AiScore H2H slugs are sometimes exposed in either ordering; both are public
+    # URLs and are tried conservatively. Live pages use the normal match ordering.
+    return list(dict.fromkeys([
+        f"{BASE}/head-to-head/soccer-{h}-vs-{a}",
+        f"{BASE}/head-to-head/soccer-{a}-vs-{h}",
+        f"{BASE}/live/football-{h}-vs-{a}",
+    ]))
 
 
 def collect_match(home: str, away: str, use_browser: bool = True) -> Dict[str, Any]:
     result: Dict[str, Any] = {
-        "home": home,
-        "away": away,
-        "source": "aiscore",
+        "home": home, "away": away, "source": "aiscore",
         "captured_at": datetime.now(timezone.utc).isoformat(),
-        "pages": [],
-        "features": {},
-        "odds": [],
+        "pages": [], "features": {}, "odds": [],
     }
     all_odds: List[Dict[str, Any]] = []
     feature_texts: List[str] = []
-
     for url in candidate_urls(home, away):
         html, status = _requests_html(url)
         mode = "requests" if html else "failed"
@@ -387,9 +373,7 @@ def collect_match(home: str, away: str, use_browser: bool = True) -> Dict[str, A
         if use_browser:
             browser_html, browser_payloads, browser_status = _browser_page(url)
             if browser_html and (not html or len(browser_html) > len(html)):
-                html = browser_html
-                mode = "playwright"
-                status = browser_status or status
+                html, mode, status = browser_html, "playwright", browser_status or status
             payloads.extend(browser_payloads)
         text = _page_text(html) if html else ""
         if text:
@@ -397,16 +381,11 @@ def collect_match(home: str, away: str, use_browser: bool = True) -> Dict[str, A
         for payload in payloads:
             all_odds.extend(extract_observed_odds_from_json(payload, home, away, url))
         result["pages"].append({
-            "url": url,
-            "mode": mode,
-            "status": status,
+            "url": url, "mode": mode, "status": status,
             "bytes": len((html or "").encode("utf-8", errors="ignore")),
             "json_payloads": len(payloads),
         })
-
-    merged_text = " ".join(feature_texts)
-    result["features"] = extract_h2h_features_from_text(merged_text, home, away)
-
+    result["features"] = extract_h2h_features_from_text(" ".join(feature_texts), home, away)
     best: Dict[Tuple[str, str, Any, str], Dict[str, Any]] = {}
     for row in all_odds:
         key = (row["market"], row["selection"], row.get("line"), _norm(row.get("bookmaker")))
@@ -422,14 +401,15 @@ def _pair_from_href(href: str, label: str = "") -> Optional[Tuple[str, str]]:
         home, away = [x.strip() for x in text.split(" - ", 1)]
         if home and away:
             return home, away
-    m = re.search(r"/live/football-(.+?)-vs-(.+?)(?:\?|$)", str(href or ""), flags=re.I)
+    path = str(href or "")
+    m = re.search(r"/(?:live/football-|head-to-head/soccer-)(.+?)-vs-(.+?)(?:[/?#]|$)", path, flags=re.I)
     if m:
         clean = lambda s: " ".join(x.capitalize() for x in s.replace("-", " ").split())
         return clean(m.group(1)), clean(m.group(2))
     return None
 
 
-def discover_matches(limit: int = 60, use_browser: bool = True) -> List[Tuple[str, str]]:
+def discover_aiscore_links(limit: int = 60, use_browser: bool = True) -> List[Tuple[str, str]]:
     urls = [f"{BASE}/football", BASE + "/"]
     pairs: List[Tuple[str, str]] = []
     seen = set()
@@ -444,10 +424,11 @@ def discover_matches(limit: int = 60, use_browser: bool = True) -> List[Tuple[st
         try:
             from bs4 import BeautifulSoup
             soup = BeautifulSoup(html, "html.parser")
-            for a in soup.find_all("a", href=True):
-                href = str(a.get("href") or "")
-                label = re.sub(r"\s+", " ", a.get_text(" ", strip=True))
-                if "/live/football-" not in href and " vs " not in label and " - " not in label:
+            for anchor in soup.find_all("a", href=True):
+                href = str(anchor.get("href") or "")
+                label = re.sub(r"\s+", " ", anchor.get_text(" ", strip=True))
+                eligible_href = "/live/football-" in href or "/head-to-head/soccer-" in href
+                if not eligible_href and " vs " not in label and " - " not in label:
                     continue
                 pair = _pair_from_href(href, label)
                 if not pair:
@@ -455,8 +436,7 @@ def discover_matches(limit: int = 60, use_browser: bool = True) -> List[Tuple[st
                 key = (_norm(pair[0]), _norm(pair[1]))
                 if not all(key) or key in seen:
                     continue
-                seen.add(key)
-                pairs.append(pair)
+                seen.add(key); pairs.append(pair)
                 if len(pairs) >= limit:
                     return pairs
         except Exception:
@@ -464,13 +444,76 @@ def discover_matches(limit: int = 60, use_browser: bool = True) -> List[Tuple[st
     return pairs
 
 
+def discover_pinnacle_seeds(limit: int = 60, target_date: Optional[str] = None) -> List[Tuple[str, str]]:
+    """Use public Pinnacle soccer matchups only as team-name seeds for AiScore."""
+    try:
+        r = requests.get(
+            f"{PINNACLE_BASE}/sports/29/matchups",
+            headers=PINNACLE_HEADERS,
+            params={"withSpecials": "false", "brandId": "0"},
+            timeout=TIMEOUT,
+        )
+        if not r.ok:
+            return []
+        payload = r.json() or []
+    except Exception:
+        return []
+    wanted = None
+    if target_date:
+        try:
+            d = datetime.fromisoformat(str(target_date)[:10]).date()
+            wanted = {d, d + timedelta(days=1)}
+        except Exception:
+            wanted = None
+    rows: List[Tuple[str, str]] = []
+    seen = set()
+    for item in payload if isinstance(payload, list) else []:
+        if item.get("type") != "matchup":
+            continue
+        start = str(item.get("startTime") or "")
+        if wanted and start:
+            try:
+                d = datetime.fromisoformat(start.replace("Z", "+00:00")).date()
+                if d not in wanted:
+                    continue
+            except Exception:
+                pass
+        participants = item.get("participants") or []
+        home = next((str(p.get("name") or "").strip() for p in participants if p.get("alignment") == "home"), "")
+        away = next((str(p.get("name") or "").strip() for p in participants if p.get("alignment") == "away"), "")
+        key = (_norm(home), _norm(away))
+        if not home or not away or key in seen:
+            continue
+        seen.add(key); rows.append((home, away))
+        if len(rows) >= limit:
+            break
+    return rows
+
+
+def discover_matches(limit: int = 60, use_browser: bool = True, target_date: Optional[str] = None) -> List[Tuple[str, str]]:
+    """Union AiScore's own public links with public Pinnacle fixture seeds."""
+    out: List[Tuple[str, str]] = []
+    seen = set()
+    for source_rows in (
+        discover_aiscore_links(limit, use_browser=use_browser),
+        discover_pinnacle_seeds(limit, target_date=target_date),
+    ):
+        for pair in source_rows:
+            key = (_norm(pair[0]), _norm(pair[1]))
+            if not all(key) or key in seen:
+                continue
+            seen.add(key); out.append(pair)
+            if len(out) >= limit:
+                return out
+    return out
+
+
 def odds_history_rows(matches: Sequence[Mapping[str, Any]], match_date: Optional[str] = None) -> List[Dict[str, Any]]:
     day = str(match_date or date.today().isoformat())[:10]
     now = datetime.now(timezone.utc).isoformat()
     rows: List[Dict[str, Any]] = []
     for match in matches:
-        home = str(match.get("home") or "").strip()
-        away = str(match.get("away") or "").strip()
+        home, away = str(match.get("home") or "").strip(), str(match.get("away") or "").strip()
         if not home or not away:
             continue
         event_id = _stable(day, home, away)
@@ -479,22 +522,14 @@ def odds_history_rows(matches: Sequence[Mapping[str, Any]], match_date: Optional
             if price is None:
                 continue
             rows.append({
-                "source": "aiscore",
-                "match_id": event_id,
-                "home_team": home,
-                "away_team": away,
-                "match_date": day,
-                "captured_date": now[:10],
+                "source": "aiscore", "match_id": event_id,
+                "home_team": home, "away_team": away,
+                "match_date": day, "captured_date": now[:10],
                 "market": str(odd.get("market") or ""),
                 "bookmaker": str(odd.get("bookmaker") or "aiscore_displayed"),
-                "selection": str(odd.get("selection") or ""),
-                "odds": price,
-                "raw": {
-                    "line": odd.get("line"),
-                    "captured_at": now,
-                    "source_url": odd.get("source_url"),
-                    "observed": True,
-                },
+                "selection": str(odd.get("selection") or ""), "odds": price,
+                "raw": {"line": odd.get("line"), "captured_at": now,
+                        "source_url": odd.get("source_url"), "observed": True},
             })
     return rows
 
@@ -503,33 +538,20 @@ def persist(matches: Sequence[Mapping[str, Any]], match_date: Optional[str] = No
     day = str(match_date or date.today().isoformat())[:10]
     odds_rows = odds_history_rows(matches, day)
     payload = {
-        "version": "AISCORE_V1",
-        "captured_at": datetime.now(timezone.utc).isoformat(),
-        "match_date": day,
-        "matches": list(matches),
-        "odds_rows": odds_rows,
+        "version": "AISCORE_V2", "captured_at": datetime.now(timezone.utc).isoformat(),
+        "match_date": day, "matches": list(matches), "odds_rows": odds_rows,
     }
     SNAPSHOT.write_text(json.dumps(payload, ensure_ascii=False, indent=2, default=str), encoding="utf-8")
-
     saved = 0
     if SUPABASE_URL and SUPABASE_KEY and odds_rows:
-        headers = {
-            "apikey": SUPABASE_KEY,
-            "Authorization": f"Bearer {SUPABASE_KEY}",
-            "Content-Type": "application/json",
-            "Prefer": "resolution=merge-duplicates,return=minimal",
-        }
+        headers = {"apikey": SUPABASE_KEY, "Authorization": f"Bearer {SUPABASE_KEY}",
+                   "Content-Type": "application/json", "Prefer": "resolution=merge-duplicates,return=minimal"}
         conflict = "source,match_id,market,bookmaker,captured_date,selection"
         for i in range(0, len(odds_rows), 200):
             batch = odds_rows[i:i + 200]
             try:
-                r = requests.post(
-                    f"{SUPABASE_URL}/rest/v1/odds_history",
-                    headers=headers,
-                    params={"on_conflict": conflict},
-                    json=batch,
-                    timeout=max(20.0, TIMEOUT),
-                )
+                r = requests.post(f"{SUPABASE_URL}/rest/v1/odds_history", headers=headers,
+                                  params={"on_conflict": conflict}, json=batch, timeout=max(20.0, TIMEOUT))
                 if r.ok:
                     saved += len(batch)
                 else:
@@ -546,18 +568,16 @@ def main() -> int:
     ap.add_argument("--match", action="append", default=[], help="Exact fixture as HOME|AWAY; repeatable")
     ap.add_argument("--date", default=date.today().isoformat())
     args = ap.parse_args()
-
     use_browser = not args.no_browser
     pairs: List[Tuple[str, str]] = []
     for raw in args.match:
-        if "|" not in raw:
-            continue
-        home, away = [x.strip() for x in raw.split("|", 1)]
-        if home and away:
-            pairs.append((home, away))
+        if "|" in raw:
+            home, away = [x.strip() for x in raw.split("|", 1)]
+            if home and away:
+                pairs.append((home, away))
     if not pairs:
-        pairs = discover_matches(args.limit, use_browser=use_browser)
-    pairs = pairs[: max(0, args.limit)]
+        pairs = discover_matches(args.limit, use_browser=use_browser, target_date=args.date)
+    pairs = pairs[:max(0, args.limit)]
     log(f"discovered fixtures={len(pairs)} browser={use_browser}")
 
     matches = []
@@ -565,14 +585,12 @@ def main() -> int:
         try:
             row = collect_match(home, away, use_browser=use_browser)
             matches.append(row)
-            log(
-                f"{idx}/{len(pairs)} {home} vs {away}: odds={len(row.get('odds') or [])} "
-                f"h2h={bool((row.get('features') or {}).get('has_h2h'))}"
-            )
+            pages = row.get("pages") or []
+            reachable = sum(1 for p in pages if p.get("bytes", 0) > 1000)
+            log(f"{idx}/{len(pairs)} {home} vs {away}: pages={reachable}/{len(pages)} odds={len(row.get('odds') or [])} h2h={bool((row.get('features') or {}).get('has_h2h'))}")
         except Exception as exc:
             log(f"{home} vs {away}: {str(exc)[:140]}", "WARN")
-        time.sleep(float(os.getenv("NETRATTLER_AISCORE_MATCH_SLEEP", "0.5")))
-
+        time.sleep(float(os.getenv("NETRATTLER_AISCORE_MATCH_SLEEP", "0.25")))
     result = persist(matches, args.date)
     log(f"finished {result}")
     return 0
