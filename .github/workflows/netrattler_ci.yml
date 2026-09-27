@@ -6,11 +6,13 @@ on:
     paths:
       - "netrattler_runtime_patch.py"
       - "netrattler_odds_cache_guard.py"
+      - "netrattler_kambi_team_odds.py"
       - "netrattler_aiscore.py"
       - "netrattler_free_odds.py"
       - "netrattler_prop_sources.py"
       - "test_netrattler_runtime_patch.py"
       - "test_netrattler_odds_cache_guard.py"
+      - "test_netrattler_kambi_team_odds.py"
       - "test_netrattler_aiscore.py"
       - ".github/workflows/netrattler_ci.yml"
   workflow_dispatch:
@@ -31,14 +33,18 @@ jobs:
           python -m py_compile \
             netrattler_runtime_patch.py \
             netrattler_odds_cache_guard.py \
+            netrattler_kambi_team_odds.py \
             netrattler_aiscore.py \
             netrattler_free_odds.py \
             netrattler_prop_sources.py \
             test_netrattler_runtime_patch.py \
             test_netrattler_odds_cache_guard.py \
+            test_netrattler_kambi_team_odds.py \
             test_netrattler_aiscore.py
       - name: Runtime fallback and skip tests
         run: python test_netrattler_runtime_patch.py
+      - name: Multi-brand Kambi tests
+        run: python test_netrattler_kambi_team_odds.py
       - name: Fresh odds cache tests
         run: python test_netrattler_odds_cache_guard.py
       - name: AiScore parser tests
