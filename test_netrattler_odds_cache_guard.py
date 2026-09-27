@@ -41,8 +41,12 @@ def test_wrong_match_and_unknown_market_are_ignored():
 
 
 def test_wrapper_fills_only_missing_and_preserves_existing_real_quote():
-    old = guard.best_observed_for_match
+    old_history = guard.best_observed_for_match
+    old_kambi = guard.kambi_team
     try:
+        # Isolate this unit test from live keyless Kambi networking. Kambi has its
+        # own parser/integration tests; this test is specifically for odds_history.
+        guard.kambi_team = None
         guard.best_observed_for_match = lambda *_args, **_kwargs: (
             {"btts_yes": 1.92, "over_25": 1.98, "home_win": 2.10},
             {"btts_yes": "aiscore:BookA", "over_25": "the_odds_api:BookB", "home_win": "cache"},
@@ -71,7 +75,35 @@ def test_wrapper_fills_only_missing_and_preserves_existing_real_quote():
         assert out["home_win"] == 1.88, "existing observed quote must not be overwritten"
         assert out["_ntr_field_sources"]["btts_yes"] == "aiscore:BookA"
     finally:
-        guard.best_observed_for_match = old
+        guard.best_observed_for_match = old_history
+        guard.kambi_team = old_kambi
+
+
+def test_wrapper_uses_kambi_before_history_for_missing_market():
+    old_history = guard.best_observed_for_match
+    old_kambi = guard.kambi_team
+    try:
+        class FakeKambi:
+            @staticmethod
+            def get_multi_brand_team_odds(*_args, **_kwargs):
+                return {"btts_yes": 1.89}, {"btts_yes": "kambi_bs"}
+        guard.kambi_team = FakeKambi()
+        guard.best_observed_for_match = lambda *_args, **_kwargs: ({"btts_yes": 1.95}, {"btts_yes": "aiscore:Book"})
+
+        class Bot:
+            @staticmethod
+            def log(*_args, **_kwargs): pass
+            @staticmethod
+            def get_pinnacle_match_odds(*_args, **_kwargs):
+                return {"btts_yes": 1.0, "_btts_quote_missing": True}
+
+        bot = Bot(); guard.install(bot)
+        out = bot.get_pinnacle_match_odds("A", "B")
+        assert out["btts_yes"] == 1.89
+        assert out["_ntr_field_sources"]["btts_yes"] == "kambi_bs"
+    finally:
+        guard.best_observed_for_match = old_history
+        guard.kambi_team = old_kambi
 
 
 def main():
@@ -79,7 +111,8 @@ def main():
     test_best_price_wins_for_same_exact_market()
     test_wrong_match_and_unknown_market_are_ignored()
     test_wrapper_fills_only_missing_and_preserves_existing_real_quote()
-    print("OK: fresh odds_history fallback guard")
+    test_wrapper_uses_kambi_before_history_for_missing_market()
+    print("OK: multi-brand Kambi + fresh odds_history final fallback guard")
 
 
 if __name__ == "__main__":
