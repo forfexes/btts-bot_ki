@@ -11,13 +11,14 @@ import json, os, re, time
 from datetime import datetime, timezone
 import requests
 
-UA="NETRATTLER-PublicFeatures/1.1 (+https://github.com/forfexes/btts-bot_ki)"
+UA="NETRATTLER-PublicFeatures/1.2 (+https://github.com/forfexes/btts-bot_ki)"
 TIMEOUT=int(os.getenv("NETRATTLER_PUBLIC_SOURCE_TIMEOUT","20"))
 USE_BROWSER=os.getenv("NETRATTLER_PUBLIC_SOURCE_BROWSER","1")=="1"
 
 SOURCES={
  "aiscore":"https://www.aiscore.com/",
  "besoccer":"https://www.besoccer.com/",
+ "scoutingstats_player_props":"https://scoutingstats.ai/player-props",
  "soccerstats":"https://www.soccerstats.com/",
  "understat":"https://understat.com/",
  "forebet":"https://www.forebet.com/",
@@ -39,9 +40,10 @@ def fetch_public(url):
     try:
         from playwright.sync_api import sync_playwright
         with sync_playwright() as p:
-            b=p.chromium.launch(headless=True)
-            page=b.new_page(user_agent=UA)
+            b=p.chromium.launch(headless=True,args=['--no-sandbox','--disable-dev-shm-usage'])
+            page=b.new_page(user_agent=UA,locale='en-GB',viewport={'width':1440,'height':1200})
             resp=page.goto(url,wait_until="domcontentloaded",timeout=TIMEOUT*1000)
+            page.wait_for_timeout(3500)
             html=page.content(); b.close()
             return html,"playwright",resp.status if resp else None
     except Exception:
@@ -61,7 +63,8 @@ def text_features(html):
       "has_btts":("btts" in low or "both teams to score" in low),
       "has_over25":("over 2.5" in low or "2.5 goals" in low),
       "has_1x2":("1x2" in low or "match result" in low),
-      "has_player_props":("player props" in low or "player shots" in low or "goalscorer" in low),
+      "has_player_props":("player props" in low or "player shots" in low or "shots on target" in low or "goalscorer" in low or "player tackles" in low),
+      "has_prop_model":("model probability" in low or "fair odds" in low or "hit rate" in low or "confidence" in low),
       "has_bookmaker":("bookmaker" in low or "bet365" in low or "pinnacle" in low or "unibet" in low),
       "has_odds":("odds" in low or "quoten" in low),
     }
@@ -77,11 +80,7 @@ def probe_all():
     return rows
 
 def h2h_features(matches):
-    """Leakage-safe aggregate for already parsed historical H2H rows.
-
-    Expected row keys: date, home_goals, away_goals, ht_home_goals, ht_away_goals,
-    corners. Caller must supply only matches known before the target kickoff.
-    """
+    """Leakage-safe aggregate for already parsed historical H2H rows."""
     if not matches: return {"h2h_n":0}
     rows=list(matches)[:10]; n=len(rows)
     goals=[float(x.get("home_goals",0))+float(x.get("away_goals",0)) for x in rows]
