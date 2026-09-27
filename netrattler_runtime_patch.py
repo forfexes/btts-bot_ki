@@ -3,7 +3,8 @@
 
 Keeps REAL_ODDS_ONLY intact while:
 - routing 1X2 to the main/AI Telegram chat without moving Goal Hunter;
-- reading richer Kambi market metadata so non-scorer player props are not lost.
+- reading richer Kambi market metadata so non-scorer player props are not lost;
+- preventing league-default BTTS/O2.5 prices from being mistaken for observed Pinnacle odds.
 """
 from __future__ import annotations
 
@@ -138,7 +139,39 @@ def install_pre_guard() -> None:
     _PRE_INSTALLED = True
 
 
+def _install_team_market_quote_guard(bot) -> None:
+    """Make missing FT BTTS/O2.5 prices fail closed instead of using league defaults.
+
+    btts_bot initializes league-level placeholder prices (for example 1.85 BTTS and
+    1.80 O2.5) before asking Pinnacle for the real market. Previously a non-empty
+    Pinnacle response containing only 1X2/other markets made those placeholders look
+    like observed quotes. Returning 1.00 for a missing FT market forces the existing
+    value gate to reject it while preserving every genuinely observed price.
+    """
+    original = getattr(bot, "get_pinnacle_match_odds", None)
+    if not callable(original) or getattr(original, "_ntr_team_market_quote_guard", False):
+        return
+
+    def guarded_get_pinnacle_match_odds(*args, **kwargs):
+        odds = original(*args, **kwargs)
+        if not isinstance(odds, dict):
+            return odds
+        safe = dict(odds)
+        if not safe.get("btts_yes"):
+            safe["btts_yes"] = 1.0
+            safe["_btts_quote_missing"] = True
+        if not safe.get("over_25"):
+            safe["over_25"] = 1.0
+            safe["_over25_quote_missing"] = True
+        return safe
+
+    guarded_get_pinnacle_match_odds._ntr_team_market_quote_guard = True
+    bot.get_pinnacle_match_odds = guarded_get_pinnacle_match_odds
+
+
 def install_bot(bot) -> None:
-    """Route only 1X2 to the AI/main chat; Goal Hunter remains Late Goals."""
+    """Install small production guards after importing btts_bot."""
     if hasattr(bot, "TELEGRAM_GROUPS"):
+        # Route only 1X2 to AI/main; Goal Hunter remains Late Goals.
         bot.TELEGRAM_GROUPS["1x2"] = getattr(bot, "TELEGRAM_CHAT_ID", "")
+    _install_team_market_quote_guard(bot)
