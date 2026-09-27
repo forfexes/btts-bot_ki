@@ -37,11 +37,6 @@ jobs:
         env:
           PIP_DISABLE_PIP_VERSION_CHECK: "1"
         run: |
-          # btts_bot talks to Gemini/Groq/OpenRouter/Supabase via HTTP requests,
-          # so their large Python SDKs are unnecessary in the tips job.
-          # Install XGBoost without dependencies to avoid the ~342 MB CUDA/NCCL
-          # package on CPU-only GitHub runners; numpy/scipy/sklearn are installed
-          # explicitly just above it.
           python -m pip install --prefer-binary \
             requests \
             python-dotenv \
@@ -56,8 +51,8 @@ jobs:
 
       - name: Fast syntax check
         run: |
-          python -m py_compile btts_bot.py netrattler_builder_engine.py netrattler_builder_guard.py netrattler_builder_styles.py netrattler_builder_concepts_v2.py netrattler_runtime_patch.py netrattler_hardtest.py \
-            test_netrattler_builder_guard.py test_netrattler_builder_styles.py test_netrattler_builder_concepts_v2.py test_netrattler_runtime_patch.py \
+          python -m py_compile btts_bot.py netrattler_builder_engine.py netrattler_builder_guard.py netrattler_builder_styles.py netrattler_builder_concepts_v2.py netrattler_runtime_patch.py netrattler_odds_cache_guard.py netrattler_aiscore.py netrattler_hardtest.py \
+            test_netrattler_builder_guard.py test_netrattler_builder_styles.py test_netrattler_builder_concepts_v2.py test_netrattler_runtime_patch.py test_netrattler_odds_cache_guard.py test_netrattler_aiscore.py \
             netrattler_result_enrichment.py netrattler_fotmob_results.py netrattler_settlement_runner.py \
             test_netrattler_result_enrichment.py test_netrattler_fotmob_results.py test_netrattler_settlement_runner.py data_fusion_v15.py \
             netrattler_runtime_policy.py netrattler_market_consensus_v36.py \
@@ -68,18 +63,19 @@ jobs:
           done
 
       - name: Runtime odds/skip regression tests
-        run: python test_netrattler_runtime_patch.py
+        run: |
+          python test_netrattler_runtime_patch.py
+          python test_netrattler_odds_cache_guard.py
+          python test_netrattler_aiscore.py
 
       - name: Consolidated NETRATTLER hardtest
         run: python netrattler_hardtest.py
 
       - name: Run Tips Bot 🤖
         env:
-          # ── ⚡ SPEED: Tipp-Lauf schnell halten (Stats sammelt der Scraper separat) ──
           NETRATTLER_FAST_TIPS:       "true"
           NETRATTLER_STATBUNKER_MAX_LOOKUPS: "0"
           NETRATTLER_LINEUP_MAX:      "8"
-          # ── KI APIs ──
           GEMINI_API_KEYS:            ${{ secrets.GEMINI_API_KEYS }}
           GROQ_API_KEYS:              ${{ secrets.GROQ_API_KEYS }}
           OPENROUTER_API_KEYS:        ${{ secrets.OPENROUTER_API_KEYS }}
@@ -87,8 +83,8 @@ jobs:
           COHERE_API_KEY:             ${{ secrets.COHERE_API_KEY }}
           HUGGINGFACE_API_KEY:        ${{ secrets.HUGGINGFACE_API_KEY }}
           TAVILY_API_KEY:             ${{ secrets.TAVILY_API_KEY }}
-          # ── Daten APIs ──
           ODDS_API_KEYS:              ${{ secrets.ODDS_API_KEYS }}
+          ODDS_API_NET_KEY:           ${{ secrets.ODDS_API_NET_KEY }}
           FOOTBALL_DATA_API_KEYS:     ${{ secrets.FOOTBALL_DATA_API_KEYS }}
           API_FOOTBALL_KEYS:          ${{ secrets.API_FOOTBALL_KEYS }}
           SPORTMONKS_API_KEY:         ${{ secrets.SPORTMONKS_API_KEY }}
@@ -99,7 +95,6 @@ jobs:
           THESTATSAPI_KEY:            ${{ secrets.THESTATSAPI_KEY }}
           THESTATSAPI_KEYS:           ${{ secrets.THESTATSAPI_KEYS }}
           API_NINJAS_KEY:             ${{ secrets.API_NINJAS_KEY }}
-          # ── Telegram ──
           TELEGRAM_TOKEN:             ${{ secrets.TELEGRAM_TOKEN }}
           TELEGRAM_CHAT_ID:           ${{ secrets.TELEGRAM_CHAT_ID }}
           TELEGRAM_GROUP_BTTS:        ${{ secrets.TELEGRAM_GROUP_BTTS }}
@@ -114,19 +109,15 @@ jobs:
           TELEGRAM_GROUP_PLAYER_PROPS: ${{ secrets.TELEGRAM_GROUP_PLAYER_PROPS }}
           TELEGRAM_GROUP_BUILDER:     ${{ secrets.TELEGRAM_GROUP_BUILDER }}
           TELEGRAM_GROUP_OVER15_HT:   ${{ secrets.TELEGRAM_GROUP_OVER15_HT }}
-          # ── Supabase ──
           SUPABASE_URL:               ${{ secrets.SUPABASE_URL }}
           SUPABASE_KEY:               ${{ secrets.SUPABASE_KEY }}
           ODDSPAPI_KEY:               ${{ secrets.ODDSPAPI_KEY }}
           SUPABASE_SERVICE_ROLE_KEY:  ${{ secrets.SUPABASE_SERVICE_ROLE_KEY }}
           BIGBALLS_API_KEY:           ${{ secrets.BIGBALLS_API_KEY }}
           BBS_API_KEY:                ${{ secrets.BBS_API_KEY }}
-          # ── Bot Einstellungen ──
           RUN_MODE:                   ${{ github.event.inputs.mode || 'tips' }}
           ENABLE_SETTLEMENT:          "false"
           ENABLE_ADVANCED_PROPS:      "true"
-          # Global 12k-row scan produced no current-team matches and wasted runtime.
-          # Player ML still fetches targeted history per observed player prop.
           ENABLE_SUPABASE_PROP_STATS: "0"
           MAX_LEAGUES_PER_RUN:        "0"
           PARALLEL_WORKERS:           "10"
@@ -145,20 +136,20 @@ jobs:
           NETRATTLER_ML_PREFETCH_BATCH: "80"
           NETRATTLER_ML_PREFETCH_BUDGET_SEC: "12"
           NETRATTLER_ML_PREFETCH_ROW_LIMIT: "3000"
-          # ── REAL-ODDS FALLBACK CHAIN ──
-          # Pinnacle bleibt bevorzugt; fehlende Preise duerfen nur durch echte
-          # beobachtete Preise aus Snapshot/1xBet/Kambi/odds-api.net/OddsPapi ersetzt werden.
+          # Real odds fallback chain. Pinnacle remains first; only observed prices
+          # from snapshots/1xBet/Kambi/odds-api.net/OddsPapi/odds_history may fill gaps.
           NETRATTLER_ENABLE_ODDSPAPI_RUNTIME: "true"
           NETRATTLER_ODDSPAPI_MAX_CALLS: "1"
           NETRATTLER_FALLBACK_CANDIDATE_MIN_PROB: "45"
           NETRATTLER_FALLBACK_LOG_LIMIT: "20"
-          # Der alte >=10-Pinnacle-Tipps-Speed-Skip darf nur noch greifen, wenn
-          # alle wichtigen Team-Markt-Gruppen bereits echte Kandidaten haben.
+          NETRATTLER_ODDS_CACHE_TTL: "600"
+          NETRATTLER_ODDS_CACHE_MAX_ROWS: "5000"
+          NETRATTLER_ODDS_CACHE_MAX_AGE_HOURS: "18"
+          NETRATTLER_ODDS_CACHE_LOG_LIMIT: "20"
+          # Old count-only skip is now market-coverage aware.
           NETRATTLER_SKIP_REQUIRED_MARKETS: "btts,over25,combo,btts_ht,over15_ht,1x2"
           NETRATTLER_SKIP_MIN_PER_MARKET: "1"
           NETRATTLER_SKIP_TOTAL_MIN: "10"
-          # HT/Combo: quote discovery should not be blocked by the old high
-          # probability gate. Real bookmaker odds + positive edge still decide.
           NETRATTLER_BTTS_HT_MIN_PROB: "32"
           NETRATTLER_BTTS_HT_MIN_EDGE: "0.02"
           NETRATTLER_OVER15_HT_MIN_PROB: "35"
@@ -209,4 +200,4 @@ jobs:
           NETRATTLER_ENABLE_LEGACY_PROP_BUILDER: "false"
           NETRATTLER_ENABLE_SCREENSHOT_BUILDERS: "false"
         run: |
-          python -c "import netrattler_runtime_patch as patch; patch.install_pre_guard(); import btts_bot; patch.install_bot(btts_bot); import netrattler_builder_guard as guard; import netrattler_builder_styles as styles; import netrattler_builder_concepts_v2 as concepts; styles.install(); concepts.install(); guard.main()"
+          python -c "import netrattler_runtime_patch as patch; patch.install_pre_guard(); import btts_bot; patch.install_bot(btts_bot); import netrattler_odds_cache_guard as cache_guard; cache_guard.install(btts_bot); import netrattler_builder_guard as guard; import netrattler_builder_styles as styles; import netrattler_builder_concepts_v2 as concepts; styles.install(); concepts.install(); guard.main()"
