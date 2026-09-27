@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """NETRATTLER public-source feature collector (shadow only).
 
-Collects normal public football pages for later ML feature extraction. It never
+Collects normal public football pages for later ML/source extraction. It never
 creates odds, never bypasses CAPTCHA/Cloudflare/login controls, and never feeds
 production picks directly. REAL_ODDS_ONLY remains owned by the production odds
 pipeline.
@@ -9,10 +9,9 @@ pipeline.
 from __future__ import annotations
 import json, os, re, time
 from datetime import datetime, timezone
-from urllib.parse import quote_plus
 import requests
 
-UA="NETRATTLER-PublicFeatures/1.0 (+https://github.com/forfexes/btts-bot_ki)"
+UA="NETRATTLER-PublicFeatures/1.1 (+https://github.com/forfexes/btts-bot_ki)"
 TIMEOUT=int(os.getenv("NETRATTLER_PUBLIC_SOURCE_TIMEOUT","20"))
 USE_BROWSER=os.getenv("NETRATTLER_PUBLIC_SOURCE_BROWSER","1")=="1"
 
@@ -23,6 +22,9 @@ SOURCES={
  "understat":"https://understat.com/",
  "forebet":"https://www.forebet.com/",
  "betmines":"https://betmines.com/",
+ "oddsportal":"https://www.oddsportal.com/football/",
+ "betexplorer":"https://www.betexplorer.com/football/",
+ "flashscore":"https://www.flashscore.com/football/",
 }
 
 def fetch_public(url):
@@ -58,6 +60,9 @@ def text_features(html):
       "has_cards":("yellow card" in low or "red card" in low or "karten" in low),
       "has_btts":("btts" in low or "both teams to score" in low),
       "has_over25":("over 2.5" in low or "2.5 goals" in low),
+      "has_1x2":("1x2" in low or "match result" in low),
+      "has_player_props":("player props" in low or "player shots" in low or "goalscorer" in low),
+      "has_bookmaker":("bookmaker" in low or "bet365" in low or "pinnacle" in low or "unibet" in low),
       "has_odds":("odds" in low or "quoten" in low),
     }
 
@@ -84,7 +89,7 @@ def h2h_features(matches):
     over25=[1.0 if g>2.5 else 0.0 for g in goals]
     ht=[float(x.get("ht_home_goals",0))+float(x.get("ht_away_goals",0)) for x in rows if x.get("ht_home_goals") is not None and x.get("ht_away_goals") is not None]
     corners=[float(x["corners"]) for x in rows if x.get("corners") is not None]
-    weights=[0.82**i for i in range(n)]; sw=sum(weights)
+    weights=[0.82**i for i in range(n)]
     wavg=lambda vals: sum(v*w for v,w in zip(vals,weights[:len(vals)]))/sum(weights[:len(vals)]) if vals else None
     return {"h2h_n":n,"h2h_avg_goals":round(wavg(goals),4),"h2h_btts_rate":round(wavg(btts),4),"h2h_over25_rate":round(wavg(over25),4),"h2h_avg_ht_goals":round(wavg(ht),4) if ht else None,"h2h_avg_corners":round(wavg(corners),4) if corners else None}
 
