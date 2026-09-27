@@ -7,10 +7,9 @@ This module is diagnostic/shadow-only and does not feed production picks.
 """
 from __future__ import annotations
 import json, os, time
-from urllib.parse import urlparse
 import requests
 
-UA = "NETRATTLER-SourceProbe/1.0 (+https://github.com/forfexes/btts-bot_ki)"
+UA = "NETRATTLER-SourceProbe/1.1 (+https://github.com/forfexes/btts-bot_ki)"
 TIMEOUT = int(os.getenv("NETRATTLER_SOURCE_PROBE_TIMEOUT", "20"))
 
 SOURCES = {
@@ -22,6 +21,11 @@ SOURCES = {
     "understat": "https://understat.com/",
     "forebet": "https://www.forebet.com/",
     "betmines": "https://betmines.com/",
+    # Odds comparison/public bookmaker pages. Probe-only until a parser has
+    # demonstrated exact event/market/selection mapping in CI.
+    "oddsportal": "https://www.oddsportal.com/football/",
+    "betexplorer": "https://www.betexplorer.com/football/",
+    "flashscore": "https://www.flashscore.com/football/",
 }
 
 def request_probe(name, url):
