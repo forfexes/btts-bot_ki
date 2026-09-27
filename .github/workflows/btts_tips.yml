@@ -62,10 +62,13 @@ jobs:
             test_netrattler_result_enrichment.py test_netrattler_fotmob_results.py test_netrattler_settlement_runner.py data_fusion_v15.py \
             netrattler_runtime_policy.py netrattler_market_consensus_v36.py \
             netrattler_exposure_engine_v36.py netrattler_coverage_watchdog_v37.py \
-            netrattler_model_registry_v37.py netrattler_oddspapi.py
+            netrattler_model_registry_v37.py netrattler_oddspapi.py netrattler_free_odds.py
           for f in netrattler_identity_hub.py netrattler_ml_player.py netrattler_prop_sources.py netrattler_source_hub.py netrattler_stat_sources.py; do
             [ ! -f "$f" ] || python -m py_compile "$f"
           done
+
+      - name: Runtime odds/skip regression tests
+        run: python test_netrattler_runtime_patch.py
 
       - name: Consolidated NETRATTLER hardtest
         run: python netrattler_hardtest.py
@@ -142,6 +145,18 @@ jobs:
           NETRATTLER_ML_PREFETCH_BATCH: "80"
           NETRATTLER_ML_PREFETCH_BUDGET_SEC: "12"
           NETRATTLER_ML_PREFETCH_ROW_LIMIT: "3000"
+          # ── REAL-ODDS FALLBACK CHAIN ──
+          # Pinnacle bleibt bevorzugt; fehlende Preise duerfen nur durch echte
+          # beobachtete Preise aus Snapshot/1xBet/Kambi/odds-api.net/OddsPapi ersetzt werden.
+          NETRATTLER_ENABLE_ODDSPAPI_RUNTIME: "true"
+          NETRATTLER_ODDSPAPI_MAX_CALLS: "1"
+          NETRATTLER_FALLBACK_CANDIDATE_MIN_PROB: "45"
+          NETRATTLER_FALLBACK_LOG_LIMIT: "20"
+          # Der alte >=10-Pinnacle-Tipps-Speed-Skip darf nur noch greifen, wenn
+          # alle wichtigen Team-Markt-Gruppen bereits echte Kandidaten haben.
+          NETRATTLER_SKIP_REQUIRED_MARKETS: "btts,over25,combo,btts_ht,over15_ht,1x2"
+          NETRATTLER_SKIP_MIN_PER_MARKET: "1"
+          NETRATTLER_SKIP_TOTAL_MIN: "10"
           # HT/Combo: quote discovery should not be blocked by the old high
           # probability gate. Real bookmaker odds + positive edge still decide.
           NETRATTLER_BTTS_HT_MIN_PROB: "32"
