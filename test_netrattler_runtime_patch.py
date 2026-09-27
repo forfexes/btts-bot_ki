@@ -45,16 +45,54 @@ def test_1x2_routes_to_main_only():
     class Bot:
         TELEGRAM_CHAT_ID = "AI"
         TELEGRAM_GROUPS = {"1x2": "LATE", "scorer": "LATE"}
+        @staticmethod
+        def get_pinnacle_match_odds(*_args, **_kwargs):
+            return {"home_win": 1.70, "draw": 4.10, "away_win": 5.00}
     bot = Bot()
     patch.install_bot(bot)
     assert bot.TELEGRAM_GROUPS["1x2"] == "AI"
     assert bot.TELEGRAM_GROUPS["scorer"] == "LATE"
 
 
+def test_missing_team_market_quotes_fail_closed():
+    class Bot:
+        TELEGRAM_CHAT_ID = "AI"
+        TELEGRAM_GROUPS = {"1x2": "LATE", "scorer": "LATE"}
+        @staticmethod
+        def get_pinnacle_match_odds(*_args, **_kwargs):
+            return {"home_win": 1.70, "draw": 4.10, "away_win": 5.00}
+    bot = Bot()
+    patch.install_bot(bot)
+    odds = bot.get_pinnacle_match_odds("A", "B")
+    assert odds["btts_yes"] == 1.0
+    assert odds["over_25"] == 1.0
+    assert odds["_btts_quote_missing"] is True
+    assert odds["_over25_quote_missing"] is True
+    assert odds["home_win"] == 1.70
+
+
+def test_real_team_market_quotes_are_preserved():
+    class Bot:
+        TELEGRAM_CHAT_ID = "AI"
+        TELEGRAM_GROUPS = {"1x2": "LATE", "scorer": "LATE"}
+        @staticmethod
+        def get_pinnacle_match_odds(*_args, **_kwargs):
+            return {"btts_yes": 2.06, "over_25": 1.92, "home_win": 1.80}
+    bot = Bot()
+    patch.install_bot(bot)
+    odds = bot.get_pinnacle_match_odds("A", "B")
+    assert odds["btts_yes"] == 2.06
+    assert odds["over_25"] == 1.92
+    assert "_btts_quote_missing" not in odds
+    assert "_over25_quote_missing" not in odds
+
+
 def main():
     test_kambi_rich_market_parser()
     test_1x2_routes_to_main_only()
-    print("OK: runtime routing + rich Kambi prop parser")
+    test_missing_team_market_quotes_fail_closed()
+    test_real_team_market_quotes_are_preserved()
+    print("OK: runtime routing + rich Kambi parser + real-odds market guard")
 
 
 if __name__ == "__main__":
