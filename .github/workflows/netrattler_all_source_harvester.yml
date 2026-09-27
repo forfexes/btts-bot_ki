@@ -18,10 +18,17 @@ jobs:
       - name: Install source adapters
         run: |
           pip install -r requirements_all_source.txt
-          # Browser/bookmaker adapters are intentionally not installed here; the dedicated
-          # Odds Harvester owns those sources, avoiding duplicate Chromium setup/work.
+          pip install playwright
+          python -m playwright install --with-deps chromium
       - name: Compile
-        run: python -m py_compile netrattler_all_source_harvester.py netrattler_source_hub.py netrattler_odds_harvester.py
+        run: python -m py_compile netrattler_all_source_harvester.py netrattler_source_hub.py netrattler_odds_harvester.py netrattler_source_probe.py netrattler_public_source_features.py
+      - name: Probe public sources
+        env:
+          NETRATTLER_SOURCE_PROBE_BROWSER: "1"
+          NETRATTLER_PUBLIC_SOURCE_BROWSER: "1"
+        run: |
+          python netrattler_source_probe.py || true
+          python netrattler_public_source_features.py || true
       - name: Run all sources; failed source continues to next
         env:
           SUPABASE_URL: ${{ secrets.SUPABASE_URL }}
@@ -52,4 +59,6 @@ jobs:
             netrattler_all_source_summary.json
             netrattler_source_hub_summary.json
             netrattler_odds_snapshot.json
+            netrattler_source_probe.json
+            netrattler_public_source_summary.json
           if-no-files-found: ignore
