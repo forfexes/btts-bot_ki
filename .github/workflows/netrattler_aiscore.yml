@@ -1,6 +1,12 @@
 name: NETRATTLER AiScore Public Collector
 
 on:
+  push:
+    branches: [main]
+    paths:
+      - "netrattler_aiscore.py"
+      - "test_netrattler_aiscore.py"
+      - ".github/workflows/netrattler_aiscore.yml"
   workflow_dispatch:
     inputs:
       limit:
