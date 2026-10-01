@@ -57,7 +57,7 @@ jobs:
             test_netrattler_result_enrichment.py test_netrattler_fotmob_results.py test_netrattler_settlement_runner.py data_fusion_v15.py \
             netrattler_runtime_policy.py netrattler_market_consensus_v36.py \
             netrattler_exposure_engine_v36.py netrattler_coverage_watchdog_v37.py \
-            netrattler_model_registry_v37.py netrattler_oddspapi.py netrattler_free_odds.py
+            netrattler_model_registry_v37.py netrattler_oddspapi.py netrattler_free_odds.py netrattler_quote_consensus.py netrattler_fivedollar.py netrattler_fieldfunded.py netrattler_sockodds.py
           for f in netrattler_identity_hub.py netrattler_ml_player.py netrattler_prop_sources.py netrattler_source_hub.py netrattler_stat_sources.py; do
             [ ! -f "$f" ] || python -m py_compile "$f"
           done
@@ -112,6 +112,10 @@ jobs:
           SUPABASE_URL:               ${{ secrets.SUPABASE_URL }}
           SUPABASE_KEY:               ${{ secrets.SUPABASE_KEY }}
           ODDSPAPI_KEY:               ${{ secrets.ODDSPAPI_KEY }}
+          FIVEDOLLAR_API_KEY:          ${{ secrets.FIVEDOLLAR_API_KEY }}
+          FIELDFUNDED_API_KEY:         ${{ secrets.FIELDFUNDED_API_KEY }}
+          SOCKODDS_API_KEY:            ${{ secrets.SOCKODDS_API_KEY }}
+          NETRATTLER_NEW_ODDS_SHADOW:  "true"
           SUPABASE_SERVICE_ROLE_KEY:  ${{ secrets.SUPABASE_SERVICE_ROLE_KEY }}
           BIGBALLS_API_KEY:           ${{ secrets.BIGBALLS_API_KEY }}
           BBS_API_KEY:                ${{ secrets.BBS_API_KEY }}
