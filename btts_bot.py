@@ -25937,7 +25937,16 @@ def main():
             if _pml.get("load_error"):
                 _pml_msg += f" · load={str(_pml.get('load_error'))[:120]}"
             log(_pml_msg)
-        _builder_prop_pool.extend(_NTR_BUILDER_PROP_POOL)
+        # Player Builder bleibt strikt player-only. Pinnacle Specials enthalten auch
+        # BTTS/Team Goals; diese dürfen nie als "echte Player-Props" gezählt werden.
+        _player_builder_categories = set(_REAL_PLAYER_BUILDER_CATS)
+        _real_player_pool = [
+            row for row in _NTR_BUILDER_PROP_POOL
+            if isinstance(row, dict)
+            and str(row.get("category") or "") in _player_builder_categories
+            and str(row.get("player") or "").strip()
+        ]
+        _builder_prop_pool.extend(_real_player_pool)
 
         # Match-Kontexte für Same-Match-/Underdog-/Narrative-Builder.
         try:
@@ -25962,7 +25971,7 @@ def main():
 
         _pool_categories = {}
         _pool_matches = {}
-        for _row in _NTR_BUILDER_PROP_POOL:
+        for _row in _real_player_pool:
             if not isinstance(_row, dict):
                 continue
             _cat = str(_row.get("category") or "other")
@@ -25972,7 +25981,7 @@ def main():
 
         log(
             f"   🏗️ Builder-Pool: {len(_builder_prop_pool)} Legs "
-            f"({len(_NTR_BUILDER_PROP_POOL)} echte Player-Props)"
+            f"({len(_real_player_pool)} echte Player-Props)"
         )
         log(
             "   🏗️ Player-Prop Kategorien: "
