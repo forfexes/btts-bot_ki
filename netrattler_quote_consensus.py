@@ -37,6 +37,6 @@ def consensus(rows:Iterable[Dict[str,Any]], max_price_delta:float=.18, allow_tru
     independent={q.source for q in same}
     spread=(max(q.odds for q in same)-min(q.odds for q in same))/max(.01,min(q.odds for q in same))
     trusted=base.source in TRUSTED_SINGLE or _n(base.bookmaker) in TRUSTED_SINGLE
-    ok=(len(independent)>=2 and spread<=max_price_delta) or (allow_trusted_single and len(same)==1 and trusted)
+    ok=(len(independent)>=2 and spread<=max_price_delta) or (allow_trusted_single and len(qs)==1 and len(same)==1 and trusted)
     return {"ok":ok,"reason":"confirmed" if ok else ("price_divergence" if spread>max_price_delta else "single_weak_source"),
             "sources":sorted(independent),"spread":round(spread,4),"quotes":[q.row() for q in same]}
