@@ -74,6 +74,8 @@ SOURCES: Tuple[SourceAdapter, ...] = (
     SourceAdapter("fotmob_scraper", "davidrocha9/fotmob-scraper", "player_stats", "FotMob fixtures/squads/player stats/Supabase sync pattern", "ENABLE_FOTMOB", True, "", "check-upstream"),
     SourceAdapter("reep_identity", "withqwerty/reep", "identity", "provider identity mapping: Transfermarkt/FBref/UEFA/SofaScore", "ENABLE_REEP", True, "", "check-upstream"),
     SourceAdapter("oddsharvester", "jordantete/OddsHarvester", "odds_clv", "OddsPortal historical/closing odds fallback via Playwright", "ENABLE_ODDSHARVESTER", True, "", "MIT", True),
+    SourceAdapter("bet365_ws_research", "joe-bring/bet365-scraper", "live_odds_stats", "Bet365 browser WebSocket research/fallback feed; never sole production truth", "ENABLE_BET365_WS_RESEARCH", False, "", "check-upstream", True),
+    SourceAdapter("flashscore_odds_research", "realine0/flashscore-football-odds-scraper", "odds_history", "Flashscore Playwright/LSApp cross-check for historical/team-market odds", "ENABLE_FLASHSCORE_ODDS_RESEARCH", False, "", "check-upstream", True),
     SourceAdapter("livescore_api", "Simatwa/livescore-api", "results_live", "Livescore.com unofficial results fallback", "ENABLE_LIVESCORE_API", True, "livescore_api", "MIT-ish check", True),
     SourceAdapter("openfootball_football_json", "openfootball/football.json", "results", "free fixture/result fallback", "ENABLE_OPENFOOTBALL", True, "", "CC0", urls=("https://raw.githubusercontent.com/openfootball/football.json/master/2025-26/en.1.json",)),
     SourceAdapter("openfootball_worldcup_json", "openfootball/worldcup.json", "worldcup_results", "World Cup JSON settlement fallback", "ENABLE_OPENFOOTBALL_WC", True, "", "CC0"),
