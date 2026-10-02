@@ -19,7 +19,7 @@ jobs:
       - name: Install dependencies
         run: |
           python -m pip install --upgrade pip
-          pip install requests python-dateutil curl_cffi
+          pip install --prefer-binary requests python-dateutil curl_cffi numpy scikit-learn
       - name: Compile settlement + learning feedback
         run: |
           python -m py_compile netrattler_settlement_v16_final.py netrattler_settlement_runner.py \
