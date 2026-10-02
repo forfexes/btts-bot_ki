@@ -49,12 +49,46 @@ _CALL_COUNT = {"fixtures": 0, "odds": 0}
 _RATE_LIMITED_FLAG = {"hit": False}
 
 
+_KEY_STATE = {"index": 0, "rotations": 0}
+
+
 def call_stats() -> dict:
-    return dict(_CALL_COUNT)
+    out = dict(_CALL_COUNT)
+    out["key_count"] = len(_keys())
+    out["key_rotations"] = int(_KEY_STATE.get("rotations", 0))
+    return out
+
+
+def _keys() -> List[str]:
+    """Return configured OddsPapi keys without ever logging their values.
+
+    Preferred secret: ODDSPAPI_KEYS with comma/newline/semicolon separated keys.
+    Legacy ODDSPAPI_KEY / ODDSPAPI_API_KEY remain valid fallbacks.
+    """
+    raw = str(os.getenv("ODDSPAPI_KEYS", "") or "")
+    candidates: List[str] = []
+    if raw.strip():
+        candidates.extend(x.strip() for x in re.split(r"[,;\\n\\r]+", raw) if x.strip())
+    for name in ("ODDSPAPI_KEY", "ODDSPAPI_API_KEY"):
+        value = str(os.getenv(name, "") or "").strip()
+        if value:
+            candidates.append(value)
+    out: List[str] = []
+    seen = set()
+    for value in candidates:
+        if value in seen:
+            continue
+        seen.add(value)
+        out.append(value)
+    return out
 
 
 def _key() -> str:
-    return (os.getenv("ODDSPAPI_KEY", "") or os.getenv("ODDSPAPI_API_KEY", "")).strip()
+    keys = _keys()
+    if not keys:
+        return ""
+    idx = int(_KEY_STATE.get("index", 0)) % len(keys)
+    return keys[idx]
 
 
 def _norm(s: str) -> str:
@@ -64,20 +98,48 @@ def _norm(s: str) -> str:
 
 
 def _get(path: str, params: dict, timeout: int = 20):
-    if requests is None or not _key():
+    keys = _keys()
+    if requests is None or not keys:
         return None
-    try:
-        p = dict(params)
-        p["apiKey"] = _key()
-        r = requests.get(f"{BASE_URL}/{path}", params=p, timeout=timeout,
-                        headers={"User-Agent": "Mozilla/5.0"})
-        if r.status_code == 429:
-            return {"_rate_limited": True}
+
+    start = int(_KEY_STATE.get("index", 0)) % len(keys)
+    saw_rate_limit = False
+    for offset in range(len(keys)):
+        idx = (start + offset) % len(keys)
+        key = keys[idx]
+        try:
+            p = dict(params)
+            p["apiKey"] = key
+            r = requests.get(
+                f"{BASE_URL}/{path}",
+                params=p,
+                timeout=timeout,
+                headers={"User-Agent": "Mozilla/5.0"},
+            )
+        except Exception:
+            continue
+
+        if r.status_code in (401, 403, 429):
+            if r.status_code == 429:
+                saw_rate_limit = True
+            if len(keys) > 1:
+                _KEY_STATE["rotations"] = int(_KEY_STATE.get("rotations", 0)) + 1
+            _KEY_STATE["index"] = (idx + 1) % len(keys)
+            continue
+
         if not r.ok:
+            # A malformed request is not a key problem; do not burn every key.
             return None
-        return r.json()
-    except Exception:
-        return None
+
+        _KEY_STATE["index"] = idx
+        try:
+            return r.json()
+        except Exception:
+            return None
+
+    if saw_rate_limit:
+        return {"_rate_limited": True, "_all_keys_exhausted": True}
+    return None
 
 
 def get_fixtures(target_date=None) -> List[Dict]:
