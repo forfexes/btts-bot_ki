@@ -284,6 +284,104 @@ def _aystar_mix(props: Sequence[builder.PropLeg], match_date: str) -> List[build
     return out
 
 
+def _library_cross_match(props: Sequence[builder.PropLeg], match_date: str) -> List[builder.BuilderPick]:
+    """Library rule: cross-match builders use 2-5 DIFFERENT games.
+
+    One real/modelled leg per game; mixed-market and same-category variants.
+    REAL_ODDS_ONLY/model-edge guards remain unchanged.
+    """
+    eligible = [
+        x for x in props
+        if _modelled(x)
+        and x.category in {
+            "shots", "sot", "fouls", "fouls_won", "tackles",
+            "tackles_committed", "tackles_received", "yellow_cards",
+            "goalkeeper_saves", "score", "assist", "score_assist", "offsides",
+        }
+    ]
+    by_match: Dict[str, List[builder.PropLeg]] = {}
+    for leg in eligible:
+        by_match.setdefault(builder.norm(leg.match), []).append(leg)
+
+    best_per_match: List[builder.PropLeg] = []
+    for rows in by_match.values():
+        ranked = sorted(rows, key=_strength, reverse=True)
+        if ranked:
+            best_per_match.append(ranked[0])
+    best_per_match.sort(key=_strength, reverse=True)
+
+    out: List[builder.BuilderPick] = []
+    configs = (
+        (2, "CROSS 2 MATCHES", 12.0, 0.75),
+        (3, "CROSS 3 MATCHES", 25.0, 0.50),
+        (4, "CROSS 4 MATCHES", 60.0, 0.25),
+        (5, "CROSS 5 MATCHES", 120.0, 0.10),
+    )
+    for size, label, max_odds, stake in configs:
+        if len(best_per_match) < size:
+            continue
+        chosen: List[builder.PropLeg] = []
+        used_cats = set()
+        # First pass favors market diversity.
+        for leg in best_per_match:
+            if leg.category in used_cats:
+                continue
+            chosen.append(leg)
+            used_cats.add(leg.category)
+            if len(chosen) >= size:
+                break
+        # Fill remaining slots from other matches if categories repeat.
+        if len(chosen) < size:
+            used_matches = {builder.norm(x.match) for x in chosen}
+            for leg in best_per_match:
+                if builder.norm(leg.match) in used_matches:
+                    continue
+                chosen.append(leg)
+                used_matches.add(builder.norm(leg.match))
+                if len(chosen) >= size:
+                    break
+        if len(chosen) != size or len({builder.norm(x.match) for x in chosen}) != size:
+            continue
+        pick = builder._make_builder("LIBRARY CROSS MATCH", label, chosen, match_date, stake)
+        if pick and pick.total_odds <= max_odds:
+            out.append(pick)
+
+    # Same-category cross-match variants like booking/shots/fouls accas.
+    labels = {
+        "yellow_cards": "BOOKINGS",
+        "shots": "SHOTS",
+        "sot": "SOT",
+        "fouls": "FOULS",
+        "fouls_won": "FOULS WON",
+        "tackles": "TACKLES",
+        "tackles_committed": "TACKLES",
+        "goalkeeper_saves": "SAVES",
+    }
+    for cat, title in labels.items():
+        per_match: List[builder.PropLeg] = []
+        for rows in by_match.values():
+            ranked = sorted([x for x in rows if x.category == cat], key=_strength, reverse=True)
+            if ranked:
+                per_match.append(ranked[0])
+        per_match.sort(key=_strength, reverse=True)
+        for size, cap in ((2, 18.0), (3, 40.0), (4, 80.0)):
+            if len(per_match) < size:
+                continue
+            legs = per_match[:size]
+            if len({builder.norm(x.match) for x in legs}) != size:
+                continue
+            pick = builder._make_builder(
+                "LIBRARY CROSS MATCH",
+                f"{title} {size} GAMES",
+                legs,
+                match_date,
+                0.35 if size == 2 else 0.20,
+            )
+            if pick and pick.total_odds <= cap:
+                out.append(pick)
+    return out
+
+
 def _pick_rank(pick: builder.BuilderPick) -> Tuple[float, float, float, float]:
     avg_q = sum(x.quality for x in pick.legs) / len(pick.legs)
     avg_p = sum(x.probability for x in pick.legs) / len(pick.legs)
@@ -322,6 +420,7 @@ def build_builder_picks(raw_props, match_contexts=None, match_date=None, max_bui
     premium += _nate_alt_lines(props, run_date)
     premium += _aystar_booking(props, run_date)
     premium += _aystar_mix(props, run_date)
+    premium += _library_cross_match(props, run_date)
 
     legacy = _ORIG_BUILD(raw_props, match_contexts, run_date, max_builders=max(30, max_count * 2))
     fallback_styles = {"KEEPER SAVES", "SAME PLAYER", "PLAYER DUEL", "CROSS MATCH PROP ACCA"}
@@ -353,7 +452,7 @@ def build_builder_picks(raw_props, match_contexts=None, match_date=None, max_bui
     match_count: Dict[str, int] = {}
     max_per_match = builder.as_int(os.getenv("NETRATTLER_MAX_BUILDERS_PER_MATCH", "8"), 8)
 
-    for style in ("TIPS BIBLE", "GODTIPSTER PROFILE", "NATE CATEGORY", "NATE ALT-LINE", "AYSTAR BOOKING", "AYSTAR MIX"):
+    for style in ("TIPS BIBLE", "GODTIPSTER PROFILE", "NATE CATEGORY", "NATE ALT-LINE", "AYSTAR BOOKING", "AYSTAR MIX", "LIBRARY CROSS MATCH"):
         for pick in unique:
             if pick.style != style:
                 continue
