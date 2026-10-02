@@ -38,6 +38,7 @@ def main():
     import test_netrattler_builder_styles as builder_styles
     import test_netrattler_runtime_patch as runtime_patch
     import test_netrattler_builder_concepts_v2 as builder_concepts
+    import test_netrattler_oddspapi_keys as oddspapi_keys
     import test_netrattler_result_enrichment as result_enrichment
     import test_netrattler_fotmob_results as fotmob_results
     import test_netrattler_settlement_runner as settlement_runner
@@ -46,6 +47,7 @@ def main():
     source_health.main()
     builder_guard.main()
     builder_styles.main()
+    oddspapi_keys.main()
     runtime_patch.main()
     builder_concepts.main()
     result_enrichment.main()
