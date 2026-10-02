@@ -4669,6 +4669,21 @@ except ImportError:
 
 PLAYWRIGHT_CACHE = {}
 
+# ── Timeout-Schutz: Playwright ist der langsamste Pfad (jeder Call startet ein
+# eigenes Chromium, ~mehrere Sek). Bei tausenden Matches sprengt das die
+# GitHub-Actions-Zeit. NETRATTLER_FAST_TIPS deckelt die Playwright-Zeit hart:
+# nach Ablauf des weichen Budgets liefert scrape_with_playwright sofort None,
+# ohne Browser zu starten. So laufen die Tipp-Runs aus Supabase/APIs weiter,
+# aber ohne Live-Scrape-Storm. ──
+_PW_FAST_TIPS = str(os.getenv("NETRATTLER_FAST_TIPS", "false")).lower() in {"1", "true", "yes", "on"}
+try:
+    _PW_BUDGET_SEC = float(os.getenv("NETRATTLER_PLAYWRIGHT_BUDGET_SEC", "120"))
+except (TypeError, ValueError):
+    _PW_BUDGET_SEC = 120.0
+_PW_FIRST_CALL_TS = None   # Zeitpunkt des ersten Playwright-Calls
+_PW_BUDGET_HIT = False     # einmaliges Logging, wenn Budget erschöpft
+
+
 def scrape_with_playwright(url, wait_for=None, timeout=8000):
     """
     Scrapt eine Seite mit echtem Chromium Browser.
@@ -4680,6 +4695,19 @@ def scrape_with_playwright(url, wait_for=None, timeout=8000):
     cache_key = f"pw_{url}"
     if cache_key in PLAYWRIGHT_CACHE:
         return PLAYWRIGHT_CACHE[cache_key]
+
+    # FAST_TIPS: hartes Zeitbudget für den gesamten Playwright-Scrape.
+    global _PW_FIRST_CALL_TS, _PW_BUDGET_HIT
+    if _PW_FAST_TIPS:
+        _now = time.time()
+        if _PW_FIRST_CALL_TS is None:
+            _PW_FIRST_CALL_TS = _now
+        elif (_now - _PW_FIRST_CALL_TS) > _PW_BUDGET_SEC:
+            if not _PW_BUDGET_HIT:
+                _PW_BUDGET_HIT = True
+                log(f"⏱️ FAST_TIPS: Playwright-Budget ({_PW_BUDGET_SEC:.0f}s) erschöpft — "
+                    f"weitere Live-Scrapes werden übersprungen (Tipps laufen aus Cache/APIs weiter).", "WARN")
+            return None
 
     try:
         with sync_playwright() as p:
@@ -20025,6 +20053,9 @@ def analyze_scorer_tips(fixture, league, scorers, observed_props=None):
 
     tips = []
     for scorer in scorers:
+        scorer_name = scorer.get("name") or scorer.get("player") or ""
+        if not scorer_name:
+            continue
         team_id = scorer.get("team_id")
         team_name = scorer.get("team", "").lower()
         is_playing = False
@@ -20044,12 +20075,12 @@ def analyze_scorer_tips(fixture, league, scorers, observed_props=None):
         if gpg < 0.3:
             continue
         prob = round((1 - math.exp(-gpg)) * 100)
-        quote = float(quote_by_player.get(_pn(scorer.get("name")), 0) or 0)
+        quote = float(quote_by_player.get(_pn(scorer_name), 0) or 0)
         if prob < 35 or quote < MIN_ODDS_VALUE or not _is_value_bet(quote, prob):
             continue
         tips.append({
-            "match": f"{fixture['home']} vs {fixture['away']}", "league": league,
-            "time": fixture.get("time_local", "TBD"), "player": scorer["name"],
+            "match": f"{fixture.get('home','')} vs {fixture.get('away','')}", "league": league,
+            "time": fixture.get("time_local", "TBD"), "player": scorer_name,
             "team": scorer.get("team", ""), "goals_per_game": gpg,
             "goals_total": scorer.get("goals_total", 0), "probability": prob,
             "odds": round(quote, 3), "oddsYes": round(quote, 3),
@@ -25032,6 +25063,33 @@ def main():
     log("=" * 60)
     log("AI TIPP BOT - ALL-IN-ONE EDITION")
     log("=" * 60)
+
+    # ── HARD WATCHDOG ──────────────────────────────────────────────
+    # GitHub-Actions killt den Job nach timeout-minutes (15 min) → verbrannte
+    # Minuten ohne Ergebnis. Dieser Watchdog beendet den Prozess kontrolliert
+    # VOR dem Kill via os._exit, das JEDEN except-Block durchbricht (ein
+    # SystemExit würde von den vielen try/except im Analyse-Pfad geschluckt).
+    # Default 660s = 11 min, sicher unter dem 15-min-Kill.
+    try:
+        _wd_budget = float(os.getenv("NETRATTLER_ANALYSIS_BUDGET_SEC", "660"))
+    except (TypeError, ValueError):
+        _wd_budget = 660.0
+    if _wd_budget > 0:
+        import threading as _threading
+
+        def _hard_watchdog():
+            log(f"🐕 Hard-Watchdog: beende Run nach {_wd_budget:.0f}s (vor GitHub-Kill).", "WARN")
+            try:
+                sys.stdout.flush()
+                sys.stderr.flush()
+            except Exception:
+                pass
+            os._exit(0)
+
+        _wd = _threading.Timer(_wd_budget, _hard_watchdog)
+        _wd.daemon = True
+        _wd.start()
+        log(f"🐕 Hard-Watchdog aktiv: {_wd_budget:.0f}s Budget.")
 
     check_config()
     check_rotation_schedule()
