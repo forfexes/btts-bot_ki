@@ -68,7 +68,7 @@ def _keys() -> List[str]:
     raw = str(os.getenv("ODDSPAPI_KEYS", "") or "")
     candidates: List[str] = []
     if raw.strip():
-        candidates.extend(x.strip() for x in re.split(r"[,;\\n\\r]+", raw) if x.strip())
+        candidates.extend(x.strip() for x in re.split(r"[,;\n\r]+", raw) if x.strip())
     for name in ("ODDSPAPI_KEY", "ODDSPAPI_API_KEY"):
         value = str(os.getenv(name, "") or "").strip()
         if value:
@@ -119,9 +119,13 @@ def _get(path: str, params: dict, timeout: int = 20):
         except Exception:
             continue
 
-        if r.status_code in (401, 403, 429):
-            if r.status_code == 429:
-                saw_rate_limit = True
+        if r.status_code == 429:
+            # Respect provider rate/quota limits. Do not hop accounts to bypass 429.
+            saw_rate_limit = True
+            _RATE_LIMITED_FLAG["hit"] = True
+            return {"_rate_limited": True}
+        if r.status_code in (401, 403):
+            # Credential failover only: try the next configured authorized key.
             if len(keys) > 1:
                 _KEY_STATE["rotations"] = int(_KEY_STATE.get("rotations", 0)) + 1
             _KEY_STATE["index"] = (idx + 1) % len(keys)
@@ -163,7 +167,10 @@ def get_fixtures(target_date=None) -> List[Dict]:
             _RATE_LIMITED_FLAG["hit"] = True
             print("   🍋 OddsPapi: Rate-Limit (429) erreicht")
         else:
-            print(f"   🍋 OddsPapi: {len(fixtures)} Fixtures mit Quoten geladen ({ds})")
+            print(
+                f"   🍋 OddsPapi: {len(fixtures)} Fixtures mit Quoten geladen ({ds})"
+                f" · keys={len(_keys())} · rotations={int(_KEY_STATE.get('rotations', 0))}"
+            )
     except Exception:
         pass
     _FIXTURES_CACHE[ds] = fixtures
