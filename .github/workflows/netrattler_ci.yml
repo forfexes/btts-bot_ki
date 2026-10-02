@@ -9,8 +9,10 @@ on:
       - "netrattler_kambi_team_odds.py"
       - "netrattler_aiscore.py"
       - "netrattler_free_odds.py"
+      - "netrattler_oddspapi.py"
       - "netrattler_prop_sources.py"
       - "test_netrattler_runtime_patch.py"
+      - "test_netrattler_oddspapi_keys.py"
       - "test_netrattler_odds_cache_guard.py"
       - "test_netrattler_kambi_team_odds.py"
       - "test_netrattler_aiscore.py"
@@ -36,11 +38,25 @@ jobs:
             netrattler_kambi_team_odds.py \
             netrattler_aiscore.py \
             netrattler_free_odds.py \
+            netrattler_oddspapi.py \
             netrattler_prop_sources.py \
             test_netrattler_runtime_patch.py \
+            test_netrattler_oddspapi_keys.py \
             test_netrattler_odds_cache_guard.py \
             test_netrattler_kambi_team_odds.py \
             test_netrattler_aiscore.py
+      - name: OddsPapi secret/config check
+        env:
+          ODDSPAPI_KEYS: ${{ secrets.ODDSPAPI_KEYS }}
+          ODDSPAPI_KEY: ${{ secrets.ODDSPAPI_KEY }}
+        run: |
+          python - <<'PY'
+          import netrattler_oddspapi as op
+          print(f"ODDSPAPI_CONFIG keys={len(op._keys())}")
+          raise SystemExit(0 if op._keys() else 1)
+          PY
+      - name: OddsPapi multi-key tests
+        run: python test_netrattler_oddspapi_keys.py
       - name: Runtime fallback and skip tests
         run: python test_netrattler_runtime_patch.py
       - name: Multi-brand Kambi tests
