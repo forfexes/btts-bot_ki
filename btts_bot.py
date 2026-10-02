@@ -22938,53 +22938,129 @@ def run_pinnacle_props_bot(win_start_utc=None, win_end_utc=None, ch_tz=None, top
     """Bet Builder Style: Pro Spiel 2-4 Legs kombiniert → Prop Hunter Kanal.
     Quellen: Pinnacle (echte Quoten) + FBref (unabhängige Stats) für Cross-Validation."""
     from datetime import datetime as _dt2
-    props = fetch_pinnacle_player_props()
-    if not props:
-        # Pinnacle kann 403 liefern. Dann echte Kambi/1xbet-Quoten als Fallback nutzen.
-        try:
-            from netrattler_prop_sources import collect_extra_player_props
-            _fx, _seen_fx = [], set()
-            for _league, _fixtures in (fixtures_cache or {}).items():
-                for _f in (_fixtures or []):
-                    _h = str(_f.get("home") or "").strip()
-                    _a = str(_f.get("away") or "").strip()
-                    if not _h or not _a:
-                        continue
-                    _k = f"{_h}|{_a}"
-                    if _k in _seen_fx:
-                        continue
-                    _seen_fx.add(_k)
-                    _fx.append({"home": _h, "away": _a})
-            _extra = list(collect_extra_player_props(_fx[:60], log=log, max_matches=60)) if _fx else []
-            _converted = []
-            for _xp in _extra:
-                try:
-                    _od = float(_xp.get("odds") or 0)
-                    _line = float(_xp.get("line") or 0.5)
-                except Exception:
+    props = list(fetch_pinnacle_player_props() or [])
+
+    # V38: Extra-Prop-Quellen sind nicht mehr nur ein Total-Ausfall-Fallback.
+    # Wenn Pinnacle einzelne Matches (z.B. Nationalteam-/AFC-/Copa-Spiele) nicht
+    # mit echten Player-Props abdeckt, werden genau diese Fixtures ergänzt.
+    try:
+        from netrattler_prop_sources import collect_extra_player_props
+
+        def _prop_match_key(_match):
+            _m = str(_match or "").strip()
+            if " vs " not in _m:
+                return ""
+            _h, _a = _m.split(" vs ", 1)
+            return f"{normalize_team_name(_h)}|{normalize_team_name(_a)}"
+
+        def _convert_extra_prop(_xp):
+            try:
+                _od = float(_xp.get("odds") or 0)
+                _line = float(_xp.get("line") or 0.5)
+            except Exception:
+                return None
+            _player = str(_xp.get("player") or "").strip()
+            _market = str(_xp.get("market") or _xp.get("category") or "").strip()
+            _match = str(_xp.get("match") or "").strip()
+            if not _player or not _market or not _match or _od <= 1.01:
+                return None
+            return {
+                "selection": f"Over {_line:g}",
+                "player_prop": f"{_player} {_market} Over {_line:g}",
+                "match": _match,
+                "league": str(_xp.get("league") or ""),
+                "odds": _od,
+                "prob": max(1, min(99, int((1.0 / _od) * 95))),
+                "special_category": str(_xp.get("category") or _market),
+                "starts": str(_xp.get("starts") or _xp.get("commence_time") or ""),
+                "source": str(_xp.get("source") or "extra"),
+                "is_team_market": False,
+            }
+
+        _fx, _seen_fx = [], set()
+        for _league, _fixtures in (fixtures_cache or {}).items():
+            for _f in (_fixtures or []):
+                _h = str(_f.get("home") or "").strip()
+                _a = str(_f.get("away") or "").strip()
+                if not _h or not _a:
                     continue
-                _player = str(_xp.get("player") or "").strip()
-                _market = str(_xp.get("market") or _xp.get("category") or "").strip()
-                _match = str(_xp.get("match") or "").strip()
-                if not _player or not _market or not _match or _od <= 1.01:
+                _k = f"{normalize_team_name(_h)}|{normalize_team_name(_a)}"
+                if not _k or _k in _seen_fx:
                     continue
-                _converted.append({
-                    "selection": f"Over {_line:g}",
-                    "player_prop": f"{_player} {_market} Over {_line:g}",
-                    "match": _match,
-                    "league": str(_xp.get("league") or ""),
-                    "odds": _od,
-                    "prob": max(1, min(99, int((1.0 / _od) * 95))),
-                    "special_category": str(_xp.get("category") or _market),
-                    "starts": str(_xp.get("starts") or _xp.get("commence_time") or ""),
-                    "source": str(_xp.get("source") or "extra"),
-                    "is_team_market": False,
+                _seen_fx.add(_k)
+                _src = str(_f.get("source") or "")
+                _intl = any(x in str(_league).lower() for x in (
+                    "international", "nations", "world cup", "wm ", "copa",
+                    "afc", "asian cup", "africa", "afrika", "concacaf",
+                    "gold cup", "friendl", "freundschaft"
+                ))
+                _fx.append({
+                    "home": _h, "away": _a, "league": _league,
+                    "source": _src,
+                    "_supplement_priority": 0 if _src == "oddspapi_recovery" else (1 if _intl else 2),
                 })
-            props = _converted
-            if props:
-                log(f"   🔌 Pinnacle-Ausfall-Fallback: {len(props)} echte Kambi/1xbet Player-Props geladen")
-        except Exception as _xpe:
-            log(f"   🔌 Extra-Prop-Fallback Fehler: {str(_xpe)[:100]}", "WARN")
+        _fx.sort(key=lambda row: row.get("_supplement_priority", 2))
+
+        # Nur Matches als "abgedeckt" zählen, für die Pinnacle tatsächlich einen
+        # PLAYER-Markt hat. BTTS/Team-Goals-Specials zählen ausdrücklich nicht.
+        _covered_prop_matches = set()
+        for _pp in props:
+            if not isinstance(_pp, dict):
+                continue
+            _txt = (
+                f"{_pp.get('special_category', '')} "
+                f"{_pp.get('player_prop', '')} "
+                f"{_pp.get('selection', '')}"
+            )
+            if _get_leg_category(_txt) in set(_REAL_PLAYER_BUILDER_CATS):
+                _pk = _prop_match_key(_pp.get("match"))
+                if _pk:
+                    _covered_prop_matches.add(_pk)
+
+        _missing_fx = [
+            row for row in _fx
+            if f"{normalize_team_name(row.get('home',''))}|{normalize_team_name(row.get('away',''))}"
+            not in _covered_prop_matches
+        ]
+        _supp_cap = max(0, int(env("NETRATTLER_PROP_SUPPLEMENT_MAX_MATCHES", "40")))
+        _probe_fx = _missing_fx[:_supp_cap]
+        _extra = list(
+            collect_extra_player_props(_probe_fx, log=log, max_matches=len(_probe_fx))
+        ) if _probe_fx else []
+
+        _converted = [row for row in (_convert_extra_prop(x) for x in _extra) if row]
+        if _converted:
+            _seen_prop_rows = {
+                (
+                    str(p.get("match") or "").lower(),
+                    str(p.get("player_prop") or "").lower(),
+                    round(float(p.get("odds") or 0), 4),
+                    str(p.get("source") or "").lower(),
+                )
+                for p in props if isinstance(p, dict)
+            }
+            _added = 0
+            for _row in _converted:
+                _rk = (
+                    str(_row.get("match") or "").lower(),
+                    str(_row.get("player_prop") or "").lower(),
+                    round(float(_row.get("odds") or 0), 4),
+                    str(_row.get("source") or "").lower(),
+                )
+                if _rk in _seen_prop_rows:
+                    continue
+                _seen_prop_rows.add(_rk)
+                props.append(_row)
+                _added += 1
+            if _added:
+                log(
+                    f"   🔌 Player-Prop Supplement: +{_added} echte Props · "
+                    f"{len(_probe_fx)} fehlende Fixtures geprüft"
+                )
+        elif not props:
+            log(f"   🔌 Player-Prop Fallback: 0 Props aus {len(_probe_fx)} geprüften Fixtures")
+    except Exception as _xpe:
+        log(f"   🔌 Extra-Prop-Supplement Fehler: {str(_xpe)[:120]}", "WARN")
 
     if not props:
         log("🔑 Player Props: keine echten Specials/Quoten aus Pinnacle oder Extra-Quellen verfügbar")
@@ -25865,7 +25941,10 @@ def main():
             if _key not in _fixtures_cache:
                 _fixtures_cache[_key] = []
             _t = _st[11:16] if _st and "T" in _st else "TBD"
-            _fixtures_cache[_key].append({"home": _h, "away": _a, "time": _t, "source": "pinnacle"})
+            _fixtures_cache[_key].append({
+                "home": _h, "away": _a, "time": _t,
+                "source": str(pm.get("source") or "pinnacle"),
+            })
             if _key not in active_leagues:
                 active_leagues.append(_key)
             _injected += 1
