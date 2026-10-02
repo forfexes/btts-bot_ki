@@ -112,6 +112,7 @@ jobs:
           TELEGRAM_GROUP_OVER15_HT:   ${{ secrets.TELEGRAM_GROUP_OVER15_HT }}
           SUPABASE_URL:               ${{ secrets.SUPABASE_URL }}
           SUPABASE_KEY:               ${{ secrets.SUPABASE_KEY }}
+          ODDSPAPI_KEYS:              ${{ secrets.ODDSPAPI_KEYS }}
           ODDSPAPI_KEY:               ${{ secrets.ODDSPAPI_KEY }}
           FIVEDOLLAR_API_KEY:          ${{ secrets.FIVEDOLLAR_API_KEY }}
           FIELDFUNDED_API_KEY:         ${{ secrets.FIELDFUNDED_API_KEY }}
@@ -146,7 +147,8 @@ jobs:
           # Real odds fallback chain. Pinnacle remains first; only observed prices
           # from snapshots/1xBet/Kambi/odds-api.net/OddsPapi/odds_history may fill gaps.
           NETRATTLER_ENABLE_ODDSPAPI_RUNTIME: "true"
-          NETRATTLER_ODDSPAPI_MAX_CALLS: "1"
+          # Detail /odds only for candidates; fixtures remain one cached broad call.
+          NETRATTLER_ODDSPAPI_MAX_CALLS: "8"
           NETRATTLER_FALLBACK_CANDIDATE_MIN_PROB: "45"
           NETRATTLER_FALLBACK_LOG_LIMIT: "20"
           NETRATTLER_ODDS_CACHE_TTL: "600"
