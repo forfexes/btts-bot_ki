@@ -57,7 +57,7 @@ jobs:
             test_netrattler_result_enrichment.py test_netrattler_fotmob_results.py test_netrattler_settlement_runner.py data_fusion_v15.py \
             netrattler_runtime_policy.py netrattler_market_consensus_v36.py \
             netrattler_exposure_engine_v36.py netrattler_coverage_watchdog_v37.py \
-            netrattler_model_registry_v37.py netrattler_oddspapi.py netrattler_free_odds.py netrattler_fixture_recovery.py test_netrattler_fixture_recovery.py netrattler_quote_consensus.py netrattler_fivedollar.py netrattler_fieldfunded.py netrattler_sockodds.py
+            netrattler_model_registry_v37.py netrattler_oddspapi.py netrattler_free_odds.py netrattler_fixture_recovery.py test_netrattler_fixture_recovery.py test_netrattler_oddspapi_keys.py netrattler_quote_consensus.py netrattler_fivedollar.py netrattler_fieldfunded.py netrattler_sockodds.py
           for f in netrattler_identity_hub.py netrattler_ml_player.py netrattler_prop_sources.py netrattler_source_hub.py netrattler_stat_sources.py; do
             [ ! -f "$f" ] || python -m py_compile "$f"
           done
