@@ -50,13 +50,16 @@ def oddspapi_to_matchup(fx: Dict[str, Any]) -> Dict[str, Any]:
     league = tournament or category or "OddsPapi"
     if category and tournament and _norm(category) not in _norm(tournament):
         league = f"{category} - {tournament}"
+    external = fx.get("externalProviders") or {}
+    pinnacle_id = external.get("pinnacleId") if isinstance(external, dict) else None
     return {
         "home": home,
         "away": away,
         "league_name": league,
         "league": league,
         "starts": fixture_start(fx),
-        "match_id": fx.get("fixtureId") or fx.get("id") or "",
+        "match_id": pinnacle_id or fx.get("fixtureId") or fx.get("id") or "",
+        "_pinnacle_id": pinnacle_id or "",
         "_oddspapi_fixture_id": fx.get("fixtureId") or "",
         "source": "oddspapi_recovery",
     }
