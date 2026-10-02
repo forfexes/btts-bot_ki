@@ -18,6 +18,7 @@ def run():
             "fixtureId": "afc1", "participant1Name": "Japan",
             "participant2Name": "Australia", "tournamentName": "AFC Asian Cup",
             "categoryName": "International", "startTime": "2026-10-01T20:00:00Z",
+            "externalProviders": {"pinnacleId": 123456789},
             "hasOdds": True,
         },
         {
@@ -32,6 +33,8 @@ def run():
     assert added[0]["away"] == "Australia"
     assert added[0]["source"] == "oddspapi_recovery"
     assert added[0]["_oddspapi_fixture_id"] == "afc1"
+    assert added[0]["_pinnacle_id"] == 123456789
+    assert added[0]["match_id"] == 123456789
     print("OK: fixture recovery dedupe + bookmaker-backed supplement")
 
 
