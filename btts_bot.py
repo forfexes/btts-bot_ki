@@ -25149,9 +25149,35 @@ def main():
             _seen_matchup_keys.add(_key)
             _deduped_matchups.append(_pm)
         _PINNACLE_MATCHUPS = _deduped_matchups
+
+        # V38: Globaler Fixture-Recovery-Pfad. OddsPapi liefert einen einzigen,
+        # bookmaker-backed Tages-Fixure-Feed. Fehlende Spiele werden unabhängig
+        # von Wettbewerbsnamen (Nations League, AFC, Copa América, AFCON,
+        # CONCACAF, WM/Quali, Friendlies usw.) in denselben Analyse-Pool gemerged.
+        # REAL_ODDS_ONLY bleibt später unverändert aktiv: Recovery erzeugt keine
+        # synthetischen Quoten und garantiert keinen Tipp.
+        try:
+            from netrattler_oddspapi import get_fixtures as _ntr_oddspapi_fixtures
+            from netrattler_fixture_recovery import merge_recovered_matchups
+            _recovery_fx = _ntr_oddspapi_fixtures(target_date) or []
+            _PINNACLE_MATCHUPS, _recovered_matchups = merge_recovered_matchups(
+                _PINNACLE_MATCHUPS, _recovery_fx
+            )
+            if _recovered_matchups:
+                _rec_leagues = {}
+                for _rm in _recovered_matchups:
+                    _rl = str(_rm.get("league_name") or "OddsPapi")
+                    _rec_leagues[_rl] = _rec_leagues.get(_rl, 0) + 1
+                log(
+                    f"   ♻️ Fixture Recovery: +{len(_recovered_matchups)} bookmaker-backed Matches · "
+                    + ", ".join(f"{k}={v}" for k, v in sorted(_rec_leagues.items(), key=lambda x: x[1], reverse=True)[:8])
+                )
+        except Exception as _rec_exc:
+            log(f"   ♻️ Fixture Recovery übersprungen: {str(_rec_exc)[:120]}", "WARN")
+
         if _raw_count != len(_PINNACLE_MATCHUPS):
-            log(f"   🧹 Pinnacle Dedup: {_raw_count} → {len(_PINNACLE_MATCHUPS)} Matches ({_raw_count - len(_PINNACLE_MATCHUPS)} Duplikate entfernt)")
-        log(f"   ✅ Pinnacle: {len(_PINNACLE_MATCHUPS)} Matches geladen")
+            log(f"   🧹/♻️ Match-Pool: {_raw_count} Pinnacle roh → {len(_PINNACLE_MATCHUPS)} nach Dedup/Recovery")
+        log(f"   ✅ Match-Pool: {len(_PINNACLE_MATCHUPS)} Matches geladen")
     except Exception as e:
         _PINNACLE_MATCHUPS = []
         log(f"   ⚠️ Pinnacle: {e}")
