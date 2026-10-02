@@ -78,6 +78,31 @@ def test_aystar_and_alt_lines():
         assert len(px) == 1
 
 
+def test_library_same_game_mix_with_real_teamline():
+    old_allow = os.environ.get("NETRATTLER_BUILDER_ALLOW_TEAM_MARKETS")
+    os.environ["NETRATTLER_BUILDER_ALLOW_TEAM_MARKETS"] = "true"
+    try:
+        rows = [
+            row("Bruno Fernandes", "To Assist", "assist", .5, 2.10, .56, "Hull vs Man Utd"),
+            row("Bryan Mbeumo", "To Score", "score", .5, 2.20, .53, "Hull vs Man Utd"),
+            row("Match Cards", "Over 3 Cards", "match_cards", 3.0, 1.85, .66, "Hull vs Man Utd"),
+            row("Bruno Fernandes", "2+ Shots", "shots", 1.5, 1.60, .70, "Hull vs Man Utd"),
+        ]
+        picks = builder.build_builder_picks(rows, match_date="2026-09-25", max_builders=30)
+        mixed = [p for p in picks if p.style == "LIBRARY SAME GAME"]
+        assert mixed, picks
+        assert any(
+            {"assist", "score", "shots"} & {x.category for x in p.legs}
+            and "match_cards" in {x.category for x in p.legs}
+            for p in mixed
+        ), mixed
+    finally:
+        if old_allow is None:
+            os.environ.pop("NETRATTLER_BUILDER_ALLOW_TEAM_MARKETS", None)
+        else:
+            os.environ["NETRATTLER_BUILDER_ALLOW_TEAM_MARKETS"] = old_allow
+
+
 def test_library_cross_match_uses_distinct_games():
     rows = [
         row("P1", "2+ Shots", "shots", 1.5, 1.65, .72, "Game A vs Game B"),
@@ -114,6 +139,7 @@ def test_unmodelled_and_bad_correlation_rejected():
 def main():
     test_tips_bible_and_nate()
     test_aystar_and_alt_lines()
+    test_library_same_game_mix_with_real_teamline()
     test_library_cross_match_uses_distinct_games()
     test_unmodelled_and_bad_correlation_rejected()
     print("OK: NETRATTLER screenshot builder styles regression passed")
