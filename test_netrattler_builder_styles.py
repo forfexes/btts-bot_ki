@@ -78,6 +78,22 @@ def test_aystar_and_alt_lines():
         assert len(px) == 1
 
 
+def test_library_cross_match_uses_distinct_games():
+    rows = [
+        row("P1", "2+ Shots", "shots", 1.5, 1.65, .72, "Game A vs Game B"),
+        row("P2", "1+ SOT", "sot", .5, 1.70, .70, "Game C vs Game D"),
+        row("P3", "2+ Fouls Won", "fouls_won", 1.5, 1.80, .67, "Game E vs Game F"),
+        row("P4", "To Get a Card", "yellow_cards", .5, 2.20, .55, "Game G vs Game H"),
+        row("P5", "2+ Tackles", "tackles", 1.5, 1.75, .68, "Game I vs Game J"),
+    ]
+    picks = builder.build_builder_picks(rows, match_date="2026-09-25", max_builders=30)
+    cross = [p for p in picks if p.style == "LIBRARY CROSS MATCH"]
+    assert any(len(p.legs) == 2 for p in cross), cross
+    assert any(len(p.legs) >= 3 for p in cross), cross
+    for pick in cross:
+        assert len({x.match for x in pick.legs}) == len(pick.legs), pick
+
+
 def test_unmodelled_and_bad_correlation_rejected():
     unmodelled = [
         {"player": "A", "match": "A vs B", "league": "X", "market": "1+ Shots",
@@ -98,6 +114,7 @@ def test_unmodelled_and_bad_correlation_rejected():
 def main():
     test_tips_bible_and_nate()
     test_aystar_and_alt_lines()
+    test_library_cross_match_uses_distinct_games()
     test_unmodelled_and_bad_correlation_rejected()
     print("OK: NETRATTLER screenshot builder styles regression passed")
 
