@@ -284,6 +284,61 @@ def _aystar_mix(props: Sequence[builder.PropLeg], match_date: str) -> List[build
     return out
 
 
+def _library_same_game_mix(props: Sequence[builder.PropLeg], match_date: str) -> List[builder.BuilderPick]:
+    """Library-style same-game mixes using only real/modelled legs.
+
+    Examples mirrored from the user's reference set:
+    attack/scorer/assist + cards, player volume + fouls, player + corners/teamline.
+    Same-game combined price is never synthesized for publication.
+    """
+    out: List[builder.BuilderPick] = []
+    by_match: Dict[str, List[builder.PropLeg]] = {}
+    for leg in props:
+        if _modelled(leg):
+            by_match.setdefault(leg.match, []).append(leg)
+
+    attack_cats = {"score", "assist", "score_assist", "shots", "sot"}
+    contact_cats = {"fouls", "fouls_won", "tackles", "tackles_committed", "tackles_received", "yellow_cards"}
+    team_cats = {"team_cards", "match_cards", "team_corners", "corners", "match_corners", "btts", "btts_ht", "over_goals", "match_goals"}
+
+    for match, rows in by_match.items():
+        attack = sorted([x for x in rows if x.category in attack_cats], key=_strength, reverse=True)
+        contact = sorted([x for x in rows if x.category in contact_cats], key=_strength, reverse=True)
+        team = sorted([x for x in rows if x.category in team_cats], key=_strength, reverse=True)
+
+        configs = []
+        if attack and team:
+            configs.append(("PLAYER + TEAMLINE 2L", [attack[0], team[0]], 0.50))
+        if attack and contact:
+            configs.append(("ATTACK + CONTACT 2L", [attack[0], contact[0]], 0.50))
+        if attack and contact and team:
+            configs.append(("ATTACK + CONTACT + TEAMLINE 3L", [attack[0], contact[0], team[0]], 0.30))
+
+        scorer = next((x for x in attack if x.category in {"score", "assist", "score_assist"}), None)
+        cards = next((x for x in team if x.category in {"team_cards", "match_cards"}), None)
+        second_attack = next((x for x in attack if scorer is None or x.key() != scorer.key()), None)
+        if scorer and cards and second_attack:
+            configs.append(("SCORER/ASSIST + CARDS + ATTACK 3L", [scorer, cards, second_attack], 0.25))
+
+        corner = next((x for x in team if x.category in {"team_corners", "corners", "match_corners"}), None)
+        player_volume = next((x for x in attack if x.category in {"shots", "sot"}), None)
+        if corner and player_volume:
+            configs.append(("PLAYER + CORNERS 2L", [player_volume, corner], 0.40))
+
+        seen = set()
+        for variant, legs, stake in configs:
+            key = tuple(sorted(x.key() for x in legs))
+            if key in seen or len({x.key() for x in legs}) != len(legs):
+                continue
+            seen.add(key)
+            if not _valid_builder(legs, min_legs=2, max_legs=4):
+                continue
+            pick = builder._make_builder("LIBRARY SAME GAME", variant, legs, match_date, stake)
+            if pick:
+                out.append(pick)
+    return out
+
+
 def _library_cross_match(props: Sequence[builder.PropLeg], match_date: str) -> List[builder.BuilderPick]:
     """Library rule: cross-match builders use 2-5 DIFFERENT games.
 
@@ -420,6 +475,7 @@ def build_builder_picks(raw_props, match_contexts=None, match_date=None, max_bui
     premium += _nate_alt_lines(props, run_date)
     premium += _aystar_booking(props, run_date)
     premium += _aystar_mix(props, run_date)
+    premium += _library_same_game_mix(props, run_date)
     premium += _library_cross_match(props, run_date)
 
     legacy = _ORIG_BUILD(raw_props, match_contexts, run_date, max_builders=max(30, max_count * 2))
@@ -452,7 +508,7 @@ def build_builder_picks(raw_props, match_contexts=None, match_date=None, max_bui
     match_count: Dict[str, int] = {}
     max_per_match = builder.as_int(os.getenv("NETRATTLER_MAX_BUILDERS_PER_MATCH", "8"), 8)
 
-    for style in ("TIPS BIBLE", "GODTIPSTER PROFILE", "NATE CATEGORY", "NATE ALT-LINE", "AYSTAR BOOKING", "AYSTAR MIX", "LIBRARY CROSS MATCH"):
+    for style in ("TIPS BIBLE", "GODTIPSTER PROFILE", "NATE CATEGORY", "NATE ALT-LINE", "AYSTAR BOOKING", "AYSTAR MIX", "LIBRARY SAME GAME", "LIBRARY CROSS MATCH"):
         for pick in unique:
             if pick.style != style:
                 continue
