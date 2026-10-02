@@ -383,7 +383,11 @@ def _collect_observed_fallbacks(home: str, away: str, existing: Dict[str, Any]) 
         f for f in (_CORE_FIELDS + _SPECIAL_FIELDS)
         if _safe_price(existing.get(f), f) is None and _safe_price(out.get(f), f) is None
     ]
-    if likely and unresolved and enable_oddspapi and oddspapi is not None and os.getenv("ODDSPAPI_KEY", "").strip():
+    _oddspapi_configured = bool(
+        oddspapi is not None
+        and getattr(oddspapi, "_keys", lambda: [])()
+    )
+    if likely and unresolved and enable_oddspapi and _oddspapi_configured:
         try:
             raw = oddspapi.get_odds_for_match(home, away, None) or {}
             _merge_missing(out, raw, "oddspapi", source_map)
