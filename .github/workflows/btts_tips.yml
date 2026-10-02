@@ -21,7 +21,7 @@ on:
 jobs:
   run-bot:
     runs-on: ubuntu-latest
-    timeout-minutes: 15
+    timeout-minutes: 25
 
     steps:
       - name: Checkout Repository
@@ -152,7 +152,9 @@ jobs:
           NETRATTLER_ODDS_CACHE_MAX_AGE_HOURS: "18"
           NETRATTLER_ODDS_CACHE_LOG_LIMIT: "20"
           # Old count-only skip is now market-coverage aware.
-          NETRATTLER_SKIP_REQUIRED_MARKETS: "btts,over25,combo,btts_ht,over15_ht,1x2"
+          # Full league fallback should cover broad markets, not block the whole run
+          # for specialist quotes that only exist when bookmakers offer them.
+          NETRATTLER_SKIP_REQUIRED_MARKETS: "btts,over25,over15_ht,1x2"
           NETRATTLER_SKIP_MIN_PER_MARKET: "1"
           NETRATTLER_SKIP_TOTAL_MIN: "10"
           NETRATTLER_BTTS_HT_MIN_PROB: "32"
@@ -190,6 +192,8 @@ jobs:
           NETRATTLER_PLAYER_PROP_MIN_EDGE: "0.03"
           NETRATTLER_PLAYER_PROP_MAX_ODDS: "0"
           NETRATTLER_BUILDER_MAX_ODDS: "0"
+          NETRATTLER_MAX_BUILDERS_PER_RUN: "18"
+          NETRATTLER_MAX_BUILDERS_PER_MATCH: "4"
           NETRATTLER_PROP_BUILDER_MIN_ODDS: "2.5"
           NETRATTLER_BUILDER_MIN_ODDS: "2.5"
           NETRATTLER_BUILDER_MAX_LEGS: "9"
