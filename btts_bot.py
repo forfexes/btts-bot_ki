@@ -25400,7 +25400,17 @@ def main():
                 # durch implied probability ersetzen, sonst verschwindet jede positive Edge.
                 ro = None
                 try:
-                    ro = get_pinnacle_match_odds(home, away)
+                    # Recovery-Matches können via OddsPapi bereits eine echte
+                    # Pinnacle-ID besitzen, obwohl sie im normalen Matchup-Feed
+                    # fehlen. Dann direkt diese ID nutzen statt erneut per Namen
+                    # im unvollständigen Primary-Feed zu suchen.
+                    _recovered_pin_id = pm.get("_pinnacle_id")
+                    if _recovered_pin_id:
+                        ro = fetch_pinnacle_match_odds(_recovered_pin_id)
+                        if ro:
+                            ro["_recovery_source"] = "oddspapi:pinnacleId"
+                    if not ro:
+                        ro = get_pinnacle_match_odds(home, away)
                     if ro:
                         if ro.get("btts_yes"):
                             btts_yes = float(ro["btts_yes"])
