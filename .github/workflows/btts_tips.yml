@@ -158,7 +158,7 @@ jobs:
           # Old count-only skip is now market-coverage aware.
           # Full league fallback should cover broad markets, not block the whole run
           # for specialist quotes that only exist when bookmakers offer them.
-          NETRATTLER_SKIP_REQUIRED_MARKETS: "btts,over25,over15_ht,1x2"
+          NETRATTLER_SKIP_REQUIRED_MARKETS: "btts,over25,combo,btts_ht,over15_ht,1x2"
           NETRATTLER_SKIP_MIN_PER_MARKET: "1"
           NETRATTLER_SKIP_TOTAL_MIN: "10"
           NETRATTLER_BTTS_HT_MIN_PROB: "32"
