@@ -1,6 +1,11 @@
 name: NETRATTLER Player Stats + Results Scraper V34
 
 on:
+  push:
+    branches: [main]
+    paths:
+      - "netrattler_player_history.py"
+      - ".github/workflows/scrape_player_stats.yml"
   schedule:
     - cron: "0 2 * * *"
   workflow_dispatch:
@@ -32,7 +37,7 @@ jobs:
       - name: Compile
         run: |
           python -m py_compile scrape_player_stats.py netrattler_odds_harvester.py \
-            netrattler_fotmob_results.py test_netrattler_fotmob_results.py
+            netrattler_fotmob_results.py test_netrattler_fotmob_results.py netrattler_player_history.py
           python test_netrattler_fotmob_results.py
       - name: Run every source with fallback
         env:
