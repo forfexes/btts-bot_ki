@@ -593,6 +593,14 @@ def main() -> int:
         time.sleep(float(os.getenv("NETRATTLER_AISCORE_MATCH_SLEEP", "0.25")))
     result = persist(matches, args.date)
     log(f"finished {result}")
+    try:
+        from netrattler_health import record
+        pages_ok = sum(1 for m in matches for p in (m.get("pages") or []) if p.get("bytes", 0) > 1000)
+        pages_all = sum(len(m.get("pages") or []) for m in matches)
+        record("aiscore", "aiscore_odds", result.get("odds", 0), result.get("saved", 0),
+               note=f"fixtures={len(pairs)} matches={result.get('matches', 0)} pages_erreichbar={pages_ok}/{pages_all}")
+    except Exception:
+        pass
     return 0
 
 

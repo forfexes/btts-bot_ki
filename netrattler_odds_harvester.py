@@ -329,10 +329,21 @@ def collect_live_all(target_date: Optional[str] = None) -> List[Dict[str, Any]]:
         ("pinnacle", lambda: collect_pinnacle(day)),
         ("the_odds_api", lambda: collect_the_odds_api(day)),
     ):
+        note = ""
+        got: List[Dict[str, Any]] = []
         try:
-            rows.extend(fn() or [])
+            got = fn() or []
+            rows.extend(got)
+            if not got and name == "the_odds_api" and not _keys():
+                note = "kein ODDS_API_KEY(S) gesetzt"
         except Exception as exc:
+            note = f"Fehler: {str(exc)[:200]}"
             log(f"{name}: {str(exc)[:120]}", "WARN")
+        try:
+            from netrattler_health import record
+            record("odds_harvester", name, len(got), note=note)
+        except Exception:
+            pass
     clean = _dedupe(rows)
     log(f"Live odds total={len(clean)} sources={dict(Counter(x.get('source') for x in clean))}")
     return clean
