@@ -21752,10 +21752,10 @@ def run_advanced_props_bot(active_leagues: list, fixtures_cache: dict, target_da
                 if not _ctx:
                     continue
 
-                _recent = _values[:10]
+                _recent = _values[:20]
                 _avg = sum(_recent) / len(_recent)
                 _games = len(_recent)
-                if _games < 3:
+                if _games < 5:
                     continue
 
                 _match_name = _ctx["match"]
@@ -21819,6 +21819,103 @@ def run_advanced_props_bot(active_leagues: list, fixtures_cache: dict, target_da
                 f"{len(_matched_players)} Spieler heutigen Teams zugeordnet · "
                 f"{total - _before} Kandidaten ergänzt"
             )
+
+            # ── Supabase-Props auch in PropBuilder-Pool einspeisen ──
+            _pool_added = 0
+            for (_team_norm2, _player_name2, _team_name2, _db_league2, _stat2), _values2 in _aggregated.items():
+                if not _values2:
+                    continue
+                _recent2 = _values2[:20]
+                _games2 = len(_recent2)
+                if _games2 < 5:
+                    continue
+                _avg2 = sum(_recent2) / _games2
+                _hit_rate2 = 0.0
+
+                _ctx2 = None
+                for _candidate_ctx2 in _contexts:
+                    if teams_match(_team_name2, _candidate_ctx2["home"]) or teams_match(
+                        _team_name2, _candidate_ctx2["away"]
+                    ):
+                        _ctx2 = _candidate_ctx2
+                        break
+                if not _ctx2:
+                    continue
+
+                _match2 = _ctx2["match"]
+                _league2 = _ctx2["league"] or _db_league2
+                _kickoff2 = _ctx2["kickoff"]
+
+                if _stat2 == "shots" and _avg2 >= 1.5:
+                    _market2 = "3+ Shots" if _avg2 >= 2.8 else "2+ Shots"
+                    _line2 = 3.0 if _avg2 >= 2.8 else 2.0
+                    _hit_rate2 = sum(1 for v in _recent2 if v >= _line2) / _games2
+                    _ntr_collect_prop(
+                        _player_name2, _team_name2, _match2, _league2,
+                        _market2, category="shots", line=_line2,
+                        probability=round(_hit_rate2 * 100),
+                        source="supabase_l20", kickoff=_kickoff2,
+                        hit_rate=_hit_rate2, games=_games2,
+                    )
+                    _pool_added += 1
+                elif _stat2 == "sot" and _avg2 >= 0.65:
+                    _market2 = "2+ Shots on Target" if _avg2 >= 1.45 else "1+ Shot on Target"
+                    _line2 = 2.0 if _avg2 >= 1.45 else 1.0
+                    _hit_rate2 = sum(1 for v in _recent2 if v >= _line2) / _games2
+                    _ntr_collect_prop(
+                        _player_name2, _team_name2, _match2, _league2,
+                        _market2, category="shots", line=_line2,
+                        probability=round(_hit_rate2 * 100),
+                        source="supabase_l20", kickoff=_kickoff2,
+                        hit_rate=_hit_rate2, games=_games2,
+                    )
+                    _pool_added += 1
+                elif _stat2 == "goals" and _avg2 >= 0.30:
+                    _hit_rate2 = sum(1 for v in _recent2 if v >= 1.0) / _games2
+                    _ntr_collect_prop(
+                        _player_name2, _team_name2, _match2, _league2,
+                        "Anytime Goalscorer", category="shots", line=1.0,
+                        probability=round(_hit_rate2 * 100),
+                        source="supabase_l20", kickoff=_kickoff2,
+                        hit_rate=_hit_rate2, games=_games2,
+                    )
+                    _pool_added += 1
+                elif _stat2 == "fouls" and _avg2 >= 1.15:
+                    _market2 = "2+ Fouls Committed" if _avg2 >= 1.70 else "1+ Foul Committed"
+                    _line2 = 2.0 if _avg2 >= 1.70 else 1.0
+                    _hit_rate2 = sum(1 for v in _recent2 if v >= _line2) / _games2
+                    _ntr_collect_prop(
+                        _player_name2, _team_name2, _match2, _league2,
+                        _market2, category="fouls", line=_line2,
+                        probability=round(_hit_rate2 * 100),
+                        source="supabase_l20", kickoff=_kickoff2,
+                        hit_rate=_hit_rate2, games=_games2,
+                    )
+                    _pool_added += 1
+                elif _stat2 == "tackles_committed" and _avg2 >= 1.25:
+                    _market2 = "3+ Tackles Committed" if _avg2 >= 2.65 else "2+ Tackles Committed"
+                    _line2 = 3.0 if _avg2 >= 2.65 else 2.0
+                    _hit_rate2 = sum(1 for v in _recent2 if v >= _line2) / _games2
+                    _ntr_collect_prop(
+                        _player_name2, _team_name2, _match2, _league2,
+                        _market2, category="tackles", line=_line2,
+                        probability=round(_hit_rate2 * 100),
+                        source="supabase_l20", kickoff=_kickoff2,
+                        hit_rate=_hit_rate2, games=_games2,
+                    )
+                    _pool_added += 1
+                elif _stat2 == "cards" and _avg2 >= 0.18:
+                    _hit_rate2 = sum(1 for v in _recent2 if v >= 1.0) / _games2
+                    _ntr_collect_prop(
+                        _player_name2, _team_name2, _match2, _league2,
+                        "Player to be Booked", category="booked", line=1.0,
+                        probability=round(_hit_rate2 * 100),
+                        source="supabase_l20", kickoff=_kickoff2,
+                        hit_rate=_hit_rate2, games=_games2,
+                    )
+                    _pool_added += 1
+
+            log(f"🔑 PropBuilder-Pool: {_pool_added} Supabase-Props eingespeist (L20, min 5 Spiele)")
 
         except Exception as _supabase_prop_error:
             log(
