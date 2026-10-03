@@ -790,6 +790,35 @@ def collect_extra_player_props(
                 _add(rows, home, away, league, name)
                 local_cats.update((r.get("category") or map_category(r.get("market", ""))) for r in rows if isinstance(r, dict))
 
+    # --- Transfermarkt Nationalteam-Kandidaten (kein odds, nur Struktur) ---
+    try:
+        from netrattler_transfermarkt_props import fetch_transfermarkt_nt_props, is_international_match
+        _tm_added = 0
+        for fx in (fixtures or [])[:max_matches]:
+            home = str(fx.get("home", "")).strip()
+            away = str(fx.get("away", "")).strip()
+            league = str(fx.get("league", "")).strip()
+            if not home or not away:
+                continue
+            if not is_international_match(league):
+                continue
+            _tm_rows = fetch_transfermarkt_nt_props(home, away, league=league, log=log)
+            for row in _tm_rows:
+                cat = row.get("category") or map_category(row.get("market", ""))
+                if cat == "other":
+                    continue
+                row["category"] = cat
+                # Nur einfügen wenn noch kein echter Prop für diesen Spieler+Markt existiert
+                key = (_norm_name(row.get("player", "")), _norm_name(row.get("match", "")), cat, round(float(row.get("line") or 0.5), 2))
+                if key not in out_best:
+                    out_best[key] = row
+                    _tm_added += 1
+                    per_cat[cat] += 1
+        if _tm_added:
+            _log(f"   🌍 TM-NT: {_tm_added} Nationalteam-Kandidaten hinzugefügt")
+    except Exception as _tm_exc:
+        _log(f"   🌍 TM-NT: Fehler {str(_tm_exc)[:80]}")
+
     out = list(out_best.values())
     if per_source:
         summary = ", ".join(f"{k}={v}" for k, v in sorted(per_source.items()))
@@ -811,4 +840,5 @@ __all__ = [
     "fetch_footymetrics_player_props",
     "collect_extra_player_props",
     "map_category",
+    "fetch_transfermarkt_nt_props",
 ]
