@@ -112,6 +112,8 @@ jobs:
           TELEGRAM_GROUP_OVER15_HT:   ${{ secrets.TELEGRAM_GROUP_OVER15_HT }}
           SUPABASE_URL:               ${{ secrets.SUPABASE_URL }}
           SUPABASE_KEY:               ${{ secrets.SUPABASE_KEY }}
+          SUPABASE_PLAYERS_URL:       ${{ secrets.SUPABASE_PLAYERS_URL }}
+          SUPABASE_PLAYERS_SERVICE_KEY: ${{ secrets.SUPABASE_PLAYERS_SERVICE_KEY }}
           ODDSPAPI_KEYS:              ${{ secrets.ODDSPAPI_KEYS }}
           ODDSPAPI_KEY:               ${{ secrets.ODDSPAPI_KEY }}
           FIVEDOLLAR_API_KEY:          ${{ secrets.FIVEDOLLAR_API_KEY }}

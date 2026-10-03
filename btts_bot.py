@@ -21654,6 +21654,21 @@ def run_advanced_props_bot(active_leagues: list, fixtures_cache: dict, target_da
             _max_rows = int(os.environ.get("PROP_STATS_MAX_ROWS", "12000"))
             _offset = 0
 
+            # Zweite DB: echte L20-Spielhistorie (breites Format) hat Vorrang.
+            _pgl_rows = []
+            try:
+                import netrattler_player_log as _pgl
+                if _pgl.is_configured():
+                    _pgl_rows = _pgl.fetch_l20_rows(
+                        [c["home"] for c in _contexts] + [c["away"] for c in _contexts],
+                        log=log,
+                    )
+                    log(f"🔑 player_game_log (L20): {len(_pgl_rows)} Spieler-Spiel-Zeilen")
+                    if _pgl_rows:
+                        _max_rows = 0  # alte EAV-Tabelle nicht zusätzlich laden
+            except Exception as _pgl_exc:
+                log(f"🔑 player_game_log Fehler: {str(_pgl_exc)[:80]}", "WARN")
+
             while _offset < _max_rows:
                 _params = {
                     # Nur Spalten abfragen, die in deiner bestehenden Tabelle sicher vorhanden sind.
@@ -21734,6 +21749,14 @@ def run_advanced_props_bot(active_leagues: list, fixtures_cache: dict, target_da
                     _raw_value = _row.get(_column)
                     if _raw_value is not None and str(_raw_value) not in {"", "0", "0.0"}:
                         _append_value(_row, _canonical, _raw_value)
+
+            if _pgl_rows:
+                # Nullwerte zählen mit (Durchschnitt/Hit-Rate sonst verzerrt); neueste zuerst.
+                for _row in _pgl_rows:
+                    for _column, _canonical in _pgl.COLUMN_TO_STAT.items():
+                        if _row.get(_column) is not None:
+                            _append_value(_row, _canonical, _row.get(_column))
+                _rows = _pgl_rows
 
             _before = total
             _matched_players = set()
