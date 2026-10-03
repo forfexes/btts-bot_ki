@@ -246,6 +246,34 @@ def _sb_post(table: str, rows: list, conflict: str = None) -> int:
     return total
 
 
+def prune_player_history_l15() -> bool:
+    """Keep detailed raw EAV rows only for each player's latest 15 distinct matches.
+
+    Season/365d aggregates live separately; this function only controls detailed
+    match history growth. It is best-effort so a cleanup outage never breaks the
+    daily collector.
+    """
+    if not SUPABASE_URL or not SUPABASE_KEY:
+        return False
+    headers = {
+        "apikey": SUPABASE_KEY,
+        "Authorization": f"Bearer {SUPABASE_KEY}",
+        "Content-Type": "application/json",
+    }
+    # RPC is installed separately in Supabase. Keeping the call here makes L15
+    # retention automatic as soon as the DB has enough room to accept cleanup.
+    endpoint = f"{SUPABASE_URL.rstrip('/')}/rest/v1/rpc/netrattler_prune_player_history_l15"
+    try:
+        r = requests.post(endpoint, headers=headers, json={}, timeout=120)
+        if r.ok:
+            print("  🧹 L15 player-history retention applied")
+            return True
+        print(f"  ⚠️ L15 retention unavailable {r.status_code}: {r.text[:180]}")
+    except requests.RequestException as exc:
+        print(f"  ⚠️ L15 retention deferred: {str(exc)[:160]}")
+    return False
+
+
 # ── Telegram ──────────────────────────────────────────────────────────────────
 
 def send_telegram(text: str):
@@ -2003,6 +2031,8 @@ def main():
         f"Ergebnisse: <b>{results_saved}</b>\n"
         f"Player Stats: <b>{stats_saved}</b>"
     )
+    if stats_saved:
+        prune_player_history_l15()
     send_telegram(report)
     print(f"\n✅ Fertig — {results_saved} Ergebnisse, {stats_saved} Stats")
 
