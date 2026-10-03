@@ -13401,6 +13401,7 @@ APIFOOTBALL_CALL_COUNTER = 0
 # 🆕 Default 100 Calls/Run (bei 3 Keys × 100 Calls = 300/Tag, also reichen 100/Run für 2-3 Runs)
 APIFOOTBALL_MAX_CALLS_PER_RUN = int(env("APIFOOTBALL_MAX_CALLS", "100"))
 APIFOOTBALL_QUOTA_EXHAUSTED = False
+_AF_MAX_FREE_SEASON = None  # wird beim ersten Free-Plan-Saisonfehler gesetzt
 # 🆕 Round-Robin Counter für Keys
 APIFOOTBALL_KEY_OFFSET = 0
 # 🆕 Set für erschöpfte Keys (per-Run)
@@ -13550,12 +13551,21 @@ def _af_request(endpoint, params, timeout=12):
     Helper für API-Football Requests mit Quota-Schutz und Round-Robin über mehrere Keys.
     Bei Free Plan: 100 Calls/Tag PRO KEY.
     """
-    global APIFOOTBALL_CALL_COUNTER, APIFOOTBALL_QUOTA_EXHAUSTED, APIFOOTBALL_KEY_OFFSET
+    global APIFOOTBALL_CALL_COUNTER, APIFOOTBALL_QUOTA_EXHAUSTED, APIFOOTBALL_KEY_OFFSET, _AF_MAX_FREE_SEASON
 
     if not API_FOOTBALL_KEYS:
         return None
 
     if APIFOOTBALL_QUOTA_EXHAUSTED:
+        return None
+
+    # Free-Plan erlaubt nur Saisons bis _AF_MAX_FREE_SEASON (z.B. 2024). Nach dem ersten
+    # Plan-Fehler Calls fuer neuere Saisons sofort ueberspringen statt je Team zu scheitern.
+    try:
+        _req_season = int((params or {}).get("season") or 0)
+    except (TypeError, ValueError):
+        _req_season = 0
+    if _AF_MAX_FREE_SEASON and _req_season > _AF_MAX_FREE_SEASON:
         return None
 
     if APIFOOTBALL_CALL_COUNTER >= APIFOOTBALL_MAX_CALLS_PER_RUN:
@@ -13619,6 +13629,12 @@ def _af_request(endpoint, params, timeout=12):
                     APIFOOTBALL_DEAD_KEYS.update(range(n))
                     APIFOOTBALL_QUOTA_EXHAUSTED = True
                     log("   ⚠️ API-Football Account gesperrt — Quelle für diesen Run deaktiviert (keine weiteren Calls)", "WARN")
+                    return None
+                if "do not have access to this season" in _err_text:
+                    import re as _re_af
+                    _m_af = _re_af.search(r"to (20\d\d)", _err_text)
+                    _AF_MAX_FREE_SEASON = int(_m_af.group(1)) if _m_af else 2024
+                    log(f"   ⚠️ API-Football Free-Plan: Saison > {_AF_MAX_FREE_SEASON} gesperrt — weitere Calls fuer neuere Saisons werden uebersprungen.", "WARN")
                     return None
                 log(f"   🔍 AF-DEBUG: API-Errors für {endpoint}: {data.get('errors')}", "WARN")
                 continue
