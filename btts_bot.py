@@ -325,7 +325,7 @@ USE_GROQ_FALLBACK = env("USE_GROQ_FALLBACK", "true").lower() in ["1", "true", "y
 
 ALWAYS_ON_LEAGUES = [
     x.strip()
-    for x in env("ALWAYS_ON_LEAGUES", "Champions League,Europa League,Premier League,Bundesliga,La Liga,Serie A,Ligue 1,WM 2026,UEFA Nations League,Copa America,Afrika Cup").split(",")
+    for x in env("ALWAYS_ON_LEAGUES", "Champions League,Europa League,Premier League,Bundesliga,La Liga,Serie A,Ligue 1,WM 2026,UEFA Nations League,CONCACAF Nations League,Copa America,Afrika Cup").split(",")
     if x.strip()
 ]
 
@@ -489,6 +489,7 @@ LEAGUES_TO_RUN = [
     "WM 2026 Qualifikation CONCACAF",
     "WM 2026",
     "UEFA Nations League",
+    "CONCACAF Nations League",
     "Copa America",
     "Afrika Cup",
     "Freundschaftsspiele International",
