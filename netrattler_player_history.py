@@ -133,33 +133,44 @@ def main() -> int:
     ap.add_argument("--days", type=int, default=365)
     ap.add_argument("--end-date")
     ap.add_argument("--resume-file", default=".player_history.json")
-    ap.add_argument("--max-dates", type=int, default=7,
-                    help="Dates per invocation; rerun to resume. Default 7 keeps CI bounded.")
+    ap.add_argument("--max-dates", type=int, default=365,
+                    help="Maximum missing dates per invocation.")
+    ap.add_argument("--date-workers", type=int, default=4,
+                    help="Historical dates processed concurrently; default 4.")
     args = ap.parse_args()
 
     resume = Path(args.resume_file)
     completed = _load_remote() | _load(resume)
     print(f"Persistent progress: {len(completed)} completed dates")
-    attempted = saved_total = 0
+    pending = [day for day in dates(args.days, args.end_date) if day not in completed]
+    if args.max_dates:
+        pending = pending[:args.max_dates]
+    attempted = len(pending)
+    saved_total = 0
+    workers = max(1, min(int(args.date_workers or 1), 8, len(pending) or 1))
+    print(f"Pending dates: {attempted}; date workers: {workers}")
 
-    for day in dates(args.days, args.end_date):
-        if day in completed:
-            continue
-        if args.max_dates and attempted >= args.max_dates:
-            break
-        attempted += 1
+    def run_day(day: str):
         print(f"\n=== PLAYER HISTORY {day} ===")
         try:
-            saved = collect_date(day)
-            saved_total += saved
+            return day, collect_date(day), None
         except Exception as exc:
-            print(f"FAILED {day}: {exc}")
-            continue
-        if not _save_remote(day, saved):
-            print(f"FAILED {day}: checkpoint was not persisted; date will be retried safely")
-            continue
-        completed.add(day)
-        _save(resume, completed)
+            return day, 0, str(exc)
+
+    with ThreadPoolExecutor(max_workers=workers) as pool:
+        futs = {pool.submit(run_day, day): day for day in pending}
+        for fut in as_completed(futs):
+            day, saved, error = fut.result()
+            if error:
+                print(f"FAILED {day}: {error}")
+                continue
+            saved_total += saved
+            if not _save_remote(day, saved):
+                print(f"FAILED {day}: checkpoint was not persisted; date will be retried safely")
+                continue
+            completed.add(day)
+            _save(resume, completed)
+            print(f"CHECKPOINT {day}: saved={saved} completed={len(completed)}")
 
     print(f"PLAYER HISTORY DONE attempted={attempted} completed={len(completed)} saved={saved_total}")
     return 0
