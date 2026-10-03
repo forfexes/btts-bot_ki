@@ -210,9 +210,9 @@ def collect_pinnacle(target_date: str) -> List[Dict[str, Any]]:
         return []
 
 
-KAMBI_BRANDS = [x.strip() for x in os.getenv("KAMBI_BRANDS", "ubse,ubnl,ubfr,ubdk,ubro,ubbe,unibet").split(",") if x.strip()]
+KAMBI_BRANDS = [x.strip() for x in os.getenv("KAMBI_BRANDS", "ubse,ub,ubnl,svenskaspel").split(",") if x.strip()]
 KAMBI_DIAG: Dict[str, Any] = {}
-KAMBI_DETAIL_EVENTS = int(os.getenv("KAMBI_DETAIL_EVENTS", "90"))
+KAMBI_DETAIL_EVENTS = int(os.getenv("KAMBI_DETAIL_EVENTS", "60"))
 
 def _kambi_rows(brand: str, ev: Mapping[str, Any], offers: Sequence[Mapping[str, Any]], league: str) -> List[Dict[str, Any]]:
     out: List[Dict[str, Any]] = []
@@ -303,8 +303,6 @@ def collect_kambi(target_date: str) -> List[Dict[str, Any]]:
             except Exception:
                 continue
         KAMBI_DIAG[brand] = f"events={len(events)} rows={got}"
-        if got:
-            break  # ein Brand reicht; die anderen sind meist identische Linien
     log(f"Kambi rows={len(rows)} diag={KAMBI_DIAG}")
     return rows
 
