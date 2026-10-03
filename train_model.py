@@ -73,7 +73,7 @@ def _quick_input_guard() -> tuple[bool, str, str, int]:
         return True, "registry-unavailable", "", 0
     if not SUPABASE_URL or not SUPABASE_KEY:
         return True, "no-supabase", "", 0
-    tables = ("match_results", "football_historical_matches", "player_match_stats", "odds_history")
+    tables = ("match_results", "football_historical_matches", "player_game_log", "odds_history")
     states = [_supabase_count_state(table) for table in tables]
     if all(int(item.get("count", -1) or -1) < 0 for item in states):
         return True, "input-probe-unavailable", "", 0
@@ -93,7 +93,7 @@ def _training_guard(df) -> tuple[bool, str, str, int]:
         from netrattler_model_registry_v37 import training_fingerprint, should_retrain
     except Exception:
         return True, "registry-unavailable", "", len(df)
-    player_state = _supabase_count_state("player_match_stats")
+    player_state = _supabase_count_state("player_game_log")
     result_state = _supabase_count_state("match_results")
     max_date = ""
     try:
@@ -1346,18 +1346,37 @@ def load_player_prop_training_frame():
         "passes", "tackles", "fouls_committed", "fouls_won", "cards", "corners",
         "home_team", "away_team", "opponent", "home_away", "team_name",
     ])
-    raw = _safe_rest_get(
-        "player_match_stats",
-        {"select": select_cols, "order": "match_date.asc"},
-        page_size=1000,
-        max_pages=60,
-    )
+    # Bevorzugt: schlanke L20-Tabelle player_game_log (1 Zeile je Spieler+Spiel).
+    raw = []
+    _src_table = "player_game_log"
+    try:
+        raw = _safe_rest_get(
+            "player_game_log",
+            {"select": "source,event_id,match_date,league,team,player_id,player_name,minutes,shots,sot,"
+                       "goals,assists,passes,tackles,fouls_committed,fouls_won,yellow_cards,"
+                       "home_team,away_team", "order": "match_date.asc"},
+            page_size=1000,
+            max_pages=120,
+        ) or []
+    except Exception:
+        raw = []
+    if raw:
+        for _r in raw:
+            _r["cards"] = _r.pop("yellow_cards", None)
+    else:
+        _src_table = "player_match_stats"
+        raw = _safe_rest_get(
+            "player_match_stats",
+            {"select": select_cols, "order": "match_date.asc"},
+            page_size=1000,
+            max_pages=60,
+        )
     if not raw:
         print("   ⚠️ Keine Player-Stats gefunden")
         return pd.DataFrame()
 
     dfp = pd.DataFrame(raw)
-    print(f"   ✅ player_match_stats geladen: {len(dfp)} Rows")
+    print(f"   ✅ {_src_table} geladen: {len(dfp)} Rows")
 
     # Basis-Keys
     for c in ["source", "event_id", "match_date", "league", "team", "player_id", "player_name"]:
