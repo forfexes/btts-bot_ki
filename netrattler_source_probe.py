@@ -1,66 +1,39 @@
-#!/usr/bin/env python3
-"""NETRATTLER public-source probe.
-
-Conservative source-health checker: no CAPTCHA/Cloudflare bypass, no login automation,
-no synthetic odds. Playwright/Chromium is optional and only renders normal public pages.
-This module is diagnostic/shadow-only and does not feed production picks.
-"""
-from __future__ import annotations
-import json, os, time
-import requests
-
-UA = "NETRATTLER-SourceProbe/1.1 (+https://github.com/forfexes/btts-bot_ki)"
-TIMEOUT = int(os.getenv("NETRATTLER_SOURCE_PROBE_TIMEOUT", "20"))
-
-SOURCES = {
-    "soccerstats": "https://www.soccerstats.com/",
-    "besoccer": "https://www.besoccer.com/",
-    "aiscore": "https://www.aiscore.com/",
-    "sofascore": "https://www.sofascore.com/",
-    "fotmob": "https://www.fotmob.com/",
-    "understat": "https://understat.com/",
-    "forebet": "https://www.forebet.com/",
-    "betmines": "https://betmines.com/",
-    # Odds comparison/public bookmaker pages. Probe-only until a parser has
-    # demonstrated exact event/market/selection mapping in CI.
-    "oddsportal": "https://www.oddsportal.com/football/",
-    "betexplorer": "https://www.betexplorer.com/football/",
-    "flashscore": "https://www.flashscore.com/football/",
-}
-
-def request_probe(name, url):
-    started=time.monotonic()
+"""Probe: welche Odds-/Stats-Seiten sind vom GitHub-Runner ohne API-Key erreichbar?"""
+import re, sys, requests
+UA = {"User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124 Safari/537.36",
+      "Accept-Language": "en"}
+URLS = [
+ "https://www.oddsportal.com/matches/soccer/",
+ "https://www.betexplorer.com/football/",
+ "https://www.betexplorer.com/next/soccer/",
+ "https://www.flashscore.com/football/",
+ "https://www.soccerstats.com/matches.asp",
+ "https://www.football-data.co.uk/fixtures.csv",
+ "https://www.football-data.co.uk/new_fixtures.csv",
+ "https://www.oddschecker.com/football",
+ "https://www.sportinglife.com/football/fixtures",
+ "https://sports.bwin.com/en/sports/football-4",
+ "https://www.betfair.com/exchange/plus/football",
+ "https://api.sofascore.com/api/v1/sport/football/scheduled-events/2026-10-05",
+ "https://www.sofascore.com/api/v1/sport/football/scheduled-events/2026-10-05",
+ "https://api.sofascore.app/api/v1/sport/football/scheduled-events/2026-10-05",
+ "https://www.fotmob.com/api/matches?date=20261005",
+ "https://www.22bet.com/line/football",
+ "https://www.bet365.com/",
+ "https://www.nordicbet.com/",
+ "https://eu-offering-api.kambicdn.com/offering/v2018/ubse/listView/football.json?lang=en_GB&market=CH",
+ "https://eu-offering-api.kambicdn.com/offering/v2018/unibet/listView/football.json?lang=en_GB&market=GB&useCombined=true",
+ "https://sbapi.sbtech.com/",
+ "https://www.scorebat.com/video-api/v3/",
+ "https://api.the-odds-api.com/v4/sports/",
+ "https://www.thesportsdb.com/api/v1/json/3/eventsday.php?d=2026-10-05&s=Soccer",
+ "https://www.aiscore.com/",
+]
+for u in URLS:
     try:
-        r=requests.get(url,headers={"User-Agent":UA,"Accept":"text/html,application/xhtml+xml"},timeout=TIMEOUT,allow_redirects=True)
-        return {"source":name,"mode":"requests","ok":r.ok,"status":r.status_code,"final_url":r.url,"bytes":len(r.content),"elapsed_s":round(time.monotonic()-started,2)}
+        r = requests.get(u, headers=UA, timeout=20)
+        t = r.text or ""
+        odd = len(re.findall(r'"(?:odds|price|decimal)"', t))
+        print(f"{r.status_code} len={len(t):>8} oddsWords={odd:>4} {u}", flush=True)
     except Exception as e:
-        return {"source":name,"mode":"requests","ok":False,"error":type(e).__name__,"detail":str(e)[:180],"elapsed_s":round(time.monotonic()-started,2)}
-
-def browser_probe(name,url):
-    try:
-        from playwright.sync_api import sync_playwright
-    except Exception as e:
-        return {"source":name,"mode":"playwright","ok":False,"error":"playwright_unavailable","detail":str(e)[:120]}
-    started=time.monotonic()
-    try:
-        with sync_playwright() as p:
-            browser=p.chromium.launch(headless=True)
-            page=browser.new_page(user_agent=UA)
-            resp=page.goto(url,wait_until="domcontentloaded",timeout=TIMEOUT*1000)
-            title=page.title()
-            html=page.content()
-            browser.close()
-        return {"source":name,"mode":"playwright","ok":bool(resp and resp.ok),"status":resp.status if resp else None,"title":title[:100],"bytes":len(html.encode()),"elapsed_s":round(time.monotonic()-started,2)}
-    except Exception as e:
-        return {"source":name,"mode":"playwright","ok":False,"error":type(e).__name__,"detail":str(e)[:180],"elapsed_s":round(time.monotonic()-started,2)}
-
-def main():
-    browser=os.getenv("NETRATTLER_SOURCE_PROBE_BROWSER","0")=="1"
-    out=[]
-    for name,url in SOURCES.items():
-        row=request_probe(name,url); out.append(row); print(json.dumps(row,ensure_ascii=False),flush=True)
-        if browser and not row.get("ok"):
-            brow=browser_probe(name,url); out.append(brow); print(json.dumps(brow,ensure_ascii=False),flush=True)
-        time.sleep(1)
-    with open("netrattler_source_probe.json","w",encoding="utf-8") as f: json.dump(out,f,ensure_ascii=False,indent=2)
-if __name__=="__main__": main()
+        print(f"ERR {type(e).__name__} {u}", flush=True)
