@@ -212,6 +212,46 @@ def collect_pinnacle(target_date: str) -> List[Dict[str, Any]]:
 
 KAMBI_BRANDS = [x.strip() for x in os.getenv("KAMBI_BRANDS", "ubse,ubnl,ubfr,ubdk,ubro,ubbe,unibet").split(",") if x.strip()]
 KAMBI_DIAG: Dict[str, Any] = {}
+KAMBI_DETAIL_EVENTS = int(os.getenv("KAMBI_DETAIL_EVENTS", "90"))
+
+def _kambi_rows(brand: str, ev: Mapping[str, Any], offers: Sequence[Mapping[str, Any]], league: str) -> List[Dict[str, Any]]:
+    out: List[Dict[str, Any]] = []
+    home, away, start = ev.get("homeName"), ev.get("awayName"), ev.get("start") or ""
+    for bo in offers or []:
+        label = str((bo.get("criterion") or {}).get("label") or "").lower()
+        for oc in bo.get("outcomes") or []:
+            if oc.get("status") not in (None, "OPEN"):
+                continue
+            otype = str(oc.get("type") or "")
+            price = (oc.get("odds") or 0) / 1000.0
+            market = sel = None
+            line = oc.get("line")
+            if label == "full time" and otype in {"OT_ONE", "OT_CROSS", "OT_TWO"}:
+                market, sel = "1x2", {"OT_ONE": "home", "OT_CROSS": "draw", "OT_TWO": "away"}[otype]
+            elif label == "both teams to score" and otype in {"OT_YES", "OT_NO"}:
+                market, sel = "btts", "yes" if otype == "OT_YES" else "no"
+            elif label == "total goals" and otype in {"OT_OVER", "OT_UNDER"} and line:
+                pts = line / 1000.0
+                tag = str(pts).replace(".", "_")
+                market, sel = f"totals_{tag}", f"{'over' if otype == 'OT_OVER' else 'under'}_{tag}"
+                line = pts
+            elif label.startswith("both teams to score") and ("half" in label) and otype in {"OT_YES", "OT_NO"}:
+                market = "btts_ht" if ("1st" in label or "first" in label) else "btts_2h"
+                sel = "yes" if otype == "OT_YES" else "no"
+            elif "total goals" in label and ("1st" in label or "first half" in label) and otype in {"OT_OVER", "OT_UNDER"} and line:
+                pts = line / 1000.0
+                tag = str(pts).replace(".", "_")
+                market, sel = f"totals_ht_{tag}", f"{'over' if otype == 'OT_OVER' else 'under'}_{tag}"
+                line = pts
+            if not market:
+                continue
+            row = _row(source="kambi", bookmaker=f"kambi_{brand}", event_id=ev.get("id"), league=league,
+                       home=home, away=away, commence_time=start, market=market, selection=sel,
+                       odds=price, line=line, raw={"brand": brand})
+            if row:
+                out.append(row)
+    return out
+
 
 
 def collect_kambi(target_date: str) -> List[Dict[str, Any]]:
@@ -234,6 +274,7 @@ def collect_kambi(target_date: str) -> List[Dict[str, Any]]:
             KAMBI_DIAG[brand] = "bad json"
             continue
         got = 0
+        wanted: List[Tuple[Mapping[str, Any], str]] = []
         for item in events:
             ev = item.get("event") or {}
             home, away = ev.get("homeName"), ev.get("awayName")
@@ -244,33 +285,23 @@ def collect_kambi(target_date: str) -> List[Dict[str, Any]]:
             if target_date and not (target_date <= _d <= (date.fromisoformat(target_date) + timedelta(days=3)).isoformat()):
                 continue
             league = ev.get("group") or ""
-            for bo in item.get("betOffers") or []:
-                label = str((bo.get("criterion") or {}).get("label") or "").lower()
-                for oc in bo.get("outcomes") or []:
-                    if oc.get("status") not in (None, "OPEN"):
-                        continue
-                    otype = str(oc.get("type") or "")
-                    price = (oc.get("odds") or 0) / 1000.0
-                    market = sel = None
-                    line = oc.get("line")
-                    if label == "full time" and otype in {"OT_ONE", "OT_CROSS", "OT_TWO"}:
-                        market, sel = "1x2", {"OT_ONE": "home", "OT_CROSS": "draw", "OT_TWO": "away"}[otype]
-                    elif label == "both teams to score" and otype in {"OT_YES", "OT_NO"}:
-                        market, sel = "btts", "yes" if otype == "OT_YES" else "no"
-                    elif label == "total goals" and otype in {"OT_OVER", "OT_UNDER"} and line:
-                        pts = line / 1000.0
-                        tag = str(pts).replace(".", "_")
-                        market, sel = f"totals_{tag}", f"{'over' if otype == 'OT_OVER' else 'under'}_{tag}"
-                        line = pts
-                    elif "half time" in label and label.startswith("both teams") and otype in {"OT_YES", "OT_NO"}:
-                        market, sel = "btts_ht", "yes" if otype == "OT_YES" else "no"
-                    if not market:
-                        continue
-                    row = _row(source="kambi", bookmaker=f"kambi_{brand}", event_id=ev.get("id"), league=league,
-                               home=home, away=away, commence_time=start, market=market, selection=sel,
-                               odds=price, line=line, raw={"brand": brand})
-                    if row:
-                        rows.append(row); got += 1
+            offers = item.get("betOffers") or []
+            new = _kambi_rows(brand, ev, offers, league)
+            rows.extend(new); got += len(new)
+            if len(wanted) < KAMBI_DETAIL_EVENTS:
+                wanted.append((ev, league))
+        for ev, league in wanted:
+            try:
+                dr = requests.get(f"https://eu-offering-api.kambicdn.com/offering/v2018/{brand}/betoffer/event/{ev.get('id')}.json",
+                                  params={"lang": "en_GB", "market": "GB"}, headers={"User-Agent": "Mozilla/5.0"}, timeout=15)
+                if dr.ok:
+                    seen = {(r["market"], r["selection"]) for r in rows if r["match_id"] == str(ev.get("id"))}
+                    for r2 in _kambi_rows(brand, ev, (dr.json() or {}).get("betOffers") or [], league):
+                        if (r2["market"], r2["selection"]) not in seen:
+                            rows.append(r2); got += 1
+                time.sleep(0.15)
+            except Exception:
+                continue
         KAMBI_DIAG[brand] = f"events={len(events)} rows={got}"
         if got:
             break  # ein Brand reicht; die anderen sind meist identische Linien
