@@ -22,7 +22,7 @@ on:
 jobs:
   scrape:
     runs-on: ubuntu-latest
-    timeout-minutes: 330
+    timeout-minutes: 120
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-python@v5
@@ -62,7 +62,7 @@ jobs:
           ENABLE_ODDSHARVESTER: "false"
           ENABLE_BET365_PUBLIC: "false"
           ENABLE_REEP_IDENTITY: "false"
-          SOURCE_MAX_EVENTS: "80"
+          SOURCE_MAX_EVENTS: "40"
           SOURCE_SLEEP: "0.08"
           DAILY_RESULTS_PARALLEL_WORKERS: "4"
           DAILY_STATS_PARALLEL_WORKERS: "2"
