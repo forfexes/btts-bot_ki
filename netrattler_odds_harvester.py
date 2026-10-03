@@ -35,7 +35,7 @@ SNAPSHOT_FILE = Path(os.getenv("NETRATTLER_ODDS_SNAPSHOT", "netrattler_odds_snap
 
 PINNACLE_BASE = os.getenv("PINNACLE_BASE", "https://guest.api.arcadia.pinnacle.com/0.1")
 PINNACLE_SPORT_SOCCER = int(os.getenv("PINNACLE_SOCCER_SPORT_ID", "29"))
-PINNACLE_GUEST_KEY = os.getenv("PINNACLE_GUEST_KEY", "CmX2KcMrXuFmNg6YFbmTxE0y9CIrOi0R")
+PINNACLE_GUEST_KEY = os.getenv("PINNACLE_GUEST_KEY", "")
 PINNACLE_HEADERS = {
     "x-api-key": PINNACLE_GUEST_KEY,
     "Content-Type": "application/json",
