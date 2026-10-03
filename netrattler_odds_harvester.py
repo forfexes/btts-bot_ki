@@ -210,6 +210,74 @@ def collect_pinnacle(target_date: str) -> List[Dict[str, Any]]:
         return []
 
 
+KAMBI_BRANDS = [x.strip() for x in os.getenv("KAMBI_BRANDS", "ubse,ubnl,ubfr,ubdk,ubro,ubbe,unibet").split(",") if x.strip()]
+KAMBI_DIAG: Dict[str, Any] = {}
+
+
+def collect_kambi(target_date: str) -> List[Dict[str, Any]]:
+    """Kambi (Unibet-Gruppe) oeffentlicher Offering-Feed, ohne Key. Quoten in Tausendstel."""
+    rows: List[Dict[str, Any]] = []
+    for brand in KAMBI_BRANDS:
+        url = f"https://eu-offering-api.kambicdn.com/offering/v2018/{brand}/listView/football/all/all/all/matches.json"
+        try:
+            r = requests.get(url, params={"lang": "en_GB", "market": "GB", "useCombined": "true", "includeParticipants": "false"},
+                             headers={"User-Agent": "Mozilla/5.0", "Accept": "application/json"}, timeout=max(TIMEOUT, 25))
+        except Exception as exc:
+            KAMBI_DIAG[brand] = f"ERR {type(exc).__name__}"
+            continue
+        if not r.ok:
+            KAMBI_DIAG[brand] = f"HTTP {r.status_code}"
+            continue
+        try:
+            events = (r.json() or {}).get("events") or []
+        except Exception:
+            KAMBI_DIAG[brand] = "bad json"
+            continue
+        got = 0
+        for item in events:
+            ev = item.get("event") or {}
+            home, away = ev.get("homeName"), ev.get("awayName")
+            start = ev.get("start") or ""
+            if not home or not away or ev.get("state") == "STARTED":
+                continue
+            _d = _date_of(start, target_date)
+            if target_date and not (target_date <= _d <= (date.fromisoformat(target_date) + timedelta(days=3)).isoformat()):
+                continue
+            league = ev.get("group") or ""
+            for bo in item.get("betOffers") or []:
+                label = str((bo.get("criterion") or {}).get("label") or "").lower()
+                for oc in bo.get("outcomes") or []:
+                    if oc.get("status") not in (None, "OPEN"):
+                        continue
+                    otype = str(oc.get("type") or "")
+                    price = (oc.get("odds") or 0) / 1000.0
+                    market = sel = None
+                    line = oc.get("line")
+                    if label == "full time" and otype in {"OT_ONE", "OT_CROSS", "OT_TWO"}:
+                        market, sel = "1x2", {"OT_ONE": "home", "OT_CROSS": "draw", "OT_TWO": "away"}[otype]
+                    elif label == "both teams to score" and otype in {"OT_YES", "OT_NO"}:
+                        market, sel = "btts", "yes" if otype == "OT_YES" else "no"
+                    elif label == "total goals" and otype in {"OT_OVER", "OT_UNDER"} and line:
+                        pts = line / 1000.0
+                        tag = str(pts).replace(".", "_")
+                        market, sel = f"totals_{tag}", f"{'over' if otype == 'OT_OVER' else 'under'}_{tag}"
+                        line = pts
+                    elif "half time" in label and label.startswith("both teams") and otype in {"OT_YES", "OT_NO"}:
+                        market, sel = "btts_ht", "yes" if otype == "OT_YES" else "no"
+                    if not market:
+                        continue
+                    row = _row(source="kambi", bookmaker=f"kambi_{brand}", event_id=ev.get("id"), league=league,
+                               home=home, away=away, commence_time=start, market=market, selection=sel,
+                               odds=price, line=line, raw={"brand": brand})
+                    if row:
+                        rows.append(row); got += 1
+        KAMBI_DIAG[brand] = f"events={len(events)} rows={got}"
+        if got:
+            break  # ein Brand reicht; die anderen sind meist identische Linien
+    log(f"Kambi rows={len(rows)} diag={KAMBI_DIAG}")
+    return rows
+
+
 ODDS_API_EXHAUSTED = False
 ODDS_API_DIAG: Dict[str, Any] = {"calls": 0, "status": {}, "remaining": None, "last_error": ""}
 
@@ -347,6 +415,7 @@ def collect_live_all(target_date: Optional[str] = None) -> List[Dict[str, Any]]:
     rows: List[Dict[str, Any]] = []
     for name, fn in (
         ("pinnacle", lambda: collect_pinnacle(day)),
+        ("kambi", lambda: collect_kambi(day)),
         ("the_odds_api", lambda: collect_the_odds_api(day)),
     ):
         note = ""
@@ -354,6 +423,8 @@ def collect_live_all(target_date: Optional[str] = None) -> List[Dict[str, Any]]:
         try:
             got = fn() or []
             rows.extend(got)
+            if name == "kambi":
+                note = f"diag={KAMBI_DIAG}"
             if name == "the_odds_api":
                 if not _keys():
                     note = "kein ODDS_API_KEY(S) gesetzt"
