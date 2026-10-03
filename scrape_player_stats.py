@@ -187,20 +187,23 @@ def _rows_by_keyset(rows: List[Dict[str, Any]]) -> List[List[Dict[str, Any]]]:
     return list(groups.values())
 
 
-def _sb_post(table: str, rows: list, conflict: str = None) -> int:
+def _sb_post(table: str, rows: list, conflict: str = None, *,
+             base_url: str = None, api_key: str = None) -> int:
     """Key-homogeneous batch upsert with a last-resort single-row fallback."""
-    if not rows or not SUPABASE_URL or not SUPABASE_KEY:
+    base_url = base_url or SUPABASE_URL
+    api_key = api_key or SUPABASE_KEY
+    if not rows or not base_url or not api_key:
         return 0
 
     clean_rows = _dedupe_rows(rows, conflict)
     headers = {
-        "apikey": SUPABASE_KEY,
-        "Authorization": f"Bearer {SUPABASE_KEY}",
+        "apikey": api_key,
+        "Authorization": f"Bearer {api_key}",
         "Content-Type": "application/json",
         "Prefer": "resolution=merge-duplicates,return=minimal",
     }
     params = {"on_conflict": conflict} if conflict else {}
-    endpoint = f"{SUPABASE_URL.rstrip('/')}/rest/v1/{table}"
+    endpoint = f"{base_url.rstrip('/')}/rest/v1/{table}"
     total = 0
     group_count = 0
 
@@ -245,6 +248,72 @@ def _sb_post(table: str, rows: list, conflict: str = None) -> int:
         print(f"  ℹ️  Supabase {table}: {group_count} homogene Key-Gruppen")
     return total
 
+
+
+# ── Zweite Datenbank: Spieler-Historie L20 (breites Format) ─────────────────
+PLAYERS_DB_URL = (os.environ.get("SUPABASE_PLAYERS_URL") or "").strip()
+PLAYERS_DB_KEY = (os.environ.get("SUPABASE_PLAYERS_SERVICE_KEY") or "").strip()
+PLAYER_LOG_KEEP_GAMES = int(os.environ.get("PLAYER_LOG_KEEP_GAMES", "20"))
+_WIDE_STATS = (
+    "minutes", "shots", "sot", "goals", "assists", "fouls_committed",
+    "fouls_won", "tackles", "yellow_cards", "red_cards", "saves",
+    "offsides", "passes", "xg", "xa",
+)
+
+
+def _long_to_wide(rows: list) -> list:
+    """EAV-Rows -> eine Zeile pro Spieler+Spiel. Nur EINE Quelle (fotmob bevorzugt),
+    weil Event-IDs je Quelle verschieden sind und Spiele sonst doppelt zählen."""
+    by_source: Dict[str, list] = {}
+    for r in rows:
+        if r.get("stat_name") in _WIDE_STATS and r.get("stat_value") is not None:
+            by_source.setdefault(str(r.get("source")), []).append(r)
+    src = "fotmob" if by_source.get("fotmob") else next(iter(by_source), None)
+    if not src:
+        return []
+    wide: Dict[tuple, Dict[str, Any]] = {}
+    for r in by_source[src]:
+        name = str(r.get("player_name") or "").strip()
+        if not name or name == "Unknown":
+            continue
+        key = f"{_norm_entity_name(name)}|{_norm_entity_name(r.get('team') or '')}"
+        ev = str(r.get("event_id"))
+        rec = wide.setdefault((key, ev), {
+            "player_key": key, "event_id": ev, "source": src,
+            "player_id": r.get("player_id"), "player_name": name,
+            "team": r.get("team"), "league": r.get("league"),
+            "home_team": r.get("home_team"), "away_team": r.get("away_team"),
+            "match_date": str(r.get("match_date") or "")[:10] or None,
+        })
+        rec[r["stat_name"]] = r["stat_value"]
+    out = list(wide.values())
+    for rec in out:  # alle Spalten gesetzt -> homogene Keys fuer PostgREST
+        for st in _WIDE_STATS:
+            rec.setdefault(st, None)
+    return out
+
+
+def write_player_game_log(rows: list) -> int:
+    """Schreibt breite Spieler-Spiel-Zeilen in die zweite DB und kappt auf L20 Spiele."""
+    if not PLAYERS_DB_URL or not PLAYERS_DB_KEY:
+        print("  ℹ️  Zweite DB (SUPABASE_PLAYERS_URL/_SERVICE_KEY) nicht gesetzt — übersprungen")
+        return 0
+    wide = _long_to_wide(rows)
+    saved = _sb_post("player_game_log", wide, conflict="player_key,event_id",
+                     base_url=PLAYERS_DB_URL, api_key=PLAYERS_DB_KEY)
+    try:
+        r = requests.post(
+            f"{PLAYERS_DB_URL.rstrip('/')}/rest/v1/rpc/prune_player_game_log",
+            headers={"apikey": PLAYERS_DB_KEY, "Authorization": f"Bearer {PLAYERS_DB_KEY}",
+                     "Content-Type": "application/json"},
+            json={"keep_games": PLAYER_LOG_KEEP_GAMES}, timeout=120,
+        )
+        print(f"  🧹 player_game_log L{PLAYER_LOG_KEEP_GAMES}-Prune: "
+              f"{'ok, gelöscht=' + r.text.strip() if r.ok else 'HTTP ' + str(r.status_code)}")
+    except requests.RequestException as exc:
+        print(f"  ⚠️ player_game_log Prune: {str(exc)[:120]}")
+    print(f"  💾 player_game_log: {saved} Spieler-Spiel-Zeilen")
+    return saved
 
 def prune_player_history_l15() -> bool:
     """Keep detailed raw EAV rows only for each player's latest 15 distinct matches.
@@ -2051,6 +2120,8 @@ def scrape_player_stats(date_str: str) -> int:
         clean,
         conflict="source,event_id,player_id,stat_name",
     )
+
+    write_player_game_log(clean)
 
     print("  ── Quellenübersicht ──")
     for name, count in source_counts.items():

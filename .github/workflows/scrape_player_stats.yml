@@ -49,6 +49,8 @@ jobs:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           ODDS_API_KEYS: ${{ secrets.ODDS_API_KEYS }}
           ODDS_API_KEY: ${{ secrets.ODDS_API_KEY }}
+          SUPABASE_PLAYERS_URL: ${{ secrets.SUPABASE_PLAYERS_URL }}
+          SUPABASE_PLAYERS_SERVICE_KEY: ${{ secrets.SUPABASE_PLAYERS_SERVICE_KEY }}
           LIVESCORE_API_KEY: ${{ secrets.LIVESCORE_API_KEY }}
           BETFAIR_APP_KEY: ${{ secrets.BETFAIR_APP_KEY }}
           BETFAIR_SESSION_TOKEN: ${{ secrets.BETFAIR_SESSION_TOKEN }}
