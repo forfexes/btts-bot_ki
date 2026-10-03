@@ -502,6 +502,8 @@ def build_builder_picks(raw_props, match_contexts=None, match_date=None, max_bui
         "NATE ALT-LINE": 4, "AYSTAR BOOKING": 3, "AYSTAR MIX": 2,
         "KEEPER SAVES": 2, "SAME PLAYER": 2, "PLAYER DUEL": 1,
         "CROSS MATCH PROP ACCA": 2,
+        "LIBRARY SAME GAME": 4,
+        "LIBRARY CROSS MATCH": 4,
     }
     out: List[builder.BuilderPick] = []
     style_count: Dict[str, int] = {}
