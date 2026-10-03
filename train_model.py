@@ -266,8 +266,8 @@ def _normalize_result_row(row, default_source="supabase"):
         "away": str(away).strip(),
         "home_goals": hg,
         "away_goals": ag,
-        "ht_home": _to_int_or_none(row.get("ht_home")) or 0,
-        "ht_away": _to_int_or_none(row.get("ht_away")) or 0,
+        "ht_home": _to_int_or_none(row.get("ht_home")),
+        "ht_away": _to_int_or_none(row.get("ht_away")),
         "shots_home": _to_int_or_none(row.get("shots_home") or row.get("home_shots") or row.get("HS")),
         "shots_away": _to_int_or_none(row.get("shots_away") or row.get("away_shots") or row.get("AS")),
         "corners_home": _to_int_or_none(row.get("corners_home") or row.get("home_corners") or row.get("HC")),
@@ -423,8 +423,8 @@ def load_all_matches():
                         "away": match.get("team2", "").replace(" FC", "").replace(" CF", "").strip(),
                         "home_goals": int(ft[0]),
                         "away_goals": int(ft[1]),
-                        "ht_home": int(ht[0]) if len(ht) >= 2 else 0,
-                        "ht_away": int(ht[1]) if len(ht) >= 2 else 0,
+                        "ht_home": int(ht[0]) if len(ht) >= 2 else None,
+                        "ht_away": int(ht[1]) if len(ht) >= 2 else None,
                         "shots_home": None, "shots_away": None,
                         "corners_home": None, "corners_away": None,
                         "cards_home": None, "cards_away": None,
@@ -531,7 +531,7 @@ def load_all_matches():
                         "away": row.get("away_team", "").strip(),
                         "home_goals": int(row.get("home_score", 0) or 0),
                         "away_goals": int(row.get("away_score", 0) or 0),
-                        "ht_home": 0, "ht_away": 0,
+                        "ht_home": None, "ht_away": None,
                         "shots_home": None, "shots_away": None,
                         "corners_home": None, "corners_away": None,
                         "cards_home": None, "cards_away": None,
@@ -570,7 +570,7 @@ def load_all_matches():
                             "away": tip.get("away_team", ""),
                             "home_goals": int(score_parts[0]),
                             "away_goals": int(score_parts[1]),
-                            "ht_home": 0, "ht_away": 0,
+                            "ht_home": None, "ht_away": None,
                             "shots_home": None, "shots_away": None,
                             "corners_home": None, "corners_away": None,
                             "cards_home": None, "cards_away": None,
@@ -693,8 +693,13 @@ def compute_form_features(df, n=10):
     df["btts"] = ((df["home_goals"] > 0) & (df["away_goals"] > 0)).astype(int)
     df["over25"] = ((df["home_goals"] + df["away_goals"]) > 2).astype(int)
     df["total_goals"] = df["home_goals"] + df["away_goals"]
-    df["btts_ht"] = ((df["ht_home"] > 0) & (df["ht_away"] > 0)).astype(int)
-    df["over15_ht"] = ((df["ht_home"] + df["ht_away"]) > 1).astype(int)
+    # Halbzeitstand unbekannt (martj42, Bot-Tipps, ...) ist NICHT 0:0 -> Target/Feature = NaN
+    _ht_h = pd.to_numeric(df["ht_home"], errors="coerce")
+    _ht_a = pd.to_numeric(df["ht_away"], errors="coerce")
+    _ht_known = _ht_h.notna() & _ht_a.notna()
+    df["ht_known"] = _ht_known.astype(int)
+    df["btts_ht"] = np.where(_ht_known, ((_ht_h > 0) & (_ht_a > 0)).astype(int), np.nan)
+    df["over15_ht"] = np.where(_ht_known, ((_ht_h + _ht_a) > 1).astype(int), np.nan)
 
     # V31: weitere Channel-Targets für Training
     df["over15"] = ((df["home_goals"] + df["away_goals"]) > 1).astype(int)
@@ -739,11 +744,11 @@ def compute_form_features(df, n=10):
     df["away_or_draw"] = ((df["away_win"] == 1) | (df["draw"] == 1)).astype(int)
     df["home_or_away"] = ((df["home_win"] == 1) | (df["away_win"] == 1)).astype(int)
 
-    df["over05_ht"] = (ht_goals > 0).astype(int)
-    df["under15_ht"] = (ht_goals < 2).astype(int)
-    df["home_win_ht"] = (pd.to_numeric(df["ht_home"], errors="coerce") > pd.to_numeric(df["ht_away"], errors="coerce")).astype(int)
-    df["draw_ht"] = (pd.to_numeric(df["ht_home"], errors="coerce") == pd.to_numeric(df["ht_away"], errors="coerce")).astype(int)
-    df["away_win_ht"] = (pd.to_numeric(df["ht_away"], errors="coerce") > pd.to_numeric(df["ht_home"], errors="coerce")).astype(int)
+    df["over05_ht"] = np.where(_ht_known, (ht_goals > 0).astype(int), np.nan)
+    df["under15_ht"] = np.where(_ht_known, (ht_goals < 2).astype(int), np.nan)
+    df["home_win_ht"] = np.where(_ht_known, (_ht_h > _ht_a).astype(int), np.nan)
+    df["draw_ht"] = np.where(_ht_known, (_ht_h == _ht_a).astype(int), np.nan)
+    df["away_win_ht"] = np.where(_ht_known, (_ht_a > _ht_h).astype(int), np.nan)
 
     for line in [65, 75, 85, 95, 105, 115]:
         col = f"corners_over{line}"
@@ -790,8 +795,10 @@ def compute_form_features(df, n=10):
             o25_r = sum(m["over25"] for m in last) / len(last)
             avg_s = sum(scored) / len(scored) if scored else 1.2
             avg_c = sum(conceded) / len(conceded) if conceded else 1.2
-            btts_ht_r = sum(m["btts_ht"] for m in last) / len(last)
-            o15ht_r = sum(m["over15_ht"] for m in last) / len(last)
+            _bh = [m["btts_ht"] for m in last if m["btts_ht"] == m["btts_ht"]]   # NaN = HT unbekannt
+            _oh = [m["over15_ht"] for m in last if m["over15_ht"] == m["over15_ht"]]
+            btts_ht_r = sum(_bh) / len(_bh) if _bh else 0.4
+            o15ht_r = sum(_oh) / len(_oh) if _oh else 0.4
             return [btts_r, o25_r, avg_s, avg_c, btts_ht_r, o15ht_r]
 
         sh = _get_stats(home, True)
