@@ -66,3 +66,13 @@ jobs:
           if [ "${{ github.event.inputs.results_only }}" = "true" ]; then ARGS="$ARGS --results-only"; fi
           python netrattler_fotmob_results.py $FOTMOB_ARGS
           python scrape_player_stats.py $ARGS
+      - name: Backfill player history 365d chunk
+        if: ${{ github.event_name == 'schedule' }}
+        env:
+          SUPABASE_URL: ${{ secrets.SUPABASE_URL }}
+          SUPABASE_KEY: ${{ secrets.SUPABASE_KEY }}
+          SUPABASE_SERVICE_ROLE_KEY: ${{ secrets.SUPABASE_SERVICE_ROLE_KEY }}
+          USE_SOFASCORE: "true"
+          USE_FOTMOB: "true"
+          USE_ODDSHARVESTER_STYLE: "false"
+        run: python netrattler_player_history.py --days 365 --max-dates 7
