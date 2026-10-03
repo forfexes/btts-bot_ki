@@ -37,8 +37,27 @@ def test_parse_daily_payload():
     assert all(row["source"] == "fotmob" and row["status"] == "finished" for row in rows)
 
 
+def test_halftime_from_detail():
+    ev = lambda **k: k
+    d = {"content": {"matchFacts": {"events": {"events": [
+        ev(type="Goal", time=12, homeScore=1, awayScore=0),
+        ev(type="Goal", time=44, homeScore=1, awayScore=1),
+        ev(type="Goal", time=70, homeScore=2, awayScore=1),
+    ]}}}}
+    assert fotmob.halftime_from_detail(d) == (1, 1)
+    d2 = {"content": {"matchFacts": {"events": {"events": [
+        ev(type="Card", time=30), ev(type="Goal", time=60, homeScore=1, awayScore=0)]}}}}
+    assert fotmob.halftime_from_detail(d2) == (0, 0)
+    d3 = {"content": {"matchFacts": {"events": {"events": [
+        ev(type="Half", halfStrKey="HT", homeScore=2, awayScore=0)]}}}}
+    assert fotmob.halftime_from_detail(d3) == (2, 0)
+    assert fotmob.halftime_from_detail({"content": {}}) is None
+    assert fotmob.halftime_from_detail(None) is None
+
+
 def main():
     test_parse_daily_payload()
+    test_halftime_from_detail()
     print("OK: FotMob completed-result parser")
 
 

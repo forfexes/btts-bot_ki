@@ -10,6 +10,7 @@ from __future__ import annotations
 import argparse
 import os
 import re
+import time
 from datetime import datetime, timedelta, timezone
 from typing import Any, Dict, List
 
@@ -125,6 +126,77 @@ def parse_daily_payload(payload: Any, date_str: str) -> List[Dict[str, Any]]:
     return rows
 
 
+HT_MAX_MATCHES = int(os.getenv("FOTMOB_HT_MAX", "150"))
+HT_SLEEP = float(os.getenv("FOTMOB_HT_SLEEP", "0.15"))
+
+
+def halftime_from_detail(detail: Any):
+    """Halbzeitstand aus FotMob matchDetails. None = unbekannt (NICHT 0:0)."""
+    if not isinstance(detail, dict):
+        return None
+    facts = (detail.get("content") or {}).get("matchFacts") or {}
+    events = (facts.get("events") or {}).get("events") or []
+    events = [e for e in events if isinstance(e, dict)]
+    if not events:
+        return None
+
+    # 1) expliziter Halbzeit-Event mit Spielstand
+    for e in events:
+        if str(e.get("type") or "").lower() == "half" and \
+                str(e.get("halfStrKey") or "").lower() in {"ht", "halftime"}:
+            h, a = _num(e.get("homeScore")), _num(e.get("awayScore"))
+            if h is not None and a is not None:
+                return int(h), int(a)
+
+    # 2) Laufender Spielstand des letzten Tores in der 1. Halbzeit (Minute <= 45)
+    first_half = []
+    for e in events:
+        if str(e.get("type") or "").lower() != "goal":
+            continue
+        minute = _num(e.get("time"))
+        if minute is None or minute > 45:
+            continue
+        if e.get("homeScore") is None or e.get("awayScore") is None:
+            return None
+        first_half.append((minute, _num(e.get("overloadTime")) or 0, e))
+    if not first_half:
+        # Keine Tore vor der Pause, aber Events vorhanden -> 0:0 zur Halbzeit
+        return 0, 0
+    last = max(first_half, key=lambda x: (x[0], x[1]))[2]
+    h, a = _num(last.get("homeScore")), _num(last.get("awayScore"))
+    return (int(h), int(a)) if h is not None and a is not None else None
+
+
+def fetch_halftime(match_id: Any):
+    for url, params in (
+        ("https://www.fotmob.com/api/data/matchDetails", {"matchId": match_id}),
+        ("https://www.fotmob.com/api/matchDetails", {"matchId": match_id}),
+    ):
+        detail = _fetch_json(url, params)
+        if isinstance(detail, dict) and (detail.get("content") or detail.get("general")):
+            return halftime_from_detail(detail)
+    return None
+
+
+def add_halftime(rows: List[Dict[str, Any]]) -> int:
+    """Ergänzt ht_home/ht_away; ohne Treffer bleiben die Keys unbelegt (kein Überschreiben)."""
+    filled = 0
+    for row in rows[:HT_MAX_MATCHES]:
+        ht = fetch_halftime(row.get("event_id"))
+        if ht is not None:
+            row["ht_home"], row["ht_away"] = ht
+            filled += 1
+        else:
+            row.pop("ht_home", None)
+            row.pop("ht_away", None)
+        time.sleep(HT_SLEEP)
+    for row in rows[HT_MAX_MATCHES:]:
+        row.pop("ht_home", None)
+        row.pop("ht_away", None)
+    print(f"⏱️  FotMob Halbzeitstände: {filled}/{len(rows)}")
+    return filled
+
+
 def fetch_results(date_str: str) -> List[Dict[str, Any]]:
     compact = date_str.replace("-", "")
     payload = None
@@ -138,6 +210,8 @@ def fetch_results(date_str: str) -> List[Dict[str, Any]]:
             break
     rows = parse_daily_payload(payload, date_str)
     print(f"✅ FotMob results: {len(rows)} completed matches for {date_str}")
+    if os.getenv("FOTMOB_HT", "1").lower() in {"1", "true", "yes", "on"}:
+        add_halftime(rows)
     return rows
 
 
@@ -151,20 +225,28 @@ def persist(rows: List[Dict[str, Any]]) -> int:
         "Prefer": "resolution=merge-duplicates,return=minimal",
     }
     endpoint = f"{SUPABASE_URL}/rest/v1/match_results"
-    try:
-        response = requests.post(
-            endpoint,
-            headers=headers,
-            params={"on_conflict": "source,event_id"},
-            json=rows,
-            timeout=45,
-        )
-        if response.ok:
-            print(f"💾 FotMob results saved: {len(rows)}")
-            return len(rows)
-        print(f"⚠️ FotMob result save {response.status_code}: {response.text[:220]}")
-    except Exception as exc:
-        print(f"⚠️ FotMob result save: {str(exc)[:160]}")
+    groups: Dict[tuple, List[Dict[str, Any]]] = {}
+    for row in rows:
+        groups.setdefault(tuple(sorted(row)), []).append(row)
+    saved = 0
+    for group in groups.values():
+        try:
+            response = requests.post(
+                endpoint,
+                headers=headers,
+                params={"on_conflict": "source,event_id"},
+                json=group,
+                timeout=45,
+            )
+            if response.ok:
+                saved += len(group)
+            else:
+                print(f"⚠️ FotMob result save {response.status_code}: {response.text[:220]}")
+        except Exception as exc:
+            print(f"⚠️ FotMob result save: {str(exc)[:160]}")
+    if saved:
+        print(f"💾 FotMob results saved: {saved}")
+    return saved
     return 0
 
 
