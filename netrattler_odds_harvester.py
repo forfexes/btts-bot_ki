@@ -210,16 +210,27 @@ def collect_pinnacle(target_date: str) -> List[Dict[str, Any]]:
         return []
 
 
+ODDS_API_DIAG: Dict[str, Any] = {"calls": 0, "status": {}, "remaining": None, "last_error": ""}
+
+
 def _odds_api_get(path: str, params: Dict[str, Any], keys: Sequence[str]) -> Tuple[Any, Optional[str]]:
     for key in keys:
         try:
             p = dict(params); p["apiKey"] = key
             r = requests.get(f"{ODDS_API_BASE}/{path.lstrip('/')}", params=p, timeout=TIMEOUT)
+            ODDS_API_DIAG["calls"] += 1
+            ODDS_API_DIAG["status"][str(r.status_code)] = ODDS_API_DIAG["status"].get(str(r.status_code), 0) + 1
+            rem = r.headers.get("x-requests-remaining")
+            if rem is not None:
+                ODDS_API_DIAG["remaining"] = rem
             if r.status_code in {401, 403, 429}:
+                ODDS_API_DIAG["last_error"] = f"{r.status_code} {r.text[:80]}"
                 continue
             if r.ok:
                 return r.json(), key
-        except Exception:
+            ODDS_API_DIAG["last_error"] = f"{r.status_code} {r.text[:80]}"
+        except Exception as exc:
+            ODDS_API_DIAG["last_error"] = f"exc {str(exc)[:80]}"
             continue
     return None, None
 
@@ -334,8 +345,13 @@ def collect_live_all(target_date: Optional[str] = None) -> List[Dict[str, Any]]:
         try:
             got = fn() or []
             rows.extend(got)
-            if not got and name == "the_odds_api" and not _keys():
-                note = "kein ODDS_API_KEY(S) gesetzt"
+            if name == "the_odds_api":
+                if not _keys():
+                    note = "kein ODDS_API_KEY(S) gesetzt"
+                else:
+                    d = ODDS_API_DIAG
+                    note = (f"calls={d['calls']} status={d['status']} remaining={d['remaining']} "
+                            f"err={d['last_error']} regions={ODDS_API_REGIONS} max_sports={ODDS_API_MAX_SPORTS}")
         except Exception as exc:
             note = f"Fehler: {str(exc)[:200]}"
             log(f"{name}: {str(exc)[:120]}", "WARN")

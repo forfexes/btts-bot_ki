@@ -597,8 +597,16 @@ def main() -> int:
         from netrattler_health import record
         pages_ok = sum(1 for m in matches for p in (m.get("pages") or []) if p.get("bytes", 0) > 1000)
         pages_all = sum(len(m.get("pages") or []) for m in matches)
+        from collections import Counter
+        st = Counter(str(p.get("status")) for m in matches for p in (m.get("pages") or []))
+        md = Counter(str(p.get("mode")) for m in matches for p in (m.get("pages") or []))
+        js = sum(int(p.get("json_payloads") or 0) for m in matches for p in (m.get("pages") or []))
+        odds_words = sum(1 for m in matches if (m.get("features") or {}).get("has_odds_words"))
+        h2h = sum(1 for m in matches if (m.get("features") or {}).get("has_h2h"))
         record("aiscore", "aiscore_odds", result.get("odds", 0), result.get("saved", 0),
-               note=f"fixtures={len(pairs)} matches={result.get('matches', 0)} pages_erreichbar={pages_ok}/{pages_all}")
+               note=(f"fixtures={len(pairs)} pages={pages_ok}/{pages_all} http={dict(st)} mode={dict(md)} "
+                     f"json_payloads={js} seiten_mit_odds_wort={odds_words} h2h={h2h}"))
+        record("aiscore", "aiscore_h2h", h2h, note="Spiele mit H2H-Features")
     except Exception:
         pass
     return 0
