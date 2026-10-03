@@ -70,6 +70,7 @@ jobs:
           BETFAIR_APP_KEY: ${{ secrets.BETFAIR_APP_KEY }}
           BETFAIR_SESSION_TOKEN: ${{ secrets.BETFAIR_SESSION_TOKEN }}
           USE_SOFASCORE: "true"
+          PLAYER_LOG_USE_MAIN_DB: "1"
           USE_FOTMOB: "true"
           USE_STATSBOMB: "false"
           USE_FBREF: "false"

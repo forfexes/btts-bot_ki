@@ -251,8 +251,34 @@ def _sb_post(table: str, rows: list, conflict: str = None, *,
 
 
 # ── Zweite Datenbank: Spieler-Historie L20 (breites Format) ─────────────────
-PLAYERS_DB_URL = (os.environ.get("SUPABASE_PLAYERS_URL") or "").strip()
-PLAYERS_DB_KEY = (os.environ.get("SUPABASE_PLAYERS_SERVICE_KEY") or "").strip()
+_USE_MAIN_DB = os.environ.get("PLAYER_LOG_USE_MAIN_DB", "0").lower() in ("1", "true", "yes", "on")
+PLAYERS_DB_URL = (os.environ.get("SUPABASE_PLAYERS_URL")
+                  or (os.environ.get("SUPABASE_URL") if _USE_MAIN_DB else "") or "").strip()
+PLAYERS_DB_KEY = (os.environ.get("SUPABASE_PLAYERS_SERVICE_KEY")
+                  or (SUPABASE_KEY if _USE_MAIN_DB else "") or "").strip()
+# Spielerkreis: nur Ligen, für die Props angeboten werden (spart Platz im 500-MB-Limit).
+# PLAYER_LOG_LEAGUES="all" = keine Filterung; sonst kommaseparierte Teilstrings (klein).
+_DEFAULT_LEAGUES = (
+    "premier league,championship,laliga,bundesliga,serie a,ligue 1,eredivisie,"
+    "belgian pro league,liga portugal,super lig,major league soccer,"
+    "champions league,europa league,conference league,efl cup,fa cup,copa del rey,"
+    "dfb pokal,coppa italia,coupe de france,nations league,world cup,euro,copa america,"
+    "africa cup,asian cup,gold cup"
+)
+_LEAGUE_EXCLUDE = ("women", "frauen", "u17", "u19", "u20", "u21", "u23", "youth", "next pro",
+                   "laliga2", "la liga 2", "2. bundesliga", "ligue 2", "serie b", "serie c",
+                   "usl", "nwsl", "afc champions", "concacaf champions", "w-league")
+_LEAGUE_ALLOW = [x.strip().lower() for x in
+                 (os.environ.get("PLAYER_LOG_LEAGUES") or _DEFAULT_LEAGUES).split(",") if x.strip()]
+
+
+def _league_wanted(league: Any) -> bool:
+    if _LEAGUE_ALLOW == ["all"]:
+        return True
+    name = str(league or "").lower()
+    if not name or any(x in name for x in _LEAGUE_EXCLUDE):
+        return False
+    return any(a in name for a in _LEAGUE_ALLOW)
 BACKFILL_ONLY_PLAYERS_DB = False
 PLAYER_LOG_KEEP_GAMES = int(os.environ.get("PLAYER_LOG_KEEP_GAMES", "20"))
 _WIDE_STATS = (
@@ -275,7 +301,7 @@ def _long_to_wide(rows: list) -> list:
     wide: Dict[tuple, Dict[str, Any]] = {}
     for r in by_source[src]:
         name = str(r.get("player_name") or "").strip()
-        if not name or name == "Unknown":
+        if not name or name == "Unknown" or not _league_wanted(r.get("league")):
             continue
         key = f"{_norm_entity_name(name)}|{_norm_entity_name(r.get('team') or '')}"
         ev = str(r.get("event_id"))
