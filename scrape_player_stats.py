@@ -1573,6 +1573,9 @@ def _walk_fotmob_players(node: Any):
             yield from _walk_fotmob_players(value)
 
 
+_FM_DIAG = {"matches": 0, "events": 0, "cards": 0, "keys_logged": False}
+
+
 def scrape_fotmob_date(date_str: str) -> List[Dict]:
     """
     FotMob Tagesliste + Matchdetails.
@@ -1625,6 +1628,8 @@ def scrape_fotmob_date(date_str: str) -> List[Dict]:
     for league_name, match in matches:
         match_id = match.get("id") or match.get("matchId")
         if not match_id:
+            continue
+        if BACKFILL_ONLY_PLAYERS_DB and not _league_wanted(league_name):
             continue
 
         detail = None
@@ -1697,6 +1702,14 @@ def scrape_fotmob_date(date_str: str) -> List[Dict]:
         try:
             facts = (detail.get("content") or {}).get("matchFacts") or {}
             ev_list = (facts.get("events") or {}).get("events") or []
+            _fm_cards = sum(1 for e in ev_list if isinstance(e, dict)
+                            and str(e.get("type") or "").lower() == "card")
+            _FM_DIAG["matches"] += 1
+            _FM_DIAG["events"] += len(ev_list)
+            _FM_DIAG["cards"] += _fm_cards
+            if not _FM_DIAG["keys_logged"] and ev_list:
+                _FM_DIAG["keys_logged"] = True
+                print("  🔎 FotMob Event-Keys:", sorted({k for e in ev_list[:30] if isinstance(e, dict) for k in e})[:20])
             rows.extend(_card_rows_from_events(
                 ev_list, source="fotmob", event_id=match_id, home=home,
                 away=away, league=league_name, match_date=date_str,
@@ -1705,6 +1718,8 @@ def scrape_fotmob_date(date_str: str) -> List[Dict]:
             print(f"  ⚠️  FotMob Karten: {str(exc)[:80]}")
         time.sleep(SOURCE_SLEEP)
 
+    print(f"  🔎 FotMob Karten-Diagnose (kumuliert): {_FM_DIAG['matches']} Spiele · "
+          f"{_FM_DIAG['events']} Events · {_FM_DIAG['cards']} Karten-Events")
     print(
         f"  {'✅' if rows else '⚪'} FotMob: {len(rows)} Player-Stat-Rows "
         f"aus {len(matches)} Spielen | Details={details_ok} "

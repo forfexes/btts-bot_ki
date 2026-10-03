@@ -15,7 +15,7 @@ on:
         required: false
         default: ""
       days:
-        description: "Backfill: letzte N Tage Player Stats (max ~14 pro Lauf), leer = 1"
+        description: "Backfill: N Tage bis zum Datum (date, leer = gestern) nur Props-Ligen; ca. 60 pro Lauf"
         required: false
         default: ""
       results_only:
@@ -26,7 +26,7 @@ on:
 jobs:
   scrape:
     runs-on: ubuntu-latest
-    timeout-minutes: 120
+    timeout-minutes: 340
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-python@v5
