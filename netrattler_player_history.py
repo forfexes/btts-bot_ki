@@ -7,6 +7,7 @@ re-fetched hundreds of times. Odds are never collected here.
 """
 from __future__ import annotations
 import argparse, json, os
+import requests
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
@@ -17,6 +18,63 @@ os.environ["TELEGRAM_CHAT_ID"] = ""
 os.environ["TELEGRAM_GROUP_STATS"] = ""
 
 import scrape_player_stats as scraper
+
+JOB_KEY = "player_history_365d"
+PROGRESS_TABLE = "netrattler_backfill_progress"
+
+
+def _progress_headers() -> dict:
+    key = scraper.SUPABASE_KEY
+    return {
+        "apikey": key,
+        "Authorization": f"Bearer {key}",
+        "Content-Type": "application/json",
+    }
+
+
+def _load_remote() -> set[str]:
+    """Load completed dates from Supabase so fresh CI runners resume correctly."""
+    if not scraper.SUPABASE_URL or not scraper.SUPABASE_KEY:
+        return set()
+    endpoint = f"{scraper.SUPABASE_URL.rstrip('/')}/rest/v1/{PROGRESS_TABLE}"
+    try:
+        r = requests.get(endpoint, headers=_progress_headers(), params={
+            "select": "backfill_date",
+            "job_key": f"eq.{JOB_KEY}",
+            "status": "eq.completed",
+            "order": "backfill_date.asc",
+        }, timeout=30)
+        if not r.ok:
+            print(f"  ⚠️  Progress load {r.status_code}: {r.text[:200]}")
+            return set()
+        return {str(row["backfill_date"]) for row in r.json() if row.get("backfill_date")}
+    except Exception as exc:
+        print(f"  ⚠️  Progress load failed: {str(exc)[:160]}")
+        return set()
+
+
+def _save_remote(day: str, rows_saved: int, status: str = "completed") -> bool:
+    """Persist one date checkpoint in Supabase. Service-role workflow access bypasses RLS."""
+    if not scraper.SUPABASE_URL or not scraper.SUPABASE_KEY:
+        return False
+    endpoint = f"{scraper.SUPABASE_URL.rstrip('/')}/rest/v1/{PROGRESS_TABLE}"
+    headers = _progress_headers()
+    headers["Prefer"] = "resolution=merge-duplicates,return=minimal"
+    try:
+        r = requests.post(endpoint, headers=headers,
+            params={"on_conflict": "job_key,backfill_date"}, json=[{
+                "job_key": JOB_KEY,
+                "backfill_date": day,
+                "status": status,
+                "rows_saved": int(rows_saved or 0),
+                "updated_at": datetime.now(timezone.utc).isoformat(),
+            }], timeout=30)
+        if not r.ok:
+            print(f"  ⚠️  Progress save {r.status_code}: {r.text[:200]}")
+        return r.ok
+    except Exception as exc:
+        print(f"  ⚠️  Progress save failed: {str(exc)[:160]}")
+        return False
 
 
 def _load(path: Path) -> set[str]:
@@ -80,7 +138,8 @@ def main() -> int:
     args = ap.parse_args()
 
     resume = Path(args.resume_file)
-    completed = _load(resume)
+    completed = _load_remote() | _load(resume)
+    print(f"Persistent progress: {len(completed)} completed dates")
     attempted = saved_total = 0
 
     for day in dates(args.days, args.end_date):
@@ -91,9 +150,13 @@ def main() -> int:
         attempted += 1
         print(f"\n=== PLAYER HISTORY {day} ===")
         try:
-            saved_total += collect_date(day)
+            saved = collect_date(day)
+            saved_total += saved
         except Exception as exc:
             print(f"FAILED {day}: {exc}")
+            continue
+        if not _save_remote(day, saved):
+            print(f"FAILED {day}: checkpoint was not persisted; date will be retried safely")
             continue
         completed.add(day)
         _save(resume, completed)
