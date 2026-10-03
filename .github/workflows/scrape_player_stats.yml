@@ -67,7 +67,6 @@ jobs:
           python netrattler_fotmob_results.py $FOTMOB_ARGS
           python scrape_player_stats.py $ARGS
       - name: Backfill player history 365d chunk
-        if: ${{ github.event_name == 'schedule' }}
         env:
           SUPABASE_URL: ${{ secrets.SUPABASE_URL }}
           SUPABASE_KEY: ${{ secrets.SUPABASE_KEY }}
