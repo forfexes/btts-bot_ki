@@ -21,7 +21,7 @@ on:
 jobs:
   run-bot:
     runs-on: ubuntu-latest
-    timeout-minutes: 25
+    timeout-minutes: 20
 
     steps:
       - name: Checkout Repository
@@ -131,11 +131,11 @@ jobs:
           PARALLEL_WORKERS:           "10"
           AI_SLEEP_SECONDS:           "0.1"
           GROQ_SLEEP_SECONDS:         "0.5"
-          NETRATTLER_ANALYSIS_BUDGET_SEC: "240"
+          NETRATTLER_ANALYSIS_BUDGET_SEC: "840"
           NETRATTLER_LEAGUE_FALLBACK_BUDGET_SEC: "45"
-          NETRATTLER_GLOBAL_BUDGET_SEC: "600"
-          NETRATTLER_HARD_WATCHDOG_SEC: "720"
-          NETRATTLER_CORNERS_BUDGET_SEC: "25"
+          NETRATTLER_GLOBAL_BUDGET_SEC: "900"
+          NETRATTLER_HARD_WATCHDOG_SEC: "960"
+          NETRATTLER_CORNERS_BUDGET_SEC: "60"
           NETRATTLER_EXTRA_PROP_MAX_MATCHES: "60"
           NETRATTLER_KAMBI_SPECIAL_FALLBACK: "true"
           NETRATTLER_KAMBI_SPECIAL_MAX_MATCHES: "24"
