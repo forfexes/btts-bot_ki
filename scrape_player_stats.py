@@ -261,24 +261,42 @@ PLAYERS_DB_KEY = (os.environ.get("SUPABASE_PLAYERS_SERVICE_KEY")
 _DEFAULT_LEAGUES = (
     "premier league,championship,laliga,bundesliga,serie a,ligue 1,eredivisie,"
     "belgian pro league,liga portugal,super lig,major league soccer,"
-    "champions league,europa league,conference league,efl cup,fa cup,copa del rey,"
-    "dfb pokal,coppa italia,coupe de france,nations league,world cup,euro,copa america,"
-    "africa cup,asian cup,gold cup"
+    "champions league,europa league,conference league,uefa nations league,"
+    "world cup,euro,copa america"
 )
 _LEAGUE_EXCLUDE = ("women", "frauen", "u17", "u19", "u20", "u21", "u23", "youth", "next pro",
-                   "laliga2", "la liga 2", "2. bundesliga", "ligue 2", "serie b", "serie c",
-                   "usl", "nwsl", "afc champions", "concacaf champions", "w-league")
+                   "premier league 2", "super liga", "laliga2", "la liga 2", "2. bundesliga",
+                   "ligue 2", "serie b", "serie c", "usl", "nwsl", "afc ", "concacaf",
+                   "caf ", "asean", "canadian", "w-league", "cup group", "friendl")
+# Domestic-Ligen mit gleichem Namen in vielen Ländern -> nur dieses FotMob-ccode zulassen
+_LEAGUE_COUNTRY = {
+    "premier league": {"ENG"}, "championship": {"ENG"}, "laliga": {"ESP"},
+    "bundesliga": {"GER"}, "serie a": {"ITA"}, "ligue 1": {"FRA"},
+    "eredivisie": {"NED"}, "belgian pro league": {"BEL"}, "liga portugal": {"POR"},
+    "super lig": {"TUR"}, "major league soccer": {"USA", "CAN"},
+}
+_REJECTED_EVENTS: set = set()
 _LEAGUE_ALLOW = [x.strip().lower() for x in
                  (os.environ.get("PLAYER_LOG_LEAGUES") or _DEFAULT_LEAGUES).split(",") if x.strip()]
 
 
-def _league_wanted(league: Any) -> bool:
+def _league_wanted(league: Any, ccode: Any = None) -> bool:
     if _LEAGUE_ALLOW == ["all"]:
         return True
     name = str(league or "").lower()
     if not name or any(x in name for x in _LEAGUE_EXCLUDE):
         return False
-    return any(a in name for a in _LEAGUE_ALLOW)
+    # Quali-Runden nur für UEFA-Wettbewerbe der Nationalteams (WM-/EM-Quali), nicht Vereinsquali
+    if "qualification" in name and "uefa" not in name:
+        return False
+    if not any(a in name for a in _LEAGUE_ALLOW):
+        return False
+    allowed = _LEAGUE_COUNTRY.get(name.strip())
+    if allowed and ccode and str(ccode).upper() not in allowed:
+        return False
+    return True
+
+
 BACKFILL_ONLY_PLAYERS_DB = False
 PLAYER_LOG_KEEP_GAMES = int(os.environ.get("PLAYER_LOG_KEEP_GAMES", "20"))
 _WIDE_STATS = (
@@ -301,7 +319,8 @@ def _long_to_wide(rows: list) -> list:
     wide: Dict[tuple, Dict[str, Any]] = {}
     for r in by_source[src]:
         name = str(r.get("player_name") or "").strip()
-        if not name or name == "Unknown" or not _league_wanted(r.get("league")):
+        if (not name or name == "Unknown" or not _league_wanted(r.get("league"))
+                or str(r.get("event_id")) in _REJECTED_EVENTS):
             continue
         key = f"{_norm_entity_name(name)}|{_norm_entity_name(r.get('team') or '')}"
         ev = str(r.get("event_id"))
@@ -1607,6 +1626,7 @@ def scrape_fotmob_date(date_str: str) -> List[Dict]:
     if leagues:
         for league in leagues:
             league_name = league.get("name", "")
+            league_ccode = league.get("ccode")
             for match in league.get("matches") or []:
                 status_obj = match.get("status") or {}
                 finished = (
@@ -1615,6 +1635,7 @@ def scrape_fotmob_date(date_str: str) -> List[Dict]:
                     or str(status_obj.get("statusId", "")).lower() in ("6", "finished")
                 )
                 if finished:
+                    match["_ccode"] = league_ccode
                     matches.append((league_name, match))
     elif isinstance(data, dict):
         for match in data.get("matches") or []:
@@ -1629,8 +1650,10 @@ def scrape_fotmob_date(date_str: str) -> List[Dict]:
         match_id = match.get("id") or match.get("matchId")
         if not match_id:
             continue
-        if BACKFILL_ONLY_PLAYERS_DB and not _league_wanted(league_name):
-            continue
+        if not _league_wanted(league_name, match.get("_ccode")):
+            _REJECTED_EVENTS.add(str(match_id))
+            if BACKFILL_ONLY_PLAYERS_DB:
+                continue
 
         detail = None
         detail_endpoints = [
@@ -1718,6 +1741,9 @@ def scrape_fotmob_date(date_str: str) -> List[Dict]:
             print(f"  ⚠️  FotMob Karten: {str(exc)[:80]}")
         time.sleep(SOURCE_SLEEP)
 
+    _cc_known = sum(1 for _l, _m in matches if _m.get("_ccode"))
+    print(f"  🔎 FotMob Liga-Filter: {len(_REJECTED_EVENTS)} Events verworfen · "
+          f"ccode bei {_cc_known}/{len(matches)} Matches vorhanden")
     print(f"  🔎 FotMob Karten-Diagnose (kumuliert): {_FM_DIAG['matches']} Spiele · "
           f"{_FM_DIAG['events']} Events · {_FM_DIAG['cards']} Karten-Events")
     print(
