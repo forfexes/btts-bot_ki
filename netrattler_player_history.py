@@ -24,7 +24,7 @@ PROGRESS_TABLE = "netrattler_backfill_progress"
 
 
 def _progress_headers() -> dict:
-    key = scraper.SUPABASE_KEY
+    key = os.getenv("SUPABASE_SERVICE_ROLE_KEY") or scraper.SUPABASE_KEY
     return {
         "apikey": key,
         "Authorization": f"Bearer {key}",
