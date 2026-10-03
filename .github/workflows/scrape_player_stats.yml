@@ -14,6 +14,10 @@ on:
         description: "Datum YYYY-MM-DD, leer = gestern"
         required: false
         default: ""
+      days:
+        description: "Backfill: letzte N Tage Player Stats (max ~14 pro Lauf), leer = 1"
+        required: false
+        default: ""
       results_only:
         description: "Nur Ergebnisse"
         required: false
@@ -65,12 +69,16 @@ jobs:
           ENABLE_ODDSHARVESTER: "false"
           ENABLE_BET365_PUBLIC: "false"
           ENABLE_REEP_IDENTITY: "false"
-          SOURCE_MAX_EVENTS: "40"
+          SOURCE_MAX_EVENTS: ${{ github.event.inputs.days != '' && '150' || '40' }}
           SOURCE_SLEEP: "0.08"
           DAILY_RESULTS_PARALLEL_WORKERS: "4"
           DAILY_STATS_PARALLEL_WORKERS: "2"
         run: |
           if [ -n "${{ github.event.inputs.date }}" ]; then ARGS="--date ${{ github.event.inputs.date }}"; FOTMOB_ARGS="--date ${{ github.event.inputs.date }}"; else ARGS="--yesterday"; FOTMOB_ARGS="--yesterday"; fi
           if [ "${{ github.event.inputs.results_only }}" = "true" ]; then ARGS="$ARGS --results-only"; fi
+          if [ -n "${{ github.event.inputs.days }}" ]; then
+            python scrape_player_stats.py $ARGS --days ${{ github.event.inputs.days }}
+            exit 0
+          fi
           python netrattler_fotmob_results.py $FOTMOB_ARGS
           python scrape_player_stats.py $ARGS

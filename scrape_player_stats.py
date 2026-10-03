@@ -2142,6 +2142,8 @@ def main():
     parser.add_argument("--yesterday", action="store_true")
     parser.add_argument("--results-only", action="store_true", help="Nur Ergebnisse, keine Player Stats")
     parser.add_argument("--stats-only",   action="store_true", help="Nur Player Stats")
+    parser.add_argument("--days", type=int, default=1,
+                        help="Backfill: Player Stats für die letzten N Tage (ab gestern rückwärts)")
     parser.add_argument("--source",    choices=["sofascore", "fotmob", "statsbomb", "github", "odds", "auto"], default="auto")
     parser.add_argument("--event-id",  default=None)
     parser.add_argument("--match-id",  default=None)
@@ -2155,6 +2157,23 @@ def main():
         date_str = args.date
 
     print(f"🚀 NETRATTLER Scraper — {date_str}")
+
+    if args.days and args.days > 1:
+        # Backfill: nur Player Stats, älteste zuerst (neueste Werte gewinnen beim Upsert/Prune).
+        base = datetime.fromisoformat(date_str).date()
+        total = 0
+        for offset in range(args.days - 1, -1, -1):
+            day = str(base - timedelta(days=offset))
+            try:
+                total += scrape_player_stats(day)
+            except Exception as exc:
+                print(f"  ⚠️  Backfill {day}: {str(exc)[:120]}")
+        send_telegram(
+            f"📊 <b>NETRATTLER Backfill</b>\n\n"
+            f"{args.days} Tage bis <b>{date_str}</b>\nPlayer Stats: <b>{total}</b>"
+        )
+        print(f"\n✅ Backfill fertig — {total} Stats")
+        return
 
     results_saved = 0
     stats_saved = 0
