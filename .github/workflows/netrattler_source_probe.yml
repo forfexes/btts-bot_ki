@@ -11,3 +11,7 @@ jobs:
         with: {python-version: "3.11"}
       - run: pip install requests
       - run: python netrattler_source_probe.py
+        env:
+          SUPABASE_URL: ${{ secrets.SUPABASE_URL }}
+          SUPABASE_KEY: ${{ secrets.SUPABASE_KEY }}
+          SUPABASE_SERVICE_ROLE_KEY: ${{ secrets.SUPABASE_SERVICE_ROLE_KEY }}
