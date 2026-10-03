@@ -126,7 +126,7 @@ jobs:
           ENABLE_ADVANCED_PROPS:      "true"
           ENABLE_TEAM_LEGS_IN_PROP_BUILDER: "true"
           NETRATTLER_BUILDER_ALLOW_TEAM_MARKETS: "true"
-          ENABLE_SUPABASE_PROP_STATS: "1"
+          ENABLE_SUPABASE_PROP_STATS: "0"
           MAX_LEAGUES_PER_RUN:        "0"
           PARALLEL_WORKERS:           "10"
           AI_SLEEP_SECONDS:           "0.1"
