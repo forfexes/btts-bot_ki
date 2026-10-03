@@ -41,6 +41,8 @@ jobs:
           BETFAIR_APP_KEY: ${{ secrets.BETFAIR_APP_KEY }}
           BETFAIR_SESSION_TOKEN: ${{ secrets.BETFAIR_SESSION_TOKEN }}
           ENABLE_ODDSHARVESTER: "true"
+          ODDS_API_MAX_SPORTS_PER_RUN: "3"
+          ODDS_API_REGIONS: "eu"
           ENABLE_BET365_PUBLIC: "true"
           ODDS_HISTORY_START_YEAR: "2010"
           ODDS_SLOW_FALLBACK_MIN_ROWS: "500"

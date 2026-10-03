@@ -210,15 +210,22 @@ def collect_pinnacle(target_date: str) -> List[Dict[str, Any]]:
         return []
 
 
+ODDS_API_EXHAUSTED = False
 ODDS_API_DIAG: Dict[str, Any] = {"calls": 0, "status": {}, "remaining": None, "last_error": ""}
 
 
 def _odds_api_get(path: str, params: Dict[str, Any], keys: Sequence[str]) -> Tuple[Any, Optional[str]]:
+    global ODDS_API_EXHAUSTED
+    if ODDS_API_EXHAUSTED:
+        return None, None
+    quota_hits = 0
     for key in keys:
         try:
             p = dict(params); p["apiKey"] = key
             r = requests.get(f"{ODDS_API_BASE}/{path.lstrip('/')}", params=p, timeout=TIMEOUT)
             ODDS_API_DIAG["calls"] += 1
+            if r.status_code in {401, 429} and "quota" in r.text.lower():
+                quota_hits += 1
             ODDS_API_DIAG["status"][str(r.status_code)] = ODDS_API_DIAG["status"].get(str(r.status_code), 0) + 1
             rem = r.headers.get("x-requests-remaining")
             if rem is not None:
@@ -232,6 +239,8 @@ def _odds_api_get(path: str, params: Dict[str, Any], keys: Sequence[str]) -> Tup
         except Exception as exc:
             ODDS_API_DIAG["last_error"] = f"exc {str(exc)[:80]}"
             continue
+    if keys and quota_hits >= len(keys):
+        ODDS_API_EXHAUSTED = True   # alle Keys leer -> keine weiteren Calls in diesem Lauf
     return None, None
 
 
