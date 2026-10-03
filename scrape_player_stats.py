@@ -253,6 +253,7 @@ def _sb_post(table: str, rows: list, conflict: str = None, *,
 # ── Zweite Datenbank: Spieler-Historie L20 (breites Format) ─────────────────
 PLAYERS_DB_URL = (os.environ.get("SUPABASE_PLAYERS_URL") or "").strip()
 PLAYERS_DB_KEY = (os.environ.get("SUPABASE_PLAYERS_SERVICE_KEY") or "").strip()
+BACKFILL_ONLY_PLAYERS_DB = False
 PLAYER_LOG_KEEP_GAMES = int(os.environ.get("PLAYER_LOG_KEEP_GAMES", "20"))
 _WIDE_STATS = (
     "minutes", "shots", "sot", "goals", "assists", "fouls_committed",
@@ -2115,11 +2116,14 @@ def scrape_player_stats(date_str: str) -> int:
     clean = _dedupe_rows(
         all_rows, "source,event_id,player_id,stat_name"
     )
-    saved = _sb_post(
-        "player_match_stats",
-        clean,
-        conflict="source,event_id,player_id,stat_name",
-    )
+    if BACKFILL_ONLY_PLAYERS_DB:
+        saved = 0
+    else:
+        saved = _sb_post(
+            "player_match_stats",
+            clean,
+            conflict="source,event_id,player_id,stat_name",
+        )
 
     write_player_game_log(clean)
 
@@ -2160,19 +2164,26 @@ def main():
 
     if args.days and args.days > 1:
         # Backfill: nur Player Stats, älteste zuerst (neueste Werte gewinnen beim Upsert/Prune).
+        if not (PLAYERS_DB_URL and PLAYERS_DB_KEY):
+            # Ohne zweite DB würde der Backfill die (fast volle) alte EAV-Tabelle fluten.
+            print("❌ Backfill abgebrochen: SUPABASE_PLAYERS_URL / SUPABASE_PLAYERS_SERVICE_KEY fehlen")
+            raise SystemExit(1)
+        global BACKFILL_ONLY_PLAYERS_DB
+        BACKFILL_ONLY_PLAYERS_DB = True
         base = datetime.fromisoformat(date_str).date()
         total = 0
         for offset in range(args.days - 1, -1, -1):
             day = str(base - timedelta(days=offset))
             try:
-                total += scrape_player_stats(day)
+                scrape_player_stats(day)
+                total += 1
             except Exception as exc:
                 print(f"  ⚠️  Backfill {day}: {str(exc)[:120]}")
         send_telegram(
             f"📊 <b>NETRATTLER Backfill</b>\n\n"
-            f"{args.days} Tage bis <b>{date_str}</b>\nPlayer Stats: <b>{total}</b>"
+            f"{args.days} Tage bis <b>{date_str}</b>\nTage verarbeitet: <b>{total}</b> (nur player_game_log)"
         )
-        print(f"\n✅ Backfill fertig — {total} Stats")
+        print(f"\n✅ Backfill fertig — {total} Tage")
         return
 
     results_saved = 0
