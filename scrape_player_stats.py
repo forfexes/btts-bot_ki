@@ -1117,6 +1117,8 @@ _STAT_ALIASES = {
     "tackles": "tackles",
     "totaltackle": "tackles",
     "wontackles": "tackles",
+    "tackleswon": "tackles",
+    "tacklesucceeded": "tackles",
     "interceptions": "interceptions",
     "clearance": "clearances",
     "clearances": "clearances",
@@ -1152,6 +1154,52 @@ _STAT_ALIASES = {
     "wasfouled": "fouls_won",
     "saves": "saves",
 }
+
+
+
+def _card_rows_from_events(events: Any, *, source: str, event_id: Any,
+                           home: str, away: str, league: str,
+                           match_date: str) -> List[Dict]:
+    """Karten stehen bei FotMob/SofaScore in den Match-Events, nicht in den Spieler-Stats."""
+    counts: Dict[Any, Dict[str, Any]] = {}
+    for ev in events or []:
+        if not isinstance(ev, dict):
+            continue
+        kind = str(ev.get("type") or ev.get("incidentType") or "").lower()
+        if kind != "card":
+            continue
+        raw_card = str(ev.get("card") or ev.get("incidentClass") or "").lower().replace("_", "")
+        if "yellowred" in raw_card or "secondyellow" in raw_card:
+            stat_names = ["yellow_cards", "red_cards"]
+        elif "red" in raw_card:
+            stat_names = ["red_cards"]
+        elif "yellow" in raw_card:
+            stat_names = ["yellow_cards"]
+        else:
+            continue
+        player = ev.get("player") if isinstance(ev.get("player"), dict) else {}
+        pid = player.get("id") or ev.get("playerId")
+        pname = (player.get("name") or ev.get("playerName") or ev.get("nameStr")
+                 or player.get("shortName"))
+        if not pname:
+            continue
+        is_home = ev.get("isHome")
+        if is_home is None:
+            is_home = ev.get("isHomeTeam")
+        team = home if is_home else away
+        key = pid or pname
+        bucket = counts.setdefault(key, {"id": pid, "name": pname, "team": team, "stats": {}})
+        for sn in stat_names:
+            bucket["stats"][sn] = bucket["stats"].get(sn, 0) + 1
+    rows: List[Dict] = []
+    for b in counts.values():
+        for sn, val in b["stats"].items():
+            rows.append(_make_stat_row(
+                source, event_id, b["id"] or b["name"], b["name"], sn, val,
+                team=b["team"], league=league, home_team=home, away_team=away,
+                match_date=match_date,
+            ))
+    return rows
 
 
 def _stat_key(value: Any) -> str:
@@ -1336,6 +1384,9 @@ def scrape_sofascore_date(date_str: str) -> List[Dict]:
 
     events = data.get("events", []) if isinstance(data, dict) else []
     rows = []
+    if not events:
+        print("  ⚠️  SofaScore: scheduled-events leer/blockiert "
+              f"(Typ={type(data).__name__}) — Runner-IP vermutlich von Cloudflare geblockt")
 
     finished = [
         ev for ev in events
@@ -1383,6 +1434,15 @@ def scrape_sofascore_date(date_str: str) -> List[Dict]:
                     team=team_name, league=tournament,
                     home=home, away=away, match_date=mdate,
                 ))
+        inc = _fetch_json(
+            f"https://api.sofascore.com/api/v1/event/{event_id}/incidents",
+            timeout=20, allow_playwright=False,
+        )
+        if isinstance(inc, dict):
+            rows.extend(_card_rows_from_events(
+                inc.get("incidents"), source="sofascore", event_id=event_id,
+                home=home, away=away, league=tournament, match_date=mdate,
+            ))
         time.sleep(SOURCE_SLEEP)
 
     print(f"  ✅ SofaScore: {len(rows)} Player-Stat-Rows aus {len(finished)} Spielen")
@@ -1538,6 +1598,15 @@ def scrape_fotmob_date(date_str: str) -> List[Dict]:
                 team=str(team_name), league=league_name,
                 home=home, away=away, match_date=date_str,
             ))
+        try:
+            facts = (detail.get("content") or {}).get("matchFacts") or {}
+            ev_list = (facts.get("events") or {}).get("events") or []
+            rows.extend(_card_rows_from_events(
+                ev_list, source="fotmob", event_id=match_id, home=home,
+                away=away, league=league_name, match_date=date_str,
+            ))
+        except Exception as exc:
+            print(f"  ⚠️  FotMob Karten: {str(exc)[:80]}")
         time.sleep(SOURCE_SLEEP)
 
     print(
