@@ -251,10 +251,8 @@ def _sb_post(table: str, rows: list, conflict: str = None, *,
 
 
 # ── Zweite Datenbank: Spieler-Historie L20 (breites Format) ─────────────────
-PLAYERS_DB_URL = (os.environ.get("SUPABASE_PLAYERS_URL") or os.environ.get("SUPABASE_URL") or "").strip()
-PLAYERS_DB_KEY = (os.environ.get("SUPABASE_PLAYERS_SERVICE_KEY")
-                  or os.environ.get("SUPABASE_SERVICE_ROLE_KEY")
-                  or os.environ.get("SUPABASE_KEY") or "").strip()
+PLAYERS_DB_URL = (os.environ.get("SUPABASE_PLAYERS_URL") or "").strip()
+PLAYERS_DB_KEY = (os.environ.get("SUPABASE_PLAYERS_SERVICE_KEY") or "").strip()
 BACKFILL_ONLY_PLAYERS_DB = False
 PLAYER_LOG_KEEP_GAMES = int(os.environ.get("PLAYER_LOG_KEEP_GAMES", "20"))
 _WIDE_STATS = (
@@ -2168,7 +2166,7 @@ def main():
         # Backfill: nur Player Stats, älteste zuerst (neueste Werte gewinnen beim Upsert/Prune).
         if not (PLAYERS_DB_URL and PLAYERS_DB_KEY):
             # Ohne zweite DB würde der Backfill die (fast volle) alte EAV-Tabelle fluten.
-            print("❌ Backfill abgebrochen: weder SUPABASE_PLAYERS_* noch SUPABASE_URL/KEY gesetzt")
+            print("❌ Backfill abgebrochen: SUPABASE_PLAYERS_URL / SUPABASE_PLAYERS_SERVICE_KEY fehlen")
             raise SystemExit(1)
         global BACKFILL_ONLY_PLAYERS_DB
         BACKFILL_ONLY_PLAYERS_DB = True

@@ -11,9 +11,8 @@ from typing import Any, Callable, Dict, Iterable, List, Optional
 
 import requests
 
-PLAYERS_DB_URL = (os.getenv("SUPABASE_PLAYERS_URL") or os.getenv("SUPABASE_URL") or "").strip().rstrip("/")
-PLAYERS_DB_KEY = (os.getenv("SUPABASE_PLAYERS_SERVICE_KEY") or os.getenv("SUPABASE_SERVICE_ROLE_KEY")
-                  or os.getenv("SUPABASE_KEY") or "").strip()
+PLAYERS_DB_URL = (os.getenv("SUPABASE_PLAYERS_URL") or "").strip().rstrip("/")
+PLAYERS_DB_KEY = (os.getenv("SUPABASE_PLAYERS_SERVICE_KEY") or "").strip()
 
 # Spalte in player_game_log -> kanonische Stat im Bot
 COLUMN_TO_STAT = {
