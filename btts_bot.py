@@ -21593,9 +21593,9 @@ def run_advanced_props_bot(active_leagues: list, fixtures_cache: dict, target_da
     # Direktverbindung zum täglichen Player-Stats-Scraper.
     total = len(foul_candidates) + len(booking_candidates) + len(shot_candidates)
     _enable_supabase_prop_stats = str(os.getenv("ENABLE_SUPABASE_PROP_STATS", "0")).lower() in {"1", "true", "yes", "on"}
-    if total < 4 and (not _enable_supabase_prop_stats):
+    if not _enable_supabase_prop_stats:
         log("🔑 Supabase Player-Stats übersprungen (Turbo). Pinnacle Props sind Hauptquelle. Aktivieren: ENABLE_SUPABASE_PROP_STATS=1")
-    if total < 4 and _enable_supabase_prop_stats and SUPABASE_URL and SUPABASE_KEY:
+    if _enable_supabase_prop_stats and SUPABASE_URL and SUPABASE_KEY:
         log("🔑 Lade Player-Stats aus Supabase...")
 
         try:
