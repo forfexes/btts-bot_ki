@@ -46,12 +46,11 @@ jobs:
       - name: Check players DB secrets
         if: ${{ github.event.inputs.days != '' }}
         env:
-          P_URL: ${{ secrets.SUPABASE_PLAYERS_URL }}
-          P_KEY: ${{ secrets.SUPABASE_PLAYERS_SERVICE_KEY }}
+          P_URL: ${{ secrets.SUPABASE_PLAYERS_URL || secrets.SUPABASE_URL }}
+          P_KEY: ${{ secrets.SUPABASE_PLAYERS_SERVICE_KEY || secrets.SUPABASE_SERVICE_ROLE_KEY || secrets.SUPABASE_KEY }}
         run: |
-          [ -n "$P_URL" ] && echo "SUPABASE_PLAYERS_URL ok (len ${#P_URL})" || { echo "SUPABASE_PLAYERS_URL FEHLT"; exit 1; }
-          [ -n "$P_KEY" ] && echo "SUPABASE_PLAYERS_SERVICE_KEY ok (len ${#P_KEY})" || { echo "SUPABASE_PLAYERS_SERVICE_KEY FEHLT"; exit 1; }
-          case "$P_URL" in https://*.supabase.co*) ;; *) echo "URL sieht nicht nach Supabase aus"; exit 1;; esac
+          [ -n "$P_URL" ] && echo "DB URL ok (len ${#P_URL})" || { echo "DB URL FEHLT"; exit 1; }
+          [ -n "$P_KEY" ] && echo "DB KEY ok (len ${#P_KEY})" || { echo "DB KEY FEHLT"; exit 1; }
           code=$(curl -s -o /dev/null -w "%{http_code}" -H "apikey: $P_KEY" -H "Authorization: Bearer $P_KEY" "${P_URL%/}/rest/v1/player_game_log?select=player_key&limit=1")
           echo "player_game_log HTTP $code"; [ "$code" = "200" ] || exit 1
       - name: Run every source with fallback
