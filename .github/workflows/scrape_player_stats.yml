@@ -79,4 +79,4 @@ jobs:
           USE_SOFASCORE: "true"
           USE_FOTMOB: "true"
           USE_ODDSHARVESTER_STYLE: "false"
-        run: python netrattler_player_history.py --days 365 --max-dates 365
+        run: python netrattler_player_history.py --days 365 --max-dates 365 --date-workers 4
