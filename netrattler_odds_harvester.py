@@ -357,14 +357,18 @@ def collect_espn(target_date: str) -> List[Dict[str, Any]]:
     """ESPN Scoreboard JSON inkl. Buchmacher-Quoten (kein Key)."""
     rows: List[Dict[str, Any]] = []
     d0 = date.fromisoformat(target_date)
-    rng = f"{d0.strftime('%Y%m%d')}-{(d0 + timedelta(days=3)).strftime('%Y%m%d')}"
     for lg in ESPN_LEAGUES:
-        try:
-            r = requests.get(f"https://site.api.espn.com/apis/site/v2/sports/soccer/{lg}/scoreboard",
-                             params={"dates": rng, "limit": 100}, headers={"User-Agent": "Mozilla/5.0"}, timeout=15)
-            if not r.ok:
+        for off in range(0, 4):
+            day_s = (d0 + timedelta(days=off)).strftime("%Y%m%d")
+            try:
+                r = requests.get(f"https://site.api.espn.com/apis/site/v2/sports/soccer/{lg}/scoreboard",
+                                 params={"dates": day_s}, headers={"User-Agent": "Mozilla/5.0"}, timeout=15)
+                if not r.ok:
+                    continue
+                events = r.json().get("events") or []
+            except Exception:
                 continue
-            for ev in r.json().get("events") or []:
+            for ev in events:
                 comp = (ev.get("competitions") or [{}])[0]
                 teams = {c.get("homeAway"): (c.get("team") or {}).get("displayName") for c in comp.get("competitors") or []}
                 h, a = teams.get("home"), teams.get("away")
@@ -391,9 +395,7 @@ def collect_espn(target_date: str) -> List[Dict[str, Any]]:
                                   commence_time=ev.get("date"), market="1x2", selection=sel, odds=ml)
                         if it:
                             rows.append(it)
-            time.sleep(0.2)
-        except Exception:
-            continue
+            time.sleep(0.1)
     log(f"ESPN rows={len(rows)} leagues={len(ESPN_LEAGUES)}")
     return rows
 
