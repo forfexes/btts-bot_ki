@@ -18774,13 +18774,29 @@ def _ntr_get_player_actual(player, stat, tip_date, match_name=""):
         "order": "match_date.desc.nullslast,collected_at.desc.nullslast",
         "limit": "20",
     }
+    rows = []
     try:
-        r = requests.get(f"{SUPABASE_URL}/rest/v1/player_match_stats", headers=headers, params=params, timeout=15)
-        if not r.ok:
-            return None
-        rows = r.json() or []
+        _p2 = {
+            "select": "player_name,home_team,away_team,match_date,shots,sot,goals,assists,passes,tackles,fouls_committed,fouls_won,yellow_cards,red_cards,saves,offsides,minutes",
+            "player_name": f"ilike.*{player}*",
+            "order": "match_date.desc",
+            "limit": "20",
+        }
+        _r2 = requests.get(f"{SUPABASE_URL}/rest/v1/player_game_log", headers=headers, params=_p2, timeout=15)
+        if _r2.ok:
+            rows = _r2.json() or []
+            for _row in rows:
+                _row["cards"] = _row.get("yellow_cards")
     except Exception:
-        return None
+        rows = []
+    if not rows:
+        try:
+            r = requests.get(f"{SUPABASE_URL}/rest/v1/player_match_stats", headers=headers, params=params, timeout=15)
+            if not r.ok:
+                return None
+            rows = r.json() or []
+        except Exception:
+            return None
 
     def _date_ok(row):
         rd = str(row.get("date") or row.get("match_date") or "")[:10]

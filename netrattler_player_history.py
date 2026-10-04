@@ -120,10 +120,7 @@ def collect_date(day: str) -> int:
                 print(f"  {name}: FAILED {str(exc)[:160]}")
 
     clean = scraper._dedupe_rows(rows, "source,event_id,player_id,stat_name")
-    saved = scraper._sb_post(
-        "player_match_stats", clean,
-        conflict="source,event_id,player_id,stat_name",
-    )
+    saved = scraper.write_player_game_log(clean)
     print(f"  raw={len(rows)} unique={len(clean)} saved={saved}")
     return int(saved or 0)
 

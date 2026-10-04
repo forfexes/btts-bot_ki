@@ -2183,8 +2183,8 @@ def scrape_player_stats(date_str: str) -> int:
     clean = _dedupe_rows(
         all_rows, "source,event_id,player_id,stat_name"
     )
-    if BACKFILL_ONLY_PLAYERS_DB:
-        saved = 0
+    if BACKFILL_ONLY_PLAYERS_DB or os.getenv("PLAYER_EAV_WRITE", "0") != "1":
+        saved = 0  # alte EAV-Tabelle player_match_stats waechst nicht mehr (Speicher); L20 liegt in player_game_log
     else:
         saved = _sb_post(
             "player_match_stats",
