@@ -14,7 +14,8 @@ def _espn_note(t):
     try:
         ev = json.loads(t)["events"][0]
         comp = ev["competitions"][0]
-        return "ODDS=" + json.dumps(comp.get("odds"))[:700] + " KEYS=" + ",".join(comp.keys())[:200]
+        o = dict((comp.get("odds") or [{}])[0]); o.pop("link", None)
+        return "ODDS=" + json.dumps(o)[:900]
     except Exception as e:
         return "parse " + str(e)[:100]
 for u in URLS:
