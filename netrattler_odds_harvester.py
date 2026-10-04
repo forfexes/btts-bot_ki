@@ -379,6 +379,13 @@ def collect_espn(target_date: str) -> List[Dict[str, Any]]:
                         node = od.get(key) or {}
                         ml = node.get("moneyLine")
                         if ml is None:
+                            _m = ((od.get("moneyline") or {}).get(sel) or {})
+                            ml = ((_m.get("close") or _m.get("open") or {}).get("odds"))
+                            try:
+                                ml = float(str(ml).replace("EVEN", "100").replace("+", "")) if ml is not None else None
+                            except Exception:
+                                ml = None
+                        if ml is None:
                             continue
                         it = _row(source="espn", bookmaker=f"espn_{prov}", event_id=ev.get("id"), league=lg, home=h, away=a,
                                   commence_time=ev.get("date"), market="1x2", selection=sel, odds=ml)
@@ -387,7 +394,7 @@ def collect_espn(target_date: str) -> List[Dict[str, Any]]:
             time.sleep(0.2)
         except Exception:
             continue
-    log(f"ESPN rows={len(rows)}")
+    log(f"ESPN rows={len(rows)} leagues={len(ESPN_LEAGUES)}")
     return rows
 
 
