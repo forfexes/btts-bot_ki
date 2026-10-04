@@ -24016,7 +24016,45 @@ def get_pinnacle_quote_for_market(home_team: str, away_team: str,
     """Direkt die Quote für einen bestimmten Markt holen."""
     odds = get_pinnacle_match_odds(home_team, away_team)
     if not odds:
+        return _ntr_db_quote(home_team, away_team, market)
+    _q = _pinnacle_quote_from(odds, market)
+    return _q if _q else _ntr_db_quote(home_team, away_team, market)
+
+
+_NTR_DB_QUOTE_MAP = {
+    "btts": ("btts", "yes"), "over25": ("totals_2_5", "over_2_5"), "btts_ht": ("btts_ht", "yes"),
+    "home_win": ("1x2", "home"), "away_win": ("1x2", "away"), "draw": ("1x2", "draw"),
+    "over15": ("totals_1_5", "over_1_5"), "under25": ("totals_2_5", "under_2_5"),
+}
+
+
+def _ntr_db_quote(home_team, away_team, market):
+    """Fallback: beste beobachtete Quote aus odds_history (Kambi/Pinnacle/ESPN/Football-Data), ohne Key."""
+    spec = _NTR_DB_QUOTE_MAP.get(market)
+    if not spec or not SUPABASE_URL or not SUPABASE_KEY:
         return None
+    try:
+        import datetime as _dt
+        tok_h = max((w for w in re.split(r"\W+", str(home_team)) if len(w) > 3), key=len, default="")
+        tok_a = max((w for w in re.split(r"\W+", str(away_team)) if len(w) > 3), key=len, default="")
+        if not tok_h or not tok_a:
+            return None
+        params = {
+            "select": "odds,bookmaker,source", "market": f"eq.{spec[0]}", "selection": f"eq.{spec[1]}",
+            "home_team": f"ilike.*{tok_h}*", "away_team": f"ilike.*{tok_a}*",
+            "match_date": f"gte.{(_dt.date.today() - _dt.timedelta(days=1)).isoformat()}",
+            "order": "captured_date.desc", "limit": "30",
+        }
+        r = requests.get(f"{SUPABASE_URL}/rest/v1/odds_history",
+                         headers={"apikey": SUPABASE_KEY, "Authorization": f"Bearer {SUPABASE_KEY}"},
+                         params=params, timeout=12)
+        vals = [float(x["odds"]) for x in (r.json() if r.ok else []) if x.get("odds")]
+        return max(vals) if vals else None
+    except Exception:
+        return None
+
+
+def _pinnacle_quote_from(odds, market):
     mapping = {
         "btts": odds.get("btts_yes"),
         "over25": odds.get("over_25"),
