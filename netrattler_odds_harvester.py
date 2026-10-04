@@ -307,6 +307,90 @@ def collect_kambi(target_date: str) -> List[Dict[str, Any]]:
     return rows
 
 
+FD_BOOKS = {"B365": "bet365", "PS": "pinnacle_fd", "MaxH": None, "AvgH": "avg_market", "WH": "williamhill", "BW": "bwin", "IW": "interwetten"}
+
+
+def collect_football_data_fixtures(target_date: str) -> List[Dict[str, Any]]:
+    """football-data.co.uk fixtures.csv: kommende Spiele mit Buchmacher-Quoten (kein Key)."""
+    import csv, io
+    rows: List[Dict[str, Any]] = []
+    try:
+        r = requests.get("https://www.football-data.co.uk/fixtures.csv", headers={"User-Agent": "Mozilla/5.0"}, timeout=25)
+        if not r.ok:
+            return []
+        reader = csv.DictReader(io.StringIO(r.content.decode("utf-8-sig", errors="ignore")))
+        limit = (date.fromisoformat(target_date) + timedelta(days=7)).isoformat()
+        for rec in reader:
+            h, a, ds = rec.get("HomeTeam"), rec.get("AwayTeam"), rec.get("Date")
+            if not h or not a or not ds:
+                continue
+            try:
+                d = datetime.strptime(ds.strip(), "%d/%m/%Y").date().isoformat()
+            except Exception:
+                try:
+                    d = datetime.strptime(ds.strip(), "%d/%m/%y").date().isoformat()
+                except Exception:
+                    continue
+            if not (target_date <= d <= limit):
+                continue
+            for pre, book in (("B365", "bet365"), ("PS", "pinnacle"), ("Avg", "avg_market"), ("Max", "max_market"), ("WH", "williamhill"), ("BW", "bwin")):
+                for col, sel in ((f"{pre}H", "home"), (f"{pre}D", "draw"), (f"{pre}A", "away")):
+                    it = _row(source="football_data", bookmaker=f"fd_{book}", event_id=_stable(d, h, a), league=rec.get("Div") or "",
+                              home=h, away=a, commence_time=d, market="1x2", selection=sel, odds=rec.get(col))
+                    if it:
+                        rows.append(it)
+                for col, sel in ((f"{pre}>2.5", "over_2_5"), (f"{pre}<2.5", "under_2_5")):
+                    it = _row(source="football_data", bookmaker=f"fd_{book}", event_id=_stable(d, h, a), league=rec.get("Div") or "",
+                              home=h, away=a, commence_time=d, market="totals_2_5", selection=sel, odds=rec.get(col), line=2.5)
+                    if it:
+                        rows.append(it)
+    except Exception as exc:
+        log(f"football-data fixtures: {str(exc)[:120]}", "WARN")
+    log(f"football-data fixtures rows={len(rows)}")
+    return rows
+
+
+ESPN_LEAGUES = [x for x in os.getenv("ESPN_LEAGUES", "eng.1,eng.2,esp.1,ger.1,ita.1,fra.1,ned.1,por.1,tur.1,bel.1,usa.1,uefa.champions,uefa.europa,uefa.europa.conf,bra.1,arg.1,mex.1").split(",") if x]
+
+
+def collect_espn(target_date: str) -> List[Dict[str, Any]]:
+    """ESPN Scoreboard JSON inkl. Buchmacher-Quoten (kein Key)."""
+    rows: List[Dict[str, Any]] = []
+    d0 = date.fromisoformat(target_date)
+    rng = f"{d0.strftime('%Y%m%d')}-{(d0 + timedelta(days=3)).strftime('%Y%m%d')}"
+    for lg in ESPN_LEAGUES:
+        try:
+            r = requests.get(f"https://site.api.espn.com/apis/site/v2/sports/soccer/{lg}/scoreboard",
+                             params={"dates": rng, "limit": 100}, headers={"User-Agent": "Mozilla/5.0"}, timeout=15)
+            if not r.ok:
+                continue
+            for ev in r.json().get("events") or []:
+                comp = (ev.get("competitions") or [{}])[0]
+                teams = {c.get("homeAway"): (c.get("team") or {}).get("displayName") for c in comp.get("competitors") or []}
+                h, a = teams.get("home"), teams.get("away")
+                if not h or not a:
+                    continue
+                for od in comp.get("odds") or []:
+                    prov = str((od.get("provider") or {}).get("name") or "espn").lower().replace(" ", "_")
+                    mapping = (
+                        ("homeTeamOdds", "home"), ("awayTeamOdds", "away"), ("drawOdds", "draw"),
+                    )
+                    for key, sel in mapping:
+                        node = od.get(key) or {}
+                        ml = node.get("moneyLine")
+                        if ml is None:
+                            continue
+                        it = _row(source="espn", bookmaker=f"espn_{prov}", event_id=ev.get("id"), league=lg, home=h, away=a,
+                                  commence_time=ev.get("date"), market="1x2", selection=sel, odds=ml)
+                        if it:
+                            rows.append(it)
+            time.sleep(0.2)
+        except Exception:
+            continue
+    log(f"ESPN rows={len(rows)}")
+    return rows
+
+
 ODDS_API_EXHAUSTED = False
 ODDS_API_DIAG: Dict[str, Any] = {"calls": 0, "status": {}, "remaining": None, "last_error": ""}
 
@@ -445,6 +529,8 @@ def collect_live_all(target_date: Optional[str] = None) -> List[Dict[str, Any]]:
     for name, fn in (
         ("pinnacle", lambda: collect_pinnacle(day)),
         ("kambi", lambda: collect_kambi(day)),
+        ("football_data", lambda: collect_football_data_fixtures(day)),
+        ("espn", lambda: collect_espn(day)),
         ("the_odds_api", lambda: collect_the_odds_api(day)),
     ):
         note = ""
