@@ -197,13 +197,18 @@ def normalize_prop_safe(row: Dict[str, Any]):
     if leg is None:
         return None
 
-    independent_values = [
-        _as_float(safe_row.get("model_prob")),
-        _as_float(safe_row.get("probability")),
-        _as_float(safe_row.get("prob")),
-        _as_float(safe_row.get("hit_rate")),
-    ]
-    has_independent = any(v > 0 for v in independent_values)
+    probability_source = str(
+        safe_row.get("probability_source")
+        or safe_row.get("model_source")
+        or safe_row.get("history_source")
+        or ""
+    ).strip().lower()
+    has_independent = (
+        _as_float(safe_row.get("model_prob")) > 0
+        or any(token in probability_source for token in (
+            "model", "history", "empirical", "fbref", "statsbomb", "fotmob", "supabase"
+        ))
+    )
 
     if has_independent and leg.odds > 1:
         implied = 1.0 / leg.odds
