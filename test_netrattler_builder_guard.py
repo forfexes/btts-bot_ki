@@ -161,6 +161,25 @@ def test_real_odds_only_and_edge_sanity():
         leg = guard.normalize_prop_safe(_row(odds=2.20))
         assert leg is not None
         assert leg.edge == 0.0
+
+        # Pinnacle/Kambi sometimes expose a probability derived from the same
+        # bookmaker quote. That is not independent model evidence and must not
+        # be rejected as negative edge; REAL_ODDS_ONLY compatibility keeps it
+        # with edge=0 until player ML/history enriches the row.
+        leg = guard.normalize_prop_safe(_row(
+            odds=2.20, probability=43.0, source="pinnacle"
+        ))
+        assert leg is not None
+        assert leg.edge == 0.0
+
+        # Explicit player-history/model provenance remains subject to the
+        # positive-edge guard.
+        leg = guard.normalize_prop_safe(_row(
+            odds=2.20, probability=0.58, probability_source="player_history"
+        ))
+        assert leg is not None
+        expected = (0.58 - 1 / 2.20) * 100
+        assert abs(leg.edge - expected) < 0.02
     finally:
         if old_min is None:
             os.environ.pop("NETRATTLER_PROP_BUILDER_MIN_EDGE", None)
