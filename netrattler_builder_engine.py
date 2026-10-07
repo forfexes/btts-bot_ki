@@ -334,11 +334,21 @@ def normalize_prop(row: Dict[str, Any]) -> Optional[PropLeg]:
     # props were allowed into the Builder pool even when no independent player
     # model/history was available. V37 accidentally converted those to implied
     # probability -> 0% edge -> rejected 623/624 legs. Restore compatibility.
-    _independent_values = [
-        as_float(row.get("model_prob")), as_float(row.get("probability")),
-        as_float(row.get("prob")), as_float(row.get("hit_rate")),
-    ]
-    has_independent_probability = any(v > 0 for v in _independent_values)
+    # Only probabilities with explicit independent provenance may create model edge.
+    # Raw bookmaker-derived "prob"/"probability" values (e.g. Pinnacle 95% of
+    # implied probability) are market context, not an independent model signal.
+    probability_source = norm(
+        row.get("probability_source")
+        or row.get("model_source")
+        or row.get("history_source")
+        or ""
+    )
+    has_independent_probability = (
+        as_float(row.get("model_prob")) > 0
+        or any(token in probability_source for token in (
+            "model", "history", "empirical", "fbref", "statsbomb", "fotmob", "supabase"
+        ))
+    )
     edge = as_float(row.get("edge_pct") or row.get("edge"))
     if 0 < abs(edge) < 1:
         edge *= 100.0
