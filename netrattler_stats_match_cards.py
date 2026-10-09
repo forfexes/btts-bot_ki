@@ -59,13 +59,11 @@ def select_cards(tips_by_market, max_cards=0):
             matches[match.casefold()].append((market, tip))
     ranked = []
     for key, entries in matches.items():
-        # At least two independently priced markets for a meaningful match card.
+        # One or more final REAL_ODDS tips are enough: every qualifying match gets a card.
         unique = {}
         for market, tip in entries:
             if market not in unique:
                 unique[market] = tip
-        if len(unique) < 2:
-            continue
         entries = list(unique.items())
         entries.sort(key=lambda x: (
             -(_number(x[1].get("probability")) or 0),
