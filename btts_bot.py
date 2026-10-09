@@ -7480,11 +7480,12 @@ def _send_daily_auswertung_to_all_groups(stats=None):
 # ============================================================
 
 def _ntr_explicit_stats_group_chat():
-    """
-    Gesamt-Statistik nur in eine wirklich konfigurierte Stats-Gruppe senden.
-    Wichtig: TELEGRAM_GROUP_STATS defaultet im Config-Block auf TELEGRAM_CHAT_ID.
-    Deshalb hier absichtlich os.environ direkt lesen, damit keine Gesamt-Auswertung
-    versehentlich in BTTS/Main landet.
+    """Return the explicitly configured Stats chat without confusing fallback routing.
+
+    TELEGRAM_GROUPS contains compatibility fallbacks (for example Builder/Props may
+    fall back to Stats). Those fallbacks must NOT make the real Stats chat look like
+    a tip-group collision. Only explicitly configured raw Telegram group secrets are
+    considered collisions here.
     """
     chat = os.getenv("TELEGRAM_GROUP_STATS", "").strip()
     if not chat:
@@ -7492,21 +7493,18 @@ def _ntr_explicit_stats_group_chat():
     allow_same = str(env("ALLOW_GLOBAL_STATS_IN_TIP_GROUP", "false")).lower() in ("1", "true", "yes", "on")
     if allow_same:
         return chat
-    market_keys = [
-        "btts", "over25", "combo", "combos", "btts_ht", "over15_ht",
-        "hz_live", "late_goals", "props", "advanced_props", "builder", "corners", "scorer", "goal_hunter", "scorer", "goal_hunter",
-    ]
-    for key in market_keys:
-        val = str(TELEGRAM_GROUPS.get(key, "") or "")
-        if val and val == chat:
+    explicit_tip_vars = (
+        "TELEGRAM_GROUP_BTTS", "TELEGRAM_GROUP_OVER25", "TELEGRAM_GROUP_COMBO",
+        "TELEGRAM_GROUP_COMBOS", "TELEGRAM_GROUP_BTTS_HT", "TELEGRAM_GROUP_OVER15_HT",
+        "TELEGRAM_GROUP_CORNERS", "TELEGRAM_GROUP_HZ_LIVE",
+        "TELEGRAM_GROUP_LATE_GOALS", "TELEGRAM_GROUP_PLAYER_PROPS",
+        "TELEGRAM_GROUP_BUILDER",
+    )
+    for var in explicit_tip_vars:
+        value = os.getenv(var, "").strip()
+        if value and value == chat:
             return ""
-    # Raw-secret safety: Goal Hunter used to be Stats for this repo.
-    if chat and chat == str(os.getenv("TELEGRAM_GROUP_LATE_GOALS", "") or ""):
-        return ""
-    if chat and chat == str(os.getenv("TELEGRAM_GROUP_HZ_LIVE", "") or ""):
-        return ""
     return chat
-
 
 def _ntr_market_daily_card(market_id, title, target_date, today_count):
     """Erstellt eine kurze Tages-/Gruppenkarte nur für diesen Markt."""
