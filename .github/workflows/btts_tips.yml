@@ -40,6 +40,7 @@ jobs:
         run: |
           python -m pip install --prefer-binary \
             requests \
+            pillow \
             python-dotenv \
             beautifulsoup4 \
             lxml \
@@ -52,7 +53,7 @@ jobs:
 
       - name: Fast syntax check
         run: |
-          python -m py_compile btts_bot.py netrattler_builder_engine.py netrattler_builder_guard.py netrattler_builder_styles.py netrattler_builder_concepts_v2.py netrattler_runtime_patch.py netrattler_odds_cache_guard.py netrattler_aiscore.py netrattler_hardtest.py \
+          python -m py_compile btts_bot.py netrattler_stats_match_cards.py netrattler_builder_engine.py netrattler_builder_guard.py netrattler_builder_styles.py netrattler_builder_concepts_v2.py netrattler_runtime_patch.py netrattler_odds_cache_guard.py netrattler_aiscore.py netrattler_hardtest.py \
             test_netrattler_builder_guard.py test_netrattler_builder_styles.py test_netrattler_builder_concepts_v2.py test_netrattler_runtime_patch.py test_netrattler_odds_cache_guard.py test_netrattler_aiscore.py \
             netrattler_result_enrichment.py netrattler_fotmob_results.py netrattler_settlement_runner.py \
             test_netrattler_result_enrichment.py test_netrattler_fotmob_results.py test_netrattler_settlement_runner.py data_fusion_v15.py \
@@ -108,6 +109,8 @@ jobs:
           TELEGRAM_GROUP_CORNERS:     ${{ secrets.TELEGRAM_GROUP_CORNERS }}
           TELEGRAM_GROUP_LATE_GOALS:  ${{ secrets.TELEGRAM_GROUP_LATE_GOALS }}
           TELEGRAM_GROUP_STATS:       ${{ secrets.TELEGRAM_GROUP_STATS }}
+          ENABLE_STATS_MATCH_CARDS:   "true"
+          STATS_MATCH_CARDS_MAX:      "3"
           TELEGRAM_GROUP_PLAYER_PROPS: ${{ secrets.TELEGRAM_GROUP_PLAYER_PROPS }}
           TELEGRAM_GROUP_BUILDER:     ${{ secrets.TELEGRAM_GROUP_BUILDER }}
           TELEGRAM_GROUP_OVER15_HT:   ${{ secrets.TELEGRAM_GROUP_OVER15_HT }}
