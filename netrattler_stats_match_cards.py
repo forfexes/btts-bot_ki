@@ -49,7 +49,7 @@ def _label(market, tip):
     return labels.get(market, market.upper()) + (("  ·  " + value[:28]) if value and value.upper() not in ("YES", "JA") else "")
 
 
-def select_cards(tips_by_market, max_cards=3):
+def select_cards(tips_by_market, max_cards=0):
     matches = defaultdict(list)
     for market, tips in (tips_by_market or {}).items():
         for tip in tips or []:
@@ -73,7 +73,7 @@ def select_cards(tips_by_market, max_cards=3):
         ))
         ranked.append((len(unique), max((_number(t.get("probability")) or 0) for _, t in entries), entries))
     ranked.sort(key=lambda row: (row[0], row[1]), reverse=True)
-    return [x[2] for x in ranked[:max(0, min(3, int(max_cards)))]]
+    limit = int(max_cards or 0)\n    chosen = ranked if limit <= 0 else ranked[:limit]\n    return [x[2] for x in chosen]
 
 
 def render_card(entries, target_date):
@@ -123,7 +123,7 @@ def send_cards(tips_by_market, target_date, token, stats_chat, log=print):
         log("Match-Cards: kein expliziter Stats-Chat oder Telegram-Token; übersprungen")
         return 0
     try:
-        cards = select_cards(tips_by_market, os.getenv("STATS_MATCH_CARDS_MAX", "3"))
+        cards = select_cards(tips_by_market, os.getenv("STATS_MATCH_CARDS_MAX", "0"))
         sent = 0
         for entries in cards:
             match = str(entries[0][1].get("match", "Match"))[:100]
