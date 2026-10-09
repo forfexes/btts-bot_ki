@@ -26290,10 +26290,10 @@ def main():
                         "team_cards": "team_cards", "double_chance": "double_chance",
                     }.get(_mk, "shots"),
                     "line": 0.5,
-                    "odds": _t.get("odds", _t.get("oddsYes", 0)),
+                    "odds": _t.get("odds") or _t.get("oddsYes") or _t.get("odd") or _t.get("price") or 0,
                     "real_observed_line": _t.get("_no_real_odds") is not True and float(_t.get("odds", _t.get("oddsYes", 0)) or 0) > 1,
                     "model_prob": _t.get("probability", 0),
-                    "source": _t.get("_source", "pinnacle"),
+                    "source": _t.get("_source") or _t.get("source") or _t.get("bookmaker") or _t.get("odds_source") or "pinnacle",
                     "ko": str(_t.get("_kickoff", "")),
                     "games": 10,
                 })
