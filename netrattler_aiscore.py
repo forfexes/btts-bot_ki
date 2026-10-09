@@ -43,7 +43,7 @@ SUPABASE_URL = (os.getenv("SUPABASE_URL") or "").rstrip("/")
 SUPABASE_KEY = os.getenv("SUPABASE_SERVICE_ROLE_KEY") or os.getenv("SUPABASE_KEY") or ""
 
 PINNACLE_BASE = os.getenv("PINNACLE_BASE", "https://guest.api.arcadia.pinnacle.com/0.1")
-PINNACLE_GUEST_KEY = os.getenv("PINNACLE_GUEST_KEY", "CmX2KcMrXuFmNg6YFbmTxE0y9CIrOi0R")
+PINNACLE_GUEST_KEY = os.getenv("PINNACLE_GUEST_KEY", "")
 PINNACLE_HEADERS = {
     "x-api-key": PINNACLE_GUEST_KEY,
     "Content-Type": "application/json",
