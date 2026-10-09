@@ -73,7 +73,9 @@ def select_cards(tips_by_market, max_cards=0):
         ))
         ranked.append((len(unique), max((_number(t.get("probability")) or 0) for _, t in entries), entries))
     ranked.sort(key=lambda row: (row[0], row[1]), reverse=True)
-    limit = int(max_cards or 0)\n    chosen = ranked if limit <= 0 else ranked[:limit]\n    return [x[2] for x in chosen]
+    limit = int(max_cards or 0)
+    chosen = ranked if limit <= 0 else ranked[:limit]
+    return [x[2] for x in chosen]
 
 
 def render_card(entries, target_date):
