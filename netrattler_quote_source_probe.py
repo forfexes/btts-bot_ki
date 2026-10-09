@@ -1,4 +1,5 @@
 #!/usr/bin/env python3
+import os
 """Network smoke-test for keyless NETRATTLER bookmaker/aggregator sources.
 
 No tips, no writes, no synthetic odds. It only reports whether public endpoints
@@ -20,7 +21,7 @@ H = {"User-Agent": UA, "Accept": "application/json,text/plain,*/*"}
 TIMEOUT = 10
 
 PIN_BASE = "https://guest.api.arcadia.pinnacle.com/0.1"
-PIN_KEY = "CmX2KcMrXuFmNg6YFbmTxE0y9CIrOi0R"
+PIN_KEY = os.getenv("PINNACLE_GUEST_KEY", "")
 
 
 def _result(source: str, ok: bool, **extra: Any) -> Dict[str, Any]:
