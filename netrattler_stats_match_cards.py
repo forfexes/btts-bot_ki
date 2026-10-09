@@ -5,7 +5,6 @@ Display-only: consumes final guarded tips; never creates prices, tips or bets.
 import io
 import os
 from collections import defaultdict
-from html import escape
 
 import requests
 
@@ -30,6 +29,8 @@ def _valid(tip):
     if not isinstance(tip, dict) or tip.get("_no_real_odds"):
         return False
     if tip.get("_synthetic") or tip.get("synthetic") or tip.get("estimated_odds"):
+        return False
+    if not (tip.get("_source") or tip.get("source") or tip.get("bookmaker") or tip.get("odds_source")):
         return False
     if not str(tip.get("match", "")).strip():
         return False
@@ -98,7 +99,7 @@ def render_card(entries, target_date):
     draw.line((60, 327, 1018, 327), fill="#3477b0", width=3)
     draw.text((62, 347), "MARKT / TIPP", font=font(23, True), fill="#94aeca")
     draw.text((705, 347), "QUOTE", font=font(23, True), fill="#94aeca")
-    draw.text((852, 347), "MODELL", font=font(23, True), fill="#94aeca")
+    draw.text((852, 347), "PROB.", font=font(23, True), fill="#94aeca")
     for i, (market, tip) in enumerate(entries[:6]):
         y = 405 + i * 69
         draw.rounded_rectangle((55, y-10, 1024, y+52), radius=12, fill="#172e4d")
