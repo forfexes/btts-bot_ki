@@ -319,11 +319,12 @@ def normalize_prop(row: Dict[str, Any]) -> Optional[PropLeg]:
         return None
     line = as_float(row.get("line"), market_line(market, 1.0))
     # Builder bets require a real offered bookmaker price. Never turn fair/model odds into a quote.
-    odds = as_float(row.get("odds") or row.get("pinnacle_odds") or row.get("bookmaker_odds") or row.get("decimal_odds"))
+    odds = as_float(row.get("odds") or row.get("pinnacle_odds") or row.get("bookmaker_odds") or row.get("decimal_odds") or row.get("oddsYes") or row.get("odd") or row.get("price"))
     probability = probability_from_row(row)
     if odds <= 1 or odds > max_sane_leg_odds(category):
         return None
-    if not is_bookmaker_source(str(row.get("source") or "")):
+    quote_source = str(row.get("source") or row.get("_source") or row.get("bookmaker") or row.get("odds_source") or "")
+    if not is_bookmaker_source(quote_source):
         return None
     estimated = bool(row.get("estimated") or row.get("estimated_odds"))
     if estimated:
@@ -373,7 +374,7 @@ def normalize_prop(row: Dict[str, Any]) -> Optional[PropLeg]:
         line=line,
         odds=round(odds, 2),
         probability=round(probability, 4),
-        source=str(row.get("source") or "unknown")[:80],
+        source=quote_source[:80],
         kickoff=str(row.get("ko") or row.get("kickoff") or row.get("kickoff_at") or "")[:40],
         hit_rate=as_float(row.get("hit_rate")),
         games=as_int(row.get("games") or row.get("sb_games")),
@@ -1440,7 +1441,6 @@ def format_builder_message(pick: BuilderPick) -> str:
         sep,
         f"💰 Gesamt-Quote: <b>{pick.total_odds:.2f}</b>{estimate}",
         f"🔥 Einsatz: <b>{pick.stake:.2f} Units</b>",
-        f"🧠 Daten: {', '.join(dict.fromkeys(x.source.split(':')[0] for x in pick.legs))}",
     ])
     return "\n".join(lines)
 
