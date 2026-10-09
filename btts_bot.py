@@ -26175,6 +26175,18 @@ def main():
 
     send_top_tips(tips_by_market, target_date)
 
+    # Optional: visualise ONLY final guarded REAL_ODDS tips in explicit Stats group.
+    # A photo failure must never interrupt normal Telegram tips.
+    try:
+        from netrattler_stats_match_cards import send_cards as _send_stats_match_cards
+        _stats_chat = _ntr_explicit_stats_group_chat()
+        _sent_cards = _send_stats_match_cards(
+            tips_by_market, target_date, TELEGRAM_TOKEN, _stats_chat, log=log
+        )
+        log(f"🖼️ NETRATTLER Stats Match-Cards: {_sent_cards} gesendet")
+    except Exception as _cards_exc:
+        log(f"⚠️ Stats Match-Cards optional: {type(_cards_exc).__name__}", "WARN")
+
     # 🎰 Pinnacle-Matches als Fixtures für Corners/Scorer/Props injizieren
     if _PINNACLE_MATCHUPS:
         _injected = 0
