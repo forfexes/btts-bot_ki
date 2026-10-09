@@ -1,5 +1,4 @@
 #!/usr/bin/env python3
-import os
 """Network smoke-test for keyless NETRATTLER bookmaker/aggregator sources.
 
 No tips, no writes, no synthetic odds. It only reports whether public endpoints
@@ -7,6 +6,7 @@ return usable football event payloads from a GitHub Actions runner.
 """
 from __future__ import annotations
 
+import os
 import json
 import time
 from datetime import datetime, timezone
