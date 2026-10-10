@@ -185,15 +185,31 @@ def select_cards(tips_by_market, max_cards=0):
     return [x[2] for x in chosen]
 
 
+def _pct(value):
+    n = _number(value)
+    if n is None:
+        return None
+    n = n * 100 if 0 <= n <= 1 else n
+    return n if 0 <= n <= 100 else None
+
+
+def _form_chars(value):
+    chars = [c for c in str(value or "").upper() if c in "WDL"]
+    return chars[-5:]
+
+
 def render_card(entries, target_date):
+    """Neon-blue premium match card (NETRATTLER branding, display-only).
+
+    Every block is optional: it is drawn only when the tip carries the real
+    value. Nothing here is invented or estimated.
+    """
     from PIL import Image, ImageDraw, ImageFont
 
-    rows = entries[:6]
-    h = max(760, 650 + len(rows) * 72)
-    w = 1080
-    im = Image.new("RGB", (w, h), "#06101f")
+    rows = entries[:5]
+    w, h = 1080, 1130
+    im = Image.new("RGB", (w, h), "#020a2a")
     draw = ImageDraw.Draw(im)
-
     font_path = "/usr/share/fonts/truetype/dejavu/DejaVuSans.ttf"
     bold_path = "/usr/share/fonts/truetype/dejavu/DejaVuSans-Bold.ttf"
 
@@ -203,71 +219,159 @@ def render_card(entries, target_date):
         except OSError:
             return ImageFont.load_default()
 
-    # Premium frame / header.
-    draw.rounded_rectangle((24, 22, 1056, h-22), radius=32, fill="#0d1c33", outline="#2b84bd", width=3)
-    draw.rounded_rectangle((38, 36, 1042, 136), radius=22, fill="#112744")
-    draw.text((64, 53), "NETRATTLER", font=font(50, True), fill="#ffd166")
-    draw.text((64, 106), "PREMIUM MATCH INTELLIGENCE", font=font(19, True), fill="#75d7f0")
-    draw.rounded_rectangle((772, 63, 1014, 111), radius=20, fill="#143a43")
-    draw.text((797, 74), "REAL ODDS VERIFIED", font=font(18, True), fill="#5ce1b8")
+    def text_c(text, cx, y, f, fill):
+        bb = draw.textbbox((0, 0), text, font=f)
+        draw.text((cx - (bb[2] - bb[0]) / 2, y), text, font=f, fill=fill)
 
+    def panel(box, outline="#2d6bff", fill="#06124a", radius=18):
+        x0, y0, x1, y1 = box
+        draw.rounded_rectangle((x0 - 2, y0 - 2, x1 + 2, y1 + 2), radius=radius + 2, outline="#12307f", width=3)
+        draw.rounded_rectangle(box, radius=radius, fill=fill, outline=outline, width=2)
+
+    # Background glow stripes + frame
+    for i in range(0, 300, 6):
+        draw.line((0, i, w, i), fill=(2, 10 + i // 14, 42 + i // 5))
     _, first = rows[0]
     match = str(first.get("match", ""))
     home, away = _teams(match)
-
-    # Club badges and versus block.
-    _paste_badge(im, draw, home, (105, 168, 265, 328), font(39, True))
-    _paste_badge(im, draw, away, (815, 168, 975, 328), font(39, True))
-    draw.text((493, 211), "VS", font=font(43, True), fill="#ffd166")
-
-    def centered(text, center_x, y, max_chars=25):
-        value = str(text or "")[:max_chars]
-        bbox = draw.textbbox((0, 0), value, font=font(28, True))
-        tw = bbox[2] - bbox[0]
-        draw.text((center_x - tw/2, y), value, font=font(28, True), fill="#ffffff")
-
-    centered(home, 185, 343, 25)
-    centered(away, 895, 343, 25)
-
-    league = str(first.get("league", ""))[:45]
+    league = str(first.get("league", ""))[:48]
     kickoff = str(first.get("time") or first.get("time_local") or "")
-    meta = "  ·  ".join(x for x in (league, kickoff, str(target_date)[:10]) if x)
-    bbox = draw.textbbox((0, 0), meta, font=font(20))
-    draw.text(((w-(bbox[2]-bbox[0]))/2, 389), meta, font=font(20), fill="#9fb4ca")
 
-    # Main pick spotlight.
+    # Header
+    text_c("NETRATTLER", w / 2, 30, font(62, True), "#ffffff")
+    text_c("PREMIUM MATCH INTELLIGENCE", w / 2, 100, font(20, True), "#9fc2ff")
+    draw.text((46, 38), "REAL ODDS.", font=font(20, True), fill="#ffffff")
+    draw.text((46, 62), "REAL CONTEXT.", font=font(20, True), fill="#ffffff")
+    draw.text((w - 250, 38), "BETTER PICKS.", font=font(20, True), fill="#ffffff")
+    draw.text((w - 250, 62), "CLEANER CARDS.", font=font(20, True), fill="#ffffff")
+    draw.rounded_rectangle((300, 132, 780, 166), radius=16, fill="#0b1f6e", outline="#3b82ff", width=2)
+    text_c(league or "FUSSBALL", w / 2, 138, font(18, True), "#d6e6ff")
+    draw.rounded_rectangle((420, 176, 660, 208), radius=14, fill="#d62839")
+    text_c("PRE-KICKOFF", w / 2, 181, font(17, True), "#ffffff")
+
+    _paste_badge(im, draw, home, (70, 130, 250, 310), font(44, True))
+    _paste_badge(im, draw, away, (830, 130, 1010, 310), font(44, True))
+    text_c("VS", w / 2, 218, font(54, True), "#ffffff")
+    meta = "  ·  ".join(x for x in (kickoff, str(target_date)[:10]) if x)
+    text_c(meta, w / 2, 288, font(19, True), "#d6e6ff")
+    text_c(home[:22], 160, 322, font(30, True), "#ffffff")
+    text_c(away[:22], 920, 322, font(30, True), "#ffffff")
+
+    # Direction panel (top pick)
     main_market, main_tip = rows[0]
-    prob = _number(main_tip.get("probability"))
-    pct = prob * 100 if prob is not None and 0 <= prob <= 1 else prob
-    main_label = _label(main_market, main_tip)
-    draw.rounded_rectangle((58, 432, 1022, 535), radius=22, fill="#15365b", outline="#2fa8db", width=2)
-    draw.text((83, 450), "TOP PICK", font=font(18, True), fill="#75d7f0")
-    draw.text((83, 480), main_label[:46], font=font(28, True), fill="#ffffff")
-    draw.text((755, 464), f"{_price(main_tip):.2f}", font=font(38, True), fill="#ffd166")
-    if pct is not None and 0 <= pct <= 100:
-        draw.text((895, 464), f"{pct:.0f}%", font=font(38, True), fill="#5ce1b8")
+    pct = _pct(main_tip.get("probability"))
+    panel((34, 376, 560, 560))
+    draw.text((56, 390), "NETRATTLER DIRECTION", font=font(22, True), fill="#ffffff")
+    draw.rounded_rectangle((56, 424, 196, 452), radius=10, outline="#ffd166", width=2)
+    draw.text((70, 428), "MODEL EDGE" if main_market == "1x2" else "TOP PICK", font=font(15, True), fill="#ffd166")
+    label = _label(main_market, main_tip)
+    label = label.replace("1X2 / GOAL HUNTER", "1X2")
+    draw.text((56, 466), label[:20], font=font(28 if len(label) < 16 else 22, True), fill="#ffffff")
+    if pct is not None:
+        draw.rounded_rectangle((376, 400, 544, 500), radius=14, fill="#063a4a", outline="#27e0c0", width=2)
+        text_c(f"{pct:.0f}%", 460, 410, font(50, True), "#27e0c0")
+        text_c("MODEL PROB.", 460, 472, font(14, True), "#27e0c0")
+    cells = [("QUOTE", f"{_price(main_tip):.2f}")]
+    fair = _number(main_tip.get("fairOdds"))
+    if fair:
+        cells.append(("FAIR", f"{fair:.2f}"))
+    cells.append(("MÄRKTE", str(len(rows))))
+    cw = (526 - 24) / len(cells)
+    for i, (k, v) in enumerate(cells):
+        x0 = 46 + i * cw
+        draw.rounded_rectangle((x0 + 4, 506, x0 + cw - 4, 550), radius=10, fill="#0a1c66", outline="#2d6bff", width=1)
+        text_c(k, x0 + cw / 2, 508, font(12, True), "#9fc2ff")
+        text_c(v, x0 + cw / 2, 524, font(22, True), "#ffd166")
 
-    # Qualified-market rows.
-    top = 568
-    draw.text((65, top), "QUALIFIZIERTE MÄRKTE", font=font(18, True), fill="#91a8c1")
-    draw.text((765, top), "QUOTE", font=font(18, True), fill="#91a8c1")
-    draw.text((905, top), "PROB.", font=font(18, True), fill="#91a8c1")
-    y0 = top + 34
+    # 1X2 model panel (only with real model probabilities) else market outlook
+    panel((574, 376, 1046, 560))
+    p1, px, p2 = (_pct(main_tip.get(k)) for k in ("p_home", "p_draw", "p_away"))
+    if None not in (p1, px, p2):
+        draw.text((596, 390), "NETRATTLER 1X2 MODEL", font=font(22, True), fill="#ffffff")
+        for i, (val, name, col) in enumerate(((p1, home, "#ffffff"), (px, "Draw", "#ffffff"), (p2, away, "#ffffff"))):
+            x0 = 592 + i * 150
+            draw.rounded_rectangle((x0, 424, x0 + 140, 494), radius=12, fill="#0a1c66", outline="#3b82ff", width=2)
+            text_c(f"{val:.0f}%", x0 + 70, 430, font(38, True), col)
+            text_c(str(name)[:12], x0 + 70, 474, font(13, True), "#9fc2ff")
+        tot = max(p1 + px + p2, 1)
+        bx0, bx1, by = 592, 1028, 512
+        a = bx0 + (bx1 - bx0) * p1 / tot
+        b2 = a + (bx1 - bx0) * px / tot
+        draw.rounded_rectangle((bx0, by, bx1, by + 14), radius=7, fill="#2d6bff")
+        draw.rectangle((a, by, b2, by + 14), fill="#9fb4d8")
+        draw.rectangle((b2, by, bx1, by + 14), fill="#d62839")
+        text_c(f"{home[:12]} {p1:.0f}%   ·   Draw {px:.0f}%   ·   {away[:12]} {p2:.0f}%", 810, 532, font(14, True), "#d6e6ff")
+    else:
+        draw.text((596, 390), "MODEL MARKET OUTLOOK", font=font(22, True), fill="#ffffff")
+        shown = [(m, t) for m, t in rows if _pct(t.get("probability")) is not None][:3]
+        for i, (m, t) in enumerate(shown):
+            x0 = 592 + i * 150
+            draw.rounded_rectangle((x0, 424, x0 + 140, 540), radius=12, fill="#063a4a", outline="#27e0c0", width=2)
+            text_c(_label(m, t).split("  ·  ")[0][:16], x0 + 70, 432, font(13, True), "#d6e6ff")
+            text_c(f"{_pct(t.get('probability')):.0f}%", x0 + 70, 466, font(38, True), "#27e0c0")
+            text_c(f"@ {_price(t):.2f}", x0 + 70, 514, font(15, True), "#ffd166")
+
+    # Qualified markets table
+    top = 586
+    panel((34, top, 1046, top + 52 + len(rows) * 58))
+    draw.text((56, top + 12), "QUALIFIZIERTE MÄRKTE", font=font(20, True), fill="#ffffff")
+    draw.text((760, top + 16), "QUOTE", font=font(15, True), fill="#9fc2ff")
+    draw.text((930, top + 16), "PROB.", font=font(15, True), fill="#9fc2ff")
     for i, (market, tip) in enumerate(rows):
-        y = y0 + i * 67
-        fill = "#132b49" if i % 2 == 0 else "#10263f"
-        draw.rounded_rectangle((56, y-7, 1024, y+50), radius=11, fill=fill)
-        draw.text((74, y+5), _label(market, tip)[:43], font=font(22, True), fill="#eef7ff")
-        draw.text((767, y+4), f"{_price(tip):.2f}", font=font(25, True), fill="#ffd166")
-        p = _number(tip.get("probability"))
-        p = p * 100 if p is not None and 0 <= p <= 1 else p
-        if p is not None and 0 <= p <= 100:
-            draw.text((906, y+4), f"{p:.0f}%", font=font(25, True), fill="#5ce1b8")
+        y = top + 48 + i * 58
+        draw.rounded_rectangle((48, y, 1032, y + 50), radius=10, fill="#0a1c66" if i % 2 == 0 else "#08175a")
+        draw.text((66, y + 12), _label(market, tip)[:40], font=font(22, True), fill="#eef7ff")
+        draw.text((762, y + 11), f"{_price(tip):.2f}", font=font(26, True), fill="#ffd166")
+        p = _pct(tip.get("probability"))
+        if p is not None:
+            draw.text((930, y + 11), f"{p:.0f}%", font=font(26, True), fill="#27e0c0")
 
-    footer_y = h - 58
-    draw.line((58, footer_y-14, 1022, footer_y-14), fill="#234767", width=2)
-    draw.text((64, footer_y), "Nur finale, validierte Picks · keine geschätzten Quoten", font=font(18), fill="#7892ad")
-
+    # Context stats: drawn only for values that really exist on the tips.
+    ctx = {}
+    for _, t in rows:
+        for k in ("xg_home", "xg_away", "btts_rate_home", "btts_rate_away", "homeForm", "awayForm",
+                  "h2h_btts", "h2h_avg_goals", "avg_goals_home", "avg_goals_away", "exp_goals_home", "exp_goals_away"):
+            if ctx.get(k) in (None, "") and t.get(k) not in (None, ""):
+                ctx[k] = t.get(k)
+    y = top + 52 + len(rows) * 58 + 24
+    blocks = []
+    gh = _number(ctx.get("xg_home") or ctx.get("avg_goals_home") or ctx.get("exp_goals_home"))
+    ga = _number(ctx.get("xg_away") or ctx.get("avg_goals_away") or ctx.get("exp_goals_away"))
+    if gh is not None and ga is not None:
+        blocks.append(("TORE / SPIEL", f"{gh:.1f}  ·  {ga:.1f}"))
+    bh, ba = _pct(ctx.get("btts_rate_home")), _pct(ctx.get("btts_rate_away"))
+    if bh is not None and ba is not None:
+        blocks.append(("BTTS-RATE", f"{bh:.0f}%  ·  {ba:.0f}%"))
+    if ctx.get("h2h_btts"):
+        blocks.append(("H2H BTTS", str(ctx["h2h_btts"])))
+    h2g = _number(ctx.get("h2h_avg_goals"))
+    if h2g is not None:
+        blocks.append(("H2H Ø TORE", f"{h2g:.1f}"))
+    if blocks:
+        panel((34, y, 1046, y + 150))
+        draw.text((56, y + 10), "FORM & STATS", font=font(20, True), fill="#ffffff")
+        bw = (980 - 10 * (len(blocks) - 1)) / len(blocks)
+        for i, (k, v) in enumerate(blocks[:4]):
+            x0 = 50 + i * (bw + 10)
+            draw.rounded_rectangle((x0, y + 44, x0 + bw, y + 100), radius=10, fill="#0a1c66", outline="#2d6bff", width=1)
+            text_c(k, x0 + bw / 2, y + 48, font(13, True), "#9fc2ff")
+            text_c(v, x0 + bw / 2, y + 68, font(24, True), "#ffffff")
+        colors = {"W": "#1fbf5b", "D": "#e0a800", "L": "#d62839"}
+        for side, key, x0 in ((home, "homeForm", 56), (away, "awayForm", 560)):
+            chars = _form_chars(ctx.get(key))
+            if chars:
+                draw.text((x0, y + 112), f"{side[:14]}", font=font(14, True), fill="#d6e6ff")
+                for j, c in enumerate(chars):
+                    cx = x0 + 150 + j * 34
+                    draw.rounded_rectangle((cx, y + 110, cx + 28, y + 136), radius=6, fill=colors[c])
+                    text_c(c, cx + 14, y + 113, font(16, True), "#ffffff")
+        y += 150 + 18
+    fy = y + 6
+    draw.line((60, fy, w - 60, fy), fill="#1f55e8", width=2)
+    text_c("NETRATTLER  |  Nur finale, validierte Picks · keine geschätzten Quoten", w / 2, fy + 12, font(16, True), "#9fc2ff")
+    final_h = fy + 52
+    draw.rounded_rectangle((14, 14, w - 14, final_h - 14), radius=26, outline="#1f55e8", width=3)
+    im = im.crop((0, 0, w, final_h))
     data = io.BytesIO()
     im.save(data, format="PNG", optimize=True)
     return data.getvalue()

@@ -26215,6 +26215,9 @@ def main():
                             "valueRating": "VALUE", "units": 1.0, "market": "1x2",
                             "reasoning": f"Pinnacle 1X2 + Teamstärke | {league_name}",
                             "_no_real_odds": False, "_source": "pinnacle", "_kickoff": _ko_sort,
+                            # display-only: normalized model 1X2 distribution for the match card
+                            "p_home": round(_norm_1x2[0], 1), "p_draw": round(_norm_1x2[1], 1),
+                            "p_away": round(_norm_1x2[2], 1),
                         }
                         enrich_pinnacle_tip(tip_1x2, home, away, league_name)
                         tips_by_market["1x2"].append(tip_1x2)
