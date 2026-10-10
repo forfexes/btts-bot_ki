@@ -20433,6 +20433,55 @@ def _ntr_is_anytime_scorer_special(pp):
     return re.search(r"goal\s*-?\s*scorer|to score a goal|anytime scorer", head) is not None
 
 
+_NTR_MULTI_GOAL_RE = re.compile(r"(2\s*\+|3\s*\+|\b(2|3|two|three)\b|or more|\bover\b|\bunder\b|hat[- ]?trick|brace)")
+
+
+def _ntr_kambi_scorer_props(fixtures, state, cap):
+    """Real observed Kambi anytime-goalscorer quotes for this league's fixtures.
+
+    Pinnacle's soccer feed has no player markets, so this is the only real-odds
+    source for scorer tips. Bounded by `cap` matches per run; never estimates.
+    """
+    out = []
+    try:
+        from netrattler_prop_sources import fetch_kambi_player_props
+    except Exception:
+        return out
+    for fx in fixtures or []:
+        if state.get("matches", 0) >= cap:
+            break
+        home, away = str(fx.get("home", "")).strip(), str(fx.get("away", "")).strip()
+        if not home or not away:
+            continue
+        state["matches"] = state.get("matches", 0) + 1
+        try:
+            rows = fetch_kambi_player_props(home, away, brand="ub") or []
+        except Exception:
+            rows = []
+        for r in rows:
+            if str(r.get("category") or "") != "score":
+                continue
+            mk = str(r.get("market") or "")
+            low = mk.lower()
+            if _SCORER_EXCLUDE_RE.search(low) or _NTR_MULTI_GOAL_RE.search(low):
+                continue
+            if "goal" not in low and "scor" not in low:
+                continue
+            try:
+                odds = float(r.get("odds") or 0)
+            except Exception:
+                continue
+            if odds <= 1.01:
+                continue
+            out.append({
+                "market": "Anytime Goalscorer (goals)", "player": r.get("player"),
+                "odds": odds, "home": home, "away": away,
+                "match": f"{home} vs {away}", "_source": str(r.get("source") or "kambi_ub"),
+                "league": str(fx.get("league") or ""),
+            })
+    return out
+
+
 def _ntr_props_for_fixtures(props, fixtures):
     """Keep only quotes whose match is one of this league's fixtures.
 
@@ -20554,6 +20603,7 @@ def run_corners_and_scorer_bots(target_date, active_leagues, odds_data_cache, fi
     except (TypeError, ValueError):
         _cs_budget = 240.0
     _cs_deadline = time.time() + _cs_budget if _cs_budget > 0 else None
+    _kambi_state = {}
     for league in active_leagues:
         if _cs_deadline and time.time() > _cs_deadline:
             log(f"⏱️ Corners/Scorer Budget ({_cs_budget:.0f}s) erreicht — restliche Ligen übersprungen, Builder/Karten haben Vorrang.", "WARN")
@@ -20612,6 +20662,10 @@ def run_corners_and_scorer_bots(target_date, active_leagues, odds_data_cache, fi
                 # Anytime-Goalscorer-Preise an die Scorer-Analyse weitergereicht.
                 _league_pin = _ntr_props_for_fixtures(_pinnacle_scorer_props, fixtures)
                 observed_scorer_props = list(fetch_odds_api_player_props(league, target_date) or []) + _league_pin
+                if env("NETRATTLER_SCORER_KAMBI", "true").lower() in ("1", "true", "yes", "on"):
+                    _kam = _ntr_kambi_scorer_props(fixtures, _kambi_state, int(env("NETRATTLER_SCORER_KAMBI_MATCHES", "40")))
+                    _sd["kambi_scorer_quotes"] = _sd.get("kambi_scorer_quotes", 0) + len(_kam)
+                    observed_scorer_props += _kam
                 _sd["leagues_with_quotes"] = _sd.get("leagues_with_quotes", 0) + (1 if observed_scorer_props else 0)
                 _sd["quotes_in_league_fixtures"] = _sd.get("quotes_in_league_fixtures", 0) + len(observed_scorer_props)
                 if not observed_scorer_props:
