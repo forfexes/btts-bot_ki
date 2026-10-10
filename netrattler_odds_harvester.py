@@ -365,26 +365,32 @@ def collect_espn(target_date: str) -> List[Dict[str, Any]]:
                                  params={"dates": day_s}, headers={"User-Agent": "Mozilla/5.0"}, timeout=15)
                 if not r.ok:
                     continue
-                events = r.json().get("events") or []
+                _js = r.json()
+                events = [e for e in ((_js or {}).get("events") or []) if isinstance(e, dict)]
             except Exception:
                 continue
             for ev in events:
-                comp = (ev.get("competitions") or [{}])[0]
-                teams = {c.get("homeAway"): (c.get("team") or {}).get("displayName") for c in comp.get("competitors") or []}
+                _comps = [c for c in (ev.get("competitions") or []) if isinstance(c, dict)]
+                comp = _comps[0] if _comps else {}
+                teams = {c.get("homeAway"): (c.get("team") or {}).get("displayName")
+                         for c in (comp.get("competitors") or []) if isinstance(c, dict)}
                 h, a = teams.get("home"), teams.get("away")
                 if not h or not a:
                     continue
-                for od in comp.get("odds") or []:
+                for od in [o for o in (comp.get("odds") or []) if isinstance(o, dict)]:
                     prov = str((od.get("provider") or {}).get("name") or "espn").lower().replace(" ", "_")
                     mapping = (
                         ("homeTeamOdds", "home"), ("awayTeamOdds", "away"), ("drawOdds", "draw"),
                     )
                     for key, sel in mapping:
-                        node = od.get(key) or {}
+                        node = od.get(key) if isinstance(od.get(key), dict) else {}
                         ml = node.get("moneyLine")
                         if ml is None:
-                            _m = ((od.get("moneyline") or {}).get(sel) or {})
-                            ml = ((_m.get("close") or _m.get("open") or {}).get("odds"))
+                            _m = (od.get("moneyline") or {}).get(sel) if isinstance(od.get("moneyline"), dict) else {}
+                            _m = _m if isinstance(_m, dict) else {}
+                            _c = _m.get("close") if isinstance(_m.get("close"), dict) else None
+                            _o = _m.get("open") if isinstance(_m.get("open"), dict) else None
+                            ml = (_c or _o or {}).get("odds")
                             try:
                                 ml = float(str(ml).replace("EVEN", "100").replace("+", "")) if ml is not None else None
                             except Exception:
