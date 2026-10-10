@@ -25553,7 +25553,8 @@ def main():
                 sys.stderr.flush()
             except Exception:
                 pass
-            os._exit(0)
+            # Incomplete pipeline must be visible as a failed Action, never green.
+            os._exit(124)
 
         _wd = _threading.Timer(_wd_budget, _hard_watchdog)
         _wd.daemon = True
