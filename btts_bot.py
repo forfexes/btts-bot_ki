@@ -25614,6 +25614,31 @@ if __name__ == "__main__":
     
     print("\n✅ Alle Module funktionieren!")
 
+_NTR_T0 = time.time()
+_NTR_STAGE_MARKS = []
+
+
+def _ntr_mark(name):
+    """Stage timing (seconds since start); persisted to Supabase on hard-watchdog kill."""
+    try:
+        _NTR_STAGE_MARKS.append((str(name), round(time.time() - _NTR_T0, 1)))
+    except Exception:
+        pass
+
+
+def _ntr_persist_marks(reason):
+    try:
+        from netrattler_coverage_watchdog_v37 import persist_report, _utc
+        persist_report({
+            "run_id": f"stages-{reason}-{datetime.now(timezone.utc).strftime('%Y%m%d%H%M%S')}",
+            "generated_at": _utc(),
+            "stage_diag": {"marks": [{"stage": n, "t": t} for n, t in _NTR_STAGE_MARKS],
+                           "specials": dict(globals().get("_NTR_SPECIAL_DIAG", {}) or {})},
+        })
+    except Exception:
+        pass
+
+
 def main():
     log("=" * 60)
     log("AI TIPP BOT - ALL-IN-ONE EDITION")
@@ -25639,6 +25664,8 @@ def main():
                 sys.stderr.flush()
             except Exception:
                 pass
+            _ntr_mark("hard_watchdog_fired")
+            _ntr_persist_marks("timeout")
             # Incomplete pipeline must be visible as a failed Action, never green.
             os._exit(124)
 
@@ -25791,6 +25818,7 @@ def main():
 
         if _raw_count != len(_PINNACLE_MATCHUPS):
             log(f"   🧹/♻️ Match-Pool: {_raw_count} Pinnacle roh → {len(_PINNACLE_MATCHUPS)} nach Dedup/Recovery")
+        _ntr_mark("pool_loaded")
         log(f"   ✅ Match-Pool: {len(_PINNACLE_MATCHUPS)} Matches geladen")
     except Exception as e:
         _PINNACLE_MATCHUPS = []
@@ -26227,6 +26255,7 @@ def main():
                 total_analyzed += 1
             except Exception as pe:
                 log(f"   ⚠️ Pinnacle Match Fehler: {str(pe)[:60]}")
+        _ntr_mark("pinnacle_done")
         log(f"🎰 Pinnacle fertig: {pinnacle_tips_count} Tipps generiert")
         try:
             _sd = globals().get("_NTR_SPECIAL_DIAG", {}) or {}
@@ -26507,6 +26536,7 @@ def main():
     # Builder-Pool pro Run zurücksetzen, damit keine alten Legs erneut erscheinen.
     _NTR_BUILDER_PROP_POOL.clear()
 
+    _ntr_mark("before_corners_scorer")
     # 🔵⚽ Ecken + Scorer Bots
     if env("ENABLE_CORNERS_SCORER", "true").lower() in ["1", "true", "yes"]:
         run_corners_and_scorer_bots(
@@ -26546,6 +26576,7 @@ def main():
             if env("DEBUG_PROP_TRACEBACK", "false").lower() in ["1", "true", "yes"]:
                 traceback.print_exc()
 
+    _ntr_mark("before_builder")
     # 🆕 NETRATTLER BUILDER ENGINE — self-learning, real-odds only
     _ntr_builder_sent = 0
     try:
@@ -26780,6 +26811,7 @@ def main():
     else:
         log(f"ℹ️ Nur {len(all_tips_flat)} Tipps - min. 3 für Combos nötig")
 
+    _ntr_mark("before_send_top_tips")
     # Main single-market tips are sent only after specialist pipelines.
     send_top_tips(tips_by_market, target_date)
 
@@ -26795,6 +26827,7 @@ def main():
     except Exception as _cards_exc:
         log(f"⚠️ Stats Match-Cards optional: {type(_cards_exc).__name__}", "WARN")
 
+    _ntr_mark("after_cards")
     # V37 Coverage Watchdog / No-Tip Diagnose. Pure diagnostics: never blocks run.
     try:
         from netrattler_coverage_watchdog_v37 import run_watchdog
@@ -26811,7 +26844,8 @@ def main():
                 "combo_multi": generated,
             },
             run_id=f"tips-{target_date}-{datetime.now(timezone.utc).strftime('%H%M%S')}",
-            stage_diag={"scorer": dict(getattr(run_corners_and_scorer_bots, "_last_scorer_diag", {}) or {})},
+            stage_diag={"scorer": dict(getattr(run_corners_and_scorer_bots, "_last_scorer_diag", {}) or {}),
+                        "marks": [{"stage": n, "t": t} for n, t in _NTR_STAGE_MARKS]},
         )
         _problems = _coverage.get("problems") or {}
         if _problems:
