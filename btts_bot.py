@@ -20056,6 +20056,106 @@ def get_top_scorers(league_id, season):
     return scorers
 
 
+def _ntr_history_scorers_from_quotes(observed_props, limit=36):
+    """Build independent scorer candidates from Supabase history for real quoted players.
+
+    The bookmaker quote proves the player belongs to that fixture, but is never used
+    as the model probability. Probability comes only from stored player history.
+    """
+    import math as _math
+    try:
+        from concurrent.futures import ThreadPoolExecutor, as_completed
+    except Exception:
+        ThreadPoolExecutor = None
+
+    rows = []
+    seen = set()
+    for prop in observed_props or []:
+        market = str(prop.get("market") or "").lower()
+        player = str(prop.get("player") or "").strip()
+        match = str(prop.get("match") or "").strip()
+        try:
+            odds = float(prop.get("odds") or 0)
+        except Exception:
+            odds = 0.0
+        if "goal" not in market or not player or " vs " not in match or odds <= 1.01:
+            continue
+        key = (normalize_team_name(player), normalize_team_name(match))
+        if key in seen:
+            continue
+        seen.add(key)
+        rows.append((player, match, odds))
+
+    # Prioritise realistic anytime prices, but never derive probability from them.
+    rows.sort(key=lambda x: (abs(x[2] - 2.75), x[2]))
+    rows = rows[:max(1, int(limit or 36))]
+    if not rows:
+        return []
+
+    def _one(item):
+        player, match, _odds = item
+        stats = get_supabase_player_avg_stats(player) or {}
+        goal = None
+        for key, payload in stats.items():
+            nk = str(key or "").lower().replace(" ", "_").replace("-", "_")
+            if nk in {"goals", "goal", "goals_per_game", "goals_pg", "goals_scored"}:
+                goal = payload or {}
+                break
+        if not goal:
+            return None
+        try:
+            avg = float(goal.get("avg") or 0)
+        except Exception:
+            avg = 0.0
+        try:
+            hit = float(goal.get("hit_rate") or 0)
+        except Exception:
+            hit = 0.0
+        try:
+            games = int(float(goal.get("games") or 0))
+        except Exception:
+            games = 0
+        if games < 3:
+            return None
+        if avg <= 0 and hit > 0:
+            p = max(0.01, min(0.95, hit / 100.0 if hit > 1 else hit))
+            avg = -_math.log(max(0.01, 1.0 - p))
+        if avg < 0.20:
+            return None
+        return {
+            "name": player,
+            "team": "",
+            "goals_total": round(avg * games, 1),
+            "appearances": games,
+            "goals_per_game": round(avg, 4),
+            "quoted_match_verified": True,
+            "quoted_match": match,
+            "source": "supabase_player_history",
+        }
+
+    out = []
+    if ThreadPoolExecutor is None:
+        for item in rows:
+            row = _one(item)
+            if row:
+                out.append(row)
+        return out
+
+    try:
+        with ThreadPoolExecutor(max_workers=min(8, len(rows))) as ex:
+            futs = [ex.submit(_one, item) for item in rows]
+            for fut in as_completed(futs):
+                try:
+                    row = fut.result()
+                except Exception:
+                    row = None
+                if row:
+                    out.append(row)
+    except Exception:
+        return []
+    return out
+
+
 def analyze_scorer_tips(fixture, league, scorers, observed_props=None):
     """Anytime scorer model. A tip is publishable only with an observed bookmaker quote."""
     import math
@@ -20122,7 +20222,13 @@ def analyze_scorer_tips(fixture, league, scorers, observed_props=None):
         team_id = scorer.get("team_id")
         team_name = scorer.get("team", "").lower()
         is_playing = False
-        if team_id and home_id and away_id:
+        if scorer.get("quoted_match_verified"):
+            quoted = str(scorer.get("quoted_match") or "")
+            qh, qa = (quoted.split(" vs ", 1) + [""])[:2] if " vs " in quoted else ("", "")
+            direct = normalize_team_name(qh) == normalize_team_name(fixture.get("home","")) and normalize_team_name(qa) == normalize_team_name(fixture.get("away",""))
+            reverse = normalize_team_name(qh) == normalize_team_name(fixture.get("away","")) and normalize_team_name(qa) == normalize_team_name(fixture.get("home",""))
+            is_playing = bool(direct or reverse)
+        elif team_id and home_id and away_id:
             is_playing = team_id in [home_id, away_id]
         elif team_name:
             home_norm = normalize_team_name(home_team)
@@ -20217,7 +20323,12 @@ def format_scorer_message(tip):
     msg += f"🏟️ Team: {tip['team']}{nl}"
     msg += f"📊 Tore/Spiel: <b>{tip['goals_per_game']}</b> ({tip['goals_total']} gesamt){nl}"
     msg += f"📈 Wahrscheinlichkeit: <b>{tip['probability']}%</b>{nl}"
-    msg += f"💰 Fair Odds: <b>{tip['fair_odds']}</b>{nl}"
+    msg += f"💰 Quote: <b>{tip.get('odds','?')}</b> · Fair: <b>{tip['fair_odds']}</b>{nl}"
+    try:
+        _edge_pct = float(tip.get("edge", 0) or 0) * 100.0
+    except Exception:
+        _edge_pct = 0.0
+    msg += f"🎯 Edge: <b>+{_edge_pct:.1f}%</b>{nl}"
     msg += f"━━━━━━━━━━━━━━━━━━{nl}"
     msg += f"<i>⚡ Anytime Scorer - trifft irgendwann!</i>"
     return msg
@@ -20406,6 +20517,12 @@ def run_corners_and_scorer_bots(target_date, active_leagues, odds_data_cache, fi
                 # Quoten werden einmal pro Liga geladen/gecacht und nur als beobachtete
                 # Anytime-Goalscorer-Preise an die Scorer-Analyse weitergereicht.
                 observed_scorer_props = list(fetch_odds_api_player_props(league, target_date) or []) + list(_pinnacle_scorer_props)
+                _history_scorers = _ntr_history_scorers_from_quotes(
+                    observed_scorer_props,
+                    limit=int(env("NETRATTLER_SCORER_HISTORY_CAP", "36")),
+                )
+                if _history_scorers:
+                    log(f"   ⚽ Scorer History: {len(_history_scorers)} Spieler mit unabhängigen Verlaufsdaten")
 
                 # 1. TheStatsAPI (neu, primäre Quelle — kein API-Football nötig)
                 if THESTATSAPI_KEYS and not scorers:
@@ -20426,6 +20543,12 @@ def run_corners_and_scorer_bots(target_date, active_leagues, odds_data_cache, fi
                 # 5. StatsBomb HTTP (kostenlos, direkt von GitHub)
                 if not scorers:
                     scorers = get_statsbomb_top_scorers(league)
+
+                if _history_scorers:
+                    _seen_scorer_names = {normalize_team_name(x.get("name") or x.get("player") or "") for x in scorers}
+                    for _hs in _history_scorers:
+                        if normalize_team_name(_hs.get("name") or "") not in _seen_scorer_names:
+                            scorers.append(_hs)
 
                 if scorers:
                     for fixture in fixtures:
@@ -26254,18 +26377,6 @@ def main():
 
     send_top_tips(tips_by_market, target_date)
 
-    # Optional: visualise ONLY final guarded REAL_ODDS tips in explicit Stats group.
-    # A photo failure must never interrupt normal Telegram tips.
-    try:
-        from netrattler_stats_match_cards import send_cards as _send_stats_match_cards
-        _stats_chat = _ntr_match_cards_chat()
-        _sent_cards = _send_stats_match_cards(
-            tips_by_market, target_date, TELEGRAM_TOKEN, _stats_chat, log=log
-        )
-        log(f"🖼️ NETRATTLER Stats Match-Cards: {_sent_cards} gesendet")
-    except Exception as _cards_exc:
-        log(f"⚠️ Stats Match-Cards optional: {type(_cards_exc).__name__}", "WARN")
-
     # 🎰 Pinnacle-Matches als Fixtures für Corners/Scorer/Props injizieren
     if _PINNACLE_MATCHUPS:
         _injected = 0
@@ -26453,7 +26564,7 @@ def main():
         )
 
         if len(_builder_prop_pool) >= 3:
-            _builder_chat = TELEGRAM_GROUPS.get("advanced_props") or TELEGRAM_GROUPS.get("props")
+            _builder_chat = TELEGRAM_GROUPS.get("builder") or TELEGRAM_GROUPS.get("advanced_props") or TELEGRAM_GROUPS.get("props")
             if _builder_chat:
                 def _send_builder(msg):
                     return send_telegram(msg, chat_id=_builder_chat)
@@ -26576,6 +26687,18 @@ def main():
         log(f"✅ {generated} Combos generiert und gesendet!")
     else:
         log(f"ℹ️ Nur {len(all_tips_flat)} Tipps - min. 3 für Combos nötig")
+
+    # Premium match cards run AFTER Scorer/Props/Builder/Combos so Telegram image
+    # retries or logo lookups can never starve the specialist betting pipelines.
+    try:
+        from netrattler_stats_match_cards import send_cards as _send_stats_match_cards
+        _stats_chat = _ntr_match_cards_chat()
+        _sent_cards = _send_stats_match_cards(
+            tips_by_market, target_date, TELEGRAM_TOKEN, _stats_chat, log=log
+        )
+        log(f"🖼️ NETRATTLER Stats Match-Cards: {_sent_cards} gesendet")
+    except Exception as _cards_exc:
+        log(f"⚠️ Stats Match-Cards optional: {type(_cards_exc).__name__}", "WARN")
 
     # V37 Coverage Watchdog / No-Tip Diagnose. Pure diagnostics: never blocks run.
     try:
