@@ -1,11 +1,6 @@
 name: NETRATTLER AI Tipp Bot
 
 on:
-  # Temporary one-shot trigger for the production validation below.
-  push:
-    branches: [main]
-    paths:
-      - ".github/workflows/btts_tips.yml"
   schedule:
     - cron: "17 8 * * *"  # 10:17 CH — Vormittag (GitHub verwirft :30-Slots oft, daher krumme Minute)
     - cron: "47 9 * * *"  # 11:47 CH — Frühspiele-Backup (Serie A 12:30, PL 13:30)
