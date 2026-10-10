@@ -6,7 +6,7 @@ Keeps REAL_ODDS_ONLY intact while:
 - reading richer Kambi market metadata so non-scorer player props are not lost;
 - augmenting missing Pinnacle team-market prices from observed bookmaker sources;
 - preventing any missing BTTS/O2.5 price from falling back to synthetic league defaults;
-- making the expensive league-loop skip coverage-aware instead of count-only.
+- making the expensive league-loop skip core-market-aware instead of letting missing specialist markets force a 400-league scan.
 """
 from __future__ import annotations
 
@@ -515,7 +515,7 @@ def _coverage_counts_from_caller() -> Tuple[Optional[Dict[str, int]], Optional[i
 
 
 def _install_coverage_aware_skip(bot) -> None:
-    """Skip league fallback only when every required team market has coverage."""
+    """Skip the generic league fallback when the core match markets have coverage.\n\n    Specialist HT/combo markets are sourced from dedicated real-odds paths and must\n    not force hundreds of mostly-empty league probes after a strong global Pinnacle run.\n    """
     original = getattr(bot, "env", None)
     if not callable(original) or getattr(original, "_ntr_coverage_skip", False):
         return
@@ -536,7 +536,7 @@ def _install_coverage_aware_skip(bot) -> None:
         required = [
             x.strip() for x in os.getenv(
                 "NETRATTLER_SKIP_REQUIRED_MARKETS",
-                "btts,over25,combo,btts_ht,over15_ht,1x2",
+                "btts,over25,1x2",
             ).split(",") if x.strip()
         ]
         min_each = max(1, int(os.getenv("NETRATTLER_SKIP_MIN_PER_MARKET", "1")))
