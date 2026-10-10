@@ -20541,7 +20541,16 @@ def run_corners_and_scorer_bots(target_date, active_leagues, odds_data_cache, fi
     except Exception as _psq:
         log(f"   ⚽ Pinnacle Scorer Quotes Fehler: {str(_psq)[:90]}", "WARN")
 
+    try:
+        _cs_budget = float(os.getenv("NETRATTLER_CORNERS_SCORER_BUDGET_SEC", "240"))
+    except (TypeError, ValueError):
+        _cs_budget = 240.0
+    _cs_deadline = time.time() + _cs_budget if _cs_budget > 0 else None
     for league in active_leagues:
+        if _cs_deadline and time.time() > _cs_deadline:
+            log(f"⏱️ Corners/Scorer Budget ({_cs_budget:.0f}s) erreicht — restliche Ligen übersprungen, Builder/Karten haben Vorrang.", "WARN")
+            _sd["budget_hit"] = 1
+            break
         fixtures = fixtures_cache.get(league, [])
         if not fixtures:
             continue
@@ -25855,7 +25864,20 @@ def main():
         log(f"🎰 Analysiere {len(_PINNACLE_MATCHUPS)} Pinnacle Matches...")
         from datetime import datetime as _pdt
         _processed_this_run = set()  # 🆕 Sicherheitsnetz gegen Restduplikate innerhalb des Runs
-        for pm in _PINNACLE_MATCHUPS:
+        # Zeitbudget: Der Match-Loop darf Scorer/Props/Builder/Karten nicht aushungern
+        # (Run 38047036800: 900 s Loop + Rest -> Watchdog-Kill vor Builder/Karten).
+        try:
+            _pin_budget = float(os.getenv("NETRATTLER_PINNACLE_LOOP_BUDGET_SEC", "480"))
+        except (TypeError, ValueError):
+            _pin_budget = 480.0
+        _pin_deadline = time.time() + _pin_budget if _pin_budget > 0 else None
+        _pin_done = 0
+        for pm in sorted(_PINNACLE_MATCHUPS, key=lambda m: str(m.get("starts", "") or "")):
+            if _pin_deadline and time.time() > _pin_deadline:
+                log(f"⏱️ Pinnacle-Loop Budget ({_pin_budget:.0f}s) erreicht nach {_pin_done} Matches — "
+                    f"Rest wird übersprungen, damit Scorer/Props/Builder/Karten laufen.", "WARN")
+                break
+            _pin_done += 1
             try:
                 home = pm.get("home", "")
                 away = pm.get("away", "")
@@ -26284,6 +26306,10 @@ def main():
     except Exception:
         pass
 
+    if not _skip_league_loop and (time.time() - _NTR_T0) > 600:
+        _skip_league_loop = True
+        log("⏱️ Liga-Fallback übersprungen: Zeitbudget für Specialist-Pipelines reserviert", "WARN")
+    _ntr_mark("league_loop_start")
     for league in ([] if _skip_league_loop else active_leagues):
         log(f"╔══ Liga: {league} ══╗")
 
@@ -26415,6 +26441,7 @@ def main():
     log("════════════════════════════════════════")
     if APIFOOTBALL_CALL_COUNTER > 0:
         log(f"📊 API-Football Calls verbraucht: {APIFOOTBALL_CALL_COUNTER}/{APIFOOTBALL_MAX_CALLS_PER_RUN}")
+    _ntr_mark("after_league_loop")
     log("Sende an Telegram + Supabase...")
 
     # V37 Data Fusion is shadow-only during rollback. It may learn/diagnose, but
