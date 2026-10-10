@@ -648,9 +648,13 @@ def _mixed_builders(props: Sequence[PropLeg], match_date: str) -> List[BuilderPi
 def _same_match_available_builders(
     props: Sequence[PropLeg], match_date: str
 ) -> List[BuilderPick]:
-    """
-    Baut aus jedem Match mit mindestens zwei echten Props einen kompakten
-    Same-Match-Builder. Bevorzugt Marktvielfalt und echte Quoten.
+    """Build robust same-match builders from real quoted player props.
+
+    The old version only tried a single prefix of the ranked legs. A couple of
+    high-priced scorer/SOT legs could therefore push the combined price above
+    the sane builder ceiling and yield zero builders despite dozens of valid
+    same-match legs. This version searches several real-leg combinations and
+    keeps the best usable pairs/triples without inventing prices.
     """
     builders: List[BuilderPick] = []
     by_match: Dict[str, List[PropLeg]] = {}
@@ -663,21 +667,17 @@ def _same_match_available_builders(
 
         ordered = sorted(
             candidates,
-            key=lambda x: (not x.estimated, x.quality, x.probability),
+            key=lambda x: (x.quality, x.probability, -x.odds),
             reverse=True,
         )
+
+        # First preserve category diversity for the classic 2-5 leg builder.
         selected: List[PropLeg] = []
         used_keys = set()
         used_categories = set()
-
-        # Erst Marktvielfalt.
         for leg in ordered:
             key = (norm(leg.player), leg.category)
-            if key in used_keys:
-                continue
-            if leg.category in used_categories:
-                continue
-            if len(selected) >= 1 and not valid_builder(selected + [leg], min_legs=2):
+            if key in used_keys or leg.category in used_categories:
                 continue
             selected.append(leg)
             used_keys.add(key)
@@ -685,36 +685,83 @@ def _same_match_available_builders(
             if len(selected) >= 5:
                 break
 
-        # Danach bei Bedarf weitere Player Legs.
         if len(selected) < 2:
             for leg in ordered:
                 key = (norm(leg.player), leg.category)
                 if key in used_keys:
                     continue
-                if len(selected) >= 1 and not valid_builder(selected + [leg], min_legs=2):
-                    continue
                 selected.append(leg)
                 used_keys.add(key)
-                if len(selected) >= 4:
+                if len(selected) >= 5:
                     break
 
-        if len(selected) < 2:
-            continue
-
+        seen_ids = set()
         for size in range(2, min(5, len(selected)) + 1):
-            legs = selected[:size]
             pick = _make_builder(
                 "SAME MATCH AVAILABLE",
                 f"{size} REAL LEGS",
-                legs,
+                selected[:size],
                 match_date,
                 0.5 if size <= 3 else 0.25,
             )
-            if pick:
+            if pick and pick.builder_id not in seen_ids:
                 builders.append(pick)
+                seen_ids.add(pick.builder_id)
+
+        # Robust fallback: search real pairs/triples instead of assuming that
+        # the first ranked legs form a sane combined price. This is especially
+        # important when the pool is mostly SOT + anytime-goalscorer markets.
+        pool = ordered[:24]
+        pair_candidates = []
+        for i, a in enumerate(pool):
+            for b in pool[i + 1:]:
+                if (norm(a.player), a.category, a.line) == (norm(b.player), b.category, b.line):
+                    continue
+                if not valid_builder([a, b], min_legs=2):
+                    continue
+                product = a.odds * b.odds
+                if product < 1.75 or product > max_sane_builder_odds("SAME MATCH AVAILABLE", "SAFE PAIR"):
+                    continue
+                score = (a.quality + b.quality, a.probability + b.probability, -product)
+                pair_candidates.append((score, [a, b]))
+        pair_candidates.sort(key=lambda row: row[0], reverse=True)
+
+        for _, legs in pair_candidates[:4]:
+            pick = _make_builder(
+                "SAME MATCH AVAILABLE",
+                "SAFE REAL PAIR",
+                legs,
+                match_date,
+                0.5,
+            )
+            if pick and pick.builder_id not in seen_ids:
+                builders.append(pick)
+                seen_ids.add(pick.builder_id)
+                if len(seen_ids) >= 4:
+                    break
+
+        # Try a practical 3-leg combination from the best successful pair.
+        if pair_candidates:
+            base = list(pair_candidates[0][1])
+            for extra in pool:
+                if extra in base:
+                    continue
+                candidate = base + [extra]
+                if not valid_builder(candidate, min_legs=3):
+                    continue
+                pick = _make_builder(
+                    "SAME MATCH AVAILABLE",
+                    "3 REAL LEGS",
+                    candidate,
+                    match_date,
+                    0.35,
+                )
+                if pick and pick.builder_id not in seen_ids:
+                    builders.append(pick)
+                    seen_ids.add(pick.builder_id)
+                    break
 
     return builders
-
 
 
 def _same_game_narratives(props: Sequence[PropLeg], match_date: str) -> List[BuilderPick]:
@@ -1272,11 +1319,23 @@ def _cross_match_prop_accas(props: Sequence[PropLeg], match_date: str) -> List[B
     """Cross-match prop accumulators: one independently qualified player prop per match."""
     allowed = {"shots", "sot", "fouls", "fouls_won", "tackles", "tackles_committed",
                "goalkeeper_saves", "yellow_cards", "score", "assist", "score_assist"}
+    grouped: Dict[str, List[PropLeg]] = {}
+    for leg in [x for x in props if x.category in allowed]:
+        grouped.setdefault(norm(leg.match), []).append(leg)
     best_by_match: Dict[str, PropLeg] = {}
-    for leg in sorted([x for x in props if x.category in allowed],
-                      key=lambda x: (x.edge, x.quality, x.probability), reverse=True):
-        best_by_match.setdefault(norm(leg.match), leg)
-    ranked=list(best_by_match.values())
+    for key, legs in grouped.items():
+        # Prefer a strong but usable real price. If every leg is long odds, keep
+        # the best-quality one and let _make_builder's sanity ceiling decide.
+        practical = [x for x in legs if 1.15 < x.odds <= 6.0]
+        source = practical or legs
+        best_by_match[key] = sorted(
+            source, key=lambda x: (x.quality, x.probability, x.edge, -x.odds), reverse=True
+        )[0]
+    ranked = sorted(
+        best_by_match.values(),
+        key=lambda x: (x.quality, x.probability, -x.odds),
+        reverse=True,
+    )
     out=[]
     for n, label in ((2,"DOUBLE"),(3,"TRIPLE"),(4,"4-FOLD"),(5,"5-FOLD"),(6,"6-FOLD")):
         if len(ranked) >= n:
