@@ -7506,6 +7506,18 @@ def _ntr_explicit_stats_group_chat():
             return ""
     return chat
 
+
+def _ntr_match_cards_chat():
+    """Dedicated visual-card target. Defaults to the main NETRATTLER chat.
+
+    TELEGRAM_GROUP_STATS is intentionally not used as fallback because older
+    installations may point it at PROP BUILDER.
+    """
+    explicit = os.getenv("TELEGRAM_GROUP_MATCH_CARDS", "").strip()
+    if explicit:
+        return explicit
+    return str(TELEGRAM_CHAT_ID or "").strip()
+
 def _ntr_market_daily_card(market_id, title, target_date, today_count):
     """Erstellt eine kurze Tages-/Gruppenkarte nur für diesen Markt."""
     nl = "\n"
@@ -20064,6 +20076,8 @@ def analyze_scorer_tips(fixture, league, scorers, observed_props=None):
 
     match_norm = {_pn(fixture.get("home")), _pn(fixture.get("away"))}
     quote_by_player = {}
+    quote_source_by_player = {}
+    quote_surname_index = {}
     for prop in observed_props or []:
         market = str(prop.get("market") or "").lower()
         if "goal" not in market or "score" in str(prop.get("side") or "").lower() and False:
@@ -20078,9 +20092,16 @@ def analyze_scorer_tips(fixture, league, scorers, observed_props=None):
             q = 0.0
         if q <= 1:
             continue
-        player_key = _pn(prop.get("player"))
+        player_raw = str(prop.get("player") or "").strip()
+        player_key = _pn(player_raw)
         if player_key and q > quote_by_player.get(player_key, 0):
             quote_by_player[player_key] = q
+            quote_source_by_player[player_key] = str(prop.get("_source") or prop.get("source") or "observed")
+        parts = [x for x in _re.split(r"[^A-Za-zÀ-ÿ0-9]+", player_raw.lower()) if x]
+        if parts:
+            surname = _pn(parts[-1])
+            if len(surname) >= 4:
+                quote_surname_index.setdefault(surname, []).append((player_key, q))
 
     tips = []
     for scorer in scorers:
@@ -20106,7 +20127,16 @@ def analyze_scorer_tips(fixture, league, scorers, observed_props=None):
         if gpg < 0.3:
             continue
         prob = round((1 - math.exp(-gpg)) * 100)
-        quote = float(quote_by_player.get(_pn(scorer_name), 0) or 0)
+        scorer_key = _pn(scorer_name)
+        quote_key = scorer_key if scorer_key in quote_by_player else ""
+        if not quote_key:
+            scorer_parts = [x for x in _re.split(r"[^A-Za-zÀ-ÿ0-9]+", str(scorer_name).lower()) if x]
+            surname = _pn(scorer_parts[-1]) if scorer_parts else ""
+            matches = quote_surname_index.get(surname, []) if len(surname) >= 4 else []
+            unique_keys = list(dict.fromkeys(k for k, _ in matches if k))
+            if len(unique_keys) == 1:
+                quote_key = unique_keys[0]
+        quote = float(quote_by_player.get(quote_key, 0) or 0)
         if prob < 35 or quote < MIN_ODDS_VALUE or not _is_value_bet(quote, prob):
             continue
         tips.append({
@@ -20118,7 +20148,7 @@ def analyze_scorer_tips(fixture, league, scorers, observed_props=None):
             "fair_odds": round(100 / prob, 2), "fairOdds": round(100 / prob, 2),
             "edge": round(prob / 100.0 - 1.0 / quote, 4), "market": "scorer",
             "confidence": 3, "units": 0.75, "valueRating": "VALUE",
-            "_no_real_odds": False, "_source": "odds_api",
+            "_no_real_odds": False, "_source": quote_source_by_player.get(quote_key, "observed"),
         })
     tips.sort(key=lambda x: (x.get("edge", 0), x["probability"]), reverse=True)
     return tips[:3]
@@ -20278,6 +20308,40 @@ def run_corners_and_scorer_bots(target_date, active_leagues, odds_data_cache, fi
 
     seen_corner_matches = set()  # Duplikat-Check über ALLE Ligen
 
+    # Reuse the same real Pinnacle player-prop snapshot as the Prop Builder.
+    # This fixes the old scorer bottleneck where only The Odds API prices were
+    # considered even though Pinnacle Goalscorer markets were already available.
+    _pinnacle_scorer_props = []
+    try:
+        for _pp in fetch_pinnacle_player_props() or []:
+            if not isinstance(_pp, dict):
+                continue
+            _txt = f"{_pp.get('special_category','')} {_pp.get('player_prop','')} {_pp.get('selection','')}"
+            if _get_leg_category(_txt) != "score":
+                continue
+            try:
+                _od = float(_pp.get("odds") or 0)
+            except Exception:
+                _od = 0.0
+            if _od <= 1.01:
+                continue
+            _match = str(_pp.get("match") or "")
+            if " vs " not in _match:
+                continue
+            _home, _away = _match.split(" vs ", 1)
+            _player = _ntr_extract_player(_pp.get("player_prop",""), _pp.get("selection",""))
+            if not _player:
+                continue
+            _pinnacle_scorer_props.append({
+                "player": _player, "market": "anytime_goalscorer", "side": "Yes",
+                "odds": _od, "match": _match, "home": _home.strip(), "away": _away.strip(),
+                "league": str(_pp.get("league") or ""), "_source": "pinnacle",
+            })
+        if _pinnacle_scorer_props:
+            log(f"   ⚽ Pinnacle Scorer Quotes: {len(_pinnacle_scorer_props)} echte Anytime-Quoten")
+    except Exception as _psq:
+        log(f"   ⚽ Pinnacle Scorer Quotes Fehler: {str(_psq)[:90]}", "WARN")
+
     for league in active_leagues:
         fixtures = fixtures_cache.get(league, [])
         if not fixtures:
@@ -20330,7 +20394,7 @@ def run_corners_and_scorer_bots(target_date, active_leagues, odds_data_cache, fi
                 scorers = []
                 # Quoten werden einmal pro Liga geladen/gecacht und nur als beobachtete
                 # Anytime-Goalscorer-Preise an die Scorer-Analyse weitergereicht.
-                observed_scorer_props = fetch_odds_api_player_props(league, target_date)
+                observed_scorer_props = list(fetch_odds_api_player_props(league, target_date) or []) + list(_pinnacle_scorer_props)
 
                 # 1. TheStatsAPI (neu, primäre Quelle — kein API-Football nötig)
                 if THESTATSAPI_KEYS and not scorers:
@@ -22700,8 +22764,11 @@ def _pinnacle_get_json(url, params):
     return None, status
 
 
-def fetch_pinnacle_player_props() -> List[Dict]:
-    """Player Props Specials von Pinnacle (echte Quoten)."""
+_PINNACLE_PLAYER_PROPS_CACHE = None\n\ndef fetch_pinnacle_player_props() -> List[Dict]:
+    """Player Props Specials von Pinnacle (echte Quoten), pro Run gecacht."""
+    global _PINNACLE_PLAYER_PROPS_CACHE
+    if isinstance(_PINNACLE_PLAYER_PROPS_CACHE, list):
+        return [dict(x) for x in _PINNACLE_PLAYER_PROPS_CACHE]
     try:
         data, status = _pinnacle_get_json(
             f"{PINNACLE_BASE}/sports/{PINNACLE_SPORT_SOCCER}/matchups",
@@ -22802,7 +22869,8 @@ def fetch_pinnacle_player_props() -> List[Dict]:
         if skipped_no_price:
             log(f"   🔑 Pinnacle Props: {skipped_no_price} Props ohne Preis übersprungen")
         _log("PINNACLE", f"🔑 {len(props)} Player-Prop-Quoten geladen")
-        return props
+        _PINNACLE_PLAYER_PROPS_CACHE = [dict(x) for x in props]
+        return [dict(x) for x in props]
     except Exception as e:
         _log("PINNACLE", f"Props Fehler: {str(e)[:80]}", "WARN")
         return []
@@ -26177,7 +26245,7 @@ def main():
     # A photo failure must never interrupt normal Telegram tips.
     try:
         from netrattler_stats_match_cards import send_cards as _send_stats_match_cards
-        _stats_chat = _ntr_explicit_stats_group_chat()
+        _stats_chat = _ntr_match_cards_chat()
         _sent_cards = _send_stats_match_cards(
             tips_by_market, target_date, TELEGRAM_TOKEN, _stats_chat, log=log
         )
