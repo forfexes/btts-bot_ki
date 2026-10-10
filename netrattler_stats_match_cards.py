@@ -13,6 +13,7 @@ from collections import defaultdict
 import requests
 
 _LOGO_CACHE = {}
+_BADGE_CACHE = {}
 
 
 def _number(value):
@@ -104,22 +105,39 @@ def _logo_url(team):
     return url
 
 
+def _badge_bytes(team):
+    key = _norm(team)
+    if not key:
+        return b""
+    if key in _BADGE_CACHE:
+        return _BADGE_CACHE[key]
+    payload = b""
+    url = _logo_url(team)
+    if url:
+        try:
+            r = requests.get(url, timeout=6)
+            if r.ok and r.content:
+                payload = r.content
+        except Exception:
+            payload = b""
+    _BADGE_CACHE[key] = payload
+    return payload
+
+
 def _paste_badge(im, draw, team, box, font):
     from PIL import Image
     x0, y0, x1, y1 = box
     size = min(x1 - x0, y1 - y0)
     loaded = False
-    url = _logo_url(team)
-    if url:
+    payload = _badge_bytes(team)
+    if payload:
         try:
-            r = requests.get(url, timeout=6)
-            if r.ok:
-                badge = Image.open(io.BytesIO(r.content)).convert("RGBA")
-                badge.thumbnail((size, size), Image.Resampling.LANCZOS)
-                px = x0 + (x1 - x0 - badge.width) // 2
-                py = y0 + (y1 - y0 - badge.height) // 2
-                im.paste(badge, (px, py), badge)
-                loaded = True
+            badge = Image.open(io.BytesIO(payload)).convert("RGBA")
+            badge.thumbnail((size, size), Image.Resampling.LANCZOS)
+            px = x0 + (x1 - x0 - badge.width) // 2
+            py = y0 + (y1 - y0 - badge.height) // 2
+            im.paste(badge, (px, py), badge)
+            loaded = True
         except Exception:
             loaded = False
     if loaded:
@@ -297,6 +315,28 @@ def send_cards(tips_by_market, target_date, token, stats_chat, log=print):
         return 0
 
     cards = select_cards(tips_by_market, os.getenv("STATS_MATCH_CARDS_MAX", "0"))
+
+    # Badge lookup is presentation-only; prefetch concurrently so dozens of cards
+    # do not serialize two network calls per team.
+    try:
+        from concurrent.futures import ThreadPoolExecutor
+        teams = []
+        seen_teams = set()
+        for entries in cards:
+            if not entries:
+                continue
+            home, away = _teams(entries[0][1].get("match", ""))
+            for team in (home, away):
+                key = _norm(team)
+                if key and key not in seen_teams:
+                    seen_teams.add(key)
+                    teams.append(team)
+        if teams:
+            with ThreadPoolExecutor(max_workers=min(10, len(teams))) as ex:
+                list(ex.map(_badge_bytes, teams))
+    except Exception:
+        pass
+
     sent = 0
     pause = max(0.0, float(os.getenv("STATS_MATCH_CARDS_SEND_DELAY_SEC", "1.2")))
     for entries in cards:
