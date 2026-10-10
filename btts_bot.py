@@ -22764,7 +22764,9 @@ def _pinnacle_get_json(url, params):
     return None, status
 
 
-_PINNACLE_PLAYER_PROPS_CACHE = None\n\ndef fetch_pinnacle_player_props() -> List[Dict]:
+_PINNACLE_PLAYER_PROPS_CACHE = None
+
+def fetch_pinnacle_player_props() -> List[Dict]:
     """Player Props Specials von Pinnacle (echte Quoten), pro Run gecacht."""
     global _PINNACLE_PLAYER_PROPS_CACHE
     if isinstance(_PINNACLE_PLAYER_PROPS_CACHE, list):
