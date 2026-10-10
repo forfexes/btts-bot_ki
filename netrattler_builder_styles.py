@@ -459,7 +459,31 @@ def _pick_rank(pick: builder.BuilderPick) -> Tuple[float, float, float, float]:
     return score, avg_p, avg_e, -pick.total_odds
 
 
+def _strict_edge() -> bool:
+    return str(os.getenv("NETRATTLER_BUILDER_STRICT_EDGE", "false")).lower() in {"1", "true", "yes", "on"}
+
+
 def build_builder_picks(raw_props, match_contexts=None, match_date=None, max_builders=None):
+    """Premium/modelled builders first; COMPAT fallback for real observed quotes.
+
+    Bug (Run #802): the premium gate above needs an independent model edge on
+    every leg. Kambi/Pinnacle player props without matched player history carry
+    edge=0 on purpose (bookmaker-implied probability is never a model edge), so
+    84 valid real-odds legs produced 0 builders. When nothing modelled
+    qualifies and STRICT_EDGE is off (engine mode COMPAT_REAL_ODDS), fall back
+    to the engine builders built from real observed quotes only. Estimated or
+    derived legs stay excluded, no odds are invented.
+    """
+    picks = _build_modelled(raw_props, match_contexts, match_date, max_builders)
+    if picks or _strict_edge():
+        return picks
+    run_date = match_date or builder.date.today().isoformat()
+    max_count = max_builders or builder.as_int(os.getenv("NETRATTLER_MAX_BUILDERS_PER_RUN", "30"), 30)
+    compat = _ORIG_BUILD(raw_props, match_contexts, run_date, max_builders=max_count)
+    return [p for p in compat if not any(x.estimated for x in p.legs)][:max_count]
+
+
+def _build_modelled(raw_props, match_contexts=None, match_date=None, max_builders=None):
     run_date = match_date or builder.date.today().isoformat()
     max_count = max_builders or builder.as_int(os.getenv("NETRATTLER_MAX_BUILDERS_PER_RUN", "30"), 30)
     props = builder.deduplicate_props(raw_props)
@@ -550,9 +574,10 @@ def format_builder_message(pick: builder.BuilderPick) -> str:
     for i, leg in enumerate(pick.legs, 1):
         icon = builder.CATEGORY_ICON.get(leg.category, "🎯")
         match_suffix = "" if same_match else f" · {leg.match}"
+        edge_txt = f" · Edge {leg.edge:+.1f}%" if leg.edge > 0 else ""
         lines.append(
             f"{i}. {icon} <b>{leg.player}</b> — {leg.market} @ {leg.odds:.2f}"
-            f" · Edge {leg.edge:+.1f}%{match_suffix}"
+            f"{edge_txt}{match_suffix}"
         )
     lines.append(sep)
     if same_match:

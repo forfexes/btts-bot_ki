@@ -128,7 +128,12 @@ def test_unmodelled_and_bad_correlation_rejected():
         {"player": "C", "match": "A vs B", "league": "X", "market": "1+ Fouls",
          "category": "fouls", "line": .5, "odds": 1.50, "source": "kambi_ub"},
     ]
-    assert builder.build_builder_picks(unmodelled, match_date="2026-09-25", max_builders=20) == []
+    # STRICT_EDGE: legs without independent model edge never become builders.
+    os.environ["NETRATTLER_BUILDER_STRICT_EDGE"] = "true"
+    try:
+        assert builder.build_builder_picks(unmodelled, match_date="2026-09-25", max_builders=20) == []
+    finally:
+        os.environ.pop("NETRATTLER_BUILDER_STRICT_EDGE", None)
 
     score = builder.normalize_prop(row("P", "To Score", "score", .5, 2.4, .50, "Q vs R"))
     assist = builder.normalize_prop(row("P", "To Give an Assist", "assist", .5, 3.0, .40, "Q vs R"))
@@ -136,7 +141,28 @@ def test_unmodelled_and_bad_correlation_rejected():
     assert builder.valid_builder([score, assist]) is False
 
 
+def test_compat_real_odds_fallback_run802():
+    """Run #802: 84 real Kambi legs without model edge produced generated=0."""
+    os.environ.pop("NETRATTLER_BUILDER_STRICT_EDGE", None)
+    rows = []
+    for m in range(4):
+        match = f"T{m}A vs T{m}B"
+        for p in range(6):
+            rows.append({"player": f"Sot{m}{p}", "match": match, "league": "X", "market": "1+ SOT",
+                         "category": "sot", "line": .5, "odds": 1.6 + .1 * p, "source": "kambi_ub"})
+        for p in range(5):
+            rows.append({"player": f"Sc{m}{p}", "match": match, "league": "X", "market": "Anytime Scorer",
+                         "category": "score", "line": .5, "odds": 2.4 + .3 * p, "source": "kambi_ub"})
+    picks = builder.build_builder_picks(rows, match_date="2026-10-10", max_builders=18)
+    assert picks, "compat real-odds pool must yield builders"
+    assert all(not any(x.estimated for x in p.legs) for p in picks)
+    assert all(x.odds > 1 and x.source.startswith("kambi") for p in picks for x in p.legs)
+    msg = builder.format_builder_message(picks[0])
+    assert "Edge +0.0%" not in msg
+
+
 def main():
+    test_compat_real_odds_fallback_run802()
     test_tips_bible_and_nate()
     test_aystar_and_alt_lines()
     test_library_same_game_mix_with_real_teamline()
