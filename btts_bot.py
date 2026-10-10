@@ -20074,7 +20074,15 @@ def analyze_scorer_tips(fixture, league, scorers, observed_props=None):
         value = "".join(ch for ch in value if not _ud.combining(ch))
         return _re.sub(r"[^a-z0-9]+", "", value)
 
-    match_norm = {_pn(fixture.get("home")), _pn(fixture.get("away"))}
+    fixture_home_key = normalize_team_name(fixture.get("home", ""))
+    fixture_away_key = normalize_team_name(fixture.get("away", ""))
+
+    def _team_match(a, b):
+        a = normalize_team_name(a)
+        b = normalize_team_name(b)
+        if not a or not b:
+            return False
+        return a == b or a in b or b in a or (len(a) >= 6 and len(b) >= 6 and a[:6] == b[:6])
     quote_by_player = {}
     quote_source_by_player = {}
     quote_surname_index = {}
@@ -20083,9 +20091,12 @@ def analyze_scorer_tips(fixture, league, scorers, observed_props=None):
         if "goal" not in market or "score" in str(prop.get("side") or "").lower() and False:
             continue
         # Exact fixture check avoids player quotes from another match in same league.
-        ph, pa = _pn(prop.get("home")), _pn(prop.get("away"))
-        if ph and pa and {ph, pa} != match_norm:
-            continue
+        ph, pa = str(prop.get("home") or ""), str(prop.get("away") or "")
+        if ph and pa:
+            direct = _team_match(ph, fixture_home_key) and _team_match(pa, fixture_away_key)
+            reverse = _team_match(ph, fixture_away_key) and _team_match(pa, fixture_home_key)
+            if not (direct or reverse):
+                continue
         try:
             q = float(prop.get("odds") or 0)
         except Exception:
