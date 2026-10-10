@@ -20512,6 +20512,14 @@ def run_corners_and_scorer_bots(target_date, active_leagues, odds_data_cache, fi
             if not isinstance(_pp, dict):
                 continue
             _sd["pin_props_total"] = _sd.get("pin_props_total", 0) + 1
+            try:
+                _lbl = f"{str(_pp.get('special_category') or '')[:24]}|{str(_pp.get('player_prop') or '')[:48]}"
+                if re.search(r"scor|goal", _lbl.lower()):
+                    _lbls = _sd.setdefault("goal_labels", {})
+                    if _lbl in _lbls or len(_lbls) < 40:
+                        _lbls[_lbl] = _lbls.get(_lbl, 0) + 1
+            except Exception:
+                pass
             if not _ntr_is_anytime_scorer_special(_pp):
                 continue
             _sd["pin_scorer_category"] = _sd.get("pin_scorer_category", 0) + 1
