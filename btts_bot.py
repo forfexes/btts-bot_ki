@@ -20156,8 +20156,11 @@ def _ntr_history_scorers_from_quotes(observed_props, limit=36):
     return out
 
 
-def analyze_scorer_tips(fixture, league, scorers, observed_props=None):
+def analyze_scorer_tips(fixture, league, scorers, observed_props=None, diag=None):
     """Anytime scorer model. A tip is publishable only with an observed bookmaker quote."""
+    def _d(key, n=1):
+        if isinstance(diag, dict):
+            diag[key] = diag.get(key, 0) + n
     import math
     import re as _re
     import unicodedata as _ud
@@ -20240,8 +20243,10 @@ def analyze_scorer_tips(fixture, league, scorers, observed_props=None):
             )
         if not is_playing:
             continue
+        _d("an_playing")
         gpg = float(scorer.get("goals_per_game", 0) or 0)
         if gpg < 0.3:
+            _d("an_drop_gpg")
             continue
         prob = round((1 - math.exp(-gpg)) * 100)
         scorer_key = _pn(scorer_name)
@@ -20254,8 +20259,19 @@ def analyze_scorer_tips(fixture, league, scorers, observed_props=None):
             if len(unique_keys) == 1:
                 quote_key = unique_keys[0]
         quote = float(quote_by_player.get(quote_key, 0) or 0)
-        if prob < 35 or quote < MIN_ODDS_VALUE or not _is_value_bet(quote, prob):
+        if quote <= 1:
+            _d("an_drop_no_quote")
             continue
+        if prob < 35:
+            _d("an_drop_prob")
+            continue
+        if quote < MIN_ODDS_VALUE:
+            _d("an_drop_min_odds")
+            continue
+        if not _is_value_bet(quote, prob):
+            _d("an_drop_edge")
+            continue
+        _d("an_final")
         tips.append({
             "match": f"{fixture.get('home','')} vs {fixture.get('away','')}", "league": league,
             "time": fixture.get("time_local", "TBD"), "player": scorer_name,
@@ -20398,6 +20414,61 @@ def get_understat_top_scorers(league_name, season):
         return []
 
 
+_SCORER_EXCLUDE_RE = re.compile(r"\b(first|last|1st|2nd|either|both|half|assist|or|hat[- ]?trick|brace|team)\b")
+
+
+def _ntr_is_anytime_scorer_special(pp):
+    """True for a real ANYTIME goalscorer quote of a Pinnacle special.
+
+    Pinnacle names the market via category ("Goalscorer"), description or both.
+    First/last scorer, half markets and "score or assist" must never count.
+    """
+    cat = str(pp.get("special_category") or "")
+    desc = str(pp.get("player_prop") or "")
+    head = f"{cat} {desc}".lower()
+    if _SCORER_EXCLUDE_RE.search(head):
+        return False
+    if _get_leg_category(f"{cat} {desc} {pp.get('selection') or ''}") == "score":
+        return True
+    return re.search(r"goal\s*-?\s*scorer|to score a goal|anytime scorer", head) is not None
+
+
+def _ntr_props_for_fixtures(props, fixtures):
+    """Keep only quotes whose match is one of this league's fixtures.
+
+    Without this every league iteration re-evaluated the same global top-N
+    quotes, so almost none of them belonged to the league being processed.
+    """
+    pairs = []
+    for fx in fixtures or []:
+        h = normalize_team_name(fx.get("home", ""))
+        a = normalize_team_name(fx.get("away", ""))
+        if h and a:
+            pairs.append((h, a))
+    if not pairs:
+        return []
+
+    def _tm(x, y):
+        return bool(x and y and (x == y or x in y or y in x or (len(x) >= 6 and len(y) >= 6 and x[:6] == y[:6])))
+
+    out = []
+    for prop in props:
+        ph = prop.get("_nh")
+        pa = prop.get("_na")
+        if ph is None:
+            ph = normalize_team_name(prop.get("home", ""))
+            pa = normalize_team_name(prop.get("away", ""))
+            prop["_nh"], prop["_na"] = ph, pa
+        if not ph or not pa:
+            out.append(prop)
+            continue
+        for h, a in pairs:
+            if (_tm(ph, h) and _tm(pa, a)) or (_tm(ph, a) and _tm(pa, h)):
+                out.append(prop)
+                break
+    return out
+
+
 def run_corners_and_scorer_bots(target_date, active_leagues, odds_data_cache, fixtures_cache):
     """
     Hauptfunktion für Ecken + Scorer Bots.
@@ -20434,13 +20505,16 @@ def run_corners_and_scorer_bots(target_date, active_leagues, odds_data_cache, fi
     # This fixes the old scorer bottleneck where only The Odds API prices were
     # considered even though Pinnacle Goalscorer markets were already available.
     _pinnacle_scorer_props = []
+    _sd = {}  # stage diagnostics: where do goalscorer quotes drop out?
+    run_corners_and_scorer_bots._last_scorer_diag = _sd
     try:
         for _pp in fetch_pinnacle_player_props() or []:
             if not isinstance(_pp, dict):
                 continue
-            _txt = f"{_pp.get('special_category','')} {_pp.get('player_prop','')} {_pp.get('selection','')}"
-            if _get_leg_category(_txt) != "score":
+            _sd["pin_props_total"] = _sd.get("pin_props_total", 0) + 1
+            if not _ntr_is_anytime_scorer_special(_pp):
                 continue
+            _sd["pin_scorer_category"] = _sd.get("pin_scorer_category", 0) + 1
             try:
                 _od = float(_pp.get("odds") or 0)
             except Exception:
@@ -20449,16 +20523,19 @@ def run_corners_and_scorer_bots(target_date, active_leagues, odds_data_cache, fi
                 continue
             _match = str(_pp.get("match") or "")
             if " vs " not in _match:
+                _sd["pin_drop_no_match"] = _sd.get("pin_drop_no_match", 0) + 1
                 continue
             _home, _away = _match.split(" vs ", 1)
             _player = _ntr_extract_player(_pp.get("player_prop",""), _pp.get("selection",""))
             if not _player:
+                _sd["pin_drop_no_player"] = _sd.get("pin_drop_no_player", 0) + 1
                 continue
             _pinnacle_scorer_props.append({
                 "player": _player, "market": "anytime_goalscorer", "side": "Yes",
                 "odds": _od, "match": _match, "home": _home.strip(), "away": _away.strip(),
                 "league": str(_pp.get("league") or ""), "_source": "pinnacle",
             })
+        _sd["pin_scorer_quotes"] = len(_pinnacle_scorer_props)
         if _pinnacle_scorer_props:
             log(f"   ⚽ Pinnacle Scorer Quotes: {len(_pinnacle_scorer_props)} echte Anytime-Quoten")
     except Exception as _psq:
@@ -20516,11 +20593,20 @@ def run_corners_and_scorer_bots(target_date, active_leagues, odds_data_cache, fi
                 scorers = []
                 # Quoten werden einmal pro Liga geladen/gecacht und nur als beobachtete
                 # Anytime-Goalscorer-Preise an die Scorer-Analyse weitergereicht.
-                observed_scorer_props = list(fetch_odds_api_player_props(league, target_date) or []) + list(_pinnacle_scorer_props)
+                _league_pin = _ntr_props_for_fixtures(_pinnacle_scorer_props, fixtures)
+                observed_scorer_props = list(fetch_odds_api_player_props(league, target_date) or []) + _league_pin
+                _sd["leagues_with_quotes"] = _sd.get("leagues_with_quotes", 0) + (1 if observed_scorer_props else 0)
+                _sd["quotes_in_league_fixtures"] = _sd.get("quotes_in_league_fixtures", 0) + len(observed_scorer_props)
+                if not observed_scorer_props:
+                    continue
+                # Global lookup budget keeps Supabase calls bounded over hundreds of leagues.
+                _hist_budget = int(env("NETRATTLER_SCORER_HISTORY_TOTAL_CAP", "240")) - _sd.get("history_lookups", 0)
                 _history_scorers = _ntr_history_scorers_from_quotes(
                     observed_scorer_props,
-                    limit=int(env("NETRATTLER_SCORER_HISTORY_CAP", "36")),
-                )
+                    limit=max(0, min(int(env("NETRATTLER_SCORER_HISTORY_CAP", "36")), _hist_budget)),
+                ) if _hist_budget > 0 else []
+                _sd["history_lookups"] = _sd.get("history_lookups", 0) + min(int(env("NETRATTLER_SCORER_HISTORY_CAP", "36")), max(0, _hist_budget), len(observed_scorer_props))
+                _sd["history_found"] = _sd.get("history_found", 0) + len(_history_scorers or [])
                 if _history_scorers:
                     log(f"   ⚽ Scorer History: {len(_history_scorers)} Spieler mit unabhängigen Verlaufsdaten")
 
@@ -20565,7 +20651,7 @@ def run_corners_and_scorer_bots(target_date, active_leagues, odds_data_cache, fi
                             log(f"   ⏭️ Scorer Duplikat: {match_name}")
                             continue
 
-                        tips = analyze_scorer_tips(fixture, league, scorers, observed_scorer_props)
+                        tips = analyze_scorer_tips(fixture, league, scorers, observed_scorer_props, diag=_sd)
                         for tip in tips:
                             scorer_tips.append(tip)
                             scorer_count += 1
@@ -26722,6 +26808,7 @@ def main():
                 "combo_multi": generated,
             },
             run_id=f"tips-{target_date}-{datetime.now(timezone.utc).strftime('%H%M%S')}",
+            stage_diag={"scorer": dict(getattr(run_corners_and_scorer_bots, "_last_scorer_diag", {}) or {})},
         )
         _problems = _coverage.get("problems") or {}
         if _problems:

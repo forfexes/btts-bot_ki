@@ -137,6 +137,7 @@ def build_report(
     rejection_stats: Optional[Mapping[str, Mapping[str, Any]]] = None,
     extra_counts: Optional[Mapping[str, int]] = None,
     run_id: str = "",
+    stage_diag: Optional[Mapping[str, Any]] = None,
 ) -> Dict[str, Any]:
     before = _counts(before_filter)
     after = _counts(after_filter)
@@ -172,6 +173,9 @@ def build_report(
         "prop_sources": _source_counts(props),
         "unknown_markets": list(unknown.values()),
         "rejection_stats": {k: dict(v) for k, v in (rejection_stats or {}).items()},
+        # Per-stage drop counts of specialist pipelines (scorer ...), readable
+        # in Supabase without GitHub log access.
+        "stage_diag": {k: dict(v) if isinstance(v, Mapping) else v for k, v in (stage_diag or {}).items()},
     }
 
 
