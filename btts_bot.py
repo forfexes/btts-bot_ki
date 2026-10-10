@@ -26376,7 +26376,9 @@ def main():
         except Exception:
             pass
 
-    send_top_tips(tips_by_market, target_date)
+    # Main-market Telegram sends are intentionally delayed until specialist
+    # Scorer/Props/Builder pipelines have completed. This prevents a large main
+    # card from consuming the watchdog budget before specialist output exists.
 
     # 🎰 Pinnacle-Matches als Fixtures für Corners/Scorer/Props injizieren
     if _PINNACLE_MATCHUPS:
@@ -26688,6 +26690,9 @@ def main():
         log(f"✅ {generated} Combos generiert und gesendet!")
     else:
         log(f"ℹ️ Nur {len(all_tips_flat)} Tipps - min. 3 für Combos nötig")
+
+    # Main single-market tips are sent only after specialist pipelines.
+    send_top_tips(tips_by_market, target_date)
 
     # Premium match cards run AFTER Scorer/Props/Builder/Combos so Telegram image
     # retries or logo lookups can never starve the specialist betting pipelines.
