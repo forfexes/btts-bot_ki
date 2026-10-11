@@ -1795,7 +1795,7 @@ _AF_TEAM_ID = {}
 
 def _af_get(path, params, keys, state):
     for key in keys[:3]:
-        if state["calls"] >= state["max"]:
+        if state.get("dead") or state["calls"] >= state["max"]:
             return None
         state["calls"] += 1
         try:
@@ -1809,6 +1809,9 @@ def _af_get(path, params, keys, state):
         errs = data.get("errors")
         if errs and not data.get("response"):
             STATS["h2h_api_err"] = str(errs)[:60]
+            if any(w in str(errs).lower() for w in ("suspend", "token", "subscription", "limit")):
+                state["dead"] = True
+                return None
             continue
         return data.get("response") or []
     return None
@@ -1851,7 +1854,7 @@ def attach_h2h_api(tips_by_market, log=print):
                 for k, v in (seen[mk] or {}).items():
                     t.setdefault(k, v)
                 continue
-            if state["calls"] >= state["max"] - 2:
+            if state.get("dead") or state["calls"] >= state["max"] - 2:
                 break
             h, a = _teams(t["match"])
             league = str(t.get("league") or "")
