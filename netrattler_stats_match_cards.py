@@ -75,6 +75,54 @@ def _teams(match):
     return text, ""
 
 
+def _query_variants(team):
+    base = str(team or "").strip()
+    out = [base]
+    stripped = re.sub(r"\b(fc|cf|afc|sc|ac|as|ss|us|sv|vfb|vfl|fk|sk|kv|krc|rc|cd|ud|ca)\b\.?", " ", base, flags=re.I)
+    stripped = " ".join(stripped.split())
+    if stripped and stripped.lower() != base.lower():
+        out.append(stripped)
+    for sep in ("-", "/"):
+        if sep in base:
+            out.append(base.replace(sep, " "))
+    words = stripped.split() or base.split()
+    if len(words) > 1:
+        out.append(words[0])
+        out.append(words[-1])
+    seen, res = set(), []
+    for q in out:
+        if q and q.lower() not in seen:
+            seen.add(q.lower())
+            res.append(q)
+    return res[:4]
+
+
+def _search_badge(query, api_key, key):
+    """Return (url, rate_limited). Retries politely on HTTP 429."""
+    for attempt in range(3):
+        r = requests.get(
+            f"https://www.thesportsdb.com/api/v1/json/{api_key}/searchteams.php",
+            params={"t": query},
+            timeout=6,
+        )
+        if r.status_code == 429:
+            time.sleep(1.5 + attempt * 1.5)
+            continue
+        if not r.ok:
+            return "", False
+        try:
+            rows = (r.json() or {}).get("teams") or []
+        except Exception:
+            return "", False
+        soccer = [x for x in rows if str(x.get("strSport") or "").lower() == "soccer"]
+        rows = soccer or rows
+        if not rows:
+            return "", False
+        exact = next((x for x in rows if _norm(x.get("strTeam")) == key), rows[0])
+        return str(exact.get("strBadge") or exact.get("strLogo") or "").strip(), False
+    return "", True
+
+
 def _logo_url(team):
     key = _norm(team)
     if not key:
@@ -82,26 +130,17 @@ def _logo_url(team):
     if key in _LOGO_CACHE:
         return _LOGO_CACHE[key]
     url = ""
-    try:
-        api_key = os.getenv("THESPORTSDB_API_KEY", "3").strip() or "3"
-        r = requests.get(
-            f"https://www.thesportsdb.com/api/v1/json/{api_key}/searchteams.php",
-            params={"t": team},
-            timeout=6,
-        )
-        if r.ok:
-            rows = (r.json() or {}).get("teams") or []
-            soccer = [x for x in rows if str(x.get("strSport") or "").lower() == "soccer"]
-            rows = soccer or rows
-            if rows:
-                exact = next(
-                    (x for x in rows if _norm(x.get("strTeam")) == key),
-                    rows[0],
-                )
-                url = str(exact.get("strBadge") or exact.get("strLogo") or "").strip()
-    except Exception:
-        url = ""
-    _LOGO_CACHE[key] = url
+    limited = False
+    api_key = os.getenv("THESPORTSDB_API_KEY", "3").strip() or "3"
+    for query in _query_variants(team):
+        try:
+            url, limited = _search_badge(query, api_key, key)
+        except Exception:
+            url, limited = "", False
+        if url or limited:
+            break
+    if url or not limited:  # do not cache a rate-limit failure
+        _LOGO_CACHE[key] = url
     return url
 
 
@@ -445,7 +484,7 @@ def send_cards(tips_by_market, target_date, token, stats_chat, log=print):
                     seen_teams.add(key)
                     teams.append(team)
         if teams:
-            with ThreadPoolExecutor(max_workers=min(10, len(teams))) as ex:
+            with ThreadPoolExecutor(max_workers=min(3, len(teams))) as ex:
                 list(ex.map(_badge_bytes, teams))
     except Exception:
         pass

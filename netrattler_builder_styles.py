@@ -14,6 +14,7 @@ Bet-Builder quote. The message explicitly asks for the live builder price.
 from __future__ import annotations
 
 import math
+import re
 import os
 from typing import Dict, List, Optional, Sequence, Tuple
 
@@ -565,6 +566,38 @@ def _build_modelled(raw_props, match_contexts=None, match_date=None, max_builder
     return out
 
 
+_CAT_DE = {
+    "sot": "Schüsse aufs Tor", "shots": "Schüsse", "fouls": "Fouls", "fouls_won": "Gefoult",
+    "tackles": "Tacklings", "tackles_committed": "Tacklings", "tackles_received": "Getackelt",
+    "yellow_cards": "Gelbe Karte", "sot_outside_box": "Schüsse aufs Tor (außerhalb Box)",
+    "shots_outside_box": "Schüsse (außerhalb Box)", "score": "Torschütze", "assist": "Vorlage",
+    "first_scorer": "Erster Torschütze", "last_scorer": "Letzter Torschütze",
+    "saves": "Paraden", "offsides": "Abseits", "passes": "Pässe",
+}
+
+
+def _clean_player(name):
+    text = re.sub(r"\s+player'?s?\b.*$", "", str(name or ""), flags=re.I).strip()
+    return text or str(name or "")
+
+
+def _clean_market(leg):
+    label = _CAT_DE.get(leg.category)
+    if label:
+        try:
+            line = float(leg.line)
+        except (TypeError, ValueError):
+            line = 0.0
+        if leg.category in ("score", "first_scorer", "last_scorer", "yellow_cards", "assist"):
+            return label
+        return f"{label} Über {line:g}" if line else label
+    text = str(leg.market or "")
+    text = re.sub(r"\(.*?\)", "", text)
+    text = text.split("|")[0]
+    text = re.sub(r"player'?s?\s+(occurrence\s+line\s+)?", "", text, flags=re.I)
+    return " ".join(text.split()) or str(leg.market or "")
+
+
 def format_builder_message(pick: builder.BuilderPick) -> str:
     sep = "━" * 18
     same_match = len({x.match for x in pick.legs}) == 1
@@ -576,7 +609,7 @@ def format_builder_message(pick: builder.BuilderPick) -> str:
         match_suffix = "" if same_match else f" · {leg.match}"
         edge_txt = f" · Edge {leg.edge:+.1f}%" if leg.edge > 0 else ""
         lines.append(
-            f"{i}. {icon} <b>{leg.player}</b> — {leg.market} @ {leg.odds:.2f}"
+            f"{i}. {icon} <b>{_clean_player(leg.player)}</b> — {_clean_market(leg)} @ {leg.odds:.2f}"
             f"{edge_txt}{match_suffix}"
         )
     lines.append(sep)
@@ -587,7 +620,7 @@ def format_builder_message(pick: builder.BuilderPick) -> str:
     else:
         lines.append(f"💰 Gesamt-Quote: <b>{pick.total_odds:.2f}</b>")
         lines.append(f"🔥 Einsatz: <b>{pick.stake:.2f} Units</b>")
-    lines.append(f"🧠 Daten: {', '.join(dict.fromkeys(x.source.split(':')[0] for x in pick.legs))}")
+    lines.append("🧠 Daten: echte Buchmacher-Quoten")
     return "\n".join(lines)
 
 
