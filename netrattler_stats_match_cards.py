@@ -535,10 +535,11 @@ def render_card(entries, target_date, result=None):
     h2g = _number(ctx.get("h2h_avg_goals"))
     if h2g is not None:
         blocks.append(("H2H Ø TORE", f"{h2g:.1f}"))
-    if blocks:
+    has_form = bool(_form_chars(ctx.get('homeForm')) or _form_chars(ctx.get('awayForm')))
+    if blocks or has_form:
         panel((34, y, 1046, y + 150))
         draw.text((56, y + 10), "FORM & STATS", font=font(20, True), fill="#ffffff")
-        bw = (980 - 10 * (len(blocks) - 1)) / len(blocks)
+        bw = (980 - 10 * (len(blocks) - 1)) / max(len(blocks), 1)
         for i, (k, v) in enumerate(blocks[:4]):
             x0 = 50 + i * (bw + 10)
             draw.rounded_rectangle((x0, y + 44, x0 + bw, y + 100), radius=10, fill="#0a1c66", outline="#2d6bff", width=1)
