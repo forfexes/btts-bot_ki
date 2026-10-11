@@ -1287,6 +1287,10 @@ def render_bis_card(entries, target_date, result=None):
             if None not in q:
                 p1, px, p2 = q
                 break
+    if None in (p1, px, p2) and grid:
+        p1 = sum(v for (i, j), v in grid.items() if i > j) * 100
+        px = sum(v for (i, j), v in grid.items() if i == j) * 100
+        p2 = sum(v for (i, j), v in grid.items() if i < j) * 100
     vals = ((p1, home), (px, "Draw"), (p2, away))
     cols = ("#0b2a9a", "#0b2a9a", "#3a1a9a")
     for i, (v, n) in enumerate(vals):

@@ -26918,6 +26918,39 @@ def main():
     # Main single-market tips are sent only after specialist pipelines.
     send_top_tips(tips_by_market, target_date)
 
+    # Card context: attach REAL model outputs (Elo-Poisson: expected goals, Elo, 1X2) where the
+    # league has rating history. Display-only fields; they never change picks, odds or edges.
+    try:
+        _ctx_cache = {}
+        _ctx_n = 0
+        _ctx_deadline = time.time() + float(env("NETRATTLER_CARD_CTX_BUDGET_SEC", "60"))
+        for _mk, _tl in tips_by_market.items():
+            for _t in _tl or []:
+                if not isinstance(_t, dict) or _t.get("exp_goals_home") or " vs " not in str(_t.get("match", "")):
+                    continue
+                if time.time() > _ctx_deadline:
+                    break
+                _h, _a = str(_t["match"]).split(" vs ", 1)
+                _lg = str(_t.get("league") or "")
+                _ck = (_h, _a, _lg)
+                if _ck not in _ctx_cache:
+                    _ctx_cache[_ck] = get_elo_poisson_prediction(_h, _a, _lg) or {}
+                _ep = _ctx_cache[_ck]
+                if not _ep:
+                    continue
+                _ctx_n += 1
+                _t.setdefault("exp_goals_home", _ep.get("exp_goals_home"))
+                _t.setdefault("exp_goals_away", _ep.get("exp_goals_away"))
+                _t.setdefault("elo_home", _ep.get("elo_home"))
+                _t.setdefault("elo_away", _ep.get("elo_away"))
+                if _mk == "1x2" and not _t.get("p_home"):
+                    _t["p_home"] = _ep.get("home_win_pct")
+                    _t["p_draw"] = _ep.get("draw_pct")
+                    _t["p_away"] = _ep.get("away_win_pct")
+        log(f"🖼️ Card-Kontext (Elo-Poisson) für {_ctx_n} Tipps ergänzt")
+    except Exception as _ctx_exc:
+        log(f"⚠️ Card-Kontext optional: {type(_ctx_exc).__name__}", "WARN")
+
     # Premium match cards run AFTER Scorer/Props/Builder/Combos so Telegram image
     # retries or logo lookups can never starve the specialist betting pipelines.
     try:
