@@ -25710,6 +25710,16 @@ def _ntr_persist_marks(reason):
         pass
 
 
+def _ntr_ht_prob_plausible(prob_pct, odds):
+    """Calibration guard for HT specials: a model probability far above the market's
+    implied probability is a miscalibrated model (fake edge), not a value bet."""
+    try:
+        ratio = float(os.getenv("NETRATTLER_HT_MAX_PROB_RATIO", "2.0"))
+        return float(prob_pct) / 100.0 <= ratio * (1.0 / float(odds))
+    except Exception:
+        return False
+
+
 def main():
     log("=" * 60)
     log("AI TIPP BOT - ALL-IN-ONE EDITION")
@@ -26225,7 +26235,7 @@ def main():
                     # Keine synthetische Wahrscheinlichkeit (prob_b*0.62): ohne unabhaengiges
                     # Modell-Ergebnis entsteht nur ein Schein-Edge gegen hohe HT-Quoten.
                     btts_ht_prob = max(0.0, min(95.0, btts_ht_prob))
-                    if btts_ht_prob > 0 and btts_ht_odds > 1 and btts_ht_prob >= BTTS_HT_MIN_PROB and _is_market_value_bet(btts_ht_odds, btts_ht_prob, BTTS_HT_MIN_ODDS, BTTS_HT_MIN_EDGE):
+                    if btts_ht_prob > 0 and btts_ht_odds > 1 and _ntr_ht_prob_plausible(btts_ht_prob, btts_ht_odds) and btts_ht_prob >= BTTS_HT_MIN_PROB and _is_market_value_bet(btts_ht_odds, btts_ht_prob, BTTS_HT_MIN_ODDS, BTTS_HT_MIN_EDGE):
                         tip_btts_ht = {
                             "match": mn, "league": league_name or "Pinnacle",
                             "time": tstr, "tip": "BTTS HT (Beide Teams treffen 1.HZ)",
@@ -26253,7 +26263,7 @@ def main():
                         o15_prob = 0.0
                     # Keine synthetische Wahrscheinlichkeit (prob_o*0.64), siehe BTTS-HT.
                     o15_prob = max(0.0, min(95.0, o15_prob))
-                    if o15_prob > 0 and o15_odds > 1 and "over15_ht" in tips_by_market and o15_prob >= OVER15_HT_MIN_PROB and _is_market_value_bet(o15_odds, o15_prob, OVER15_HT_MIN_ODDS, OVER15_HT_MIN_EDGE):
+                    if o15_prob > 0 and o15_odds > 1 and _ntr_ht_prob_plausible(o15_prob, o15_odds) and "over15_ht" in tips_by_market and o15_prob >= OVER15_HT_MIN_PROB and _is_market_value_bet(o15_odds, o15_prob, OVER15_HT_MIN_ODDS, OVER15_HT_MIN_EDGE):
                         tip_o15_ht = {
                             "match": mn, "league": league_name or "Pinnacle",
                             "time": tstr, "tip": "Over 1.5 Tore HT",
