@@ -1719,3 +1719,95 @@ def attach_history_context(tips_by_market, log=print):
             done += 1
     STATS["history_ctx"] = done
     return done
+
+
+# ---------------------------------------------------------------- H2H via API-Football (capped)
+_AF_TEAM_ID = {}
+
+
+def _af_get(path, params, keys, state):
+    for key in keys[:3]:
+        if state["calls"] >= state["max"]:
+            return None
+        state["calls"] += 1
+        try:
+            r = requests.get("https://v3.football.api-sports.io" + path, params=params, timeout=10,
+                             headers={"x-rapidapi-key": key, "x-rapidapi-host": "v3.football.api-sports.io"})
+        except Exception:
+            continue
+        if not r.ok:
+            continue
+        data = r.json() or {}
+        errs = data.get("errors")
+        if errs and not data.get("response"):
+            STATS["h2h_api_err"] = str(errs)[:60]
+            continue
+        return data.get("response") or []
+    return None
+
+
+def _af_team_id(team, league, keys, state):
+    k = _norm(team)
+    if k in _AF_TEAM_ID:
+        return _AF_TEAM_ID[k]
+    q = re.sub(r"[^A-Za-z0-9 ]+", " ", unicodedata.normalize("NFKD", team).encode("ascii", "ignore").decode())
+    q = " ".join(t for t in q.split() if t.lower() not in _FL_STOP) or q.strip()
+    if len(q) < 3:
+        return None
+    resp = _af_get("/teams", {"search": q[:40]}, keys, state)
+    country = _country_of(league).lower()
+    best, sc = None, 0.0
+    for row in resp or []:
+        t = row.get("team") or {}
+        score = _name_score(team, t.get("name", "")) + (0.3 if country and str(t.get("country", "")).lower() == country else 0)
+        if t.get("id") and score > sc:
+            best, sc = t["id"], score
+    _AF_TEAM_ID[k] = best if sc >= 0.5 else None
+    return _AF_TEAM_ID[k]
+
+
+def attach_h2h_api(tips_by_market, log=print):
+    keys = [k.strip() for k in (os.getenv("API_FOOTBALL_KEYS") or os.getenv("API_FOOTBALL_KEY") or "").split(",") if k.strip()]
+    if not keys or os.getenv("ENABLE_CARD_H2H_API", "true").lower() not in ("1", "true", "yes", "on"):
+        return 0
+    state = {"calls": 0, "max": int(os.getenv("CARD_H2H_MAX_CALLS", "45"))}
+    done, seen = 0, {}
+    for tips in tips_by_market.values():
+        for t in tips or []:
+            if not isinstance(t, dict) or " vs " not in str(t.get("match", "")):
+                continue
+            if t.get("h2h_matches"):
+                continue
+            mk = _norm(t["match"])
+            if mk in seen:
+                for k, v in (seen[mk] or {}).items():
+                    t.setdefault(k, v)
+                continue
+            if state["calls"] >= state["max"] - 2:
+                break
+            h, a = _teams(t["match"])
+            league = str(t.get("league") or "")
+            hid, aid = _af_team_id(h, league, keys, state), _af_team_id(a, league, keys, state)
+            seen[mk] = None
+            if not hid or not aid:
+                continue
+            resp = _af_get("/fixtures/headtohead", {"h2h": f"{hid}-{aid}", "last": 10}, keys, state)
+            games = []
+            for m in resp or []:
+                g = m.get("goals") or {}
+                if g.get("home") is None or g.get("away") is None:
+                    continue
+                games.append((int(g["home"]), int(g["away"])))
+            if not games:
+                continue
+            seen[mk] = {
+                "h2h_matches": len(games),
+                "h2h_btts": f"{sum(1 for x, y in games if x > 0 and y > 0)}/{len(games)}",
+                "h2h_avg_goals": round(sum(x + y for x, y in games) / len(games), 1),
+            }
+            for k, v in seen[mk].items():
+                t.setdefault(k, v)
+            done += 1
+    STATS["h2h_api_matches"] = done
+    STATS["h2h_api_calls"] = state["calls"]
+    return done
