@@ -1261,8 +1261,8 @@ def render_bis_card(entries, target_date, result=None):
     tc(f"{pct:.0f}%" if pct is not None else "–", 482, 370, f(56), "#33f0c8")
     tc("MODEL", 482, 430, f(15), "#33f0c8")
     tc("PROBABILITY", 482, 448, f(15), "#33f0c8")
-    lh = num("exp_goals_home", "xg_home", "avg_goals_home")
-    la = num("exp_goals_away", "xg_away", "avg_goals_away")
+    lh = num("exp_goals_home", "xg_home")
+    la = num("exp_goals_away", "xg_away")
     grid = _poisson_grid(lh, la) if lh and la else None
     btts_p = sum(v for (i, j), v in grid.items() if i and j) * 100 if grid else None
     best = sorted(grid.items(), key=lambda x: -x[1]) if grid else []
@@ -1627,3 +1627,95 @@ def _espn_logo(team, league=""):
         return best
     _stat("espn_empty")
     return ""
+
+
+# ---------------------------------------------------------------- history context (Supabase)
+def _load_results():
+    url, hdr = _sb()
+    if not url:
+        return []
+    base = url.replace("netrattler_match_cards", "match_results")
+    rows, off = [], 0
+    while off < 20000:
+        r = requests.get(base, headers=hdr, timeout=25, params={
+            "select": "match_date,home_team,away_team,home_score,away_score,league",
+            "status": "eq.finished", "order": "match_date.desc", "limit": "1000", "offset": str(off)})
+        if not r.ok:
+            break
+        chunk = r.json()
+        rows += chunk
+        if len(chunk) < 1000:
+            break
+        off += 1000
+    return rows
+
+
+def attach_history_context(tips_by_market, log=print):
+    """Real recent form / goals / BTTS-rate / H2H from stored match results (display-only)."""
+    if os.getenv("ENABLE_CARD_HISTORY", "true").lower() not in ("1", "true", "yes", "on"):
+        return 0
+    try:
+        rows = _load_results()
+    except Exception as exc:
+        log(f"Card-Historie nicht geladen: {type(exc).__name__}")
+        return 0
+    by_team = defaultdict(list)
+    for r in rows:
+        try:
+            hs, as_ = int(r["home_score"]), int(r["away_score"])
+        except Exception:
+            continue
+        hk, ak = _norm(r.get("home_team")), _norm(r.get("away_team"))
+        if not hk or not ak:
+            continue
+        by_team[hk].append((r["match_date"], hk, ak, hs, as_))
+        by_team[ak].append((r["match_date"], hk, ak, hs, as_))
+    keys = list(by_team)
+
+    def find(team):
+        k = _norm(team)
+        if k in by_team:
+            return k
+        toks = _tokens(team)
+        if not toks:
+            return None
+        best, bs = None, 0.0
+        for kk in keys:
+            if len(kk) < 4:
+                continue
+            if k and (k in kk or kk in k) and min(len(k), len(kk)) >= 5:
+                return kk
+        return best
+
+    def summary(key, name_key):
+        games = sorted(by_team[key], reverse=True)[:8]
+        res, gf, ga, bt, n = [], 0, 0, 0, 0
+        for _d, hk, ak, hs, as_ in games:
+            mine, opp = (hs, as_) if hk == key else (as_, hs)
+            res.append("W" if mine > opp else "D" if mine == opp else "L")
+            gf += mine; ga += opp; bt += 1 if hs > 0 and as_ > 0 else 0; n += 1
+        return {"form": "".join(res[:5][::-1]), "n": n, "gf": gf / n, "bt": 100 * bt / n}
+
+    done = 0
+    for tips in tips_by_market.values():
+        for t in tips or []:
+            if not isinstance(t, dict) or " vs " not in str(t.get("match", "")) or t.get("homeForm"):
+                continue
+            h, a = _teams(t["match"])
+            hk, ak = find(h), find(a)
+            if not hk or not ak:
+                continue
+            hs_, as_ = summary(hk, h), summary(ak, a)
+            if hs_["n"] < 3 or as_["n"] < 3:
+                continue
+            t.setdefault("homeForm", hs_["form"]); t.setdefault("awayForm", as_["form"])
+            t.setdefault("avg_goals_home", round(hs_["gf"], 2)); t.setdefault("avg_goals_away", round(as_["gf"], 2))
+            t.setdefault("btts_rate_home", round(hs_["bt"])); t.setdefault("btts_rate_away", round(as_["bt"]))
+            h2h = [g for g in by_team[hk] if {g[1], g[2]} == {hk, ak}]
+            if h2h:
+                t.setdefault("h2h_matches", len(h2h))
+                t.setdefault("h2h_btts", f"{sum(1 for g in h2h if g[3] > 0 and g[4] > 0)}/{len(h2h)}")
+                t.setdefault("h2h_avg_goals", round(sum(g[3] + g[4] for g in h2h) / len(h2h), 1))
+            done += 1
+    STATS["history_ctx"] = done
+    return done

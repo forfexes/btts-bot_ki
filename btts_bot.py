@@ -26948,6 +26948,8 @@ def main():
                     _t["p_draw"] = _ep.get("draw_pct")
                     _t["p_away"] = _ep.get("away_win_pct")
         log(f"🖼️ Card-Kontext (Elo-Poisson) für {_ctx_n} Tipps ergänzt")
+        import netrattler_stats_match_cards as _nsc_h
+        log(f"🖼️ Card-Kontext (Historie Supabase) für {_nsc_h.attach_history_context(tips_by_market, log=log)} Tipps ergänzt")
     except Exception as _ctx_exc:
         log(f"⚠️ Card-Kontext optional: {type(_ctx_exc).__name__}", "WARN")
 
