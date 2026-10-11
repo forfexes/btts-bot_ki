@@ -192,9 +192,18 @@ def _wiki_badge(team):
     return ""
 
 
+_TSDB_LAST = 0.0
+
+
 def _search_badge(query, api_key, key):
     """Return (url, rate_limited). Retries politely on HTTP 429."""
+    global _TSDB_LAST
+    gap = float(os.getenv("TSDB_MIN_GAP_SEC", "2.3"))
     for attempt in range(3):
+        wait = _TSDB_LAST + gap - time.time()
+        if wait > 0:
+            time.sleep(wait)
+        _TSDB_LAST = time.time()
         r = requests.get(
             f"https://www.thesportsdb.com/api/v1/json/{api_key}/searchteams.php",
             params={"t": query},
@@ -614,12 +623,9 @@ def send_cards(tips_by_market, target_date, token, stats_chat, log=print):
 
     cards = select_cards(tips_by_market, os.getenv("STATS_MATCH_CARDS_MAX", "0"))
 
-    # Badge lookup is presentation-only; prefetch concurrently so dozens of cards
-    # do not serialize two network calls per team.
+    # Badge lookup is presentation-only. Persistent cache first, then throttled lookups.
     try:
-        from concurrent.futures import ThreadPoolExecutor
-        teams = []
-        seen_teams = set()
+        teams, seen_teams = [], set()
         for entries in cards:
             if not entries:
                 continue
@@ -629,11 +635,28 @@ def send_cards(tips_by_market, target_date, token, stats_chat, log=print):
                 if key and key not in seen_teams:
                     seen_teams.add(key)
                     teams.append(team)
-        if teams:
-            with ThreadPoolExecutor(max_workers=min(3, len(teams))) as ex:
-                list(ex.map(_badge_bytes, teams))
-    except Exception:
-        pass
+        _crest_cache_load()
+        budget = float(os.getenv("CREST_PREFETCH_BUDGET_SEC", "240"))
+        t0 = time.time()
+        for rnd in range(2):
+            todo = [t for t in teams if not _BADGE_CACHE.get(_norm(t))]
+            for team in todo:
+                if time.time() - t0 > budget:
+                    break
+                _BADGE_CACHE.pop(_norm(team), None)
+                _badge_bytes(team)
+            if rnd == 0 and any(not _BADGE_CACHE.get(_norm(t)) for t in teams) and time.time() - t0 < budget - 40:
+                time.sleep(20)  # let the rate limit recover, retry the rest once
+                for t in teams:
+                    if not _BADGE_CACHE.get(_norm(t)):
+                        _LOGO_CACHE.pop(_norm(t), None)
+            else:
+                break
+        _crest_cache_save(teams)
+        STATS["teams_total"] = len(teams)
+        STATS["teams_with_badge"] = sum(1 for t in teams if _BADGE_CACHE.get(_norm(t)))
+    except Exception as exc:
+        log(f"Crest-Prefetch Fehler: {type(exc).__name__}")
 
     sent = 0
     pause = max(0.0, float(os.getenv("STATS_MATCH_CARDS_SEND_DELAY_SEC", "1.2")))
@@ -950,3 +973,42 @@ def send_scorer_card(token, chat, tip, target_date, log=print):
     if mid and mid is not True:
         save_card(chat, mid, [("scorer", tip)], target_date, log)
     return bool(mid)
+
+
+def _crest_cache_load():
+    try:
+        url, hdr = _sb()
+        if not url:
+            return
+        base = url.replace("netrattler_match_cards", "netrattler_crest_cache")
+        r = requests.get(base, headers=hdr, params={"select": "team_key,url", "limit": "5000"}, timeout=15)
+        if r.ok:
+            n = 0
+            for row in r.json():
+                if row.get("team_key") and row.get("url") and row["team_key"] not in _LOGO_CACHE:
+                    _LOGO_CACHE[row["team_key"]] = row["url"]
+                    n += 1
+            STATS["crest_cache_loaded"] = n
+    except Exception:
+        pass
+
+
+def _crest_cache_save(teams):
+    try:
+        url, hdr = _sb()
+        if not url:
+            return
+        base = url.replace("netrattler_match_cards", "netrattler_crest_cache")
+        rows = []
+        for t in teams:
+            k = _norm(t)
+            u = _LOGO_CACHE.get(k)
+            if u and _BADGE_CACHE.get(k):
+                rows.append({"team_key": k, "team": t[:80], "url": u})
+        if rows:
+            h = dict(hdr)
+            h["Prefer"] = "resolution=merge-duplicates,return=minimal"
+            r = requests.post(base + "?on_conflict=team_key", headers=h, json=rows, timeout=20)
+            STATS["crest_cache_saved"] = len(rows) if r.ok else 0
+    except Exception:
+        pass
