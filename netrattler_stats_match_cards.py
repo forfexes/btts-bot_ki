@@ -348,7 +348,7 @@ def _form_chars(value):
     return chars[-5:]
 
 
-def render_card(entries, target_date):
+def render_card(entries, target_date, result=None):
     """Neon-blue premium match card (NETRATTLER branding, display-only).
 
     Every block is optional: it is drawn only when the tip carries the real
@@ -396,12 +396,21 @@ def render_card(entries, target_date):
     draw.text((w - 250, 62), "CLEANER CARDS.", font=font(20, True), fill="#ffffff")
     draw.rounded_rectangle((300, 132, 780, 166), radius=16, fill="#0b1f6e", outline="#3b82ff", width=2)
     text_c(league or "FUSSBALL", w / 2, 138, font(18, True), "#d6e6ff")
-    draw.rounded_rectangle((420, 176, 660, 208), radius=14, fill="#d62839")
-    text_c("PRE-KICKOFF", w / 2, 181, font(17, True), "#ffffff")
+    result = result if isinstance(result, dict) else None
+    marks = (result or {}).get("marks") or {}
+    if result:
+        draw.rounded_rectangle((420, 176, 660, 208), radius=14, fill="#1fbf5b")
+        text_c("ABGESCHLOSSEN", w / 2, 181, font(17, True), "#ffffff")
+    else:
+        draw.rounded_rectangle((420, 176, 660, 208), radius=14, fill="#d62839")
+        text_c("PRE-KICKOFF", w / 2, 181, font(17, True), "#ffffff")
 
     _paste_badge(im, draw, home, (70, 130, 250, 310), font(44, True))
     _paste_badge(im, draw, away, (830, 130, 1010, 310), font(44, True))
-    text_c("VS", w / 2, 218, font(54, True), "#ffffff")
+    if result and result.get("ft"):
+        text_c(str(result["ft"]).replace("-", " : "), w / 2, 212, font(60, True), "#ffffff")
+    else:
+        text_c("VS", w / 2, 218, font(54, True), "#ffffff")
     shown_date = str(target_date)[:10]
     try:
         from datetime import datetime as _dt
@@ -412,6 +421,8 @@ def render_card(entries, target_date):
     except Exception:
         pass
     meta = "  ·  ".join(x for x in (kickoff, shown_date) if x)
+    if result and result.get("ht"):
+        meta = f"Halbzeit {result['ht']}  ·  {shown_date}"
     text_c(meta, w / 2, 288, font(19, True), "#d6e6ff")
     text_c(home[:22], 160, 322, font(30, True), "#ffffff")
     text_c(away[:22], 920, 322, font(30, True), "#ffffff")
@@ -477,15 +488,24 @@ def render_card(entries, target_date):
     panel((34, top, 1046, top + 52 + len(rows) * 58))
     draw.text((56, top + 12), "QUALIFIZIERTE MÄRKTE", font=font(20, True), fill="#ffffff")
     draw.text((760, top + 16), "QUOTE", font=font(15, True), fill="#9fc2ff")
-    draw.text((930, top + 16), "PROB.", font=font(15, True), fill="#9fc2ff")
+    draw.text((880, top + 16), "PROB.", font=font(15, True), fill="#9fc2ff")
     for i, (market, tip) in enumerate(rows):
         y = top + 48 + i * 58
-        draw.rounded_rectangle((48, y, 1032, y + 50), radius=10, fill="#0a1c66" if i % 2 == 0 else "#08175a")
+        mk = marks.get(str(i)) or marks.get(i)
+        rowfill = "#0a1c66" if i % 2 == 0 else "#08175a"
+        if mk == "win":
+            rowfill = "#0b4a3a"
+        elif mk == "loss":
+            rowfill = "#5a1426"
+        draw.rounded_rectangle((48, y, 1032, y + 50), radius=10, fill=rowfill)
         draw.text((66, y + 12), _label(market, tip)[:40], font=font(22, True), fill="#eef7ff")
         draw.text((762, y + 11), f"{_price(tip):.2f}", font=font(26, True), fill="#ffd166")
         p = _pct(tip.get("probability"))
         if p is not None:
-            draw.text((930, y + 11), f"{p:.0f}%", font=font(26, True), fill="#27e0c0")
+            draw.text((880, y + 11), f"{p:.0f}%", font=font(26, True), fill="#27e0c0")
+        if mk in ("win", "loss"):
+            draw.text((972, y + 8), "✔" if mk == "win" else "✖", font=font(30, True),
+                      fill="#27e0c0" if mk == "win" else "#ff5468")
 
     # Context stats: drawn only for values that really exist on the tips.
     ctx = {}
@@ -538,82 +558,6 @@ def render_card(entries, target_date):
     return data.getvalue()
 
 
-def render_result_card(info):
-    """Settlement card: crests, final score, HIT/MISS. info keys: home, away, league, label,
-    odds, status ('win'/'loss'), ft, ht, profit, reason."""
-    from PIL import Image, ImageDraw, ImageFont
-
-    w, h = 1080, 760
-    im = Image.new("RGB", (w, h), "#020a2a")
-    draw = ImageDraw.Draw(im)
-    fp = "/usr/share/fonts/truetype/dejavu/DejaVuSans.ttf"
-    fb = "/usr/share/fonts/truetype/dejavu/DejaVuSans-Bold.ttf"
-
-    def font(size, bold=False):
-        try:
-            return ImageFont.truetype(fb if bold else fp, size)
-        except OSError:
-            return ImageFont.load_default()
-
-    def text_c(text, cx, y, f, fill):
-        bb = draw.textbbox((0, 0), text, font=f)
-        draw.text((cx - (bb[2] - bb[0]) / 2, y), text, font=f, fill=fill)
-
-    for i in range(0, 300, 6):
-        draw.line((0, i, w, i), fill=(2, 10 + i // 14, 42 + i // 5))
-    win = str(info.get("status")) == "win"
-    accent = "#27e0c0" if win else "#ff5468"
-    draw.rounded_rectangle((14, 14, w - 14, h - 14), radius=26, outline="#1f55e8", width=3)
-    text_c("NETRATTLER", w / 2, 30, font(62, True), "#ffffff")
-    text_c("TIPP AUSWERTUNG", w / 2, 100, font(20, True), "#9fc2ff")
-    home, away = str(info.get("home") or ""), str(info.get("away") or "")
-    draw.rounded_rectangle((300, 132, 780, 166), radius=16, fill="#0b1f6e", outline="#3b82ff", width=2)
-    text_c(str(info.get("league") or "FUSSBALL")[:48], w / 2, 138, font(18, True), "#d6e6ff")
-    _paste_badge(im, draw, home, (70, 130, 250, 310), font(44, True))
-    _paste_badge(im, draw, away, (830, 130, 1010, 310), font(44, True))
-    ft = str(info.get("ft") or "")
-    text_c(ft or "VS", w / 2, 205, font(70, True), "#ffffff")
-    if info.get("ht"):
-        text_c(f"HZ {info['ht']}", w / 2, 290, font(20, True), "#9fc2ff")
-    text_c(home[:22], 160, 322, font(30, True), "#ffffff")
-    text_c(away[:22], 920, 322, font(30, True), "#ffffff")
-
-    draw.rounded_rectangle((34, 390, 1046, 560), radius=18, fill="#06124a", outline=accent, width=3)
-    text_c("✔ TREFFER" if win else "✖ KEIN TREFFER", 540, 408, font(46, True), accent)
-    label = str(info.get("label") or "")[:48]
-    text_c(label, 540, 474, font(28, True), "#ffffff")
-    odds = _number(info.get("odds"))
-    profit = _number(info.get("profit"))
-    bits = []
-    if odds:
-        bits.append(f"Quote {odds:.2f}")
-    if profit is not None:
-        bits.append(f"{profit:+.2f} Units")
-    if bits:
-        text_c("  ·  ".join(bits), 540, 516, font(22, True), "#ffd166")
-    reason = str(info.get("reason") or "")[:90]
-    if reason:
-        text_c(reason, 540, 590, font(18), "#9fb4ca")
-    draw.line((60, h - 62, w - 60, h - 62), fill="#1f55e8", width=2)
-    text_c("NETRATTLER  |  automatisch ausgewertet", w / 2, h - 50, font(16, True), "#9fc2ff")
-    data = io.BytesIO()
-    im.save(data, format="PNG", optimize=True)
-    return data.getvalue()
-
-
-def send_result_card(token, chat, info, log=print):
-    if os.getenv("ENABLE_RESULT_CARDS", "true").lower() not in ("1", "true", "yes", "on"):
-        return False
-    if not token or not chat:
-        return False
-    try:
-        payload = render_result_card(info)
-    except Exception as exc:
-        log(f"Result-Card übersprungen: {type(exc).__name__}: {str(exc)[:80]}")
-        return False
-    return _send_photo(token, chat, "", payload, log)
-
-
 def _send_photo(token, chat, caption, payload, log):
     url = f"https://api.telegram.org/bot{token}/sendPhoto"
     max_retries = max(1, int(os.getenv("STATS_MATCH_CARDS_RETRIES", "4")))
@@ -631,7 +575,10 @@ def _send_photo(token, chat, caption, payload, log):
             except Exception:
                 body = {}
             if resp.ok and body.get("ok"):
-                return True
+                try:
+                    return int((body.get("result") or {}).get("message_id") or 0) or True
+                except Exception:
+                    return True
             if resp.status_code == 429:
                 retry_after = int((body.get("parameters") or {}).get("retry_after") or 2)
                 wait = max(1, min(30, retry_after + 1))
@@ -684,10 +631,128 @@ def send_cards(tips_by_market, target_date, token, stats_chat, log=print):
         try:
             match = str(entries[0][1].get("match", "Match"))[:100]
             payload = render_card(entries, target_date)
-            if _send_photo(token, stats_chat, "", payload, log):
+            mid = _send_photo(token, stats_chat, "", payload, log)
+            if mid:
                 sent += 1
+                if mid is not True:
+                    save_card(stats_chat, mid, entries, target_date, log)
             if pause:
                 time.sleep(pause)
         except Exception as exc:
             log(f"Match-Card optional übersprungen: {type(exc).__name__}: {str(exc)[:90]}")
     return sent
+
+
+# ---------------------------------------------------------------- in-image results
+def _sb():
+    url = (os.getenv("SUPABASE_URL") or "").rstrip("/")
+    key = os.getenv("SUPABASE_SERVICE_ROLE_KEY") or os.getenv("SUPABASE_KEY") or ""
+    if not url or not key:
+        return None, None
+    return f"{url}/rest/v1/netrattler_match_cards", {
+        "apikey": key, "Authorization": f"Bearer {key}", "Content-Type": "application/json",
+        "Prefer": "return=minimal",
+    }
+
+
+def match_key(match):
+    return _norm(" ".join(_teams(match)))
+
+
+def save_card(chat, message_id, entries, target_date, log=print):
+    """Remember the sent card so settlement can edit the same image later."""
+    try:
+        url, hdr = _sb()
+        if not url:
+            return False
+        import json as _json
+        rows = []
+        for market, tip in entries[:5]:
+            rows.append([market, {k: v for k, v in tip.items()
+                                  if isinstance(v, (str, int, float, bool, type(None)))}])
+        first = entries[0][1]
+        body = {
+            "chat_id": str(chat), "message_id": int(message_id),
+            "match": str(first.get("match", ""))[:200], "match_key": match_key(first.get("match", "")),
+            "card_date": str(target_date)[:10], "entries": _json.loads(_json.dumps(rows, default=str)),
+        }
+        r = requests.post(url, headers=hdr, json=body, timeout=15)
+        if not r.ok:
+            log(f"Card-Speicher HTTP {r.status_code}")
+        return r.ok
+    except Exception as exc:
+        log(f"Card-Speicher Fehler: {type(exc).__name__}")
+        return False
+
+
+def _edit_photo(token, chat, message_id, payload, log):
+    import json as _json
+    try:
+        r = requests.post(
+            f"https://api.telegram.org/bot{token}/editMessageMedia",
+            data={"chat_id": chat, "message_id": int(message_id),
+                  "media": _json.dumps({"type": "photo", "media": "attach://card"})},
+            files={"card": ("netrattler_result.png", payload, "image/png")}, timeout=25,
+        )
+        if r.status_code == 429:
+            time.sleep(min(30, int((r.json().get("parameters") or {}).get("retry_after") or 3) + 1))
+            return False
+        if not r.ok:
+            log(f"Card-Edit HTTP {r.status_code}: {r.text[:100]}")
+        return r.ok
+    except Exception as exc:
+        log(f"Card-Edit Fehler: {type(exc).__name__}")
+        return False
+
+
+def update_cards_with_results(token, results, log=print):
+    """results: list of dicts {match, status('win'/'loss'), odds, group, ft, ht}.
+    Re-renders the stored card of that match with a ✔/✖ per settled market and edits
+    the original photo message (no new post)."""
+    if os.getenv("ENABLE_RESULT_IN_CARD", "true").lower() not in ("1", "true", "yes", "on"):
+        return 0
+    url, hdr = _sb()
+    if not url or not token or not results:
+        return 0
+    import json as _json
+    by_key = defaultdict(list)
+    for res in results:
+        by_key[match_key(res.get("match", ""))].append(res)
+    done = 0
+    for mk, res_list in by_key.items():
+        try:
+            r = requests.get(url, headers=hdr, timeout=20,
+                             params={"match_key": f"eq.{mk}", "select": "*", "order": "created_at.desc", "limit": "10"})
+            cards = r.json() if r.ok else []
+            for card in cards if isinstance(cards, list) else []:
+                entries = [(m, t) for m, t in (card.get("entries") or [])]
+                if not entries:
+                    continue
+                old = card.get("result") or {}
+                marks = dict(old.get("marks") or {})
+                ft = old.get("ft") or ""
+                ht = old.get("ht") or ""
+                for res in res_list:
+                    ft = res.get("ft") or ft
+                    ht = res.get("ht") or ht
+                    for i, (m, t) in enumerate(entries):
+                        odds_t = _number(t.get("odds") or t.get("oddsYes"))
+                        odds_r = _number(res.get("odds"))
+                        same_odds = odds_t is not None and odds_r is not None and abs(odds_t - odds_r) < 0.011
+                        if str(m) == str(res.get("group")) or same_odds:
+                            if str(m) == str(res.get("group")) and odds_t and odds_r and not same_odds and len(
+                                    [1 for mm, _ in entries if str(mm) == str(m)]) > 1:
+                                continue
+                            marks[str(i)] = res.get("status")
+                if not marks:
+                    continue
+                payload = render_card(entries, card.get("card_date") or "",
+                                      {"marks": marks, "ft": ft, "ht": ht})
+                if _edit_photo(token, card["chat_id"], card["message_id"], payload, log):
+                    done += 1
+                    requests.patch(url, headers=hdr, timeout=15, params={"card_id": f"eq.{card.get('card_id')}"},
+                                   json={"result": {"marks": marks, "ft": ft, "ht": ht}})
+                time.sleep(1.2)
+        except Exception as exc:
+            log(f"Card-Result optional übersprungen: {type(exc).__name__}")
+    return done

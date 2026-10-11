@@ -476,22 +476,18 @@ def format_direct_summary(settlement: Dict[str, Any]) -> str:
 
 
 def send_result_cards(newly_closed: Sequence[Dict[str, Any]]) -> int:
-    """Wappen-Karte pro ausgewertetem Einzelspiel-Tipp in die jeweilige Gruppe (ohne Caption)."""
-    sent = 0
+    """Ergebnis ins GLEICHE Bild: gespeicherte Match-Karte wird per editMessageMedia ersetzt."""
     try:
-        from netrattler_stats_match_cards import send_result_card
+        from netrattler_stats_match_cards import update_cards_with_results
     except Exception:
         return 0
-    limit = as_int(os.getenv("SETTLEMENT_RESULT_CARDS_MAX", "40"), 40)
+    results = []
     for row in newly_closed:
-        if sent >= limit:
-            break
         group = str(row.get("market_group") or group_of(row.get("tip_payload") or {}) or "default")
-        if group in {"combo", "combo_multi", "builder", "props"}:
-            continue
         home, away, _match = match_parts(row.get("tip_payload") or row)
         res = row.get("match_result") or {}
-        if not (home and away and isinstance(res, dict)):
+        st = normalized_status(row.get("status"))
+        if not (home and away and isinstance(res, dict)) or st not in {"win", "loss"}:
             continue
         hs, as_ = res.get("home_score"), res.get("away_score")
         if hs in (None, "") or as_ in (None, ""):
@@ -500,20 +496,15 @@ def send_result_cards(newly_closed: Sequence[Dict[str, Any]]) -> int:
         hth = anyv(raw, ["home_score_ht", "ht_home", "home_ht", "HTHG", "intHomeScoreHT"], None)
         hta = anyv(raw, ["away_score_ht", "ht_away", "away_ht", "HTAG", "intAwayScoreHT"], None)
         data = unpack(row.get("tip_payload") or {})
-        chat = str(GROUPS.get(group) or GROUPS.get("default") or "")
-        info = {
-            "home": home, "away": away, "league": anyv(data, ["league", "league_name"], ""),
-            "label": market_text(row.get("tip_payload") or row), "odds": anyv(data, ["odds", "oddsYes"], 0),
-            "status": normalized_status(row.get("status")), "ft": f"{hs}-{as_}",
+        results.append({
+            "match": f"{home} vs {away}", "status": st, "group": group,
+            "odds": anyv(data, ["odds", "oddsYes"], 0), "ft": f"{hs}-{as_}",
             "ht": f"{hth}-{hta}" if hth not in (None, "") and hta not in (None, "") else "",
-            "profit": row.get("profit"), "reason": str(row.get("reason") or ""),
-        }
-        if send_result_card(TG_TOKEN, chat, info, log=log):
-            sent += 1
-            time.sleep(1.2)
-    if sent:
-        log(f"Result-Cards gesendet: {sent}")
-    return sent
+        })
+    n = update_cards_with_results(TG_TOKEN, results, log=log)
+    if n:
+        log(f"Karten mit Ergebnis im selben Bild aktualisiert: {n}")
+    return n
 
 
 def edit_original_tip(settlement: Dict[str, Any]) -> bool:
