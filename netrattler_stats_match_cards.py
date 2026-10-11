@@ -538,6 +538,82 @@ def render_card(entries, target_date):
     return data.getvalue()
 
 
+def render_result_card(info):
+    """Settlement card: crests, final score, HIT/MISS. info keys: home, away, league, label,
+    odds, status ('win'/'loss'), ft, ht, profit, reason."""
+    from PIL import Image, ImageDraw, ImageFont
+
+    w, h = 1080, 760
+    im = Image.new("RGB", (w, h), "#020a2a")
+    draw = ImageDraw.Draw(im)
+    fp = "/usr/share/fonts/truetype/dejavu/DejaVuSans.ttf"
+    fb = "/usr/share/fonts/truetype/dejavu/DejaVuSans-Bold.ttf"
+
+    def font(size, bold=False):
+        try:
+            return ImageFont.truetype(fb if bold else fp, size)
+        except OSError:
+            return ImageFont.load_default()
+
+    def text_c(text, cx, y, f, fill):
+        bb = draw.textbbox((0, 0), text, font=f)
+        draw.text((cx - (bb[2] - bb[0]) / 2, y), text, font=f, fill=fill)
+
+    for i in range(0, 300, 6):
+        draw.line((0, i, w, i), fill=(2, 10 + i // 14, 42 + i // 5))
+    win = str(info.get("status")) == "win"
+    accent = "#27e0c0" if win else "#ff5468"
+    draw.rounded_rectangle((14, 14, w - 14, h - 14), radius=26, outline="#1f55e8", width=3)
+    text_c("NETRATTLER", w / 2, 30, font(62, True), "#ffffff")
+    text_c("TIPP AUSWERTUNG", w / 2, 100, font(20, True), "#9fc2ff")
+    home, away = str(info.get("home") or ""), str(info.get("away") or "")
+    draw.rounded_rectangle((300, 132, 780, 166), radius=16, fill="#0b1f6e", outline="#3b82ff", width=2)
+    text_c(str(info.get("league") or "FUSSBALL")[:48], w / 2, 138, font(18, True), "#d6e6ff")
+    _paste_badge(im, draw, home, (70, 130, 250, 310), font(44, True))
+    _paste_badge(im, draw, away, (830, 130, 1010, 310), font(44, True))
+    ft = str(info.get("ft") or "")
+    text_c(ft or "VS", w / 2, 205, font(70, True), "#ffffff")
+    if info.get("ht"):
+        text_c(f"HZ {info['ht']}", w / 2, 290, font(20, True), "#9fc2ff")
+    text_c(home[:22], 160, 322, font(30, True), "#ffffff")
+    text_c(away[:22], 920, 322, font(30, True), "#ffffff")
+
+    draw.rounded_rectangle((34, 390, 1046, 560), radius=18, fill="#06124a", outline=accent, width=3)
+    text_c("✔ TREFFER" if win else "✖ KEIN TREFFER", 540, 408, font(46, True), accent)
+    label = str(info.get("label") or "")[:48]
+    text_c(label, 540, 474, font(28, True), "#ffffff")
+    odds = _number(info.get("odds"))
+    profit = _number(info.get("profit"))
+    bits = []
+    if odds:
+        bits.append(f"Quote {odds:.2f}")
+    if profit is not None:
+        bits.append(f"{profit:+.2f} Units")
+    if bits:
+        text_c("  ·  ".join(bits), 540, 516, font(22, True), "#ffd166")
+    reason = str(info.get("reason") or "")[:90]
+    if reason:
+        text_c(reason, 540, 590, font(18), "#9fb4ca")
+    draw.line((60, h - 62, w - 60, h - 62), fill="#1f55e8", width=2)
+    text_c("NETRATTLER  |  automatisch ausgewertet", w / 2, h - 50, font(16, True), "#9fc2ff")
+    data = io.BytesIO()
+    im.save(data, format="PNG", optimize=True)
+    return data.getvalue()
+
+
+def send_result_card(token, chat, info, log=print):
+    if os.getenv("ENABLE_RESULT_CARDS", "true").lower() not in ("1", "true", "yes", "on"):
+        return False
+    if not token or not chat:
+        return False
+    try:
+        payload = render_result_card(info)
+    except Exception as exc:
+        log(f"Result-Card übersprungen: {type(exc).__name__}: {str(exc)[:80]}")
+        return False
+    return _send_photo(token, chat, "", payload, log)
+
+
 def _send_photo(token, chat, caption, payload, log):
     url = f"https://api.telegram.org/bot{token}/sendPhoto"
     max_retries = max(1, int(os.getenv("STATS_MATCH_CARDS_RETRIES", "4")))
@@ -545,7 +621,7 @@ def _send_photo(token, chat, caption, payload, log):
         try:
             resp = requests.post(
                 url,
-                data={"chat_id": chat, "caption": caption},
+                data=({"chat_id": chat, "caption": caption} if caption else {"chat_id": chat}),
                 files={"photo": ("netrattler_match.png", payload, "image/png")},
                 timeout=20,
             )
@@ -608,7 +684,7 @@ def send_cards(tips_by_market, target_date, token, stats_chat, log=print):
         try:
             match = str(entries[0][1].get("match", "Match"))[:100]
             payload = render_card(entries, target_date)
-            if _send_photo(token, stats_chat, "NETRATTLER | " + match, payload, log):
+            if _send_photo(token, stats_chat, "", payload, log):
                 sent += 1
             if pause:
                 time.sleep(pause)
