@@ -193,6 +193,72 @@ def _wiki_badge(team):
 
 
 _TSDB_LAST = 0.0
+_TEAM_LEAGUE = {}
+_FL_COUNTRY = {}
+_FL_ALIAS = {"usa": "usa", "united-states": "usa", "korea-republic": "south-korea", "south-korea": "south-korea",
+             "czech-republic": "czechia", "bosnia-herzegovina": "bosnia-and-herzegovina", "uae": "uae",
+             "united-arab-emirates": "uae", "ireland": "republic-of-ireland", "turkiye": "turkey"}
+_FL_STOP = {"fc", "cf", "cd", "sc", "ac", "afc", "ca", "club", "de", "sd", "ud", "fk", "sk", "if", "bk", "cs",
+            "sv", "vfl", "vfb", "rcd", "rc", "ssc", "as", "us", "ss", "the", "atletico", "deportivo"}
+
+
+def _slug(text):
+    text = unicodedata.normalize("NFKD", str(text or "")).encode("ascii", "ignore").decode().lower()
+    return re.sub(r"[^a-z0-9]+", "-", text).strip("-")
+
+
+def _fl_get(url):
+    try:
+        r = requests.get(url, timeout=8, headers={"User-Agent": "Mozilla/5.0 NETRATTLER-cards/1.0"})
+        return r.text if r.ok else ""
+    except Exception:
+        STATS["fl_err"] = STATS.get("fl_err", 0) + 1
+        return ""
+
+
+def _fl_country_slugs(country):
+    if country in _FL_COUNTRY:
+        return _FL_COUNTRY[country]
+    html = _fl_get(f"https://football-logos.cc/{country}/")
+    slugs = sorted(set(re.findall(r'href="(?:https://football-logos\.cc)?/%s/([a-z0-9-]+)/"' % re.escape(country), html)))
+    _FL_COUNTRY[country] = slugs
+    return slugs
+
+
+def _fl_logo(team, league):
+    """Club crest from football-logos.cc: club page -> 700x700 PNG."""
+    if os.getenv("ENABLE_FOOTBALL_LOGOS_CC", "true").lower() not in ("1", "true", "yes", "on"):
+        return ""
+    country = _slug(str(league or "").split(" - ")[0])
+    country = _FL_ALIAS.get(country, country)
+    if not country:
+        return ""
+    full = _slug(team)
+    core = "-".join(t for t in full.split("-") if t not in _FL_STOP) or full
+    cands = []
+    for c in (full, core):
+        if c and c not in cands:
+            cands.append(c)
+    want = set(core.split("-"))
+    best, best_score = "", 0.0
+    for sl in _fl_country_slugs(country):
+        toks = set(t for t in sl.split("-") if t not in _FL_STOP)
+        if not toks:
+            continue
+        inter = len(toks & want)
+        score = inter / max(len(toks | want), 1)
+        if inter and score > best_score:
+            best, best_score = sl, score
+    if best and best_score >= 0.5 and best not in cands:
+        cands.insert(0 if best_score >= 0.99 else 1, best)
+    for sl in cands[:3]:
+        html = _fl_get(f"https://football-logos.cc/{country}/{sl}/")
+        m = re.search(r"https://assets\.football-logos\.cc/logos/[a-z0-9-]+/(?:700x700|512x512|256x256)/[a-z0-9-]+\.[0-9a-f]+\.png", html)
+        if m:
+            STATS["fl_ok"] = STATS.get("fl_ok", 0) + 1
+            return m.group(0)
+    STATS["fl_miss"] = STATS.get("fl_miss", 0) + 1
+    return ""
 
 
 def _search_badge(query, api_key, key):
@@ -243,6 +309,10 @@ def _logo_url(team):
     url = _crest_from_index(team)
     if url:
         STATS["index_ok"] = STATS.get("index_ok", 0) + 1
+        _LOGO_CACHE[key] = url
+        return url
+    url = _fl_logo(team, _TEAM_LEAGUE.get(key, ""))
+    if url:
         _LOGO_CACHE[key] = url
         return url
     limited = False
@@ -632,6 +702,8 @@ def send_cards(tips_by_market, target_date, token, stats_chat, log=print):
             home, away = _teams(entries[0][1].get("match", ""))
             for team in (home, away):
                 key = _norm(team)
+                if key and entries[0][1].get("league"):
+                    _TEAM_LEAGUE.setdefault(key, str(entries[0][1].get("league")))
                 if key and key not in seen_teams:
                     seen_teams.add(key)
                     teams.append(team)
@@ -964,6 +1036,9 @@ def send_scorer_card(token, chat, tip, target_date, log=print):
         return False
     if not token or not chat or not _valid(tip) or not tip.get("player"):
         return False
+    for t in _teams(tip.get("match", "")):
+        if _norm(t) and tip.get("league"):
+            _TEAM_LEAGUE.setdefault(_norm(t), str(tip.get("league")))
     try:
         payload = render_scorer_card(tip, target_date)
     except Exception as exc:
