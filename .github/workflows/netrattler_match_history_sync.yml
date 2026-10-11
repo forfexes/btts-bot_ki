@@ -1,0 +1,23 @@
+name: NETRATTLER Match History Sync
+
+on:
+  workflow_dispatch:
+  schedule:
+    - cron: "40 3 * * 1"
+
+jobs:
+  sync:
+    runs-on: ubuntu-latest
+    timeout-minutes: 25
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+      - run: pip install --prefer-binary requests
+      - name: Sync match history into Supabase
+        env:
+          SUPABASE_URL: ${{ secrets.SUPABASE_URL }}
+          SUPABASE_KEY: ${{ secrets.SUPABASE_KEY }}
+          SUPABASE_SERVICE_ROLE_KEY: ${{ secrets.SUPABASE_SERVICE_ROLE_KEY }}
+        run: python netrattler_match_history_sync.py

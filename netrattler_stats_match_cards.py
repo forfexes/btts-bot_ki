@@ -1650,6 +1650,32 @@ def _load_results():
     return rows
 
 
+def _load_history_from_supabase(log=print):
+    """Fallback: stored copy in netrattler_match_history (matches since 2015)."""
+    url, hdr = _sb()
+    if not url:
+        return []
+    base = url.replace("netrattler_match_cards", "netrattler_match_history")
+    out, off = [], 0
+    try:
+        while off < 150000:
+            r = requests.get(base, headers=hdr, timeout=25, params={
+                "select": "match_date,home_team,away_team,ft_home,ft_away", "match_date": "gte.2015-01-01",
+                "order": "match_date.desc", "limit": "1000", "offset": str(off)})
+            if not r.ok:
+                break
+            chunk = r.json()
+            out += [{"match_date": c["match_date"], "home_team": c["home_team"], "away_team": c["away_team"],
+                     "home_score": c["ft_home"], "away_score": c["ft_away"]} for c in chunk]
+            if len(chunk) < 1000:
+                break
+            off += 1000
+        STATS["history_supabase_rows"] = len(out)
+    except Exception as exc:
+        log(f"Card-Historie Supabase Fehler: {type(exc).__name__}")
+    return out
+
+
 def _load_github_matches(log=print):
     """Open dataset xgabora/Club-Football-Match-Data (MIT): 238k matches 2000-2026, 38 divisions."""
     import csv
@@ -1690,7 +1716,10 @@ def attach_history_context(tips_by_market, log=print):
     except Exception as exc:
         log(f"Card-Historie nicht geladen: {type(exc).__name__}")
         rows = []
-    rows = list(rows) + _load_github_matches(log)
+    gh_rows = _load_github_matches(log)
+    if not gh_rows:
+        gh_rows = _load_history_from_supabase(log)
+    rows = list(rows) + gh_rows
     STATS["history_rows"] = len(rows)
     by_team = defaultdict(list)
     for r in rows:
