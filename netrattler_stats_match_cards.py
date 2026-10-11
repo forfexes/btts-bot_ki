@@ -315,6 +315,14 @@ def _logo_url(team):
     if url:
         _LOGO_CACHE[key] = url
         return url
+    for src in (_wikidata_logo, _apifootball_logo, _allsports_logo, _sofascore_logo, _espn_logo):
+        try:
+            url = src(team, _TEAM_LEAGUE.get(key, ""))
+        except Exception:
+            url = ""
+        if url:
+            _LOGO_CACHE[key] = url
+            return url
     limited = False
     api_key = os.getenv("THESPORTSDB_API_KEY", "3").strip() or "3"
     for query in _query_variants(team):
@@ -343,8 +351,8 @@ def _badge_bytes(team):
     url = _logo_url(team)
     if url:
         try:
-            r = requests.get(url, timeout=6)
-            if r.ok and r.content:
+            r = requests.get(url, timeout=8, headers={"User-Agent": "Mozilla/5.0 (NETRATTLER match cards; crest lookup)"})
+            if r.ok and r.content and not r.content[:15].lstrip().lower().startswith((b"<!doctype", b"<html")):
                 payload = r.content
         except Exception:
             payload = b""
@@ -1444,3 +1452,174 @@ def render_bis_card(entries, target_date, result=None):
     data = io.BytesIO()
     im.save(data, format="PNG", optimize=True)
     return data.getvalue()
+
+
+# ---------------------------------------------------------------- extra crest fallbacks
+_UA = {"User-Agent": "Mozilla/5.0 (NETRATTLER match cards; crest lookup)"}
+_SRC_CALLS = {}
+
+
+def _stat(name):
+    STATS[name] = STATS.get(name, 0) + 1
+
+
+def _name_score(a, b):
+    ta = set(t for t in _slug(a).split("-") if t and t not in _FL_STOP)
+    tb = set(t for t in _slug(b).split("-") if t and t not in _FL_STOP)
+    if not ta or not tb:
+        return 0.0
+    return len(ta & tb) / len(ta | tb)
+
+
+def _budget(src, default):
+    n = _SRC_CALLS.get(src, 0)
+    if n >= int(os.getenv(f"CREST_{src.upper()}_MAX", str(default))):
+        return False
+    _SRC_CALLS[src] = n + 1
+    return True
+
+
+def _country_of(league):
+    return str(league or "").split(" - ")[0].strip()
+
+
+def _wikidata_logo(team, league=""):
+    """Wikidata P154 (logo image) -> Wikimedia Commons PNG thumbnail."""
+    if not _budget("wikidata", 80):
+        return ""
+    r = requests.get("https://www.wikidata.org/w/api.php", headers=_UA, timeout=8, params={
+        "action": "wbsearchentities", "search": team, "language": "en", "type": "item",
+        "limit": 6, "format": "json"})
+    hits = (r.json() or {}).get("search") or []
+    ids = [h["id"] for h in hits if any(w in str(h.get("description", "")).lower()
+                                        for w in ("football", "soccer", "futbol", "fútbol", "club"))][:4]
+    if not ids:
+        _stat("wikidata_empty")
+        return ""
+    r = requests.get("https://www.wikidata.org/w/api.php", headers=_UA, timeout=8, params={
+        "action": "wbgetentities", "ids": "|".join(ids), "props": "claims", "format": "json"})
+    ents = (r.json() or {}).get("entities") or {}
+    for i in ids:
+        claims = (ents.get(i) or {}).get("claims") or {}
+        for prop in ("P154", "P94"):  # logo image, coat of arms image
+            for c in claims.get(prop) or []:
+                fn = (((c.get("mainsnak") or {}).get("datavalue") or {}).get("value"))
+                if fn:
+                    _stat("wikidata_ok")
+                    from urllib.parse import quote as _q
+                    return "https://commons.wikimedia.org/wiki/Special:FilePath/" + _q(fn.replace(" ", "_")) + "?width=300"
+    _stat("wikidata_empty")
+    return ""
+
+
+def _apifootball_logo(team, league=""):
+    keys = [k.strip() for k in (os.getenv("API_FOOTBALL_KEYS") or os.getenv("API_FOOTBALL_KEY") or "").split(",") if k.strip()]
+    if not keys or not _budget("apifootball", 40):
+        return ""
+    q = re.sub(r"[^A-Za-z0-9 ]+", " ", unicodedata.normalize("NFKD", team).encode("ascii", "ignore").decode())
+    q = " ".join(t for t in q.split() if t.lower() not in _FL_STOP) or q.strip()
+    if len(q) < 3:
+        return ""
+    country = _country_of(league).lower()
+    for key in keys[:3]:
+        r = requests.get("https://v3.football.api-sports.io/teams", params={"search": q[:40]}, timeout=8,
+                         headers={"x-rapidapi-key": key, "x-rapidapi-host": "v3.football.api-sports.io"})
+        if not r.ok:
+            continue
+        data = r.json() or {}
+        if data.get("errors") and not data.get("response"):
+            continue
+        best, sc = "", 0.0
+        for row in data.get("response") or []:
+            t = row.get("team") or {}
+            score = _name_score(team, t.get("name", "")) + (0.3 if country and str(t.get("country", "")).lower() == country else 0)
+            if t.get("logo") and score > sc:
+                best, sc = t["logo"], score
+        if best and sc >= 0.5:
+            _stat("apifootball_ok")
+            return best
+        _stat("apifootball_empty")
+        return ""
+    return ""
+
+
+def _allsports_logo(team, league=""):
+    key = os.getenv("ALLSPORTS_API_KEY", "")
+    if not key or not _budget("allsports", 40):
+        return ""
+    r = requests.get("https://apiv2.allsportsapi.com/football/", timeout=8,
+                     params={"met": "Teams", "teamName": team, "APIkey": key})
+    best, sc = "", 0.0
+    for row in (r.json() or {}).get("result") or [] if r.ok else []:
+        score = _name_score(team, row.get("team_name", ""))
+        if row.get("team_logo") and score > sc:
+            best, sc = row["team_logo"], score
+    if best and sc >= 0.5:
+        _stat("allsports_ok")
+        return best
+    _stat("allsports_empty")
+    return ""
+
+
+def _sofascore_logo(team, league=""):
+    if not _budget("sofascore", 40):
+        return ""
+    r = requests.get("https://api.sofascore.com/api/v1/search/teams", params={"q": team}, timeout=8, headers=_UA)
+    if not r.ok:
+        _stat("sofascore_err")
+        return ""
+    best, sc = None, 0.0
+    for row in (r.json() or {}).get("results") or []:
+        e = row.get("entity") or row
+        if str((e.get("sport") or {}).get("slug", "football")) != "football":
+            continue
+        score = _name_score(team, e.get("name", ""))
+        if e.get("id") and score > sc:
+            best, sc = e["id"], score
+    if best and sc >= 0.5:
+        _stat("sofascore_ok")
+        return f"https://api.sofascore.app/api/v1/team/{best}/image"
+    _stat("sofascore_empty")
+    return ""
+
+
+def _espn_logo(team, league=""):
+    if not _budget("espn", 40):
+        return ""
+    r = requests.get("https://site.web.api.espn.com/apis/search/v2", timeout=8, headers=_UA,
+                     params={"query": team, "limit": 10, "type": "team"})
+    if not r.ok:
+        _stat("espn_err")
+        return ""
+    best, sc = "", 0.0
+
+    def walk(o):
+        nonlocal best, sc
+        if isinstance(o, dict):
+            name = o.get("displayName") or o.get("name") or ""
+            img = ""
+            for k in ("logo", "image", "img"):
+                v = o.get(k)
+                if isinstance(v, str) and "teamlogos/soccer" in v:
+                    img = v
+            if not img:
+                for lg in o.get("logos") or o.get("images") or []:
+                    if isinstance(lg, dict) and "soccer" in str(lg.get("href", "")):
+                        img = lg["href"]
+                        break
+            if img and name:
+                score = _name_score(team, name)
+                if score > sc:
+                    best, sc = img, score
+            for v in o.values():
+                walk(v)
+        elif isinstance(o, list):
+            for v in o:
+                walk(v)
+
+    walk(r.json() or {})
+    if best and sc >= 0.5:
+        _stat("espn_ok")
+        return best
+    _stat("espn_empty")
+    return ""
