@@ -379,6 +379,53 @@ def _paste_badge(im, draw, team, box, font):
     draw.text((x0 + (x1-x0-tw)/2, y0 + (y1-y0-th)/2 - 4), initials, font=font, fill="#ffffff")
 
 
+
+def _neon_bg(w, h):
+    """Bright stadium-style neon background (gradient, spotlights, sparkles)."""
+    from PIL import Image, ImageDraw, ImageFilter
+    import random
+    bg = Image.new("RGB", (w, h), "#03104f")
+    d = ImageDraw.Draw(bg)
+    for y in range(h):
+        t = y / max(h - 1, 1)
+        r = int(3 + 6 * (1 - t) ** 2); g = int(12 + 46 * (1 - t) ** 2); b = int(55 + 150 * (1 - t) ** 1.6)
+        d.line((0, y, w, y), fill=(r, g, min(255, b)))
+    glow = Image.new("RGB", (w, h), "black")
+    gd = ImageDraw.Draw(glow)
+    for cx, cy, rad, col in ((w * 0.1, 30, 210, (40, 110, 255)), (w * 0.9, 30, 210, (40, 110, 255)),
+                             (w * 0.5, -80, 300, (40, 90, 230)), (w * 0.5, h * 0.6, 420, (8, 30, 120))):
+        gd.ellipse((cx - rad, cy - rad, cx + rad, cy + rad), fill=col)
+    glow = glow.filter(ImageFilter.GaussianBlur(110))
+    from PIL import ImageChops
+    bg = ImageChops.screen(bg, glow)
+    rnd = random.Random(42)
+    sp = Image.new("RGB", (w, h), "black")
+    sd = ImageDraw.Draw(sp)
+    for _ in range(260):
+        x, y = rnd.randint(0, w), int(rnd.random() ** 2 * 360)
+        rr = rnd.choice((1, 1, 1, 2, 2, 3))
+        c = rnd.choice(((255, 255, 255), (180, 220, 255), (255, 200, 120)))
+        sd.ellipse((x - rr, y - rr, x + rr, y + rr), fill=c)
+    bg = ImageChops.screen(bg, sp.filter(ImageFilter.GaussianBlur(0.6)))
+    bg = ImageChops.screen(bg, sp.filter(ImageFilter.GaussianBlur(4)))
+    return bg
+
+
+def _neon_glow(im, boxes, color=(60, 200, 255)):
+    """Glow halo around panel frames (screen-blended)."""
+    from PIL import Image, ImageDraw, ImageFilter, ImageChops
+    layer = Image.new("RGB", im.size, "black")
+    d = ImageDraw.Draw(layer)
+    for box, rad in boxes:
+        d.rounded_rectangle(box, radius=rad, outline=color, width=6)
+    halo = layer.filter(ImageFilter.GaussianBlur(9))
+    out = ImageChops.screen(im, halo)
+    d2 = ImageDraw.Draw(out)
+    for box, rad in boxes:
+        d2.rounded_rectangle(box, radius=rad, outline=(150, 230, 255), width=2)
+    return out
+
+
 def select_cards(tips_by_market, max_cards=0):
     matches = defaultdict(list)
     for market, tips in (tips_by_market or {}).items():
@@ -442,7 +489,7 @@ def render_card(entries, target_date, result=None):
     im = Image.new("RGB", (w, h), "#020a2a")
     draw = ImageDraw.Draw(im)
     font_path = "/usr/share/fonts/truetype/dejavu/DejaVuSans.ttf"
-    bold_path = "/usr/share/fonts/truetype/dejavu/DejaVuSans-Bold.ttf"
+    bold_path = "/usr/share/fonts/truetype/dejavu/DejaVuSansCondensed-Bold.ttf"
 
     def font(size, bold=False):
         try:
@@ -454,14 +501,14 @@ def render_card(entries, target_date, result=None):
         bb = draw.textbbox((0, 0), text, font=f)
         draw.text((cx - (bb[2] - bb[0]) / 2, y), text, font=f, fill=fill)
 
-    def panel(box, outline="#2d6bff", fill="#06124a", radius=18):
-        x0, y0, x1, y1 = box
-        draw.rounded_rectangle((x0 - 2, y0 - 2, x1 + 2, y1 + 2), radius=radius + 2, outline="#12307f", width=3)
+    glow_boxes = []
+
+    def panel(box, outline="#4aa8ff", fill="#061660", radius=18):
+        glow_boxes.append((box, radius))
         draw.rounded_rectangle(box, radius=radius, fill=fill, outline=outline, width=2)
 
     # Background glow stripes + frame
-    for i in range(0, 300, 6):
-        draw.line((0, i, w, i), fill=(2, 10 + i // 14, 42 + i // 5))
+    im.paste(_neon_bg(w, h))
     _, first = rows[0]
     match = str(first.get("match", ""))
     home, away = _teams(match)
@@ -469,8 +516,8 @@ def render_card(entries, target_date, result=None):
     kickoff = str(first.get("time") or first.get("time_local") or "")
 
     # Header
-    text_c("NETRATTLER", w / 2, 30, font(62, True), "#ffffff")
-    text_c("PREMIUM MATCH INTELLIGENCE", w / 2, 100, font(20, True), "#9fc2ff")
+    text_c("NETRATTLER", w / 2, 22, font(76, True), "#ffffff")
+    text_c("PREMIUM MATCH INTELLIGENCE", w / 2, 102, font(20, True), "#e6f2ff")
     draw.text((46, 38), "REAL ODDS.", font=font(20, True), fill="#ffffff")
     draw.text((46, 62), "REAL CONTEXT.", font=font(20, True), fill="#ffffff")
     draw.text((w - 250, 38), "BETTER PICKS.", font=font(20, True), fill="#ffffff")
@@ -532,7 +579,7 @@ def render_card(entries, target_date, result=None):
     cw = (526 - 24) / len(cells)
     for i, (k, v) in enumerate(cells):
         x0 = 46 + i * cw
-        draw.rounded_rectangle((x0 + 4, 506, x0 + cw - 4, 550), radius=10, fill="#0a1c66", outline="#2d6bff", width=1)
+        draw.rounded_rectangle((x0 + 4, 506, x0 + cw - 4, 550), radius=10, fill="#0b2a8c", outline="#2d6bff", width=1)
         text_c(k, x0 + cw / 2, 508, font(12, True), "#9fc2ff")
         text_c(v, x0 + cw / 2, 524, font(22, True), "#ffd166")
 
@@ -543,7 +590,7 @@ def render_card(entries, target_date, result=None):
         draw.text((596, 390), "NETRATTLER 1X2 MODEL", font=font(22, True), fill="#ffffff")
         for i, (val, name, col) in enumerate(((p1, home, "#ffffff"), (px, "Draw", "#ffffff"), (p2, away, "#ffffff"))):
             x0 = 592 + i * 150
-            draw.rounded_rectangle((x0, 424, x0 + 140, 494), radius=12, fill="#0a1c66", outline="#3b82ff", width=2)
+            draw.rounded_rectangle((x0, 424, x0 + 140, 494), radius=12, fill="#0b2a8c", outline="#3b82ff", width=2)
             text_c(f"{val:.0f}%", x0 + 70, 430, font(38, True), col)
             text_c(str(name)[:12], x0 + 70, 474, font(13, True), "#9fc2ff")
         tot = max(p1 + px + p2, 1)
@@ -573,7 +620,7 @@ def render_card(entries, target_date, result=None):
     for i, (market, tip) in enumerate(rows):
         y = top + 48 + i * 58
         mk = marks.get(str(i)) or marks.get(i)
-        rowfill = "#0a1c66" if i % 2 == 0 else "#08175a"
+        rowfill = "#0b2a8c" if i % 2 == 0 else "#09227a"
         if mk == "win":
             rowfill = "#0b4a3a"
         elif mk == "loss":
@@ -623,7 +670,7 @@ def render_card(entries, target_date, result=None):
         bw = (980 - 10 * (len(blocks) - 1)) / max(len(blocks), 1)
         for i, (k, v) in enumerate(blocks[:4]):
             x0 = 50 + i * (bw + 10)
-            draw.rounded_rectangle((x0, y + 44, x0 + bw, y + 100), radius=10, fill="#0a1c66", outline="#2d6bff", width=1)
+            draw.rounded_rectangle((x0, y + 44, x0 + bw, y + 100), radius=10, fill="#0b2a8c", outline="#2d6bff", width=1)
             text_c(k, x0 + bw / 2, y + 48, font(13, True), "#9fc2ff")
             text_c(v, x0 + bw / 2, y + 68, font(24, True), "#ffffff")
         colors = {"W": "#1fbf5b", "D": "#e0a800", "L": "#d62839"}
@@ -640,7 +687,8 @@ def render_card(entries, target_date, result=None):
     draw.line((60, fy, w - 60, fy), fill="#1f55e8", width=2)
     text_c("NETRATTLER  |  Nur finale, validierte Picks · keine geschätzten Quoten", w / 2, fy + 12, font(16, True), "#9fc2ff")
     final_h = fy + 52
-    draw.rounded_rectangle((14, 14, w - 14, final_h - 14), radius=26, outline="#1f55e8", width=3)
+    glow_boxes.append(((14, 14, w - 14, final_h - 14), 26))
+    im = _neon_glow(im, glow_boxes)
     im = im.crop((0, 0, w, final_h))
     data = io.BytesIO()
     im.save(data, format="PNG", optimize=True)
@@ -923,7 +971,7 @@ def render_scorer_card(tip, target_date, result=None):
     im = Image.new("RGB", (w, h), "#020a2a")
     draw = ImageDraw.Draw(im)
     fp = "/usr/share/fonts/truetype/dejavu/DejaVuSans.ttf"
-    fb = "/usr/share/fonts/truetype/dejavu/DejaVuSans-Bold.ttf"
+    fb = "/usr/share/fonts/truetype/dejavu/DejaVuSansCondensed-Bold.ttf"
 
     def font(size, bold=False):
         try:
@@ -935,20 +983,20 @@ def render_scorer_card(tip, target_date, result=None):
         bb = draw.textbbox((0, 0), text, font=f)
         draw.text((cx - (bb[2] - bb[0]) / 2, y), text, font=f, fill=fill)
 
-    def panel(box, outline="#2d6bff", fill="#06124a", radius=18):
-        x0, y0, x1, y1 = box
-        draw.rounded_rectangle((x0 - 2, y0 - 2, x1 + 2, y1 + 2), radius=radius + 2, outline="#12307f", width=3)
+    glow_boxes = []
+
+    def panel(box, outline="#4aa8ff", fill="#061660", radius=18):
+        glow_boxes.append((box, radius))
         draw.rounded_rectangle(box, radius=radius, fill=fill, outline=outline, width=2)
 
     result = result if isinstance(result, dict) else None
     mark = ((result or {}).get("marks") or {}).get("0")
-    for i in range(0, 300, 6):
-        draw.line((0, i, w, i), fill=(2, 10 + i // 14, 42 + i // 5))
+    im.paste(_neon_bg(w, h))
     match = str(tip.get("match", ""))
     home, away = _teams(match)
     player = str(tip.get("player", ""))
-    text_c("NETRATTLER", w / 2, 30, font(62, True), "#ffffff")
-    text_c("GOAL HUNTER · ANYTIME GOALSCORER", w / 2, 100, font(20, True), "#9fc2ff")
+    text_c("NETRATTLER", w / 2, 22, font(76, True), "#ffffff")
+    text_c("GOAL HUNTER · ANYTIME GOALSCORER", w / 2, 102, font(20, True), "#e6f2ff")
     draw.rounded_rectangle((300, 132, 780, 166), radius=16, fill="#0b1f6e", outline="#3b82ff", width=2)
     text_c(str(tip.get("league") or "FUSSBALL")[:48], w / 2, 138, font(18, True), "#d6e6ff")
     if result:
@@ -1012,7 +1060,7 @@ def render_scorer_card(tip, target_date, result=None):
     cw = 980 / max(len(cells), 1)
     for i, (k, v, col) in enumerate(cells):
         x0 = 50 + i * cw
-        draw.rounded_rectangle((x0 + 4, top + 18, x0 + cw - 4, top + 110), radius=12, fill="#0a1c66", outline="#2d6bff", width=1)
+        draw.rounded_rectangle((x0 + 4, top + 18, x0 + cw - 4, top + 110), radius=12, fill="#0b2a8c", outline="#2d6bff", width=1)
         text_c(k, x0 + cw / 2, top + 26, font(15, True), "#9fc2ff")
         text_c(v, x0 + cw / 2, top + 56, font(40, True), col)
     if mark in ("win", "loss"):
@@ -1024,7 +1072,8 @@ def render_scorer_card(tip, target_date, result=None):
     draw.line((60, fy, w - 60, fy), fill="#1f55e8", width=2)
     text_c("NETRATTLER  |  Nur finale, validierte Picks · keine geschätzten Quoten", w / 2, fy + 12, font(16, True), "#9fc2ff")
     final_h = fy + 52
-    draw.rounded_rectangle((14, 14, w - 14, final_h - 14), radius=26, outline="#1f55e8", width=3)
+    glow_boxes.append(((14, 14, w - 14, final_h - 14), 26))
+    im = _neon_glow(im, glow_boxes)
     im = im.crop((0, 0, w, final_h))
     data = io.BytesIO()
     im.save(data, format="PNG", optimize=True)
