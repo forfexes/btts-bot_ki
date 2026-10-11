@@ -14,6 +14,8 @@ import requests
 
 _LOGO_CACHE = {}
 _BADGE_CACHE = {}
+STATS = {"tsdb_ok": 0, "tsdb_429": 0, "tsdb_empty": 0, "tsdb_err": 0,
+         "wiki_ok": 0, "wiki_empty": 0, "wiki_err": 0, "fallback_initials": 0, "err_sample": ""}
 
 
 def _number(value):
@@ -75,6 +77,73 @@ def _teams(match):
     return text, ""
 
 
+_CREST_INDEX = None
+_CREST_STOP = {
+    "fc", "cf", "afc", "sc", "ac", "as", "ss", "us", "sv", "vfb", "vfl", "fk", "sk", "kv", "krc", "kaa",
+    "kvc", "rsc", "raal", "rc", "cd", "ud", "ca", "bk", "if", "ik", "sd", "fsv", "tsg", "rb", "ssc",
+    "de", "la", "le", "real", "royal", "club", "calcio", "1", "04", "05", "1899", "1846", "vv", "sp", "1909", "65", "71", "46",
+}
+
+
+def _tokens(value):
+    text = unicodedata.normalize("NFKD", str(value or "").lower())
+    text = "".join(c for c in text if not unicodedata.combining(c))
+    return [t for t in re.split(r"[^a-z0-9]+", text) if t]
+
+
+def _load_crest_index():
+    global _CREST_INDEX
+    if _CREST_INDEX is not None:
+        return _CREST_INDEX
+    _CREST_INDEX = {"sha": "", "rows": []}
+    try:
+        import json
+        path = os.path.join(os.path.dirname(os.path.abspath(__file__)), "netrattler_crest_index.json")
+        with open(path, encoding="utf-8") as handle:
+            data = json.load(handle)
+        rows = []
+        for name, rel in data.get("clubs", []):
+            toks = _tokens(name)
+            core = [t for t in toks if t not in _CREST_STOP] or toks
+            rows.append((name, rel, set(toks), set(core), _norm(name)))
+        _CREST_INDEX = {"sha": data.get("sha", "master"), "repo": data.get("repo", ""), "rows": rows}
+    except Exception:
+        pass
+    return _CREST_INDEX
+
+
+def _crest_from_index(team):
+    """Free GitHub crest collection (top leagues). Conservative fuzzy match."""
+    idx = _load_crest_index()
+    rows = idx.get("rows") or []
+    team = {"rennes": "Stade Rennais", "bayern": "Bayern Munich", "psg": "Paris Saint-Germain"}.get(
+        str(team or "").strip().lower(), team)
+    toks = _tokens(team)
+    if not toks or not rows:
+        return ""
+    core = {t for t in toks if t not in _CREST_STOP} or set(toks)
+    key = _norm(team)
+    best, best_score = None, 0.0
+    for name, rel, ntoks, ncore, nkey in rows:
+        if nkey == key:
+            score = 10.0
+        elif core and ncore and (core <= ncore or ncore <= core):
+            score = 2.0 + len(core & ncore) / max(len(core | ncore), 1)
+        elif len(core) == 1 and len(next(iter(core))) >= 5 and any(
+            t.startswith(next(iter(core))[:5]) or next(iter(core)).startswith(t[:5])
+            for t in ncore if len(t) >= 5
+        ):
+            score = 1.0
+        else:
+            continue
+        if score > best_score:
+            best, best_score = rel, score
+    if not best:
+        return ""
+    from urllib.parse import quote
+    return f"https://raw.githubusercontent.com/{idx.get('repo')}/{idx.get('sha')}/logos/{quote(best)}"
+
+
 def _query_variants(team):
     base = str(team or "").strip()
     out = [base]
@@ -97,6 +166,32 @@ def _query_variants(team):
     return res[:4]
 
 
+def _wiki_badge(team):
+    """Fallback crest from the club's Wikipedia infobox image."""
+    try:
+        r = requests.get(
+            "https://en.wikipedia.org/w/api.php",
+            params={
+                "action": "query", "generator": "search", "gsrsearch": f"{team} football club",
+                "gsrlimit": 1, "prop": "pageimages", "piprop": "thumbnail", "pithumbsize": 300,
+                "format": "json",
+            },
+            headers={"User-Agent": "NETRATTLER-cards/1.0 (match card crests)"},
+            timeout=6,
+        )
+        pages = ((r.json() or {}).get("query") or {}).get("pages") or {}
+        for page in pages.values():
+            url = str((page.get("thumbnail") or {}).get("source") or "")
+            if url:
+                STATS["wiki_ok"] += 1
+                return url
+        STATS["wiki_empty"] += 1
+    except Exception as exc:
+        STATS["wiki_err"] += 1
+        STATS["err_sample"] = f"wiki:{type(exc).__name__}"
+    return ""
+
+
 def _search_badge(query, api_key, key):
     """Return (url, rate_limited). Retries politely on HTTP 429."""
     for attempt in range(3):
@@ -106,9 +201,12 @@ def _search_badge(query, api_key, key):
             timeout=6,
         )
         if r.status_code == 429:
+            STATS["tsdb_429"] += 1
             time.sleep(1.5 + attempt * 1.5)
             continue
         if not r.ok:
+            STATS["tsdb_err"] += 1
+            STATS["err_sample"] = f"tsdb:HTTP{r.status_code}"
             return "", False
         try:
             rows = (r.json() or {}).get("teams") or []
@@ -117,9 +215,13 @@ def _search_badge(query, api_key, key):
         soccer = [x for x in rows if str(x.get("strSport") or "").lower() == "soccer"]
         rows = soccer or rows
         if not rows:
+            STATS["tsdb_empty"] += 1
             return "", False
         exact = next((x for x in rows if _norm(x.get("strTeam")) == key), rows[0])
-        return str(exact.get("strBadge") or exact.get("strLogo") or "").strip(), False
+        found = str(exact.get("strBadge") or exact.get("strLogo") or "").strip()
+        if found:
+            STATS["tsdb_ok"] += 1
+        return found, False
     return "", True
 
 
@@ -129,16 +231,24 @@ def _logo_url(team):
         return ""
     if key in _LOGO_CACHE:
         return _LOGO_CACHE[key]
-    url = ""
+    url = _crest_from_index(team)
+    if url:
+        STATS["index_ok"] = STATS.get("index_ok", 0) + 1
+        _LOGO_CACHE[key] = url
+        return url
     limited = False
     api_key = os.getenv("THESPORTSDB_API_KEY", "3").strip() or "3"
     for query in _query_variants(team):
         try:
             url, limited = _search_badge(query, api_key, key)
-        except Exception:
+        except Exception as exc:
             url, limited = "", False
+            STATS["tsdb_err"] += 1
+            STATS["err_sample"] = f"tsdb:{type(exc).__name__}"
         if url or limited:
             break
+    if not url:
+        url = _wiki_badge(team)
     if url or not limited:  # do not cache a rate-limit failure
         _LOGO_CACHE[key] = url
     return url
@@ -181,6 +291,7 @@ def _paste_badge(im, draw, team, box, font):
             loaded = False
     if loaded:
         return
+    STATS["fallback_initials"] += 1
     # Clean fallback when no public badge is available.
     draw.ellipse((x0, y0, x1, y1), fill="#172f50", outline="#39b9e7", width=4)
     initials = "".join(part[:1] for part in re.findall(r"[A-Za-z0-9]+", team)[:3]).upper()[:3] or "FC"
@@ -314,7 +425,9 @@ def render_card(entries, target_date):
     draw.text((70, 428), "MODEL EDGE" if main_market == "1x2" else "TOP PICK", font=font(15, True), fill="#ffd166")
     label = _label(main_market, main_tip)
     label = label.replace("1X2 / GOAL HUNTER", "1X2")
-    draw.text((56, 466), label[:20], font=font(28 if len(label) < 16 else 22, True), fill="#ffffff")
+    if len(label) > 20 and "·" in label:
+        label = label.split("·")[0].strip()
+    draw.text((56, 466), label[:22], font=font(28 if len(label) < 16 else 22, True), fill="#ffffff")
     if pct is not None:
         draw.rounded_rectangle((376, 400, 544, 500), radius=14, fill="#063a4a", outline="#27e0c0", width=2)
         text_c(f"{pct:.0f}%", 460, 410, font(50, True), "#27e0c0")

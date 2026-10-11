@@ -26943,7 +26943,8 @@ def main():
             },
             run_id=f"tips-{target_date}-{datetime.now(timezone.utc).strftime('%H%M%S')}",
             stage_diag={"scorer": dict(getattr(run_corners_and_scorer_bots, "_last_scorer_diag", {}) or {}),
-                        "marks": [{"stage": n, "t": t} for n, t in _NTR_STAGE_MARKS]},
+                        "marks": [{"stage": n, "t": t} for n, t in _NTR_STAGE_MARKS],
+                        "cards": dict(getattr(sys.modules.get("netrattler_stats_match_cards"), "STATS", {}) or {})},
         )
         _problems = _coverage.get("problems") or {}
         if _problems:

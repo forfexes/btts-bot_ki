@@ -25,3 +25,10 @@ def kambi():
     assert out[0]["_source"] == "kambi_ub" and out[0]["odds"] == 2.5
 main()
 kambi()
+import netrattler_stats_match_cards as cards
+def crests():
+    for team in ("Mechelen", "Sint Truidense", "Rennes", "FC Twente '65", "Real Madrid CF", "Liverpool"):
+        assert cards._crest_from_index(team), team
+    assert not cards._crest_from_index("Totally Unknown Club")
+crests()
+print("OK: crest index")
