@@ -485,6 +485,8 @@ def render_card(entries, target_date, result=None):
     rows = entries[:5]
     if len(rows) == 1 and str(rows[0][0]) == "scorer" and rows[0][1].get("player"):
         return render_scorer_card(rows[0][1], target_date, result)
+    if os.getenv("NETRATTLER_CARD_LAYOUT", "bis").lower() == "bis":
+        return render_bis_card(entries, target_date, result)
     w, h = 1080, 1130
     im = Image.new("RGB", (w, h), "#020a2a")
     draw = ImageDraw.Draw(im)
@@ -1136,3 +1138,309 @@ def _crest_cache_save(teams):
             STATS["crest_cache_saved"] = len(rows) if r.ok else 0
     except Exception:
         pass
+
+
+# ---------------------------------------------------------------- BIS-layout card
+def _poisson_grid(lh, la, n=7):
+    import math
+    ph = [math.exp(-lh) * lh ** k / math.factorial(k) for k in range(n)]
+    pa = [math.exp(-la) * la ** k / math.factorial(k) for k in range(n)]
+    return {(i, j): ph[i] * pa[j] for i in range(n) for j in range(n)}
+
+
+def render_bis_card(entries, target_date, result=None):
+    """1:1 layout of the reference neon card. Every value is real or shown as '–'."""
+    from PIL import Image, ImageDraw, ImageFont
+
+    rows = entries[:5]
+    W, H = 1200, 1130
+    im = _neon_bg(W, H)
+    draw = ImageDraw.Draw(im)
+    FB = "/usr/share/fonts/truetype/dejavu/DejaVuSansCondensed-Bold.ttf"
+    FR = "/usr/share/fonts/truetype/dejavu/DejaVuSansCondensed.ttf"
+
+    def f(size, bold=True):
+        try:
+            return ImageFont.truetype(FB if bold else FR, size)
+        except OSError:
+            return ImageFont.load_default()
+
+    def tc(text, cx, y, fnt, fill="#ffffff"):
+        bb = draw.textbbox((0, 0), str(text), font=fnt)
+        draw.text((cx - (bb[2] - bb[0]) / 2, y), str(text), font=fnt, fill=fill)
+
+    glow = []
+
+    def box(b, fill="#0a1f86", outline="#5cc8ff", r=14, w=2, g=True):
+        if g:
+            glow.append((b, r))
+        draw.rounded_rectangle(b, radius=r, fill=fill, outline=outline, width=w)
+
+    result = result if isinstance(result, dict) else None
+    marks = (result or {}).get("marks") or {}
+    main_m, main = rows[0]
+    match = str(main.get("match", ""))
+    home, away = _teams(match)
+    league = str(main.get("league") or "Fussball")
+    kickoff = str(main.get("time") or main.get("time_local") or "")
+    shown_date = str(target_date)[:10]
+    try:
+        from datetime import datetime as _dt
+        from zoneinfo import ZoneInfo as _ZI
+        ko = str(main.get("_kickoff") or "")
+        if ko[:2] == "20":
+            shown_date = _dt.fromisoformat(ko).astimezone(_ZI("Europe/Zurich")).strftime("%Y-%m-%d")
+    except Exception:
+        pass
+
+    ctx = {}
+    for _, t in rows:
+        for k, v in t.items():
+            if v in (None, "", 0, 0.0, "0") or k in ctx:
+                continue
+            ctx[k] = v
+    ctx.setdefault("homeForm", ctx.get("home_form"))
+    ctx.setdefault("awayForm", ctx.get("away_form"))
+
+    def num(*keys):
+        for k in keys:
+            n = _number(ctx.get(k))
+            if n:
+                return n
+        return None
+
+    # ---------------- header
+    draw.text((40, 26), "REAL ODDS.", font=f(20), fill="#ffffff")
+    draw.text((40, 50), "REAL CONTEXT.", font=f(20), fill="#ffffff")
+    draw.text((W - 230, 26), "BETTER PICKS.", font=f(20), fill="#ffffff")
+    draw.text((W - 230, 50), "CLEANER CARDS.", font=f(20), fill="#ffffff")
+    for dx in (3, 2, 1):
+        tc("NETRATTLER", W / 2 + dx, 14 + dx, f(78), "#0a2fb0")
+    tc("NETRATTLER", W / 2, 14, f(78), "#ffffff")
+    tc("REAL ODDS. REAL CONTEXT.", W / 2, 100, f(19), "#ffffff")
+    draw.rounded_rectangle((W / 2 - 220, 128, W / 2 + 220, 158), radius=15, fill="#08206e", outline="#5cc8ff", width=2)
+    tc(league[:44], W / 2, 133, f(17), "#d9ecff")
+    if result:
+        draw.rounded_rectangle((W / 2 - 130, 166, W / 2 + 130, 196), radius=15, fill="#16b85a")
+        tc("ABGESCHLOSSEN", W / 2, 170, f(19), "#ffffff")
+    else:
+        draw.rounded_rectangle((W / 2 - 130, 166, W / 2 + 130, 196), radius=15, fill="#e3263b")
+        tc("PRE-KICKOFF", W / 2, 170, f(19), "#ffffff")
+    if result and result.get("ft"):
+        tc(str(result["ft"]).replace("-", " : "), W / 2, 198, f(66), "#ffffff")
+    else:
+        tc("VS", W / 2, 200, f(66), "#ffffff")
+    tc(shown_date + (f"  ·  {kickoff}" if kickoff else ""), W / 2, 274, f(19), "#ffffff")
+    sub = f"Halbzeit {result['ht']}" if result and result.get("ht") else "Not Started"
+    tc(sub, W / 2, 298, f(15, False), "#cfe3ff")
+    _paste_badge(im, draw, home, (150, 80, 330, 260), f(46))
+    _paste_badge(im, draw, away, (870, 80, 1050, 260), f(46))
+    tc(home[:20], 240, 270, f(30), "#ffffff")
+    tc(away[:20], 960, 270, f(30), "#ffffff")
+
+    # ---------------- direction panel
+    pct = _pct(main.get("probability"))
+    label = _label(main_m, main).replace("1X2 / GOAL HUNTER", "1X2")
+    pick = str(main.get("tip") or "").strip()
+    big = pick if (main_m == "1x2" and pick) else label.split("  ·  ")[0]
+    box((24, 330, 594, 588))
+    draw.text((44, 340), "NETRATTLER DIRECTION · RESEARCH", font=f(22), fill="#ffffff")
+    draw.rounded_rectangle((44, 372, 196, 398), radius=12, outline="#ffd84a", width=2)
+    tc("MODEL EDGE", 120, 375, f(16), "#ffd84a")
+    draw.text((44, 404), big[:16], font=f(46 if len(big) <= 12 else 34), fill="#ffffff")
+    draw.text((46, 462), "Finaler Pick · echte Buchmacher-Quote", font=f(16, False), fill="#d9ecff")
+    draw.rounded_rectangle((388, 368, 576, 470), radius=12, fill="#062a5c", outline="#33f0c8", width=3)
+    tc(f"{pct:.0f}%" if pct is not None else "–", 482, 370, f(56), "#33f0c8")
+    tc("MODEL", 482, 430, f(15), "#33f0c8")
+    tc("PROBABILITY", 482, 448, f(15), "#33f0c8")
+    lh = num("exp_goals_home", "xg_home", "avg_goals_home")
+    la = num("exp_goals_away", "xg_away", "avg_goals_away")
+    grid = _poisson_grid(lh, la) if lh and la else None
+    btts_p = sum(v for (i, j), v in grid.items() if i and j) * 100 if grid else None
+    best = sorted(grid.items(), key=lambda x: -x[1]) if grid else []
+    odds = _price(main)
+    fair = _number(main.get("fairOdds") or main.get("fair_odds"))
+    cells = [("CURRENT LINE", f"{odds:.2f}" if odds else "–"), ("FAIR ODDS", f"{fair:.2f}" if fair else "–"),
+             ("POISSON BTTS", f"{btts_p:.0f}%" if btts_p is not None else "–"),
+             ("PROJECTED SCORE", f"{best[0][0][0]}-{best[0][0][1]}" if best else "–")]
+    for i, (k, v) in enumerate(cells):
+        x0 = 36 + i * 139
+        draw.rounded_rectangle((x0, 488, x0 + 133, 576), radius=10, fill="#0b2a9a", outline="#5cc8ff", width=1)
+        draw.text((x0 + 8, 494), k, font=f(13), fill="#ffffff")
+        draw.text((x0 + 10, 520), v, font=f(36), fill="#33f0c8" if i != 0 else "#ffd84a")
+
+    # ---------------- 1x2 model + market outlook
+    box((606, 330, 1176, 474))
+    draw.text((626, 340), "NETRATTLER 1X2 MODEL", font=f(22), fill="#ffffff")
+    p1, px, p2 = (_pct(main.get(k)) for k in ("p_home", "p_draw", "p_away"))
+    if None in (p1, px, p2):
+        for _, t in rows:
+            q = [_pct(t.get(k)) for k in ("p_home", "p_draw", "p_away")]
+            if None not in q:
+                p1, px, p2 = q
+                break
+    vals = ((p1, home), (px, "Draw"), (p2, away))
+    cols = ("#0b2a9a", "#0b2a9a", "#3a1a9a")
+    for i, (v, n) in enumerate(vals):
+        x0 = 622 + i * 182
+        draw.rounded_rectangle((x0, 372, x0 + 172, 434), radius=10, fill=cols[i], outline="#5cc8ff", width=2)
+        tc(f"{v:.0f}%" if v is not None else "–", x0 + 86, 372, f(36), "#ffffff")
+        tc(str(n)[:14], x0 + 86, 412, f(15), "#ffffff")
+    if None not in (p1, px, p2):
+        tot = max(p1 + px + p2, 1)
+        a = 622 + 538 * p1 / tot
+        b = a + 538 * px / tot
+        draw.rounded_rectangle((622, 442, 1160, 454), radius=6, fill="#2d6bff")
+        draw.rectangle((a, 442, b, 454), fill="#c9d6ee")
+        draw.rounded_rectangle((b, 442, 1160, 454), radius=6, fill="#e3263b")
+    if None not in (p1, px, p2):
+        draw.text((624, 456), f"{home[:12]} {p1:.0f}%", font=f(13, False), fill="#d9ecff")
+        tc(f"Draw {px:.0f}%", 891, 456, f(13, False), "#d9ecff")
+        t_ = f"{away[:12]} {p2:.0f}%"
+        draw.text((1160 - draw.textlength(t_, font=f(13, False)), 456), t_, font=f(13, False), fill="#d9ecff")
+    box((606, 484, 1176, 588))
+    draw.text((626, 490), "MODEL MARKET OUTLOOK", font=f(20), fill="#ffffff")
+    for i in range(3):
+        x0 = 622 + i * 182
+        if i < len(rows):
+            m, t = rows[i]
+            mk = marks.get(str(i))
+            oc = "#33f0c8" if mk == "win" else ("#ff4f63" if mk == "loss" else ("#ffd84a" if i == 0 else "#33f0c8"))
+            draw.rounded_rectangle((x0, 518, x0 + 172, 580), radius=10, fill="#062a5c", outline=oc, width=3)
+            tc(_label(m, t).split("  ·  ")[0][:18], x0 + 86, 522, f(13), "#ffffff")
+            pv = _pct(t.get("probability"))
+            tc((f"{pv:.0f}%" if pv is not None else "–") + ("  ✔" if mk == "win" else "  ✖" if mk == "loss" else ""),
+               x0 + 86, 538, f(26), oc)
+            tc(f"@ {_price(t):.2f}", x0 + 86, 564, f(12), "#ffd84a")
+        else:
+            draw.rounded_rectangle((x0, 518, x0 + 172, 580), radius=10, fill="#08206e", outline="#2d6bff", width=1)
+            tc("–", x0 + 86, 534, f(26), "#7fa6e6")
+
+    # ---------------- bottom four panels
+    top, bot = 604, 950
+    xs = [(24, 306), (318, 600), (612, 894), (906, 1176)]
+    titles = ["SCORE OUTLOOK", "RECENT FORM BATTLE", "H2H HISTORY SUMMARY", "TEAM STATS"]
+    for (x0, x1), t in zip(xs, titles):
+        box((x0, top, x1, bot))
+        draw.text((x0 + 14, top + 8), t, font=f(18), fill="#ffffff")
+
+    def cell(b, k, v, vs=30, vc="#ffffff"):
+        draw.rounded_rectangle(b, radius=8, fill="#0b2a9a", outline="#5cc8ff", width=1)
+        tc(k, (b[0] + b[2]) / 2, b[1] + 4, f(12), "#d9ecff")
+        tc(v, (b[0] + b[2]) / 2, b[1] + 22, f(vs), vc)
+
+    # score outlook
+    x0 = 24
+    cell((x0 + 10, top + 38, x0 + 140, top + 120), "LIKELIEST SCORE",
+         f"{best[0][0][0]}-{best[0][0][1]}" if best else "–")
+    if best:
+        tc(f"{best[0][1]*100:.1f}%", x0 + 75, top + 96, f(13, False), "#d9ecff")
+    cell((x0 + 146, top + 38, x0 + 272, top + 120), "EXPECTED GOALS",
+         f"{lh:.1f} · {la:.1f}" if lh and la else "–", 26, "#33f0c8")
+    cell((x0 + 10, top + 128, x0 + 140, top + 210), "EXPECTED TOTAL", f"{lh+la:.1f}" if lh and la else "–")
+    draw.rounded_rectangle((x0 + 146, top + 128, x0 + 272, top + 210), radius=8, fill="#0b2a9a", outline="#5cc8ff", width=1)
+    tc("NEXT LIKELY", x0 + 209, top + 132, f(12), "#d9ecff")
+    for i, ((a, b), v) in enumerate(best[1:3]):
+        draw.text((x0 + 160, top + 152 + i * 26), f"{a}-{b}", font=f(18), fill="#ffffff")
+        draw.text((x0 + 214, top + 152 + i * 26), f"{v*100:.1f}%", font=f(16, False), fill="#ffffff")
+    draw.rounded_rectangle((x0 + 10, top + 218, x0 + 272, bot - 12), radius=8, fill="#0b2a9a", outline="#ffd84a", width=1)
+    draw.text((x0 + 22, top + 222), "SCENARIOS 2 & 3", font=f(14), fill="#ffd84a")
+    for i, ((a, b), v) in enumerate(best[1:3]):
+        y = top + 250 + i * 32
+        draw.text((x0 + 22, y), f"{a}-{b}", font=f(18), fill="#ffffff")
+        draw.rounded_rectangle((x0 + 76, y + 6, x0 + 196, y + 16), radius=5, fill="#1d3a8a")
+        draw.rounded_rectangle((x0 + 76, y + 6, x0 + 76 + 120 * min(1, v / max(best[0][1], 1e-6)), y + 16), radius=5, fill="#33f0c8")
+        draw.text((x0 + 208, y), f"{v*100:.1f}%", font=f(16), fill="#ffd84a")
+    if not best:
+        tc("keine Modell-Tore", x0 + 141, top + 262, f(15, False), "#cfe3ff")
+
+    # form battle
+    x0 = 318
+    colors = {"W": "#1fbf5b", "D": "#e0a800", "L": "#d62839"}
+    for side, key, cx in ((home, "homeForm", x0 + 76), (away, "awayForm", x0 + 212)):
+        tc(side[:13], cx, top + 38, f(16), "#ffffff")
+        ch = _form_chars(ctx.get(key))
+        for j, c in enumerate(ch):
+            bx = cx - 62 + j * 25
+            draw.rounded_rectangle((bx, top + 62, bx + 21, top + 84), radius=4, fill=colors[c])
+            tc(c, bx + 10.5, top + 64, f(14), "#ffffff")
+        wdl = f"{ch.count('W')}-{ch.count('D')}-{ch.count('L')}" if ch else "–"
+        tc(wdl, cx, top + 92, f(24), "#ffffff")
+        tc("(W-D-L)", cx, top + 120, f(12, False), "#d9ecff")
+    draw.line((x0 + 141, top + 40, x0 + 141, top + 140), fill="#5cc8ff", width=1)
+    srows = [("GOALS / GAME", num("avg_goals_home"), num("avg_goals_away"), "{:.1f}"),
+             ("xG", num("xg_home"), num("xg_away"), "{:.1f}"),
+             ("BTTS-RATE", _pct(ctx.get("btts_rate_home")), _pct(ctx.get("btts_rate_away")), "{:.0f}%")]
+    for i, (k, a, b, fmt) in enumerate(srows):
+        y = top + 150 + i * 36
+        draw.line((x0 + 12, y - 4, x0 + 270, y - 4), fill="#2d6bff", width=1)
+        draw.text((x0 + 18, y), fmt.format(a) if a is not None else "–", font=f(18), fill="#ffffff")
+        tc(k, x0 + 141, y + 3, f(12), "#d9ecff")
+        bb = fmt.format(b) if b is not None else "–"
+        draw.text((x0 + 262 - draw.textlength(bb, font=f(18)), y), bb, font=f(18), fill="#ffffff")
+    fh, fa = _form_chars(ctx.get("homeForm")), _form_chars(ctx.get("awayForm"))
+    edge = ""
+    if fh and fa:
+        sh = fh.count("W") * 3 + fh.count("D")
+        sa = fa.count("W") * 3 + fa.count("D")
+        edge = home if sh > sa else away if sa > sh else "Ausgeglichen"
+    draw.text((x0 + 18, bot - 36), "Recent Edge: ", font=f(17), fill="#ffffff")
+    draw.text((x0 + 18 + draw.textlength("Recent Edge: ", font=f(17)), bot - 36), (edge or "–")[:14], font=f(17), fill="#ffd84a")
+
+    # h2h
+    x0 = 612
+    h2b = ctx.get("h2h_btts") or ctx.get("h2h_btts_rate")
+    h2g = num("h2h_avg_goals")
+    h2n = num("h2h_matches", "h2h_count")
+    verified = bool(h2b or h2g)
+    draw.rounded_rectangle((x0 + 90, top + 38, x0 + 192, top + 62), radius=11, fill="#0d5a3a" if verified else "#3a2a5a",
+                           outline="#33f0c8" if verified else "#8a7ab0", width=1)
+    tc("VERIFIED" if verified else "KEINE DATEN", x0 + 141, top + 42, f(13), "#33f0c8" if verified else "#d0c8ff")
+    cell((x0 + 12, top + 72, x0 + 270, top + 150), "H2H MATCHES", f"{h2n:.0f}" if h2n else "–", 32)
+    hb = h2b
+    if isinstance(hb, (int, float)):
+        hb = f"{_pct(hb):.0f}%" if _pct(hb) is not None else "–"
+    cell((x0 + 12, top + 158, x0 + 270, top + 236), "H2H BTTS", str(hb or "–")[:14], 32, "#33f0c8")
+    cell((x0 + 12, top + 244, x0 + 270, top + 322), "AVG GOALS", f"{h2g:.1f}" if h2g else "–", 32)
+
+    # team stats
+    x0 = 906
+    draw.text((x0 + 14, top + 40), home[:11], font=f(15), fill="#ffffff")
+    tc("STAT", x0 + 135, top + 42, f(13), "#ffd84a")
+    draw.text((x0 + 256 - draw.textlength(away[:11], font=f(15)), top + 40), away[:11], font=f(15), fill="#ffffff")
+    trows = [("Goals / game", num("avg_goals_home"), num("avg_goals_away"), "{:.1f}"),
+             ("xG for", num("xg_home"), num("xg_away"), "{:.1f}"),
+             ("xG against", num("xga_home"), num("xga_away"), "{:.1f}"),
+             ("BTTS-Rate", _pct(ctx.get("btts_rate_home")), _pct(ctx.get("btts_rate_away")), "{:.0f}%"),
+             ("Elo", num("elo_home"), num("elo_away"), "{:.0f}")]
+    for i, (k, a, b, fmt) in enumerate(trows):
+        y = top + 70 + i * 40
+        draw.rounded_rectangle((x0 + 10, y, x0 + 260, y + 34), radius=6, fill="#0b2a9a", outline="#2d6bff", width=1)
+        draw.text((x0 + 18, y + 5), fmt.format(a) if a is not None else "–", font=f(19), fill="#ffffff")
+        tc(k, x0 + 135, y + 9, f(13, False), "#d9ecff")
+        bb = fmt.format(b) if b is not None else "–"
+        draw.text((x0 + 252 - draw.textlength(bb, font=f(19)), y + 5), bb, font=f(19), fill="#ffffff")
+    sedge = ""
+    ga, gb = num("xg_home", "avg_goals_home"), num("xg_away", "avg_goals_away")
+    if ga and gb:
+        sedge = home if ga > gb else away if gb > ga else "Ausgeglichen"
+    draw.rounded_rectangle((x0 + 10, bot - 46, x0 + 260, bot - 10), radius=8, fill="#0b2a9a", outline="#5cc8ff", width=1)
+    tc(f"Stat Edge: {sedge[:13] or '–'}", x0 + 135, bot - 40, f(18), "#ffd84a")
+
+    # ---------------- footer bar
+    box((24, 966, 1176, 1040))
+    parts = [f"{shown_date}  {kickoff}".strip(), league[:34], f"{len(rows)} validierte Märkte", "NETRATTLER AI"]
+    for i, p_ in enumerate(parts):
+        cx = 24 + 1152 * (i + 0.5) / 4
+        tc(p_, cx, 992, f(17), "#ffffff")
+        if i:
+            draw.line((24 + 1152 * i / 4, 978, 24 + 1152 * i / 4, 1028), fill="#5cc8ff", width=1)
+    draw.line((60, 1074, 380, 1074), fill="#9fc2ff", width=1)
+    draw.line((820, 1074, 1140, 1074), fill="#9fc2ff", width=1)
+    tc("NETRATTLER  |  REAL ODDS. REAL CONTEXT.", W / 2, 1064, f(17), "#e6f2ff")
+    glow.append(((10, 10, W - 10, 1110), 24))
+    im = _neon_glow(im, glow)
+    im = im.crop((0, 0, W, 1120))
+    data = io.BytesIO()
+    im.save(data, format="PNG", optimize=True)
+    return data.getvalue()
