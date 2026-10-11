@@ -1650,6 +1650,37 @@ def _load_results():
     return rows
 
 
+def _load_github_matches(log=print):
+    """Open dataset xgabora/Club-Football-Match-Data (MIT): 238k matches 2000-2026, 38 divisions."""
+    import csv
+    url = os.getenv("CARD_MATCHES_CSV_URL",
+                    "https://raw.githubusercontent.com/xgabora/Club-Football-Match-Data-2000-2025/main/data/Matches.csv")
+    path = "/tmp/ntr_matches_cache.csv"
+    try:
+        if not (os.path.exists(path) and time.time() - os.path.getmtime(path) < 6 * 3600):
+            r = requests.get(url, timeout=90, stream=True)
+            if not r.ok:
+                log(f"Card-Historie GitHub HTTP {r.status_code}")
+                return []
+            with open(path, "wb") as fh:
+                for chunk in r.iter_content(1 << 20):
+                    fh.write(chunk)
+        out = []
+        with open(path, encoding="utf-8", errors="ignore", newline="") as fh:
+            for row in csv.DictReader(fh):
+                try:
+                    out.append({"match_date": row["MatchDate"], "home_team": row["HomeTeam"],
+                                "away_team": row["AwayTeam"], "home_score": int(float(row["FTHome"])),
+                                "away_score": int(float(row["FTAway"]))})
+                except Exception:
+                    continue
+        STATS["history_github_rows"] = len(out)
+        return out
+    except Exception as exc:
+        log(f"Card-Historie GitHub Fehler: {type(exc).__name__}")
+        return []
+
+
 def attach_history_context(tips_by_market, log=print):
     """Real recent form / goals / BTTS-rate / H2H from stored match results (display-only)."""
     if os.getenv("ENABLE_CARD_HISTORY", "true").lower() not in ("1", "true", "yes", "on"):
@@ -1658,7 +1689,9 @@ def attach_history_context(tips_by_market, log=print):
         rows = _load_results()
     except Exception as exc:
         log(f"Card-Historie nicht geladen: {type(exc).__name__}")
-        return 0
+        rows = []
+    rows = list(rows) + _load_github_matches(log)
+    STATS["history_rows"] = len(rows)
     by_team = defaultdict(list)
     for r in rows:
         try:
@@ -1672,20 +1705,26 @@ def attach_history_context(tips_by_market, log=print):
         by_team[ak].append((r["match_date"], hk, ak, hs, as_))
     keys = list(by_team)
 
+    import difflib
+    _fcache = {}
+
     def find(team):
         k = _norm(team)
+        if k in _fcache:
+            return _fcache[k]
+        res = None
+        k = k.replace("sporting", "sp") if k.startswith("sporting") and k not in by_team else k
         if k in by_team:
-            return k
-        toks = _tokens(team)
-        if not toks:
-            return None
-        best, bs = None, 0.0
-        for kk in keys:
-            if len(kk) < 4:
-                continue
-            if k and (k in kk or kk in k) and min(len(k), len(kk)) >= 5:
-                return kk
-        return best
+            res = k
+        else:
+            ks = [kk for kk in keys if len(kk) >= 4 and min(len(k), len(kk)) >= 5 and (k in kk or kk in k)]
+            if ks:
+                res = max(ks, key=lambda kk: len(by_team[kk]))
+            else:
+                m = difflib.get_close_matches(k, keys, n=1, cutoff=0.88)
+                res = m[0] if m else None
+        _fcache[k] = res
+        return res
 
     def summary(key, name_key):
         games = sorted(by_team[key], reverse=True)[:8]
