@@ -512,8 +512,15 @@ def render_card(entries, target_date, result=None):
     for _, t in rows:
         for k in ("xg_home", "xg_away", "btts_rate_home", "btts_rate_away", "homeForm", "awayForm",
                   "h2h_btts", "h2h_avg_goals", "avg_goals_home", "avg_goals_away", "exp_goals_home", "exp_goals_away"):
-            if ctx.get(k) in (None, "") and t.get(k) not in (None, ""):
-                ctx[k] = t.get(k)
+            v = t.get(k)
+            if k == "homeForm" and v in (None, ""):
+                v = t.get("home_form")
+            if k == "awayForm" and v in (None, ""):
+                v = t.get("away_form")
+            if v in (None, "", 0, 0.0, "0", "0.0"):
+                continue
+            if ctx.get(k) in (None, ""):
+                ctx[k] = v
     y = top + 52 + len(rows) * 58 + 24
     blocks = []
     gh = _number(ctx.get("xg_home") or ctx.get("avg_goals_home") or ctx.get("exp_goals_home"))
