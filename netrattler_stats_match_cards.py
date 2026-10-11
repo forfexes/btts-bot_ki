@@ -357,6 +357,8 @@ def render_card(entries, target_date, result=None):
     from PIL import Image, ImageDraw, ImageFont
 
     rows = entries[:5]
+    if len(rows) == 1 and str(rows[0][0]) == "scorer" and rows[0][1].get("player"):
+        return render_scorer_card(rows[0][1], target_date, result)
     w, h = 1080, 1130
     im = Image.new("RGB", (w, h), "#020a2a")
     draw = ImageDraw.Draw(im)
@@ -764,3 +766,187 @@ def update_cards_with_results(token, results, log=print):
         except Exception as exc:
             log(f"Card-Result optional übersprungen: {type(exc).__name__}")
     return done
+
+
+# ---------------------------------------------------------------- goalscorer card
+_PLAYER_CACHE = {}
+
+
+def _player_photo(name, team=""):
+    """Public player image (TheSportsDB cutout/thumb, then Wikipedia). Presentation only."""
+    key = _norm(name)
+    if not key:
+        return b""
+    if key in _PLAYER_CACHE:
+        return _PLAYER_CACHE[key]
+    urls = []
+    try:
+        r = requests.get("https://www.thesportsdb.com/api/v1/json/%s/searchplayers.php" %
+                         (os.getenv("THESPORTSDB_API_KEY", "3").strip() or "3"),
+                         params={"p": name}, timeout=6)
+        rows = (r.json() or {}).get("player") or [] if r.ok else []
+        rows = [x for x in rows if str(x.get("strSport") or "").lower() == "soccer"] or rows
+        exact = next((x for x in rows if _norm(x.get("strPlayer")) == key), rows[0] if rows else None)
+        if exact:
+            for f in ("strCutout", "strThumb", "strRender"):
+                if exact.get(f):
+                    urls.append(str(exact[f]))
+    except Exception:
+        STATS["player_tsdb_err"] = STATS.get("player_tsdb_err", 0) + 1
+    try:
+        r = requests.get(
+            "https://en.wikipedia.org/w/api.php",
+            params={"action": "query", "generator": "search", "gsrsearch": f"{name} footballer",
+                    "gsrlimit": 1, "prop": "pageimages", "piprop": "thumbnail", "pithumbsize": 400,
+                    "format": "json"},
+            headers={"User-Agent": "NETRATTLER-cards/1.0 (match card player image)"}, timeout=6)
+        for page in (((r.json() or {}).get("query") or {}).get("pages") or {}).values():
+            u = str((page.get("thumbnail") or {}).get("source") or "")
+            if u:
+                urls.append(u)
+    except Exception:
+        STATS["player_wiki_err"] = STATS.get("player_wiki_err", 0) + 1
+    payload = b""
+    for u in urls:
+        try:
+            r = requests.get(u, timeout=8)
+            if r.ok and r.content:
+                payload = r.content
+                break
+        except Exception:
+            continue
+    STATS["player_photo_ok" if payload else "player_photo_missing"] = \
+        STATS.get("player_photo_ok" if payload else "player_photo_missing", 0) + 1
+    _PLAYER_CACHE[key] = payload
+    return payload
+
+
+def render_scorer_card(tip, target_date, result=None):
+    from PIL import Image, ImageDraw, ImageFont, ImageOps
+
+    w, h = 1080, 880
+    im = Image.new("RGB", (w, h), "#020a2a")
+    draw = ImageDraw.Draw(im)
+    fp = "/usr/share/fonts/truetype/dejavu/DejaVuSans.ttf"
+    fb = "/usr/share/fonts/truetype/dejavu/DejaVuSans-Bold.ttf"
+
+    def font(size, bold=False):
+        try:
+            return ImageFont.truetype(fb if bold else fp, size)
+        except OSError:
+            return ImageFont.load_default()
+
+    def text_c(text, cx, y, f, fill):
+        bb = draw.textbbox((0, 0), text, font=f)
+        draw.text((cx - (bb[2] - bb[0]) / 2, y), text, font=f, fill=fill)
+
+    def panel(box, outline="#2d6bff", fill="#06124a", radius=18):
+        x0, y0, x1, y1 = box
+        draw.rounded_rectangle((x0 - 2, y0 - 2, x1 + 2, y1 + 2), radius=radius + 2, outline="#12307f", width=3)
+        draw.rounded_rectangle(box, radius=radius, fill=fill, outline=outline, width=2)
+
+    result = result if isinstance(result, dict) else None
+    mark = ((result or {}).get("marks") or {}).get("0")
+    for i in range(0, 300, 6):
+        draw.line((0, i, w, i), fill=(2, 10 + i // 14, 42 + i // 5))
+    match = str(tip.get("match", ""))
+    home, away = _teams(match)
+    player = str(tip.get("player", ""))
+    text_c("NETRATTLER", w / 2, 30, font(62, True), "#ffffff")
+    text_c("GOAL HUNTER · ANYTIME GOALSCORER", w / 2, 100, font(20, True), "#9fc2ff")
+    draw.rounded_rectangle((300, 132, 780, 166), radius=16, fill="#0b1f6e", outline="#3b82ff", width=2)
+    text_c(str(tip.get("league") or "FUSSBALL")[:48], w / 2, 138, font(18, True), "#d6e6ff")
+    if result:
+        draw.rounded_rectangle((420, 176, 660, 208), radius=14, fill="#1fbf5b")
+        text_c("ABGESCHLOSSEN", w / 2, 181, font(17, True), "#ffffff")
+    else:
+        draw.rounded_rectangle((420, 176, 660, 208), radius=14, fill="#d62839")
+        text_c("PRE-KICKOFF", w / 2, 181, font(17, True), "#ffffff")
+    _paste_badge(im, draw, home, (50, 150, 220, 320), font(40, True))
+    _paste_badge(im, draw, away, (860, 150, 1030, 320), font(40, True))
+    text_c(home[:20], 135, 330, font(24, True), "#ffffff")
+    text_c(away[:20], 945, 330, font(24, True), "#ffffff")
+
+    # player photo (circle) in the middle
+    cx0, cy0, size = 420, 215, 240
+    photo = _player_photo(player, str(tip.get("team", "")))
+    shown = False
+    if photo:
+        try:
+            ph = Image.open(io.BytesIO(photo)).convert("RGBA")
+            ph = ImageOps.fit(ph, (size, size), Image.Resampling.LANCZOS, centering=(0.5, 0.2))
+            mask = Image.new("L", (size, size), 0)
+            ImageDraw.Draw(mask).ellipse((0, 0, size - 1, size - 1), fill=255)
+            draw.ellipse((cx0 - 5, cy0 - 5, cx0 + size + 5, cy0 + size + 5), fill="#27e0c0")
+            im.paste(ph, (cx0, cy0), mask)
+            shown = True
+        except Exception:
+            shown = False
+    if not shown:
+        draw.ellipse((cx0, cy0, cx0 + size, cy0 + size), fill="#172f50", outline="#27e0c0", width=5)
+        ini = "".join(x[:1] for x in re.findall(r"[A-Za-z]+", player)[-2:]).upper() or "?"
+        text_c(ini, cx0 + size / 2, cy0 + size / 2 - 40, font(80, True), "#ffffff")
+
+    text_c(player[:26], w / 2, 476, font(46, True), "#ffffff")
+    sub = str(tip.get("team") or "")
+    if result and result.get("ft"):
+        sub = (sub + "  ·  " if sub else "") + "Endstand " + str(result["ft"]).replace("-", " : ")
+    if sub:
+        text_c(sub[:60], w / 2, 536, font(22, True), "#9fc2ff")
+
+    top = 584
+    outline = "#2d6bff"
+    if mark == "win":
+        outline = "#27e0c0"
+    elif mark == "loss":
+        outline = "#ff5468"
+    panel((34, top, 1046, top + 190), outline=outline)
+    odds = _number(tip.get("odds") or tip.get("oddsYes"))
+    pct = _pct(tip.get("probability"))
+    fair = _number(tip.get("fairOdds") or tip.get("fair_odds"))
+    cells = []
+    if odds:
+        cells.append(("QUOTE", f"{odds:.2f}", "#ffd166"))
+    if pct is not None:
+        cells.append(("MODEL PROB.", f"{pct:.0f}%", "#27e0c0"))
+    if fair:
+        cells.append(("FAIR", f"{fair:.2f}", "#ffd166"))
+    gpg = _number(tip.get("goals_per_game"))
+    if gpg:
+        cells.append(("TORE / SPIEL", f"{gpg:.2f}", "#ffffff"))
+    cw = 980 / max(len(cells), 1)
+    for i, (k, v, col) in enumerate(cells):
+        x0 = 50 + i * cw
+        draw.rounded_rectangle((x0 + 4, top + 18, x0 + cw - 4, top + 110), radius=12, fill="#0a1c66", outline="#2d6bff", width=1)
+        text_c(k, x0 + cw / 2, top + 26, font(15, True), "#9fc2ff")
+        text_c(v, x0 + cw / 2, top + 56, font(40, True), col)
+    if mark in ("win", "loss"):
+        text_c("✔ TORSCHÜTZE – TREFFER" if mark == "win" else "✖ KEIN TOR – KEIN TREFFER", w / 2, top + 128,
+               font(32, True), "#27e0c0" if mark == "win" else "#ff5468")
+    else:
+        text_c("ANYTIME GOALSCORER · Spieler trifft jederzeit", w / 2, top + 134, font(20, True), "#d6e6ff")
+    fy = top + 214
+    draw.line((60, fy, w - 60, fy), fill="#1f55e8", width=2)
+    text_c("NETRATTLER  |  Nur finale, validierte Picks · keine geschätzten Quoten", w / 2, fy + 12, font(16, True), "#9fc2ff")
+    final_h = fy + 52
+    draw.rounded_rectangle((14, 14, w - 14, final_h - 14), radius=26, outline="#1f55e8", width=3)
+    im = im.crop((0, 0, w, final_h))
+    data = io.BytesIO()
+    im.save(data, format="PNG", optimize=True)
+    return data.getvalue()
+
+
+def send_scorer_card(token, chat, tip, target_date, log=print):
+    if os.getenv("ENABLE_SCORER_CARDS", "true").lower() not in ("1", "true", "yes", "on"):
+        return False
+    if not token or not chat or not _valid(tip) or not tip.get("player"):
+        return False
+    try:
+        payload = render_scorer_card(tip, target_date)
+    except Exception as exc:
+        log(f"Scorer-Card übersprungen: {type(exc).__name__}: {str(exc)[:80]}")
+        return False
+    mid = _send_photo(token, chat, "", payload, log)
+    if mid and mid is not True:
+        save_card(chat, mid, [("scorer", tip)], target_date, log)
+    return bool(mid)

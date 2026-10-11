@@ -20769,6 +20769,11 @@ def run_corners_and_scorer_bots(target_date, active_leagues, odds_data_cache, fi
                 continue
             mark_tip_sent(tip.get("match",""), "scorer", target_date)
             try:
+                import netrattler_stats_match_cards as _nsc
+                _nsc.send_scorer_card(TELEGRAM_TOKEN, group_late, tip, target_date, log=log)
+            except Exception as _sce:
+                log(f"   Scorer-Card optional übersprungen: {type(_sce).__name__}")
+            try:
                 save_to_supabase({
                     **tip,
                     "tip_id": f"scorer_{tip.get('player','?')}_{tip.get('match','?')}_{target_date}".replace(" ","_"),
