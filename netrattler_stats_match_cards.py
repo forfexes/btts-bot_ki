@@ -252,7 +252,16 @@ def render_card(entries, target_date):
     _paste_badge(im, draw, home, (70, 130, 250, 310), font(44, True))
     _paste_badge(im, draw, away, (830, 130, 1010, 310), font(44, True))
     text_c("VS", w / 2, 218, font(54, True), "#ffffff")
-    meta = "  ·  ".join(x for x in (kickoff, str(target_date)[:10]) if x)
+    shown_date = str(target_date)[:10]
+    try:
+        from datetime import datetime as _dt
+        from zoneinfo import ZoneInfo as _ZI
+        ko = str(first.get("_kickoff") or "")
+        if ko[:2] == "20":
+            shown_date = _dt.fromisoformat(ko).astimezone(_ZI("Europe/Zurich")).strftime("%Y-%m-%d")
+    except Exception:
+        pass
+    meta = "  ·  ".join(x for x in (kickoff, shown_date) if x)
     text_c(meta, w / 2, 288, font(19, True), "#d6e6ff")
     text_c(home[:22], 160, 322, font(30, True), "#ffffff")
     text_c(away[:22], 920, 322, font(30, True), "#ffffff")
