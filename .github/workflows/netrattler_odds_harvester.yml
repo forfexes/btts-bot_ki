@@ -30,7 +30,7 @@ jobs:
           pip install oddsharvester || pip install git+https://github.com/jordantete/OddsHarvester.git || true
           python -m playwright install chromium --with-deps
       - name: Compile
-        run: python -m py_compile netrattler_odds_harvester.py
+        run: python -m py_compile netrattler_odds_harvester.py netrattler_keyless_odds.py
       - name: Collect Bet365 and every available bookmaker
         env:
           SUPABASE_URL: ${{ secrets.SUPABASE_URL }}

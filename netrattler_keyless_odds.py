@@ -275,6 +275,13 @@ def collect_matchbook(target_date: str) -> List[Dict[str, Any]]:
                 continue
             total += 1
             home, away = [x.strip() for x in name.split(" vs ", 1)]
+            if "matchbook_sample" not in KEYLESS_DIAG and ev.get("markets"):
+                _m0 = (ev.get("markets") or [{}])[0]
+                _r0 = (_m0.get("runners") or [{}])[0]
+                KEYLESS_DIAG["matchbook_sample"] = {"market": _m0.get("name"), "mtype": _m0.get("market-type"),
+                                                    "runner": _r0.get("name"), "runner_keys": sorted(_r0.keys())[:15],
+                                                    "prices": (_r0.get("prices") or [])[:2],
+                                                    "markets": [m.get("name") for m in ev.get("markets") or []][:12]}
             for mk in ev.get("markets") or []:
                 mname = str(mk.get("name") or "")
                 for rn in mk.get("runners") or []:

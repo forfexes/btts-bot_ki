@@ -538,6 +538,17 @@ def _dedupe(rows: Iterable[Mapping[str, Any]]) -> List[Dict[str, Any]]:
     return list(best.values())
 
 
+def _keyless(name: str, day: str) -> List[Dict[str, Any]]:
+    """Keyless real-price collectors (bwin, 1xBet platform, Matchbook); disabled via KEYLESS_ODDS=false."""
+    if os.getenv("KEYLESS_ODDS", "true").lower() not in {"1", "true", "yes", "on"}:
+        return []
+    import netrattler_keyless_odds as k
+    fn = dict(k.COLLECTORS).get(name)
+    rows = fn(day) if fn else []
+    log(f"{name} rows={len(rows)} diag={k.KEYLESS_DIAG.get(name) or k.KEYLESS_DIAG.get(name.split('_')[0])}")
+    return rows
+
+
 def collect_live_all(target_date: Optional[str] = None) -> List[Dict[str, Any]]:
     day = str(target_date or date.today().isoformat())[:10]
     rows: List[Dict[str, Any]] = []
@@ -547,6 +558,9 @@ def collect_live_all(target_date: Optional[str] = None) -> List[Dict[str, Any]]:
         ("football_data", lambda: collect_football_data_fixtures(day)),
         ("espn", lambda: collect_espn(day)),
         ("the_odds_api", lambda: collect_the_odds_api(day)),
+        ("bwin", lambda: _keyless("bwin", day)),
+        ("1xbet_platform", lambda: _keyless("1xbet_platform", day)),
+        ("matchbook", lambda: _keyless("matchbook", day)),
     ):
         note = ""
         got: List[Dict[str, Any]] = []
@@ -555,6 +569,9 @@ def collect_live_all(target_date: Optional[str] = None) -> List[Dict[str, Any]]:
             rows.extend(got)
             if name == "kambi":
                 note = f"diag={KAMBI_DIAG}"
+            if name in {"bwin", "1xbet_platform", "matchbook"}:
+                import netrattler_keyless_odds as _k
+                note = str({kk: vv for kk, vv in _k.KEYLESS_DIAG.items() if kk.startswith(name.split("_")[0][:4]) or kk.startswith("1x")})[:300]
             if name == "the_odds_api":
                 if not _keys():
                     note = "kein ODDS_API_KEY(S) gesetzt"
