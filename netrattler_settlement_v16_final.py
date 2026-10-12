@@ -486,6 +486,13 @@ def send_result_cards(newly_closed: Sequence[Dict[str, Any]]) -> int:
         group = str(row.get("market_group") or group_of(row.get("tip_payload") or {}) or "default")
         home, away, _match = match_parts(row.get("tip_payload") or row)
         res = row.get("match_result") or {}
+        if isinstance(res, str):
+            try:
+                res = json.loads(res)
+            except Exception:
+                res = {}
+        if not res and row.get("result_home") not in (None, ""):
+            res = {"home_score": row.get("result_home"), "away_score": row.get("result_away")}
         st = normalized_status(row.get("status"))
         if not (home and away and isinstance(res, dict)) or st not in {"win", "loss"}:
             continue
@@ -495,6 +502,8 @@ def send_result_cards(newly_closed: Sequence[Dict[str, Any]]) -> int:
         raw = res.get("raw") if isinstance(res.get("raw"), dict) else {}
         hth = anyv(raw, ["home_score_ht", "ht_home", "home_ht", "HTHG", "intHomeScoreHT"], None)
         hta = anyv(raw, ["away_score_ht", "ht_away", "away_ht", "HTAG", "intAwayScoreHT"], None)
+        if hth in (None, "") and row.get("ht_home") not in (None, ""):
+            hth, hta = row.get("ht_home"), row.get("ht_away")
         data = unpack(row.get("tip_payload") or {})
         results.append({
             "match": f"{home} vs {away}", "status": st, "group": group,
@@ -1864,7 +1873,7 @@ def main() -> None:
         log(f"Original-Tipps direkt editiert: {edited_count}/{len(newly_closed)}")
     try:
         _today = datetime.now(timezone.utc).date()
-        _recent = [r for r in settled
+        _recent = [r for r in (list(existing) + list(settled))
                    if r.get("status") in {"win", "loss"}
                    and str(r.get("tip_date") or "")[:10] >= str(_today - timedelta(days=2))]
     except Exception:
