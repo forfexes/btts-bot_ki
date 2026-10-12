@@ -288,7 +288,7 @@ def collect_matchbook(target_date: str) -> List[Dict[str, Any]]:
                     mapped = _mb_market(mname, str(rn.get("name") or ""), home, away)
                     if not mapped:
                         continue
-                    backs = [p for p in rn.get("prices") or [] if p.get("side") == "back" and p.get("decimal-odds")]
+                    backs = [p for p in rn.get("prices") or [] if p.get("side") in ("back", "win") and p.get("decimal-odds")]
                     if not backs:
                         continue
                     best = max(float(p["decimal-odds"]) for p in backs)
