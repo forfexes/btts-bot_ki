@@ -17,8 +17,15 @@ def get(path, key, **params):
     return r.status_code, body
 
 
-if keys:
-    key = keys[0]
+key = None
+key_status = []
+for _k in keys:
+    _st, _b = get("/v2/football/matches", _k, per_page=1)
+    key_status.append(f"{_st}:{(_b.get('error') or {}).get('code', 'ok') if isinstance(_b, dict) else ''}")
+    if _st == 200 and key is None:
+        key = _k
+out["key_status"] = key_status
+if key:
     today = d.date.today()
     matches = []
     for path in ("/v2/football/matches", "/football/matches"):
