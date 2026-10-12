@@ -20368,8 +20368,7 @@ def format_corners_message(tip):
     if h2h_avg:
         msg += f"🔄 H2H Ø Ecken: {h2h_avg} (letzte 5)\n"
     msg += f"━━━━━━━━━━━━━━━━━━\n"
-    _src = str(tip.get("_source") or "observed").replace("_", " ")
-    msg += f"<i>💭 Echte Corner-Quote: {_src}</i>"
+    msg += f"<i>💭 Echte Buchmacher-Quote</i>"
     return msg
 
 
@@ -20702,6 +20701,13 @@ def run_corners_and_scorer_bots(target_date, active_leagues, odds_data_cache, fi
                             _c_odds_f = 0
                         if _c_odds_f < CORNER_MIN_ODDS:
                             log(f"   ⏭️ Ecken unter Mindestquote {CORNER_MIN_ODDS:.2f} verworfen: {tip['match']} ({_c_odds_f})")
+                            continue
+                        try:
+                            _c_fair = float(tip.get("fair_odds") or 0)
+                        except Exception:
+                            _c_fair = 0
+                        if _c_odds_f > 4.0 or (_c_fair > 1 and _c_odds_f / _c_fair > 2.0):
+                            log(f"   ⛔ Ecken-Quote unplausibel verworfen: {tip['match']} ({_c_odds_f} vs fair {_c_fair})", "WARN")
                             continue
                         corners_tips.append(tip)
                         corners_count += 1
