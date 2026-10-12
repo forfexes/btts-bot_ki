@@ -1862,7 +1862,14 @@ def main() -> None:
             edited_count += 1
     if newly_closed:
         log(f"Original-Tipps direkt editiert: {edited_count}/{len(newly_closed)}")
-    send_result_cards(newly_closed)
+    try:
+        _today = datetime.now(timezone.utc).date()
+        _recent = [r for r in settled
+                   if r.get("status") in {"win", "loss"}
+                   and str(r.get("tip_date") or "")[:10] >= str(_today - timedelta(days=2))]
+    except Exception:
+        _recent = list(newly_closed)
+    send_result_cards(_recent or newly_closed)
 
     history = dedup_history(existing + settled)
     save_group_stats(history)

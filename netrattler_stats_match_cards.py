@@ -790,9 +790,15 @@ def send_cards(tips_by_market, target_date, token, stats_chat, log=print):
 
     sent = 0
     pause = max(0.0, float(os.getenv("STATS_MATCH_CARDS_SEND_DELAY_SEC", "1.2")))
+    seen_sig = _existing_card_signatures(target_date, stats_chat)
     for entries in cards:
         try:
             match = str(entries[0][1].get("match", "Match"))[:100]
+            sig = _card_signature(entries)
+            if sig in seen_sig:
+                STATS["cards_dup_skipped"] = STATS.get("cards_dup_skipped", 0) + 1
+                continue
+            seen_sig.add(sig)
             payload = render_card(entries, target_date)
             mid = _send_photo(token, stats_chat, "", payload, log)
             if mid:
@@ -807,6 +813,31 @@ def send_cards(tips_by_market, target_date, token, stats_chat, log=print):
 
 
 # ---------------------------------------------------------------- in-image results
+def _card_signature(entries):
+    parts = []
+    for m, t in entries:
+        o = _number(t.get("odds") or t.get("oddsYes"))
+        parts.append(f"{m}|{t.get('tip') or t.get('selection') or ''}|{round(o, 2) if o else ''}")
+    return match_key(str(entries[0][1].get("match", ""))) + "#" + ";".join(sorted(parts))
+
+
+def _existing_card_signatures(target_date, chat):
+    out = set()
+    try:
+        url, hdr = _sb()
+        if not url:
+            return out
+        r = requests.get(url, headers=hdr, timeout=20, params={
+            "card_date": f"eq.{target_date}", "chat_id": f"eq.{chat}", "select": "entries", "limit": "1000"})
+        for row in (r.json() if r.ok else []) or []:
+            ent = [(m, t) for m, t in (row.get("entries") or [])]
+            if ent:
+                out.add(_card_signature(ent))
+    except Exception:
+        pass
+    return out
+
+
 def _sb():
     url = (os.getenv("SUPABASE_URL") or "").rstrip("/")
     key = os.getenv("SUPABASE_SERVICE_ROLE_KEY") or os.getenv("SUPABASE_KEY") or ""
@@ -875,7 +906,18 @@ def update_cards_with_results(token, results, log=print):
     if os.getenv("ENABLE_RESULT_IN_CARD", "true").lower() not in ("1", "true", "yes", "on"):
         return 0
     url, hdr = _sb()
+    diag = {"results": len(results or []), "token": bool(token), "cards_found": 0, "marked": 0,
+            "edit_ok": 0, "edit_fail": 0, "no_marks": 0, "err": ""}
+
+    def _diag():
+        try:
+            if url:
+                requests.post(url.replace("netrattler_match_cards", "netrattler_card_diag"),
+                              headers=hdr, json={"info": diag}, timeout=10)
+        except Exception:
+            pass
     if not url or not token or not results:
+        _diag()
         return 0
     import json as _json
     by_key = defaultdict(list)
@@ -887,7 +929,10 @@ def update_cards_with_results(token, results, log=print):
             r = requests.get(url, headers=hdr, timeout=20,
                              params={"match_key": f"eq.{mk}", "select": "*", "order": "created_at.desc", "limit": "10"})
             cards = r.json() if r.ok else []
+            if not r.ok:
+                diag["err"] = f"get {r.status_code}"
             for card in cards if isinstance(cards, list) else []:
+                diag["cards_found"] += 1
                 entries = [(m, t) for m, t in (card.get("entries") or [])]
                 if not entries:
                     continue
@@ -908,16 +953,25 @@ def update_cards_with_results(token, results, log=print):
                                 continue
                             marks[str(i)] = res.get("status")
                 if not marks:
+                    diag["no_marks"] += 1
                     continue
+                if old.get("marks") == marks and old.get("ft") == ft:
+                    diag["unchanged"] = diag.get("unchanged", 0) + 1
+                    continue
+                diag["marked"] += 1
                 payload = render_card(entries, card.get("card_date") or "",
                                       {"marks": marks, "ft": ft, "ht": ht})
                 if _edit_photo(token, card["chat_id"], card["message_id"], payload, log):
+                    diag["edit_ok"] += 1
                     done += 1
                     requests.patch(url, headers=hdr, timeout=15, params={"card_id": f"eq.{card.get('card_id')}"},
                                    json={"result": {"marks": marks, "ft": ft, "ht": ht}})
                 time.sleep(1.2)
         except Exception as exc:
+            diag["err"] = f"{type(exc).__name__}: {str(exc)[:120]}"
             log(f"Card-Result optional übersprungen: {type(exc).__name__}")
+    diag["edit_fail"] = diag["marked"] - diag["edit_ok"]
+    _diag()
     return done
 
 
