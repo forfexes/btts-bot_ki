@@ -20760,19 +20760,47 @@ def run_corners_and_scorer_bots(target_date, active_leagues, odds_data_cache, fi
                 pass
 
     if scorer_tips and group_late:
-        send_telegram(f"⚽ <b>SCORER TIPPS</b>\n<i>📅 {target_date}</i>", group_late)
+        def _scorer_plausible(_t):
+            try:
+                _o = float(_t.get("odds") or 0)
+                _f = float(_t.get("fair_odds") or 0)
+                import unicodedata as _ud
+                _clean = lambda x: re.sub(r"[^a-z0-9 ]", "", _ud.normalize("NFKD", str(x or "").lower()).encode("ascii", "ignore").decode())
+                _team = _clean(_t.get("team", ""))
+                if not _team:
+                    return False, "kein Team"
+                _m = _clean(_t.get("match", ""))
+                if _team[:5] not in _m:
+                    return False, "Team nicht im Spiel"
+                if _o <= 1.0 or (_f and _o / _f > 3.0) or _o > 15.0:
+                    return False, f"Quote unplausibel {_o}"
+            except Exception:
+                return False, "Fehler"
+            return True, ""
+        _ok_tips = []
+        for _t in scorer_tips:
+            _ok, _why = _scorer_plausible(_t)
+            if _ok:
+                _ok_tips.append(_t)
+            else:
+                log(f"   ⛔ Scorer verworfen ({_why}): {_t.get('player','?')} · {_t.get('match','?')}", "WARN")
+        scorer_tips = _ok_tips
+        scorer_count = len(scorer_tips)
+    if scorer_tips and group_late:
         for tip in scorer_tips:
             _smsg = format_scorer_message(tip)
-            _smid = send_telegram(_smsg, group_late)
+            _smid = None
+            try:
+                import netrattler_stats_match_cards as _nsc
+                _smid = _nsc.send_scorer_card(TELEGRAM_TOKEN, group_late, tip, target_date, log=log, return_id=True)
+            except Exception as _sce:
+                log(f"   Scorer-Card optional übersprungen: {type(_sce).__name__}")
+            if not _smid:
+                _smid = send_telegram(_smsg, group_late)  # Fallback: Text nur wenn Karte fehlschlägt
             if _smid is None:
                 log(f"   ⚠️ Scorer Telegram nicht zugestellt — nicht als gesendet markieren: {tip.get('match','?')}", "WARN")
                 continue
             mark_tip_sent(tip.get("match",""), "scorer", target_date)
-            try:
-                import netrattler_stats_match_cards as _nsc
-                _nsc.send_scorer_card(TELEGRAM_TOKEN, group_late, tip, target_date, log=log)
-            except Exception as _sce:
-                log(f"   Scorer-Card optional übersprungen: {type(_sce).__name__}")
             try:
                 save_to_supabase({
                     **tip,
@@ -20780,7 +20808,7 @@ def run_corners_and_scorer_bots(target_date, active_leagues, odds_data_cache, fi
                     "date": str(target_date), "market": "scorer", "status": "pending",
                     "group_key": "scorer", "pick_type": "scorer",
                     "telegram_chat_id": _telegram_actual_chat(group_late, _smid),
-                    "telegram_msg_id": _smid, "message_text": _smsg[:3500],
+                    "telegram_msg_id": _smid if _smid is not True else None, "message_text": _smsg[:3500],
                 })
             except Exception:
                 pass

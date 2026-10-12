@@ -1144,7 +1144,7 @@ def render_scorer_card(tip, target_date, result=None):
     return data.getvalue()
 
 
-def send_scorer_card(token, chat, tip, target_date, log=print):
+def send_scorer_card(token, chat, tip, target_date, log=print, return_id=False):
     if os.getenv("ENABLE_SCORER_CARDS", "true").lower() not in ("1", "true", "yes", "on"):
         return False
     if not token or not chat or not _valid(tip) or not tip.get("player"):
@@ -1160,7 +1160,7 @@ def send_scorer_card(token, chat, tip, target_date, log=print):
     mid = _send_photo(token, chat, "", payload, log)
     if mid and mid is not True:
         save_card(chat, mid, [("scorer", tip)], target_date, log)
-    return bool(mid)
+    return (mid or None) if return_id else bool(mid)
 
 
 def _crest_cache_load():
