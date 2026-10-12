@@ -20454,10 +20454,12 @@ def _ntr_kambi_scorer_props(fixtures, state, cap):
         if not home or not away:
             continue
         state["matches"] = state.get("matches", 0) + 1
-        try:
-            rows = fetch_kambi_player_props(home, away, brand="ub") or []
-        except Exception:
-            rows = []
+        rows = []
+        for _brand in [x.strip() for x in env("NETRATTLER_SCORER_KAMBI_BRANDS", "ub,rsiuspa,paf").split(",") if x.strip()]:
+            try:
+                rows += fetch_kambi_player_props(home, away, brand=_brand) or []
+            except Exception:
+                pass
         for r in rows:
             if str(r.get("category") or "") != "score":
                 continue
