@@ -264,7 +264,7 @@ def fetch_kambi_player_props(home: str, away: str, brand: str = "ub") -> List[Di
 # QUELLE: 1xbet-Familie (Melbet, Megapari, 888starz, Betwinner ...)
 #   LineFeed-JSON. Groesste Prop-Tiefe, aber Bot-Schutz auf Single-IP.
 # ==================================================================
-_1X_HOSTS = ["https://1xbet.com", "https://ind.1xbet.com", "https://melbet.com"]
+_1X_HOSTS = ["https://22bet.com", "https://melbet.com", "https://betwinner.com"]  # 1xbet.com itself blocks runners
 _1X_LIST_CACHE: Dict[str, Any] = {}
 _1X_GAME_CACHE: Dict[tuple, Any] = {}
 # 1xbet bet-group IDs fuer Player-Props (aus dem LineFeed-Schema):
@@ -282,7 +282,7 @@ def fetch_1xbet_player_props(home: str, away: str) -> List[Dict[str, Any]]:
     for host in _1X_HOSTS:
         if host not in _1X_LIST_CACHE:
             _1X_LIST_CACHE[host] = _get_json(
-                f"{host}/LineFeed/Get1x2_VZip",
+                f"{host}/service-api/LineFeed/Get1x2_VZip",
                 params={"sports": 1, "count": 500, "lng": "en", "mode": 4, "country": 1},
             )
         data = _1X_LIST_CACHE.get(host)
@@ -303,7 +303,7 @@ def fetch_1xbet_player_props(home: str, away: str) -> List[Dict[str, Any]]:
     _gk = (host_used, str(event_id))
     if _gk not in _1X_GAME_CACHE:
         _1X_GAME_CACHE[_gk] = _get_json(
-            f"{host_used}/LineFeed/GetGameZip",
+            f"{host_used}/service-api/LineFeed/GetGameZip",
             params={"id": event_id, "lng": "en", "cfview": 0, "grMode": 4, "country": 1},
         )
     game = _1X_GAME_CACHE.get(_gk)

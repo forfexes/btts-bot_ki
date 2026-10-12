@@ -210,7 +210,7 @@ def collect_pinnacle(target_date: str) -> List[Dict[str, Any]]:
         return []
 
 
-KAMBI_BRANDS = [x.strip() for x in os.getenv("KAMBI_BRANDS", "ubse,ub,ubnl,svenskaspel").split(",") if x.strip()]
+KAMBI_BRANDS = [x.strip() for x in os.getenv("KAMBI_BRANDS", "ubse,ub,ubnl,svenskaspel,rsiuspa").split(",") if x.strip()]
 KAMBI_DIAG: Dict[str, Any] = {}
 KAMBI_DETAIL_EVENTS = int(os.getenv("KAMBI_DETAIL_EVENTS", "60"))
 
