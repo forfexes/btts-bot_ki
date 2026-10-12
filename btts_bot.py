@@ -19781,6 +19781,46 @@ def get_team_corner_stats(team_id, league_id, season):
         return None
 
 
+_NTR_OH_CORNERS = None
+
+
+def _ntr_odds_history_corner_quotes(home, away):
+    """Fallback: real corner over-prices harvested into odds_history (e.g. bwin), keyless."""
+    global _NTR_OH_CORNERS
+    if _NTR_OH_CORNERS is None:
+        _NTR_OH_CORNERS = []
+        try:
+            _url = (os.getenv("SUPABASE_URL") or "").rstrip("/")
+            _key = os.getenv("SUPABASE_SERVICE_ROLE_KEY") or os.getenv("SUPABASE_KEY") or ""
+            if _url and _key:
+                _since = (datetime.utcnow() - timedelta(days=1)).date().isoformat()
+                _r = requests.get(f"{_url}/rest/v1/odds_history", timeout=20,
+                                  headers={"apikey": _key, "Authorization": f"Bearer {_key}"},
+                                  params={"select": "bookmaker,home_team,away_team,market,selection,odds",
+                                          "market": "like.corners_*", "selection": "like.over_*",
+                                          "match_date": f"gte.{_since}", "limit": "5000"})
+                if _r.ok:
+                    _NTR_OH_CORNERS = _r.json() or []
+        except Exception:
+            _NTR_OH_CORNERS = []
+    hn, an = normalize_team_name(home), normalize_team_name(away)
+
+    def _tm(x, y):
+        return bool(x and y and (x == y or x in y or y in x or (len(x) >= 6 and len(y) >= 6 and x[:6] == y[:6])))
+    out = {}
+    for row in _NTR_OH_CORNERS:
+        if not (_tm(normalize_team_name(row.get("home_team", "")), hn) and _tm(normalize_team_name(row.get("away_team", "")), an)):
+            continue
+        try:
+            line = round(float(str(row.get("market")).split("corners_", 1)[1].replace("_", ".")), 2)
+            odds = float(row.get("odds") or 0)
+        except Exception:
+            continue
+        if odds > 1.05 and line > 0 and (line not in out or odds > out[line][0]):
+            out[line] = (odds, str(row.get("bookmaker") or "odds_history"))
+    return out
+
+
 def _ntr_observed_corner_quotes(fixture, target_date=None):
     """Observed full-match corner lines. Kambi first; OddsPapi only opt-in."""
     home = str(fixture.get("home") or "").strip()
@@ -19806,6 +19846,11 @@ def _ntr_observed_corner_quotes(fixture, target_date=None):
                     out[line] = (odds, str(row.get("source") or "kambi"))
     except Exception:
         pass
+    if not out:
+        try:
+            out.update(_ntr_odds_history_corner_quotes(home, away))
+        except Exception:
+            pass
     if out or env("NETRATTLER_ENABLE_ODDSPAPI_RUNTIME", "false").lower() not in {"1", "true", "yes", "on"}:
         return out
     try:
