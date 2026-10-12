@@ -20460,6 +20460,14 @@ def _ntr_kambi_scorer_props(fixtures, state, cap):
                 rows += fetch_kambi_player_props(home, away, brand=_brand) or []
             except Exception:
                 pass
+        _seen_q = set()
+        _uniq = []
+        for r in rows:
+            _k = (str(r.get("player")), str(r.get("source")), str(r.get("market")), r.get("odds"))
+            if _k not in _seen_q:
+                _seen_q.add(_k)
+                _uniq.append(r)
+        rows = _uniq
         for r in rows:
             if str(r.get("category") or "") != "score":
                 continue
