@@ -32,6 +32,7 @@ import re
 import sys
 import time
 from collections import defaultdict, Counter
+from concurrent.futures import ThreadPoolExecutor, as_completed
 from datetime import datetime, timezone
 from io import StringIO
 from typing import Any, Dict, Iterable, List, Optional, Tuple
@@ -1025,4 +1026,3 @@ def main() -> int:
 
 if __name__ == "__main__":
     raise SystemExit(main())
-from concurrent.futures import ThreadPoolExecutor, as_completed
