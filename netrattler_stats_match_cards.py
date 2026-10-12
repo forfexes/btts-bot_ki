@@ -1704,8 +1704,8 @@ def _load_results():
     return rows
 
 
-def _load_history_from_supabase(log=print):
-    """Fallback: stored copy in netrattler_match_history (matches since 2015)."""
+def _load_history_from_supabase(log=print, since="2015-01-01"):
+    """Stored copy in netrattler_match_history (open dataset + football-data current seasons/extra leagues)."""
     url, hdr = _sb()
     if not url:
         return []
@@ -1714,7 +1714,7 @@ def _load_history_from_supabase(log=print):
     try:
         while off < 150000:
             r = requests.get(base, headers=hdr, timeout=25, params={
-                "select": "match_date,home_team,away_team,ft_home,ft_away", "match_date": "gte.2015-01-01",
+                "select": "match_date,home_team,away_team,ft_home,ft_away", "match_date": f"gte.{since}",
                 "order": "match_date.desc", "limit": "1000", "offset": str(off)})
             if not r.ok:
                 break
@@ -1773,6 +1773,13 @@ def attach_history_context(tips_by_market, log=print):
     gh_rows = _load_github_matches(log)
     if not gh_rows:
         gh_rows = _load_history_from_supabase(log)
+    else:
+        # Recent seasons and extra leagues (football-data sync) are only in Supabase.
+        seen = {(str(r.get("match_date"))[:10], _norm(r.get("home_team")), _norm(r.get("away_team"))) for r in gh_rows}
+        recent = _load_history_from_supabase(log, since=os.getenv("CARD_HISTORY_SUPABASE_SINCE", "2024-07-01"))
+        add = [r for r in recent if (str(r.get("match_date"))[:10], _norm(r.get("home_team")), _norm(r.get("away_team"))) not in seen]
+        STATS["history_supabase_added"] = len(add)
+        gh_rows = gh_rows + add
     rows = list(rows) + gh_rows
     STATS["history_rows"] = len(rows)
     by_team = defaultdict(list)
