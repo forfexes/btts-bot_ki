@@ -11,7 +11,7 @@ jobs:
         with:
           python-version: "3.11"
       - run: pip install requests
-      - run: python netrattler_keyless_source_probe.py; python netrattler_source_discovery_v3.py
+      - run: python netrattler_keyless_odds.py
         env:
           PINNACLE_GUEST_KEY: ${{ secrets.PINNACLE_GUEST_KEY }}
           SUPABASE_URL: ${{ secrets.SUPABASE_URL }}
