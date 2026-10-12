@@ -223,6 +223,24 @@ def collect_1x_platform(target_date: str) -> List[Dict[str, Any]]:
             continue
         rows: List[Dict[str, Any]] = []
         kept = 0
+        # The top list is capped (~50 games); walk championships for wider coverage.
+        seen_ids = {g.get("I") for g in games}
+        cj, _ = _get(f"{host}/service-api/LineFeed/GetChampsZip", {"sport": "1", "lng": "en", "country": "1"})
+        champs = sorted((cj or {}).get("Value") or [], key=lambda c: -(c.get("GC") or 0))
+        max_champs = int(os.getenv("ONEX_MAX_CHAMPS", "60"))
+        for ch in champs[:max_champs]:
+            cid = ch.get("LI")
+            if not cid:
+                continue
+            gj, _ = _get(f"{host}/service-api/LineFeed/Get1x2_VZip",
+                         {"sports": "1", "champs": str(cid), "count": "50", "lng": "en", "mode": "4",
+                          "country": "1", "getEmpty": "true"})
+            for g in (gj or {}).get("Value") or []:
+                if g.get("I") not in seen_ids:
+                    seen_ids.add(g.get("I"))
+                    games.append(g)
+            time.sleep(0.1)
+        KEYLESS_DIAG["1x_champs"] = len(champs)
         for g in games:
             if g.get("SC") or not g.get("S"):
                 continue
