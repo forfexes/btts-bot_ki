@@ -20767,12 +20767,13 @@ def run_corners_and_scorer_bots(target_date, active_leagues, odds_data_cache, fi
                 import unicodedata as _ud
                 _clean = lambda x: re.sub(r"[^a-z0-9 ]", "", _ud.normalize("NFKD", str(x or "").lower()).encode("ascii", "ignore").decode())
                 _team = _clean(_t.get("team", ""))
-                if not _team:
-                    return False, "kein Team"
                 _m = _clean(_t.get("match", ""))
-                if _team[:5] not in _m:
+                if _team and _team[:5] not in _m:
                     return False, "Team nicht im Spiel"
-                if _o <= 1.0 or (_f and _o / _f > 3.0) or _o > 15.0:
+                _src = str(_t.get("_source") or "").strip().lower()
+                if _t.get("_no_real_odds") or _src in ("", "observed", "estimated", "model"):
+                    return False, "keine Bookmaker-Quelle"
+                if _o <= 1.0 or (_f and _o / _f > 3.0) or _o > 10.0:
                     return False, f"Quote unplausibel {_o}"
             except Exception:
                 return False, "Fehler"
