@@ -273,6 +273,11 @@ def collect_matchbook(target_date: str) -> List[Dict[str, Any]]:
             day = str(ev.get("start") or "")[:10]
             if not _in_window(day, target_date):
                 continue
+            try:  # prematch only: an in-play price is not a pre-kickoff quote
+                if datetime.fromisoformat(str(ev.get("start")).replace("Z", "+00:00")) <= datetime.now(timezone.utc):
+                    continue
+            except Exception:
+                continue
             total += 1
             home, away = [x.strip() for x in name.split(" vs ", 1)]
             if "matchbook_sample" not in KEYLESS_DIAG and ev.get("markets"):
