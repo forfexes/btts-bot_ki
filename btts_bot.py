@@ -26879,6 +26879,17 @@ def main():
             f"≥3 Legs: {sum(1 for v in _pool_matches.values() if v >= 3)}"
         )
 
+        try:
+            requests.post(f"{SUPABASE_URL}/rest/v1/netrattler_card_diag", timeout=15,
+                          headers={"apikey": SUPABASE_KEY, "Authorization": f"Bearer {SUPABASE_KEY}", "Content-Type": "application/json"},
+                          json={"info": {"probe": "builder_pool", "pool": len(_builder_prop_pool),
+                                         "real_player": len(_real_player_pool), "categories": _pool_categories,
+                                         "matches": len(_pool_matches),
+                                         "ge2": sum(1 for v in _pool_matches.values() if v >= 2),
+                                         "ge3": sum(1 for v in _pool_matches.values() if v >= 3),
+                                         "player_ml": {k: _pml.get(k) for k in ("eligible", "enriched", "empirical", "models_loaded")}}})
+        except Exception:
+            pass
         if len(_builder_prop_pool) >= 3:
             _builder_chat = TELEGRAM_GROUPS.get("builder") or TELEGRAM_GROUPS.get("advanced_props") or TELEGRAM_GROUPS.get("props")
             if _builder_chat:
