@@ -26258,7 +26258,7 @@ def main():
                         "probability": prob_b, "confidence": 3,
                         "oddsYes": btts_yes, "fairOdds": round(100/prob_b, 2),
                         "valueRating": ("VALUE" if ro else "OK"), "units": 1.0, "market": "btts",
-                        "reasoning": f"Pinnacle Markt-Analyse | {league_name}",
+                        "reasoning": f"Markt-Analyse | {league_name}",
                         "_no_real_odds": not bool(ro), "_source": "pinnacle", "_kickoff": _ko_sort,
                     }
                     enrich_pinnacle_tip(tip_btts, home, away, league_name)
@@ -26274,7 +26274,7 @@ def main():
                         "probability": prob_o, "confidence": 3,
                         "oddsYes": over25, "fairOdds": round(100/prob_o, 2),
                         "valueRating": ("VALUE" if ro else "OK"), "units": 1.0, "market": "over25",
-                        "reasoning": f"Pinnacle Markt-Analyse | {league_name}",
+                        "reasoning": f"Markt-Analyse | {league_name}",
                         "_no_real_odds": not bool(ro), "_source": "pinnacle", "_kickoff": _ko_sort,
                     }
                     enrich_pinnacle_tip(tip_over25, home, away, league_name)
@@ -26304,7 +26304,7 @@ def main():
                             "oddsYes": combo_odds, "odds": combo_odds,
                             "fairOdds": round(100/combo_prob, 2),
                             "valueRating": "VALUE", "units": 0.75, "market": "combo",
-                            "reasoning": f"Pinnacle beobachtete BTTS+O2.5 Quote | {league_name}",
+                            "reasoning": f"Echte Buchmacher-Quote: BTTS+O2.5 Quote | {league_name}",
                             "_no_real_odds": False, "_source": str((ro or {}).get("_combo_source") or "pinnacle:related"), "_kickoff": _ko_sort,
                         }
                         enrich_pinnacle_tip(tip_combo, home, away, league_name)
@@ -26337,7 +26337,7 @@ def main():
                             "probability": btts_ht_prob, "confidence": 3,
                             "oddsYes": btts_ht_odds, "odds": btts_ht_odds, "fairOdds": round(100/btts_ht_prob, 2),
                             "valueRating": "VALUE", "units": 1.0, "market": "btts_ht",
-                            "reasoning": f"Pinnacle beobachtete HT-Quote | {league_name}",
+                            "reasoning": f"Echte Buchmacher-Quote: HT-Quote | {league_name}",
                             "_no_real_odds": False, "_source": str((ro or {}).get("_btts_ht_source") or "pinnacle"), "_kickoff": _ko_sort,
                         }
                         enrich_pinnacle_tip(tip_btts_ht, home, away, league_name)
@@ -26365,7 +26365,7 @@ def main():
                             "probability": o15_prob, "confidence": 3,
                             "oddsYes": o15_odds, "odds": o15_odds, "fairOdds": round(100/o15_prob, 2),
                             "valueRating": "VALUE", "units": 1.0, "market": "over15_ht",
-                            "reasoning": f"Pinnacle beobachtete HT-Quote | {league_name}",
+                            "reasoning": f"Echte Buchmacher-Quote: HT-Quote | {league_name}",
                             "_no_real_odds": False, "_source": str((ro or {}).get("_over15_ht_source") or "pinnacle"), "_kickoff": _ko_sort,
                         }
                         enrich_pinnacle_tip(tip_o15_ht, home, away, league_name)
