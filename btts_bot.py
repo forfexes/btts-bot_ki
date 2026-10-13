@@ -26429,7 +26429,7 @@ def main():
                             "tip": sel, "selection": sel, "probability": sel_prob, "confidence": 3,
                             "oddsYes": q, "odds": q, "fairOdds": round(100/sel_prob, 2),
                             "valueRating": "VALUE", "units": 1.0, "market": "1x2",
-                            "reasoning": f"Pinnacle 1X2 + Teamstärke | {league_name}",
+                            "reasoning": f"1X2 + Teamstärke | {league_name}",
                             "_no_real_odds": False, "_source": "pinnacle", "_kickoff": _ko_sort,
                             # display-only: normalized model 1X2 distribution for the match card
                             "p_home": round(_norm_1x2[0], 1), "p_draw": round(_norm_1x2[1], 1),
