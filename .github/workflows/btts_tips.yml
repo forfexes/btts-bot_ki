@@ -57,7 +57,7 @@ jobs:
 
       - name: Fast syntax check
         run: |
-          python -m py_compile btts_bot.py netrattler_stats_match_cards.py netrattler_builder_engine.py netrattler_builder_guard.py netrattler_builder_styles.py netrattler_builder_concepts_v2.py netrattler_runtime_patch.py netrattler_odds_cache_guard.py netrattler_aiscore.py netrattler_hardtest.py \
+          python -m py_compile netrattler_scorer_history_fallback.py test_netrattler_scorer_history_fallback.py btts_bot.py netrattler_stats_match_cards.py netrattler_builder_engine.py netrattler_builder_guard.py netrattler_builder_styles.py netrattler_builder_concepts_v2.py netrattler_runtime_patch.py netrattler_odds_cache_guard.py netrattler_aiscore.py netrattler_hardtest.py \
             test_netrattler_builder_guard.py test_netrattler_builder_styles.py test_netrattler_builder_concepts_v2.py test_netrattler_runtime_patch.py test_netrattler_odds_cache_guard.py test_netrattler_aiscore.py \
             netrattler_result_enrichment.py netrattler_fotmob_results.py netrattler_settlement_runner.py \
             test_netrattler_result_enrichment.py test_netrattler_fotmob_results.py test_netrattler_settlement_runner.py data_fusion_v15.py \
@@ -72,6 +72,7 @@ jobs:
         run: |
           python test_netrattler_runtime_patch.py
           python test_netrattler_odds_cache_guard.py
+          python -m unittest -v test_netrattler_scorer_history_fallback.py
           python test_netrattler_aiscore.py
           python test_netrattler_fixture_recovery.py
 
@@ -224,4 +225,4 @@ jobs:
           NETRATTLER_ENABLE_LEGACY_PROP_BUILDER: "false"
           NETRATTLER_ENABLE_SCREENSHOT_BUILDERS: "false"
         run: |
-          python -c "import netrattler_runtime_patch as patch; patch.install_pre_guard(); import btts_bot; patch.install_bot(btts_bot); import netrattler_odds_cache_guard as cache_guard; cache_guard.install(btts_bot); import netrattler_builder_guard as guard; import netrattler_builder_styles as styles; import netrattler_builder_concepts_v2 as concepts; styles.install(); concepts.install(); guard.main()"
+          python -c "import netrattler_runtime_patch as patch; patch.install_pre_guard(); import btts_bot; patch.install_bot(btts_bot); import netrattler_odds_cache_guard as cache_guard; cache_guard.install(btts_bot); import netrattler_scorer_history_fallback as scorer_history; scorer_history.install(btts_bot); import netrattler_builder_guard as guard; import netrattler_builder_styles as styles; import netrattler_builder_concepts_v2 as concepts; styles.install(); concepts.install(); guard.main()"
