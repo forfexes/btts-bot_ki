@@ -289,7 +289,7 @@ def bwin_detail_probe(listing, params, timeout=16):
             report["total_priced_options"] = sum(m["valid_price_selections"] for m in summary["markets"])
             report["scorer_or_player_markets"] = [
                 m for m in summary["markets"]
-                if re.search(r"player|scorer|to score|shots? on target|assists?", m["name"], re.I)
+                if re.search(r"\bplayer\b|\bgoalscorer\b|shots? on target|\bassist(s)?\b", m["name"], re.I)
             ][:35]
             report["market_families"] = summarize_market_families(summary)
         out.append(report)
