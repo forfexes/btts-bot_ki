@@ -32,8 +32,9 @@ TIMEOUT = float(os.getenv("NETRATTLER_ODDS_CACHE_TIMEOUT", "8"))
 TTL = int(os.getenv("NETRATTLER_ODDS_CACHE_TTL", "600"))
 MAX_ROWS = int(os.getenv("NETRATTLER_ODDS_CACHE_MAX_ROWS", "5000"))
 MAX_AGE_HOURS = float(os.getenv("NETRATTLER_ODDS_CACHE_MAX_AGE_HOURS", "18"))
-# Fail closed: new collectors stay shadow until their mapping is explicitly validated.
-LIVE_HISTORY_SOURCES = frozenset({"pinnacle", "kambi", "the_odds_api"})
+# Only providers with validated selection mapping enter live tips.
+# bwin uses labelled home/away, BTTS and totals; numeric-code 1xBet stays shadow.
+LIVE_HISTORY_SOURCES = frozenset({"pinnacle", "kambi", "the_odds_api", "bwin"})
 
 _CACHE: Tuple[float, List[Dict[str, Any]]] = (0.0, [])
 _INSTALLED = False
