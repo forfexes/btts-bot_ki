@@ -55,7 +55,8 @@ class TestHardprobe(unittest.TestCase):
     @patch("netrattler_betclone_hardprobe.probe_homepage")
     def test_guessed_domain_is_never_promoted_to_feed(self, probe):
         probe.return_value = {"http": 200, "state": "public_structured_odds_candidate",
-                              "verified_odds": 4, "off_domain_redirect": False}
+                              "verified_odds": 4, "off_domain_redirect": False,
+                              "identity_signal": "brand_and_sportsbook_terms"}
         result = probe_guessed_domain("betby", "testbook", "https://testbook.com/")
         self.assertFalse(result["usable_feed"])
         self.assertEqual(result["domain_verification"], "unverified_guess")
@@ -75,6 +76,15 @@ class TestHardprobe(unittest.TestCase):
     def test_unrelated_reachable_domain_is_low_priority(self, probe):
         probe.return_value = {"http": 200, "state": "html_no_verified_odds",
                               "verified_odds": 0, "identity_signal": "no_identity_signal"}
+        result = probe_guessed_domain("betby", "unrelated", "https://unrelated.com/")
+        self.assertEqual(result["manual_review_priority"], "low")
+        self.assertFalse(result["usable_feed"])
+
+    @patch("netrattler_betclone_hardprobe.probe_homepage")
+    def test_unrelated_odds_like_json_never_gets_high_priority(self, probe):
+        probe.return_value = {"http": 200, "verified_odds": 100,
+                              "state": "public_structured_odds_candidate",
+                              "identity_signal": "no_identity_signal"}
         result = probe_guessed_domain("betby", "unrelated", "https://unrelated.com/")
         self.assertEqual(result["manual_review_priority"], "low")
         self.assertFalse(result["usable_feed"])
