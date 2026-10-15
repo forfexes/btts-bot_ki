@@ -117,6 +117,32 @@ def parse_catalogue_html(html):
     soup = BeautifulSoup(html, "html.parser")
     found = []
     seen = set()
+    h1 = soup.find("h1")
+    if h1 is not None:
+        # Main brand list is the FIRST contiguous run of affiliate links after
+        # the group H1. Stop at the first substantive editorial paragraph;
+        # links below that point are generic recommendations/footer, not
+        # members of this sportsbook platform.
+        started = False
+        for tag in h1.find_all_next(["a", "p", "h2", "h3"]):
+            if tag.name == "a":
+                host = (urlparse(tag.get("href") or "").hostname or "").lower()
+                if host not in {"finmart.pro", "www.finmart.pro"}:
+                    continue
+                started = True
+                brand = re.sub(r"\s+", " ", tag.get_text(" ", strip=True)).strip()
+                if not brand or len(brand) > 90:
+                    continue
+                key = brand.casefold()
+                if key not in seen:
+                    seen.add(key)
+                    found.append(brand)
+            elif started and tag.name in {"p", "h2", "h3"}:
+                prose = tag.get_text(" ", strip=True)
+                if len(prose) > 75 and not tag.find("a"):
+                    break
+        if found:
+            return found
     for table in soup.find_all("table"):
         links = table.select("a[href]")
         has_bookmaker_header = "bookmaker" in table.get_text(" ", strip=True)[:200].lower()
