@@ -50,11 +50,7 @@ def _teams_match(candidate: Any, target: Any) -> bool:
     a, b = _norm(candidate), _norm(target)
     if not a or not b:
         return False
-    if a == b or a in b or b in a:
-        return True
-    aa = {x for x in a.split() if len(x) >= 4 and x not in {"club", "city", "united"}}
-    bb = {x for x in b.split() if len(x) >= 4 and x not in {"club", "city", "united"}}
-    return bool(aa and bb and (aa & bb))
+    return a == b
 
 
 def _price(value: Any, hi: float = 100.0) -> Optional[float]:
@@ -140,6 +136,8 @@ def best_observed_for_match(home: str, away: str, rows: Optional[Iterable[Mappin
     sources: Dict[str, str] = {}
     for row in (list(rows) if rows is not None else _load_rows()):
         if str(row.get("source") or "").lower() not in LIVE_HISTORY_SOURCES or not _fresh(row):
+            continue
+        if _norm(row.get("home_team")) in {"home", "away", "team 1", "team 2"} or _norm(row.get("away_team")) in {"home", "away", "team 1", "team 2"}:
             continue
         if not (_teams_match(row.get("home_team"), home) and _teams_match(row.get("away_team"), away)):
             continue
