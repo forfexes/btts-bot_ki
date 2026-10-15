@@ -32,6 +32,8 @@ TIMEOUT = float(os.getenv("NETRATTLER_ODDS_CACHE_TIMEOUT", "8"))
 TTL = int(os.getenv("NETRATTLER_ODDS_CACHE_TTL", "600"))
 MAX_ROWS = int(os.getenv("NETRATTLER_ODDS_CACHE_MAX_ROWS", "5000"))
 MAX_AGE_HOURS = float(os.getenv("NETRATTLER_ODDS_CACHE_MAX_AGE_HOURS", "18"))
+# Fail closed: new collectors stay shadow until their mapping is explicitly validated.
+LIVE_HISTORY_SOURCES = frozenset({"pinnacle", "kambi", "the_odds_api"})
 
 _CACHE: Tuple[float, List[Dict[str, Any]]] = (0.0, [])
 _INSTALLED = False
@@ -67,7 +69,7 @@ def _fresh(row: Mapping[str, Any]) -> bool:
     raw = row.get("raw") if isinstance(row.get("raw"), dict) else {}
     stamp = raw.get("captured_at") or raw.get("timestamp") or raw.get("updated_at")
     if not stamp:
-        return True
+        return False
     try:
         dt = datetime.fromisoformat(str(stamp).replace("Z", "+00:00"))
         if dt.tzinfo is None:
@@ -75,7 +77,7 @@ def _fresh(row: Mapping[str, Any]) -> bool:
         age = (datetime.now(timezone.utc) - dt.astimezone(timezone.utc)).total_seconds() / 3600.0
         return -1.0 <= age <= MAX_AGE_HOURS
     except Exception:
-        return True
+        return False
 
 
 def _load_rows(force: bool = False) -> List[Dict[str, Any]]:
@@ -100,7 +102,7 @@ def _load_rows(force: bool = False) -> List[Dict[str, Any]]:
             timeout=TIMEOUT,
         )
         data = r.json() if r.ok and r.text else []
-        rows = [dict(x) for x in data if isinstance(x, dict) and _fresh(x)] if isinstance(data, list) else []
+        rows = [dict(x) for x in data if isinstance(x, dict) and str(x.get("source") or "").lower() in LIVE_HISTORY_SOURCES and _fresh(x)] if isinstance(data, list) else []
         _CACHE = (now, rows)
         return rows
     except Exception:
@@ -125,7 +127,7 @@ def _field_for_row(row: Mapping[str, Any]) -> Optional[str]:
         return "btts_yes_ht" if selection in {"yes", "y"} else None
     if market in {"totals_ht_1_5", "over_under_ht_1_5"} or (("1_5" in market or line_f == 1.5) and ("ht" in market or "half" in market)):
         return "over_15_ht" if selection.startswith("over") else None
-    if market in {"totals_2_5", "over_under_2_5"} or ("2_5" in market and "corner" not in market):
+    if market in {"totals_2_5", "over_under_2_5"}:
         return "over_25" if selection.startswith("over") else None
     if "btts" in market and ("over25" in market or "over_2_5" in market or "over2_5" in market or "combo" in market):
         return "btts_over25_yes" if ("yes" in selection or selection in {"over", "btts_over"}) else None
@@ -136,6 +138,8 @@ def best_observed_for_match(home: str, away: str, rows: Optional[Iterable[Mappin
     best: Dict[str, float] = {}
     sources: Dict[str, str] = {}
     for row in (list(rows) if rows is not None else _load_rows()):
+        if str(row.get("source") or "").lower() not in LIVE_HISTORY_SOURCES or not _fresh(row):
+            continue
         if not (_teams_match(row.get("home_team"), home) and _teams_match(row.get("away_team"), away)):
             continue
         field = _field_for_row(row)
