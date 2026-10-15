@@ -355,6 +355,45 @@ def probe_homepage(family, brand, url, timeout=9):
     return out
 
 
+def conservative_domain_candidate(brand):
+    """ONE unverified .com guess; not a verified operator domain."""
+    name = brand.strip().lower()
+    if name.endswith((".com", ".bet", ".io", ".gg", ".hu", ".ee", ".lv", ".se", ".uk", ".net")):
+        domain = name
+    elif re.fullmatch(r"[a-z0-9][a-z0-9-]{2,45}", name):
+        domain = name + ".com"
+    else:
+        return None
+    if not re.fullmatch(r"[a-z0-9][a-z0-9.-]{3,70}", domain):
+        return None
+    return "https://" + domain + "/"
+
+
+def discover_catalogue_candidates(catalogue, known_sites):
+    known = {(x["platform"], x["brand"].casefold()) for x in known_sites}
+    guesses, unresolved = [], []
+    for family, group in catalogue.items():
+        for name in group.get("bookmakers", []):
+            if (family, name.casefold()) in known:
+                continue
+            url = conservative_domain_candidate(name)
+            if url:
+                guesses.append((family, name, url))
+            else:
+                unresolved.append({"platform": family, "brand": name,
+                                   "reason": "no_safe_single_domain_guess"})
+    return guesses, unresolved
+
+
+def probe_guessed_domain(family, brand, url, timeout=5):
+    item = probe_homepage(family, brand, url, timeout=timeout)
+    item["domain_verification"] = "unverified_guess"
+    item["usable_feed"] = False
+    if item.get("verified_odds"):
+        item["state"] = "unverified_domain_with_odds_needs_review"
+    return item
+
+
 def catalogue_audit_matrix(catalogue, sites):
     """Explicitly mark every listed brand as checked or not checked."""
     site_lookup = {(s["platform"], s["brand"].casefold()): s for s in sites
@@ -373,7 +412,7 @@ def catalogue_audit_matrix(catalogue, sites):
     return matrix
 
 
-def run_scan(timeout=9, workers=7, scan_sites=True):
+def run_scan(timeout=9, workers=7, scan_sites=True, all_brands=False):
     catalogue = {}
     sites = []
     jobs = {}
@@ -394,6 +433,18 @@ def run_scan(timeout=9, workers=7, scan_sites=True):
                 catalogue[family] = val
             else:
                 sites.append(val)
+    guesses, unresolved = discover_catalogue_candidates(catalogue, sites)
+    guessed_results = []
+    if all_brands and guesses:
+        with ThreadPoolExecutor(max_workers=max(1, min(workers, 10))) as pool:
+            futures = [pool.submit(probe_guessed_domain, family, name, url, min(timeout, 6))
+                       for family, name, url in guesses]
+            for future in as_completed(futures):
+                try:
+                    guessed_results.append(future.result())
+                except Exception as exc:
+                    guessed_results.append({"state": "unexpected_error",
+                                            "error_type": type(exc).__name__})
     seen = {family: {name.casefold() for name in item.get("bookmakers", [])}
             for family, item in catalogue.items()}
     for site in sites:
@@ -409,6 +460,12 @@ def run_scan(timeout=9, workers=7, scan_sites=True):
         "catalogue_families_retrieved": sum(i["count"] > 0 for i in catalogue.values()),
         "historical_extra_entries": sum(i.get("historical_extra_count", 0) for i in catalogue.values()),
         "sites_checked": len(sites),
+        "all_brand_discovery_enabled": all_brands,
+        "unverified_candidate_domains": len(guesses),
+        "unverified_candidate_domains_probed": len(guessed_results),
+        "unverified_candidate_probe_states": dict(Counter(g.get("state") for g in guessed_results)),
+        "unverified_candidate_probe_results": sorted(guessed_results, key=lambda x: (x.get("platform", ""), x.get("brand", ""))),
+        "brands_without_safe_domain_guess": unresolved,
         "catalogue_brands_tested": sum(row["site_tested"] for row in matrix),
         "catalogue_brands_awaiting_verified_domain": sum(not row["site_tested"] for row in matrix),
         "catalogue_audit_matrix": matrix,
@@ -422,9 +479,11 @@ def main():
     p.add_argument("--timeout", type=int, default=9)
     p.add_argument("--workers", type=int, default=7)
     p.add_argument("--inventory-only", action="store_true")
+    p.add_argument("--all-brands", action="store_true", help="Probe one UNVERIFIED domain per untested brand")
     p.add_argument("--output", default="netrattler_betclone_hardprobe.json")
     args = p.parse_args()
-    result = run_scan(timeout=args.timeout, workers=args.workers, scan_sites=not args.inventory_only)
+    result = run_scan(timeout=args.timeout, workers=args.workers,
+                      scan_sites=not args.inventory_only, all_brands=args.all_brands)
     with open(args.output, "w", encoding="utf-8") as f:
         json.dump(result, f, indent=2, ensure_ascii=False)
     print("CATALOGUE", result["catalogue_families_retrieved"], "/", len(PAGES),
@@ -435,6 +494,10 @@ def main():
     print("HOMEPAGES", result["sites_checked"], "STATUS", json.dumps(result["site_states"]), flush=True)
     print("MATRIX", result["catalogue_brands_tested"], "tested listed brands,",
           result["catalogue_brands_awaiting_verified_domain"], "listed brands without curated domain", flush=True)
+    print("ALL_BRAND_DISCOVERY", result["unverified_candidate_domains_probed"], "/",
+          result["unverified_candidate_domains"], "unverified candidates",
+          "no_safe_guess", len(result["brands_without_safe_domain_guess"]),
+          "states", json.dumps(result["unverified_candidate_probe_states"]), flush=True)
     for row in result["sites"]:
         print("SITE", row["platform"], row["brand"], row["http"], row["state"],
               "odds", row["verified_odds"], "host", row["final_host"], flush=True)
