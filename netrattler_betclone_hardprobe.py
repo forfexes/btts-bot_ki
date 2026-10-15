@@ -43,12 +43,15 @@ CANDIDATES = {
     "altenar": [
         ("rabona", "https://rabona.com/"), ("sportaza", "https://sportaza.com/"),
         ("betinia", "https://betinia.com/"), ("vegas.hu", "https://vegas.hu/"),
+        ("campobet", "https://campobet.com/"), ("nomini", "https://nomini.com/"),
         ("betrepublic", "https://betrepublic.com/"),
     ],
     "betby": [
         ("betfury", "https://betfury.com/"), ("20bet", "https://20bet.com/"),
         ("tonybet", "https://tonybet.com/"), ("vave", "https://vave.com/"),
         ("mama.bet", "https://mama.bet/"), ("noxino", "https://noxino.com/"),
+        ("gamdom", "https://gamdom.com/"), ("roobet", "https://roobet.com/"),
+        ("chips.gg", "https://chips.gg/"),
     ],
     "betconstruct": [
         ("vbet", "https://www.vbet.com/"), ("efbet", "https://efbet.com/"),
