@@ -1,7 +1,7 @@
 import unittest
 from unittest.mock import patch
 from netrattler_betclone_hardprobe import (
-    CANDIDATES, PAGES, audit_odds_json, parse_catalogue_html, parse_extended_bookmakers, probe_homepage, valid_decimal
+    CANDIDATES, PAGES, audit_odds_json, parse_catalogue_html, parse_extended_bookmakers, probe_homepage, valid_decimal, conservative_domain_candidate, discover_catalogue_candidates
 )
 
 
@@ -38,6 +38,19 @@ class TestHardprobe(unittest.TestCase):
         names = ", ".join(["Betx101"] + [f"example{i} sportsbook" for i in range(20)])
         html = "<p>" + names + "</p>"
         self.assertEqual(len(parse_extended_bookmakers(html)), 21)
+
+    def test_guessed_domains_are_explicitly_unverified(self):
+        self.assertEqual(conservative_domain_candidate("Vbet"), "https://vbet.com/")
+        self.assertEqual(conservative_domain_candidate("chips.gg"), "https://chips.gg/")
+        self.assertIsNone(conservative_domain_candidate("Some Bookmaker"))
+        self.assertIsNone(conservative_domain_candidate("https://bad.example/path"))
+
+    def test_all_brands_discovery_covers_unmapped_without_false_verification(self):
+        catalogue = {"betby": {"bookmakers": ["Vbet", "Unmapped", "Unknown Brand"]}}
+        known = [{"platform": "betby", "brand": "Vbet", "url": "https://vbet.com/"}]
+        guessed, unresolved = discover_catalogue_candidates(catalogue, known)
+        self.assertEqual(guessed, [("betby", "Unmapped", "https://unmapped.com/")])
+        self.assertEqual(len(unresolved), 1)
 
     def test_no_table_fails_closed(self):
         self.assertEqual(parse_catalogue_html("<h1>blocked</h1>"), [])
