@@ -1,6 +1,12 @@
 name: NETRATTLER BetClone Platform Probe
 on:
   workflow_dispatch:
+  push:
+    branches: [main]
+    paths:
+      - '.github/workflows/netrattler_betclone_probe.yml'
+      - 'netrattler_betclone_probe.py'
+      - 'test_netrattler_betclone_probe.py'
   schedule:
     - cron: '42 7 * * 1'
 permissions:
