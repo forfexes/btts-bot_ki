@@ -82,6 +82,21 @@ class MarketAuditTests(unittest.TestCase):
         self.assertEqual(result[0]["scorer_or_player_markets"][0]["name"], "Anytime Goalscorer")
         self.assertEqual(get.call_count, 1)
 
+    def test_bwin_structured_1x2_option_metadata(self):
+        from netrattler_keyless_odds import _bwin_rows
+        fixture = {"id": 456, "name": {"value": "Home FC - Away FC"},
+                   "startDate": "2026-10-20T18:00:00Z",
+                   "participants": [{"name": {"value": "Home FC"}},
+                                    {"name": {"value": "Away FC"}}],
+                   "optionMarkets": [{"name": {"value": "Match Result"}, "status": "Visible",
+                       "options": [
+                           {"sourceName": {"value": "1"}, "price": {"odds": 2.2}},
+                           {"parameters": {"optionTypes": ["Draw"]}, "price": {"odds": 3.3}},
+                           {"sourceName": {"value": "2"}, "price": {"odds": 3.8}}
+                       ]}]}
+        rows = _bwin_rows(fixture)
+        self.assertEqual({r["selection"] for r in rows}, {"home", "draw", "away"})
+
     def test_specific_markets(self):
         self.assertEqual(market_family("Both Teams To Score - 1st Half"), "btts_ht")
         self.assertEqual(market_family("Anytime Goalscorer"), "goalscorer")
