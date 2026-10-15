@@ -108,6 +108,70 @@ def summarize_x1(payload):
     }
 
 
+def summarize_x1_game_detail(payload):
+    """Profile full prematch game: group IDs and labelled selection types only."""
+    item = payload.get("Value") if isinstance(payload, dict) else None
+    if not isinstance(item, dict):
+        return {"has_event": False, "group_count": 0, "group_labels": [],
+                "raw_type_counts": {}, "text_labels": []}
+    groups = item.get("GE") or []
+    counts = Counter()
+    labels = []
+    group_labels = []
+    def walk(node, depth=0):
+        if depth > 10:
+            return
+        if isinstance(node, list):
+            for child in node[:300]:
+                walk(child, depth + 1)
+        elif isinstance(node, dict):
+            if "T" in node and "C" in node:
+                code = str(node.get("T"))
+                counts[code] += 1
+                label = next((str(node[k])[:100] for k in ("N", "Name", "GN", "SN")
+                              if isinstance(node.get(k), str) and node.get(k)), "")
+                if label and len(labels) < 25:
+                    labels.append({"type": code, "label": label})
+            for child in node.values():
+                if isinstance(child, (dict, list)):
+                    walk(child, depth + 1)
+    for group in groups[:200]:
+        if not isinstance(group, dict):
+            continue
+        for k in ("N", "GN", "Name"):
+            if isinstance(group.get(k), str) and len(group_labels) < 30:
+                group_labels.append(group[k][:100])
+        walk(group)
+    return {
+        "has_event": True,
+        "group_count": len(groups),
+        "group_labels": group_labels,
+        "raw_type_counts": dict(counts.most_common(50)),
+        "text_labels": labels,
+        "notes": "Unlabelled codes remain excluded from production until their market semantics are verified",
+    }
+
+
+def x1_detail_probe(listing_payload, timeout=16):
+    """At most two single-match public GETs. No login, proxies or fallback on blocks."""
+    events = sample_x1_events(listing_payload)[:2]
+    results = []
+    for fixture, _ in events:
+        game_id = fixture.get("I")
+        if not isinstance(game_id, (int, str)) or not re.fullmatch(r"\d{3,15}", str(game_id)):
+            continue
+        raw = public_json("https://22bet.com/service-api/LineFeed/GetGameZip",
+            {"id": str(game_id), "lng": "en", "cfview": "0",
+             "isSubGames": "true", "GroupEvents": "true", "countevents": "250"},
+            timeout=timeout)
+        result = {"http": raw["http"], "error": raw["error"],
+                  "data": summarize_x1_game_detail(raw["json"]) if raw["json"] else None}
+        results.append(result)
+        if raw["http"] in (401, 403, 407, 429, 451):
+            break
+    return results
+
+
 def bwin_text(item):
     if isinstance(item, dict):
         return str(item.get("value") or item.get("short") or item.get("text") or "")
@@ -180,7 +244,7 @@ def quantify_bwin_harvester_mapping(payload):
             if market not in mapped_examples:
                 mapped_examples[market] = {
                     "selection": row.get("selection"),
-                    "line": row.get("line"),
+                    "line": (row.get("raw") or {}).get("line"),
                     "bookmaker": row.get("bookmaker"),
                 }
     return {
@@ -246,11 +310,13 @@ def main():
     bwin = public_json("https://sports.bwin.com/cds-api/bettingoffer/fixtures",
         bwin_params, timeout=args.timeout)
 
+    detail = x1_detail_probe(x1["json"], timeout=args.timeout) if x1["json"] else []
     report = {
         "at_utc": datetime.now(timezone.utc).isoformat(),
         "scope": "Public anonymous 1xBet-family and bwin listing responses, observation only",
         "x1": {"http": x1["http"], "error": x1["error"],
-               "data": summarize_x1(x1["json"]) if x1["json"] else None},
+               "data": summarize_x1(x1["json"]) if x1["json"] else None,
+               "detailed_events": detail},
         "bwin": {"http": bwin["http"], "error": bwin["error"],
                  "data": summarize_bwin(bwin["json"]) if bwin["json"] else None},
     }
@@ -264,7 +330,9 @@ def main():
     for code in (report["x1"]["data"] or {}).get("market_type_codes", [])[:30]:
         print("X1_CODE", code["type_code"], code["observations"], "valid", code["valid_prices"],
               "labels", code["raw_labels"], flush=True)
-    print("BWIN", json.dumps({k: v for k, v in report["bwin"].items() if k not in ("data", "market_families")}),
+    for i, item in enumerate(detail):
+        print("X1_DETAIL", i, json.dumps(item, ensure_ascii=False), flush=True)
+    print("BWIN", json.dumps({k: v for k, v in report["bwin"].items() if k not in ("data", "market_families", "production_parser")}),
           "fixtures", (report["bwin"]["data"] or {}).get("fixture_count", 0), flush=True)
     for family, info in report["bwin"].get("market_families", {}).items():
         print("BWIN_FAMILY", family, info["market_instances"], "outcomes", info["priced_outcomes"], flush=True)
