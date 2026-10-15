@@ -141,6 +141,21 @@ def parse_catalogue_html(html):
             if key not in seen:
                 seen.add(key)
                 found.append(brand)
+    # Some BetClone pages place the rest of their operator links outside
+    # the first tabular fragment. Affiliate ANCHOR LABELS are the complete
+    # source inventory; never request their third-party tracking destinations.
+    for a in soup.select("a[href]"):
+        href = a.get("href") or ""
+        host = (urlparse(href).hostname or "").lower()
+        if host not in {"finmart.pro", "www.finmart.pro"}:
+            continue
+        brand = re.sub(r"\\s+", " ", a.get_text(" ", strip=True)).strip()
+        if not brand or len(brand) > 90 or brand.lower() in {"bookmaker", "bonus"}:
+            continue
+        key = brand.casefold()
+        if key not in seen:
+            seen.add(key)
+            found.append(brand)
     return found
 
 
