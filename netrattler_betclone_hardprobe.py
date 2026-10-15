@@ -318,7 +318,7 @@ def probe_homepage(family, brand, url, timeout=9):
             tokens = [t for t in re.split(r"[^a-z0-9]+", brand.casefold()) if len(t) >= 4]
             out["identity_brand_mentioned"] = bool(tokens) and all(t in identity_text for t in tokens)
             out["identity_sportsbook_language"] = bool(re.search(
-                r"\\b(?:sportsbook|sports betting|sportwetten|bookmaker|betting odds)\\b",
+                r"\b(?:sportsbook|sports betting|sportwetten|bookmaker|betting odds)\b",
                 identity_text, re.I))
             out["identity_signal"] = (
                 "brand_and_sportsbook_terms" if out["identity_brand_mentioned"] and out["identity_sportsbook_language"]
