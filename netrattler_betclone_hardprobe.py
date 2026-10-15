@@ -389,6 +389,11 @@ def probe_guessed_domain(family, brand, url, timeout=5):
     item = probe_homepage(family, brand, url, timeout=timeout)
     item["domain_verification"] = "unverified_guess"
     item["usable_feed"] = False
+    item["manual_review_priority"] = (
+        "high" if item.get("verified_odds") else
+        "medium" if item.get("http") == 200 and not item.get("off_domain_redirect") else
+        "low"
+    )
     if item.get("verified_odds"):
         item["state"] = "unverified_domain_with_odds_needs_review"
     return item
@@ -464,6 +469,14 @@ def run_scan(timeout=9, workers=7, scan_sites=True, all_brands=False):
         "unverified_candidate_domains": len(guesses),
         "unverified_candidate_domains_probed": len(guessed_results),
         "unverified_candidate_probe_states": dict(Counter(g.get("state") for g in guessed_results)),
+        "unverified_candidate_review_priorities": dict(Counter(g.get("manual_review_priority", "unknown") for g in guessed_results)),
+        "unverified_candidate_review_queue": sorted(
+            ({"platform": g.get("platform"), "brand": g.get("brand"),
+              "url": g.get("url"), "http": g.get("http"),
+              "state": g.get("state"), "final_host": g.get("final_host"),
+              "priority": g.get("manual_review_priority")}
+             for g in guessed_results if g.get("manual_review_priority") in ("high", "medium")),
+            key=lambda g: (0 if g["priority"] == "high" else 1, g["platform"] or "", g["brand"] or "")),
         "unverified_candidate_probe_results": sorted(guessed_results, key=lambda x: (x.get("platform", ""), x.get("brand", ""))),
         "brands_without_safe_domain_guess": unresolved,
         "catalogue_brands_tested": sum(row["site_tested"] for row in matrix),
