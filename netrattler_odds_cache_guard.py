@@ -30,7 +30,9 @@ SUPABASE_URL = (os.getenv("SUPABASE_URL") or "").rstrip("/")
 SUPABASE_KEY = os.getenv("SUPABASE_SERVICE_ROLE_KEY") or os.getenv("SUPABASE_KEY") or ""
 TIMEOUT = float(os.getenv("NETRATTLER_ODDS_CACHE_TIMEOUT", "8"))
 TTL = int(os.getenv("NETRATTLER_ODDS_CACHE_TTL", "600"))
-MAX_ROWS = int(os.getenv("NETRATTLER_ODDS_CACHE_MAX_ROWS", "5000"))
+MAX_ROWS = int(os.getenv("NETRATTLER_ODDS_CACHE_MAX_ROWS", "12000"))
+PAGE_SIZE = 1000
+CACHE_MARKETS = ("1x2", "btts", "btts_ht", "totals_2_5", "totals_ht_1_5")
 MAX_AGE_HOURS = float(os.getenv("NETRATTLER_ODDS_CACHE_MAX_AGE_HOURS", "18"))
 # Only providers with validated selection mapping enter live tips.
 # bwin uses labelled home/away, BTTS and totals; numeric-code 1xBet stays shadow.
@@ -89,24 +91,42 @@ def _load_rows(force: bool = False) -> List[Dict[str, Any]]:
     headers = {"apikey": SUPABASE_KEY, "Authorization": f"Bearer {SUPABASE_KEY}"}
     today = datetime.now(timezone.utc).date().isoformat()
     try:
-        r = requests.get(
-            f"{SUPABASE_URL}/rest/v1/odds_history",
-            headers=headers,
-            params={
-                "captured_date": f"eq.{today}",
-                "select": "source,bookmaker,home_team,away_team,match_date,market,selection,odds,raw",
-                "limit": str(MAX_ROWS),
-            },
-            timeout=TIMEOUT,
-        )
-        data = r.json() if r.ok and r.text else []
-        rows = [dict(x) for x in data if isinstance(x, dict) and str(x.get("source") or "").lower() in LIVE_HISTORY_SOURCES and _fresh(x)] if isinstance(data, list) else []
+        # Restrict at the database: scanning the first 5k arbitrary historical rows
+        # silently omitted most freshly harvested bwin and half-time offers.
+        allowed = ",".join(sorted(LIVE_HISTORY_SOURCES))
+        markets = ",".join(CACHE_MARKETS)
+        rows: List[Dict[str, Any]] = []
+        for offset in range(0, max(0, MAX_ROWS), PAGE_SIZE):
+            limit = min(PAGE_SIZE, MAX_ROWS - offset)
+            response = requests.get(
+                f"{SUPABASE_URL}/rest/v1/odds_history",
+                headers=headers,
+                params={
+                    "captured_date": f"eq.{today}",
+                    "source": f"in.({allowed})",
+                    "market": f"in.({markets})",
+                    "select": "source,bookmaker,home_team,away_team,match_date,market,selection,odds,raw",
+                    "order": "match_date.asc,match_id.asc,source.asc,bookmaker.asc,market.asc,selection.asc",
+                    "limit": str(limit),
+                    "offset": str(offset),
+                },
+                timeout=TIMEOUT,
+            )
+            response.raise_for_status()
+            data = response.json()
+            if not isinstance(data, list):
+                raise ValueError("unexpected odds_history response")
+            rows.extend(dict(x) for x in data
+                        if isinstance(x, dict)
+                        and str(x.get("source") or "").lower() in LIVE_HISTORY_SOURCES
+                        and _fresh(x))
+            if len(data) < limit:
+                break
         _CACHE = (now, rows)
         return rows
-    except Exception:
+    except (requests.RequestException, ValueError, TypeError):
         _CACHE = (now, [])
         return []
-
 
 def _field_for_row(row: Mapping[str, Any]) -> Optional[str]:
     market = str(row.get("market") or "").lower().replace("-", "_")
