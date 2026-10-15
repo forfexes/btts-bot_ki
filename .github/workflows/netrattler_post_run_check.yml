@@ -12,6 +12,12 @@ on:
       - NETRATTLER Public Sources CI
     types: [completed]
   workflow_dispatch:
+  push:
+    branches: [main]
+    paths:
+      - '.github/workflows/netrattler_post_run_check.yml'
+      - 'netrattler_post_run_check.py'
+      - 'test_netrattler_post_run_check.py'
 permissions:
   contents: read
 jobs:
