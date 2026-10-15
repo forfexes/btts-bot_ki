@@ -140,11 +140,11 @@ def test_cache_selects_only_relevant_markets_and_paginates():
     def fake_get(_url, *, params, **_kwargs):
         calls.append(params)
         return Response([dict(row), dict(row)] if params["offset"] == "0" else [dict(row)])
-    with patch.object(guard, "SUPABASE_URL", "https://example.supabase.co"), \\
-         patch.object(guard, "SUPABASE_KEY", "test-token"), \\
-         patch.object(guard, "PAGE_SIZE", 2), \\
-         patch.object(guard, "MAX_ROWS", 6), \\
-         patch.object(guard.requests, "get", side_effect=fake_get):
+    with (patch.object(guard, "SUPABASE_URL", "https://example.supabase.co"),
+          patch.object(guard, "SUPABASE_KEY", "test-token"),
+          patch.object(guard, "PAGE_SIZE", 2),
+          patch.object(guard, "MAX_ROWS", 6),
+          patch.object(guard.requests, "get", side_effect=fake_get)):
         got = guard._load_rows(force=True)
     assert len(got) == 3
     assert len(calls) == 2
