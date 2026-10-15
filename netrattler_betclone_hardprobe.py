@@ -408,9 +408,13 @@ def probe_guessed_domain(family, brand, url, timeout=5):
     item = probe_homepage(family, brand, url, timeout=timeout)
     item["domain_verification"] = "unverified_guess"
     item["usable_feed"] = False
+    # Even valid-looking JSON on an unrelated guessed domain is not a
+    # trustworthy bookmaker source. Require brand + sportsbook identity.
+    identity_ok = (item.get("identity_signal") == "brand_and_sportsbook_terms"
+                   and not item.get("off_domain_redirect"))
     item["manual_review_priority"] = (
-        "high" if item.get("verified_odds") else
-        "medium" if item.get("http") == 200 and not item.get("off_domain_redirect") and item.get("identity_signal") == "brand_and_sportsbook_terms" else
+        "high" if item.get("verified_odds") and identity_ok else
+        "medium" if item.get("http") == 200 and identity_ok else
         "low"
     )
     if item.get("verified_odds"):
@@ -477,7 +481,7 @@ def run_scan(timeout=9, workers=7, scan_sites=True, all_brands=False):
     matrix = catalogue_audit_matrix(catalogue, sites)
     return {
         "checked_at_utc": datetime.now(timezone.utc).isoformat(),
-        "method": "one_unauthed_public_homepage_GET_per_curated_domain",
+        "method": "single unauthenticated homepage GET per curated or guessed domain; guessed domains are never verified feeds",
         "not_a_feed_integration": True,
         "catalogue": catalogue,
         "catalogue_total_listed_entries": sum(i["count"] for i in catalogue.values()),
