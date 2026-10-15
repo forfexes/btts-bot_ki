@@ -113,41 +113,71 @@ def fetch_public(url, timeout=9):
 
 
 def parse_catalogue_html(html):
-    """Extract FIRST bookmaker table, not referral destinations or page navigation."""
+    """Read ALL bookmaker table sections; ignore navigation, ads and referral URLs."""
     soup = BeautifulSoup(html, "html.parser")
-    table = next((t for t in soup.find_all("table")
-                  if "bookmaker" in t.get_text(" ", strip=True)[:250].lower()), None)
-    if table is None:
-        return []
     found = []
     seen = set()
-    for tr in table.find_all("tr"):
-        cells = tr.find_all("td")
-        if not cells:
+    for table in soup.find_all("table"):
+        links = table.select("a[href]")
+        has_bookmaker_header = "bookmaker" in table.get_text(" ", strip=True)[:200].lower()
+        has_bookmaker_referrals = any(
+            "finmart.pro" in (a.get("href") or "").lower() for a in links
+        )
+        if not has_bookmaker_header and not has_bookmaker_referrals:
             continue
-        brand = cells[0].get_text(" ", strip=True)
-        brand = re.sub(r"\s+", " ", brand)
-        if not brand or len(brand) > 90 or brand.lower() in {"bookmaker", "bonus"}:
-            continue
-        key = brand.casefold()
-        if key not in seen:
-            seen.add(key)
-            found.append(brand)
+        for tr in table.find_all("tr"):
+            cells = tr.find_all("td")
+            if not cells:
+                continue
+            cell = cells[0]
+            brand = re.sub(r"\s+", " ", cell.get_text(" ", strip=True)).strip()
+            if not brand or len(brand) > 90 or brand.lower() in {"bookmaker", "bonus"}:
+                continue
+            # Continuing tables may have no column headings, but always have an
+            # operator affiliate link. We extract only the TEXT, never follow it.
+            if not cell.find("a") and not has_bookmaker_header:
+                continue
+            key = brand.casefold()
+            if key not in seen:
+                seen.add(key)
+                found.append(brand)
     return found
 
+
+def parse_extended_bookmakers(html):
+    """Unlinked Betconstruct appendix: explicitly mark as historical/unverified."""
+    soup = BeautifulSoup(html, "html.parser")
+    extra = []
+    seen = set()
+    for p in soup.find_all(["p", "div"]):
+        if p.find(["p", "div"]):
+            continue
+        t = p.get_text(" ", strip=True)
+        if len(t) < 200 or t.count(",") < 15 or "Betx101" not in t:
+            continue
+        for name in re.split(r",\s*", t):
+            name = re.sub(r"\s+sportsbook$", "", name.strip(), flags=re.I)
+            if 2 <= len(name) <= 80 and len(name.split()) <= 5:
+                key = name.casefold()
+                if key not in seen:
+                    extra.append(name)
+                    seen.add(key)
+    return extra
 
 def inventory_one(family, page):
     url = "https://betclone.com/" + page
     try:
         code, final, ct, body, n = fetch_public(url, timeout=11)
         names = parse_catalogue_html(body) if code == 200 else []
+        extra = parse_extended_bookmakers(body) if code == 200 else []
         return {"url": url, "http": code, "count": len(names),
                 "status": "listed" if names else "catalogue_unavailable_or_unparsed",
-                "bookmakers": names}
+                "bookmakers": names, "historical_extra_bookmakers": extra,
+                "historical_extra_count": len(extra)}
     except requests.RequestException as exc:
         return {"url": url, "http": 0, "count": 0,
                 "status": "network_error", "error_type": type(exc).__name__,
-                "bookmakers": []}
+                "bookmakers": [], "historical_extra_bookmakers": [], "historical_extra_count": 0}
 
 
 def valid_decimal(value):
@@ -285,6 +315,7 @@ def run_scan(timeout=9, workers=7, scan_sites=True):
         "catalogue": catalogue,
         "catalogue_total_listed_entries": sum(i["count"] for i in catalogue.values()),
         "catalogue_families_retrieved": sum(i["count"] > 0 for i in catalogue.values()),
+        "historical_extra_entries": sum(i.get("historical_extra_count", 0) for i in catalogue.values()),
         "sites_checked": len(sites),
         "site_states": dict(states),
         "sites": sorted(sites, key=lambda x: (x["platform"], x["brand"])),
@@ -302,7 +333,8 @@ def main():
     with open(args.output, "w", encoding="utf-8") as f:
         json.dump(result, f, indent=2, ensure_ascii=False)
     print("CATALOGUE", result["catalogue_families_retrieved"], "/", len(PAGES),
-          "groups; brands", result["catalogue_total_listed_entries"], flush=True)
+          "groups; primary brands", result["catalogue_total_listed_entries"],
+          "extra historical names", result["historical_extra_entries"], flush=True)
     for family, r in sorted(result["catalogue"].items()):
         print("CATALOGUE_GROUP", family, r["count"], r["status"], flush=True)
     print("HOMEPAGES", result["sites_checked"], "STATUS", json.dumps(result["site_states"]), flush=True)
