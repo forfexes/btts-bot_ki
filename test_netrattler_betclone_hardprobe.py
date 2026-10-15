@@ -89,6 +89,16 @@ class TestHardprobe(unittest.TestCase):
         self.assertEqual(result["manual_review_priority"], "low")
         self.assertFalse(result["usable_feed"])
 
+    @patch("netrattler_betclone_hardprobe.fetch_public")
+    def test_homepage_sportsbook_identity_detects_real_words(self, fetch):
+        fetch.return_value = (200, "https://brand.com/", "text/html",
+                              "<html><head><title>Brand Sportsbook - Betting Odds</title>"
+                              "<meta name='description' content='Sports betting at Brand'></head></html>", 140)
+        result = probe_homepage("betby", "Brand", "https://brand.com/")
+        self.assertTrue(result["identity_brand_mentioned"])
+        self.assertTrue(result["identity_sportsbook_language"])
+        self.assertEqual(result["identity_signal"], "brand_and_sportsbook_terms")
+
     def test_no_table_fails_closed(self):
         self.assertEqual(parse_catalogue_html("<h1>blocked</h1>"), [])
 
