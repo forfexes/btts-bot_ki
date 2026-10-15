@@ -39,6 +39,7 @@ MAX_AGE_HOURS = float(os.getenv("NETRATTLER_ODDS_CACHE_MAX_AGE_HOURS", "18"))
 LIVE_HISTORY_SOURCES = frozenset({"pinnacle", "kambi", "the_odds_api", "bwin"})
 
 _CACHE: Tuple[float, List[Dict[str, Any]]] = (0.0, [])
+_MATCH_INDEX: Dict[Tuple[str, str], List[Dict[str, Any]]] = {}
 _INSTALLED = False
 _LOGGED = 0
 
@@ -80,13 +81,23 @@ def _fresh(row: Mapping[str, Any]) -> bool:
         return False
 
 
+def _index_rows(rows: Iterable[Mapping[str, Any]]) -> Dict[Tuple[str, str], List[Dict[str, Any]]]:
+    indexed: Dict[Tuple[str, str], List[Dict[str, Any]]] = {}
+    for row in rows:
+        home, away = _norm(row.get("home_team")), _norm(row.get("away_team"))
+        if home and away:
+            indexed.setdefault((home, away), []).append(dict(row))
+    return indexed
+
+
 def _load_rows(force: bool = False) -> List[Dict[str, Any]]:
-    global _CACHE
+    global _CACHE, _MATCH_INDEX
     now = time.time()
     if not force and _CACHE[1] and now - _CACHE[0] < TTL:
         return _CACHE[1]
     if not SUPABASE_URL or not SUPABASE_KEY:
         _CACHE = (now, [])
+        _MATCH_INDEX = {}
         return []
     headers = {"apikey": SUPABASE_KEY, "Authorization": f"Bearer {SUPABASE_KEY}"}
     today = datetime.now(timezone.utc).date().isoformat()
@@ -123,6 +134,7 @@ def _load_rows(force: bool = False) -> List[Dict[str, Any]]:
             if len(data) < limit:
                 break
         _CACHE = (now, rows)
+        _MATCH_INDEX = _index_rows(rows)
         return rows
     except (requests.RequestException, ValueError, TypeError):
         _CACHE = (now, [])
@@ -155,7 +167,12 @@ def _field_for_row(row: Mapping[str, Any]) -> Optional[str]:
 def best_observed_for_match(home: str, away: str, rows: Optional[Iterable[Mapping[str, Any]]] = None) -> Tuple[Dict[str, float], Dict[str, str]]:
     best: Dict[str, float] = {}
     sources: Dict[str, str] = {}
-    for row in (list(rows) if rows is not None else _load_rows()):
+    if rows is None:
+        _load_rows()
+        candidates = _MATCH_INDEX.get((_norm(home), _norm(away)), [])
+    else:
+        candidates = rows
+    for row in candidates:
         if str(row.get("source") or "").lower() not in LIVE_HISTORY_SOURCES or not _fresh(row):
             continue
         if _norm(row.get("home_team")) in {"home", "away", "team 1", "team 2"} or _norm(row.get("away_team")) in {"home", "away", "team 1", "team 2"}:
