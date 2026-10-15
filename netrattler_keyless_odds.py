@@ -161,19 +161,33 @@ def collect_bwin(target_date: str) -> List[Dict[str, Any]]:
     fixtures = (js or {}).get("fixtures") or []
     fixtures = [f for f in fixtures if f.get("stage") == "PreMatch"
                 and _in_window(str(f.get("startDate") or "")[:10], target_date)]
+    attempted = 0
     detailed = 0
     for fx in fixtures:
         new = _bwin_rows(fx)
-        if len(new) < 6 and detailed < details:
+        present = {row["market"] for row in new}
+        # Listing markets can already contain 1X2/FT goals yet omit HT specials.
+        # Probe bounded details for the missing markets, not only short listings.
+        need_detail = (
+            len(new) < 6
+            or "btts_ht" not in present
+            or "totals_ht_1_5" not in present
+        )
+        if need_detail and attempted < details and fx.get("id") is not None:
+            attempted += 1  # Count failures too: never issue unbounded detail requests.
             dj, _ = _get(f"{BWIN_BASE}/fixture-view", {**BWIN_PARAMS, "offerMapping": "All",
                                                         "fixtureIds": fx.get("id"), "state": "Latest"})
             full = (dj or {}).get("fixture")
-            if full:
-                new = _bwin_rows(full)
+            if isinstance(full, dict):
                 detailed += 1
-                time.sleep(0.2)
+                # Preserve the listing if a partial detail response has no prices.
+                by_selection = {(row["market"], row["selection"]): row for row in new}
+                for row in _bwin_rows(full):
+                    by_selection[(row["market"], row["selection"])] = row
+                new = list(by_selection.values())
+            time.sleep(0.2)
         rows.extend(new)
-    KEYLESS_DIAG["bwin"] = f"http={st} fixtures={len(fixtures)} detail={detailed} rows={len(rows)}"
+    KEYLESS_DIAG["bwin"] = f"http={st} fixtures={len(fixtures)} detail_attempts={attempted} detail_ok={detailed} rows={len(rows)}"
     return rows
 
 
