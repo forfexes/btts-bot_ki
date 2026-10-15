@@ -4,6 +4,8 @@ on:
   push:
     branches: [main]
     paths:
+      - "netrattler_odds_cache_guard.py"
+      - "test_netrattler_odds_cache_guard.py"
       - "netrattler_source_probe.py"
       - "netrattler_public_source_features.py"
       - "netrattler_quote_source_probe.py"
@@ -20,6 +22,10 @@ jobs:
       - uses: actions/setup-python@v5
         with:
           python-version: "3.11"
+      - name: Validate live odds fallback safety
+        run: |
+          python -m pip install requests
+          python -m pytest -q test_netrattler_odds_cache_guard.py
       - name: Install browser probe
         run: |
           python -m pip install --prefer-binary requests beautifulsoup4 cloudscraper curl_cffi playwright
