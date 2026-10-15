@@ -149,7 +149,7 @@ def parse_catalogue_html(html):
         host = (urlparse(href).hostname or "").lower()
         if host not in {"finmart.pro", "www.finmart.pro"}:
             continue
-        brand = re.sub(r"\\s+", " ", a.get_text(" ", strip=True)).strip()
+        brand = re.sub(r"\s+", " ", a.get_text(" ", strip=True)).strip()
         if not brand or len(brand) > 90 or brand.lower() in {"bookmaker", "bonus"}:
             continue
         key = brand.casefold()
