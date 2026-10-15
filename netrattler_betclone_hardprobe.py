@@ -352,6 +352,24 @@ def probe_homepage(family, brand, url, timeout=9):
     return out
 
 
+def catalogue_audit_matrix(catalogue, sites):
+    """Explicitly mark every listed brand as checked or not checked."""
+    site_lookup = {(s["platform"], s["brand"].casefold()): s for s in sites
+                   if s.get("platform") and s.get("brand")}
+    matrix = []
+    for platform, group in sorted(catalogue.items()):
+        for name in group.get("bookmakers", []):
+            hit = site_lookup.get((platform, name.casefold()))
+            matrix.append({
+                "platform": platform, "brand": name,
+                "site_tested": bool(hit),
+                "site_state": hit.get("state") if hit else "no_curated_domain_not_tested",
+                "candidate_url": hit.get("url") if hit else None,
+                "verified_odds": hit.get("verified_odds", 0) if hit else 0,
+            })
+    return matrix
+
+
 def run_scan(timeout=9, workers=7, scan_sites=True):
     catalogue = {}
     sites = []
@@ -378,6 +396,7 @@ def run_scan(timeout=9, workers=7, scan_sites=True):
     for site in sites:
         site["brand_in_betclone_table"] = site["brand"].casefold() in seen.get(site["platform"], set())
     states = Counter(s["state"] for s in sites)
+    matrix = catalogue_audit_matrix(catalogue, sites)
     return {
         "checked_at_utc": datetime.now(timezone.utc).isoformat(),
         "method": "one_unauthed_public_homepage_GET_per_curated_domain",
@@ -387,6 +406,9 @@ def run_scan(timeout=9, workers=7, scan_sites=True):
         "catalogue_families_retrieved": sum(i["count"] > 0 for i in catalogue.values()),
         "historical_extra_entries": sum(i.get("historical_extra_count", 0) for i in catalogue.values()),
         "sites_checked": len(sites),
+        "catalogue_brands_tested": sum(row["site_tested"] for row in matrix),
+        "catalogue_brands_awaiting_verified_domain": sum(not row["site_tested"] for row in matrix),
+        "catalogue_audit_matrix": matrix,
         "site_states": dict(states),
         "sites": sorted(sites, key=lambda x: (x["platform"], x["brand"])),
     }
@@ -408,6 +430,8 @@ def main():
     for family, r in sorted(result["catalogue"].items()):
         print("CATALOGUE_GROUP", family, r["count"], r["status"], flush=True)
     print("HOMEPAGES", result["sites_checked"], "STATUS", json.dumps(result["site_states"]), flush=True)
+    print("MATRIX", result["catalogue_brands_tested"], "tested listed brands,",
+          result["catalogue_brands_awaiting_verified_domain"], "listed brands without curated domain", flush=True)
     for row in result["sites"]:
         print("SITE", row["platform"], row["brand"], row["http"], row["state"],
               "odds", row["verified_odds"], "host", row["final_host"], flush=True)
