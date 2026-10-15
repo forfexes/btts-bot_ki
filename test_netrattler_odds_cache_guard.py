@@ -6,11 +6,11 @@ import netrattler_odds_cache_guard as guard
 
 def test_best_observed_market_mapping_and_source():
     rows = [
-        {"source": "aiscore", "bookmaker": "BookA", "home_team": "Arsenal FC", "away_team": "Chelsea", "market": "btts", "selection": "yes", "odds": 1.91, "raw": {}},
-        {"source": "the_odds_api", "bookmaker": "BookB", "home_team": "Arsenal", "away_team": "Chelsea FC", "market": "totals_2_5", "selection": "over_2_5", "odds": 1.97, "raw": {"line": 2.5}},
+        {"source": "pinnacle", "bookmaker": "BookA", "home_team": "Arsenal", "away_team": "Chelsea", "market": "btts", "selection": "yes", "odds": 1.91, "raw": {}},
+        {"source": "the_odds_api", "bookmaker": "BookB", "home_team": "Arsenal", "away_team": "Chelsea", "market": "totals_2_5", "selection": "over_2_5", "odds": 1.97, "raw": {"line": 2.5}},
         {"source": "pinnacle", "bookmaker": "pinnacle", "home_team": "Arsenal", "away_team": "Chelsea", "market": "1x2", "selection": "home", "odds": 1.82, "raw": {}},
-        {"source": "aiscore", "bookmaker": "BookC", "home_team": "Arsenal", "away_team": "Chelsea", "market": "btts_ht", "selection": "yes", "odds": 2.45, "raw": {}},
-        {"source": "aiscore", "bookmaker": "BookC", "home_team": "Arsenal", "away_team": "Chelsea", "market": "totals_ht_1_5", "selection": "over_1_5", "odds": 2.05, "raw": {"line": 1.5}},
+        {"source": "pinnacle", "bookmaker": "BookC", "home_team": "Arsenal", "away_team": "Chelsea", "market": "btts_ht", "selection": "yes", "odds": 2.45, "raw": {}},
+        {"source": "pinnacle", "bookmaker": "BookC", "home_team": "Arsenal", "away_team": "Chelsea", "market": "totals_ht_1_5", "selection": "over_1_5", "odds": 2.05, "raw": {"line": 1.5}},
     ]
     odds, sources = guard.best_observed_for_match("Arsenal", "Chelsea", rows)
     assert odds["btts_yes"] == 1.91
@@ -18,23 +18,23 @@ def test_best_observed_market_mapping_and_source():
     assert odds["home_win"] == 1.82
     assert odds["btts_yes_ht"] == 2.45
     assert odds["over_15_ht"] == 2.05
-    assert sources["btts_yes"] == "aiscore:BookA"
+    assert sources["btts_yes"] == "pinnacle:BookA"
 
 
 def test_best_price_wins_for_same_exact_market():
     rows = [
-        {"source": "a", "bookmaker": "A", "home_team": "Arsenal", "away_team": "Chelsea", "market": "btts", "selection": "yes", "odds": 1.80, "raw": {}},
-        {"source": "b", "bookmaker": "B", "home_team": "Arsenal", "away_team": "Chelsea", "market": "btts", "selection": "yes", "odds": 1.94, "raw": {}},
+        {"source": "pinnacle", "bookmaker": "A", "home_team": "Arsenal", "away_team": "Chelsea", "market": "btts", "selection": "yes", "odds": 1.80, "raw": {}},
+        {"source": "the_odds_api", "bookmaker": "B", "home_team": "Arsenal", "away_team": "Chelsea", "market": "btts", "selection": "yes", "odds": 1.94, "raw": {}},
     ]
     odds, sources = guard.best_observed_for_match("Arsenal", "Chelsea", rows)
     assert odds["btts_yes"] == 1.94
-    assert sources["btts_yes"] == "b:B"
+    assert sources["btts_yes"] == "the_odds_api:B"
 
 
 def test_wrong_match_and_unknown_market_are_ignored():
     rows = [
-        {"source": "x", "bookmaker": "X", "home_team": "Liverpool", "away_team": "Chelsea", "market": "btts", "selection": "yes", "odds": 2.0, "raw": {}},
-        {"source": "x", "bookmaker": "X", "home_team": "Arsenal", "away_team": "Chelsea", "market": "prediction", "selection": "yes", "odds": 9.0, "raw": {}},
+        {"source": "pinnacle", "bookmaker": "X", "home_team": "Liverpool", "away_team": "Chelsea", "market": "btts", "selection": "yes", "odds": 2.0, "raw": {}},
+        {"source": "pinnacle", "bookmaker": "X", "home_team": "Arsenal", "away_team": "Chelsea", "market": "prediction", "selection": "yes", "odds": 9.0, "raw": {}},
     ]
     odds, _ = guard.best_observed_for_match("Arsenal", "Chelsea", rows)
     assert odds == {}
@@ -49,7 +49,7 @@ def test_wrapper_fills_only_missing_and_preserves_existing_real_quote():
         guard.kambi_team = None
         guard.best_observed_for_match = lambda *_args, **_kwargs: (
             {"btts_yes": 1.92, "over_25": 1.98, "home_win": 2.10},
-            {"btts_yes": "aiscore:BookA", "over_25": "the_odds_api:BookB", "home_win": "cache"},
+            {"btts_yes": "pinnacle:BookA", "over_25": "the_odds_api:BookB", "home_win": "cache"},
         )
 
         class Bot:
@@ -73,7 +73,7 @@ def test_wrapper_fills_only_missing_and_preserves_existing_real_quote():
         assert "_btts_quote_missing" not in out
         assert out["over_25"] == 1.86, "existing observed quote must not be overwritten"
         assert out["home_win"] == 1.88, "existing observed quote must not be overwritten"
-        assert out["_ntr_field_sources"]["btts_yes"] == "aiscore:BookA"
+        assert out["_ntr_field_sources"]["btts_yes"] == "pinnacle:BookA"
     finally:
         guard.best_observed_for_match = old_history
         guard.kambi_team = old_kambi
@@ -88,7 +88,7 @@ def test_wrapper_uses_kambi_before_history_for_missing_market():
             def get_multi_brand_team_odds(*_args, **_kwargs):
                 return {"btts_yes": 1.89}, {"btts_yes": "kambi_bs"}
         guard.kambi_team = FakeKambi()
-        guard.best_observed_for_match = lambda *_args, **_kwargs: ({"btts_yes": 1.95}, {"btts_yes": "aiscore:Book"})
+        guard.best_observed_for_match = lambda *_args, **_kwargs: ({"btts_yes": 1.95}, {"btts_yes": "pinnacle:Book"})
 
         class Bot:
             @staticmethod
@@ -117,3 +117,12 @@ def main():
 
 if __name__ == "__main__":
     main()
+
+
+def test_shadow_and_fuzzy_names_never_enter_live():
+    rows = [
+        {"source": "bwin", "home_team": "Arsenal", "away_team": "Chelsea", "market": "btts", "selection": "yes", "odds": 9.0, "raw": {}},
+        {"source": "pinnacle", "home_team": "Arsenal FC", "away_team": "Chelsea", "market": "btts", "selection": "yes", "odds": 2.0, "raw": {}},
+        {"source": "pinnacle", "home_team": "Arsenal", "away_team": "Chelsea", "market": "corners_2_5", "selection": "over", "odds": 3.0, "raw": {}},
+    ]
+    assert guard.best_observed_for_match("Arsenal", "Chelsea", rows)[0] == {}
