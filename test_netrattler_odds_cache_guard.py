@@ -153,6 +153,27 @@ def test_cache_selects_only_relevant_markets_and_paginates():
     assert [x["offset"] for x in calls] == ["0", "2"]
 
 
+
+def test_live_cache_index_uses_exact_match_and_current_rows_only():
+    from datetime import datetime, timezone
+    now = datetime.now(timezone.utc).isoformat()
+    good = {"source": "bwin", "bookmaker": "bwin", "home_team": "Arsenal",
+            "away_team": "Chelsea", "match_date": now[:10], "market": "btts",
+            "selection": "yes", "odds": 1.94, "raw": {"captured_at": now}}
+    unrelated = dict(good, home_team="Liverpool", odds=5.0)
+    indexed = guard._index_rows([good, unrelated])
+    old_load, old_index = guard._load_rows, guard._MATCH_INDEX
+    try:
+        guard._MATCH_INDEX = indexed
+        guard._load_rows = lambda **_kwargs: [good, unrelated]
+        odds, sources = guard.best_observed_for_match("Arsenal", "Chelsea")
+        assert odds == {"btts_yes": 1.94}
+        assert sources["btts_yes"] == "bwin"
+        assert guard.best_observed_for_match("Arsenal FC", "Chelsea")[0] == {}
+    finally:
+        guard._load_rows, guard._MATCH_INDEX = old_load, old_index
+
+
 def main():
     test_best_observed_market_mapping_and_source()
     test_best_price_wins_for_same_exact_market()
@@ -162,6 +183,7 @@ def main():
     test_shadow_and_fuzzy_names_never_enter_live()
     test_verified_bwin_live_but_unlabelled_codes_stay_shadow()
     test_cache_selects_only_relevant_markets_and_paginates()
+    test_live_cache_index_uses_exact_match_and_current_rows_only()
     print("OK: multi-brand Kambi + fresh odds_history final fallback guard")
 
 
