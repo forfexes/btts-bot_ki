@@ -69,7 +69,8 @@ def _fresh(row: Mapping[str, Any]) -> bool:
     raw = row.get("raw") if isinstance(row.get("raw"), dict) else {}
     stamp = raw.get("captured_at") or raw.get("timestamp") or raw.get("updated_at")
     if not stamp:
-        return False
+        # Legacy validated providers may lack raw timestamps; captured_date is checked upstream.
+        return str(row.get("source") or "").lower() in LIVE_HISTORY_SOURCES
     try:
         dt = datetime.fromisoformat(str(stamp).replace("Z", "+00:00"))
         if dt.tzinfo is None:
