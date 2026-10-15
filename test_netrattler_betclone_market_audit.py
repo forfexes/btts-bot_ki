@@ -97,6 +97,57 @@ class MarketAuditTests(unittest.TestCase):
         rows = _bwin_rows(fixture)
         self.assertEqual({r["selection"] for r in rows}, {"home", "draw", "away"})
 
+    @patch("netrattler_keyless_odds.time.sleep")
+    @patch("netrattler_keyless_odds._get")
+    def test_bwin_detail_enriches_even_when_listing_has_many_quotations(self, get, _sleep):
+        from netrattler_keyless_odds import collect_bwin
+        fixture = {"id": 234, "stage": "PreMatch", "startDate": "2026-10-16T18:00:00Z",
+            "name": {"value": "Arsenal - Chelsea"},
+            "participants": [{"name": {"value": "Arsenal"}}, {"name": {"value": "Chelsea"}}],
+            "games": [
+                {"name": {"value": "Match Result"}, "results": [
+                    {"name": {"value": "1"}, "odds": 2.2},
+                    {"name": {"value": "X"}, "odds": 3.3},
+                    {"name": {"value": "2"}, "odds": 3.8}]},
+                {"name": {"value": "Both Teams To Score"}, "results": [
+                    {"name": {"value": "Yes"}, "odds": 1.86},
+                    {"name": {"value": "No"}, "odds": 2.0}]},
+                {"name": {"value": "Total Goals"}, "results": [
+                    {"name": {"value": "Over 2.5"}, "odds": 1.92},
+                    {"name": {"value": "Under 2.5"}, "odds": 1.95}]},
+            ]}
+        detail = {**fixture, "games": [
+            {"name": {"value": "Both Teams To Score 1st Half"}, "results": [
+                {"name": {"value": "Yes"}, "odds": 3.1},
+                {"name": {"value": "No"}, "odds": 1.42}]},
+            {"name": {"value": "1st Half - Total Goals"}, "results": [
+                {"name": {"value": "Over 1.5"}, "odds": 2.42},
+                {"name": {"value": "Under 1.5"}, "odds": 1.57}]}
+        ]}
+        get.side_effect = [({"fixtures": [fixture]}, 200), ({"fixture": detail}, 200)]
+        rows = collect_bwin("2026-10-16")
+        markets = {row["market"] for row in rows}
+        self.assertEqual(len(rows), 11)
+        self.assertTrue({"btts", "btts_ht", "totals_2_5", "totals_ht_1_5", "1x2"}.issubset(markets))
+        self.assertEqual(get.call_count, 2)
+
+    @patch("netrattler_keyless_odds.time.sleep")
+    @patch("netrattler_keyless_odds._get")
+    def test_bwin_detail_failure_retains_listing_prices_and_respects_cap(self, get, _sleep):
+        from netrattler_keyless_odds import collect_bwin, KEYLESS_DIAG
+        from unittest.mock import patch as mock_patch
+        fixture = {"id": 777, "stage": "PreMatch", "startDate": "2026-10-16T18:00:00Z",
+                   "name": {"value": "Arsenal - Chelsea"}, "games": [
+                       {"name": {"value": "Both Teams To Score"}, "results": [
+                           {"name": {"value": "Yes"}, "odds": 1.91}]}]}
+        second = {**fixture, "id": 778, "name": {"value": "Celtic - Rangers"}}
+        get.side_effect = [({"fixtures": [fixture, second]}, 200), (None, 500)]
+        with mock_patch.dict("os.environ", {"BWIN_DETAIL_FIXTURES": "1"}):
+            rows = collect_bwin("2026-10-16")
+        self.assertEqual(len(rows), 2)
+        self.assertEqual(get.call_count, 2)
+        self.assertIn("detail_attempts=1", KEYLESS_DIAG["bwin"])
+
     def test_specific_markets(self):
         self.assertEqual(market_family("Both Teams To Score - 1st Half"), "btts_ht")
         self.assertEqual(market_family("Anytime Goalscorer"), "goalscorer")
