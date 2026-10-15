@@ -286,7 +286,7 @@ def audit_odds_json(payload):
                                          if str(k).lower().replace("_", "") in label_fields).lower()
                 for marker, pat in (
                     ("btts", r"both teams to score|\bbtts\b"),
-                    ("goalscorer", r"goal.?scorer|to score"),
+                    ("goalscorer", r"\b(?:first|last|anytime) goalscorer\b|\bplayer\b.{0,35}\bto score\b"),
                     ("shots", r"shots? on target|total shots?"),
                     ("corners", r"corners?"),
                     ("half", r"1st half|first half|half.time"),
@@ -307,6 +307,25 @@ def probe_homepage(family, brand, url, timeout=9):
     try:
         code, final, content_type, body, n = fetch_public(url, timeout)
         out.update({"http": code, "bytes": n, "final_host": urlparse(final).hostname})
+        # A reachable guessed .com may be unrelated to the BetClone operator.
+        # Record weak, transparent homepage identity signals for human review.
+        if "html" in content_type.lower() and code == 200:
+            soup_identity = BeautifulSoup(body[:120000], "html.parser")
+            title = soup_identity.title.get_text(" ", strip=True)[:160] if soup_identity.title else ""
+            desc = soup_identity.find("meta", attrs={"name": re.compile("^description$", re.I)})
+            description = (desc.get("content") or "")[:240] if desc else ""
+            identity_text = (title + " " + description).casefold()
+            tokens = [t for t in re.split(r"[^a-z0-9]+", brand.casefold()) if len(t) >= 4]
+            out["identity_brand_mentioned"] = bool(tokens) and all(t in identity_text for t in tokens)
+            out["identity_sportsbook_language"] = bool(re.search(
+                r"\\b(?:sportsbook|sports betting|sportwetten|bookmaker|betting odds)\\b",
+                identity_text, re.I))
+            out["identity_signal"] = (
+                "brand_and_sportsbook_terms" if out["identity_brand_mentioned"] and out["identity_sportsbook_language"]
+                else "brand_only" if out["identity_brand_mentioned"]
+                else "sportsbook_terms_only" if out["identity_sportsbook_language"]
+                else "no_identity_signal"
+            )
         mime = content_type.split(";")[0].lower()
         if code in (401, 403, 407, 429, 451) or (code != 200 and BLOCKED.search(body[:2000])):
             out["state"] = "blocked"
@@ -391,7 +410,7 @@ def probe_guessed_domain(family, brand, url, timeout=5):
     item["usable_feed"] = False
     item["manual_review_priority"] = (
         "high" if item.get("verified_odds") else
-        "medium" if item.get("http") == 200 and not item.get("off_domain_redirect") else
+        "medium" if item.get("http") == 200 and not item.get("off_domain_redirect") and item.get("identity_signal") == "brand_and_sportsbook_terms" else
         "low"
     )
     if item.get("verified_odds"):
@@ -470,11 +489,13 @@ def run_scan(timeout=9, workers=7, scan_sites=True, all_brands=False):
         "unverified_candidate_domains_probed": len(guessed_results),
         "unverified_candidate_probe_states": dict(Counter(g.get("state") for g in guessed_results)),
         "unverified_candidate_review_priorities": dict(Counter(g.get("manual_review_priority", "unknown") for g in guessed_results)),
+        "unverified_candidate_identity_signals": dict(Counter(g.get("identity_signal", "not_available") for g in guessed_results)),
         "unverified_candidate_review_queue": sorted(
             ({"platform": g.get("platform"), "brand": g.get("brand"),
               "url": g.get("url"), "http": g.get("http"),
               "state": g.get("state"), "final_host": g.get("final_host"),
-              "priority": g.get("manual_review_priority")}
+              "priority": g.get("manual_review_priority"),
+              "identity_signal": g.get("identity_signal")}
              for g in guessed_results if g.get("manual_review_priority") in ("high", "medium")),
             key=lambda g: (0 if g["priority"] == "high" else 1, g["platform"] or "", g["brand"] or "")),
         "unverified_candidate_probe_results": sorted(guessed_results, key=lambda x: (x.get("platform", ""), x.get("brand", ""))),
