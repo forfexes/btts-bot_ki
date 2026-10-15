@@ -106,6 +106,53 @@ def test_wrapper_uses_kambi_before_history_for_missing_market():
         guard.kambi_team = old_kambi
 
 
+
+def test_verified_bwin_live_but_unlabelled_codes_stay_shadow():
+    from datetime import datetime, timezone
+    now = datetime.now(timezone.utc).isoformat()
+    rows = [
+        {"source": "bwin", "bookmaker": "bwin", "home_team": "Arsenal", "away_team": "Chelsea",
+         "market": "btts_ht", "selection": "yes", "odds": 2.50, "raw": {"captured_at": now}},
+        {"source": "bwin", "bookmaker": "bwin", "home_team": "Arsenal", "away_team": "Chelsea",
+         "market": "totals_ht_1_5", "selection": "over_1_5", "odds": 2.10,
+         "raw": {"captured_at": now}},
+        {"source": "1xbet_platform", "bookmaker": "1x_22bet", "home_team": "Arsenal",
+         "away_team": "Chelsea", "market": "btts_ht", "selection": "yes", "odds": 9,
+         "raw": {"captured_at": now}},
+    ]
+    prices, src = guard.best_observed_for_match("Arsenal", "Chelsea", rows)
+    assert prices == {"btts_yes_ht": 2.5, "over_15_ht": 2.1}
+    assert src["btts_yes_ht"] == "bwin"
+
+
+def test_cache_selects_only_relevant_markets_and_paginates():
+    from unittest.mock import patch
+    from datetime import datetime, timezone
+    now = datetime.now(timezone.utc).isoformat()
+    row = {"source": "bwin", "bookmaker": "bwin", "home_team": "Arsenal",
+           "away_team": "Chelsea", "match_date": now[:10], "market": "btts",
+           "selection": "yes", "odds": 1.90, "raw": {"captured_at": now}}
+    calls = []
+    class Response:
+        def __init__(self, records): self.records = records
+        def raise_for_status(self): pass
+        def json(self): return self.records
+    def fake_get(_url, *, params, **_kwargs):
+        calls.append(params)
+        return Response([dict(row), dict(row)] if params["offset"] == "0" else [dict(row)])
+    with patch.object(guard, "SUPABASE_URL", "https://example.supabase.co"), \\
+         patch.object(guard, "SUPABASE_KEY", "test-token"), \\
+         patch.object(guard, "PAGE_SIZE", 2), \\
+         patch.object(guard, "MAX_ROWS", 6), \\
+         patch.object(guard.requests, "get", side_effect=fake_get):
+        got = guard._load_rows(force=True)
+    assert len(got) == 3
+    assert len(calls) == 2
+    assert all("bwin" in call["source"] and "1xbet_platform" not in call["source"] for call in calls)
+    assert all("btts_ht" in call["market"] and "totals_ht_1_5" in call["market"] for call in calls)
+    assert [x["offset"] for x in calls] == ["0", "2"]
+
+
 def main():
     test_best_observed_market_mapping_and_source()
     test_best_price_wins_for_same_exact_market()
@@ -113,12 +160,14 @@ def main():
     test_wrapper_fills_only_missing_and_preserves_existing_real_quote()
     test_wrapper_uses_kambi_before_history_for_missing_market()
     test_shadow_and_fuzzy_names_never_enter_live()
+    test_verified_bwin_live_but_unlabelled_codes_stay_shadow()
+    test_cache_selects_only_relevant_markets_and_paginates()
     print("OK: multi-brand Kambi + fresh odds_history final fallback guard")
 
 
 def test_shadow_and_fuzzy_names_never_enter_live():
     rows = [
-        {"source": "bwin", "home_team": "Arsenal", "away_team": "Chelsea", "market": "btts", "selection": "yes", "odds": 9.0, "raw": {}},
+        {"source": "1xbet_platform", "home_team": "Arsenal", "away_team": "Chelsea", "market": "btts", "selection": "yes", "odds": 9.0, "raw": {}},
         {"source": "pinnacle", "home_team": "Arsenal FC", "away_team": "Chelsea", "market": "btts", "selection": "yes", "odds": 2.0, "raw": {}},
         {"source": "pinnacle", "home_team": "Arsenal", "away_team": "Chelsea", "market": "corners_2_5", "selection": "over", "odds": 3.0, "raw": {}},
     ]
