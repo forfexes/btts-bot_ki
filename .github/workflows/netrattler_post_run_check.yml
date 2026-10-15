@@ -6,6 +6,12 @@ on:
       - NETRATTLER Bookie Market Audit
       - NETRATTLER BetClone Platform Probe
       - NETRATTLER Odds Harvester V34
+      - NETRATTLER All Source Harvester V34
+      - NETRATTLER Player Stats + Results Scraper V34
+      - NETRATTLER ML Train V36 Temporal All Sources
+      - NETRATTLER Scorer Source Probe
+      - NETRATTLER Keyless Source Probe
+      - NETRATTLER V36D MANUAL SOURCE LEARNING
       - NETRATTLER Settlement Final V25 MULTISOURCE
       - NETRATTLER Health Check
       - NETRATTLER Core CI
