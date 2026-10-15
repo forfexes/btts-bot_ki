@@ -116,10 +116,6 @@ def main():
     print("OK: multi-brand Kambi + fresh odds_history final fallback guard")
 
 
-if __name__ == "__main__":
-    main()
-
-
 def test_shadow_and_fuzzy_names_never_enter_live():
     rows = [
         {"source": "bwin", "home_team": "Arsenal", "away_team": "Chelsea", "market": "btts", "selection": "yes", "odds": 9.0, "raw": {}},
@@ -127,3 +123,7 @@ def test_shadow_and_fuzzy_names_never_enter_live():
         {"source": "pinnacle", "home_team": "Arsenal", "away_team": "Chelsea", "market": "corners_2_5", "selection": "over", "odds": 3.0, "raw": {}},
     ]
     assert guard.best_observed_for_match("Arsenal", "Chelsea", rows)[0] == {}
+
+
+if __name__ == "__main__":
+    main()
