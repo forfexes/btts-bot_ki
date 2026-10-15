@@ -159,6 +159,44 @@ def summarize_bwin(payload):
     }
 
 
+def quantify_bwin_harvester_mapping(payload):
+    """Verify existing production _bwin_rows parses observed selections."""
+    from netrattler_keyless_odds import _bwin_rows
+    fixture_list = payload.get("fixtures", []) if isinstance(payload, dict) else []
+    mapped = Counter()
+    mapped_examples = {}
+    parsed_events = 0
+    for fixture in fixture_list[:100]:
+        if not isinstance(fixture, dict):
+            continue
+        rows = _bwin_rows(fixture)
+        if rows:
+            parsed_events += 1
+        for row in rows:
+            market = row.get("market", "")
+            if not market:
+                continue
+            mapped[market] += 1
+            if market not in mapped_examples:
+                mapped_examples[market] = {
+                    "selection": row.get("selection"),
+                    "line": row.get("line"),
+                    "bookmaker": row.get("bookmaker"),
+                }
+    return {
+        "parsed_fixtures": parsed_events,
+        "mapped_odds_rows": sum(mapped.values()),
+        "mapped_market_counts": dict(mapped.most_common(120)),
+        "mapped_market_examples": mapped_examples,
+        "critical_market_counts": {
+            "btts": mapped.get("btts", 0),
+            "btts_ht": mapped.get("btts_ht", 0),
+            "totals_ht_1_5": mapped.get("totals_ht_1_5", 0),
+            "totals_2_5": mapped.get("totals_2_5", 0),
+        },
+    }
+
+
 def market_family(label):
     s = re.sub(r"\s+", " ", (label or "").lower())
     if re.search(r"both teams to score|btts|both teams score", s):
@@ -218,6 +256,7 @@ def main():
     }
     if report["bwin"]["data"]:
         report["bwin"]["market_families"] = summarize_market_families(report["bwin"]["data"])
+        report["bwin"]["production_parser"] = quantify_bwin_harvester_mapping(bwin["json"])
     with open(args.output, "w", encoding="utf-8") as f:
         json.dump(report, f, ensure_ascii=False, indent=2)
     print("X1", json.dumps({k: v for k, v in report["x1"].items() if k != "data"}),
@@ -229,6 +268,8 @@ def main():
           "fixtures", (report["bwin"]["data"] or {}).get("fixture_count", 0), flush=True)
     for family, info in report["bwin"].get("market_families", {}).items():
         print("BWIN_FAMILY", family, info["market_instances"], "outcomes", info["priced_outcomes"], flush=True)
+    if report["bwin"].get("production_parser"):
+        print("BWIN_PRODUCTION_MAPPING", json.dumps({k: v for k, v in report["bwin"]["production_parser"].items() if k in ("parsed_fixtures", "mapped_odds_rows", "critical_market_counts")}), flush=True)
     for m in (report["bwin"]["data"] or {}).get("markets", [])[:50]:
         if m["valid_price_selections"]:
             print("BWIN_MARKET", json.dumps(m, ensure_ascii=False), flush=True)
