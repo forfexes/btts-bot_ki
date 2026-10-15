@@ -16,7 +16,7 @@ permissions:
 jobs:
   probe:
     runs-on: ubuntu-latest
-    timeout-minutes: 12
+    timeout-minutes: 18
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-python@v5
@@ -28,8 +28,8 @@ jobs:
         run: python -m unittest -v test_netrattler_betclone_probe.py test_netrattler_betclone_hardprobe.py
       - name: Probe four BetClone platform families
         run: python netrattler_betclone_probe.py
-      - name: Audit all 10 BetClone groups and 48 public bookmaker homepages
-        run: python netrattler_betclone_hardprobe.py --timeout 9 --workers 7
+      - name: Audit all 10 BetClone groups and every listed brand (unverified domains flagged)
+        run: python netrattler_betclone_hardprobe.py --timeout 6 --workers 10 --all-brands
       - uses: actions/upload-artifact@v4
         if: always()
         with:
