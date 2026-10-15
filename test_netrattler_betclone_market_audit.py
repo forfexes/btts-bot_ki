@@ -1,6 +1,6 @@
 import unittest
 from netrattler_betclone_market_audit import (
-    sample_x1_events, summarize_x1, summarize_bwin, market_family, summarize_market_families, quantify_bwin_harvester_mapping
+    sample_x1_events, summarize_x1, summarize_bwin, market_family, summarize_market_families, quantify_bwin_harvester_mapping, summarize_x1_game_detail, x1_detail_probe
 )
 
 
@@ -18,6 +18,22 @@ class MarketAuditTests(unittest.TestCase):
         result = summarize_x1(p)
         self.assertEqual(result["market_type_codes"][0]["raw_labels"], [])
         self.assertEqual(result["market_type_codes"][0]["line_parameter_count"], 1)
+
+    def test_x1_full_market_tree_parses_nested_groups(self):
+        sample = {"Value": {"O1": "A", "O2": "B", "GE": [
+            {"G": 1, "GN": "Totals", "E": [[{"T": 9, "C": 1.8, "N": "Over 1.5"}],
+                                             [{"T": 10, "C": 2.0, "N": "Under 1.5"}]]}
+        ]}}
+        result = summarize_x1_game_detail(sample)
+        self.assertEqual(result["group_count"], 1)
+        self.assertEqual(result["raw_type_counts"].get("9"), 1)
+        self.assertEqual(result["raw_type_counts"].get("10"), 1)
+        self.assertIn("Totals", result["group_labels"])
+
+    def test_x1_detail_missing_event_fails_closed(self):
+        result = summarize_x1_game_detail({"Value": []})
+        self.assertFalse(result["has_event"])
+        self.assertEqual(result["group_count"], 0)
 
     def test_bwin_prices_are_counted_only_if_numeric(self):
         p = {"fixtures": [{"games": [{"name": {"value": "Both Teams To Score"},
