@@ -9,13 +9,15 @@ jobs:
     runs-on: ubuntu-latest
 
     permissions:
-      actions: write   # ✅ GANZ WICHTIG
+      actions: write
 
     steps:
       - name: Delete old runs
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          GH_REPO: ${{ github.repository }}
         run: |
-          gh run list --limit 1000 --json databaseId -q '.[].databaseId' | tail -n +50| while read id; do
-            gh run delete $id
+          set -euo pipefail
+          gh run list --repo "$GH_REPO" --limit 1000 --json databaseId -q '.[].databaseId' | tail -n +50 | while read -r id; do
+            gh run delete "$id" --repo "$GH_REPO"
           done
