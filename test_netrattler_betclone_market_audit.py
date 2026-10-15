@@ -1,6 +1,7 @@
+from unittest.mock import patch
 import unittest
 from netrattler_betclone_market_audit import (
-    sample_x1_events, summarize_x1, summarize_bwin, market_family, summarize_market_families, quantify_bwin_harvester_mapping, summarize_x1_game_detail, x1_detail_probe
+    sample_x1_events, summarize_x1, summarize_bwin, market_family, summarize_market_families, quantify_bwin_harvester_mapping, summarize_x1_game_detail, x1_detail_probe, bwin_detail_probe
 )
 
 
@@ -66,6 +67,20 @@ class MarketAuditTests(unittest.TestCase):
         self.assertEqual(result["critical_market_counts"]["btts_ht"], 2)
         self.assertEqual(result["critical_market_counts"]["totals_ht_1_5"], 2)
         self.assertEqual(result["mapped_odds_rows"], 4)
+
+    @patch("netrattler_betclone_market_audit.public_json")
+    def test_bwin_detail_request_is_bounded_and_read_only(self, get):
+        get.return_value = {"http": 200, "error": None,
+                            "json": {"fixture": {"id": 123, "games": [
+                                {"name": {"value": "Anytime Goalscorer"}, "results": [
+                                    {"name": {"value": "Example Player"}, "odds": 2.4}
+                                ]}
+                            ]}}}
+        result = bwin_detail_probe({"fixtures": [{"id": 123}]}, {"country": "GB"})
+        self.assertEqual(len(result), 1)
+        self.assertTrue(result[0]["has_fixture"])
+        self.assertEqual(result[0]["scorer_or_player_markets"][0]["name"], "Anytime Goalscorer")
+        self.assertEqual(get.call_count, 1)
 
     def test_specific_markets(self):
         self.assertEqual(market_family("Both Teams To Score - 1st Half"), "btts_ht")
