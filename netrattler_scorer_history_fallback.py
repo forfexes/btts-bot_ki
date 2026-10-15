@@ -8,6 +8,7 @@ from __future__ import annotations
 from datetime import datetime, timedelta, timezone
 from typing import Any, Dict, Mapping
 import re
+import inspect
 import unicodedata
 
 import requests
@@ -94,6 +95,16 @@ def install(bot) -> None:
     def guarded(player_name):
         existing = original(player_name) or {}
         if _goal_view_available(existing):
+            return existing
+        # The same average-stats function is used by thousands of player-prop
+        # lookups. Run extra Supabase I/O ONLY for the goalscorer history pipeline.
+        frame = inspect.currentframe()
+        try:
+            parent = frame.f_back if frame is not None else None
+            qualified = parent.f_code.co_qualname if parent is not None else ""
+        finally:
+            del frame
+        if not qualified.endswith("_ntr_history_scorers_from_quotes.<locals>._one"):
             return existing
         try:
             url = getattr(bot, "SUPABASE_URL", "")
