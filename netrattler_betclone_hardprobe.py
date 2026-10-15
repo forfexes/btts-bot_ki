@@ -179,13 +179,42 @@ def parse_extended_bookmakers(html):
                     seen.add(key)
     return extra
 
+# Each primary table is followed by prose. Affiliate links elsewhere on a page
+# (recommendations/footer) must NOT be attributed to this sportsbook family.
+END_OF_PRIMARY_LIST = {
+    "1xbet": "1xBet has been taking bets",
+    "altenar": "Altenar, a provider of solutions",
+    "betby": "Betby company, founded",
+    "betconstruct": "Betconstruct company was established",
+    "delasport": "Delasport was founded",
+    "digitain": "The company Digitain was founded",
+    "igate": "iGate is a betting platform",
+    "inplaynet": "The sportsbooks in this table share",
+    "first": "The sportsbooks in this table share",
+    "softswiss": "The sportsbooks in this table share",
+}
+
+
+def primary_table_section(body, family):
+    """Slice after H1 and before the page's explanatory prose/footer."""
+    h1 = re.search(r"<h1\b[^>]*>", body, flags=re.I)
+    start = h1.start() if h1 else 0
+    marker = END_OF_PRIMARY_LIST.get(family, "")
+    end = body.lower().find(marker.lower(), start) if marker else -1
+    if end < 0:
+        return body[start:], False
+    return body[start:end], True
+
+
 def inventory_one(family, page):
     url = "https://betclone.com/" + page
     try:
         code, final, ct, body, n = fetch_public(url, timeout=11)
-        names = parse_catalogue_html(body) if code == 200 else []
+        section, boundary_found = primary_table_section(body, family)
+        names = parse_catalogue_html(section) if code == 200 else []
         extra = parse_extended_bookmakers(body) if code == 200 else []
         return {"url": url, "http": code, "count": len(names),
+                "end_boundary_found": boundary_found,
                 "status": "listed" if names else "catalogue_unavailable_or_unparsed",
                 "bookmakers": names, "historical_extra_bookmakers": extra,
                 "historical_extra_count": len(extra)}
