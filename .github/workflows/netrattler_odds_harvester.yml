@@ -1,6 +1,11 @@
 name: NETRATTLER Odds Harvester V34
 
 on:
+  push:
+    branches: [main]
+    paths:
+      - '.github/workflows/netrattler_odds_harvester.yml'
+      - 'netrattler_keyless_odds.py'
   schedule:
     - cron: "45 6,11,17 * * *"  # 3 daily refreshes ahead of main football tip windows (UTC)
     - cron: "35 3 * * 0"
@@ -31,6 +36,8 @@ jobs:
           python -m playwright install chromium --with-deps
       - name: Compile
         run: python -m py_compile netrattler_odds_harvester.py netrattler_keyless_odds.py
+      - name: Test bookmaker odds parser and bounded detail fallback
+        run: python -m unittest -v test_netrattler_betclone_market_audit.py
       - name: Collect Bet365 and every available bookmaker
         env:
           SUPABASE_URL: ${{ secrets.SUPABASE_URL }}
