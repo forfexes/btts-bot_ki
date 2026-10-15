@@ -112,6 +112,7 @@ def main():
     test_wrong_match_and_unknown_market_are_ignored()
     test_wrapper_fills_only_missing_and_preserves_existing_real_quote()
     test_wrapper_uses_kambi_before_history_for_missing_market()
+    test_shadow_and_fuzzy_names_never_enter_live()
     print("OK: multi-brand Kambi + fresh odds_history final fallback guard")
 
 
