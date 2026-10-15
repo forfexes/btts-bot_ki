@@ -278,15 +278,12 @@ def _snapshot_for_match(home: str, away: str) -> Dict[str, Any]:
                 field = "draw"
             elif selection in {"away", "2"}:
                 field = "away_win"
-        elif "btts" in market and selection in {"yes", "y"}:
+        # Snapshot markets are exact contracts: HT/combo quotes must NEVER
+        # masquerade as full-time BTTS or Over 2.5 prices.
+        elif market in {"btts", "btts_ft", "both_teams_to_score"} and selection in {"yes", "y"}:
             field = "btts_yes"
-        else:
-            try:
-                is_25 = "2.5" in market or abs(float(raw_line) - 2.5) <= 0.01
-            except Exception:
-                is_25 = "2.5" in market
-            if is_25 and "over" in selection and ("total" in market or "over" in market):
-                field = "over_25"
+        elif market in {"totals_2_5", "over_under_2_5", "total_goals_2_5", "over25"} and selection in {"over", "over_2_5"}:
+            field = "over_25"
         if not field:
             continue
         p = _safe_price(price, field)
