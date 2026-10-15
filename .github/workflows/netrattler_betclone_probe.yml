@@ -1,0 +1,28 @@
+name: NETRATTLER BetClone Platform Probe
+on:
+  workflow_dispatch:
+  schedule:
+    - cron: '42 7 * * 1'
+permissions:
+  contents: read
+jobs:
+  probe:
+    runs-on: ubuntu-latest
+    timeout-minutes: 8
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+      - name: Install probe dependency
+        run: pip install requests
+      - name: Test read-only platform probe
+        run: python -m unittest -v test_netrattler_betclone_probe.py
+      - name: Probe four BetClone platform families
+        run: python netrattler_betclone_probe.py
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: netrattler-betclone-platform-probe
+          path: netrattler_betclone_probe_summary.json
+          retention-days: 7
