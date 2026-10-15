@@ -261,6 +261,43 @@ def quantify_bwin_harvester_mapping(payload):
     }
 
 
+def bwin_detail_probe(listing, params, timeout=16):
+    """Read at most 2 public fixture-detail views already used by the collector."""
+    fixtures = listing.get("fixtures", []) if isinstance(listing, dict) else []
+    out = []
+    # Prefer fixtures with a nonempty market list: ensure they really are sports fixtures.
+    ids = []
+    for f in fixtures:
+        ident = f.get("id") if isinstance(f, dict) else None
+        if isinstance(ident, (str, int)) and re.fullmatch(r"\d{2,20}", str(ident)):
+            ids.append(str(ident))
+        if len(ids) >= 2:
+            break
+    for ident in ids:
+        d = public_json("https://sports.bwin.com/cds-api/bettingoffer/fixture-view",
+            {**params, "offerMapping": "All", "fixtureIds": ident, "state": "Latest"},
+            timeout=timeout)
+        detail = d["json"] or {}
+        event = detail.get("fixture") if isinstance(detail, dict) else None
+        if not isinstance(event, dict):
+            raw_fixture = (detail.get("fixtures") or []) if isinstance(detail, dict) else []
+            event = raw_fixture[0] if raw_fixture else None
+        report = {"http": d["http"], "error": d["error"], "has_fixture": isinstance(event, dict)}
+        if isinstance(event, dict):
+            summary = summarize_bwin({"fixtures": [event]})
+            report["market_names_count"] = summary["distinct_market_names"]
+            report["total_priced_options"] = sum(m["valid_price_selections"] for m in summary["markets"])
+            report["scorer_or_player_markets"] = [
+                m for m in summary["markets"]
+                if re.search(r"player|scorer|to score|shots? on target|assists?", m["name"], re.I)
+            ][:35]
+            report["market_families"] = summarize_market_families(summary)
+        out.append(report)
+        if d["http"] in (401, 403, 407, 429, 451):
+            break
+    return out
+
+
 def market_family(label):
     s = re.sub(r"\s+", " ", (label or "").lower())
     if re.search(r"both teams to score|btts|both teams score", s):
@@ -309,6 +346,7 @@ def main():
     }
     bwin = public_json("https://sports.bwin.com/cds-api/bettingoffer/fixtures",
         bwin_params, timeout=args.timeout)
+    bwin_details = bwin_detail_probe(bwin["json"], bwin_params, timeout=args.timeout) if bwin["json"] else []
 
     detail = x1_detail_probe(x1["json"], timeout=args.timeout) if x1["json"] else []
     report = {
@@ -320,6 +358,7 @@ def main():
         "bwin": {"http": bwin["http"], "error": bwin["error"],
                  "data": summarize_bwin(bwin["json"]) if bwin["json"] else None},
     }
+    report["bwin"]["detail_views"] = bwin_details
     if report["bwin"]["data"]:
         report["bwin"]["market_families"] = summarize_market_families(report["bwin"]["data"])
         report["bwin"]["production_parser"] = quantify_bwin_harvester_mapping(bwin["json"])
@@ -338,6 +377,8 @@ def main():
         print("BWIN_FAMILY", family, info["market_instances"], "outcomes", info["priced_outcomes"], flush=True)
     if report["bwin"].get("production_parser"):
         print("BWIN_PRODUCTION_MAPPING", json.dumps({k: v for k, v in report["bwin"]["production_parser"].items() if k in ("parsed_fixtures", "mapped_odds_rows", "critical_market_counts")}), flush=True)
+    for i, detail in enumerate(bwin_details):
+        print("BWIN_DETAIL", i, json.dumps(detail, ensure_ascii=False), flush=True)
     for m in (report["bwin"]["data"] or {}).get("markets", [])[:50]:
         if m["valid_price_selections"]:
             print("BWIN_MARKET", json.dumps(m, ensure_ascii=False), flush=True)
