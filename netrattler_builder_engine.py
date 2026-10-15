@@ -385,15 +385,23 @@ def normalize_prop(row: Dict[str, Any]) -> Optional[PropLeg]:
     )
 
 
+_NON_PLAYER_NAME = re.compile(r"amount of goals|total goals|either team|both teams|first team|correct score|odd/even|\\b(draw|over|under)\\b")
+
+
 def deduplicate_props(rows: Iterable[Dict[str, Any]]) -> List[PropLeg]:
     best: Dict[Tuple[str, str, str, float], PropLeg] = {}
     for row in rows:
         leg = normalize_prop(row)
         if not leg:
             continue
-        old = best.get(leg.key())
+        if leg.category in PLAYER_CATEGORIES and _NON_PLAYER_NAME.search(str(leg.player).lower()):
+            continue
+        # Same player/market/line under two spellings of the match (e.g. "Gimnasia La Plata" vs
+        # "Gimnasia y Esgrima de La Plata") is one leg, not two.
+        dkey = ("P", norm(leg.player), leg.category, leg.line) if leg.category in PLAYER_CATEGORIES else leg.key()
+        old = best.get(dkey)
         if old is None or (leg.quality, not leg.estimated, leg.odds) > (old.quality, not old.estimated, old.odds):
-            best[leg.key()] = leg
+            best[dkey] = leg
     return sorted(best.values(), key=lambda x: (x.quality, x.probability), reverse=True)
 
 
@@ -1415,11 +1423,16 @@ def build_builder_picks(
 
     # Stable dedup, then rank safe/high-quality builders first.
     seen = set()
+    seen_legsets = set()
     unique: List[BuilderPick] = []
     for pick in candidates:
         if pick.builder_id in seen:
             continue
+        _ls = frozenset(x.key() for x in pick.legs)
+        if _ls in seen_legsets:
+            continue
         seen.add(pick.builder_id)
+        seen_legsets.add(_ls)
         unique.append(pick)
 
     def rank(pick: BuilderPick) -> Tuple[float, float, float]:
