@@ -225,6 +225,36 @@ def test_v37_snapshot_dict_is_read_as_real_odds():
             os.environ["NETRATTLER_ODDS_SNAPSHOT"] = old_env
 
 
+def test_snapshot_half_time_and_combo_cannot_override_full_time():
+    _reset_runtime_state()
+    old_env = os.environ.get("NETRATTLER_ODDS_SNAPSHOT")
+    try:
+        with tempfile.TemporaryDirectory() as td:
+            fn = Path(td) / "snapshot.json"
+            fn.write_text(json.dumps({"rows": [
+                {"home_team": "Arsenal", "away_team": "Chelsea",
+                 "market": "btts_ht", "selection": "yes", "odds": 2.20},
+                {"home_team": "Arsenal", "away_team": "Chelsea",
+                 "market": "btts_over25", "selection": "yes", "odds": 3.60},
+                {"home_team": "Arsenal", "away_team": "Chelsea",
+                 "market": "totals_ht_2_5", "selection": "over_2_5", "odds": 4.10,
+                 "raw": {"line": 2.5}},
+                {"home_team": "Arsenal", "away_team": "Chelsea",
+                 "market": "totals_2_5", "selection": "over_2_5", "odds": 1.85},
+                {"home_team": "Arsenal", "away_team": "Chelsea",
+                 "market": "btts", "selection": "yes", "odds": 1.92},
+            ]}), encoding="utf-8")
+            os.environ["NETRATTLER_ODDS_SNAPSHOT"] = str(fn)
+            result = patch._snapshot_for_match("Arsenal", "Chelsea")
+            assert result["btts_yes"] == 1.92, result
+            assert result["over_25"] == 1.85, result
+    finally:
+        if old_env is None:
+            os.environ.pop("NETRATTLER_ODDS_SNAPSHOT", None)
+        else:
+            os.environ["NETRATTLER_ODDS_SNAPSHOT"] = old_env
+
+
 def test_coverage_aware_skip_keeps_loop_on_when_groups_are_empty():
     _reset_runtime_state()
     old_force = os.environ.pop("FORCE_LEAGUE_LOOP", None)
@@ -302,6 +332,7 @@ def main():
     test_real_team_market_quotes_are_preserved()
     test_observed_fallback_chain_fills_only_missing_fields_and_tracks_source()
     test_v37_snapshot_dict_is_read_as_real_odds()
+    test_snapshot_half_time_and_combo_cannot_override_full_time()
     test_coverage_aware_skip_keeps_loop_on_when_groups_are_empty()
     test_coverage_aware_skip_allows_speed_skip_only_with_full_market_coverage()
     print("OK: runtime odds fallbacks + source attribution + V37 snapshot + coverage-aware skip")
