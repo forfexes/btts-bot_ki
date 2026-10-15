@@ -375,6 +375,9 @@ def main():
           "fixtures", (report["bwin"]["data"] or {}).get("fixture_count", 0), flush=True)
     for family, info in report["bwin"].get("market_families", {}).items():
         print("BWIN_FAMILY", family, info["market_instances"], "outcomes", info["priced_outcomes"], flush=True)
+    for family, info in report["bwin"].get("market_families", {}).items():
+        if family in ("goalscorer", "shots_on_target", "shots", "corners"):
+            print("BWIN_SPECIAL_MARKET", family, info["market_instances"], "priced", info["priced_outcomes"], flush=True)
     if report["bwin"].get("production_parser"):
         print("BWIN_PRODUCTION_MAPPING", json.dumps({k: v for k, v in report["bwin"]["production_parser"].items() if k in ("parsed_fixtures", "mapped_odds_rows", "critical_market_counts")}), flush=True)
     for i, detail in enumerate(bwin_details):
