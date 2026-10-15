@@ -1,6 +1,6 @@
 import unittest
 from netrattler_betclone_market_audit import (
-    sample_x1_events, summarize_x1, summarize_bwin, market_family, summarize_market_families
+    sample_x1_events, summarize_x1, summarize_bwin, market_family, summarize_market_families, quantify_bwin_harvester_mapping
 )
 
 
@@ -26,6 +26,30 @@ class MarketAuditTests(unittest.TestCase):
         r = summarize_bwin(p)
         self.assertEqual(r["markets"][0]["valid_price_selections"], 1)
         self.assertEqual(summarize_market_families(r)["btts"]["priced_outcomes"], 1)
+
+    def test_existing_bwin_parser_supports_first_half_btts_and_totals(self):
+        fixture = {
+            "id": 123,
+            "startDate": "2026-10-15T18:00:00Z",
+            "name": {"value": "A - B"},
+            "participants": [{"name": {"value": "A"}}, {"name": {"value": "B"}}],
+            "games": [
+                {"name": {"value": "Both Teams To Score 1st Half"}, "status": "Visible",
+                 "results": [
+                     {"name": {"value": "Yes"}, "odds": 1.95},
+                     {"name": {"value": "No"}, "odds": 1.82}
+                 ]},
+                {"name": {"value": "1st Half - Total Goals"}, "status": "Visible",
+                 "results": [
+                     {"name": {"value": "Over 1.5"}, "odds": 2.0},
+                     {"name": {"value": "Under 1.5"}, "odds": 1.75}
+                 ]},
+            ],
+        }
+        result = quantify_bwin_harvester_mapping({"fixtures": [fixture]})
+        self.assertEqual(result["critical_market_counts"]["btts_ht"], 2)
+        self.assertEqual(result["critical_market_counts"]["totals_ht_1_5"], 2)
+        self.assertEqual(result["mapped_odds_rows"], 4)
 
     def test_specific_markets(self):
         self.assertEqual(market_family("Both Teams To Score - 1st Half"), "btts_ht")
