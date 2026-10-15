@@ -78,10 +78,20 @@ class ScorerHistoryTests(unittest.TestCase):
             def get_supabase_player_avg_stats(_name): return {"shots": {"avg": 2.2, "games": 10}}
         bot = Bot()
         scorer.install(bot)
-        with patch.object(scorer, "recent_goals", return_value={"goals": {"avg": 0.5, "games": 10}}):
-            data = bot.get_supabase_player_avg_stats("Sam Lee")
+        def _ntr_history_scorers_from_quotes():
+            def _one():
+                return bot.get_supabase_player_avg_stats("Sam Lee")
+            return _one()
+
+        with patch.object(scorer, "recent_goals", return_value={"goals": {"avg": 0.5, "games": 10}}) as query:
+            data = _ntr_history_scorers_from_quotes()
             self.assertEqual(data["goals"]["avg"], 0.5)
             self.assertEqual(data["shots"]["avg"], 2.2)
+            self.assertEqual(query.call_count, 1)
+            # Player-prop pipelines must not cause another Supabase history lookup.
+            other = bot.get_supabase_player_avg_stats("Sam Lee")
+            self.assertNotIn("goals", other)
+            self.assertEqual(query.call_count, 1)
 
 
 if __name__ == "__main__":
