@@ -269,7 +269,7 @@ def bwin_detail_probe(listing, params, timeout=16):
     ids = []
     for f in fixtures:
         ident = f.get("id") if isinstance(f, dict) else None
-        if isinstance(ident, (str, int)) and re.fullmatch(r"\d{2,20}", str(ident)):
+        if isinstance(ident, (str, int)) and re.fullmatch(r"[A-Za-z0-9:_-]{2,80}", str(ident)):
             ids.append(str(ident))
         if len(ids) >= 2:
             break
