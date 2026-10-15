@@ -8,7 +8,7 @@ on:
       - 'netrattler_betclone_market_audit.py'
       - 'test_netrattler_betclone_market_audit.py'
   schedule:
-    - cron: '12 8 * * 4'
+    - cron: '12 8 * * *'
 permissions:
   contents: read
 jobs:
