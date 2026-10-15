@@ -28,6 +28,25 @@ jobs:
         run: python -m unittest -v test_netrattler_betclone_market_audit.py
       - name: Test production odds fallback and safe source gating
         run: python test_netrattler_odds_cache_guard.py
+      - name: Verify production Supabase odds fallback (read-only)
+        env:
+          SUPABASE_URL: ${{ secrets.SUPABASE_URL }}
+          SUPABASE_KEY: ${{ secrets.SUPABASE_KEY }}
+        run: |
+          python - <<'PY'
+          import os
+          from collections import Counter
+          import netrattler_odds_cache_guard as cache
+          if not os.getenv("SUPABASE_URL") or not os.getenv("SUPABASE_KEY"):
+              raise SystemExit("Missing Supabase read configuration")
+          rows = cache._load_rows(force=True)
+          counts = Counter(str(row.get("source") or "") for row in rows)
+          print("VERIFIED_ODDS_FALLBACK total=", len(rows), "sources=", dict(counts), flush=True)
+          if counts.get("bwin", 0) <= 0:
+              raise SystemExit("Live validated bwin odds not returned by fallback query")
+          if any(str(row.get("source")) not in cache.LIVE_HISTORY_SOURCES for row in rows):
+              raise SystemExit("Non-validated bookmaker escaped the source gate")
+          PY
       - name: Inspect existing public market feeds (read-only)
         run: python netrattler_betclone_market_audit.py --timeout 16
       - uses: actions/upload-artifact@v4
