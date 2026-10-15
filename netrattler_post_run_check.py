@@ -9,6 +9,38 @@ import os
 import sys
 import urllib.error
 import urllib.request
+import re
+
+
+def coverage_warnings(log_text):
+    issues = []
+    for line in log_text.splitlines():
+        if 'Coverage:' in line and 'no_candidates' in line:
+            missing = re.findall(r'([a-z0-9_]+)=no_candidates', line)
+            if missing:
+                issues.append('No candidates: ' + ', '.join(missing))
+        if 'Builder Engine: 0 Builder' in line:
+            issues.append('Builder Engine sent zero builders')
+    return list(dict.fromkeys(issues))
+
+
+def fetch_job_logs(run):
+    token = os.getenv('GITHUB_TOKEN') or ''
+    repo = os.getenv('GITHUB_REPOSITORY') or ''
+    run_id = run.get('id')
+    if not (token and repo and run_id):
+        return ''
+    headers = {'Authorization': 'Bearer ' + token, 'Accept': 'application/vnd.github+json'}
+    url = f'https://api.github.com/repos/{repo}/actions/runs/{int(run_id)}/jobs?per_page=30'
+    with urllib.request.urlopen(urllib.request.Request(url, headers=headers), timeout=20) as response:
+        jobs = json.load(response).get('jobs', [])
+    chunks = []
+    for job in jobs[:5]:
+        jid = int(job['id'])
+        url = f'https://api.github.com/repos/{repo}/actions/jobs/{jid}/logs'
+        with urllib.request.urlopen(urllib.request.Request(url, headers=headers), timeout=30) as response:
+            chunks.append(response.read(1500000).decode('utf-8', 'replace'))
+    return '\\n'.join(chunks)
 
 
 def evaluate(run):
@@ -50,6 +82,15 @@ def main():
     run = event.get("workflow_run") or {}
     ok, message = evaluate(run)
     print(message, flush=True)
+    if ok and run.get('name') == 'NETRATTLER AI Tipp Bot':
+        try:
+            warnings = coverage_warnings(fetch_job_logs(run))
+            if warnings:
+                message = 'NETRATTLER | TIP COVERAGE WARNING\\n' + '\\n'.join(warnings) + '\\n' + (run.get('html_url') or '')
+                print(message, flush=True)
+                notify(message)
+        except (urllib.error.URLError, ValueError, KeyError, TimeoutError) as exc:
+            print('Coverage log inspection unavailable: ' + type(exc).__name__, flush=True)
     # Send failures; successful runs are recorded in Actions without Telegram spam.
     if not ok:
         notify(message)
