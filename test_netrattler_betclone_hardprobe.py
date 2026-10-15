@@ -25,6 +25,15 @@ class TestHardprobe(unittest.TestCase):
                "<table><tr><td>Advertisement</td></tr></table>"
         self.assertEqual(parse_catalogue_html(html), ["A", "B"])
 
+    def test_h1_table_ends_before_unrelated_affiliates(self):
+        html = "<h1>Bookmakers</h1><table><tr><th>Bookmaker</th></tr>" \
+               "<tr><td><a href='https://finmart.pro/one'>A</a></td></tr>" \
+               "<tr><td><a href='https://finmart.pro/two'>B</a></td></tr></table>" \
+               "<p>This sportsbook platform has an established presence and an " \
+               "extended editorial description for readers of this platform.</p>" \
+               "<footer><a href='https://finmart.pro/ad'>WrongFamily</a></footer>"
+        self.assertEqual(parse_catalogue_html(html), ["A", "B"])
+
     def test_historical_appendix_is_separate(self):
         names = ", ".join(["Betx101"] + [f"example{i} sportsbook" for i in range(20)])
         html = "<p>" + names + "</p>"
