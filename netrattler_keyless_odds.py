@@ -131,7 +131,13 @@ def _bwin_rows(fx: Mapping[str, Any]) -> List[Dict[str, Any]]:
             continue
         opts = mk.get("options") or mk.get("results") or []
         for op in opts:
-            oname = _bwin_text(op.get("name"))
+            oname = _bwin_text(op.get("name")) or _bwin_text(op.get("sourceName"))
+            option_types = (op.get("parameters") or {}).get("optionTypes") or []
+            if mname.lower().strip() in {"match result", "result 1x2", "1x2"}:
+                if "Draw" in option_types:
+                    oname = "draw"
+                elif _bwin_text(op.get("sourceName")) in {"1", "2"}:
+                    oname = _bwin_text(op.get("sourceName"))
             price = (op.get("price") or {}).get("odds") if isinstance(op.get("price"), dict) else op.get("odds")
             mapped = _bwin_market(mname, oname, home, away)
             if not mapped or not price:
