@@ -1,5 +1,5 @@
 import unittest
-from netrattler_post_run_check import evaluate
+from netrattler_post_run_check import evaluate, coverage_warnings
 
 
 class PostRunTests(unittest.TestCase):
@@ -14,6 +14,13 @@ class PostRunTests(unittest.TestCase):
                             "conclusion": "failure", "html_url": "https://example.test/run"})
         self.assertFalse(ok)
         self.assertIn("RUN-FEHLER", msg)
+
+    def test_silent_coverage_failure(self):
+        log = '[WARN] Coverage: btts=no_candidates, scorer=no_candidates, corners=no_candidates'
+        self.assertEqual(coverage_warnings(log), ['No candidates: btts, scorer, corners'])
+
+    def test_builder_warning(self):
+        self.assertEqual(coverage_warnings('Builder Engine: 0 Builder gesendet'), ['Builder Engine sent zero builders'])
 
     def test_incomplete(self):
         ok, _ = evaluate({"status": "in_progress"})
