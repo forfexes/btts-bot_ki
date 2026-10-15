@@ -1,7 +1,7 @@
 import unittest
 from unittest.mock import patch
 from netrattler_betclone_hardprobe import (
-    CANDIDATES, PAGES, audit_odds_json, parse_catalogue_html, parse_extended_bookmakers, probe_homepage, valid_decimal, conservative_domain_candidate, discover_catalogue_candidates
+    CANDIDATES, PAGES, audit_odds_json, parse_catalogue_html, parse_extended_bookmakers, probe_homepage, valid_decimal, conservative_domain_candidate, discover_catalogue_candidates, probe_guessed_domain
 )
 
 
@@ -51,6 +51,24 @@ class TestHardprobe(unittest.TestCase):
         guessed, unresolved = discover_catalogue_candidates(catalogue, known)
         self.assertEqual(guessed, [("betby", "Unmapped", "https://unmapped.com/")])
         self.assertEqual(len(unresolved), 1)
+
+    @patch("netrattler_betclone_hardprobe.probe_homepage")
+    def test_guessed_domain_is_never_promoted_to_feed(self, probe):
+        probe.return_value = {"http": 200, "state": "public_structured_odds_candidate",
+                              "verified_odds": 4, "off_domain_redirect": False}
+        result = probe_guessed_domain("betby", "testbook", "https://testbook.com/")
+        self.assertFalse(result["usable_feed"])
+        self.assertEqual(result["domain_verification"], "unverified_guess")
+        self.assertEqual(result["manual_review_priority"], "high")
+        self.assertEqual(result["state"], "unverified_domain_with_odds_needs_review")
+
+    @patch("netrattler_betclone_hardprobe.probe_homepage")
+    def test_guessed_domain_reachable_gets_review_not_certification(self, probe):
+        probe.return_value = {"http": 200, "state": "html_no_verified_odds",
+                              "verified_odds": 0, "off_domain_redirect": False}
+        result = probe_guessed_domain("betby", "testbook", "https://testbook.com/")
+        self.assertEqual(result["manual_review_priority"], "medium")
+        self.assertFalse(result["usable_feed"])
 
     def test_no_table_fails_closed(self):
         self.assertEqual(parse_catalogue_html("<h1>blocked</h1>"), [])
