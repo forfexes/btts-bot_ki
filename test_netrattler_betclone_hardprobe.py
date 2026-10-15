@@ -65,9 +65,18 @@ class TestHardprobe(unittest.TestCase):
     @patch("netrattler_betclone_hardprobe.probe_homepage")
     def test_guessed_domain_reachable_gets_review_not_certification(self, probe):
         probe.return_value = {"http": 200, "state": "html_no_verified_odds",
-                              "verified_odds": 0, "off_domain_redirect": False}
+                              "verified_odds": 0, "off_domain_redirect": False,
+                              "identity_signal": "brand_and_sportsbook_terms"}
         result = probe_guessed_domain("betby", "testbook", "https://testbook.com/")
         self.assertEqual(result["manual_review_priority"], "medium")
+        self.assertFalse(result["usable_feed"])
+
+    @patch("netrattler_betclone_hardprobe.probe_homepage")
+    def test_unrelated_reachable_domain_is_low_priority(self, probe):
+        probe.return_value = {"http": 200, "state": "html_no_verified_odds",
+                              "verified_odds": 0, "identity_signal": "no_identity_signal"}
+        result = probe_guessed_domain("betby", "unrelated", "https://unrelated.com/")
+        self.assertEqual(result["manual_review_priority"], "low")
         self.assertFalse(result["usable_feed"])
 
     def test_no_table_fails_closed(self):
