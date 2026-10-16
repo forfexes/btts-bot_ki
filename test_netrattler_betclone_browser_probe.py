@@ -6,11 +6,13 @@ import netrattler_betclone_browser_probe as probe
 
 class BrowserProbeTests(unittest.TestCase):
     def test_curated_unblocked_homepages_only(self):
-        self.assertEqual(len(probe.CANDIDATES), 10)
+        self.assertEqual(len(probe.CANDIDATES), 14)
         self.assertEqual(len({brand for _, brand, _ in probe.CANDIDATES}), 10)
         self.assertEqual({family for family, _, _ in probe.CANDIDATES},
-                         {"altenar", "betby", "betconstruct", "first", "inplaynet", "softswiss"})
+                         {"altenar", "betby", "betconstruct", "first", "igate", "inplaynet", "softswiss"})
         self.assertTrue(all(url.startswith("https://") for _, _, url in probe.CANDIDATES))
+        self.assertIn(("igate", "spinlynx", "https://spinlynx.com/"), probe.CANDIDATES)
+        self.assertIn(("altenar", "vegas.hu", "https://vegas.hu/"), probe.CANDIDATES)
         self.assertFalse(any(brand in {"rabona", "efbet", "n1bet", "goldenbet"}
                              for _, brand, _ in probe.CANDIDATES))
 
@@ -20,6 +22,13 @@ class BrowserProbeTests(unittest.TestCase):
         self.assertTrue(probe.is_first_party_response(page, "https://api.vbet.com/v1/football"))
         self.assertFalse(probe.is_first_party_response(page, "https://vbet.com.attacker.invalid/api"))
         self.assertFalse(probe.is_first_party_response(page, "https://cdn.example.org/odds"))
+
+    def test_public_redirected_origin_not_unrelated_json_hosts(self):
+        redirected_page = "https://spinlynx36.com/"
+        self.assertTrue(probe.is_first_party_response(redirected_page, "https://api.spinlynx36.com/football"))
+        self.assertFalse(probe.is_first_party_response(redirected_page, "https://spinlynx36.com.fake.example/api"))
+        self.assertEqual(probe.first_party_sports_link(redirected_page, ["/sports?session=private"]),
+                         "https://spinlynx36.com/sports")
 
     def test_only_existing_public_first_party_sports_links_are_followed(self):
         page = "https://www.tonybet.com/"

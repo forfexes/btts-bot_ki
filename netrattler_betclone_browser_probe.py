@@ -34,6 +34,12 @@ CANDIDATES = (
     ("betconstruct", "fastbet", "https://fastbet.com/"),
     ("inplaynet", "rolletto", "https://rolletto.com/"),
     ("softswiss", "wild.io", "https://wild.io/"),
+    # Already HTTP 200 in the public-site audit; more family coverage.
+    # These are public homepages, NOT verified football odds feeds.
+    ("igate", "spinlynx", "https://spinlynx.com/"),
+    ("altenar", "vegas.hu", "https://vegas.hu/"),
+    ("inplaynet", "cosmobet", "https://cosmobet.com/"),
+    ("betby", "vave", "https://vave.com/"),
 )
 DENIAL_TEXT = ("captcha", "access denied", "just a moment",
                "verify you are human", "geo-block", "geo restricted")
@@ -82,7 +88,11 @@ def audit_page(browser, family: str, brand: str, url: str) -> dict:
         if "json" not in str(response.headers.get("content-type") or "").lower():
             return
         result["json_responses"] += 1
-        if not is_first_party_response(url, response.url):
+        # A public homepage can redirect to its canonical operator domain.
+        # Only the actual browser-rendered navigation origin, never an
+        # arbitrary third-party JSON host, is allowed for payload inspection.
+        origin = page.url if (urlparse(page.url).scheme == "https") else url
+        if not is_first_party_response(origin, response.url):
             return
         if len(seen_responses) >= 16:
             return
@@ -114,6 +124,9 @@ def audit_page(browser, family: str, brand: str, url: str) -> dict:
         if navigation.status >= 400:
             result["status"] = "http_error"
             return result
+        # A redirected page may be a different public brand host; report this
+        # without storing its URL, assuming ownership, or validating odds.
+        result["redirected_to_other_host"] = not is_first_party_response(url, page.url)
         # A JS shell may populate public odds after the initial page response.
         page.wait_for_timeout(2000)
         title = page.title()
@@ -125,7 +138,7 @@ def audit_page(browser, family: str, brand: str, url: str) -> dict:
         # Landing pages often expose only login and promotions, not betting odds.
         hrefs = page.locator("a[href]").evaluate_all(
             "(anchors) => anchors.slice(0, 120).map(a => a.getAttribute('href'))")
-        sports_url = first_party_sports_link(url, hrefs)
+        sports_url = first_party_sports_link(page.url, hrefs)
         if sports_url:
             result["public_sports_link_found"] = True
             try:
@@ -155,7 +168,7 @@ def audit_page(browser, family: str, brand: str, url: str) -> dict:
 def main() -> None:
     parser = argparse.ArgumentParser()
     parser.add_argument("--output", default="netrattler_betclone_browser_probe.json")
-    parser.add_argument("--limit", type=int, default=10)
+    parser.add_argument("--limit", type=int, default=len(CANDIDATES))
     args = parser.parse_args()
     from playwright.sync_api import sync_playwright
     rows = []
