@@ -40,7 +40,7 @@ def fetch_job_logs(run):
         url = f'https://api.github.com/repos/{repo}/actions/jobs/{jid}/logs'
         with urllib.request.urlopen(urllib.request.Request(url, headers=headers), timeout=30) as response:
             chunks.append(response.read(1500000).decode('utf-8', 'replace'))
-    return '\\n'.join(chunks)
+    return '\n'.join(chunks)
 
 
 def evaluate(run):
@@ -52,6 +52,10 @@ def evaluate(run):
         return False, f"NETRATTLER | Run noch nicht abgeschlossen: {name}"
     if conclusion == "success":
         return True, f"NETRATTLER | OK: {name}\n{url}"
+    if conclusion == "cancelled" and run.get("event") == "push":
+        # A newer push replaces this verification run via Actions concurrency.
+        # Cancellation is still visible in Actions, but not a production failure.
+        return True, f"NETRATTLER | PUSH-TEST ABGEBROCHEN: {name}\n{url}"
     return False, f"NETRATTLER | RUN-FEHLER: {name}\nStatus: {conclusion or 'unknown'}\n{url}"
 
 
@@ -82,11 +86,11 @@ def main():
     run = event.get("workflow_run") or {}
     ok, message = evaluate(run)
     print(message, flush=True)
-    if ok and run.get('name') == 'NETRATTLER AI Tipp Bot':
+    if ok and run.get('conclusion') == 'success' and run.get('name') == 'NETRATTLER AI Tipp Bot':
         try:
             warnings = coverage_warnings(fetch_job_logs(run))
             if warnings:
-                message = 'NETRATTLER | TIP COVERAGE WARNING\\n' + '\\n'.join(warnings) + '\\n' + (run.get('html_url') or '')
+                message = 'NETRATTLER | TIP COVERAGE WARNING\n' + '\n'.join(warnings) + '\n' + (run.get('html_url') or '')
                 print(message, flush=True)
                 notify(message)
         except (urllib.error.URLError, ValueError, KeyError, TimeoutError) as exc:

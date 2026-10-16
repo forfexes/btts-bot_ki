@@ -15,6 +15,26 @@ class PostRunTests(unittest.TestCase):
         self.assertFalse(ok)
         self.assertIn("RUN-FEHLER", msg)
 
+    def test_cancelled_push_is_not_failure(self):
+        ok, msg = evaluate({"name": "NETRATTLER AI Tipp Bot",
+                            "status": "completed", "conclusion": "cancelled",
+                            "event": "push", "html_url": "https://example.test/old"})
+        self.assertTrue(ok)
+        self.assertIn("PUSH-TEST ABGEBROCHEN", msg)
+
+    def test_cancelled_scheduled_run_still_warns(self):
+        ok, msg = evaluate({"name": "NETRATTLER AI Tipp Bot",
+                            "status": "completed", "conclusion": "cancelled",
+                            "event": "schedule"})
+        self.assertFalse(ok)
+        self.assertIn("RUN-FEHLER", msg)
+
+    def test_cancelled_manual_run_still_warns(self):
+        ok, _ = evaluate({"name": "NETRATTLER AI Tipp Bot",
+                          "status": "completed", "conclusion": "cancelled",
+                          "event": "workflow_dispatch"})
+        self.assertFalse(ok)
+
     def test_silent_coverage_failure(self):
         log = '[WARN] Coverage: btts=no_candidates, scorer=no_candidates, corners=no_candidates'
         self.assertEqual(coverage_warnings(log), ['No candidates: btts, scorer, corners'])
