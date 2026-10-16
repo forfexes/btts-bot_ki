@@ -5,6 +5,9 @@ on:
     branches: [main]
     paths:
       - ".github/workflows/btts_tips.yml"
+      - "netrattler_scorer_history_fallback.py"
+      - "netrattler_odds_cache_guard.py"
+      - "netrattler_runtime_patch.py"
   schedule:
     - cron: "17 8 * * *"  # 10:17 CH — Vormittag (GitHub verwirft :30-Slots oft, daher krumme Minute)
     - cron: "47 9 * * *"  # 11:47 CH — Frühspiele-Backup (Serie A 12:30, PL 13:30)
