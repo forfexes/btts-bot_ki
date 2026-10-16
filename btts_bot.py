@@ -4683,6 +4683,9 @@ except (TypeError, ValueError):
     _PW_BUDGET_SEC = 120.0
 _PW_FIRST_CALL_TS = None   # Zeitpunkt des ersten Playwright-Calls
 _PW_BUDGET_HIT = False     # einmaliges Logging, wenn Budget erschöpft
+_PW_MAX_CALLS = max(0, min(12, int(os.getenv("NETRATTLER_PLAYWRIGHT_MAX_CALLS", "4"))))
+_PW_ATTEMPTS = 0
+_PW_CALL_CAP_HIT = False
 
 
 def scrape_with_playwright(url, wait_for=None, timeout=8000):
@@ -4697,8 +4700,13 @@ def scrape_with_playwright(url, wait_for=None, timeout=8000):
     if cache_key in PLAYWRIGHT_CACHE:
         return PLAYWRIGHT_CACHE[cache_key]
 
-    # FAST_TIPS: hartes Zeitbudget für den gesamten Playwright-Scrape.
-    global _PW_FIRST_CALL_TS, _PW_BUDGET_HIT
+    # FAST_TIPS: bounded calls and wall-clock time, never a browser storm.
+    global _PW_FIRST_CALL_TS, _PW_BUDGET_HIT, _PW_ATTEMPTS, _PW_CALL_CAP_HIT
+    if _PW_FAST_TIPS and _PW_ATTEMPTS >= _PW_MAX_CALLS:
+        if not _PW_CALL_CAP_HIT:
+            _PW_CALL_CAP_HIT = True
+            log(f"⏱️ FAST_TIPS: Playwright max {_PW_MAX_CALLS} browser calls — rest skipped", "WARN")
+        return None
     if _PW_FAST_TIPS:
         _now = time.time()
         if _PW_FIRST_CALL_TS is None:
@@ -4710,6 +4718,7 @@ def scrape_with_playwright(url, wait_for=None, timeout=8000):
                     f"weitere Live-Scrapes werden übersprungen (Tipps laufen aus Cache/APIs weiter).", "WARN")
             return None
 
+    _PW_ATTEMPTS += 1
     try:
         with sync_playwright() as p:
             browser = p.chromium.launch(
