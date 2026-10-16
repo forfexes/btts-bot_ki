@@ -297,8 +297,8 @@ def audit_odds_json(payload):
                 category_text = " ".join(str(v)[:100] for k, v in obj.items()
                                          if str(k).lower().replace("_", "") in label_fields).lower()
                 for marker, pat in (
-                    ("btts", r"both teams to score|\\bbtts\\b"),
-                    ("goalscorer", r"\\b(?:first|last|anytime) goalscorer\\b|\\bplayer\\b.{0,35}\\bto score\\b"),
+                    ("btts", r"both teams to score|\bbtts\b"),
+                    ("goalscorer", r"\b(?:first|last|anytime) goalscorer\b|\bplayer\b.{0,35}\bto score\b"),
                     ("shots", r"shots? on target|total shots?"),
                     ("corners", r"corners?"),
                     ("half", r"1st half|first half|half.time"),
