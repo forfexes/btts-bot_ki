@@ -11,6 +11,13 @@ import netrattler_altenar_schema_probe as sniffer
 
 
 class AltenarSchemaSniffTests(unittest.TestCase):
+    def test_targets_cover_curated_altenar_brands_only(self):
+        self.assertEqual(len(sniffer.TARGETS), 7)
+        self.assertEqual(len({brand for _, brand, _ in sniffer.TARGETS}), len(sniffer.TARGETS))
+        self.assertTrue(all(family == "altenar" for family, _, _ in sniffer.TARGETS))
+        self.assertTrue(all(url.startswith("https://") for _, _, url in sniffer.TARGETS))
+        self.assertIn(("altenar", "vegas.hu", "https://vegas.hu/"), sniffer.TARGETS)
+
     def test_sniffs_event_market_selection_price_shape(self):
         payload = {
             "events": [

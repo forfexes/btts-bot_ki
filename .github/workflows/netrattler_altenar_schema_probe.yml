@@ -6,7 +6,7 @@ permissions:
 jobs:
   probe:
     runs-on: ubuntu-latest
-    timeout-minutes: 9
+    timeout-minutes: 18
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-python@v5
@@ -20,7 +20,7 @@ jobs:
         run: |
           python -m py_compile netrattler_altenar_schema_probe.py test_netrattler_altenar_schema_probe.py
           python -m unittest -v test_netrattler_altenar_schema_probe.py
-      - name: Sniff Altenar (Vegas.hu / biahosted.com) field schema
+      - name: Sniff Altenar (all curated biahosted.com brands) field schema
         env:
           SUPABASE_URL: ${{ secrets.SUPABASE_URL }}
           SUPABASE_KEY: ${{ secrets.SUPABASE_KEY }}
