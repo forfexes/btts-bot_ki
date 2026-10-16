@@ -1,0 +1,24 @@
+name: NETRATTLER Kambi Scorer Market CI
+on:
+  push:
+    branches: [main]
+    paths:
+      - 'netrattler_prop_sources.py'
+      - 'test_netrattler_kambi_scorer_market.py'
+      - '.github/workflows/netrattler_kambi_scorer_ci.yml'
+  workflow_dispatch:
+jobs:
+  validate-scorer-markets:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+      - name: Install minimal runtime
+        run: pip install requests
+      - name: Verify player market subtype safety
+        run: |
+          python -m py_compile netrattler_prop_sources.py test_netrattler_kambi_scorer_market.py
+          python -m unittest -v test_netrattler_kambi_scorer_market.py
