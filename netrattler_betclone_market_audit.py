@@ -347,6 +347,25 @@ def main():
     bwin = public_json("https://sports.bwin.com/cds-api/bettingoffer/fixtures",
         bwin_params, timeout=args.timeout)
     bwin_details = bwin_detail_probe(bwin["json"], bwin_params, timeout=args.timeout) if bwin["json"] else []
+    # Inspect fixture-title vs participants. Some markets enumerate individual
+    # players as participants: they must never become fixture home/away teams.
+    if bwin["json"]:
+        from netrattler_keyless_odds import _bwin_text
+        for fx in (bwin["json"].get("fixtures") or [])[:12]:
+            participants = [p for p in fx.get("participants") or [] if isinstance(p, dict)]
+            if len(participants) < 2:
+                continue
+            name = _bwin_text(fx.get("name"))
+            p1 = _bwin_text(participants[0].get("name"))
+            p2 = _bwin_text(participants[1].get("name"))
+            print("BWIN_FIXTURE_IDENTITY", json.dumps({
+                "fixture_title": name[:110], "participant_1": p1[:70],
+                "participant_2": p2[:70],
+                "competition": _bwin_text((fx.get("competition") or {}).get("name"))[:60],
+                "participant_type_1": participants[0].get("type"),
+                "participant_type_2": participants[1].get("type"),
+            }, ensure_ascii=False), flush=True)
+
 
     detail = x1_detail_probe(x1["json"], timeout=args.timeout) if x1["json"] else []
     report = {
