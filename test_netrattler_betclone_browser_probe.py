@@ -35,6 +35,15 @@ class BrowserProbeTests(unittest.TestCase):
                 return payload
         self.assertEqual(probe.public_response_price_count(Reply()), 1)
 
+    def test_deeply_nested_nonmarket_data_stays_unverified(self):
+        payload = {"name": "marketing", "price": 1.81}
+        for _ in range(30):
+            payload = {"data": [payload]}
+        class Reply:
+            def json(self):
+                return payload
+        self.assertEqual(probe.public_response_price_count(Reply()), 0)
+
     def test_hosted_schema_diagnostics_are_bounded_and_value_free(self):
         payload = {
             "events": [{
