@@ -116,11 +116,23 @@ def _bwin_market(mname: str, oname: str, home: str, away: str):
 
 def _bwin_rows(fx: Mapping[str, Any]) -> List[Dict[str, Any]]:
     out: List[Dict[str, Any]] = []
-    parts = [p for p in fx.get("participants") or [] if isinstance(p, dict)]
-    name = _bwin_text(fx.get("name"))
-    home = _bwin_text(parts[0].get("name")) if len(parts) >= 2 else name.split(" - ")[0]
-    away = _bwin_text(parts[1].get("name")) if len(parts) >= 2 else (name.split(" - ") + [""])[1]
-    if not home or not away:
+    # Always derive the actual fixture teams from the fixture TITLE.
+    # bwin participants can contain individual players for markets belonging
+    # to a club game (confirmed in its public 3. Liga/Eredivisie feed). Taking
+    # the first two participants silently re-labelled team corners/BTTS odds
+    # as "player vs player" and polluted odds_history.
+    from html import unescape
+    name = unescape(_bwin_text(fx.get("name"))).strip()
+    if " - " in name:
+        home, away = name.split(" - ", 1)
+    elif " vs " in name:
+        home, away = name.split(" vs ", 1)
+    else:
+        # Futures such as "LaLiga 2026/27 – Relegation" can also list
+        # two clubs as participants. No match title => do not invent a game.
+        return out
+    home, away = home.strip(), away.strip()
+    if not home or not away or home.lower() == away.lower():
         return out
     league = _bwin_text((fx.get("competition") or {}).get("name"))
     start = fx.get("startDate")
