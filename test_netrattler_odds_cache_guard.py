@@ -154,6 +154,62 @@ def test_cache_selects_only_relevant_markets_and_paginates():
 
 
 
+def test_rolling_utc_window_uses_yesterday_but_filters_stale_prices():
+    from datetime import datetime, timezone, timedelta
+    from unittest.mock import patch
+    now = datetime.now(timezone.utc)
+    current = (now - timedelta(hours=4)).isoformat()
+    stale = (now - timedelta(hours=30)).isoformat()
+    today = now.date().isoformat()
+    yesterday = (now.date() - timedelta(days=1)).isoformat()
+
+    def row(stamp, captured):
+        return {"source": "bwin", "bookmaker": "bwin", "home_team": "Arsenal",
+                "away_team": "Chelsea", "match_date": today, "captured_date": captured,
+                "market": "btts_ht", "selection": "yes", "odds": 2.4,
+                "raw": {"captured_at": stamp}}
+    fresh_yesterday = row(current, yesterday)
+    stale_yesterday = row(stale, yesterday)
+    no_timestamp_yesterday = dict(row(current, yesterday), raw={})
+
+    calls = []
+    class Response:
+        def raise_for_status(self): pass
+        def json(self): return [fresh_yesterday, stale_yesterday, no_timestamp_yesterday]
+    def fake_get(_url, *, params, **_kwargs):
+        calls.append(params)
+        return Response()
+
+    with (patch.object(guard, "SUPABASE_URL", "https://example.supabase.co"),
+          patch.object(guard, "SUPABASE_KEY", "token"),
+          patch.object(guard.requests, "get", side_effect=fake_get)):
+        output = guard._load_rows(force=True)
+        assert len(output) == 1, output
+        assert calls[0]["captured_date"] == f"gte.{yesterday}"
+        assert calls[0]["match_date"] == f"gte.{today}"
+        # A second lookup with an empty cache must not issue repeated DB requests.
+        guard._load_rows()
+        assert len(calls) == 1
+    assert guard._fresh(fresh_yesterday)
+    assert not guard._fresh(stale_yesterday)
+
+
+def test_db_failure_clears_stale_match_index():
+    from unittest.mock import patch
+    stale = {"source": "bwin", "home_team": "Arsenal", "away_team": "Chelsea",
+             "market": "btts", "selection": "yes", "odds": 1.91, "raw": {}}
+    original_index, original_cache = guard._MATCH_INDEX, guard._CACHE
+    try:
+        guard._MATCH_INDEX = guard._index_rows([stale])
+        with (patch.object(guard, "SUPABASE_URL", "https://example.supabase.co"),
+              patch.object(guard, "SUPABASE_KEY", "token"),
+              patch.object(guard.requests, "get", side_effect=guard.requests.RequestException("offline"))):
+            assert guard._load_rows(force=True) == []
+            assert guard._MATCH_INDEX == {}, "Never serve stale quotes after query failure"
+    finally:
+        guard._MATCH_INDEX, guard._CACHE = original_index, original_cache
+
+
 def test_live_cache_index_uses_exact_match_and_current_rows_only():
     from datetime import datetime, timezone
     now = datetime.now(timezone.utc).isoformat()
@@ -183,6 +239,8 @@ def main():
     test_shadow_and_fuzzy_names_never_enter_live()
     test_verified_bwin_live_but_unlabelled_codes_stay_shadow()
     test_cache_selects_only_relevant_markets_and_paginates()
+    test_rolling_utc_window_uses_yesterday_but_filters_stale_prices()
+    test_db_failure_clears_stale_match_index()
     test_live_cache_index_uses_exact_match_and_current_rows_only()
     print("OK: multi-brand Kambi + fresh odds_history final fallback guard")
 
