@@ -59,11 +59,33 @@ def summarize(audit: Mapping[str, Any]) -> Dict[str, Any]:
     catalogue_count = sum(p["listed_bookmakers"] for p in platforms.values())
     if catalogue_count != int(audit.get("catalogue_total_listed_entries") or 0):
         raise ValueError("Catalogue count does not match actual listed entries")
+
+    # An inflated catalogue total is not proof that the per-brand audit
+    # accounted for every operator. Validate the full family+brand matrix too.
+    matrix = audit.get("catalogue_audit_matrix")
+    matrix_complete = False
+    if matrix is not None:
+        if not isinstance(matrix, list):
+            raise ValueError("Invalid bookmaker audit matrix")
+        expected = {
+            (family, brand.casefold())
+            for family, row in catalogue.items()
+            for brand in row.get("bookmakers") or []
+        }
+        actual = [
+            (str(row.get("platform") or ""), str(row.get("brand") or "").casefold())
+            for row in matrix if isinstance(row, dict)
+        ]
+        if len(actual) != len(matrix) or len(actual) != len(expected) or set(actual) != expected:
+            raise ValueError("Incomplete or duplicated BetClone bookmaker audit matrix")
+        matrix_complete = True
+
     return {
         "report": "netrattler_betclone_integration_status",
         "generated_utc": datetime.now(timezone.utc).isoformat(),
         "source_audit_utc": audit.get("checked_at_utc"),
         "family_count": len(platforms),
+        "catalogue_matrix_complete": matrix_complete,
         "listed_bookmaker_entries": catalogue_count,
         "curated_homepages_checked": sum(p["curated_homepages_checked"] for p in platforms.values()),
         "unverified_candidate_domains_checked": sum(p["unverified_candidate_domains_checked"] for p in platforms.values()),
@@ -88,7 +110,8 @@ def main() -> None:
           "curated_checked=", status["curated_homepages_checked"],
           "guessed_checked=", status["unverified_candidate_domains_checked"],
           "validated_family_feeds=", status["families_with_verified_production_odds"],
-          "shadow_family_feeds=", status["families_with_shadow_feed"], flush=True)
+          "shadow_family_feeds=", status["families_with_shadow_feed"],
+          "brand_matrix_complete=", status["catalogue_matrix_complete"], flush=True)
     for family, info in status["platforms"].items():
         print("BETCLONE_INTEGRATION_FAMILY", family,
               "listed=", info["listed_bookmakers"],

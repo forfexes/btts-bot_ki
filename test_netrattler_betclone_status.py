@@ -36,6 +36,27 @@ class BetCloneStatusTests(unittest.TestCase):
         self.assertEqual(s["unverified_candidate_domains_checked"], 1)
         self.assertEqual(s["listed_bookmaker_entries"], 5)
 
+    def test_brand_matrix_exhaustive_when_provided(self):
+        self.audit["catalogue_audit_matrix"] = [
+            {"platform": family, "brand": brand, "site_tested": False}
+            for family, row in self.audit["catalogue"].items()
+            for brand in row["bookmakers"]
+        ]
+        self.assertTrue(summarize(self.audit)["catalogue_matrix_complete"])
+        self.audit["catalogue_audit_matrix"].pop()
+        with self.assertRaisesRegex(ValueError, "Incomplete"):
+            summarize(self.audit)
+
+    def test_duplicate_brand_matrix_entry_rejected(self):
+        self.audit["catalogue_audit_matrix"] = [
+            {"platform": family, "brand": brand}
+            for family, row in self.audit["catalogue"].items()
+            for brand in row["bookmakers"]
+        ]
+        self.audit["catalogue_audit_matrix"][1] = self.audit["catalogue_audit_matrix"][0]
+        with self.assertRaisesRegex(ValueError, "duplicated"):
+            summarize(self.audit)
+
     def test_independent_sources_not_counted_as_betclone_platforms(self):
         s = summarize(self.audit)
         self.assertIn("bwin", s["separate_verified_collectors_not_attributed_to_betclone"])
