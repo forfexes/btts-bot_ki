@@ -12,6 +12,7 @@ from __future__ import annotations
 
 import argparse
 from datetime import datetime, timezone
+from collections import Counter
 import json
 from pathlib import Path
 from urllib.parse import urljoin, urlparse
@@ -98,18 +99,68 @@ def is_denied(status: int, body: str) -> bool:
         term in (body or "").lower()[:4000] for term in DENIAL_TEXT)
 
 
+# Fixed allow-list: diagnostics record neither JSON values nor arbitrary keys.
+# Normalize underscores/hyphens/case before counting schema roles.
+_PUBLIC_SCHEMA_KEYS = {
+    "events": {"event", "events", "eventid", "eventname", "fixture",
+               "fixtures", "fixtureid", "match", "matches", "matchid",
+               "hometeam", "awayteam", "participants"},
+    "markets": {"market", "markets", "marketid", "marketname", "bettype",
+                "betoffer", "betoffers", "optionmarkets", "markettype",
+                "bettingmarkets", "marketgroup", "marketgroups"},
+    "selections": {"selection", "selections", "outcome", "outcomes",
+                   "options", "bets", "runners", "participants"},
+    "prices": {"odds", "decimalodds", "decimalprice", "price",
+               "coefficient", "fixedodds", "europeanodds"},
+    "sports": {"sport", "sports", "sportid", "league", "leagues",
+               "tournament", "tournaments", "competition"},
+}
+
+
+def sports_json_shape_signals(payload) -> dict[str, int]:
+    """Bounded, content-free structural diagnostics of an observed public reply.
+
+    Only fixed-role counter names leave the browser. Values, arbitrary keys,
+    URLs, event names, participant names and source JSON are never logged.
+    """
+    hits: Counter = Counter()
+    nodes = [payload]
+    inspected = 0
+    while nodes and inspected < 1200:
+        item = nodes.pop()
+        inspected += 1
+        if isinstance(item, list):
+            nodes.extend(item[:100])
+        elif isinstance(item, dict):
+            keys = {
+                "".join(c for c in str(k).lower() if c.isalnum())
+                for k in list(item)[:100]
+            }
+            for role, names in _PUBLIC_SCHEMA_KEYS.items():
+                if keys & names:
+                    hits[role] += 1
+            nodes.extend(list(item.values())[:100])
+    return {role: min(1200, hits[role]) for role in _PUBLIC_SCHEMA_KEYS}
+
+
+def public_response_evidence(response) -> dict | None:
+    """Extract only diagnostic counts from already-loaded, unauthenticated JSON."""
+    try:
+        payload = response.json()
+        return {"prices": min(500, int(audit_odds_json(payload).get("verified_prices", 0))),
+                "shape": sports_json_shape_signals(payload)}
+    except Exception:
+        return None
+
+
 def public_response_price_count(response) -> int | None:
     """Read an already-observed public JSON reply without leaking missing-body errors.
 
     Navigation may evict Chrome's Network.getResponseBody; unavailable data is
     NOT a zero-odds source and is never silently treated as a valid feed.
     """
-    try:
-        return min(500, int(audit_odds_json(response.json()).get("verified_prices", 0)))
-    except Exception:
-        # Includes Playwright's Error when a response body is gone after
-        # navigation; callbacks must not emit unhandled protocol tracebacks.
-        return None
+    evidence = public_response_evidence(response)
+    return evidence["prices"] if evidence is not None else None
 
 
 def audit_page(browser, family: str, brand: str, url: str) -> dict:
@@ -119,7 +170,8 @@ def audit_page(browser, family: str, brand: str, url: str) -> dict:
               "public_structured_price_candidates": 0, "verified_production_feed": False,
               "external_json_hosts": [], "hosted_json_inspected": 0,
               "hosted_structured_price_candidates": 0,
-              "unavailable_json_bodies": 0}
+              "unavailable_json_bodies": 0,
+              "hosted_schema_signals": {role: 0 for role in _PUBLIC_SCHEMA_KEYS}}
     context = browser.new_context(accept_downloads=False, service_workers="block")
     page = context.new_page()
     seen_responses = set()
@@ -145,7 +197,7 @@ def audit_page(browser, family: str, brand: str, url: str) -> dict:
             # were already fetched by this anonymous public web page.
             # No direct API calls, request headers, cookies, or JSON bodies saved.
             if (is_observed_public_platform_host(family, response.url)
-                    and result["hosted_json_inspected"] < 12):
+                    and result["hosted_json_inspected"] < 32):
                 clen = response.headers.get("content-length")
                 try:
                     if clen and int(clen) > 220_000:
@@ -153,11 +205,13 @@ def audit_page(browser, family: str, brand: str, url: str) -> dict:
                 except (ValueError, TypeError):
                     return
                 result["hosted_json_inspected"] += 1
-                observed = public_response_price_count(response)
-                if observed is None:
+                evidence = public_response_evidence(response)
+                if evidence is None:
                     result["unavailable_json_bodies"] += 1
                 else:
-                    result["hosted_structured_price_candidates"] += observed
+                    result["hosted_structured_price_candidates"] += evidence["prices"]
+                    for role, count in evidence["shape"].items():
+                        result["hosted_schema_signals"][role] += count
             return
         if len(seen_responses) >= 16:
             return

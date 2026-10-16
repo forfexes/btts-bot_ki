@@ -24,6 +24,30 @@ class BrowserProbeTests(unittest.TestCase):
         self.assertIsNone(probe.public_response_host_only("javascript:alert(1)"))
         self.assertIsNone(probe.public_response_host_only("http://api.example.com/odds"))
 
+    def test_hosted_schema_diagnostics_are_bounded_and_value_free(self):
+        payload = {
+            "events": [{
+                "eventId": "PRIVATE MATCH NAME",
+                "markets": [{"marketName": "Sensitive match description",
+                             "selections": [{"name": "Confidential Player",
+                                             "decimalOdds": 2.25}]}]
+            }]
+        }
+        result = probe.sports_json_shape_signals(payload)
+        self.assertGreater(result["events"], 0)
+        self.assertGreater(result["markets"], 0)
+        self.assertGreater(result["selections"], 0)
+        self.assertGreater(result["prices"], 0)
+        self.assertNotIn("PRIVATE MATCH NAME", str(result))
+        self.assertNotIn("Confidential Player", str(result))
+
+    def test_irrelevant_private_json_does_not_create_sportsbook_evidence(self):
+        result = probe.sports_json_shape_signals({
+            "api_key": "private", "account": {"user_email": "someone@example.test"},
+            "tokens": [234.5, 42], "available_balance": 999,
+        })
+        self.assertTrue(all(value == 0 for value in result.values()))
+
     def test_unavailable_response_body_is_not_read_as_zero_odds(self):
         class LostBody:
             def json(self):
