@@ -63,6 +63,9 @@ class BrowserProbeTests(unittest.TestCase):
         self.assertEqual(signs["prices"], 2)
         self.assertEqual(signs["plausible_decimal_price_fields"], 1)
         self.assertEqual(signs["plausible_decimal_full_context"], 1)
+        self.assertEqual(signs["full_context_label_name"], 1)
+        self.assertEqual(signs["full_context_price_price"], 1)
+        self.assertEqual(signs["full_context_label_outcomename"], 0)
         no = probe.sports_json_shape_signals({"eventId": "x", "market": "win",
                                                "name": "yes", "price": "0.45"})
         self.assertEqual(no["plausible_decimal_price_fields"], 0)

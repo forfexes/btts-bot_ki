@@ -170,6 +170,11 @@ def sports_json_shape_signals(payload) -> dict[str, int]:
                     hits["plausible_decimal_price_fields"] += 1
                     if event_ctx and market_ctx and keys & label_fields:
                         hits["plausible_decimal_full_context"] += 1
+                        # Whitelisted field names only; no values or arbitrary keys.
+                        for label_key in sorted(label_fields & keys):
+                            hits["full_context_label_" + label_key] += 1
+                        for price_key in sorted(_PUBLIC_SCHEMA_KEYS["prices"] & keys):
+                            hits["full_context_price_" + price_key] += 1
                 if event_ctx:
                     hits["priced_with_event"] += 1
                 if market_ctx:
@@ -186,6 +191,8 @@ def sports_json_shape_signals(payload) -> dict[str, int]:
              "priced_with_sports", "priced_with_label",
              "priced_complete_context", "plausible_decimal_price_fields",
              "plausible_decimal_full_context"]
+    names += ["full_context_label_" + key for key in sorted(label_fields)]
+    names += ["full_context_price_" + key for key in sorted(_PUBLIC_SCHEMA_KEYS["prices"])]
     return {role: min(1200, hits[role]) for role in names}
 
 
