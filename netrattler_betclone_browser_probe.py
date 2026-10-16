@@ -41,6 +41,12 @@ CANDIDATES = (
     ("inplaynet", "cosmobet", "https://cosmobet.com/"),
     ("betby", "vave", "https://vave.com/"),
 )
+# Provider-related hosts were OBSERVED in a public Chromium network trace;
+# these suffixes are not permission to call private/partner endpoints.
+OBSERVED_HOSTED_PLATFORM_SUFFIXES = {
+    "inplaynet": ("inplaynet.tech",),
+    "altenar": ("biahosted.com",),
+}
 DENIAL_TEXT = ("captcha", "access denied", "just a moment",
                "verify you are human", "geo-block", "geo restricted")
 
@@ -52,6 +58,15 @@ def public_response_host_only(url: str) -> str | None:
     if parsed.scheme != "https" or not host or len(host) > 160:
         return None
     return host
+
+
+def is_observed_public_platform_host(platform: str, response_url: str) -> bool:
+    """Allow bounded analysis of public JSON actually loaded by the operator page."""
+    hostname = public_response_host_only(response_url)
+    return bool(hostname and any(
+        hostname == suffix or hostname.endswith("." + suffix)
+        for suffix in OBSERVED_HOSTED_PLATFORM_SUFFIXES.get(platform, ())
+    ))
 
 
 def is_first_party_response(page_url: str, response_url: str) -> bool:
@@ -88,7 +103,8 @@ def audit_page(browser, family: str, brand: str, url: str) -> dict:
     result = {"platform": family, "brand": brand, "status": "not_checked",
               "json_responses": 0, "first_party_json": 0,
               "public_structured_price_candidates": 0, "verified_production_feed": False,
-              "external_json_hosts": []}
+              "external_json_hosts": [], "hosted_json_inspected": 0,
+              "hosted_structured_price_candidates": 0}
     context = browser.new_context(accept_downloads=False, service_workers="block")
     page = context.new_page()
     seen_responses = set()
@@ -110,6 +126,24 @@ def audit_page(browser, family: str, brand: str, url: str) -> dict:
             host = public_response_host_only(response.url)
             if host and (host in external_json_host_counts or len(external_json_host_counts) < 48):
                 external_json_host_counts[host] = external_json_host_counts.get(host, 0) + 1
+            # Only inspect the JSON of observed platform-host responses that
+            # were already fetched by this anonymous public web page.
+            # No direct API calls, request headers, cookies, or JSON bodies saved.
+            if (is_observed_public_platform_host(family, response.url)
+                    and result["hosted_json_inspected"] < 12):
+                clen = response.headers.get("content-length")
+                try:
+                    if clen and int(clen) > 220_000:
+                        return
+                except (ValueError, TypeError):
+                    return
+                result["hosted_json_inspected"] += 1
+                try:
+                    stats = audit_odds_json(response.json())
+                    result["hosted_structured_price_candidates"] += min(
+                        500, int(stats.get("verified_prices", 0)))
+                except (ValueError, TypeError, RuntimeError):
+                    pass
             return
         if len(seen_responses) >= 16:
             return
@@ -210,6 +244,7 @@ def main() -> None:
     Path(args.output).write_text(json.dumps(report, indent=2), encoding="utf-8")
     print("BETCLONE_BROWSER_SUMMARY checked=", len(rows),
           "price_candidates=", sum(row["public_structured_price_candidates"] for row in rows),
+          "hosted_candidates=", sum(row["hosted_structured_price_candidates"] for row in rows),
           "validated_feeds=0", flush=True)
 
 

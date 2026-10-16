@@ -24,6 +24,20 @@ class BrowserProbeTests(unittest.TestCase):
         self.assertIsNone(probe.public_response_host_only("javascript:alert(1)"))
         self.assertIsNone(probe.public_response_host_only("http://api.example.com/odds"))
 
+    def test_only_observed_platform_hosted_json_may_be_inspected(self):
+        self.assertTrue(probe.is_observed_public_platform_host(
+            "inplaynet", "https://sportservice.inplaynet.tech/v1/sports"))
+        self.assertTrue(probe.is_observed_public_platform_host(
+            "altenar", "https://hu-sb2frontend-altenar2.biahosted.com/public"))
+        self.assertFalse(probe.is_observed_public_platform_host(
+            "inplaynet", "https://sportservice.inplaynet.tech.evil.invalid/odds"))
+        self.assertFalse(probe.is_observed_public_platform_host(
+            "altenar", "https://sportservice.inplaynet.tech/odds"))
+        self.assertFalse(probe.is_observed_public_platform_host(
+            "betby", "https://sportservice.inplaynet.tech/odds"))
+        self.assertFalse(probe.is_observed_public_platform_host(
+            "inplaynet", "http://sportservice.inplaynet.tech/odds"))
+
     def test_first_party_requests_only(self):
         page = "https://www.vbet.com/"
         self.assertTrue(probe.is_first_party_response(page, "https://www.vbet.com/api/events"))
