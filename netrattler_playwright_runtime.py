@@ -101,6 +101,48 @@ def _espn_fixtures(bot: Any, league_name: str, target_date: Any) -> List[Dict[st
         return list(fallback)
 
 
+def _guard_fbref_advanced(bot: Any) -> None:
+    """Stop repeated failed FBref advanced-stat fetches across leagues.
+
+    When a source repeatedly returns no usable data, trying it for every
+    league wastes requests and logs. This is a run-local circuit breaker;
+    it does not fabricate replacement statistics and does not bypass 403/429.
+    """
+    manager = getattr(bot, "AdvancedPropsManager", None)
+    method = getattr(manager, "scrape_fbref_advanced_stats", None) if manager else None
+    if not callable(method) or getattr(method, "_ntr_fbref_circuit", False):
+        return
+    max_failures = max(1, _bounded_int("NETRATTLER_FBREF_MAX_FAILED_LEAGUES", 2, 10))
+    state = {"failures": 0, "open": False, "notice": False}
+
+    def guarded(self, league_name: str):
+        if state["open"]:
+            # No extra FBref requests, browsers, or repeated warnings.
+            return {}
+        result = method(self, league_name)
+        if result:
+            state["failures"] = 0
+        else:
+            state["failures"] += 1
+            if state["failures"] >= max_failures:
+                state["open"] = True
+                if not state["notice"]:
+                    state["notice"] = True
+                    try:
+                        bot.log(
+                            f"FBref advanced stats unavailable across {max_failures} leagues; "
+                            "source paused for this run; using available independent stats",
+                            "WARN",
+                        )
+                    except Exception:
+                        pass
+        return result
+
+    guarded._ntr_fbref_circuit = True
+    guarded._ntr_fbref_state = state
+    setattr(manager, "scrape_fbref_advanced_stats", guarded)
+
+
 def install(bot: Any) -> None:
     """Attach conservative Playwright page budget and ESPN JSON-only provider."""
     current = getattr(bot, "scrape_with_playwright", None)
@@ -118,6 +160,10 @@ def install(bot: Any) -> None:
             parsed = urlparse(str(url or ""))
             if parsed.scheme not in ("https", "http") or not parsed.hostname:
                 return None
+            if parsed.hostname == "fbref.com" or parsed.hostname.endswith(".fbref.com"):
+                # The caller only launches a browser here after an explicit
+                # 403/429; do not try to defeat the upstream access restriction.
+                return None
             elapsed = 0 if stats["first"] is None else time.monotonic() - stats["first"]
             if stats["used"] >= max_pages or elapsed >= seconds:
                 if not stats["warned"]:
@@ -132,6 +178,8 @@ def install(bot: Any) -> None:
         browser._ntr_browser_budget_guard = True
         browser._ntr_browser_stats = stats
         bot.scrape_with_playwright = browser
+
+    _guard_fbref_advanced(bot)
 
     original = getattr(bot, "fetch_espn_fixtures", None)
     if callable(original) and getattr(original, "_ntr_json_guard", False) is not True:
