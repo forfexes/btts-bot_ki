@@ -218,3 +218,26 @@ fixture). Only one Altenar brand (`vegas.hu`) is wired; other Altenar
 operators were not probed for their own `integration` id and may use a
 different regional host. No Over/Under, BTTS, corners, cards or player
 markets are mapped for Altenar.
+
+## InPlayNet — 2026-10-16 UTC
+
+A matching bounded schema sniffer
+(`netrattler_inplaynet_schema_probe.py`) visited the two curated public
+homepages (Rolletto, company id 50; Cosmobet, company id 217) and
+inspected every allowlisted `sportservice.inplaynet.tech` JSON response
+(14 and 21 respectively). **None matched an event/market/price shape.**
+All observed endpoints are catalogue/config calls: `getmarketcategories`,
+`GetItemTranslationsByCompany`, `GetItemVisibilityInfoByCompany`,
+`getdisablegamesbycompany`, `getdisableheaderclassifiers`,
+`getprematchheadermarkets`, `getspecialoddsregions`, `gethiddenmarket`,
+`getordinalnumbers`, `GetItemSortInfoByCompany`. These configure which
+markets/sports a given company id shows, not the odds themselves.
+
+**Conclusion: the public homepage load does not expose a fixtures/odds
+endpoint for InPlayNet.** This is a technical observation, not a bypass
+attempt and not proof odds are categorically unreachable (a specific
+match page, reached only after clicking into a live event, might trigger
+a further endpoint this bounded homepage+one-sports-link crawl never
+reaches). **InPlayNet is not promoted to any adapter.** Revisiting this
+would require navigating into an actual listed match (not just the sports
+landing page), still without bypassing any access control.
