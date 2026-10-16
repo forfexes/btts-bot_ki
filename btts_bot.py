@@ -2920,18 +2920,18 @@ def fetch_espn_fixtures(league_name, target_date):
         )
 
         if not r.ok:
-            # Playwright Fallback
-            log(f"   ESPN {r.status_code} → Playwright Fallback für {league_name}")
+            # A 400 indicates a bad league/date query, not a browser issue.
+            # Do not start Chromium on unsupported ESPN league identifiers.
+            if r.status_code != 403 or not PLAYWRIGHT_AVAILABLE:
+                return _AF_BULK_FIXTURES.get(league_name, [])
+            log(f"   ESPN 403 → Playwright Fallback für {league_name}")
             data = _fetch_espn_via_playwright(url, date_str)
-            if not data:
-                # API-Football als letzter Fallback
-                if league_name in _AF_BULK_FIXTURES:
-                    return _AF_BULK_FIXTURES.get(league_name, [])
-                return []
+            if not isinstance(data, dict):
+                return _AF_BULK_FIXTURES.get(league_name, [])
         else:
             data = r.json()
-
-        data = r.json()
+        if not isinstance(data, dict):
+            return _AF_BULK_FIXTURES.get(league_name, [])
         events = data.get("events", [])
 
         now_utc = datetime.now(timezone.utc)
