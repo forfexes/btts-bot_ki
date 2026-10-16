@@ -274,7 +274,7 @@ def audit_odds_json(payload):
     # never auto-promotes a JSON document to production odds.
     visited = [0]
     def walk(obj, event=False, market=False, depth=0):
-        if depth > 30 or visited[0] >= 4000:
+        if depth > 55 or visited[0] >= 4000:
             return
         visited[0] += 1
         if isinstance(obj, list):
