@@ -273,8 +273,12 @@ def audit_odds_json(payload):
     counts = Counter()
     price_fields = {"odds", "decimalodds", "decimalprice", "price"}
     label_fields = {"name", "label", "selection", "outcome"}
-    event_fields = {"eventid", "fixtureid", "matchid", "eventname", "home", "hometeam", "participants"}
-    market_fields = {"market", "marketid", "marketname", "bettype", "markets"}
+    event_fields = {"event", "events", "eventid", "eventname", "fixture",
+                    "fixtures", "fixtureid", "match", "matches", "matchid",
+                    "home", "hometeam", "awayteam", "participants"}
+    market_fields = {"market", "markets", "marketid", "marketname", "markettype",
+                     "marketgroup", "marketgroups", "bettype", "betoffer",
+                     "betoffers", "optionmarkets", "bettingmarkets"}
     visited = 0
     pending = [(payload, False, False, 0)]
     while pending and visited < 4000:

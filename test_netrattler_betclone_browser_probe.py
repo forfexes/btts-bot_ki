@@ -24,6 +24,13 @@ class BrowserProbeTests(unittest.TestCase):
         self.assertIsNone(probe.public_response_host_only("javascript:alert(1)"))
         self.assertIsNone(probe.public_response_host_only("http://api.example.com/odds"))
 
+    def test_public_host_event_and_marketgroup_schema(self):
+        class Reply:
+            def json(self):
+                return {"events": [{"marketGroups": [{"name": "Over 2.5",
+                                                        "price": 1.90}]}]}
+        self.assertEqual(probe.public_response_price_count(Reply()), 1)
+
     def test_public_odds_reader_finds_late_market_after_noise(self):
         obj = {"eventId": "match", "markets": [
             *({"metadata": [{"empty": i} for i in range(300)]}

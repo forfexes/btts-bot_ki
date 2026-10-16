@@ -15,6 +15,12 @@ class TestHardprobe(unittest.TestCase):
         self.assertEqual(evidence.get("verified_prices"), 1)
         self.assertEqual(evidence.get("btts", 0), 0)
 
+    def test_public_event_container_and_markettype_context_are_supported(self):
+        payload = {"events": [{"marketGroups": [
+            {"marketType": "goals", "name": "Over 2.5", "price": 1.90}
+        ]}]}
+        self.assertEqual(audit_odds_json(payload).get("verified_prices"), 1)
+
     def test_nested_public_sportsbook_price_schema_not_lost_at_depth_15(self):
         payload = {"eventId": "fixture", "markets": [
             {"name": "Over 2.5", "price": 1.81}
