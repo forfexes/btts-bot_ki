@@ -108,3 +108,24 @@ On 2026-10-16 UTC the `odds_history` table contained 11,671 `1xbet_platform` pri
 - Redirecting to an operator's publicly rendered canonical hostname is now
   considered when examining same-origin responses; it does not turn a
   third-party response or an HTML document into a validated sportsbook feed.
+
+## Strictly conditional 1xBet quote corroboration — 2026-10-16 UTC
+
+The current NETRATTLER code optionally admits **only** the 1xBet-platform
+`1x2` and `totals_2_5` rows when every outcome in the same market is
+corroborated by a *different validated bookmaker feed* for the **exact same
+home team, away team, fixture date, market and selection**. Each 1xBet
+quote must independently be within the 0.85–1.18 ratio window, and the
+`imported_at` timestamp must be fresh. A 1xBet quote with no reference or
+only a partially matched market is still shadow and cannot enter live tips.
+All other numeric-code 1xBet markets remain blocked.
+
+- Git commit: `6869e0e654a6b2824f2c671c8bb04566a8098271`
+- An independent read-only SQL cross-check of the 2026-10-16 Supabase snapshot
+  identified 38 fully comparable 1X2 match-markets and 33 fully comparable
+  Over/Under 2.5 match-markets using these numerical criteria.
+- These counts are comparable stored market groups, **not 71 bets sent, and not
+  a claim that all cloned brands are integrated**.
+- Altenar public browser diagnostics observed 46 price-and-label-key
+  structures with event/market context, but no separately validated,
+  selection-mapped quote. **Altenar is not promoted to a live source.**

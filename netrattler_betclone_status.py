@@ -19,6 +19,11 @@ from typing import Any, Dict, Mapping
 # still lack corroborated market-period and selection semantics.
 VERIFIED_BETCLONE_LIVE_FAMILIES: frozenset[str] = frozenset()
 SHADOW_FAMILIES: frozenset[str] = frozenset({"1xbet"})
+# Eligibility is per-quote and conditional, NOT a general platform approval.
+# See _corroborated_x1_rows in netrattler_odds_cache_guard.py.
+CONDITIONALLY_CORROBORATED_MARKETS = {
+    "1xbet": ("1x2", "totals_2_5"),
+}
 
 # These are verified sources in NETRATTLER, but are not represented by these
 # ten BetClone platform-family pages. Never credit BetClone with their totals.
@@ -43,6 +48,7 @@ def summarize(audit: Mapping[str, Any]) -> Dict[str, Any]:
         # A candidate price-bearing JSON object is still not a validated feed.
         live = family in VERIFIED_BETCLONE_LIVE_FAMILIES
         shadow = family in SHADOW_FAMILIES and not live
+        conditional = CONDITIONALLY_CORROBORATED_MARKETS.get(family, ())
         platforms[family] = {
             "listed_bookmakers": len(entry.get("bookmakers") or []),
             "curated_homepages_checked": len(site_rows),
@@ -52,7 +58,10 @@ def summarize(audit: Mapping[str, Any]) -> Dict[str, Any]:
             "structured_homepage_price_candidates": has_homepage_prices,
             "validated_production_odds_feed": live,
             "raw_shadow_feed": shadow,
+            "conditional_live_markets": list(conditional),
+            "requires_complete_independent_market_corroboration": bool(conditional),
             "integration_status": "production_verified" if live else
+                                  "conditionally_corroborated_markets_with_shadow_remainder" if conditional else
                                   "raw_shadow_unlabelled_markets" if shadow else
                                   "no_verified_production_feed",
         }
@@ -91,6 +100,7 @@ def summarize(audit: Mapping[str, Any]) -> Dict[str, Any]:
         "unverified_candidate_domains_checked": sum(p["unverified_candidate_domains_checked"] for p in platforms.values()),
         "families_with_verified_production_odds": sum(p["validated_production_odds_feed"] for p in platforms.values()),
         "families_with_shadow_feed": sum(p["raw_shadow_feed"] for p in platforms.values()),
+        "families_with_conditional_live_markets": sum(bool(p["conditional_live_markets"]) for p in platforms.values()),
         "separate_verified_collectors_not_attributed_to_betclone": list(INDEPENDENT_VERIFIED_ODDS_COLLECTORS),
         "warning": "HTTP 200, affiliated brand, guessed domain or JSON price does not prove a verified usable odds feed",
         "platforms": platforms,
@@ -111,6 +121,7 @@ def main() -> None:
           "guessed_checked=", status["unverified_candidate_domains_checked"],
           "validated_family_feeds=", status["families_with_verified_production_odds"],
           "shadow_family_feeds=", status["families_with_shadow_feed"],
+          "conditional_live_family_markets=", status["families_with_conditional_live_markets"],
           "brand_matrix_complete=", status["catalogue_matrix_complete"], flush=True)
     for family, info in status["platforms"].items():
         print("BETCLONE_INTEGRATION_FAMILY", family,
