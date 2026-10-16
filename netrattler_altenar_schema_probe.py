@@ -143,7 +143,7 @@ def run() -> dict:
 
     family, brand, url = TARGET
     result = {"platform": family, "brand": brand, "url": url, "status": "not_checked",
-              "inspected": 0, "shapes": {}, "samples": [], "arrays": {}}
+              "inspected": 0, "shapes": {}, "samples": [], "arrays": {}, "endpoints": []}
     with sync_playwright() as pw:
         browser = pw.chromium.launch(headless=True)
         context = browser.new_context(accept_downloads=False, service_workers="block")
@@ -151,6 +151,7 @@ def run() -> dict:
         all_shapes = Counter()
         all_samples = []
         all_arrays = {}
+        all_endpoints = []
 
         def inspect_response(response):
             if result["inspected"] >= MAX_RESPONSES_INSPECTED or response.status != 200:
@@ -179,6 +180,19 @@ def run() -> dict:
             if len(all_arrays) < len(_TOP_ARRAYS):
                 for k, v in describe_top_level_arrays(payload).items():
                     all_arrays.setdefault(k, v)
+            # Bounded endpoint fingerprint (method + path, no query string, no
+            # headers/cookies/body) so a later keyless HTTP collector can be
+            # attempted the same way the existing 1xBet/bwin collectors are,
+            # instead of requiring a full browser for every scrape.
+            if len(all_endpoints) < 10:
+                parsed = urlparse(response.url)
+                try:
+                    method = response.request.method
+                except Exception:
+                    method = "?"
+                fp = f"{method} {parsed.hostname}{parsed.path}"
+                if fp not in all_endpoints:
+                    all_endpoints.append(fp)
 
         page.on("response", inspect_response)
         try:
@@ -216,6 +230,7 @@ def run() -> dict:
             result["shapes"] = dict(all_shapes)
             result["samples"] = all_samples
             result["arrays"] = all_arrays
+            result["endpoints"] = all_endpoints
             context.close()
             browser.close()
     return result
