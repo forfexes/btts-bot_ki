@@ -373,7 +373,7 @@ def test_x1_loader_queries_only_allowlisted_shadow_markets():
           patch.object(guard.requests, "get", side_effect=get)):
         rows = guard._load_x1_rows(force=True)
     assert len(rows) == 1
-    assert calls[0]["source"] == "eq.1xbet_platform"
+    assert calls[0]["source"] == "in.(1xbet_platform,altenar_platform)"
     assert "1x2" in calls[0]["market"] and "totals_2_5" in calls[0]["market"]
     assert "btts_ht" not in calls[0]["market"]
     assert "btts" in calls[0]["market"]

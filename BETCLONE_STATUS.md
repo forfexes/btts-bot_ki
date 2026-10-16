@@ -159,3 +159,62 @@ until those fields are independently mapped and tested.
 The updated inspector recognises both `event(s)` and `marketGroup(s)`
 wrappers, explores bounded deep JSON, and records candidates without
 capturing full request URLs, cookies, credentials or response payloads.
+
+## Altenar field schema and keyless adapter — 2026-10-16 UTC
+
+A follow-up, narrower schema sniffer (`netrattler_altenar_schema_probe.py`)
+captured bounded, truncated real sample objects (not just shape counts)
+from the same public Vegas.hu/biahosted.com response. This confirmed a
+standard flat Altenar widget payload: `sports[]`/`categories[]`/`champs[]`/
+`events[]`/`competitors[]`/`markets[]`/`odds[]` arrays cross-referenced by
+id. Concretely:
+
+- `events[]`: `id`, `sportId`, `champId`, `status`, `startDate` (real ISO
+  kickoff), `marketIds[]`, `competitorIds[]` (home, away in order), `name`
+  (localized `"Home vs. Away"` string, used only as a fallback).
+- `markets[]`: `id`, `headerName` (`"1X2"` observed; no Over/Under or BTTS
+  header seen yet), `oddIds[]`.
+- `odds[]`: `id`, `competitorId`, `price`, `typeId` (1/2/3 = home/draw/away
+  **selection** role — a different namespace from the market's own
+  `typeId`), `oddStatus` (0 = active).
+- `sports[].iconName == "soccer"` is the locale-proof way to find the
+  football sport id (team/league/selection text is in the operator's own
+  language, e.g. Hungarian "Döntetlen" for Draw on vegas.hu).
+
+A second probe (`netrattler_altenar_keyless_probe.py`) confirmed the
+public `GET hu-sb2frontend-altenar2.biahosted.com/api/widget/GetTopEvents`
+endpoint is reachable with a **plain keyless HTTP GET** (HTTP 200, no
+login, no bypass) using the same public query parameters the page's own
+browser sends (`integration=vegas.hu` is the operator's public widget
+brand id, not a credential) — no Playwright session needed per scrape.
+
+**Implemented, conservative by construction:**
+
+- `netrattler_keyless_odds._altenar_rows()` / `collect_altenar_platform()`:
+  parses **only** a complete 1X2 market (all three selections present and
+  active); there is no Over/Under, BTTS, half-time, corners or player-prop
+  mapping yet because no such market header has been observed in this
+  response. Non-football sports, non-scheduled event status and suspended
+  (`oddStatus != 0`) prices are excluded.
+- Registered as source `altenar_platform` in `netrattler_odds_harvester.py`
+  (`COLLECTORS` / `collect_live_all`), so it is harvested into
+  `odds_history` on the normal schedule.
+- Gated through the **exact same** never-auto-promote shadow treatment as
+  `1xbet_platform` in `netrattler_odds_cache_guard.py`
+  (`X1_SHADOW_SOURCES`): an Altenar 1X2 quote is only usable as a real-odds
+  fallback when all three selections independently corroborate an already
+  validated `LIVE_HISTORY_SOURCES` price for the exact same fixture/date/
+  selection within the 0.85–1.18 ratio window. 11 regression tests cover
+  the parser (`test_netrattler_keyless_odds.py`) plus the generalized gate
+  (`test_netrattler_odds_cache_guard.py`).
+
+**Not yet done:** end-to-end confirmation that a corroborated Altenar
+quote has actually reached a production fallback fill (the same
+diagnostic used to confirm 1xBet in production,
+`netrattler_card_diag` probe `cache_guard_1xbet_used`, now also fires for
+`altenar_platform` — but no Altenar row has corroborated yet as of this
+write-up, since it depends on both sources covering the same live
+fixture). Only one Altenar brand (`vegas.hu`) is wired; other Altenar
+operators were not probed for their own `integration` id and may use a
+different regional host. No Over/Under, BTTS, corners, cards or player
+markets are mapped for Altenar.

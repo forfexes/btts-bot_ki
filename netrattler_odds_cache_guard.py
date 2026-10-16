@@ -39,7 +39,11 @@ MAX_AGE_HOURS = float(os.getenv("NETRATTLER_ODDS_CACHE_MAX_AGE_HOURS", "18"))
 # complete 1X2 or OU2.5 markets independently corroborated at the same
 # fixture/date/selection can pass _corroborated_x1_rows below.
 LIVE_HISTORY_SOURCES = frozenset({"pinnacle", "kambi", "the_odds_api", "bwin"})
-X1_SHADOW_SOURCE = "1xbet_platform"
+# Numeric/flat-widget shadow sources: same strict never-auto-promote treatment.
+# Altenar (biahosted.com public widget, e.g. vegas.hu) only ever emits a
+# complete 1x2 market here -- no totals/btts support yet, so it is naturally
+# limited to the one market X1_CROSS_CHECK_MARKETS already requires in full.
+X1_SHADOW_SOURCES = frozenset({"1xbet_platform", "altenar_platform"})
 X1_CROSS_CHECK_MARKETS = {
     "1x2": frozenset({"home", "draw", "away"}),
     "totals_2_5": frozenset({"over_2_5", "under_2_5"}),
@@ -159,7 +163,7 @@ def _load_rows(force: bool = False) -> List[Dict[str, Any]]:
 
 def _fresh_x1(row: Mapping[str, Any]) -> bool:
     """Numeric-coded shadow odds need a recent real ingestion timestamp."""
-    if str(row.get("source") or "").lower() != X1_SHADOW_SOURCE:
+    if str(row.get("source") or "").lower() not in X1_SHADOW_SOURCES:
         return False
     stamp = row.get("imported_at")
     if not stamp or not row.get("match_date"):
@@ -196,7 +200,7 @@ def _load_x1_rows(force: bool = False) -> List[Dict[str, Any]]:
                 headers={"apikey": SUPABASE_KEY,
                          "Authorization": f"Bearer {SUPABASE_KEY}"},
                 params={
-                    "source": "eq.1xbet_platform",
+                    "source": f"in.({','.join(sorted(X1_SHADOW_SOURCES))})",
                     "market": "in.(1x2,totals_2_5,btts)",
                     "captured_date": f"eq.{today}",
                     "match_date": f"gte.{today}",
@@ -250,7 +254,7 @@ def _corroborated_x1_rows(candidates: List[Dict[str, Any]]) -> set[int]:
         source = str(row.get("source") or "").lower()
         if source in LIVE_HISTORY_SOURCES and _fresh(row):
             references.setdefault(key, []).append(price)
-        elif source == X1_SHADOW_SOURCE and _fresh_x1(row):
+        elif source in X1_SHADOW_SOURCES and _fresh_x1(row):
             shadow.setdefault((home, away, match_date, market), {}).setdefault(selection, []).append(row)
     certified: set[int] = set()
     for (home, away, match_date, market), offers in shadow.items():
@@ -312,7 +316,7 @@ def best_observed_for_match(home: str, away: str, rows: Optional[Iterable[Mappin
     verified_x1_ids = _corroborated_x1_rows(candidates)
     for row in candidates:
         source_type = str(row.get("source") or "").lower()
-        if source_type == X1_SHADOW_SOURCE:
+        if source_type in X1_SHADOW_SOURCES:
             if id(row) not in verified_x1_ids:
                 continue
         elif source_type not in LIVE_HISTORY_SOURCES or not _fresh(row):
@@ -399,7 +403,8 @@ def install(bot) -> None:
         # Diagnostics only (never gates or alters odds): confirm in Supabase that the
         # corroborated 1xBet shadow source is actually reaching production fills,
         # since this is otherwise invisible (no bookmaker names in tips/reasoning).
-        x1_fields = [f"{field}={source}" for field, source in all_added if "1xbet_platform" in source]
+        x1_fields = [f"{field}={source}" for field, source in all_added
+                     if any(s in source for s in X1_SHADOW_SOURCES)]
         if x1_fields:
             try:
                 SUPABASE_URL = os.getenv("SUPABASE_URL", "").rstrip("/")

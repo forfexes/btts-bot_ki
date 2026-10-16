@@ -359,7 +359,104 @@ def collect_matchbook(target_date: str) -> List[Dict[str, Any]]:
     return rows
 
 
-COLLECTORS = (("bwin", collect_bwin), ("1xbet_platform", collect_1x_platform), ("matchbook", collect_matchbook))
+# --------------------------------------------------------------------- Altenar platform
+# Public widget endpoint observed on the already-vetted Vegas.hu public homepage
+# (see netrattler_altenar_schema_probe.py / BETCLONE_STATUS.md). A plain keyless
+# GET with the same public query the page's own browser makes; confirmed
+# reachable (HTTP 200) without any login, token or bypass. Only emits a
+# complete 1x2 market: the Altenar response has no totals/btts markets in the
+# fields observed so far, so this is conservative by construction, and is
+# wired through the exact same never-auto-promote shadow+corroboration gate
+# used for 1xbet_platform in netrattler_odds_cache_guard.py.
+ALTENAR_INTEGRATIONS = {"vegas.hu": "https://hu-sb2frontend-altenar2.biahosted.com"}
+ALTENAR_FOOTBALL_ICON = "soccer"
+
+
+def _altenar_rows(payload: Mapping[str, Any], bookmaker: str) -> List[Dict[str, Any]]:
+    """Normalize one Altenar GetTopEvents response into odds_history rows.
+
+    Join path: event.sportId -> sports[].iconName == "soccer" (locale-proof,
+    unlike team/league names which are shown in the site's own language);
+    event.competitorIds[0/1] -> competitors[].name for home/away;
+    event.marketIds[] -> markets[] where headerName == "1X2" -> oddIds[] ->
+    odds[] with typeId 1/2/3 = home/draw/away (selection role, not the
+    market.typeId field, which is a different namespace) and oddStatus == 0
+    (active). A market only counts when all three selections are present.
+    """
+    out: List[Dict[str, Any]] = []
+    if not isinstance(payload, dict):
+        return out
+    sports = {s.get("id"): s for s in (payload.get("sports") or []) if isinstance(s, dict)}
+    football_sport_ids = {sid for sid, s in sports.items()
+                           if str(s.get("iconName") or "").lower() == ALTENAR_FOOTBALL_ICON}
+    competitors = {c.get("id"): c.get("name") for c in (payload.get("competitors") or []) if isinstance(c, dict)}
+    champs = {c.get("id"): c.get("name") for c in (payload.get("champs") or []) if isinstance(c, dict)}
+    markets = {m.get("id"): m for m in (payload.get("markets") or []) if isinstance(m, dict)}
+    odds_by_id = {o.get("id"): o for o in (payload.get("odds") or []) if isinstance(o, dict)}
+    sel_by_type = {1: "home", 2: "draw", 3: "away"}
+    for ev in payload.get("events") or []:
+        if not isinstance(ev, dict) or ev.get("sportId") not in football_sport_ids:
+            continue
+        if ev.get("status") not in (0, None):
+            continue  # anything other than the normal/scheduled state is skipped
+        comp_ids = ev.get("competitorIds") or []
+        home = competitors.get(comp_ids[0]) if len(comp_ids) >= 1 else None
+        away = competitors.get(comp_ids[1]) if len(comp_ids) >= 2 else None
+        if not home or not away:
+            name = str(ev.get("name") or "")
+            parts = re.split(r"\s+vs\.?\s+", name, maxsplit=1)
+            if len(parts) == 2:
+                home, away = home or parts[0].strip(), away or parts[1].strip()
+        if not home or not away:
+            continue
+        start = ev.get("startDate")
+        league = champs.get(ev.get("champId")) or ""
+        for market_id in ev.get("marketIds") or []:
+            market = markets.get(market_id)
+            if not market or str(market.get("headerName") or "").strip() != "1X2":
+                continue
+            selections: Dict[str, float] = {}
+            for odd_id in market.get("oddIds") or []:
+                odd = odds_by_id.get(odd_id)
+                if not isinstance(odd, dict) or odd.get("oddStatus") not in (0, None):
+                    continue
+                sel = sel_by_type.get(odd.get("typeId"))
+                if not sel or odd.get("price") is None:
+                    continue
+                selections[sel] = odd.get("price")
+            if len(selections) != 3:
+                continue  # only a complete 1x2 market is usable; no partial lines
+            for sel, price in selections.items():
+                row = _row(source="altenar_platform", bookmaker=bookmaker, event_id=f"alt_{ev.get('id')}",
+                           league=league, home=home, away=away, commence_time=start, market="1x2",
+                           selection=sel, odds=price, raw={"platform": "altenar", "integration": bookmaker})
+                if row:
+                    out.append(row)
+    return out
+
+
+def collect_altenar_platform(target_date: str) -> List[Dict[str, Any]]:
+    """Altenar public widget 1x2 prices; shadow-only (see cache_guard gate)."""
+    rows: List[Dict[str, Any]] = []
+    for brand, host in ALTENAR_INTEGRATIONS.items():
+        js, st = _get(f"{host}/api/widget/GetTopEvents", {
+            "culture": "hu-HU", "timezoneOffset": "-300", "integration": brand, "deviceType": "1",
+            "numFormat": "hu-HU", "countryCode": "", "eventCount": os.getenv("ALTENAR_EVENT_COUNT", "50"),
+            "sportId": "0", "timePeriod": "0",
+        })
+        if not js:
+            KEYLESS_DIAG[f"altenar_{brand}"] = f"http={st} events=0"
+            continue
+        new_rows = _altenar_rows(js, bookmaker=f"altenar_{brand}")
+        KEYLESS_DIAG[f"altenar_{brand}"] = (
+            f"http={st} events={len(js.get('events') or [])} rows={len(new_rows)}"
+        )
+        rows.extend(new_rows)
+    return rows
+
+
+COLLECTORS = (("bwin", collect_bwin), ("1xbet_platform", collect_1x_platform),
+              ("matchbook", collect_matchbook), ("altenar_platform", collect_altenar_platform))
 
 
 if __name__ == "__main__":

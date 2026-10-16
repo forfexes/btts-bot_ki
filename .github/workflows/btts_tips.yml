@@ -7,6 +7,9 @@ on:
       - ".github/workflows/btts_tips.yml"
       - "netrattler_scorer_history_fallback.py"
       - "netrattler_odds_cache_guard.py"
+      - "netrattler_keyless_odds.py"
+      - "test_netrattler_keyless_odds.py"
+      - "netrattler_odds_harvester.py"
       - "netrattler_runtime_patch.py"
       - "netrattler_playwright_runtime.py"
       - "test_netrattler_playwright_runtime.py"
@@ -95,7 +98,7 @@ jobs:
 
       - name: Fast syntax check
         run: |
-          python -m py_compile netrattler_playwright_runtime.py test_netrattler_playwright_runtime.py test_netrattler_kambi_scorer_market.py netrattler_prop_sources.py netrattler_thesportsdb_guard.py test_netrattler_thesportsdb_guard.py netrattler_scorer_history_fallback.py test_netrattler_scorer_history_fallback.py btts_bot.py netrattler_stats_match_cards.py netrattler_builder_engine.py netrattler_builder_guard.py netrattler_builder_styles.py netrattler_builder_concepts_v2.py netrattler_runtime_patch.py netrattler_odds_cache_guard.py netrattler_aiscore.py netrattler_hardtest.py \
+          python -m py_compile netrattler_playwright_runtime.py test_netrattler_playwright_runtime.py test_netrattler_kambi_scorer_market.py netrattler_prop_sources.py netrattler_thesportsdb_guard.py test_netrattler_thesportsdb_guard.py netrattler_scorer_history_fallback.py test_netrattler_scorer_history_fallback.py btts_bot.py netrattler_stats_match_cards.py netrattler_builder_engine.py netrattler_builder_guard.py netrattler_builder_styles.py netrattler_builder_concepts_v2.py netrattler_runtime_patch.py netrattler_odds_cache_guard.py netrattler_aiscore.py netrattler_hardtest.py netrattler_keyless_odds.py test_netrattler_keyless_odds.py \
             test_netrattler_builder_guard.py test_netrattler_builder_styles.py test_netrattler_builder_concepts_v2.py test_netrattler_runtime_patch.py test_netrattler_odds_cache_guard.py test_netrattler_aiscore.py \
             netrattler_result_enrichment.py netrattler_fotmob_results.py netrattler_settlement_runner.py \
             test_netrattler_result_enrichment.py test_netrattler_fotmob_results.py test_netrattler_settlement_runner.py data_fusion_v15.py \
@@ -110,6 +113,7 @@ jobs:
         run: |
           python test_netrattler_runtime_patch.py
           python test_netrattler_odds_cache_guard.py
+          python -m unittest -v test_netrattler_keyless_odds.py
           python -m unittest -v test_netrattler_scorer_history_fallback.py
           python -m unittest -v test_netrattler_thesportsdb_guard.py
           python -m unittest -v test_netrattler_playwright_runtime.py
