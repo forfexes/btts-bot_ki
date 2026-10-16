@@ -4283,7 +4283,12 @@ def fetch_github_football_data(league_name, target_date):
         "Ligue 1": f"https://raw.githubusercontent.com/openfootball/football.json/master/{_openfootball_season_str()}/fr.1.json",
         "Primeira Liga": f"https://raw.githubusercontent.com/openfootball/football.json/master/{_openfootball_season_str()}/pt.1.json",
         "Eredivisie": f"https://raw.githubusercontent.com/openfootball/football.json/master/{_openfootball_season_str()}/nl.1.json",
-        "Champions League": f"https://raw.githubusercontent.com/openfootball/football.json/master/{_openfootball_season_str()}/cl.json",
+        # "Champions League" removed 2026-10-16: verified this path 404s for
+        # every season tried (current and past 5) - openfootball/football.json
+        # never actually published a cl.json file at this path, independent of
+        # the season string. Already degraded safely (fetch below returns []
+        # on any non-OK response), so no past behavior silently broke; this
+        # just removes a URL that could never have worked.
     }
 
     url = GITHUB_LEAGUES.get(league_name)
