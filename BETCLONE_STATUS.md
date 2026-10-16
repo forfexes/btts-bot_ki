@@ -241,3 +241,76 @@ a further endpoint this bounded homepage+one-sports-link crawl never
 reaches). **InPlayNet is not promoted to any adapter.** Revisiting this
 would require navigating into an actual listed match (not just the sports
 landing page), still without bypassing any access control.
+
+## Altenar production corroboration — verified 2026-10-16 UTC (follow-up)
+
+Cross-checked all 6 Altenar-covered `2026-10-16` fixtures
+(Burnley–Wolves, Eintracht Frankfurt–1.FC Köln, Holstein Kiel–Hertha
+Berlin, Le Mans–Toulouse, Frosinone–Sassuolo, Deportivo A Coruña–Levante;
+MTK Budapest–Vasas is uncovered by any `LIVE_HISTORY_SOURCES`) against
+independently-stored `pinnacle`/`kambi`/`bwin` 1x2 prices for the same
+date. **All 6 have matching independent references, and every selection
+is well inside the 0.85–1.18 corroboration ratio** (e.g. Burnley home:
+altenar 3.11 vs kambi 3.08 / pinnacle 3.15 / bwin 2.93). The adapter and
+corroboration gate are confirmed data-correct and would fire if used.
+
+However, `netrattler_card_diag` shows **zero** `cache_guard_1xbet_used`
+hits for `altenar_platform` across every production run in the last 3+
+hours — every hit so far is the same single fixture
+("Atletico de Rafaela vs Quilmes", via `1xbet_platform`). The
+`builder_pool` diagnostic explains why: each run narrows a pool of
+~585–588 candidate matches down to only **11** that clear the tip-quality
+gates (probability ≥67%, odds 1.70–3.00, confidence ≥3) *before* the
+odds-fallback/corroboration step is ever consulted for a given match.
+None of the 6 Altenar-covered fixtures has yet landed in that small
+11-match shortlist in any observed run. **This is normal selection
+variance from the statistical model, not a defect in the Altenar
+adapter, the corroboration gate, or the quality filters** — the filters
+were correctly left untouched. Altenar remains ready to serve as a real
+fallback the moment one of its covered fixtures clears the quality gate
+on its own merits.
+
+## Final status report (handoff step 10) — 2026-10-16 UTC
+
+**Checked platform families:** 1xBet (pre-existing), Altenar (this
+session, full investigation), InPlayNet (this session, full
+investigation), plus a 389-entry catalogue-level reachability sweep
+covering BETBY/BetConstruct/Delasport/Digitain/FIRST/iGate/SoftSwiss
+(prior session) that found zero confirmed odds feeds from homepage/
+domain probing alone.
+
+**Productive sources (real odds confirmed flowing into `odds_history`
+and usable by the shadow-corroboration gate):**
+- `1xbet_platform` — confirmed used in live production tips (direct
+  `cache_guard_1xbet_used` hits, e.g. "Atletico de Rafaela vs Quilmes").
+- `altenar_platform` — adapter built, tested, shipped, producing real
+  1x2 odds (21 rows / 7 matches at last harvest) that are data-correct
+  and corroboration-ready, but **not yet observed firing in a live tip**
+  (see above — a candidate-selection timing matter, not a bug).
+
+**Markets integrated:** 1x2 (full-time result) only, for both sources.
+No Over/Under, BTTS, half-time, corners, cards, or player markets are
+mapped for either platform.
+
+**Usable quotes as of this write-up:** Altenar — 7 matches × 3 selections
+= 21 rows for `2026-10-16` (6 with independent corroboration available).
+1xBet — ongoing, pre-existing volume (unchanged this session).
+
+**Actual Telegram/production usage:** 1xBet — yes, confirmed. Altenar —
+not yet; mechanically ready, awaiting a covered fixture to clear the
+unmodified quality filters.
+
+**Remaining technical blockers:**
+- InPlayNet (Rolletto/Cosmobet): no event/odds endpoint found on the
+  public homepage/sports-landing crawl; not promoted to an adapter;
+  revisiting would require navigating into a real listed match page.
+- BETBY, BetConstruct, Delasport, Digitain, FIRST, iGate, SoftSwiss: not
+  yet individually investigated beyond the original catalogue-level
+  homepage sweep (prior session) — next step per the handoff's own work
+  order (point 7), not started this session.
+- Only one Altenar operator brand (`vegas.hu`) is wired; other Altenar
+  skins were not probed for their own `integration` id/host.
+- GitHub Actions log retrieval remains blocked in this environment for
+  all workflows (proxy denies `results-receiver.actions.githubusercontent.com`);
+  all production verification in this session was done via bounded
+  `netrattler_card_diag` writes and direct Supabase queries instead.
