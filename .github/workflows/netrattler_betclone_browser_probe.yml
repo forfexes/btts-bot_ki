@@ -5,6 +5,8 @@ on:
     branches: [main]
     paths:
       - 'netrattler_betclone_browser_probe.py'
+      - 'netrattler_betclone_hardprobe.py'
+      - 'test_netrattler_betclone_hardprobe.py'
       - 'test_netrattler_betclone_browser_probe.py'
       - '.github/workflows/netrattler_betclone_browser_probe.yml'
   workflow_dispatch:
@@ -29,7 +31,7 @@ jobs:
       - name: Validate fail-closed public-site probing
         run: |
           python -m py_compile netrattler_betclone_browser_probe.py test_netrattler_betclone_browser_probe.py
-          python -m unittest -v test_netrattler_betclone_browser_probe.py
+          python -m unittest -v test_netrattler_betclone_browser_probe.py test_netrattler_betclone_hardprobe.py
       - name: Probe fourteen curated public rendered operator pages
         run: |
           python netrattler_betclone_browser_probe.py --limit 14
