@@ -8,17 +8,17 @@ Source: GitHub Actions [Platform Probe run 38886119671](https://github.com/forfe
 
 | BetClone group | Listed primary brands | Productive BetClone-derived feed |
 | --- | ---: | --- |
-| 1xBet | 28 | Existing LineFeed produces 1xbet_platform rows; numeric market codes not cleared for tips |
-| Altenar | 107 | Not verified |
-| BETBY | 98 | Not verified |
-| BetConstruct | 13 | Not verified |
-| Delasport | 36 | Not verified |
-| Digitain | 35 | Not verified |
-| FIRST | 12 | Not verified |
-| iGate | 32 | Not verified |
-| InPlayNet | 10 | Not verified |
-| SoftSwiss | 18 | Not verified |
-| **Total** | **389** | **1 family partially integrated** |
+| 1xBet | 28 | Existing LineFeed produces 1xbet_platform rows; confirmed used in live production tips |
+| Altenar | 107 | Adapter shipped (1x2 only, `vegas.hu` brand); 21 real rows in `odds_history`, corroboration-ready, not yet fired in a live tip |
+| BETBY | 98 | Investigated — no reachable public odds API found (homepage crawl) |
+| BetConstruct | 13 | Investigated — no reachable public odds API found (homepage crawl) |
+| Delasport | 36 | Investigated — inconclusive (browser error), not promoted |
+| Digitain | 35 | Investigated — inconclusive (HTTP error), not promoted |
+| FIRST | 12 | Investigated — no reachable public odds API found (homepage crawl) |
+| iGate | 32 | Investigated — access denied |
+| InPlayNet | 10 | Investigated — no event/odds endpoint found; catalogue/config calls only |
+| SoftSwiss | 18 | Investigated — no reachable public odds API found (homepage crawl) |
+| **Total** | **389** | **2 families productive (1xBet, Altenar); 7 investigated with no productive feed found** |
 
 The catalogue also exposes 151 historical appendix names, separately marked as unverified; they are NOT counted among the 389 primary rows.
 
@@ -314,3 +314,41 @@ unmodified quality filters.
   all workflows (proxy denies `results-receiver.actions.githubusercontent.com`);
   all production verification in this session was done via bounded
   `netrattler_card_diag` writes and direct Supabase queries instead.
+
+## Remaining BetClone families (BETBY, BetConstruct, Delasport, Digitain, FIRST, iGate, SoftSwiss) — 2026-10-16 UTC
+
+Per the work order's point 7, all seven remaining families were probed with
+the same rendered-browser methodology that found Altenar's and InPlayNet's
+real platform hosts (`netrattler_betclone_browser_probe.py`, now 16 curated
+public operator homepages, incl. two first-time additions: Delasport via
+`grandwin.bet`, Digitain via `slottica.com`). Run:
+[38935999444](https://github.com/forfexes/btts-bot_ki/actions/runs/38935999444),
+results read back via `netrattler_card_diag` (probe `betclone_browser_probe`,
+since GitHub Actions log retrieval is blocked in this environment).
+
+**Result: no shared, odds-shaped hosted JSON host was observed for any of
+the 7 families** (14 clean results + 2 inconclusive):
+
+| Family | Brands checked | Finding |
+| --- | --- | --- |
+| BETBY | tonybet, gamdom, vave | Only `sentry.softlabs.com` (error tracking) and ad/CDN hosts; no sportsbook API host |
+| BetConstruct | vbet (blocked), olybet, fastbet | Only cookie-consent and ad-delivery (`objectic.io`) hosts; vbet denied access outright |
+| FIRST | bk8 | No external JSON hosts at all on the public homepage |
+| SoftSwiss | metaspins (blocked), wild.io | No external JSON hosts observed |
+| iGate | spinlynx | Access denied |
+| Delasport | grandwin | Browser error both in CI and locally (proxy/navigation failure) — **inconclusive**, not re-attempted via any bypass |
+| Digitain | slottica | HTTP error — **inconclusive**, not re-attempted via any bypass |
+
+(Altenar's `vegas.hu` and InPlayNet's both brands are included in the same
+run only as a regression check — they correctly still show their
+already-known `biahosted.com`/`inplaynet.tech` hosted hosts.)
+
+**Conclusion: none of these 7 families expose a reachable public odds API
+from a homepage+one-sports-link crawl**, matching and extending the
+original catalogue-level sweep. This is a genuine technical limit of this
+observation method (a logged-in session or a specific live-match page
+might behave differently), not a claim that these operators have no odds
+anywhere, and **none of the 7 are promoted to any adapter**. Revisiting
+any of them would require the same kind of deeper, still-bypass-free
+investigation that found Altenar's and InPlayNet's actual platform hosts —
+navigating into a real listed match, not just the sports landing page.
