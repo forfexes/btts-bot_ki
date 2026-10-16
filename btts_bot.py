@@ -21779,7 +21779,7 @@ def _ntr_enrich_prop_pool_with_player_ml(rows: list) -> dict:
     candidates.sort(
         key=lambda r: (
             int(float(r.get("games") or 0)),
-            float(r.get("odds") or 0),
+            -float(r.get("odds") or 0),
         ),
         reverse=True,
     )
@@ -26952,7 +26952,7 @@ def main():
                                          "matches": len(_pool_matches),
                                          "ge2": sum(1 for v in _pool_matches.values() if v >= 2),
                                          "ge3": sum(1 for v in _pool_matches.values() if v >= 3),
-                                         "player_ml": {k: _pml.get(k) for k in ("eligible", "enriched", "empirical", "models_loaded")}}})
+                                         "player_ml": {k: _pml.get(k) for k in ("eligible", "enriched", "empirical", "models_loaded", "missing_stats", "required_models", "load_error")}}})
         except Exception:
             pass
         if len(_builder_prop_pool) >= 3:
