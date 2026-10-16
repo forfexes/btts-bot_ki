@@ -24,6 +24,16 @@ class BrowserProbeTests(unittest.TestCase):
         self.assertIsNone(probe.public_response_host_only("javascript:alert(1)"))
         self.assertIsNone(probe.public_response_host_only("http://api.example.com/odds"))
 
+    def test_public_odds_reader_finds_late_market_after_noise(self):
+        obj = {"eventId": "match", "markets": [
+            *({"metadata": [{"empty": i} for i in range(300)]}
+              for _ in range(22)), {"name": "Over 2.5", "price": 1.92}
+        ]}
+        class Reply:
+            def json(self):
+                return obj
+        self.assertEqual(probe.public_response_price_count(Reply()), 1)
+
     def test_public_odds_parser_accepts_valid_deeply_nested_market(self):
         payload = {"eventId": "fixture", "markets": [
             {"name": "Over 2.5", "price": 1.81}

@@ -6,6 +6,15 @@ from netrattler_betclone_hardprobe import (
 
 
 class TestHardprobe(unittest.TestCase):
+    def test_late_quote_survives_large_public_schema_noise(self):
+        noise = [{"metadata": [{"unused": i} for i in range(300)]}
+                 for _ in range(22)]
+        payload = {"eventId": "match", "markets": noise +
+                   [{"name": "Over 2.5", "price": 1.92}]}
+        evidence = audit_odds_json(payload)
+        self.assertEqual(evidence.get("verified_prices"), 1)
+        self.assertEqual(evidence.get("btts", 0), 0)
+
     def test_nested_public_sportsbook_price_schema_not_lost_at_depth_15(self):
         payload = {"eventId": "fixture", "markets": [
             {"name": "Over 2.5", "price": 1.81}

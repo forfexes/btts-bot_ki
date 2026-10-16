@@ -263,45 +263,51 @@ def valid_decimal(value):
 
 
 def audit_odds_json(payload):
-    """Conservative: selection + numerical price + enclosing event AND market."""
+    """Find plausible price structures in bounded public JSON observations.
+
+    A quote-like object is still only a CANDIDATE pending independent
+    event, market, selection, bookmaker and timestamp validation. Traverse
+    newest branches first, as sportsbook sites often append actual priced
+    markets after huge ancillary metadata and catalog sections.
+    """
     counts = Counter()
     price_fields = {"odds", "decimalodds", "decimalprice", "price"}
     label_fields = {"name", "label", "selection", "outcome"}
     event_fields = {"eventid", "fixtureid", "matchid", "eventname", "home", "hometeam", "participants"}
     market_fields = {"market", "marketid", "marketname", "bettype", "markets"}
-    # Modern hosted sportsbook JSON can nest 20+ levels, but depth and total
-    # visited objects remain bounded. This counts structural *candidates* only,
-    # never auto-promotes a JSON document to production odds.
-    visited = [0]
-    def walk(obj, event=False, market=False, depth=0):
-        if depth > 55 or visited[0] >= 4000:
-            return
-        visited[0] += 1
+    visited = 0
+    pending = [(payload, False, False, 0)]
+    while pending and visited < 4000:
+        obj, event, market, depth = pending.pop()
+        if depth > 55:
+            continue
+        visited += 1
         if isinstance(obj, list):
             for item in obj[:400]:
-                walk(item, event, market, depth + 1)
+                if isinstance(item, (list, dict)):
+                    pending.append((item, event, market, depth + 1))
         elif isinstance(obj, dict):
-            keys = {str(k).lower().replace("_", "") for k in obj}
+            keys = {str(k).lower().replace("_", "") for k in list(obj)[:150]}
             e = event or bool(keys & event_fields)
             m = market or bool(keys & market_fields)
-            prices = [v for k, v in obj.items() if str(k).lower().replace("_", "") in price_fields]
+            prices = [v for k, v in list(obj.items())[:150]
+                      if str(k).lower().replace("_", "") in price_fields]
             if e and m and keys & label_fields and any(valid_decimal(v) for v in prices):
                 counts["verified_prices"] += 1
                 category_text = " ".join(str(v)[:100] for k, v in obj.items()
                                          if str(k).lower().replace("_", "") in label_fields).lower()
                 for marker, pat in (
-                    ("btts", r"both teams to score|\bbtts\b"),
-                    ("goalscorer", r"\b(?:first|last|anytime) goalscorer\b|\bplayer\b.{0,35}\bto score\b"),
+                    ("btts", r"both teams to score|\\bbtts\\b"),
+                    ("goalscorer", r"\\b(?:first|last|anytime) goalscorer\\b|\\bplayer\\b.{0,35}\\bto score\\b"),
                     ("shots", r"shots? on target|total shots?"),
                     ("corners", r"corners?"),
                     ("half", r"1st half|first half|half.time"),
                 ):
                     if re.search(pat, category_text):
                         counts[marker] += 1
-            for val in obj.values():
+            for val in list(obj.values())[:150]:
                 if isinstance(val, (list, dict)):
-                    walk(val, e, m, depth + 1)
-    walk(payload)
+                    pending.append((val, e, m, depth + 1))
     return dict(counts)
 
 
