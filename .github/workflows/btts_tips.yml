@@ -14,6 +14,8 @@ on:
       - "netrattler_prop_sources.py"
       - "netrattler_builder_engine.py"
       - "test_netrattler_builder_delivery.py"
+      - "btts_bot.py"
+      - "test_netrattler_combo_race_guard.py"
       - "netrattler_hardtest.py"
       - "test_netrattler_kambi_scorer_market.py"
   schedule:

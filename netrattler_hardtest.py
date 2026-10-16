@@ -21,6 +21,7 @@ def main():
         "test_netrattler_source_health.py",
         "test_netrattler_builder_guard.py",
         "test_netrattler_builder_delivery.py",
+        "test_netrattler_combo_race_guard.py",
         "test_netrattler_builder_styles.py",
         "test_netrattler_builder_concepts_v2.py",
         "test_netrattler_runtime_patch.py",
@@ -37,6 +38,7 @@ def main():
     import test_netrattler_source_health as source_health
     import test_netrattler_builder_guard as builder_guard
     import test_netrattler_builder_delivery as builder_delivery
+    import test_netrattler_combo_race_guard as combo_race_guard
     import test_netrattler_builder_styles as builder_styles
     import test_netrattler_runtime_patch as runtime_patch
     import test_netrattler_builder_concepts_v2 as builder_concepts
@@ -51,6 +53,10 @@ def main():
     delivery_result = unittest.TextTestRunner(verbosity=0).run(delivery_suite)
     if not delivery_result.wasSuccessful():
         raise SystemExit("NETRATTLER builder delivery regression failed")
+    combo_suite = unittest.defaultTestLoader.loadTestsFromTestCase(combo_race_guard.ComboRaceGuardTests)
+    combo_result = unittest.TextTestRunner(verbosity=0).run(combo_suite)
+    if not combo_result.wasSuccessful():
+        raise SystemExit("NETRATTLER combo dedupe regression failed")
     builder_guard.main()
     builder_styles.main()
     oddspapi_keys.main()

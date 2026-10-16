@@ -6736,9 +6736,9 @@ def is_duplicate_combo(tip_id, target_date):
     if cache_key in _SENT_TIPS_CACHE:
         return True
 
-    if day in _PREFETCHED_DUP_DATES:
-        return False
-
+    # A preloaded daily cache is only a snapshot. Another running job may have
+    # sent and persisted this combo since the snapshot. Always recheck a cache
+    # MISS against Supabase immediately before Telegram delivery.
     if SUPABASE_URL and SUPABASE_KEY:
         try:
             r = requests.get(
@@ -6751,11 +6751,16 @@ def is_duplicate_combo(tip_id, target_date):
                 },
                 timeout=5,
             )
-            if r.ok and len(r.json()) > 0:
+            if not r.ok:
+                # Fail closed: sending while DB is unreachable can double-post.
+                log(f"   Combo dedupe unavailable: HTTP {r.status_code}; skipping send", "WARN")
+                return True
+            if len(r.json()) > 0:
                 _SENT_TIPS_CACHE.add(cache_key)
                 return True
-        except Exception:
-            pass
+        except Exception as exc:
+            log(f"   Combo dedupe unavailable: {type(exc).__name__}; skipping send", "WARN")
+            return True
 
     return False
 
@@ -16469,9 +16474,9 @@ def is_duplicate_combo(tip_id, target_date):
     if cache_key in _SENT_TIPS_CACHE:
         return True
 
-    if day in _PREFETCHED_DUP_DATES:
-        return False
-
+    # A preloaded daily cache is only a snapshot. Another running job may have
+    # sent and persisted this combo since the snapshot. Always recheck a cache
+    # MISS against Supabase immediately before Telegram delivery.
     if SUPABASE_URL and SUPABASE_KEY:
         try:
             r = requests.get(
@@ -16484,11 +16489,16 @@ def is_duplicate_combo(tip_id, target_date):
                 },
                 timeout=5,
             )
-            if r.ok and len(r.json()) > 0:
+            if not r.ok:
+                # Fail closed: sending while DB is unreachable can double-post.
+                log(f"   Combo dedupe unavailable: HTTP {r.status_code}; skipping send", "WARN")
+                return True
+            if len(r.json()) > 0:
                 _SENT_TIPS_CACHE.add(cache_key)
                 return True
-        except Exception:
-            pass
+        except Exception as exc:
+            log(f"   Combo dedupe unavailable: {type(exc).__name__}; skipping send", "WARN")
+            return True
 
     return False
 
@@ -27028,6 +27038,8 @@ def main():
                     if _combo_mid is None:
                         log(f"   ⚠️ Combo {n} Telegram nicht zugestellt — nicht speichern", "WARN")
                         continue
+                    # Protect this process as well, even if persistence fails.
+                    _SENT_TIPS_CACHE.add(f"combo_{_combo_tip_id}")
                     generated += 1
                     try:
                         save_to_supabase({

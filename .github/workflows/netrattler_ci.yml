@@ -18,6 +18,8 @@ on:
       - "test_netrattler_aiscore.py"
       - "netrattler_builder_engine.py"
       - "test_netrattler_builder_delivery.py"
+      - "btts_bot.py"
+      - "test_netrattler_combo_race_guard.py"
       - "netrattler_hardtest.py"
       - ".github/workflows/netrattler_ci.yml"
   workflow_dispatch:
@@ -49,7 +51,9 @@ jobs:
             test_netrattler_kambi_team_odds.py \
             test_netrattler_aiscore.py \
             netrattler_builder_engine.py \
-            test_netrattler_builder_delivery.py
+            test_netrattler_builder_delivery.py \
+            test_netrattler_combo_race_guard.py \
+            btts_bot.py
       - name: OddsPapi secret/config check
         env:
           ODDSPAPI_KEYS: ${{ secrets.ODDSPAPI_KEYS }}
@@ -64,6 +68,8 @@ jobs:
         run: python test_netrattler_oddspapi_keys.py
       - name: Verified builder delivery regression
         run: python -m unittest -v test_netrattler_builder_delivery.py
+      - name: Combo dedupe stale-cache regression
+        run: python -m unittest -v test_netrattler_combo_race_guard.py
       - name: Runtime fallback and skip tests
         run: python test_netrattler_runtime_patch.py
       - name: Multi-brand Kambi tests
