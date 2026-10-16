@@ -1,0 +1,39 @@
+name: NETRATTLER BetClone Playwright Audit
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - 'netrattler_betclone_browser_probe.py'
+      - 'test_netrattler_betclone_browser_probe.py'
+      - '.github/workflows/netrattler_betclone_browser_probe.yml'
+  workflow_dispatch:
+
+jobs:
+  browser-probe:
+    runs-on: ubuntu-latest
+    timeout-minutes: 9
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+      - name: Install bounded public-browser dependencies
+        run: |
+          python -m pip install requests beautifulsoup4 playwright
+          python -m playwright install --with-deps --only-shell chromium
+      - name: Validate fail-closed public-site probing
+        run: |
+          python -m py_compile netrattler_betclone_browser_probe.py test_netrattler_betclone_browser_probe.py
+          python -m unittest -v test_netrattler_betclone_browser_probe.py
+      - name: Probe only four public rendered operator pages
+        run: |
+          python netrattler_betclone_browser_probe.py --limit 4
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: netrattler-betclone-public-browser-audit
+          path: netrattler_betclone_browser_probe.json
+          retention-days: 7
