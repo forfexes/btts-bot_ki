@@ -6,8 +6,10 @@ import netrattler_betclone_browser_probe as probe
 
 class BrowserProbeTests(unittest.TestCase):
     def test_curated_unblocked_homepages_only(self):
-        self.assertEqual(len(probe.CANDIDATES), 4)
-        self.assertEqual(len({brand for _, brand, _ in probe.CANDIDATES}), 4)
+        self.assertEqual(len(probe.CANDIDATES), 10)
+        self.assertEqual(len({brand for _, brand, _ in probe.CANDIDATES}), 10)
+        self.assertEqual({family for family, _, _ in probe.CANDIDATES},
+                         {"altenar", "betby", "betconstruct", "first", "inplaynet", "softswiss"})
         self.assertTrue(all(url.startswith("https://") for _, _, url in probe.CANDIDATES))
         self.assertFalse(any(brand in {"rabona", "efbet", "n1bet", "goldenbet"}
                              for _, brand, _ in probe.CANDIDATES))
