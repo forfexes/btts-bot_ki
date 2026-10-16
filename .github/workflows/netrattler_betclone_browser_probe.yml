@@ -30,9 +30,9 @@ jobs:
         run: |
           python -m py_compile netrattler_betclone_browser_probe.py test_netrattler_betclone_browser_probe.py
           python -m unittest -v test_netrattler_betclone_browser_probe.py
-      - name: Probe only four public rendered operator pages
+      - name: Probe ten curated public rendered operator pages
         run: |
-          python netrattler_betclone_browser_probe.py --limit 4
+          python netrattler_betclone_browser_probe.py --limit 10
       - uses: actions/upload-artifact@v4
         if: always()
         with:
