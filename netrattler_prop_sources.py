@@ -242,10 +242,10 @@ def fetch_kambi_player_props(home: str, away: str, brand: str = "ub") -> List[Di
             # offers. These carry much larger prices and must never be used
             # as "anytime" scorer quotes; inspect the actual offer subtype.
             descriptor = f"{crit} {offer_type}".lower()
-            if re.search(r"\\b(first|last|next|opening|2nd|second|third|3rd|half|period|assist)\\b|"
-                         r"(two or more|three or more|2\\+|3\\+|hat.trick|own goal)", descriptor):
+            if re.search(r"\b(first|last|next|opening|2nd|second|third|3rd|half|period|assist)\b|"
+                         r"(two or more|three or more|2\+|3\+|hat.trick|own goal)", descriptor):
                 continue
-            if not re.search(r"any\\s*time|to score(?: a goal)?\\b", descriptor):
+            if not re.search(r"any\s*time|to score(?: a goal)?\b", descriptor):
                 # Only explicitly identified anytime scorer offers go to live
                 # player props. Ambiguous "Goalscorer" stays unavailable.
                 continue
