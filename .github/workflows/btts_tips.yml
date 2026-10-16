@@ -31,6 +31,12 @@ on:
           - settlement
           - both
 
+# A parser/test commit should not launch multiple overlapping 30-minute
+# production bots. Retain scheduled runs; replace obsolete push verification.
+concurrency:
+  group: netrattler-ai-tips-${{ github.event_name }}-${{ github.ref }}
+  cancel-in-progress: ${{ github.event_name == 'push' }}
+
 jobs:
   run-bot:
     runs-on: ubuntu-latest
