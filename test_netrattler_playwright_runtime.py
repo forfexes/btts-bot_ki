@@ -128,7 +128,7 @@ class BrowserRuntimeTests(unittest.TestCase):
             _requests = 0
             def scrape_fbref_advanced_stats(self, league):
                 AdvancedPropsManager._requests += 1
-                if AdvancedPropsManager._requests == 2:
+                if AdvancedPropsManager._requests % 2 == 0:
                     return {"Player": {"shots_per90": 2.0}}
                 return {}
         bot.AdvancedPropsManager = AdvancedPropsManager
