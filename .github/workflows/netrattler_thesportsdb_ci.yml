@@ -1,0 +1,22 @@
+name: NETRATTLER Fixture Circuit Breaker CI
+on:
+  push:
+    branches: [main]
+    paths:
+      - 'netrattler_thesportsdb_guard.py'
+      - 'test_netrattler_thesportsdb_guard.py'
+      - '.github/workflows/netrattler_thesportsdb_ci.yml'
+  workflow_dispatch:
+jobs:
+  fixture-cache:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+      - name: Compile and verify cached daily fixtures and outage handling
+        run: |
+          python -m py_compile netrattler_thesportsdb_guard.py test_netrattler_thesportsdb_guard.py
+          python -m unittest -v test_netrattler_thesportsdb_guard.py
