@@ -82,8 +82,35 @@ class BrowserRuntimeTests(unittest.TestCase):
         self.assertEqual(original.call_count, 2)
         self.assertEqual(original.call_args.kwargs["timeout"], 8000)
         self.assertEqual(bot.log.call_count, 1)
+        # Only hosts and outcomes are logged, never page paths or query tokens.
+        summary = bot.log.call_args.args[0]
+        self.assertIn("hosts=example.org:2", summary)
+        self.assertIn("useful=2 empty=0", summary)
+        self.assertNotIn("/one", summary)
+        self.assertNotIn("/two", summary)
         runtime.install(bot)
         self.assertEqual(original.call_count, 2)
+
+    def test_browser_budget_telemetry_tracks_empty_without_leaking_urls(self):
+        bot, _ = self.make_bot(SimpleNamespace(ok=False, status_code=400))
+        bot.scrape_with_playwright = Mock(side_effect=[None, "<html>ok</html>"])
+        with (patch.dict("os.environ", {
+                "NETRATTLER_PLAYWRIGHT_ENABLED": "true",
+                "NETRATTLER_PLAYWRIGHT_MAX_PAGES": "2",
+                "NETRATTLER_PLAYWRIGHT_BUDGET_SEC": "30"}),
+              patch.object(runtime.importlib.util, "find_spec", return_value=object())):
+            runtime.install(bot)
+        secret_url = "https://sports.example.org/public?q=private"
+        self.assertIsNone(bot.scrape_with_playwright(secret_url))
+        self.assertIsNotNone(bot.scrape_with_playwright("https://stats.example.org/"))
+        self.assertIsNone(bot.scrape_with_playwright("https://elsewhere.example/"))
+        msg = bot.log.call_args.args[0]
+        self.assertIn("sports.example.org:1", msg)
+        self.assertIn("stats.example.org:1", msg)
+        self.assertIn("useful=1 empty=1", msg)
+        self.assertNotIn("q=private", msg)
+        self.assertNotIn("/public", msg)
+
 
     def test_fbref_failed_advanced_stats_circuits_across_leagues(self):
         """Two failing leagues cannot trigger repeated blocked source attempts."""
