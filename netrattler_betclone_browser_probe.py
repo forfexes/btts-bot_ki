@@ -41,6 +41,10 @@ CANDIDATES = (
     ("altenar", "vegas.hu", "https://vegas.hu/"),
     ("inplaynet", "cosmobet", "https://cosmobet.com/"),
     ("betby", "vave", "https://vave.com/"),
+    # Delasport and Digitain had no prior browser-rendered pass; added to
+    # close the remaining-families gap (2026-10-16 UTC).
+    ("delasport", "grandwin", "https://grandwin.bet/"),
+    ("digitain", "slottica", "https://slottica.com/"),
 )
 # Provider-related hosts were OBSERVED in a public Chromium network trace;
 # these suffixes are not permission to call private/partner endpoints.
@@ -343,6 +347,36 @@ def audit_page(browser, family: str, brand: str, url: str) -> dict:
         context.close()
 
 
+def _post_diagnostic(report: dict) -> None:
+    """Bounded diagnostic write so results are readable without GitHub Actions
+    log retrieval (blocked in some environments). No cookies/headers/tokens/
+    full response bodies — only the same aggregate counts already in the
+    local JSON artifact, trimmed to the per-family essentials."""
+    import os
+    SUPABASE_URL = (os.getenv("SUPABASE_URL") or "").rstrip("/")
+    SUPABASE_KEY = os.getenv("SUPABASE_SERVICE_ROLE_KEY") or os.getenv("SUPABASE_KEY") or ""
+    if not (SUPABASE_URL and SUPABASE_KEY):
+        return
+    import requests
+    slim_rows = [
+        {"platform": r["platform"], "brand": r["brand"], "status": r["status"],
+         "public_structured_price_candidates": r["public_structured_price_candidates"],
+         "hosted_structured_price_candidates": r["hosted_structured_price_candidates"],
+         "external_json_hosts": r["external_json_hosts"]}
+        for r in report["results"]
+    ]
+    try:
+        requests.post(
+            f"{SUPABASE_URL}/rest/v1/netrattler_card_diag", timeout=15,
+            headers={"apikey": SUPABASE_KEY, "Authorization": f"Bearer {SUPABASE_KEY}",
+                     "Content-Type": "application/json"},
+            json={"info": {"probe": "betclone_browser_probe", "checked": report["checked"],
+                            "results": slim_rows}},
+        )
+    except Exception as exc:
+        print("Supabase write failed:", exc)
+
+
 def main() -> None:
     parser = argparse.ArgumentParser()
     parser.add_argument("--output", default="netrattler_betclone_browser_probe.json")
@@ -364,6 +398,7 @@ def main() -> None:
               "checked": len(rows), "results": rows,
               "validated_new_production_feeds": 0}
     Path(args.output).write_text(json.dumps(report, indent=2), encoding="utf-8")
+    _post_diagnostic(report)
     print("BETCLONE_BROWSER_SUMMARY checked=", len(rows),
           "price_candidates=", sum(row["public_structured_price_candidates"] for row in rows),
           "hosted_candidates=", sum(row["hosted_structured_price_candidates"] for row in rows),
