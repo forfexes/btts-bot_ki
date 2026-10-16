@@ -58,8 +58,27 @@ jobs:
             curl_cffi \
             numpy \
             scipy \
-            scikit-learn
+            scikit-learn \
+            playwright
           python -m pip install --prefer-binary --no-deps "xgboost==3.2.0"
+
+      - name: Install headless Chromium for Playwright
+        run: python -m playwright install --with-deps --only-shell chromium
+
+      - name: Verify Playwright browser starts
+        run: |
+          python - <<'PY'
+          from playwright.sync_api import sync_playwright
+          with sync_playwright() as p:
+              browser = p.chromium.launch(headless=True, args=["--no-sandbox"])
+              try:
+                  page = browser.new_page()
+                  page.goto("data:text/html,<title>NETRATTLER Playwright ready</title>")
+                  assert page.title() == "NETRATTLER Playwright ready"
+                  print("NETRATTLER_PLAYWRIGHT_READY: chromium headless OK")
+              finally:
+                  browser.close()
+          PY
 
       - name: Fast syntax check
         run: |
@@ -90,6 +109,8 @@ jobs:
       - name: Run Tips Bot 🤖
         env:
           NETRATTLER_FAST_TIPS:       "true"
+          NETRATTLER_PLAYWRIGHT_BUDGET_SEC: "60"
+          NETRATTLER_ESPN_PW_MAX:     "3"
           NETRATTLER_STATBUNKER_MAX_LOOKUPS: "0"
           NETRATTLER_LINEUP_MAX:      "8"
           GEMINI_API_KEYS:            ${{ secrets.GEMINI_API_KEYS }}
