@@ -11044,6 +11044,17 @@ def get_international_btts_rate(team_name: str, last_n: int = 20) -> dict:
 
 FOOTBALLCSV_CACHE = {}
 
+# NOTE (verified 2026-10-16): the footballcsv/* GitHub mirrors (england,
+# deutschland, espana, austria) stopped receiving new seasons after 2020-21 -
+# every raw.githubusercontent.com request for 2021-22 or later 404s for all
+# four repos. _openfootball_season_str() will therefore never find data here
+# going forward; this is a structural dead end in the upstream project, not a
+# formatting bug. get_footballcsv_btts_rate() already degrades safely (returns
+# {} on any non-OK response) and currently has no call site in this file, so
+# this is documented rather than silently patched over with stale 2020-21
+# data presented as "current" form. The live, actively maintained equivalent
+# for England/Germany/Spain is openfootball/football.json via GITHUB_LEAGUES
+# above, which was confirmed still returning 2026-27 data.
 FOOTBALLCSV_REPOS = {
     "Premier League": ("footballcsv/england", "eng.1", "2020s", _openfootball_season_str()),
     "Bundesliga": ("footballcsv/deutschland", "de.1", "2020s", _openfootball_season_str()),
