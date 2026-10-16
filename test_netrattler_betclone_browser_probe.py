@@ -19,6 +19,16 @@ class BrowserProbeTests(unittest.TestCase):
         self.assertFalse(probe.is_first_party_response(page, "https://vbet.com.attacker.invalid/api"))
         self.assertFalse(probe.is_first_party_response(page, "https://cdn.example.org/odds"))
 
+    def test_only_existing_public_first_party_sports_links_are_followed(self):
+        page = "https://www.tonybet.com/"
+        hrefs = ["https://other.example/sports", "javascript:alert(1)",
+                 "/casino", "https://tonybet.com/sport/live?token=secret#abc"]
+        self.assertEqual(probe.first_party_sports_link(page, hrefs),
+                         "https://tonybet.com/sport/live")
+        self.assertIsNone(probe.first_party_sports_link(page, ["/casino", "/login"]))
+        self.assertIsNone(probe.first_party_sports_link(
+            page, ["https://tonybet.com.attacker.invalid/sports"]))
+
     def test_access_denial_remains_denied_even_if_http_200(self):
         self.assertTrue(probe.is_denied(403, ""))
         self.assertTrue(probe.is_denied(200, "Just a moment - verify you are human"))
