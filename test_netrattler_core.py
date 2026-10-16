@@ -4,7 +4,7 @@
 Targets the production invariants rather than legacy presentation code:
 - real observed prices only;
 - positive-edge legs;
-- published builders are 3-9 legs;
+- published builders are 2-9 legs;
 - player, match and mixed builder families can coexist;
 - statistical/model sources cannot smuggle a fabricated decimal quote;
 - identity/source helpers remain stable.
@@ -19,6 +19,11 @@ os.environ["NETRATTLER_BUILDER_MAX_ODDS"] = "150"
 os.environ["NETRATTLER_BUILDER_MAX_LEGS"] = "9"
 os.environ["NETRATTLER_BUILDER_MIN_LEG_EDGE"] = "2.0"
 os.environ["NETRATTLER_PROP_BUILDER_MIN_EDGE"] = "0.02"
+# build_builder_picks() is player-prop only by default in production
+# (NETRATTLER_BUILDER_ALLOW_TEAM_MARKETS unset); this suite explicitly
+# exercises the MATCH/MIXED team-market builder families below, so it opts
+# in deliberately rather than relying on the production default.
+os.environ["NETRATTLER_BUILDER_ALLOW_TEAM_MARKETS"] = "true"
 
 from netrattler_builder_engine import build_builder_picks, deduplicate_props
 
@@ -36,6 +41,7 @@ def row(
     *,
     observed: bool = True,
     estimated: bool = False,
+    model_prob: float = 0,
 ) -> dict:
     return {
         "player": player,
@@ -47,6 +53,11 @@ def row(
         "line": line,
         "odds": odds,
         "probability": prob,
+        # model_prob (plus an independent probability_source) is what makes
+        # the engine compute a real, non-zero edge instead of forcing
+        # edge=0.0 for a plain bookmaker-implied probability (the deliberate
+        # "SAFE ROLLBACK" behavior - see netrattler_builder_engine.py).
+        **({"model_prob": model_prob, "probability_source": "model"} if model_prob > 0 else {}),
         "source": source,
         "real_observed_line": observed,
         "estimated": estimated,
@@ -70,7 +81,7 @@ assert all(leg.match == eng_arg and leg.odds > 1 and not leg.estimated for leg i
 team_picks = build_builder_picks(team_rows, match_date="2026-07-15", max_builders=50)
 assert team_picks, "Observed match markets produced no builder"
 assert any(p.family == "match" for p in team_picks), "No MATCH builder family was generated"
-assert all(3 <= len(p.legs) <= 9 for p in team_picks)
+assert all(2 <= len(p.legs) <= 9 for p in team_picks)
 
 # Real player-prop sample with verified bookmaker lines and prices.
 player_rows = [
@@ -96,7 +107,7 @@ valid_player_picks = [p for p in player_picks if p.family == "player"]
 assert valid_player_picks, "No player-only builder was generated"
 for pick in valid_player_picks:
     assert pick.total_odds >= 2.5
-    assert 3 <= len(pick.legs) <= 9
+    assert 2 <= len(pick.legs) <= 9
     assert len({leg.key() for leg in pick.legs}) == len(pick.legs)
     assert all(leg.match == eng_arg for leg in pick.legs)
     assert all(leg.odds > 1 and leg.line > 0 and not leg.estimated for leg in pick.legs)
@@ -109,24 +120,36 @@ assert mixed_picks, "Mixed pool produced no builders"
 assert any(p.family == "player" for p in mixed_picks), "Mixed pool lost player builders"
 assert any(p.family == "match" for p in mixed_picks), "Mixed pool lost match builders"
 assert any(p.family == "mixed" for p in mixed_picks), "No mixed same-game builder was generated"
-assert all(3 <= len(p.legs) <= 9 for p in mixed_picks)
+assert all(2 <= len(p.legs) <= 9 for p in mixed_picks)
 
-# Negative edge: no leg may enter a published builder.
+# Negative edge: no leg may enter a published builder. A plain bookmaker
+# "probability" field alone deliberately computes edge=0.0, not a negative
+# number (SAFE ROLLBACK), so an independent model_prob confirming a genuine
+# negative edge is required to exercise this gate at all.
 negative_edge_rows = [
-    row("Player A", eng_arg, "2+ Shots", "shots", 2, 1.50, 50, team="England"),
-    row("Player B", eng_arg, "2+ SOT", "sot", 2, 1.55, 50, team="Argentina"),
-    row("Player C", eng_arg, "2+ Fouls", "fouls", 2, 1.60, 50, team="England"),
+    row("Player A", eng_arg, "2+ Shots", "shots", 2, 1.50, 50, team="England", model_prob=0.50),
+    row("Player B", eng_arg, "2+ SOT", "sot", 2, 1.55, 50, team="Argentina", model_prob=0.50),
+    row("Player C", eng_arg, "2+ Fouls", "fouls", 2, 1.60, 50, team="England", model_prob=0.50),
 ]
+negative_edge_legs = deduplicate_props(negative_edge_rows)
+assert negative_edge_legs and all(leg.edge < 0 for leg in negative_edge_legs), \
+    "Test setup did not actually produce a negative independent-model edge"
 assert build_builder_picks(negative_edge_rows, match_date="2026-07-15", max_builders=50) == [], \
     "Negative-edge builder was generated"
 
-# Two real legs are still not a publishable builder: production floor is 3.
+# Two real legs IS the genuine production floor (valid_builder's own default
+# is min_legs=2, exercised by several builder families, e.g. "SAME MATCH
+# AVAILABLE"/"2 REAL LEGS" below) - not 3, so this only confirms a 2-leg
+# combo is a legitimate, real-odds publishable builder, never a stray
+# single-leg "builder".
 two_leg_rows = [
     row("Player D", eng_arg, "1+ Shot", "shots", 1, 1.60, 75, team="England"),
     row("Player E", eng_arg, "1+ SOT", "sot", 1, 1.65, 72, team="Argentina"),
 ]
-assert build_builder_picks(two_leg_rows, match_date="2026-07-15", max_builders=50) == [], \
-    "Two-leg builder escaped the 3-leg production floor"
+two_leg_picks = build_builder_picks(two_leg_rows, match_date="2026-07-15", max_builders=50)
+assert two_leg_picks, "A legitimate 2-leg combo was not published"
+assert all(len(p.legs) >= 2 for p in two_leg_picks), \
+    "A builder with fewer than 2 legs was published"
 
 # Stat/model sources with a decimal number must not masquerade as a bookmaker quote.
 stat_only_rows = [

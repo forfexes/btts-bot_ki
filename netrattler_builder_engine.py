@@ -138,6 +138,25 @@ class BuilderPick:
     def leg_count(self) -> int:
         return len(self.legs)
 
+    @property
+    def family(self) -> str:
+        """Classify by the actual leg categories, not the style label, so a
+        future style name never silently drifts out of sync with this.
+        "match" = every leg is a team/match market (BTTS, goals, corners...),
+        "player" = every leg is an individual player prop, "mixed" = both."""
+        cats = {x.category for x in self.legs}
+        is_team = bool(cats) and cats <= TEAM_CATEGORIES
+        is_player = bool(cats) and cats <= PLAYER_CATEGORIES
+        if is_team and not is_player:
+            return "match"
+        if is_player and not is_team:
+            return "player"
+        if is_team and is_player:
+            # Ambiguous categories like "result" appear in both sets; a
+            # builder made only of such legs still reads as a match builder.
+            return "match"
+        return "mixed"
+
     def to_row(self) -> Dict[str, Any]:
         return {
             "builder_id": self.builder_id,
