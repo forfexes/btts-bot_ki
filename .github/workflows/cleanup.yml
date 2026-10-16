@@ -7,6 +7,7 @@ on:
 jobs:
   cleanup:
     runs-on: ubuntu-latest
+    timeout-minutes: 12
 
     permissions:
       actions: write
@@ -18,6 +19,12 @@ jobs:
           GH_REPO: ${{ github.repository }}
         run: |
           set -euo pipefail
-          gh run list --repo "$GH_REPO" --limit 1000 --json databaseId -q '.[].databaseId' | tail -n +50 | while read -r id; do
-            gh run delete "$id" --repo "$GH_REPO"
-          done
+          # Never spend the entire Actions budget on thousands of old runs.
+          # Some protected runs return 403; log them but clean the rest.
+          gh run list --repo "$GH_REPO" --limit 300 --json databaseId -q '.[].databaseId' |
+            awk 'NR>=50 && NR<130' |
+            while read -r id; do
+              if ! gh run delete "$id" --repo "$GH_REPO"; then
+                echo "::warning::Run $id could not be removed (permissions/protection). Continuing cleanup."
+              fi
+            done
