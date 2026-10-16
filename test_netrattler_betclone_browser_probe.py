@@ -16,6 +16,14 @@ class BrowserProbeTests(unittest.TestCase):
         self.assertFalse(any(brand in {"rabona", "efbet", "n1bet", "goldenbet"}
                              for _, brand, _ in probe.CANDIDATES))
 
+    def test_cross_origin_diagnostics_strip_private_url_components(self):
+        self.assertEqual(
+            probe.public_response_host_only("https://user:secret@api.example.com/v1/odds?token=private"),
+            "api.example.com",
+        )
+        self.assertIsNone(probe.public_response_host_only("javascript:alert(1)"))
+        self.assertIsNone(probe.public_response_host_only("http://api.example.com/odds"))
+
     def test_first_party_requests_only(self):
         page = "https://www.vbet.com/"
         self.assertTrue(probe.is_first_party_response(page, "https://www.vbet.com/api/events"))

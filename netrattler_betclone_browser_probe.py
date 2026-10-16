@@ -45,6 +45,15 @@ DENIAL_TEXT = ("captcha", "access denied", "just a moment",
                "verify you are human", "geo-block", "geo restricted")
 
 
+def public_response_host_only(url: str) -> str | None:
+    """Return only the hostname, never credentials, paths or query parameters."""
+    parsed = urlparse(url)
+    host = (parsed.hostname or "").lower()
+    if parsed.scheme != "https" or not host or len(host) > 160:
+        return None
+    return host
+
+
 def is_first_party_response(page_url: str, response_url: str) -> bool:
     """Only inspect public JSON returned by the operator's own host family."""
     page_host = (urlparse(page_url).hostname or "").lower().removeprefix("www.")
@@ -78,10 +87,12 @@ def audit_page(browser, family: str, brand: str, url: str) -> dict:
     """One bounded browser visit, collecting aggregate evidence only."""
     result = {"platform": family, "brand": brand, "status": "not_checked",
               "json_responses": 0, "first_party_json": 0,
-              "public_structured_price_candidates": 0, "verified_production_feed": False}
+              "public_structured_price_candidates": 0, "verified_production_feed": False,
+              "external_json_hosts": []}
     context = browser.new_context(accept_downloads=False, service_workers="block")
     page = context.new_page()
     seen_responses = set()
+    external_json_host_counts: dict[str, int] = {}
     def inspect_response(response):
         if len(seen_responses) >= 35 or response.status != 200:
             return
@@ -93,6 +104,12 @@ def audit_page(browser, family: str, brand: str, url: str) -> dict:
         # arbitrary third-party JSON host, is allowed for payload inspection.
         origin = page.url if (urlparse(page.url).scheme == "https") else url
         if not is_first_party_response(origin, response.url):
+            # Hosted sportsbook frontends may receive public JSON from a
+            # different domain. Record ONLY a bounded hostname/count so the
+            # provider can be reviewed without collecting private payloads.
+            host = public_response_host_only(response.url)
+            if host and (host in external_json_host_counts or len(external_json_host_counts) < 48):
+                external_json_host_counts[host] = external_json_host_counts.get(host, 0) + 1
             return
         if len(seen_responses) >= 16:
             return
@@ -162,6 +179,11 @@ def audit_page(browser, family: str, brand: str, url: str) -> dict:
         result["error_type"] = type(exc).__name__
         return result
     finally:
+        result["external_json_hosts"] = [
+            {"host": h, "json_responses": n}
+            for h, n in sorted(external_json_host_counts.items(),
+                               key=lambda pair: (-pair[1], pair[0]))[:8]
+        ]
         context.close()
 
 

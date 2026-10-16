@@ -92,3 +92,19 @@ On 2026-10-16 UTC the `odds_history` table contained 11,671 `1xbet_platform` pri
 5. Report per-platform usable market coverage and API restrictions. Complete means verified prices *and* safe, tested NETRATTLER integration, not an HTTP 200 or a green audit.
 
 **Do not mark BetClone fully finished without these criteria.**
+
+## Extended browser audit — 2026-10-16 UTC
+
+- [Follow-up run 38907432247](https://github.com/forfexes/btts-bot_ki/actions/runs/38907432247):
+  14 curated public homepages covering **7** catalogue platform families,
+  with 5/5 offline checks passing.
+- 12 pages rendered, while VBET and Spinlynx returned access denied.
+  Newly visited Vegas.hu, Cosmobet and Vave rendered; none yielded a
+  verified structured odds price. **Zero new production feeds**.
+- Rolletto and Cosmobet each returned more than 100 JSON network responses.
+  Some responses were hosted on other origins. Their hostnames, when
+  collected in subsequent runs, remain **investigative metadata**, not
+  authorization to access undocumented/partner APIs and not tip-ready prices.
+- Redirecting to an operator's publicly rendered canonical hostname is now
+  considered when examining same-origin responses; it does not turn a
+  third-party response or an HTML document into a validated sportsbook feed.
