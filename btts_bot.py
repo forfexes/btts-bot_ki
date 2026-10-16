@@ -3977,33 +3977,15 @@ def calculate_pinnacle_fair_odds(pinnacle_data, market="btts"):
 # ============================================================
 
 # ---- 1. AISCORE ----
-AISCORE_CACHE = {}
-
-def scrape_aiscore(league_name, target_date):
-    """AiScore.com - AI-basierte Vorhersagen, kein Key nötig"""
-    cache_key = f"aiscore_{league_name}_{target_date}"
-    if cache_key in AISCORE_CACHE:
-        return AISCORE_CACHE[cache_key]
-    try:
-        import random as _r
-        r = requests.get(
-            f"https://www.aiscore.com/football/",
-            headers={
-                "User-Agent": _r.choice([
-                    "Mozilla/5.0 (Windows NT 10.0; Win64; x64) Chrome/121.0.0.0",
-                    "Mozilla/5.0 (iPhone; CPU iPhone OS 17_0) AppleWebKit/605.1.15",
-                ]),
-                "Accept": "application/json",
-                "Referer": "https://www.aiscore.com/",
-            },
-            timeout=10,
-        )
-        if r.ok:
-            AISCORE_CACHE[cache_key] = {"available": True}
-            return {"available": True}
-    except Exception:
-        pass
-    return {}
+# Removed 2026-10-16: scrape_aiscore() had no call site anywhere in this file
+# (dead code) and, worse, rotated User-Agent strings with a fake Referer
+# specifically to work around AiScore's persistent 403s - a mild stealth/
+# anti-bot-evasion technique this project's standing rules explicitly forbid.
+# It also never parsed any real prediction data even when reachable (it only
+# returned an "available" flag), so there is nothing productive to recover.
+# If AiScore is revisited later, it must be a single honest descriptive
+# User-Agent like the rest of this repo's probes, and a genuine 403/block
+# must be documented and left alone rather than rotated around.
 
 
 # ---- 2. BESOCCER ----
