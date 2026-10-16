@@ -1,0 +1,23 @@
+name: NETRATTLER HF Closing Consensus Sync
+on:
+  workflow_dispatch:
+  schedule:
+    - cron: '35 6 * * 2,5'
+permissions:
+  contents: read
+jobs:
+  sync:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+      - run: pip install pandas pyarrow requests
+      - name: Import closing consensus (benchmark only, never a tip quote)
+        env:
+          SUPABASE_URL: ${{ secrets.SUPABASE_URL }}
+          SUPABASE_KEY: ${{ secrets.SUPABASE_KEY }}
+          SUPABASE_SERVICE_ROLE_KEY: ${{ secrets.SUPABASE_SERVICE_ROLE_KEY }}
+        run: python netrattler_hf_closing_sync.py
