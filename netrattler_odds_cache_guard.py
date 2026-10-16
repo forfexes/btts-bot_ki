@@ -395,6 +395,25 @@ def install(bot) -> None:
                 _LOGGED += 1
             except Exception:
                 pass
+
+        # Diagnostics only (never gates or alters odds): confirm in Supabase that the
+        # corroborated 1xBet shadow source is actually reaching production fills,
+        # since this is otherwise invisible (no bookmaker names in tips/reasoning).
+        x1_fields = [f"{field}={source}" for field, source in all_added if "1xbet_platform" in source]
+        if x1_fields:
+            try:
+                SUPABASE_URL = os.getenv("SUPABASE_URL", "").rstrip("/")
+                SUPABASE_KEY = os.getenv("SUPABASE_SERVICE_ROLE_KEY") or os.getenv("SUPABASE_KEY") or ""
+                if SUPABASE_URL and SUPABASE_KEY:
+                    requests.post(
+                        f"{SUPABASE_URL}/rest/v1/netrattler_card_diag", timeout=8,
+                        headers={"apikey": SUPABASE_KEY, "Authorization": f"Bearer {SUPABASE_KEY}",
+                                 "Content-Type": "application/json"},
+                        json={"info": {"probe": "cache_guard_1xbet_used", "match": f"{home} vs {away}",
+                                        "fields": x1_fields}},
+                    )
+            except Exception:
+                pass
         return odds
 
     guarded._ntr_odds_cache_guard = True
