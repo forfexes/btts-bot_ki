@@ -1,0 +1,43 @@
+name: NETRATTLER Scorer History CI
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - 'netrattler_scorer_history_fallback.py'
+      - 'test_netrattler_scorer_history_fallback.py'
+      - '.github/workflows/netrattler_scorer_history_ci.yml'
+  workflow_dispatch:
+
+jobs:
+  scorer-history:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+      - name: Install small test dependencies
+        run: pip install requests
+      - name: Compile and test exact-identity goals fallback
+        run: |
+          python -m py_compile netrattler_scorer_history_fallback.py test_netrattler_scorer_history_fallback.py
+          python -m unittest -v test_netrattler_scorer_history_fallback.py
+      - name: Probe Supabase L30 scorer data read-only
+        env:
+          SUPABASE_URL: ${{ secrets.SUPABASE_URL }}
+          SUPABASE_KEY: ${{ secrets.SUPABASE_KEY }}
+        run: |
+          python - <<'PY'
+          import os
+          import netrattler_scorer_history_fallback as f
+          if not os.getenv("SUPABASE_URL") or not os.getenv("SUPABASE_KEY"):
+              raise SystemExit("No Supabase credentials for real L30 test")
+          name = "Davy Klaassen"
+          stats = f.recent_goals(name, os.environ["SUPABASE_URL"], os.environ["SUPABASE_KEY"])
+          entry = stats.get("goals") or {}
+          print("LIVE_L30_SAMPLE", name, "games", entry.get("games", 0), "avg", entry.get("avg"))
+          if entry.get("games", 0) < 3:
+              raise SystemExit("L30 scorer fallback did not retrieve minimum three real matches")
+          PY
