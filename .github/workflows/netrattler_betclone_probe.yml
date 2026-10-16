@@ -9,6 +9,8 @@ on:
       - 'test_netrattler_betclone_probe.py'
       - 'netrattler_betclone_hardprobe.py'
       - 'test_netrattler_betclone_hardprobe.py'
+      - 'netrattler_betclone_status.py'
+      - 'test_netrattler_betclone_status.py'
   schedule:
     - cron: '42 7 * * 1'
 permissions:
@@ -25,11 +27,13 @@ jobs:
       - name: Install probe dependency
         run: pip install requests beautifulsoup4
       - name: Test read-only platform probe
-        run: python -m unittest -v test_netrattler_betclone_probe.py test_netrattler_betclone_hardprobe.py
+        run: python -m unittest -v test_netrattler_betclone_probe.py test_netrattler_betclone_hardprobe.py test_netrattler_betclone_status.py
       - name: Probe four BetClone platform families
         run: python netrattler_betclone_probe.py
       - name: Audit all 10 BetClone groups and every listed brand (unverified domains flagged)
         run: python netrattler_betclone_hardprobe.py --timeout 6 --workers 10 --all-brands
+      - name: Produce evidence-based production integration matrix
+        run: python netrattler_betclone_status.py
       - name: Summarize exact BetClone audit coverage (catalogue vs proven odds)
         if: always()
         run: |
@@ -89,4 +93,5 @@ jobs:
           path: |
             netrattler_betclone_probe_summary.json
             netrattler_betclone_hardprobe.json
+            netrattler_betclone_integration_status.json
           retention-days: 7
