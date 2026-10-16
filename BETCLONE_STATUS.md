@@ -352,3 +352,15 @@ anywhere, and **none of the 7 are promoted to any adapter**. Revisiting
 any of them would require the same kind of deeper, still-bypass-free
 investigation that found Altenar's and InPlayNet's actual platform hosts —
 navigating into a real listed match, not just the sports landing page.
+
+## Altenar: other brands checked, still only vegas.hu is usable — 2026-10-16 UTC
+
+Closed the flagged gap ("other Altenar operators were not probed for their
+own integration id/host"): extended the schema sniffer to all 6 remaining
+BetClone-catalogued Altenar brands
+([run 38946777512](https://github.com/forfexes/btts-bot_ki/actions/runs/38946777512)).
+Result: rabona, campobet, nomini and betrepublic were access-denied at the
+homepage itself; sportaza likewise; betinia rendered but never loaded any
+`biahosted.com` JSON on this bounded homepage+one-sports-link crawl.
+**`vegas.hu` remains the only Altenar brand with a confirmed, working
+keyless widget.** No bypass was attempted for the denied/blocked brands.
