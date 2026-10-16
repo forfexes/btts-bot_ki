@@ -31,6 +31,30 @@ The catalogue also exposes 151 historical appendix names, separately marked as u
 - Candidates for human/technical follow-up, **not verified feeds**: BETBY/Inkybet, FIRST/Hugobets, FIRST/Locowin, FIRST/Simsinos, InPlayNet/CasinOK, SoftSwiss/Dailyspins.
 - Explicit authenticated/business-partner APIs require authorized credentials; no proxy/captcha/geo-block evasion permitted.
 
+## Playwright verification (2026-10-16)
+
+Live GitHub browser audit [run 38897332586](https://github.com/forfexes/btts-bot_ki/actions/runs/38897332586):
+Chromium launched successfully; **10 operator homepages in 6 families** were
+rendered without bypassing access controls. All four browser-audit unit tests
+passed. Public sportsbook links were followed on Betinia, Gamdom, Rolletto,
+and Wild.io. **Zero additional verified structured odds feeds** emerged.
+
+| BetClone group | Browser-tested sites | Outcome |
+| --- | --- | --- |
+| Altenar | Betinia | Rendered, sports link; no verified prices |
+| BETBY | Tonybet, Gamdom | JSON responses, no verified prices |
+| BetConstruct | VBET, Olybet, Fastbet | VBET denied; others rendered without verified odds |
+| FIRST | BK8 | Rendered without verified odds |
+| InPlayNet | Rolletto | Sports link, no verified first-party prices |
+| SoftSwiss | Metaspins, Wild.io | Metaspins denied; Wild.io rendered, no verified odds |
+
+Browsers are **operational**, as independently demonstrated by
+[Playwright CI 38895482826](https://github.com/forfexes/btts-bot_ki/actions/runs/38895482826).
+The actual tips workflow installs Chromium and sets
+`NETRATTLER_PLAYWRIGHT_ENABLED=true`, but caps browser usage to 4 pages / 45s.
+A browser-rendered homepage is not a data feed, and browser availability does
+not mean every BetClone operator has become an odds provider.
+
 ## Confirmed sources, distinct from the BetClone directory audit
 
 On 2026-10-16 UTC the `odds_history` table contained 11,671 `1xbet_platform` price records, 7,566 `kambi`, 5,532 `pinnacle`, 5,149 `matchbook`, and 3,706 `bwin`. These **are records, not distinct bookmakers**, and the latter four are not necessarily listed in the ten BetClone groups. 1xBet market type codes remain shadow-only until accurately mapped.
