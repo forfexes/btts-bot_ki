@@ -16,7 +16,7 @@ import os
 import re
 import time
 import unicodedata
-from datetime import datetime, timezone
+from datetime import datetime, timezone, timedelta
 from typing import Any, Dict, Iterable, List, Mapping, Optional, Tuple
 
 import requests
@@ -93,7 +93,7 @@ def _index_rows(rows: Iterable[Mapping[str, Any]]) -> Dict[Tuple[str, str], List
 def _load_rows(force: bool = False) -> List[Dict[str, Any]]:
     global _CACHE, _MATCH_INDEX
     now = time.time()
-    if not force and _CACHE[1] and now - _CACHE[0] < TTL:
+    if not force and now - _CACHE[0] < TTL:
         return _CACHE[1]
     if not SUPABASE_URL or not SUPABASE_KEY:
         _CACHE = (now, [])
@@ -101,6 +101,7 @@ def _load_rows(force: bool = False) -> List[Dict[str, Any]]:
         return []
     headers = {"apikey": SUPABASE_KEY, "Authorization": f"Bearer {SUPABASE_KEY}"}
     today = datetime.now(timezone.utc).date().isoformat()
+    yesterday = (datetime.now(timezone.utc).date() - timedelta(days=1)).isoformat()
     try:
         # Restrict at the database: scanning the first 5k arbitrary historical rows
         # silently omitted most freshly harvested bwin and half-time offers.
@@ -113,11 +114,12 @@ def _load_rows(force: bool = False) -> List[Dict[str, Any]]:
                 f"{SUPABASE_URL}/rest/v1/odds_history",
                 headers=headers,
                 params={
-                    "captured_date": f"eq.{today}",
+                    "captured_date": f"gte.{yesterday}",
+                    "match_date": f"gte.{today}",
                     "source": f"in.({allowed})",
                     "market": f"in.({markets})",
-                    "select": "source,bookmaker,home_team,away_team,match_date,market,selection,odds,raw",
-                    "order": "match_date.asc,match_id.asc,source.asc,bookmaker.asc,market.asc,selection.asc",
+                    "select": "source,bookmaker,home_team,away_team,match_date,captured_date,market,selection,odds,raw",
+                    "order": "captured_date.desc,match_date.asc,match_id.asc,source.asc,bookmaker.asc,market.asc,selection.asc",
                     "limit": str(limit),
                     "offset": str(offset),
                 },
@@ -130,7 +132,8 @@ def _load_rows(force: bool = False) -> List[Dict[str, Any]]:
             rows.extend(dict(x) for x in data
                         if isinstance(x, dict)
                         and str(x.get("source") or "").lower() in LIVE_HISTORY_SOURCES
-                        and _fresh(x))
+                        and _fresh(x)
+                        and ((x.get("raw") or {}).get("captured_at") or str(x.get("captured_date") or "") == today))
             if len(data) < limit:
                 break
         _CACHE = (now, rows)
@@ -138,6 +141,7 @@ def _load_rows(force: bool = False) -> List[Dict[str, Any]]:
         return rows
     except (requests.RequestException, ValueError, TypeError):
         _CACHE = (now, [])
+        _MATCH_INDEX = {}
         return []
 
 def _field_for_row(row: Mapping[str, Any]) -> Optional[str]:
