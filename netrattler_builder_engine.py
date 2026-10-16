@@ -29,6 +29,7 @@ import re
 import unicodedata
 from dataclasses import dataclass, asdict
 from datetime import date
+from itertools import combinations
 from typing import Any, Callable, Dict, Iterable, List, Optional, Sequence, Tuple
 
 import requests
@@ -1323,6 +1324,61 @@ def _match_market_builders(props: Sequence[PropLeg], match_date: str) -> List[Bu
     return out
 
 
+def _alternate_real_prop_builders(props: Sequence[PropLeg], match_date: str) -> List[BuilderPick]:
+    """Produce additional, genuinely distinct bookmaker-priced player builders.
+
+    Previously the same ranked prefix was regenerated every run and all picks
+    were skipped as existing. This bounded pool explores other real quoted legs
+    without changing odds, bypassing the quality gate, or changing old IDs.
+    """
+    groups: Dict[str, List[PropLeg]] = {}
+    for leg in props:
+        if (leg.category not in PLAYER_CATEGORIES or leg.category == "result"
+                or leg.estimated or leg.edge < 0
+                or not 1.15 <= leg.odds <= 4.5 or not norm(leg.player)):
+            continue
+        groups.setdefault(norm(leg.match), []).append(leg)
+
+    builders: List[BuilderPick] = []
+    for match_legs in groups.values():
+        pool = sorted(
+            match_legs,
+            key=lambda x: (x.quality, x.probability, x.edge, -x.odds),
+            reverse=True,
+        )[:12]
+        if len({norm(x.player) for x in pool}) < 2:
+            continue
+        for size, ceiling in ((2, 8.0), (3, 18.0)):
+            scored: List[Tuple[Tuple[float, float, float], BuilderPick]] = []
+            for legs in combinations(pool, size):
+                # One quote per real player: no incompatible alternate lines,
+                # same-player parlay stacks, or copies of a fake derived price.
+                if len({norm(x.player) for x in legs}) != size:
+                    continue
+                pick = _make_builder(
+                    "PLAYER PROP ALTERNATE", f"{size} REAL LEGS",
+                    list(legs), match_date, 0.25,
+                )
+                if not pick or pick.total_odds > ceiling:
+                    continue
+                score = (
+                    sum(x.quality for x in legs) / size,
+                    sum(x.probability for x in legs) / size,
+                    -pick.total_odds,
+                )
+                scored.append((score, pick))
+            scored.sort(key=lambda pair: pair[0], reverse=True)
+            seen = set()
+            for _, pick in scored:
+                if pick.builder_id in seen:
+                    continue
+                builders.append(pick)
+                seen.add(pick.builder_id)
+                if len(seen) >= 4:
+                    break
+    return builders
+
+
 def _cross_match_prop_accas(props: Sequence[PropLeg], match_date: str) -> List[BuilderPick]:
     """Cross-match prop accumulators: one independently qualified player prop per match."""
     allowed = {"shots", "sot", "fouls", "fouls_won", "tackles", "tackles_committed",
@@ -1409,6 +1465,7 @@ def build_builder_picks(
     candidates.extend(_category_trios(props, run_date))
     candidates.extend(_mixed_builders(props, run_date))
     candidates.extend(_same_match_available_builders(props, run_date))
+    candidates.extend(_alternate_real_prop_builders(props, run_date))
     candidates.extend(_same_game_narratives(props, run_date))
     candidates.extend(_cross_match_builder(props, run_date))
     # Team & Korrelations-Builder
@@ -1625,6 +1682,12 @@ def run_builder_engine(
             if logger:
                 logger(f"MASTER BUILDER duplicate skipped: {pick.builder_id}")
             continue
+        if exists is None and supabase_url and supabase_key:
+            # Fail closed: if the DB check times out, Telegram delivery cannot
+            # be proven unique, so never risk a duplicate send.
+            if logger:
+                logger(f"MASTER BUILDER dedupe unavailable; send blocked: {pick.builder_id}")
+            continue
         try:
             send_result = send_message(format_builder_message(pick))
             if send_result is None or send_result is False or send_result == 0:
@@ -1646,6 +1709,10 @@ def run_builder_engine(
                     telegram_chat_id = telegram_chat.get("id")
             elif isinstance(send_result, int) and not isinstance(send_result, bool):
                 telegram_message_id = send_result
+            else:
+                if logger:
+                    logger(f"MASTER BUILDER unverified Telegram response: {pick.style} {pick.variant}")
+                continue
 
             persisted = persist_builder_pick(
                 pick, supabase_url, supabase_key, check_existing=False,

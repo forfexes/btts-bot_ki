@@ -74,5 +74,49 @@ class BuilderDeliveryTests(unittest.TestCase):
         self.assertFalse(self.rows[0].get("telegram_sent", False))
 
 
+    def test_database_lookup_failure_blocks_duplicate_risk(self):
+        class _FailedGet:
+            ok = False
+        with (patch.object(engine, "deduplicate_props", return_value=[]),
+              patch.object(engine, "build_builder_picks", return_value=[self.pick]),
+              patch.object(engine.requests, "get", return_value=_FailedGet()),
+              patch.object(engine.requests, "post") as post):
+            sent, _ = engine.run_builder_engine([], lambda _: 12345,
+                          supabase_url="https://supabase.invalid", supabase_key="test")
+        self.assertEqual(sent, 0)
+        post.assert_not_called()
+
+    def test_boolean_success_is_not_a_telegram_receipt(self):
+        self.assertEqual(self._run(True), 0)
+        self.assertEqual(self.rows, [])
+
+    def test_alternate_real_props_add_distinct_builders(self):
+        props = [
+            engine.PropLeg(f"Player {i}", "Home", "Home vs Away",
+                "Example League", "shots 1+", "shots" if i % 2 else "sot",
+                1.0, 1.60, 0.72, "pinnacle", quality=0.8 - 0.01 * i,
+                edge=1.5)
+            for i in range(6)
+        ]
+        picks = engine._alternate_real_prop_builders(props, "2026-10-16")
+        self.assertGreaterEqual(len(picks), 4)
+        self.assertEqual(len({p.builder_id for p in picks}), len(picks))
+        for pick in picks:
+            self.assertEqual(len({leg.player for leg in pick.legs}), pick.leg_count)
+            self.assertFalse(pick.estimated_odds)
+            self.assertTrue(all(leg.source == "pinnacle" for leg in pick.legs))
+            self.assertLessEqual(pick.total_odds, 18.0)
+
+    def test_alternate_ignores_estimated_and_negative_edge(self):
+        props = [
+            engine.PropLeg(f"Player {i}", "Home", "Home vs Away",
+                "Example League", "shots", "shots", 1.0, 1.6, 0.72,
+                "pinnacle", quality=0.7, estimated=(i == 1),
+                edge=-1 if i == 2 else 1)
+            for i in range(3)
+        ]
+        self.assertEqual(engine._alternate_real_prop_builders(props, "2026-10-16"), [])
+
+
 if __name__ == "__main__":
     unittest.main()
