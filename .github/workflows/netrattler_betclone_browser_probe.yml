@@ -8,6 +8,8 @@ on:
       - 'test_netrattler_betclone_browser_probe.py'
       - '.github/workflows/netrattler_betclone_browser_probe.yml'
   workflow_dispatch:
+  schedule:
+    - cron: "35 8 * * 1"  # weekly after the 07:42 UTC BetClone catalogue scan
 
 jobs:
   browser-probe:
