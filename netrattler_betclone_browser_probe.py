@@ -326,7 +326,8 @@ def audit_page(browser, family: str, brand: str, url: str) -> dict:
             except Exception:
                 result["sports_page_error"] = True
         result["status"] = ("candidate_prices_require_independent_market_validation"
-                            if result["public_structured_price_candidates"]
+                            if (result["public_structured_price_candidates"]
+                                or result["hosted_structured_price_candidates"])
                             else "rendered_without_verified_public_odds")
         return result
     except Exception as exc:
