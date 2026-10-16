@@ -9439,6 +9439,54 @@ def format_result_text(tip, result, status):
     return msg
 
 
+_GAME_LOG_STATS = ("minutes", "shots", "sot", "goals", "assists", "fouls_committed", "fouls_won",
+                   "tackles", "yellow_cards", "passes", "saves", "offsides")
+
+
+def _supabase_game_log_stats(names: list, per_player: int = 30) -> dict:
+    """Per-match player log (player_game_log, 10-30 games per player) -> avg_stats dict
+    {stat: {avg, hit_rate, games}}. Real history only; players with <3 games are skipped
+    so the view fallback (or no model probability) applies instead."""
+    out = {}
+    names = [n for n in dict.fromkeys(str(x or "").strip() for x in names) if n]
+    todo = [n for n in names if ("gl", n) not in _SUPABASE_PLAYER_STATS_CACHE]
+    for i in range(0, len(todo), 30):
+        chunk = todo[i:i + 30]
+        quoted = ",".join('"' + n.replace('"', "") + '"' for n in chunk)
+        try:
+            r = requests.get(
+                f"{SUPABASE_URL}/rest/v1/player_game_log",
+                headers={"apikey": SUPABASE_KEY, "Authorization": f"Bearer {SUPABASE_KEY}"},
+                params={"player_name": f"in.({quoted})", "order": "match_date.desc", "limit": str(len(chunk) * per_player),
+                        "select": "player_name,match_date," + ",".join(_GAME_LOG_STATS)},
+                timeout=25,
+            )
+            rows = r.json() if r.ok else []
+        except Exception:
+            rows = []
+        by = {}
+        for row in rows if isinstance(rows, list) else []:
+            by.setdefault(row.get("player_name"), []).append(row)
+        for n in chunk:
+            games = (by.get(n) or [])[:per_player]
+            stats = {}
+            if len(games) >= 3:
+                for st in _GAME_LOG_STATS:
+                    vals = [float(g[st]) for g in games if g.get(st) is not None]
+                    if len(vals) >= 3:
+                        stats[st] = {"avg": round(sum(vals) / len(vals), 3),
+                                     "hit_rate": round(100.0 * sum(1 for v in vals if v > 0) / len(vals), 1),
+                                     "games": len(vals)}
+                if "yellow_cards" in stats:
+                    stats["cards"] = stats["yellow_cards"]
+            _SUPABASE_PLAYER_STATS_CACHE[("gl", n)] = stats
+    for n in names:
+        st = _SUPABASE_PLAYER_STATS_CACHE.get(("gl", n))
+        if st:
+            out[n] = st
+    return out
+
+
 def get_supabase_player_avg_stats(player_name: str) -> dict:
     """
     Holt historische Spieler-Durchschnittswerte aus Supabase player_avg_stats View.
@@ -9448,6 +9496,10 @@ def get_supabase_player_avg_stats(player_name: str) -> dict:
         return {}
     if player_name in _SUPABASE_PLAYER_STATS_CACHE:
         return _SUPABASE_PLAYER_STATS_CACHE[player_name]
+    _gl = _supabase_game_log_stats([player_name]).get(player_name)
+    if _gl:
+        _SUPABASE_PLAYER_STATS_CACHE[player_name] = _gl
+        return _gl
     try:
         r = requests.get(
             f"{SUPABASE_URL}/rest/v1/player_avg_stats",
@@ -21773,6 +21825,10 @@ def _ntr_enrich_prop_pool_with_player_ml(rows: list) -> dict:
         team_elo = lambda _x: None
         favorite = lambda _h, _a: None
 
+    try:
+        _supabase_game_log_stats([str(r.get("player") or "") for r in candidates])
+    except Exception:
+        pass
     for row in candidates:
         player = str(row.get("player") or "").strip()
         avg_stats = get_supabase_player_avg_stats(player)
