@@ -19,7 +19,7 @@ def coverage_warnings(log_text):
     should not raise a false zero-builder alarm. Partial sends still warn.
     """
     issues = []
-    generated = [int(n) for n in re.findall(r'MASTER BUILDER[^\\n]*generated=(\\d+)', log_text)]
+    generated = [int(n) for n in re.findall(r'MASTER BUILDER[^\n]*generated=(\d+)', log_text)]
     count_generated = max(generated, default=0)
     duplicate_ids = set(re.findall(
         r'MASTER BUILDER duplicate skipped: ([a-zA-Z0-9_-]+)', log_text
