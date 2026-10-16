@@ -175,14 +175,27 @@ CALENDAR_YEAR_LEAGUE_IDS = {
     10,    # Freundschaftsspiele
 }
 
+def _openfootball_season_str():
+    """Aktuelle Saison im openfootball/footballcsv Format, z.B. '2026-27'.
+    Saison startet im August — davor noch die Vorjahressaison."""
+    now = datetime.now(timezone.utc)
+    start_year = now.year if now.month >= 8 else now.year - 1
+    return f"{start_year}-{str(start_year + 1)[-2:]}"
+
+
 def get_dynamic_season(league_id=None, league_name=None):
     """
-    Bestimmt automatisch die richtige Saison (2026 vs 2025).
-    Sommer-Ligen (Südamerika, MLS, Asien, Australien) → 2026
-    Europäische Winter-Ligen → 2025
+    Bestimmt automatisch die richtige Saison (laufendes Jahr neu berechnet,
+    nicht fest kodiert — sonst nach ein paar Monaten wieder veraltet).
+    Sommer-Ligen (Südamerika, MLS, Asien, Australien) → laufendes Kalenderjahr
+    Europäische Winter-Ligen → Start-Jahr der laufenden Saison (ab August)
     """
+    now = datetime.now(timezone.utc)
+    calendar_year = now.year
+    european_season_start_year = now.year if now.month >= 8 else now.year - 1
+
     if league_id and int(league_id) in CALENDAR_YEAR_LEAGUE_IDS:
-        return 2026
+        return calendar_year
 
     # Fallback via Liga-Name
     SUMMER_LEAGUES = [
@@ -194,9 +207,9 @@ def get_dynamic_season(league_id=None, league_name=None):
     if league_name:
         for sl in SUMMER_LEAGUES:
             if sl.lower() in league_name.lower():
-                return 2026
+                return calendar_year
 
-    return 2025
+    return european_season_start_year
 
 SUPABASE_URL = env("SUPABASE_URL")
 SUPABASE_KEY = env("SUPABASE_KEY")
@@ -4263,14 +4276,14 @@ def fetch_github_football_data(league_name, target_date):
         return GITHUB_FOOTBALL_CACHE[cache_key]
 
     GITHUB_LEAGUES = {
-        "Bundesliga": "https://raw.githubusercontent.com/openfootball/football.json/master/2024-25/de.1.json",
-        "Premier League": "https://raw.githubusercontent.com/openfootball/football.json/master/2024-25/en.1.json",
-        "La Liga": "https://raw.githubusercontent.com/openfootball/football.json/master/2024-25/es.1.json",
-        "Serie A": "https://raw.githubusercontent.com/openfootball/football.json/master/2024-25/it.1.json",
-        "Ligue 1": "https://raw.githubusercontent.com/openfootball/football.json/master/2024-25/fr.1.json",
-        "Primeira Liga": "https://raw.githubusercontent.com/openfootball/football.json/master/2024-25/pt.1.json",
-        "Eredivisie": "https://raw.githubusercontent.com/openfootball/football.json/master/2024-25/nl.1.json",
-        "Champions League": "https://raw.githubusercontent.com/openfootball/football.json/master/2024-25/cl.json",
+        "Bundesliga": f"https://raw.githubusercontent.com/openfootball/football.json/master/{_openfootball_season_str()}/de.1.json",
+        "Premier League": f"https://raw.githubusercontent.com/openfootball/football.json/master/{_openfootball_season_str()}/en.1.json",
+        "La Liga": f"https://raw.githubusercontent.com/openfootball/football.json/master/{_openfootball_season_str()}/es.1.json",
+        "Serie A": f"https://raw.githubusercontent.com/openfootball/football.json/master/{_openfootball_season_str()}/it.1.json",
+        "Ligue 1": f"https://raw.githubusercontent.com/openfootball/football.json/master/{_openfootball_season_str()}/fr.1.json",
+        "Primeira Liga": f"https://raw.githubusercontent.com/openfootball/football.json/master/{_openfootball_season_str()}/pt.1.json",
+        "Eredivisie": f"https://raw.githubusercontent.com/openfootball/football.json/master/{_openfootball_season_str()}/nl.1.json",
+        "Champions League": f"https://raw.githubusercontent.com/openfootball/football.json/master/{_openfootball_season_str()}/cl.json",
     }
 
     url = GITHUB_LEAGUES.get(league_name)
@@ -11032,10 +11045,10 @@ def get_international_btts_rate(team_name: str, last_n: int = 20) -> dict:
 FOOTBALLCSV_CACHE = {}
 
 FOOTBALLCSV_REPOS = {
-    "Premier League": ("footballcsv/england", "eng.1", "2020s", "2024-25"),
-    "Bundesliga": ("footballcsv/deutschland", "de.1", "2020s", "2024-25"),
-    "La Liga": ("footballcsv/espana", "es.1", "2020s", "2024-25"),
-    "Bundesliga Österreich": ("footballcsv/austria", "at.1", "2020s", "2024-25"),
+    "Premier League": ("footballcsv/england", "eng.1", "2020s", _openfootball_season_str()),
+    "Bundesliga": ("footballcsv/deutschland", "de.1", "2020s", _openfootball_season_str()),
+    "La Liga": ("footballcsv/espana", "es.1", "2020s", _openfootball_season_str()),
+    "Bundesliga Österreich": ("footballcsv/austria", "at.1", "2020s", _openfootball_season_str()),
 }
 
 def get_footballcsv_btts_rate(league_name: str, team_name: str) -> dict:
@@ -12859,11 +12872,11 @@ def get_penalty_team_rating(team_name, league_name):
         return PENALTY_CACHE[cache_key]
 
     PENALTY_LEAGUES = {
-        "Premier League": "https://raw.githubusercontent.com/openfootball/football.json/master/2024-25/en.1.json",
-        "Bundesliga": "https://raw.githubusercontent.com/openfootball/football.json/master/2024-25/de.1.json",
-        "La Liga": "https://raw.githubusercontent.com/openfootball/football.json/master/2024-25/es.1.json",
-        "Serie A": "https://raw.githubusercontent.com/openfootball/football.json/master/2024-25/it.1.json",
-        "Ligue 1": "https://raw.githubusercontent.com/openfootball/football.json/master/2024-25/fr.1.json",
+        "Premier League": f"https://raw.githubusercontent.com/openfootball/football.json/master/{_openfootball_season_str()}/en.1.json",
+        "Bundesliga": f"https://raw.githubusercontent.com/openfootball/football.json/master/{_openfootball_season_str()}/de.1.json",
+        "La Liga": f"https://raw.githubusercontent.com/openfootball/football.json/master/{_openfootball_season_str()}/es.1.json",
+        "Serie A": f"https://raw.githubusercontent.com/openfootball/football.json/master/{_openfootball_season_str()}/it.1.json",
+        "Ligue 1": f"https://raw.githubusercontent.com/openfootball/football.json/master/{_openfootball_season_str()}/fr.1.json",
     }
 
     url = PENALTY_LEAGUES.get(league_name)
