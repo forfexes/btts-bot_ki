@@ -230,6 +230,112 @@ def test_live_cache_index_uses_exact_match_and_current_rows_only():
         guard._load_rows, guard._MATCH_INDEX = old_load, old_index
 
 
+def test_full_1x2_corroboration_promotes_only_verified_x1_quotes():
+    from datetime import datetime, timezone
+    today = datetime.now(timezone.utc).date().isoformat()
+    now = datetime.now(timezone.utc).isoformat()
+    base = {"home_team": "Arsenal", "away_team": "Chelsea", "match_date": today,
+            "captured_date": today, "market": "1x2"}
+    good = []
+    for selection, ref, x1 in (("home", 2.00, 2.10), ("draw", 3.30, 3.38),
+                                ("away", 4.20, 4.40)):
+        good.append(dict(base, source="bwin", selection=selection,
+                         odds=ref, raw={"captured_at": now}))
+        good.append(dict(base, source="1xbet_platform", selection=selection,
+                         odds=x1, imported_at=now, raw={"platform": "1xbet"}))
+    result, sources = guard.best_observed_for_match("Arsenal", "Chelsea", good)
+    assert result == {"home_win": 2.1, "draw": 3.38, "away_win": 4.4}, result
+    assert all(s.startswith("1xbet_platform") for s in sources.values())
+
+
+def test_partial_or_mismatched_x1_market_never_promoted():
+    from datetime import datetime, timezone
+    today = datetime.now(timezone.utc).date().isoformat()
+    now = datetime.now(timezone.utc).isoformat()
+    base = {"home_team": "Arsenal", "away_team": "Chelsea", "match_date": today,
+            "captured_date": today, "market": "1x2"}
+    rows = []
+    for selection, ref in (("home", 2.0), ("draw", 3.3), ("away", 4.2)):
+        rows.append(dict(base, source="bwin", selection=selection, odds=ref,
+                         raw={"captured_at": now}))
+    rows.append(dict(base, source="1xbet_platform", selection="home",
+                     odds=2.1, imported_at=now))
+    result, sources = guard.best_observed_for_match("Arsenal", "Chelsea", rows)
+    assert result == {"home_win": 2.0, "draw": 3.3, "away_win": 4.2}
+    assert all(s == "bwin" for s in sources.values())
+    # All outcomes present, but one X1 quote contradicts a mapped bookmaker.
+    rows.extend([
+        dict(base, source="1xbet_platform", selection="draw", odds=3.4, imported_at=now),
+        dict(base, source="1xbet_platform", selection="away", odds=1.3, imported_at=now),
+    ])
+    result, sources = guard.best_observed_for_match("Arsenal", "Chelsea", rows)
+    assert result["home_win"] == 2.0
+    assert all(s == "bwin" for s in sources.values())
+
+
+def test_x1_totals_needs_both_lines_and_never_allows_other_markets():
+    from datetime import datetime, timezone
+    today = datetime.now(timezone.utc).date().isoformat()
+    now = datetime.now(timezone.utc).isoformat()
+    base = {"home_team": "Arsenal", "away_team": "Chelsea", "match_date": today,
+            "captured_date": today, "market": "totals_2_5"}
+    rows = [
+        dict(base, source="bwin", selection="over_2_5", odds=1.9, raw={"captured_at": now}),
+        dict(base, source="bwin", selection="under_2_5", odds=1.9, raw={"captured_at": now}),
+        dict(base, source="1xbet_platform", selection="over_2_5", odds=2.0, imported_at=now),
+        dict(base, source="1xbet_platform", selection="under_2_5", odds=1.95, imported_at=now),
+        dict(base, source="1xbet_platform", market="btts_ht", selection="yes",
+             odds=9.9, imported_at=now),
+    ]
+    prices, sources = guard.best_observed_for_match("Arsenal", "Chelsea", rows)
+    assert prices == {"over_25": 2.0}
+    assert sources["over_25"].startswith("1xbet_platform")
+
+
+def test_x1_shadow_with_no_fresh_import_never_promoted():
+    from datetime import datetime, timezone, timedelta
+    today = datetime.now(timezone.utc).date().isoformat()
+    now = datetime.now(timezone.utc).isoformat()
+    old = (datetime.now(timezone.utc) - timedelta(hours=25)).isoformat()
+    base = {"home_team": "Arsenal", "away_team": "Chelsea", "match_date": today,
+            "captured_date": today, "market": "1x2"}
+    rows = []
+    for selection, p in (("home", 2.0), ("draw", 3.3), ("away", 4.2)):
+        rows.append(dict(base, source="bwin", selection=selection,
+                         odds=p, raw={"captured_at": now}))
+        rows.append(dict(base, source="1xbet_platform", selection=selection,
+                         odds=p * 1.04, imported_at=old))
+    prices, sources = guard.best_observed_for_match("Arsenal", "Chelsea", rows)
+    assert prices["home_win"] == 2.0
+    assert all(s == "bwin" for s in sources.values())
+
+
+def test_x1_loader_queries_only_allowlisted_shadow_markets():
+    from unittest.mock import patch
+    from datetime import datetime, timezone
+    today = datetime.now(timezone.utc).date().isoformat()
+    now = datetime.now(timezone.utc).isoformat()
+    srcrow = {"source": "1xbet_platform", "home_team": "Arsenal",
+              "away_team": "Chelsea", "market": "1x2", "selection": "home",
+              "match_date": today, "captured_date": today, "imported_at": now,
+              "odds": 2.1}
+    calls = []
+    class Response:
+        def raise_for_status(self): pass
+        def json(self): return [srcrow]
+    def get(_url, *, params, **_kwargs):
+        calls.append(params)
+        return Response()
+    with (patch.object(guard, "SUPABASE_URL", "https://supabase.invalid"),
+          patch.object(guard, "SUPABASE_KEY", "test"),
+          patch.object(guard.requests, "get", side_effect=get)):
+        rows = guard._load_x1_rows(force=True)
+    assert len(rows) == 1
+    assert calls[0]["source"] == "eq.1xbet_platform"
+    assert "1x2" in calls[0]["market"] and "totals_2_5" in calls[0]["market"]
+    assert "btts_ht" not in calls[0]["market"]
+
+
 def main():
     test_best_observed_market_mapping_and_source()
     test_best_price_wins_for_same_exact_market()
@@ -242,7 +348,12 @@ def main():
     test_rolling_utc_window_uses_yesterday_but_filters_stale_prices()
     test_db_failure_clears_stale_match_index()
     test_live_cache_index_uses_exact_match_and_current_rows_only()
-    print("OK: multi-brand Kambi + fresh odds_history final fallback guard")
+    test_full_1x2_corroboration_promotes_only_verified_x1_quotes()
+    test_partial_or_mismatched_x1_market_never_promoted()
+    test_x1_totals_needs_both_lines_and_never_allows_other_markets()
+    test_x1_shadow_with_no_fresh_import_never_promoted()
+    test_x1_loader_queries_only_allowlisted_shadow_markets()
+    print("OK: multi-brand Kambi + corroborated X1 shadow + fresh odds_history fallback")
 
 
 def test_shadow_and_fuzzy_names_never_enter_live():

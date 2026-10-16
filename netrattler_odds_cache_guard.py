@@ -34,12 +34,24 @@ MAX_ROWS = int(os.getenv("NETRATTLER_ODDS_CACHE_MAX_ROWS", "20000"))
 PAGE_SIZE = 1000
 CACHE_MARKETS = ("1x2", "btts", "btts_ht", "totals_2_5", "totals_ht_1_5")
 MAX_AGE_HOURS = float(os.getenv("NETRATTLER_ODDS_CACHE_MAX_AGE_HOURS", "18"))
-# Only providers with validated selection mapping enter live tips.
-# bwin uses labelled home/away, BTTS and totals; numeric-code 1xBet stays shadow.
+# Trusted independent collectors: always eligible for the safe history fallback.
+# 1xBet raw numeric-coded offers are NOT generally safe for live tips. Only
+# complete 1X2 or OU2.5 markets independently corroborated at the same
+# fixture/date/selection can pass _corroborated_x1_rows below.
 LIVE_HISTORY_SOURCES = frozenset({"pinnacle", "kambi", "the_odds_api", "bwin"})
+X1_SHADOW_SOURCE = "1xbet_platform"
+X1_CROSS_CHECK_MARKETS = {
+    "1x2": frozenset({"home", "draw", "away"}),
+    "totals_2_5": frozenset({"over_2_5", "under_2_5"}),
+}
+X1_MAX_ROWS = max(1000, min(12000, int(os.getenv("NETRATTLER_X1_HISTORY_MAX_ROWS", "7000"))))
+X1_CORROBORATION_RATIO_MIN = 0.85
+X1_CORROBORATION_RATIO_MAX = 1.18
 
 _CACHE: Tuple[float, List[Dict[str, Any]]] = (0.0, [])
 _MATCH_INDEX: Dict[Tuple[str, str], List[Dict[str, Any]]] = {}
+_X1_CACHE: Tuple[float, List[Dict[str, Any]]] = (0.0, [])
+_X1_MATCH_INDEX: Dict[Tuple[str, str], List[Dict[str, Any]]] = {}
 _INSTALLED = False
 _LOGGED = 0
 
@@ -144,6 +156,119 @@ def _load_rows(force: bool = False) -> List[Dict[str, Any]]:
         _MATCH_INDEX = {}
         return []
 
+def _fresh_x1(row: Mapping[str, Any]) -> bool:
+    """Numeric-coded shadow odds need a recent real ingestion timestamp."""
+    if str(row.get("source") or "").lower() != X1_SHADOW_SOURCE:
+        return False
+    stamp = row.get("imported_at")
+    if not stamp or not row.get("match_date"):
+        return False
+    if str(row.get("captured_date") or "") != datetime.now(timezone.utc).date().isoformat():
+        return False
+    try:
+        dt = datetime.fromisoformat(str(stamp).replace("Z", "+00:00"))
+        if dt.tzinfo is None:
+            dt = dt.replace(tzinfo=timezone.utc)
+        age = (datetime.now(timezone.utc) - dt.astimezone(timezone.utc)).total_seconds() / 3600.0
+        return -1.0 <= age <= MAX_AGE_HOURS
+    except (ValueError, TypeError):
+        return False
+
+
+def _load_x1_rows(force: bool = False) -> List[Dict[str, Any]]:
+    """Load shadow quotes separately: they never displace validated providers."""
+    global _X1_CACHE, _X1_MATCH_INDEX
+    now = time.time()
+    if not force and now - _X1_CACHE[0] < TTL:
+        return _X1_CACHE[1]
+    if not SUPABASE_URL or not SUPABASE_KEY:
+        _X1_CACHE = (now, [])
+        _X1_MATCH_INDEX = {}
+        return []
+    today = datetime.now(timezone.utc).date().isoformat()
+    rows: List[Dict[str, Any]] = []
+    try:
+        for offset in range(0, X1_MAX_ROWS, PAGE_SIZE):
+            limit = min(PAGE_SIZE, X1_MAX_ROWS - offset)
+            response = requests.get(
+                f"{SUPABASE_URL}/rest/v1/odds_history",
+                headers={"apikey": SUPABASE_KEY,
+                         "Authorization": f"Bearer {SUPABASE_KEY}"},
+                params={
+                    "source": "eq.1xbet_platform",
+                    "market": "in.(1x2,totals_2_5)",
+                    "captured_date": f"eq.{today}",
+                    "match_date": f"gte.{today}",
+                    "select": "source,bookmaker,home_team,away_team,match_date,captured_date,market,selection,odds,raw,imported_at",
+                    "order": "imported_at.desc",
+                    "limit": str(limit),
+                    "offset": str(offset),
+                },
+                timeout=TIMEOUT,
+            )
+            response.raise_for_status()
+            data = response.json()
+            if not isinstance(data, list):
+                raise ValueError("unexpected x1 odds_history response")
+            rows.extend(dict(r) for r in data if isinstance(r, dict) and _fresh_x1(r))
+            if len(data) < limit:
+                break
+    except (requests.RequestException, ValueError, TypeError):
+        rows = []
+    _X1_CACHE = (now, rows)
+    _X1_MATCH_INDEX = _index_rows(rows)
+    return rows
+
+
+def _corroborated_x1_rows(candidates: List[Dict[str, Any]]) -> set[int]:
+    """Admit ONLY full markets agreeing with an independent mapped provider.
+
+    Exact home/away, match date, market and outcome; no fuzzy matching, no
+    unsupported halftime/scorer/cards/corners and no promotion by lone quote.
+    """
+    references: Dict[Tuple[str, str, str], List[float]] = {}
+    shadow: Dict[Tuple[str, str], Dict[str, List[Dict[str, Any]]]] = {}
+    today = datetime.now(timezone.utc).date().isoformat()
+    for row in candidates:
+        market = str(row.get("market") or "").lower()
+        if market not in X1_CROSS_CHECK_MARKETS:
+            continue
+        selection = str(row.get("selection") or "").lower()
+        if selection not in X1_CROSS_CHECK_MARKETS[market]:
+            continue
+        match_date = str(row.get("match_date") or "")
+        if not match_date or match_date < today:
+            continue
+        price = _price(row.get("odds"), 30.0)
+        if price is None:
+            continue
+        key = (match_date, market, selection)
+        source = str(row.get("source") or "").lower()
+        if source in LIVE_HISTORY_SOURCES and _fresh(row):
+            references.setdefault(key, []).append(price)
+        elif source == X1_SHADOW_SOURCE and _fresh_x1(row):
+            shadow.setdefault((match_date, market), {}).setdefault(selection, []).append(row)
+    certified: set[int] = set()
+    for (_match_date, market), offers in shadow.items():
+        required = X1_CROSS_CHECK_MARKETS[market]
+        if not required.issubset(offers):
+            continue
+        good: Dict[str, List[Dict[str, Any]]] = {}
+        for selection in required:
+            refs = references.get((_match_date, market, selection), [])
+            selected = [
+                row for row in offers[selection]
+                if any(X1_CORROBORATION_RATIO_MIN <= float(row["odds"]) / ref
+                       <= X1_CORROBORATION_RATIO_MAX for ref in refs)
+            ]
+            if not selected:
+                break
+            good[selection] = selected
+        if len(good) == len(required):
+            certified.update(id(row) for group in good.values() for row in group)
+    return certified
+
+
 def _field_for_row(row: Mapping[str, Any]) -> Optional[str]:
     market = str(row.get("market") or "").lower().replace("-", "_")
     selection = str(row.get("selection") or "").lower().strip()
@@ -173,11 +298,19 @@ def best_observed_for_match(home: str, away: str, rows: Optional[Iterable[Mappin
     sources: Dict[str, str] = {}
     if rows is None:
         _load_rows()
-        candidates = _MATCH_INDEX.get((_norm(home), _norm(away)), [])
+        candidates = list(_MATCH_INDEX.get((_norm(home), _norm(away)), []))
+        if str(os.getenv("NETRATTLER_X1_CROSS_VERIFY", "true")).lower() in {"1", "true", "yes", "on"}:
+            _load_x1_rows()
+            candidates.extend(_X1_MATCH_INDEX.get((_norm(home), _norm(away)), []))
     else:
-        candidates = rows
+        candidates = list(rows)
+    verified_x1_ids = _corroborated_x1_rows(candidates)
     for row in candidates:
-        if str(row.get("source") or "").lower() not in LIVE_HISTORY_SOURCES or not _fresh(row):
+        source_type = str(row.get("source") or "").lower()
+        if source_type == X1_SHADOW_SOURCE:
+            if id(row) not in verified_x1_ids:
+                continue
+        elif source_type not in LIVE_HISTORY_SOURCES or not _fresh(row):
             continue
         if _norm(row.get("home_team")) in {"home", "away", "team 1", "team 2"} or _norm(row.get("away_team")) in {"home", "away", "team 1", "team 2"}:
             continue
