@@ -118,29 +118,54 @@ _PUBLIC_SCHEMA_KEYS = {
 
 
 def sports_json_shape_signals(payload) -> dict[str, int]:
-    """Bounded, content-free structural diagnostics of an observed public reply.
+    """Bounded, value-free market anatomy: raw prices vs valid quote context.
 
-    Only fixed-role counter names leave the browser. Values, arbitrary keys,
-    URLs, event names, participant names and source JSON are never logged.
+    Count only fixed structural roles, never market names, prices, users, links,
+    request headers, query strings, or arbitrary JSON keys.
     """
     hits: Counter = Counter()
-    nodes = [payload]
+    nodes = [(payload, False, False, False)]
     inspected = 0
+    label_fields = {
+        "name", "label", "title", "outcomename", "selectionname",
+        "optionname", "runnername", "participantname", "competitorname",
+    }
     while nodes and inspected < 1200:
-        item = nodes.pop()
+        item, event_parent, market_parent, sport_parent = nodes.pop()
         inspected += 1
         if isinstance(item, list):
-            nodes.extend(item[:100])
+            nodes.extend((child, event_parent, market_parent, sport_parent)
+                         for child in item[:100])
         elif isinstance(item, dict):
             keys = {
                 "".join(c for c in str(k).lower() if c.isalnum())
                 for k in list(item)[:100]
             }
-            for role, names in _PUBLIC_SCHEMA_KEYS.items():
-                if keys & names:
+            matched = {role: bool(keys & names)
+                       for role, names in _PUBLIC_SCHEMA_KEYS.items()}
+            for role, present in matched.items():
+                if present:
                     hits[role] += 1
-            nodes.extend(list(item.values())[:100])
-    return {role: min(1200, hits[role]) for role in _PUBLIC_SCHEMA_KEYS}
+            event_ctx = event_parent or matched["events"]
+            market_ctx = market_parent or matched["markets"]
+            sport_ctx = sport_parent or matched["sports"]
+            if matched["prices"]:
+                if event_ctx:
+                    hits["priced_with_event"] += 1
+                if market_ctx:
+                    hits["priced_with_market"] += 1
+                if sport_ctx:
+                    hits["priced_with_sports"] += 1
+                if keys & label_fields:
+                    hits["priced_with_label"] += 1
+                    if event_ctx and market_ctx:
+                        hits["priced_complete_context"] += 1
+            nodes.extend((child, event_ctx, market_ctx, sport_ctx)
+                         for child in list(item.values())[:100])
+    names = [*_PUBLIC_SCHEMA_KEYS, "priced_with_event", "priced_with_market",
+             "priced_with_sports", "priced_with_label",
+             "priced_complete_context"]
+    return {role: min(1200, hits[role]) for role in names}
 
 
 def public_response_evidence(response) -> dict | None:
@@ -171,7 +196,9 @@ def audit_page(browser, family: str, brand: str, url: str) -> dict:
               "external_json_hosts": [], "hosted_json_inspected": 0,
               "hosted_structured_price_candidates": 0,
               "unavailable_json_bodies": 0,
-              "hosted_schema_signals": {role: 0 for role in _PUBLIC_SCHEMA_KEYS}}
+              "hosted_schema_signals": {
+                  role: 0 for role in sports_json_shape_signals(None)
+              }}
     context = browser.new_context(accept_downloads=False, service_workers="block")
     page = context.new_page()
     seen_responses = set()

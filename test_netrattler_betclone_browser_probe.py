@@ -41,6 +41,21 @@ class BrowserProbeTests(unittest.TestCase):
         self.assertNotIn("PRIVATE MATCH NAME", str(result))
         self.assertNotIn("Confidential Player", str(result))
 
+    def test_price_requires_ancestral_event_market_and_selection(self):
+        full = {"eventId": 999, "markets": [{
+            "marketName": "Anytime scorer",
+            "outcomes": [{"label": "Yes", "decimalOdds": 1.9}]
+        }]}
+        partial = {"marketName": "Unrelated market", "odds": 2.2}
+        a = probe.sports_json_shape_signals(full)
+        b = probe.sports_json_shape_signals(partial)
+        self.assertEqual(a["priced_complete_context"], 1)
+        self.assertEqual(a["priced_with_market"], 1)
+        self.assertEqual(a["priced_with_event"], 1)
+        self.assertEqual(b["priced_with_market"], 1)
+        self.assertEqual(b["priced_with_event"], 0)
+        self.assertEqual(b["priced_complete_context"], 0)
+
     def test_irrelevant_private_json_does_not_create_sportsbook_evidence(self):
         result = probe.sports_json_shape_signals({
             "api_key": "private", "account": {"user_email": "someone@example.test"},
