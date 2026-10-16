@@ -130,6 +130,17 @@ def sports_json_shape_signals(payload) -> dict[str, int]:
         "name", "label", "title", "outcomename", "selectionname",
         "optionname", "runnername", "participantname", "competitorname",
     }
+    def decimal_quote(value):
+        # Only decimal odds, never probabilities, booleans, floats in
+        # unrelated "price" structures, or any nested raw data.
+        if isinstance(value, bool) or isinstance(value, (list, dict)):
+            return False
+        try:
+            number = float(value)
+        except (TypeError, ValueError, OverflowError):
+            return False
+        return 1.0001 < number <= 100.0
+
     while nodes and inspected < 1200:
         item, event_parent, market_parent, sport_parent = nodes.pop()
         inspected += 1
@@ -150,6 +161,15 @@ def sports_json_shape_signals(payload) -> dict[str, int]:
             market_ctx = market_parent or matched["markets"]
             sport_ctx = sport_parent or matched["sports"]
             if matched["prices"]:
+                price_values = [
+                    value for key, value in list(item.items())[:100]
+                    if "".join(c for c in str(key).lower() if c.isalnum())
+                    in _PUBLIC_SCHEMA_KEYS["prices"]
+                ]
+                if any(decimal_quote(value) for value in price_values):
+                    hits["plausible_decimal_price_fields"] += 1
+                    if event_ctx and market_ctx and keys & label_fields:
+                        hits["plausible_decimal_full_context"] += 1
                 if event_ctx:
                     hits["priced_with_event"] += 1
                 if market_ctx:
@@ -164,7 +184,8 @@ def sports_json_shape_signals(payload) -> dict[str, int]:
                          for child in list(item.values())[:100])
     names = [*_PUBLIC_SCHEMA_KEYS, "priced_with_event", "priced_with_market",
              "priced_with_sports", "priced_with_label",
-             "priced_complete_context"]
+             "priced_complete_context", "plausible_decimal_price_fields",
+             "plausible_decimal_full_context"]
     return {role: min(1200, hits[role]) for role in names}
 
 

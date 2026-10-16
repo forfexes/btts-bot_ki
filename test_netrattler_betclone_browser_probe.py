@@ -56,6 +56,21 @@ class BrowserProbeTests(unittest.TestCase):
         self.assertEqual(b["priced_with_event"], 0)
         self.assertEqual(b["priced_complete_context"], 0)
 
+    def test_numeric_price_eligibility_distinguishes_schema_from_actual_odds(self):
+        base = {"events": [{"markets": [{"outcomes": [{"name": "Over",
+                 "price": {"value": 1.9}}, {"name": "Under", "price": "1.84"}]}]}]}
+        signs = probe.sports_json_shape_signals(base)
+        self.assertEqual(signs["prices"], 2)
+        self.assertEqual(signs["plausible_decimal_price_fields"], 1)
+        self.assertEqual(signs["plausible_decimal_full_context"], 1)
+        no = probe.sports_json_shape_signals({"eventId": "x", "market": "win",
+                                               "name": "yes", "price": "0.45"})
+        self.assertEqual(no["plausible_decimal_price_fields"], 0)
+        self.assertEqual(no["priced_complete_context"], 1)
+        self.assertEqual(probe.sports_json_shape_signals(
+            {"eventId": 1, "market": "goals", "name": "over", "price": True}
+        )["plausible_decimal_price_fields"], 0)
+
     def test_irrelevant_private_json_does_not_create_sportsbook_evidence(self):
         result = probe.sports_json_shape_signals({
             "api_key": "private", "account": {"user_email": "someone@example.test"},
