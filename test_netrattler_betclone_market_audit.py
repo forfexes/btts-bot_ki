@@ -97,6 +97,30 @@ class MarketAuditTests(unittest.TestCase):
         rows = _bwin_rows(fixture)
         self.assertEqual({r["selection"] for r in rows}, {"home", "draw", "away"})
 
+    def test_bwin_player_participants_cannot_replace_club_fixture_names(self):
+        from netrattler_keyless_odds import _bwin_rows
+        fixture = {"id": 9001, "name": {"value": "FC Ingolstadt 04 - Rot-Weiss Essen"},
+                   "startDate": "2026-10-16T16:00:00Z",
+                   "participants": [{"name": {"value": "Velupillay, Nishan"}},
+                                    {"name": {"value": "Yannick Deichmann"}}],
+                   "games": [{"name": {"value": "Total Corners"},
+                              "results": [{"name": {"value": "Over 8.5"}, "odds": 1.98}]}]}
+        rows = _bwin_rows(fixture)
+        self.assertEqual(len(rows), 1)
+        self.assertEqual(rows[0]["home_team"], "FC Ingolstadt 04")
+        self.assertEqual(rows[0]["away_team"], "Rot-Weiss Essen")
+        self.assertEqual(rows[0]["market"], "corners_8_5")
+
+    def test_bwin_futures_title_is_not_a_fixture(self):
+        from netrattler_keyless_odds import _bwin_rows
+        futures = {"id": 9999, "name": {"value": "Laliga 2026/27 – Relegation"},
+                   "startDate": "2026-10-16T16:00:00Z",
+                   "participants": [{"name": {"value": "Rayo Vallecano"}},
+                                    {"name": {"value": "Espanyol Barcelona"}}],
+                   "games": [{"name": {"value": "Both Teams To Score"},
+                              "results": [{"name": {"value": "Yes"}, "odds": 1.88}]}]}
+        self.assertEqual(_bwin_rows(futures), [])
+
     @patch("netrattler_keyless_odds.time.sleep")
     @patch("netrattler_keyless_odds._get")
     def test_bwin_detail_enriches_even_when_listing_has_many_quotations(self, get, _sleep):
