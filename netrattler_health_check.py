@@ -144,6 +144,61 @@ def check_supabase() -> List[str]:
     return issues, size, total, len(latest)  # type: ignore[return-value]
 
 
+
+def check_clv() -> str:
+    """Benchmark NETRATTLER tip value vs. the de-vigged multi-bookmaker closing consensus
+    (netrattler_closing_consensus, imported from open CC-BY Hugging Face datasets).
+    Informational only — never changes what gets tipped, never a published quote."""
+    since = (date.today() - timedelta(days=30)).isoformat()
+    r = _sb("tips", {"select": "market,tip,odds,status,match,date", "date": f"gte.{since}",
+                      "market": "in.(over25,btts)", "order": "date.desc", "limit": "1000"})
+    if not r.ok:
+        return ""
+    tips = [t for t in r.json() if t.get("odds") and float(t["odds"] or 0) > 1]
+    if not tips:
+        return ""
+    dates = sorted({t["date"][:10] for t in tips if t.get("date")})
+    if not dates:
+        return ""
+    r2 = _sb("netrattler_closing_consensus", {
+        "select": "match_date,home_team,away_team,close_over25_prob,close_btts_prob",
+        "match_date": f"gte.{dates[0]}", "limit": "4000"})
+    consensus = r2.json() if r2.ok else []
+    by_date: Dict[str, List[Dict[str, Any]]] = {}
+    for c in consensus:
+        by_date.setdefault(str(c.get("match_date") or ""), []).append(c)
+
+    def _tok(m: str) -> set:
+        return set(w.lower() for w in str(m or "").replace("-", " ").split() if len(w) > 2)
+
+    n = 0
+    clv_sum = 0.0
+    beat = 0
+    for t in tips:
+        d = str(t.get("date") or "")[:10]
+        rows = by_date.get(d, [])
+        match_tok = _tok(t.get("match"))
+        best = None
+        for c in rows:
+            home_tok, away_tok = _tok(c.get("home_team")), _tok(c.get("away_team"))
+            if home_tok & match_tok and away_tok & match_tok:
+                best = c
+                break
+        if not best:
+            continue
+        p = best.get("close_over25_prob") if t["market"] == "over25" else best.get("close_btts_prob")
+        if not p:
+            continue
+        clv = float(t["odds"]) * float(p) - 1.0
+        clv_sum += clv
+        n += 1
+        if clv > 0:
+            beat += 1
+    if n < 5:
+        return ""
+    return f"CLV (30d, {n} Tipps gg. Closing-Konsens): {clv_sum / n * 100:+.1f}% · {beat}/{n} besser als Schluss"
+
+
 def send(text: str) -> None:
     print(text)
     if TG_TOKEN and TG_CHAT:
@@ -165,6 +220,13 @@ def main() -> int:
     issues += sb_issues
     head = f"🩺 <b>NETRATTLER Health {date.today().isoformat()}</b>"
     stats = f"DB {size:.0f} MB · player_game_log {total} Zeilen · {n_sources} Quellen geprüft" if size is not None and total is not None else ""
+    try:
+        clv_line = check_clv()
+    except Exception as exc:
+        clv_line = ""
+        print("CLV Fehler:", str(exc)[:120])
+    if clv_line:
+        stats = f"{stats}\n{clv_line}" if stats else clv_line
     if issues:
         body = "\n".join(f"• {i}" for i in issues[:15])
         send(f"{head}\n⚠️ {len(issues)} Auffälligkeiten\n{body}\n{stats}")
