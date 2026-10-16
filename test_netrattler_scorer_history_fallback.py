@@ -70,6 +70,32 @@ class ScorerHistoryTests(unittest.TestCase):
         with patch.object(scorer, "recent_goals", side_effect=AssertionError("must not fetch")):
             self.assertEqual(bot.get_supabase_player_avg_stats("Sam Lee")["goals"]["avg"], 0.1)
 
+    def test_incomplete_goals_view_triggers_l30_for_scorer_only(self):
+        class Bot:
+            SUPABASE_URL = "https://example.com"
+            SUPABASE_KEY = "token"
+            @staticmethod
+            def get_supabase_player_avg_stats(_name):
+                return {"goals": {"avg": 1.0, "games": 1},
+                        "shots": {"avg": 2.2, "games": 10}}
+
+        bot = Bot()
+        scorer.install(bot)
+
+        def _ntr_history_scorers_from_quotes():
+            def _one():
+                return bot.get_supabase_player_avg_stats("Davy Klaassen")
+            return _one()
+
+        with patch.object(scorer, "recent_goals",
+                          return_value={"goals": {"avg": 0.2, "games": 20}}) as query:
+            data = _ntr_history_scorers_from_quotes()
+            self.assertEqual(data["goals"], {"avg": 0.2, "games": 20})
+            self.assertEqual(data["shots"], {"avg": 2.2, "games": 10})
+            self.assertEqual(query.call_count, 1)
+            self.assertEqual(bot.get_supabase_player_avg_stats("Davy Klaassen")["goals"]["games"], 1)
+            self.assertEqual(query.call_count, 1)
+
     def test_install_uses_history_when_goal_stat_missing(self):
         class Bot:
             SUPABASE_URL = "https://example.com"
