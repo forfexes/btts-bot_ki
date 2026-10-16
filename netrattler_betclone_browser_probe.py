@@ -14,7 +14,7 @@ import argparse
 from datetime import datetime, timezone
 import json
 from pathlib import Path
-from urllib.parse import urlparse
+from urllib.parse import urljoin, urlparse
 
 from netrattler_betclone_hardprobe import audit_odds_json
 
@@ -36,6 +36,22 @@ def is_first_party_response(page_url: str, response_url: str) -> bool:
     response_host = (urlparse(response_url).hostname or "").lower().removeprefix("www.")
     return bool(page_host and response_host and
                 (response_host == page_host or response_host.endswith("." + page_host)))
+
+
+def first_party_sports_link(homepage: str, hrefs: list[str]) -> str | None:
+    """Find at most one explicitly published sportsbook link; no URL guessing."""
+    for href in hrefs[:120]:
+        if not isinstance(href, str) or not href:
+            continue
+        target = urljoin(homepage, href)
+        parsed = urlparse(target)
+        if (parsed.scheme == "https" and
+                is_first_party_response(homepage, target) and
+                "sport" in parsed.path.lower() and
+                parsed.path.strip("/").lower() != "sportsbook-terms"):
+            # Strip query and fragment, including transient signed parameters.
+            return parsed._replace(query="", fragment="").geturl()
+    return None
 
 
 def is_denied(status: int, body: str) -> bool:
@@ -95,10 +111,29 @@ def audit_page(browser, family: str, brand: str, url: str) -> dict:
         body = page.locator("body").inner_text(timeout=2500)[:4000]
         if is_denied(navigation.status, title + " " + body):
             result["status"] = "restricted_or_challenge"
-        elif result["public_structured_price_candidates"]:
-            result["status"] = "candidate_prices_require_independent_market_validation"
-        else:
-            result["status"] = "rendered_without_verified_public_odds"
+            return result
+        # Navigate ONE genuine on-site sports link, when advertised publicly.
+        # Landing pages often expose only login and promotions, not betting odds.
+        hrefs = page.locator("a[href]").evaluate_all(
+            "(anchors) => anchors.slice(0, 120).map(a => a.getAttribute('href'))")
+        sports_url = first_party_sports_link(url, hrefs)
+        if sports_url:
+            result["public_sports_link_found"] = True
+            try:
+                sports_navigation = page.goto(sports_url, wait_until="domcontentloaded", timeout=10000)
+                if sports_navigation and sports_navigation.status in (401, 403, 407, 429, 451):
+                    result["status"] = "sports_page_access_denied"
+                    return result
+                page.wait_for_timeout(1500)
+                if is_denied(sports_navigation.status if sports_navigation else 0,
+                             page.locator("body").inner_text(timeout=2000)[:3000]):
+                    result["status"] = "sports_page_restricted_or_challenge"
+                    return result
+            except Exception:
+                result["sports_page_error"] = True
+        result["status"] = ("candidate_prices_require_independent_market_validation"
+                            if result["public_structured_price_candidates"]
+                            else "rendered_without_verified_public_odds")
         return result
     except Exception as exc:
         result["status"] = "browser_error"
