@@ -98,13 +98,28 @@ def is_denied(status: int, body: str) -> bool:
         term in (body or "").lower()[:4000] for term in DENIAL_TEXT)
 
 
+def public_response_price_count(response) -> int | None:
+    """Read an already-observed public JSON reply without leaking missing-body errors.
+
+    Navigation may evict Chrome's Network.getResponseBody; unavailable data is
+    NOT a zero-odds source and is never silently treated as a valid feed.
+    """
+    try:
+        return min(500, int(audit_odds_json(response.json()).get("verified_prices", 0)))
+    except Exception:
+        # Includes Playwright's Error when a response body is gone after
+        # navigation; callbacks must not emit unhandled protocol tracebacks.
+        return None
+
+
 def audit_page(browser, family: str, brand: str, url: str) -> dict:
     """One bounded browser visit, collecting aggregate evidence only."""
     result = {"platform": family, "brand": brand, "status": "not_checked",
               "json_responses": 0, "first_party_json": 0,
               "public_structured_price_candidates": 0, "verified_production_feed": False,
               "external_json_hosts": [], "hosted_json_inspected": 0,
-              "hosted_structured_price_candidates": 0}
+              "hosted_structured_price_candidates": 0,
+              "unavailable_json_bodies": 0}
     context = browser.new_context(accept_downloads=False, service_workers="block")
     page = context.new_page()
     seen_responses = set()
@@ -138,12 +153,11 @@ def audit_page(browser, family: str, brand: str, url: str) -> dict:
                 except (ValueError, TypeError):
                     return
                 result["hosted_json_inspected"] += 1
-                try:
-                    stats = audit_odds_json(response.json())
-                    result["hosted_structured_price_candidates"] += min(
-                        500, int(stats.get("verified_prices", 0)))
-                except (ValueError, TypeError, RuntimeError):
-                    pass
+                observed = public_response_price_count(response)
+                if observed is None:
+                    result["unavailable_json_bodies"] += 1
+                else:
+                    result["hosted_structured_price_candidates"] += observed
             return
         if len(seen_responses) >= 16:
             return
@@ -156,13 +170,11 @@ def audit_page(browser, family: str, brand: str, url: str) -> dict:
                 return
         seen_responses.add(id(response))
         result["first_party_json"] += 1
-        try:
-            obj = response.json()
-            mapped = audit_odds_json(obj)
-            result["public_structured_price_candidates"] += min(
-                500, int(mapped.get("verified_prices", 0)))
-        except (ValueError, TypeError, RuntimeError):
-            pass
+        observed = public_response_price_count(response)
+        if observed is None:
+            result["unavailable_json_bodies"] += 1
+        else:
+            result["public_structured_price_candidates"] += observed
     page.on("response", inspect_response)
     try:
         navigation = page.goto(url, wait_until="domcontentloaded", timeout=12000)

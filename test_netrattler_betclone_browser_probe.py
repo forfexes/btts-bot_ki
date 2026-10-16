@@ -24,6 +24,17 @@ class BrowserProbeTests(unittest.TestCase):
         self.assertIsNone(probe.public_response_host_only("javascript:alert(1)"))
         self.assertIsNone(probe.public_response_host_only("http://api.example.com/odds"))
 
+    def test_unavailable_response_body_is_not_read_as_zero_odds(self):
+        class LostBody:
+            def json(self):
+                raise Exception("Response.json: No resource with given identifier found")
+        class PublicOdds:
+            def json(self):
+                return {"eventId": 5, "market": "Total Goals",
+                        "selections": [{"label": "Over", "odds": 1.8}]}
+        self.assertIsNone(probe.public_response_price_count(LostBody()))
+        self.assertEqual(probe.public_response_price_count(PublicOdds()), 1)
+
     def test_only_observed_platform_hosted_json_may_be_inspected(self):
         self.assertTrue(probe.is_observed_public_platform_host(
             "inplaynet", "https://sportservice.inplaynet.tech/v1/sports"))
