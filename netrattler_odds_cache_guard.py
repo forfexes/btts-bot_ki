@@ -226,8 +226,8 @@ def _corroborated_x1_rows(candidates: List[Dict[str, Any]]) -> set[int]:
     Exact home/away, match date, market and outcome; no fuzzy matching, no
     unsupported halftime/scorer/cards/corners and no promotion by lone quote.
     """
-    references: Dict[Tuple[str, str, str], List[float]] = {}
-    shadow: Dict[Tuple[str, str], Dict[str, List[Dict[str, Any]]]] = {}
+    references: Dict[Tuple[str, str, str, str, str], List[float]] = {}
+    shadow: Dict[Tuple[str, str, str, str], Dict[str, List[Dict[str, Any]]]] = {}
     today = datetime.now(timezone.utc).date().isoformat()
     for row in candidates:
         market = str(row.get("market") or "").lower()
@@ -242,24 +242,28 @@ def _corroborated_x1_rows(candidates: List[Dict[str, Any]]) -> set[int]:
         price = _price(row.get("odds"), 30.0)
         if price is None:
             continue
-        key = (match_date, market, selection)
+        home, away = _norm(row.get("home_team")), _norm(row.get("away_team"))
+        if not home or not away or home in {"home", "team 1"} or away in {"away", "team 2"}:
+            continue
+        key = (home, away, match_date, market, selection)
         source = str(row.get("source") or "").lower()
         if source in LIVE_HISTORY_SOURCES and _fresh(row):
             references.setdefault(key, []).append(price)
         elif source == X1_SHADOW_SOURCE and _fresh_x1(row):
-            shadow.setdefault((match_date, market), {}).setdefault(selection, []).append(row)
+            shadow.setdefault((home, away, match_date, market), {}).setdefault(selection, []).append(row)
     certified: set[int] = set()
-    for (_match_date, market), offers in shadow.items():
+    for (home, away, match_date, market), offers in shadow.items():
         required = X1_CROSS_CHECK_MARKETS[market]
         if not required.issubset(offers):
             continue
         good: Dict[str, List[Dict[str, Any]]] = {}
         for selection in required:
-            refs = references.get((_match_date, market, selection), [])
+            refs = references.get((home, away, match_date, market, selection), [])
             selected = [
                 row for row in offers[selection]
-                if any(X1_CORROBORATION_RATIO_MIN <= float(row["odds"]) / ref
-                       <= X1_CORROBORATION_RATIO_MAX for ref in refs)
+                if (p := _price(row.get("odds"), 30.0)) is not None
+                and any(X1_CORROBORATION_RATIO_MIN <= p / ref
+                        <= X1_CORROBORATION_RATIO_MAX for ref in refs)
             ]
             if not selected:
                 break

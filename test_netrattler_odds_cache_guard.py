@@ -310,6 +310,26 @@ def test_x1_shadow_with_no_fresh_import_never_promoted():
     assert all(s == "bwin" for s in sources.values())
 
 
+def test_x1_corroboration_never_crosses_fixture_teams():
+    from datetime import datetime, timezone
+    today = datetime.now(timezone.utc).date().isoformat()
+    now = datetime.now(timezone.utc).isoformat()
+    rows = []
+    for choice, price in (("home", 2.0), ("draw", 3.3), ("away", 4.2)):
+        rows.append({"source": "bwin", "home_team": "Liverpool",
+                     "away_team": "Chelsea", "match_date": today,
+                     "captured_date": today, "market": "1x2",
+                     "selection": choice, "odds": price,
+                     "raw": {"captured_at": now}})
+        rows.append({"source": "1xbet_platform", "home_team": "Arsenal",
+                     "away_team": "Chelsea", "match_date": today,
+                     "captured_date": today, "market": "1x2",
+                     "selection": choice, "odds": price * 1.03,
+                     "imported_at": now})
+    result, _ = guard.best_observed_for_match("Arsenal", "Chelsea", rows)
+    assert result == {}, result
+
+
 def test_x1_loader_queries_only_allowlisted_shadow_markets():
     from unittest.mock import patch
     from datetime import datetime, timezone
@@ -353,6 +373,7 @@ def main():
     test_x1_totals_needs_both_lines_and_never_allows_other_markets()
     test_x1_shadow_with_no_fresh_import_never_promoted()
     test_x1_loader_queries_only_allowlisted_shadow_markets()
+    test_x1_corroboration_never_crosses_fixture_teams()
     print("OK: multi-brand Kambi + corroborated X1 shadow + fresh odds_history fallback")
 
 
