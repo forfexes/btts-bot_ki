@@ -85,6 +85,62 @@ class BrowserRuntimeTests(unittest.TestCase):
         runtime.install(bot)
         self.assertEqual(original.call_count, 2)
 
+    def test_fbref_failed_advanced_stats_circuits_across_leagues(self):
+        """Two failing leagues cannot trigger repeated blocked source attempts."""
+        bot, _ = self.make_bot(SimpleNamespace(ok=False, status_code=403))
+        class AdvancedPropsManager:
+            _requests = 0
+            def scrape_fbref_advanced_stats(self, league):
+                AdvancedPropsManager._requests += 1
+                return {}
+        bot.AdvancedPropsManager = AdvancedPropsManager
+        with patch.dict("os.environ", {"NETRATTLER_FBREF_MAX_FAILED_LEAGUES": "2"}):
+            runtime.install(bot)
+        obj = AdvancedPropsManager()
+        self.assertEqual(obj.scrape_fbref_advanced_stats("Bundesliga"), {})
+        self.assertEqual(obj.scrape_fbref_advanced_stats("Serie A"), {})
+        self.assertEqual(obj.scrape_fbref_advanced_stats("La Liga"), {})
+        self.assertEqual(AdvancedPropsManager._requests, 2)
+        self.assertEqual(bot.log.call_count, 1)
+        runtime.install(bot)
+        self.assertEqual(obj.scrape_fbref_advanced_stats("Ligue 1"), {})
+        self.assertEqual(AdvancedPropsManager._requests, 2)
+
+    def test_fbref_browser_not_used_after_upstream_access_denial(self):
+        bot, _ = self.make_bot(SimpleNamespace(ok=False, status_code=403))
+        original = bot.scrape_with_playwright
+        with (patch.dict("os.environ", {
+                "NETRATTLER_PLAYWRIGHT_ENABLED": "true",
+                "NETRATTLER_PLAYWRIGHT_MAX_PAGES": "4"}),
+              patch.object(runtime.importlib.util, "find_spec", return_value=object())):
+            runtime.install(bot)
+        self.assertIsNone(bot.scrape_with_playwright("https://fbref.com/en/comps/9/"))
+        self.assertIsNone(bot.scrape_with_playwright("https://www.fbref.com/en/comps/9/"))
+        self.assertEqual(original.call_count, 0)
+        self.assertEqual(bot.scrape_with_playwright._ntr_browser_stats["used"], 0)
+        # Valid publicly accessible sites remain eligible.
+        self.assertEqual(bot.scrape_with_playwright("https://example.org/"), "<html>ok</html>")
+        self.assertEqual(original.call_count, 1)
+
+    def test_valid_fbref_advanced_source_does_not_trip_circuit(self):
+        bot, _ = self.make_bot(SimpleNamespace(ok=False, status_code=403))
+        class AdvancedPropsManager:
+            _requests = 0
+            def scrape_fbref_advanced_stats(self, league):
+                AdvancedPropsManager._requests += 1
+                if AdvancedPropsManager._requests == 2:
+                    return {"Player": {"shots_per90": 2.0}}
+                return {}
+        bot.AdvancedPropsManager = AdvancedPropsManager
+        runtime.install(bot)
+        obj = AdvancedPropsManager()
+        self.assertEqual(obj.scrape_fbref_advanced_stats("Bundesliga"), {})
+        self.assertIn("Player", obj.scrape_fbref_advanced_stats("Serie A"))
+        self.assertEqual(obj.scrape_fbref_advanced_stats("La Liga"), {})
+        self.assertIn("Player", obj.scrape_fbref_advanced_stats("Ligue 1"))
+        self.assertEqual(AdvancedPropsManager._requests, 4)
+        bot.log.assert_not_called()
+
     def test_browser_disabled_by_default(self):
         bot, _ = self.make_bot(SimpleNamespace(ok=False, status_code=403))
         with (patch.dict("os.environ", {"NETRATTLER_PLAYWRIGHT_ENABLED": "false"}),
