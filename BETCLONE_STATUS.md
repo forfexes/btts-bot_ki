@@ -59,6 +59,30 @@ not mean every BetClone operator has become an odds provider.
 
 On 2026-10-16 UTC the `odds_history` table contained 11,671 `1xbet_platform` price records, 7,566 `kambi`, 5,532 `pinnacle`, 5,149 `matchbook`, and 3,706 `bwin`. These **are records, not distinct bookmakers**, and the latter four are not necessarily listed in the ten BetClone groups. 1xBet market type codes remain shadow-only until accurately mapped.
 
+## Playwright Chromium verification — 2026-10-16 UTC
+
+- Production browser dependency and Chrome Headless Shell installation passed in
+  [Playwright Browser CI run 38895482826](https://github.com/forfexes/btts-bot_ki/actions/runs/38895482826).
+  Real Chromium launch plus DOM inspection passed. This confirms runtime
+  availability, **not** an extra football bookmaker feed.
+- The production tip bot [run 38895482998](https://github.com/forfexes/btts-bot_ki/actions/runs/38895482998)
+  logged `Playwright: available` and consumed its strict four-page/45-second
+  browser budget. Its subsequent analysis had no new validated BetClone family
+  integrated via Playwright.
+- The browser-specific BetClone probe
+  [run 38897332586](https://github.com/forfexes/btts-bot_ki/actions/runs/38897332586)
+  visited ten curated operator homepages from six catalogue groups:
+  eight rendered without a independently validated sports-odds feed, two
+  returned access-denied, **zero** price candidates and **zero** confirmed
+  production integrations. Four rendered sites did offer a public sports
+  page link, which is **not** evidence of extractable market prices.
+- The production Playwright guard now reports only host-level and success/empty
+  counts when its browser budget is exhausted. URL parameters, HTML, cookies,
+  and browser response bodies are not stored in these diagnostics.
+- Expanding browser checks cannot justify relabelling a general HTML page as
+  usable pre-match football odds; explicit event, market, selection, odds,
+  timestamp and source mappings still need independent validation.
+
 ## Remaining work / acceptance criteria
 
 1. For every other platform family, find a legitimately available **structured** public feed or confirm that only authenticated/partner feeds are available. Do not declare an HTML page an integrated feed.
