@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Read-only Playwright probe for four PUBLIC BetClone-listed operator homepages.
+"""Read-only Playwright probe for curated PUBLIC BetClone-listed operator homepages.
 
 The browser can render accessible JS content, but is not used to circumvent
 authentication, CAPTCHAs, geo-restrictions, or access denials. A structured
@@ -20,11 +20,20 @@ from netrattler_betclone_hardprobe import audit_odds_json
 
 # Curated operator homepages previously returning HTTP 200 in the static audit.
 # Blocked or restricted websites are excluded, without mirrors or proxies.
+# Curated sites with a recent unauthenticated HTTP 200 in the BetClone
+# homepage audit. Never add 403/429/challenge sites, guessed mirror domains or
+# affiliate redirects. This is a public browser audit only, not an odds scraper.
 CANDIDATES = (
     ("betby", "tonybet", "https://tonybet.com/"),
     ("betconstruct", "vbet", "https://www.vbet.com/"),
     ("first", "bk8", "https://www.bk8sports.com/en"),
     ("softswiss", "metaspins", "https://metaspins.com/"),
+    ("altenar", "betinia", "https://betinia.com/"),
+    ("betby", "gamdom", "https://gamdom.com/"),
+    ("betconstruct", "olybet", "https://olybet.com/"),
+    ("betconstruct", "fastbet", "https://fastbet.com/"),
+    ("inplaynet", "rolletto", "https://rolletto.com/"),
+    ("softswiss", "wild.io", "https://wild.io/"),
 )
 DENIAL_TEXT = ("captcha", "access denied", "just a moment",
                "verify you are human", "geo-block", "geo restricted")
@@ -146,14 +155,14 @@ def audit_page(browser, family: str, brand: str, url: str) -> dict:
 def main() -> None:
     parser = argparse.ArgumentParser()
     parser.add_argument("--output", default="netrattler_betclone_browser_probe.json")
-    parser.add_argument("--limit", type=int, default=4)
+    parser.add_argument("--limit", type=int, default=10)
     args = parser.parse_args()
     from playwright.sync_api import sync_playwright
     rows = []
     with sync_playwright() as pw:
         browser = pw.chromium.launch(headless=True, args=["--no-sandbox"])
         try:
-            for family, brand, url in CANDIDATES[:max(0, min(args.limit, 4))]:
+            for family, brand, url in CANDIDATES[:max(0, min(args.limit, len(CANDIDATES)))]:
                 row = audit_page(browser, family, brand, url)
                 rows.append(row)
                 print("BETCLONE_BROWSER", json.dumps(row, ensure_ascii=False), flush=True)
