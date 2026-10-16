@@ -152,7 +152,10 @@ def install(bot: Any) -> None:
         bot.PLAYWRIGHT_AVAILABLE = bool(enabled and available)
         max_pages = _bounded_int("NETRATTLER_PLAYWRIGHT_MAX_PAGES", 4, 12)
         seconds = _bounded_int("NETRATTLER_PLAYWRIGHT_BUDGET_SEC", 45, 120)
-        stats = {"used": 0, "first": None, "warned": False}
+        # Minimal, non-sensitive browser telemetry: hostname only; never
+        # persist rendered HTML, query parameters, cookies or credentials.
+        stats = {"used": 0, "first": None, "warned": False,
+                 "hosts": {}, "useful": 0, "empty": 0}
 
         def browser(url: str, wait_for=None, timeout=8000):
             if not bot.PLAYWRIGHT_AVAILABLE or max_pages == 0:
@@ -168,12 +171,24 @@ def install(bot: Any) -> None:
             if stats["used"] >= max_pages or elapsed >= seconds:
                 if not stats["warned"]:
                     stats["warned"] = True
-                    bot.log(f"Playwright browser budget reached ({stats['used']} pages / {seconds}s); using other sources", "WARN")
+                    by_host = ",".join(f"{host}:{count}" for host, count in sorted(stats["hosts"].items()))
+                    bot.log(
+                        f"Playwright browser budget reached ({stats['used']} pages / {seconds}s); "
+                        f"hosts={by_host or 'none'} useful={stats['useful']} empty={stats['empty']}; "
+                        "using other sources", "WARN"
+                    )
                 return None
             if stats["first"] is None:
                 stats["first"] = time.monotonic()
             stats["used"] += 1
-            return current(url, wait_for=wait_for, timeout=min(int(timeout), 8000))
+            host = parsed.hostname.lower()
+            stats["hosts"][host] = stats["hosts"].get(host, 0) + 1
+            result = current(url, wait_for=wait_for, timeout=min(int(timeout), 8000))
+            if result:
+                stats["useful"] += 1
+            else:
+                stats["empty"] += 1
+            return result
 
         browser._ntr_browser_budget_guard = True
         browser._ntr_browser_stats = stats
