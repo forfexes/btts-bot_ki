@@ -1,5 +1,15 @@
 name: NETRATTLER AiScore Public Collector
 
+# Scheduled runs disabled 2026-10-16: source_health shows EVERY run since at
+# least 2026-10-03 (two weeks straight, both weekday and weekend slots) hit
+# http=403 on all 120/120 pages, 0 odds, 0 h2h - a complete, persistent block,
+# not a transient blip. Each run was still reported "success" by GitHub
+# Actions (the script degrades gracefully on zero data), which is exactly the
+# "green run is not proof of a working source" trap - confirmed here via
+# source_health, not assumed from the green checkmark. No bypass/stealth
+# technique was attempted or will be; this collector already used a single
+# honest User-Agent. workflow_dispatch is kept so this can be re-checked by
+# hand later without burning ~6 CI minutes/day on a confirmed-dead source.
 on:
   push:
     branches: [main]
@@ -13,11 +23,6 @@ on:
         description: "Maximum AiScore matches"
         required: false
         default: "40"
-  schedule:
-    - cron: "10 9 * * *"      # before daily 09:30 UTC tips run
-    - cron: "35 12 * * 6,0"  # before weekend 13:00 UTC tips run
-    - cron: "35 15 * * 6,0"  # before weekend 16:00 UTC tips run
-    - cron: "35 18 * * *"     # before daily 19:00 UTC tips run
 
 jobs:
   aiscore:
