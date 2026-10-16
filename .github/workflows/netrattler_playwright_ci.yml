@@ -1,0 +1,39 @@
+name: NETRATTLER Playwright Browser CI
+on:
+  push:
+    branches: [main]
+    paths:
+      - 'netrattler_playwright_runtime.py'
+      - 'test_netrattler_playwright_runtime.py'
+      - '.github/workflows/netrattler_playwright_ci.yml'
+  workflow_dispatch:
+jobs:
+  browser-test:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+      - name: Install Playwright Chromium headless shell
+        run: |
+          python -m pip install playwright
+          python -m playwright install --with-deps --only-shell chromium
+      - name: Verify regression tests
+        run: |
+          python -m py_compile netrattler_playwright_runtime.py test_netrattler_playwright_runtime.py
+          python -m unittest -v test_netrattler_playwright_runtime.py
+      - name: Launch real headless browser on local test page
+        run: |
+          python - <<'PY'
+          from playwright.sync_api import sync_playwright
+          with sync_playwright() as pw:
+              browser = pw.chromium.launch(headless=True, args=["--no-sandbox"])
+              page = browser.new_page()
+              page.set_content("<html><head><title>NETRATTLER PW OK</title></head><body><div id='target'>verified</div></body></html>")
+              assert page.title() == "NETRATTLER PW OK"
+              assert page.locator("#target").inner_text() == "verified"
+              print("PLAYWRIGHT_BROWSER_OK: actual Chromium launch, DOM read")
+              browser.close()
+          PY
