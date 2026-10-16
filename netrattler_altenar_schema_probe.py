@@ -28,6 +28,7 @@ from __future__ import annotations
 
 import json
 import os
+import re
 from collections import Counter
 from urllib.parse import urlparse
 
@@ -152,6 +153,7 @@ def run() -> dict:
         all_samples = []
         all_arrays = {}
         all_endpoints = []
+        all_query_captured = [False]
 
         def inspect_response(response):
             if result["inspected"] >= MAX_RESPONSES_INSPECTED or response.status != 200:
@@ -193,6 +195,19 @@ def run() -> dict:
                 fp = f"{method} {parsed.hostname}{parsed.path}"
                 if fp not in all_endpoints:
                     all_endpoints.append(fp)
+            # The one endpoint we actually need to replicate keylessly: capture
+            # its public query string (no cookies/headers/auth token — Altenar's
+            # anonymous widget query params, same category of info already
+            # hardcoded in netrattler_keyless_odds.py for 1xBet/bwin) exactly
+            # once, redacting anything that looks like a bearer/session value.
+            if "GetTopEvents" in response.url and not all_query_captured[0]:
+                parsed_q = urlparse(response.url)
+                safe_q = "&".join(
+                    p for p in (parsed_q.query or "").split("&")
+                    if not re.search(r"(token|session|auth|bearer|key)", p, re.I)
+                )
+                all_query_captured[0] = True
+                result["top_events_query"] = safe_q[:600]
 
         page.on("response", inspect_response)
         try:
