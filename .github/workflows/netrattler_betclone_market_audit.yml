@@ -9,6 +9,8 @@ on:
       - 'test_netrattler_betclone_market_audit.py'
       - 'netrattler_odds_cache_guard.py'
       - 'test_netrattler_odds_cache_guard.py'
+      - 'netrattler_betclone_live_smoke.py'
+      - 'test_netrattler_betclone_live_smoke.py'
   schedule:
     - cron: '12 8 * * *'
 permissions:
@@ -47,6 +49,13 @@ jobs:
           if any(str(row.get("source")) not in cache.LIVE_HISTORY_SOURCES for row in rows):
               raise SystemExit("Non-validated bookmaker escaped the source gate")
           PY
+      - name: Test BetClone live corroboration rules
+        run: python -m unittest -v test_netrattler_betclone_live_smoke.py
+      - name: Measure today's actually corroborated 1xBet markets (read-only)
+        env:
+          SUPABASE_URL: ${{ secrets.SUPABASE_URL }}
+          SUPABASE_KEY: ${{ secrets.SUPABASE_KEY }}
+        run: python netrattler_betclone_live_smoke.py
       - name: Inspect existing public market feeds (read-only)
         run: python netrattler_betclone_market_audit.py --timeout 16
       - uses: actions/upload-artifact@v4
