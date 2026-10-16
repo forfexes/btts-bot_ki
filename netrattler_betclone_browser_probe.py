@@ -1,0 +1,138 @@
+#!/usr/bin/env python3
+"""Read-only Playwright probe for four PUBLIC BetClone-listed operator homepages.
+
+The browser can render accessible JS content, but is not used to circumvent
+authentication, CAPTCHAs, geo-restrictions, or access denials. A structured
+price candidate is not a validated, production-ready odds feed.
+
+No cookies, credentials, page HTML, tokens, request queries or JSON bodies are
+persisted. This is an observational audit, never a live-tip source.
+"""
+from __future__ import annotations
+
+import argparse
+from datetime import datetime, timezone
+import json
+from pathlib import Path
+from urllib.parse import urlparse
+
+from netrattler_betclone_hardprobe import audit_odds_json
+
+# Curated operator homepages previously returning HTTP 200 in the static audit.
+# Blocked or restricted websites are excluded, without mirrors or proxies.
+CANDIDATES = (
+    ("betby", "tonybet", "https://tonybet.com/"),
+    ("betconstruct", "vbet", "https://www.vbet.com/"),
+    ("first", "bk8", "https://www.bk8sports.com/en"),
+    ("softswiss", "metaspins", "https://metaspins.com/"),
+)
+DENIAL_TEXT = ("captcha", "access denied", "just a moment",
+               "verify you are human", "geo-block", "geo restricted")
+
+
+def is_first_party_response(page_url: str, response_url: str) -> bool:
+    """Only inspect public JSON returned by the operator's own host family."""
+    page_host = (urlparse(page_url).hostname or "").lower().removeprefix("www.")
+    response_host = (urlparse(response_url).hostname or "").lower().removeprefix("www.")
+    return bool(page_host and response_host and
+                (response_host == page_host or response_host.endswith("." + page_host)))
+
+
+def is_denied(status: int, body: str) -> bool:
+    return status in (401, 403, 407, 429, 451) or any(
+        term in (body or "").lower()[:4000] for term in DENIAL_TEXT)
+
+
+def audit_page(browser, family: str, brand: str, url: str) -> dict:
+    """One bounded browser visit, collecting aggregate evidence only."""
+    result = {"platform": family, "brand": brand, "status": "not_checked",
+              "json_responses": 0, "first_party_json": 0,
+              "public_structured_price_candidates": 0, "verified_production_feed": False}
+    context = browser.new_context(accept_downloads=False, service_workers="block")
+    page = context.new_page()
+    seen_responses = set()
+    def inspect_response(response):
+        if len(seen_responses) >= 35 or response.status != 200:
+            return
+        if "json" not in str(response.headers.get("content-type") or "").lower():
+            return
+        result["json_responses"] += 1
+        if not is_first_party_response(url, response.url):
+            return
+        if len(seen_responses) >= 16:
+            return
+        clen = response.headers.get("content-length")
+        if clen:
+            try:
+                if int(clen) > 220_000:
+                    return
+            except ValueError:
+                return
+        seen_responses.add(id(response))
+        result["first_party_json"] += 1
+        try:
+            obj = response.json()
+            mapped = audit_odds_json(obj)
+            result["public_structured_price_candidates"] += min(
+                500, int(mapped.get("verified_prices", 0)))
+        except (ValueError, TypeError, RuntimeError):
+            pass
+    page.on("response", inspect_response)
+    try:
+        navigation = page.goto(url, wait_until="domcontentloaded", timeout=12000)
+        if navigation is None:
+            result["status"] = "no_navigation"
+            return result
+        if navigation.status in (401, 403, 407, 429, 451):
+            result["status"] = "access_denied"
+            return result
+        if navigation.status >= 400:
+            result["status"] = "http_error"
+            return result
+        # A JS shell may populate public odds after the initial page response.
+        page.wait_for_timeout(2000)
+        title = page.title()
+        body = page.locator("body").inner_text(timeout=2500)[:4000]
+        if is_denied(navigation.status, title + " " + body):
+            result["status"] = "restricted_or_challenge"
+        elif result["public_structured_price_candidates"]:
+            result["status"] = "candidate_prices_require_independent_market_validation"
+        else:
+            result["status"] = "rendered_without_verified_public_odds"
+        return result
+    except Exception as exc:
+        result["status"] = "browser_error"
+        result["error_type"] = type(exc).__name__
+        return result
+    finally:
+        context.close()
+
+
+def main() -> None:
+    parser = argparse.ArgumentParser()
+    parser.add_argument("--output", default="netrattler_betclone_browser_probe.json")
+    parser.add_argument("--limit", type=int, default=4)
+    args = parser.parse_args()
+    from playwright.sync_api import sync_playwright
+    rows = []
+    with sync_playwright() as pw:
+        browser = pw.chromium.launch(headless=True, args=["--no-sandbox"])
+        try:
+            for family, brand, url in CANDIDATES[:max(0, min(args.limit, 4))]:
+                row = audit_page(browser, family, brand, url)
+                rows.append(row)
+                print("BETCLONE_BROWSER", json.dumps(row, ensure_ascii=False), flush=True)
+        finally:
+            browser.close()
+    report = {"checked_utc": datetime.now(timezone.utc).isoformat(),
+              "mode": "public_render_only_not_a_live_feed",
+              "checked": len(rows), "results": rows,
+              "validated_new_production_feeds": 0}
+    Path(args.output).write_text(json.dumps(report, indent=2), encoding="utf-8")
+    print("BETCLONE_BROWSER_SUMMARY checked=", len(rows),
+          "price_candidates=", sum(row["public_structured_price_candidates"] for row in rows),
+          "validated_feeds=0", flush=True)
+
+
+if __name__ == "__main__":
+    main()
