@@ -23,9 +23,18 @@ def _exact_name(value: Any) -> str:
 def _goal_view_available(stats: Any) -> bool:
     if not isinstance(stats, Mapping):
         return False
-    return any(str(k).lower().replace(" ", "_").replace("-", "_") in
-               {"goals", "goal", "goals_per_game", "goals_pg", "goals_scored"}
-               for k in stats)
+    for key, entry in stats.items():
+        if str(key).lower().replace(" ", "_").replace("-", "_") not in {
+            "goals", "goal", "goals_per_game", "goals_pg", "goals_scored"
+        }:
+            continue
+        try:
+            # A goal average from one or two appearances is not enough to
+            # suppress the L30 fallback. The final model also requires >=3 games.
+            return float((entry or {}).get("games") or 0) >= 3
+        except (AttributeError, TypeError, ValueError):
+            return False
+    return False
 
 
 def recent_goals(player_name: str, url: str, key: str) -> Dict[str, Any]:
