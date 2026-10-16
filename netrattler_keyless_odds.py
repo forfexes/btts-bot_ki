@@ -447,11 +447,33 @@ def collect_altenar_platform(target_date: str) -> List[Dict[str, Any]]:
         if not js:
             KEYLESS_DIAG[f"altenar_{brand}"] = f"http={st} events=0"
             continue
+        n_events = len(js.get("events") or []) if isinstance(js, dict) else 0
+        n_1x2_markets = sum(
+            1 for m in (js.get("markets") or []) if isinstance(m, dict)
+            and str(m.get("headerName") or "").strip() == "1X2"
+        ) if isinstance(js, dict) else 0
         new_rows = _altenar_rows(js, bookmaker=f"altenar_{brand}")
         KEYLESS_DIAG[f"altenar_{brand}"] = (
-            f"http={st} events={len(js.get('events') or [])} rows={len(new_rows)}"
+            f"http={st} events={n_events} markets_1x2={n_1x2_markets} rows={len(new_rows)}"
         )
         rows.extend(new_rows)
+    # One-time production diagnostic (no logs are retrievable in this
+    # environment), so a dry run of this collector is actually auditable.
+    try:
+        SUPABASE_URL = (os.getenv("SUPABASE_URL") or "").rstrip("/")
+        SUPABASE_KEY = os.getenv("SUPABASE_SERVICE_ROLE_KEY") or os.getenv("SUPABASE_KEY") or ""
+        if SUPABASE_URL and SUPABASE_KEY:
+            import requests as _rq
+            _rq.post(
+                f"{SUPABASE_URL}/rest/v1/netrattler_card_diag", timeout=10,
+                headers={"apikey": SUPABASE_KEY, "Authorization": f"Bearer {SUPABASE_KEY}",
+                         "Content-Type": "application/json"},
+                json={"info": {"probe": "altenar_collector_run",
+                                "diag": {k: v for k, v in KEYLESS_DIAG.items() if k.startswith("altenar_")},
+                                "rows": len(rows)}},
+            )
+    except Exception:
+        pass
     return rows
 
 
