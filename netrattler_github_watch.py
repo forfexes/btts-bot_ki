@@ -319,6 +319,91 @@ def inspect_repo(cfg: Dict[str, Any]) -> Dict[str, Any]:
     return payload
 
 
+# ---------------------------------------------------------------- Hugging Face datasets
+HF_TERMS = [t.strip() for t in os.getenv(
+    "HF_WATCH_TERMS",
+    "football,soccer,premier league,bundesliga,la liga,serie a,betting odds,football odds,player stats,expected goals",
+).split(",") if t.strip()]
+HF_MIN_SCORE = int(os.getenv("HF_WATCH_MIN_SCORE", "5") or 5)
+HF_MAX_AGE_DAYS = int(os.getenv("HF_WATCH_MAX_AGE_DAYS", "120") or 120)
+_HF_NOISE = re.compile(r"american.?football|\bnfl\b|fantasy.?premier|image|vision|video|audio|speech|tweet|sentiment|commentary", re.I)
+
+
+def hf_seen() -> Dict[str, str]:
+    """dataset id -> last stored lastModified (keyless HF datasets already recorded)."""
+    out: Dict[str, str] = {}
+    if not SUPABASE_URL or not SUPABASE_KEY:
+        return out
+    try:
+        r = requests.get(f"{SUPABASE_URL}/rest/v1/netrattler_source_discovery", headers=sb_headers(), timeout=TIMEOUT,
+                         params={"select": "source_name,payload->>last_modified", "kind": "eq.hf_dataset", "limit": "5000"})
+        for row in (r.json() if r.ok else []) or []:
+            out[row.get("source_name")] = row.get("last_modified") or ""
+    except Exception as exc:
+        log(f"HF seen: {str(exc)[:120]}", "WARN")
+    return out
+
+
+def inspect_huggingface() -> Dict[str, Any]:
+    seen = hf_seen()
+    first_run = not seen
+    found: Dict[str, Dict[str, Any]] = {}
+    for term in HF_TERMS:
+        try:
+            r = requests.get("https://huggingface.co/api/datasets", timeout=TIMEOUT, headers={"User-Agent": UA},
+                             params={"search": term, "sort": "lastModified", "direction": "-1", "limit": "50", "full": "true"})
+            items = r.json() if r.ok else []
+        except Exception as exc:
+            log(f"HF {term}: {str(exc)[:120]}", "WARN")
+            continue
+        for it in items if isinstance(items, list) else []:
+            did = str(it.get("id") or "")
+            if not did or did in found:
+                continue
+            text = " ".join([did, str(it.get("description") or "")[:600], " ".join(map(str, it.get("tags") or []))])
+            if _HF_NOISE.search(text) and not re.search(r"odds|bet", text, re.I):
+                continue
+            mod = str(it.get("lastModified") or "")
+            try:
+                age = (datetime.now(timezone.utc) - datetime.fromisoformat(mod.replace("Z", "+00:00"))).days
+            except Exception:
+                age = 9999
+            if age > HF_MAX_AGE_DAYS:
+                continue
+            score, reasons = 0, []
+            for pattern, pts, label in RELEVANCE_RULES:
+                if pattern.search(text):
+                    score += pts
+                    reasons.append(label)
+            if re.search(r"football|soccer", text, re.I):
+                score += 2
+            found[did] = {"id": did, "last_modified": mod, "age_days": age, "downloads": it.get("downloads"),
+                          "likes": it.get("likes"), "gated": bool(it.get("gated")), "score": score, "reasons": reasons,
+                          "url": f"https://huggingface.co/datasets/{did}"}
+    new_or_updated = []
+    for d in found.values():
+        prev = seen.get(d["id"])
+        if prev is None or (prev and prev != d["last_modified"]):
+            d["state"] = "NEW" if prev is None else "UPDATED"
+            new_or_updated.append(d)
+            sb_insert("netrattler_source_discovery", {
+                "source_name": d["id"], "url": d["url"], "kind": "hf_dataset",
+                "tags": ["hf-dataset", *d["reasons"]][:30], "score": d["score"], "payload": d,
+                "data_hash": stable_hash("hf_dataset", d["id"], d["last_modified"]), "collected_at": NOW,
+            })
+    relevant = sorted([d for d in new_or_updated if d["score"] >= HF_MIN_SCORE and not d["gated"]],
+                      key=lambda x: (x["score"], x.get("downloads") or 0), reverse=True)
+    log(f"HF datasets: found={len(found)} new/updated={len(new_or_updated)} relevant={len(relevant)} first_run={first_run}")
+    if relevant:
+        lines = ["🤗 NETRATTLER Hugging Face Watch" + (" (Erstlauf)" if first_run else "")]
+        for d in relevant[:8]:
+            lines.append(f"• {d['id']} · {d['state']} · Relevanz {d['score']} · {', '.join(d['reasons'][:3]) or 'football'}\n  {d['url']}")
+        if len(relevant) > 8:
+            lines.append(f"+{len(relevant) - 8} weitere")
+        telegram_send("\n".join(lines))
+    return {"found": len(found), "new_or_updated": len(new_or_updated), "relevant": [d["id"] for d in relevant[:20]]}
+
+
 def main() -> int:
     log("=" * 68)
     log("NETRATTLER GitHub Watch V1 startet")
@@ -345,10 +430,15 @@ def main() -> int:
         "relevant_changes": len(relevant),
         "repos": results,
     }
+    if str(os.getenv("HF_WATCH", "true")).lower() not in {"0", "false", "no", "off"}:
+        try:
+            summary["huggingface"] = inspect_huggingface()
+        except Exception as exc:
+            log(f"HF watch: FAIL {str(exc)[:160]}", "WARN")
     with open("netrattler_github_watch_summary.json", "w", encoding="utf-8") as fh:
         json.dump(summary, fh, ensure_ascii=False, indent=2)
     log(f"Fertig: ok={len(results)} fail={failures} changed={len(changed)} relevant={len(relevant)}")
-    return 0 if results else 2
+    return 0 if results or summary.get("huggingface") else 2
 
 
 if __name__ == "__main__":
