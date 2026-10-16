@@ -104,7 +104,7 @@ def _espn_fixtures(bot: Any, league_name: str, target_date: Any) -> List[Dict[st
 def install(bot: Any) -> None:
     """Attach conservative Playwright page budget and ESPN JSON-only provider."""
     current = getattr(bot, "scrape_with_playwright", None)
-    if callable(current) and not getattr(current, "_ntr_browser_budget_guard", False):
+    if callable(current) and getattr(current, "_ntr_browser_budget_guard", False) is not True:
         enabled = str(os.environ.get("NETRATTLER_PLAYWRIGHT_ENABLED", "false")).lower() in {"1", "yes", "true", "on"}
         available = importlib.util.find_spec("playwright") is not None
         bot.PLAYWRIGHT_AVAILABLE = bool(enabled and available)
@@ -134,7 +134,7 @@ def install(bot: Any) -> None:
         bot.scrape_with_playwright = browser
 
     original = getattr(bot, "fetch_espn_fixtures", None)
-    if callable(original) and not getattr(original, "_ntr_json_guard", False):
+    if callable(original) and getattr(original, "_ntr_json_guard", False) is not True:
         def fetch(league_name, target_date):
             return _espn_fixtures(bot, league_name, target_date)
         fetch._ntr_json_guard = True
