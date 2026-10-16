@@ -69,6 +69,46 @@ def _node_role(keys: set) -> dict:
     return {role: bool(keys & names) for role, names in _PUBLIC_SCHEMA_KEYS.items()}
 
 
+_TOP_ARRAYS = ("events", "markets", "competitors", "champs", "categories", "sports")
+
+
+def _truncate_deep(value, depth=0, max_depth=7, list_limit=2):
+    """Like _truncate, but keeps real nested structure (bounded) instead of
+    collapsing past depth 2 — needed to see how events/markets/odds actually
+    join (shared id fields), not just that a price-shaped leaf exists."""
+    if isinstance(value, bool) or value is None:
+        return value
+    if isinstance(value, (int, float)):
+        try:
+            return round(float(value), 4)
+        except Exception:
+            return None
+    if isinstance(value, str):
+        return value[:100]
+    if depth >= max_depth:
+        return "…"
+    if isinstance(value, list):
+        return [_truncate_deep(v, depth + 1, max_depth, list_limit) for v in value[:list_limit]]
+    if isinstance(value, dict):
+        return {str(k)[:40]: _truncate_deep(v, depth + 1, max_depth, list_limit)
+                for k, v in list(value.items())[:25]}
+    return str(value)[:100]
+
+
+def describe_top_level_arrays(payload) -> dict:
+    """One or two real (bounded/truncated) sample items per known top-level
+    Altenar array, so an adapter can see the actual join keys between
+    events/markets/odds/competitors instead of only an aggregate price count."""
+    out = {}
+    if not isinstance(payload, dict):
+        return out
+    for key in _TOP_ARRAYS:
+        val = payload.get(key)
+        if isinstance(val, list) and val:
+            out[key] = [_truncate_deep(v) for v in val[:2]]
+    return out
+
+
 def sniff(payload) -> dict:
     """Walk bounded JSON, collecting key-name shapes and a few truncated samples."""
     shapes = Counter()
@@ -103,13 +143,14 @@ def run() -> dict:
 
     family, brand, url = TARGET
     result = {"platform": family, "brand": brand, "url": url, "status": "not_checked",
-              "inspected": 0, "shapes": {}, "samples": []}
+              "inspected": 0, "shapes": {}, "samples": [], "arrays": {}}
     with sync_playwright() as pw:
         browser = pw.chromium.launch(headless=True)
         context = browser.new_context(accept_downloads=False, service_workers="block")
         page = context.new_page()
         all_shapes = Counter()
         all_samples = []
+        all_arrays = {}
 
         def inspect_response(response):
             if result["inspected"] >= MAX_RESPONSES_INSPECTED or response.status != 200:
@@ -135,6 +176,9 @@ def run() -> dict:
             for s in sniffed["samples"]:
                 if len(all_samples) < MAX_SAMPLES:
                     all_samples.append(s)
+            if len(all_arrays) < len(_TOP_ARRAYS):
+                for k, v in describe_top_level_arrays(payload).items():
+                    all_arrays.setdefault(k, v)
 
         page.on("response", inspect_response)
         try:
@@ -171,6 +215,7 @@ def run() -> dict:
         finally:
             result["shapes"] = dict(all_shapes)
             result["samples"] = all_samples
+            result["arrays"] = all_arrays
             context.close()
             browser.close()
     return result

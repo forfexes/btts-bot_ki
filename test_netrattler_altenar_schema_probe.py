@@ -55,6 +55,28 @@ class AltenarSchemaSniffTests(unittest.TestCase):
         self.assertEqual(result["shapes"], {})
         self.assertEqual(result["samples"], [])
 
+    def test_describe_top_level_arrays_keeps_real_join_keys(self):
+        payload = {
+            "sports": [{"id": 1, "name": "Football"}],
+            "events": [{"id": 999, "sportId": 1, "champId": 5,
+                        "competitors": [{"id": 10, "name": "FC Example"},
+                                        {"id": 11, "name": "AC Sample"}],
+                        "startDate": "2026-10-20T18:00:00Z"}],
+            "markets": [{"id": 77, "eventId": 999, "name": "1X2"}],
+            "odds": [{"id": 1, "marketId": 77, "name": "1", "price": 1.85, "typeId": 1}],
+        }
+        described = sniffer.describe_top_level_arrays(payload)
+        self.assertIn("events", described)
+        self.assertIn("markets", described)
+        self.assertEqual(described["events"][0]["id"], 999)
+        self.assertEqual(described["markets"][0]["eventId"], 999)
+        # nested competitor list inside the event sample must survive (not "…")
+        self.assertIsInstance(described["events"][0]["competitors"], list)
+        self.assertEqual(described["events"][0]["competitors"][0]["name"], "FC Example")
+
+    def test_describe_top_level_arrays_ignores_non_dict_payload(self):
+        self.assertEqual(sniffer.describe_top_level_arrays(["not", "a", "dict"]), {})
+
     def test_bounded_sample_count(self):
         many_markets = {"events": [
             {"eventId": i, "hometeam": "A", "awayteam": "B", "markets": [
