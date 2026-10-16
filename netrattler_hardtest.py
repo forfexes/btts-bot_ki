@@ -20,6 +20,7 @@ def main():
         "netrattler_settlement_runner.py",
         "test_netrattler_source_health.py",
         "test_netrattler_builder_guard.py",
+        "test_netrattler_builder_delivery.py",
         "test_netrattler_builder_styles.py",
         "test_netrattler_builder_concepts_v2.py",
         "test_netrattler_runtime_patch.py",
@@ -35,6 +36,7 @@ def main():
     # then screenshot concepts and settlement/result parsers. All are offline.
     import test_netrattler_source_health as source_health
     import test_netrattler_builder_guard as builder_guard
+    import test_netrattler_builder_delivery as builder_delivery
     import test_netrattler_builder_styles as builder_styles
     import test_netrattler_runtime_patch as runtime_patch
     import test_netrattler_builder_concepts_v2 as builder_concepts
@@ -45,6 +47,10 @@ def main():
     import test_netrattler_settlement_v21 as settlement_v21
 
     source_health.main()
+    delivery_suite = unittest.defaultTestLoader.loadTestsFromTestCase(builder_delivery.BuilderDeliveryTests)
+    delivery_result = unittest.TextTestRunner(verbosity=0).run(delivery_suite)
+    if not delivery_result.wasSuccessful():
+        raise SystemExit("NETRATTLER builder delivery regression failed")
     builder_guard.main()
     builder_styles.main()
     oddspapi_keys.main()

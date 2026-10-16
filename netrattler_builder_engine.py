@@ -1549,8 +1549,12 @@ def persist_builder_pick(
     supabase_url: str,
     supabase_key: str,
     check_existing: bool = True,
+    *,
+    telegram_sent: bool = False,
+    telegram_message_id: Any = None,
+    telegram_chat_id: Any = None,
 ) -> Optional[bool]:
-    """Return True for a newly stored pick, False if it exists, None on DB failure/offline."""
+    """Persist a builder; delivery is recorded only after Telegram confirms success."""
     if not supabase_url or not supabase_key:
         return None
     base = supabase_url.rstrip("/")
@@ -1559,11 +1563,18 @@ def persist_builder_pick(
             exists = builder_pick_exists(pick, supabase_url, supabase_key)
             if exists is True:
                 return False
+        payload = pick.to_row()
+        if telegram_sent:
+            payload["telegram_sent"] = True
+            if telegram_message_id is not None and not isinstance(telegram_message_id, bool):
+                payload["telegram_msg_id"] = str(telegram_message_id)
+            if telegram_chat_id is not None:
+                payload["telegram_chat_id"] = str(telegram_chat_id)
         response = requests.post(
             f"{base}/rest/v1/netrattler_builder_picks",
             headers=_supabase_headers(supabase_key),
             params={"on_conflict": "builder_id"},
-            data=json.dumps(pick.to_row(), ensure_ascii=False, default=str),
+            data=json.dumps(payload, ensure_ascii=False, default=str),
             timeout=12,
         )
         return True if response.status_code in (200, 201, 204) else None
@@ -1616,13 +1627,30 @@ def run_builder_engine(
             continue
         try:
             send_result = send_message(format_builder_message(pick))
-            if send_result is None or send_result is False:
+            if send_result is None or send_result is False or send_result == 0:
                 if logger:
                     logger(f"MASTER BUILDER send failed/no message_id: {pick.style} {pick.variant}")
                 continue
+            telegram_message_id = None
+            telegram_chat_id = None
+            if isinstance(send_result, dict):
+                # A Telegram HTTP response can be truthy even when ok=false.
+                payload = send_result.get("result", send_result)
+                if send_result.get("ok") is False or not isinstance(payload, dict) or not payload.get("message_id"):
+                    if logger:
+                        logger(f"MASTER BUILDER Telegram declined send: {pick.style} {pick.variant}")
+                    continue
+                telegram_message_id = payload["message_id"]
+                telegram_chat = payload.get("chat")
+                if isinstance(telegram_chat, dict):
+                    telegram_chat_id = telegram_chat.get("id")
+            elif isinstance(send_result, int) and not isinstance(send_result, bool):
+                telegram_message_id = send_result
 
             persisted = persist_builder_pick(
-                pick, supabase_url, supabase_key, check_existing=False
+                pick, supabase_url, supabase_key, check_existing=False,
+                telegram_sent=True, telegram_message_id=telegram_message_id,
+                telegram_chat_id=telegram_chat_id,
             )
             sent += 1
             if logger:

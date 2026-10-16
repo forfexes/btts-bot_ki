@@ -12,6 +12,9 @@ on:
       - "test_netrattler_playwright_runtime.py"
       - "netrattler_thesportsdb_guard.py"
       - "netrattler_prop_sources.py"
+      - "netrattler_builder_engine.py"
+      - "test_netrattler_builder_delivery.py"
+      - "netrattler_hardtest.py"
       - "test_netrattler_kambi_scorer_market.py"
   schedule:
     - cron: "17 8 * * *"  # 10:17 CH — Vormittag (GitHub verwirft :30-Slots oft, daher krumme Minute)
