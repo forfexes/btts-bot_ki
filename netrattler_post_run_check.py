@@ -13,13 +13,27 @@ import re
 
 
 def coverage_warnings(log_text):
+    """Distinguish missing builder candidates from legitimate deduplication.
+
+    Green runs with N generated builders and N previously delivered builder IDs
+    should not raise a false zero-builder alarm. Partial sends still warn.
+    """
     issues = []
+    generated = [int(n) for n in re.findall(r'MASTER BUILDER[^\\n]*generated=(\\d+)', log_text)]
+    count_generated = max(generated, default=0)
+    duplicate_ids = set(re.findall(
+        r'MASTER BUILDER duplicate skipped: ([a-zA-Z0-9_-]+)', log_text
+    ))
+    all_already_delivered = count_generated > 0 and len(duplicate_ids) >= count_generated
+
     for line in log_text.splitlines():
         if 'Coverage:' in line and 'no_candidates' in line:
             missing = re.findall(r'([a-z0-9_]+)=no_candidates', line)
+            if all_already_delivered:
+                missing = [item for item in missing if item != 'builder']
             if missing:
                 issues.append('No candidates: ' + ', '.join(missing))
-        if 'Builder Engine: 0 Builder' in line:
+        if 'Builder Engine: 0 Builder' in line and not all_already_delivered:
             issues.append('Builder Engine sent zero builders')
     return list(dict.fromkeys(issues))
 

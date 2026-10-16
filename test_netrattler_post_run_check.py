@@ -42,6 +42,25 @@ class PostRunTests(unittest.TestCase):
     def test_builder_warning(self):
         self.assertEqual(coverage_warnings('Builder Engine: 0 Builder gesendet'), ['Builder Engine sent zero builders'])
 
+    def test_all_generated_builders_already_sent_is_not_failure(self):
+        log = '\\n'.join([
+            'MASTER BUILDER normalized=476 · matches=10 · generated=3',
+            'MASTER BUILDER duplicate skipped: nb_1',
+            'MASTER BUILDER duplicate skipped: nb_2',
+            'MASTER BUILDER duplicate skipped: nb_3',
+            'Builder Engine: 0 Builder aus 599 Props gesendet',
+            'Coverage: builder=no_candidates, scorer=no_candidates',
+        ])
+        self.assertEqual(coverage_warnings(log), ['No candidates: scorer'])
+
+    def test_partial_deduplication_still_warns(self):
+        log = '\\n'.join([
+            'MASTER BUILDER normalized=476 · generated=3',
+            'MASTER BUILDER duplicate skipped: nb_1',
+            'Builder Engine: 0 Builder gesendet',
+        ])
+        self.assertEqual(coverage_warnings(log), ['Builder Engine sent zero builders'])
+
     def test_incomplete(self):
         ok, _ = evaluate({"status": "in_progress"})
         self.assertFalse(ok)
