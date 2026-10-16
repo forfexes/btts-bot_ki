@@ -22,7 +22,7 @@ SHADOW_FAMILIES: frozenset[str] = frozenset({"1xbet"})
 # Eligibility is per-quote and conditional, NOT a general platform approval.
 # See _corroborated_x1_rows in netrattler_odds_cache_guard.py.
 CONDITIONALLY_CORROBORATED_MARKETS = {
-    "1xbet": ("1x2", "totals_2_5"),
+    "1xbet": ("1x2", "totals_2_5", "btts"),
 }
 
 # These are verified sources in NETRATTLER, but are not represented by these

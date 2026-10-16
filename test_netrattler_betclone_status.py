@@ -33,7 +33,7 @@ class BetCloneStatusTests(unittest.TestCase):
         self.assertEqual(s["platforms"]["1xbet"]["integration_status"],
                          "conditionally_corroborated_markets_with_shadow_remainder")
         self.assertEqual(s["platforms"]["1xbet"]["conditional_live_markets"],
-                         ["1x2", "totals_2_5"])
+                         ["1x2", "totals_2_5", "btts"])
         self.assertTrue(s["platforms"]["1xbet"]["requires_complete_independent_market_corroboration"])
         self.assertEqual(s["families_with_conditional_live_markets"], 1)
         self.assertEqual(s["curated_homepages_checked"], 3)

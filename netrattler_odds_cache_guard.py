@@ -43,6 +43,7 @@ X1_SHADOW_SOURCE = "1xbet_platform"
 X1_CROSS_CHECK_MARKETS = {
     "1x2": frozenset({"home", "draw", "away"}),
     "totals_2_5": frozenset({"over_2_5", "under_2_5"}),
+    "btts": frozenset({"yes", "no"}),
 }
 X1_MAX_ROWS = max(1000, min(12000, int(os.getenv("NETRATTLER_X1_HISTORY_MAX_ROWS", "7000"))))
 X1_CORROBORATION_RATIO_MIN = 0.85
@@ -196,7 +197,7 @@ def _load_x1_rows(force: bool = False) -> List[Dict[str, Any]]:
                          "Authorization": f"Bearer {SUPABASE_KEY}"},
                 params={
                     "source": "eq.1xbet_platform",
-                    "market": "in.(1x2,totals_2_5)",
+                    "market": "in.(1x2,totals_2_5,btts)",
                     "captured_date": f"eq.{today}",
                     "match_date": f"gte.{today}",
                     "select": "source,bookmaker,home_team,away_team,match_date,captured_date,market,selection,odds,raw,imported_at",

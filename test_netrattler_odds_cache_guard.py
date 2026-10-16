@@ -310,6 +310,28 @@ def test_x1_shadow_with_no_fresh_import_never_promoted():
     assert all(s == "bwin" for s in sources.values())
 
 
+def test_x1_btts_requires_both_yes_and_no_independent_reference():
+    from datetime import datetime, timezone
+    today = datetime.now(timezone.utc).date().isoformat()
+    now = datetime.now(timezone.utc).isoformat()
+    base = {"home_team": "Arsenal", "away_team": "Chelsea",
+            "match_date": today, "captured_date": today, "market": "btts"}
+    refs = [dict(base, source="bwin", selection=k, odds=p,
+                 raw={"captured_at": now})
+            for k, p in (("yes", 1.75), ("no", 2.05))]
+    shadow = [dict(base, source="1xbet_platform", selection=k, odds=p,
+                   imported_at=now)
+              for k, p in (("yes", 1.82), ("no", 2.10))]
+    prices, sources = guard.best_observed_for_match("Arsenal", "Chelsea", refs + shadow)
+    assert prices == {"btts_yes": 1.82}
+    assert sources["btts_yes"].startswith("1xbet_platform")
+    # Without independently verified NO on the same fixture, deny the whole
+    # 1xBet BTTS market. It may not cherry-pick YES alone.
+    prices, sources = guard.best_observed_for_match("Arsenal", "Chelsea", refs[:1] + shadow)
+    assert prices == {"btts_yes": 1.75}
+    assert sources["btts_yes"] == "bwin"
+
+
 def test_x1_corroboration_never_crosses_fixture_teams():
     from datetime import datetime, timezone
     today = datetime.now(timezone.utc).date().isoformat()
@@ -354,6 +376,7 @@ def test_x1_loader_queries_only_allowlisted_shadow_markets():
     assert calls[0]["source"] == "eq.1xbet_platform"
     assert "1x2" in calls[0]["market"] and "totals_2_5" in calls[0]["market"]
     assert "btts_ht" not in calls[0]["market"]
+    assert "btts" in calls[0]["market"]
 
 
 def main():
@@ -374,6 +397,7 @@ def main():
     test_x1_shadow_with_no_fresh_import_never_promoted()
     test_x1_loader_queries_only_allowlisted_shadow_markets()
     test_x1_corroboration_never_crosses_fixture_teams()
+    test_x1_btts_requires_both_yes_and_no_independent_reference()
     print("OK: multi-brand Kambi + corroborated X1 shadow + fresh odds_history fallback")
 
 

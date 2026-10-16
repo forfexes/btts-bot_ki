@@ -38,6 +38,7 @@ def summarize(verified_rows, shadow_rows):
         "corroborated_x1_selections": len(approved),
         "complete_markets_1x2": by_market["1x2"],
         "complete_markets_totals_2_5": by_market["totals_2_5"],
+        "complete_markets_btts": by_market["btts"],
         "all_other_betclone_families_verified": False,
     }
 

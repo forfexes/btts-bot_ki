@@ -129,3 +129,13 @@ All other numeric-code 1xBet markets remain blocked.
 - Altenar public browser diagnostics observed 46 price-and-label-key
   structures with event/market context, but no separately validated,
   selection-mapped quote. **Altenar is not promoted to a live source.**
+
+## BTTS conditional corroboration — 2026-10-16 UTC
+
+Following same-fixture read-only agreement against labelled independent
+bookmakers, the `btts` market is included in the strict conditional 1xBet
+gate. Both YES and NO selections must exist, agree with independently mapped
+prices and be fresh. The user-visible `btts_yes` price is eligible only when
+all those conditions hold. Incomplete matches, BTTS half-time, cards, corners,
+player markets and unknown numeric codes remain excluded. A complete pair is
+NOT proof that every 1xBet brand is live or that a Telegram tip was sent.
