@@ -235,7 +235,20 @@ def fetch_kambi_player_props(home: str, away: str, brand: str = "ub") -> List[Di
     match_name = f"{home} vs {away}"
     for bo in offer.get("betOffers") or []:
         crit = (bo.get("criterion") or {}).get("label", "")
+        offer_type = str((bo.get("betOfferType") or {}).get("name") or "")
         cat = map_category(crit)
+        if cat == "score":
+            # A generic "Goalscorer" criterion can include *first/last* scorer
+            # offers. These carry much larger prices and must never be used
+            # as "anytime" scorer quotes; inspect the actual offer subtype.
+            descriptor = f"{crit} {offer_type}".lower()
+            if re.search(r"\\b(first|last|next|opening|2nd|second|third|3rd|half|period|assist)\\b|"
+                         r"(two or more|three or more|2\\+|3\\+|hat.trick|own goal)", descriptor):
+                continue
+            if not re.search(r"any\\s*time|to score(?: a goal)?\\b", descriptor):
+                # Only explicitly identified anytime scorer offers go to live
+                # player props. Ambiguous "Goalscorer" stays unavailable.
+                continue
         if cat == "other":
             continue
         for oc in bo.get("outcomes") or []:
@@ -254,7 +267,8 @@ def fetch_kambi_player_props(home: str, away: str, brand: str = "ub") -> List[Di
                 continue
             props.append({
                 "player": player, "team": "", "match": match_name, "league": "",
-                "market": crit, "category": cat, "line": line, "odds": odds,
+                "market": (f"{crit} | {offer_type}" if cat == "score" and offer_type else crit),
+                "category": cat, "line": line, "odds": odds,
                 "source": f"kambi_{brand}",
             })
     return props
