@@ -6,6 +6,22 @@ from netrattler_betclone_hardprobe import (
 
 
 class TestHardprobe(unittest.TestCase):
+    def test_nested_public_sportsbook_price_schema_not_lost_at_depth_15(self):
+        payload = {"eventId": "fixture", "markets": [
+            {"name": "Over 2.5", "price": 1.81}
+        ]}
+        for _ in range(20):
+            payload = {"data": [payload]}
+        evidence = audit_odds_json(payload)
+        self.assertEqual(evidence.get("verified_prices"), 1)
+
+    def test_depth_and_node_limit_do_not_promote_irrelevant_json(self):
+        noise = {"unrelated": {"price": 1.95, "name": "marketing"}}
+        for _ in range(36):
+            noise = {"other": [noise]}
+        self.assertEqual(audit_odds_json(noise).get("verified_prices", 0), 0)
+
+
     def test_ten_platform_families(self):
         self.assertEqual(len(PAGES), 10)
         self.assertTrue(all(CANDIDATES.get(p) for p in PAGES))

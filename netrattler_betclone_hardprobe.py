@@ -269,9 +269,14 @@ def audit_odds_json(payload):
     label_fields = {"name", "label", "selection", "outcome"}
     event_fields = {"eventid", "fixtureid", "matchid", "eventname", "home", "hometeam", "participants"}
     market_fields = {"market", "marketid", "marketname", "bettype", "markets"}
+    # Modern hosted sportsbook JSON can nest 20+ levels, but depth and total
+    # visited objects remain bounded. This counts structural *candidates* only,
+    # never auto-promotes a JSON document to production odds.
+    visited = [0]
     def walk(obj, event=False, market=False, depth=0):
-        if depth > 15:
+        if depth > 30 or visited[0] >= 4000:
             return
+        visited[0] += 1
         if isinstance(obj, list):
             for item in obj[:400]:
                 walk(item, event, market, depth + 1)
