@@ -139,3 +139,23 @@ prices and be fresh. The user-visible `btts_yes` price is eligible only when
 all those conditions hold. Incomplete matches, BTTS half-time, cards, corners,
 player markets and unknown numeric codes remain excluded. A complete pair is
 NOT proof that every 1xBet brand is live or that a Telegram tip was sent.
+
+## Altenar public hosted quote candidates — 2026-10-16 UTC
+
+In the successful, headless [BetClone Playwright Audit #38920290197](https://github.com/forfexes/btts-bot_ki/actions/runs/38920290197),
+Vegas.hu triggered an observed public `biahosted.com` JSON response.
+The bounded depth-aware browser inspector identified **69 price-like records**
+with public market/event context and plausible decimal `name`/`price`
+fields. All **38 parser/browser regression tests** passed. The page is
+marked `candidate_prices_require_independent_market_validation`.
+
+**This is not a validated Altenar bookmaker feed.** These 69 are
+*observations from several public JSON responses*, not 69 confirmed distinct
+football fixtures, and do not yet establish home/away, kickoff time,
+football market-period, selection mapping, price timestamp or bookmaker
+identity. They must remain excluded from the production quote allowlist
+until those fields are independently mapped and tested.
+
+The updated inspector recognises both `event(s)` and `marketGroup(s)`
+wrappers, explores bounded deep JSON, and records candidates without
+capturing full request URLs, cookies, credentials or response payloads.
