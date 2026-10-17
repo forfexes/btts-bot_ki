@@ -15,6 +15,16 @@ on:
       - 'test_netrattler_open_h2h.py'
       - 'netrattler_health_check.py'
       - 'test_netrattler_health_check.py'
+      - 'netrattler_odds_harvester.py'
+      - 'netrattler_keyless_odds.py'
+      - 'netrattler_odds_cache_guard.py'
+      - 'netrattler_scorer.py'
+      - 'netrattler_builder_engine.py'
+      - 'netrattler_builder_guard.py'
+      - 'netrattler_builder_styles.py'
+      - 'netrattler_builder_concepts_v2.py'
+      - 'netrattler_prop_sources.py'
+      - 'netrattler_settlement_runner.py'
       - '.github/workflows/netrattler_sandbox_hardtest.yml'
 
 permissions:
@@ -49,6 +59,7 @@ jobs:
           set -o pipefail
           python netrattler_hardtest.py 2>&1 | tee netrattler-hardtest.log
       - name: Run odds, source and player regression suites
+        if: success() || failure()
         shell: bash
         run: |
           set -o pipefail
