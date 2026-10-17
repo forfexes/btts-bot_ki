@@ -4,6 +4,15 @@ import netrattler_health_check as health
 
 
 class HealthSourceTests(unittest.TestCase):
+    @patch.object(health, 'SUPABASE_URL', '')
+    @patch.object(health, 'SUPABASE_KEY', '')
+    def test_missing_credentials_returns_consistent_shape(self):
+        issues, size, total, sources = health.check_supabase()
+        self.assertIn('Supabase-Zugang fehlt', issues)
+        self.assertIsNone(size)
+        self.assertIsNone(total)
+        self.assertEqual(sources, 0)
+
     @patch.object(health, 'SUPABASE_URL', 'https://example.supabase.co')
     @patch.object(health, 'SUPABASE_KEY', 'test-only-key')
     @patch.object(health, '_sb')
