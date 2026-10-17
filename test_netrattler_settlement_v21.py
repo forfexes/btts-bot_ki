@@ -227,8 +227,17 @@ class SettlementV21Tests(unittest.TestCase):
         original = mod.recover_legacy_builder_text(self._legacy_prop_builder())
         self.assertIn("Player A", original)
         self.assertIn("Player B", original)
-        self.assertIn("3.01", original)
+        self.assertIn("live beim Bookmaker prüfen", original)
+        self.assertNotIn("Gesamt-Quote: <b>3.01", original)
         self.assertIn("\n", original)
+
+    def test_cross_match_builder_retains_observed_combined_quote(self):
+        payload = self._legacy_prop_builder()
+        payload["legs"][1]["match"] = "C vs D"
+        original = mod.recover_legacy_builder_text(payload)
+        self.assertIn("Player A", original)
+        self.assertIn("Player B", original)
+        self.assertIn("3.01", original)
 
     def test_legacy_same_game_builder_does_not_invent_combo_price(self):
         original = mod.recover_legacy_builder_text(self._legacy_prop_builder(estimated=True))
