@@ -11,6 +11,7 @@ on:
           - netrattler_source_sweep.py
           - netrattler_pinnacle_props_probe.py
           - netrattler_smarkets_probe.py
+          - netrattler_fotmob_ht_probe.py
 permissions:
   contents: read
 jobs:
