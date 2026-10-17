@@ -137,6 +137,8 @@ def check_supabase() -> List[str]:
     if r.ok:
         for row in r.json():
             latest.setdefault(f"{row['workflow']}/{row['source']}", row)
+    else:
+        issues.append(f"source_health: HTTP {r.status_code} (Quellen nicht prüfbar)")
     for key, row in sorted(latest.items()):
         if not row.get("ok"):
             note = str(row.get("note") or "")[:110]
