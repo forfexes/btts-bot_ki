@@ -35,7 +35,6 @@ jobs:
           cache: "pip"
       - name: Install all free source dependencies
         run: |
-          pip install curl_cffi
           pip install -r requirements.txt || true
           python -m playwright install chromium --with-deps
       - name: Compile

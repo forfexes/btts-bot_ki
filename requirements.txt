@@ -6,7 +6,6 @@ beautifulsoup4
 lxml
 rapidfuzz
 cloudscraper
-curl_cffi
 scipy
 scikit-learn
 joblib

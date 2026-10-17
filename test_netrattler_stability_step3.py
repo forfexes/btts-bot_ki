@@ -125,7 +125,8 @@ def test_corner_routing_and_source_text(bot):
         "_source":"kambi_ub",
     })
     assert "Over 8.5 Ecken" in msg
-    assert "kambi ub" in msg.lower()
+    # Standing rule: no bookmaker/source names in published tips.
+    assert "kambi" not in msg.lower()
 
 
 def main():

@@ -25,13 +25,8 @@ HEADERS = {
 
 
 def _fetch_json(url: str, params: dict):
-    try:
-        from curl_cffi import requests as crequests
-        response = crequests.get(url, params=params, headers=HEADERS, impersonate="chrome", timeout=20)
-        if response.status_code == 200:
-            return response.json()
-    except Exception:
-        pass
+    # No browser-fingerprint impersonation (curl_cffi removed 2026-10-17):
+    # a plain request only; a block is respected, not evaded.
     try:
         response = requests.get(url, params=params, headers=HEADERS, timeout=20)
         if response.ok:

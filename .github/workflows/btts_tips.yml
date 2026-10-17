@@ -71,7 +71,6 @@ jobs:
             beautifulsoup4 \
             lxml \
             cloudscraper \
-            curl_cffi \
             numpy \
             scipy \
             scikit-learn \

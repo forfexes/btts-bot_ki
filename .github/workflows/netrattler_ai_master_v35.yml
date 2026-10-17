@@ -194,7 +194,6 @@ jobs:
                 "rapidfuzz>=3,<4" \
                 "beautifulsoup4>=4.12,<5" \
                 "cloudscraper>=1.2.71,<2" \
-                "curl_cffi>=0.7,<1" \
                 "scikit-learn>=1.5,<2" \
                 "playwright>=1.50,<2"
               ;;

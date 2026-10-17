@@ -80,7 +80,7 @@ def _count_path(url: str, path: str) -> None:
 
 
 def _get_json(url: str, params: Optional[dict] = None, timeout: int = 6):
-    """Fast JSON fetch: requests/cloudscraper first, curl_cffi Chrome fallback on 403/429/block."""
+    """Fast JSON fetch via requests/cloudscraper (no impersonation fallback)."""
     sess = _session()
     status = None
     if sess is not None:
@@ -93,17 +93,8 @@ def _get_json(url: str, params: Optional[dict] = None, timeout: int = 6):
                 return data
         except Exception:
             pass
-    # GitHub datacenter IPs are often rejected by plain requests even when the
-    # public JSON endpoint itself is reachable. curl_cffi is much cheaper than Chromium.
-    try:
-        from curl_cffi import requests as _creq
-        r = _creq.get(url, params=params or {}, headers=_HEADERS, impersonate="chrome", timeout=timeout)
-        if r.status_code == 200:
-            data = r.json()
-            _count_path(url, "curl_cffi_ok")
-            return data
-    except Exception:
-        pass
+    # curl_cffi Chrome impersonation removed 2026-10-17: a 403/429 block is
+    # respected, not evaded.
     _count_path(url, f"failed_{status}")
     return None
 

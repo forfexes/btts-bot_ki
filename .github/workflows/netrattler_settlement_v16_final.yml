@@ -19,7 +19,7 @@ jobs:
       - name: Install dependencies
         run: |
           python -m pip install --upgrade pip
-          pip install --prefer-binary requests python-dateutil curl_cffi numpy scikit-learn pillow
+          pip install --prefer-binary requests python-dateutil numpy scikit-learn pillow
           sudo apt-get install -y -qq fonts-dejavu-core >/dev/null 2>&1 || true
       - name: Compile settlement + learning feedback
         run: |

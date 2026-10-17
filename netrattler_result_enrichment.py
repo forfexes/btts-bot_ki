@@ -30,15 +30,7 @@ def _same(a: Any, b: Any) -> bool:
 
 
 def _get(url: str, params=None) -> Dict[str, Any]:
-    """Small settlement-safe JSON fetch with the same TLS fallback as daily stats."""
-    try:
-        from curl_cffi import requests as crequests
-        r = crequests.get(url, params=params, headers=UA, impersonate="chrome", timeout=TIMEOUT)
-        if r.status_code == 200:
-            data = r.json()
-            return data if isinstance(data, dict) else {}
-    except Exception:
-        pass
+    """Small settlement-safe JSON fetch (plain request; no impersonation)."""
     r = requests.get(url, params=params, headers=UA, timeout=TIMEOUT)
     r.raise_for_status()
     data = r.json()

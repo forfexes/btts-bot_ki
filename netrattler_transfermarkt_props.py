@@ -130,24 +130,11 @@ def _get(url: str, params: Optional[dict] = None, timeout: int = _TIMEOUT) -> Op
         try:
             r = s.get(url, params=params or {}, headers=_HEADERS, timeout=timeout)
             if r.status_code in (403, 429, 503):
-                pass  # Fallback zu curl_cffi unten
+                _BLOCKED = True  # respect the block; no impersonation fallback
             elif r.ok:
                 return r.text
         except Exception:
             pass
-
-    # curl_cffi Chrome-Impersonation als Fallback (umgeht Cloudflare)
-    try:
-        from curl_cffi import requests as _creq
-        from urllib.parse import urlencode
-        full_url = f"{url}?{urlencode(params)}" if params else url
-        r2 = _creq.get(full_url, headers=_HEADERS, impersonate="chrome", timeout=timeout)
-        if r2.status_code == 200:
-            return r2.text
-        if r2.status_code in (403, 429, 503):
-            _BLOCKED = True
-    except Exception:
-        pass
 
     return None
 
