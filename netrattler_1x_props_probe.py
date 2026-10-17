@@ -18,6 +18,8 @@ from collections import Counter
 
 import requests
 
+from netrattler_1x_shadow_snapshots import extract_snapshots, persist_snapshots, MAX_WRITE_ROWS
+
 HOSTS = ("https://22bet.com", "https://melbet.com", "https://betwinner.com")
 HEADERS = {"User-Agent": "NETRATTLER-PublicSourceAudit/2.0 (+https://github.com/forfexes/btts-bot_ki)",
            "Accept": "application/json"}
@@ -67,15 +69,21 @@ def summarize_game(val: dict) -> dict:
     return {"groups": groups.most_common(40), "group_names": names, "subgames": subgames}
 
 
-def run() -> list:
+def run() -> tuple[list, list]:
     out = []
+    snapshots = []
     for host in HOSTS:
         st, data = _get(f"{host}/service-api/LineFeed/Get1x2_VZip",
                         {"sports": 1, "count": 300, "lng": "en", "mode": 4, "country": 1})
         row = {"host": host, "list_http": st}
         games = (data or {}).get("Value") or []
         row["list_events"] = len(games)
-        picked = [g for g in games if any(t in str(g.get("L") or "").lower() for t in TOP)][:1]
+        picked = sorted(
+            (g for g in games if any(t in str(g.get("L") or "").lower() for t in TOP)
+             and g.get("I") and g.get("O1") and g.get("O2")
+             and str(g.get("O1")).lower() != "home" and str(g.get("O2")).lower() != "away"),
+            key=lambda g: int(g.get("S") or 0),
+        )[:2]
         row["fixtures"] = []
         for g in picked:
             gid = g.get("I")
@@ -97,6 +105,10 @@ def run() -> list:
                                      "country": 1, "marketType": 1})
                     if sub and sub.get("Value"):
                         sv = sub["Value"]
+                        remaining = MAX_WRITE_ROWS - len(snapshots)
+                        if remaining > 0:
+                            snapshots.extend(extract_snapshots(
+                                sv, fx["match"], title, max_rows=min(400, remaining)))
                         sample = []
                         for grp in (sv.get("GE") or [])[:3]:
                             for r in (grp.get("E") or [])[:1]:
@@ -113,11 +125,11 @@ def run() -> list:
         out.append(row)
         if row["fixtures"]:
             break
-    return out
+    return out, snapshots[:MAX_WRITE_ROWS]
 
 
 def main() -> int:
-    rows = run()
+    rows, snapshots = run()
     print(json.dumps(rows, indent=2, ensure_ascii=False)[:8000])
     url = (os.getenv("SUPABASE_URL") or "").rstrip("/")
     key = os.getenv("SUPABASE_SERVICE_ROLE_KEY") or os.getenv("SUPABASE_KEY") or ""
@@ -125,6 +137,15 @@ def main() -> int:
         requests.post(f"{url}/rest/v1/netrattler_card_diag", timeout=15,
                       headers={"apikey": key, "Authorization": f"Bearer {key}", "Content-Type": "application/json"},
                       json={"info": {"probe": "x1_props_probe", "rows": rows}})
+    saved = 0
+    if url and key:
+        try:
+            saved = persist_snapshots(snapshots, url, key)
+        except requests.RequestException as exc:
+            print("X1_SHADOW_WRITE_FAILED", type(exc).__name__)
+            return 1
+    print("X1_SHADOW_PLAYER_OBSERVATIONS", len(snapshots), "saved", saved,
+          "semantic_codes_validated", 0, flush=True)
     return 0
 
 
