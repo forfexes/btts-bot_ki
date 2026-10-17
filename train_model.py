@@ -296,8 +296,14 @@ def _load_supabase_match_table(table: str, limit_total: int = 100000):
 
 def _load_odds_history(limit_total: int = 200000):
     print("📥 Lade Supabase odds_history (alle Bookies)...")
+    # Only the columns the merge below reads: select="*" also pulled the raw
+    # jsonb blob for every row. Ordered oldest-first, so the row cap must
+    # stay above the table size or the NEWEST odds are silently dropped
+    # (odds_history passed 250k rows in Oct 2026 once live sources landed).
     raw = _fetch_supabase_rows(
-        "odds_history", select="*", order="match_date.asc,captured_date.asc", limit_total=limit_total
+        "odds_history",
+        select="match_date,home_team,away_team,market,bookmaker,selection,odds,captured_date,source",
+        order="match_date.asc,captured_date.asc", limit_total=limit_total,
     )
     by_key = {}
     for row in raw:
@@ -596,7 +602,7 @@ def load_all_matches():
     all_rows.extend(_load_supabase_match_table("football_historical_matches", limit_total=150000))
 
     # Merge every bookmaker/source from odds_history into matching games.
-    odds_by_key = _load_odds_history(limit_total=250000)
+    odds_by_key = _load_odds_history(limit_total=int(os.getenv("NETRATTLER_TRAIN_ODDS_LIMIT", "1000000")))
     for _row in all_rows:
         _dt = _parse_match_date(_row.get("date"))
         if _dt:
