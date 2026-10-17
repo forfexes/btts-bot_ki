@@ -629,7 +629,7 @@ def recover_legacy_builder_text(payload: Dict[str, Any]) -> str:
                 "💰 Builder-Quote: <b>live beim Bookmaker prüfen</b>",
                 "🔒 Keine synthetische Same-Game-Gesamtquote",
             ])
-            return "\\n".join(lines)
+            return "\n".join(lines)
     except (TypeError, ValueError, KeyError, ImportError) as exc:
         log(f"Builder-Originaltext nicht rekonstruierbar: {type(exc).__name__}", "WARN")
     return ""
