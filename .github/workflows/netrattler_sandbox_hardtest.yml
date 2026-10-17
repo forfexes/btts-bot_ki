@@ -25,6 +25,9 @@ on:
       - 'netrattler_builder_concepts_v2.py'
       - 'netrattler_prop_sources.py'
       - 'netrattler_settlement_runner.py'
+      - 'test_netrattler_builder_delivery.py'
+      - 'netrattler_settlement_v16_final.py'
+      - 'test_netrattler_settlement_v21.py'
       - '.github/workflows/netrattler_sandbox_hardtest.yml'
 
 permissions:
