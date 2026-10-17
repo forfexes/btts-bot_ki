@@ -203,5 +203,36 @@ class SmarketsTests(unittest.TestCase):
         self.assertEqual(g.best_observed_for_match("Persita", "Bali", [r("smarkets", 1.5, "btts_ht", "yes")])[0], {})
 
 
+class OneXBetRealTeamIdentityTests(unittest.TestCase):
+    def test_1xbet_placeholders_and_special_bets_never_generate_rows(self):
+        from unittest.mock import patch
+        invalid_pairs = (
+            ("Home", "Away"),
+            ("Home (Special bets)", "Away (Special bets)"),
+            ("Team 1", "Team 2"),
+            ("Arsenal", "Arsenal"),
+            ("Home", "Chelsea"),
+        )
+        for home, away in invalid_pairs:
+            payload = {"I": 123, "O1": home, "O2": away, "S": 1792245600,
+                       "E": [{"T": 1, "C": 2.0}, {"T": 180, "C": 1.8},
+                             {"T": 9, "P": 30.5, "C": 2.1}]}
+            with self.subTest(home=home, away=away), patch.object(k, "_row") as to_row:
+                self.assertEqual(k._x1_rows(payload, "https://22bet.com"), [])
+                to_row.assert_not_called()
+
+    def test_1xbet_real_club_fixture_still_emits_observed_market(self):
+        from unittest.mock import patch
+        payload = {"I": 42, "O1": "Arsenal", "O2": "Chelsea",
+                   "S": 1792245600, "E": [{"T": 1, "C": 2.2}]}
+        with patch.object(k, "_row", side_effect=lambda **kw: kw) as to_row:
+            rows = k._x1_rows(payload, "https://22bet.com")
+        self.assertEqual(len(rows), 1)
+        self.assertEqual(rows[0]["market"], "1x2")
+        self.assertEqual(rows[0]["home"], "Arsenal")
+        self.assertEqual(rows[0]["away"], "Chelsea")
+        self.assertEqual(to_row.call_count, 1)
+
+
 if __name__ == "__main__":
     unittest.main()
