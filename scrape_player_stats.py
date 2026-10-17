@@ -13,7 +13,7 @@ import argparse, csv, gzip, io, json, os, re, time, hashlib
 from pathlib import Path
 from collections import defaultdict
 from datetime import datetime, timezone, timedelta
-from typing import Any, Dict, List, Optional
+from typing import Any, Dict, List, Optional, Tuple
 from concurrent.futures import ThreadPoolExecutor, as_completed
 import requests
 
@@ -1585,6 +1585,57 @@ def _walk_fotmob_players(node: Any):
 _FM_DIAG = {"matches": 0, "events": 0, "cards": 0, "keys_logged": False}
 
 
+def _fotmob_team_corners(detail: Dict[str, Any]) -> Optional[Tuple[int, int]]:
+    """Team corner counts from FotMob matchDetails stats ({key/title: corners, stats: [home, away]})."""
+    content = detail.get("content") or {}
+    periods = ((content.get("stats") or {}).get("Periods") or {}) if isinstance(content.get("stats"), dict) else {}
+    if isinstance(periods, dict) and periods:
+        # Full-match stats only; FirstHalf/SecondHalf also contain a 'corners' row.
+        if "All" not in periods:
+            return None
+        stack = [periods["All"]]
+    else:
+        stack = [content.get("stats") or {}]
+    while stack:
+        node = stack.pop()
+        if isinstance(node, dict):
+            label = str(node.get("key") or node.get("title") or "").strip().lower()
+            vals = node.get("stats")
+            if label in ("corners", "corner_kicks", "corner kicks") and isinstance(vals, list) and len(vals) == 2:
+                try:
+                    return int(float(vals[0])), int(float(vals[1]))
+                except (TypeError, ValueError):
+                    pass
+            stack.extend(node.values())
+        elif isinstance(node, list):
+            stack.extend(node)
+    return None
+
+
+_CORNER_PATCHES = {"found": 0, "patched": 0}
+
+
+def _patch_result_corners(match_id: Any, corners: Tuple[int, int]) -> None:
+    """Store team corners on the existing FotMob match_results row (raw is NULL there today)."""
+    url = (os.getenv("SUPABASE_URL") or "").rstrip("/")
+    key = os.getenv("SUPABASE_SERVICE_ROLE_KEY") or os.getenv("SUPABASE_KEY") or ""
+    if not url or not key:
+        return
+    try:
+        r = requests.patch(
+            f"{url}/rest/v1/match_results",
+            params={"source": "eq.fotmob", "event_id": f"eq.{match_id}"},
+            headers={"apikey": key, "Authorization": f"Bearer {key}", "Content-Type": "application/json",
+                     "Prefer": "return=representation"},
+            json={"raw": {"home_corners": corners[0], "away_corners": corners[1], "corners_source": "fotmob"}},
+            timeout=15,
+        )
+        if r.ok and r.json():
+            _CORNER_PATCHES["patched"] += 1
+    except Exception:
+        pass
+
+
 def scrape_fotmob_date(date_str: str) -> List[Dict]:
     """
     FotMob Tagesliste + Matchdetails.
@@ -1664,6 +1715,13 @@ def scrape_fotmob_date(date_str: str) -> List[Dict]:
         if not isinstance(detail, dict):
             continue
         details_ok += 1
+        try:
+            _cn = _fotmob_team_corners(detail)
+            if _cn:
+                _CORNER_PATCHES["found"] += 1
+                _patch_result_corners(match_id, _cn)
+        except Exception:
+            pass
         if _fotmob_player_records(detail):
             details_with_player_stats += 1
 
@@ -2195,7 +2253,7 @@ def scrape_player_stats(date_str: str) -> int:
             requests.post(f"{_u}/rest/v1/netrattler_card_diag", timeout=10,
                           headers={"apikey": _k, "Authorization": f"Bearer {_k}", "Content-Type": "application/json"},
                           json={"info": {"probe": "scrape_sources", "date": date_str,
-                                         "counts": source_counts, "raw": len(all_rows), "unique": len(clean)}})
+                                         "counts": source_counts, "raw": len(all_rows), "unique": len(clean), "corners": dict(_CORNER_PATCHES)}})
     except Exception:
         pass
     print(f"  🧹 {len(all_rows)} Roh-Rows → {len(clean)} eindeutige Rows")

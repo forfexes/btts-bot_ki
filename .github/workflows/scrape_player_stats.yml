@@ -42,6 +42,7 @@ jobs:
           python -m py_compile scrape_player_stats.py netrattler_odds_harvester.py \
             netrattler_fotmob_results.py test_netrattler_fotmob_results.py netrattler_player_history.py
           python test_netrattler_fotmob_results.py
+          python test_fotmob_corners.py
       - name: Check players DB secrets
         if: ${{ github.event.inputs.days != '' }}
         env:
