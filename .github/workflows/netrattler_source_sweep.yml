@@ -13,6 +13,7 @@ on:
           - netrattler_smarkets_probe.py
           - netrattler_fotmob_ht_probe.py
           - netrattler_kambi_brand_probe.py
+          - netrattler_clv_report.py
 permissions:
   contents: read
 jobs:
