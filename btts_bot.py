@@ -26403,6 +26403,16 @@ def main():
                     pass
 
                 # BTTS Tipp — nur Value Bets (Quote >=1.70 + echter Edge)
+                try:
+                    _gf = globals().setdefault("_GROUP_FUNNEL", {})
+                    _gf["btts_evaluated"] = _gf.get("btts_evaluated", 0) + 1
+                    if btts_yes:
+                        _gf["btts_has_odds"] = _gf.get("btts_has_odds", 0) + 1
+                    if prob_b >= BTTS_MIN_PROB:
+                        _gf["btts_prob_ok"] = _gf.get("btts_prob_ok", 0) + 1
+                    _gf["btts_max_prob"] = max(_gf.get("btts_max_prob", 0), float(prob_b or 0))
+                except Exception:
+                    pass
                 if prob_b >= BTTS_MIN_PROB and "btts" in tips_by_market and _is_market_value_bet(btts_yes, prob_b, BTTS_MIN_ODDS, BTTS_MIN_EDGE):
                     tip_btts = {
                         "match": mn, "league": league_name or "Pinnacle",
@@ -27040,6 +27050,13 @@ def main():
                                          "ge2": sum(1 for v in _pool_matches.values() if v >= 2),
                                          "ge3": sum(1 for v in _pool_matches.values() if v >= 3),
                                          "player_ml": {k: _pml.get(k) for k in ("eligible", "enriched", "empirical", "models_loaded", "missing_stats", "required_models", "load_error", "unmatched_sample")}}})
+        except Exception:
+            pass
+        try:
+            requests.post(f"{SUPABASE_URL}/rest/v1/netrattler_card_diag", timeout=15,
+                          headers={"apikey": SUPABASE_KEY, "Authorization": f"Bearer {SUPABASE_KEY}", "Content-Type": "application/json"},
+                          json={"info": {"probe": "group_funnel", "funnel": dict(globals().get("_GROUP_FUNNEL", {}) or {}),
+                                         "tips_by_market": {k: len(v) for k, v in (tips_by_market or {}).items()}}})
         except Exception:
             pass
         if len(_builder_prop_pool) >= 3:
