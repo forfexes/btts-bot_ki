@@ -1224,6 +1224,8 @@ _STAT_ALIASES = {
     "wontackles": "tackles",
     "tackleswon": "tackles",
     "tacklesucceeded": "tackles",
+    # FotMob playerStats key (2026-10 schema): "matchstats.headers.tackles" = tackles won.
+    "matchstatsheaderstackles": "tackles",
     "interceptions": "interceptions",
     "clearance": "clearances",
     "clearances": "clearances",
