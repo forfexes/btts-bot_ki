@@ -60,7 +60,7 @@ class BuilderDeliveryTests(unittest.TestCase):
         self.assertEqual(stored["telegram_msg_id"], "12345")
         self.assertEqual(stored["telegram_chat_id"], "-10042")
         self.assertIn("Player A", stored["message_text"])
-        self.assertIn("Gesamt-Quote", stored["message_text"])
+        self.assertIn("Builder-Quote", stored["message_text"])
 
     def test_declined_or_missing_send_never_saves(self):
         for result in (None, False, 0, {"ok": False, "description": "blocked"},
