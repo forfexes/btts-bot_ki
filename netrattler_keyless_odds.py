@@ -543,12 +543,24 @@ def _sm_market_key(m: Mapping[str, Any]):
     return SMARKETS_MARKETS.get((name, str(param) if param is not None else None))
 
 
+SMARKETS_MIN_SPREAD_RATIO = float(os.getenv("SMARKETS_MIN_SPREAD_RATIO", "0.90"))
+
+
 def _sm_back_odds(quote: Mapping[str, Any]) -> Optional[float]:
+    """Back price = 10000 / best offer, but ONLY on a tight two-sided book.
+
+    A thin exchange market can show a stale offer far from the real price
+    (seen: 7.00 vs 4.91 elsewhere). Require a bid and best_bid/best_offer >=
+    SMARKETS_MIN_SPREAD_RATIO (in probability points), otherwise drop it."""
     offers = [o for o in (quote or {}).get("offers") or [] if isinstance(o, dict) and o.get("price")]
-    if not offers:
+    bids = [b for b in (quote or {}).get("bids") or [] if isinstance(b, dict) and b.get("price")]
+    if not offers or not bids:
         return None
     best = min(int(o["price"]) for o in offers)
-    if best <= 0 or best >= 10000:
+    best_bid = max(int(b["price"]) for b in bids)
+    if best <= 0 or best >= 10000 or best_bid <= 0:
+        return None
+    if best_bid / best < SMARKETS_MIN_SPREAD_RATIO:
         return None
     return round(10000.0 / best, 3)
 

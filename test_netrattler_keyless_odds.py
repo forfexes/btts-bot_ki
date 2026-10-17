@@ -165,7 +165,11 @@ class SmarketsTests(unittest.TestCase):
     def test_back_odds_from_best_offer(self):
         self.assertAlmostEqual(k._sm_back_odds({"offers": [{"price": 5291}, {"price": 5236}], "bids": [{"price": 5051}]}), 1.91, places=2)
         self.assertIsNone(k._sm_back_odds({"offers": []}))
-        self.assertIsNone(k._sm_back_odds({"offers": [{"price": 10000}]}))
+        self.assertIsNone(k._sm_back_odds({"offers": [{"price": 10000}], "bids": [{"price": 9000}]}))
+
+    def test_wide_or_one_sided_book_dropped(self):
+        self.assertIsNone(k._sm_back_odds({"offers": [{"price": 1429}], "bids": [{"price": 1000}]}))  # 7.00 offer, 10.0 bid
+        self.assertIsNone(k._sm_back_odds({"offers": [{"price": 5236}]}))
 
     def test_market_mapping(self):
         self.assertEqual(k._sm_market_key({"market_type": {"name": "BTTS"}})[0], "btts")
