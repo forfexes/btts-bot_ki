@@ -604,7 +604,8 @@ def recover_legacy_builder_text(payload: Dict[str, Any]) -> str:
         rebuilt_legs = [PropLeg(**{k: v for k, v in item.items() if k in allowed}) for item in legs]
         quote = as_float(data.get("total_odds"), 0)
         estimated = bool(data.get("estimated_odds"))
-        if not estimated and quote > 1 and as_float(data.get("stake"), 0) > 0:
+        same_match = len({norm(leg["match"]) for leg in legs}) == 1
+        if not estimated and not same_match and quote > 1 and as_float(data.get("stake"), 0) > 0:
             pick = BuilderPick(
                 builder_id=str(data.get("builder_id") or ""),
                 style=str(data.get("style") or "BUILDER"),
@@ -616,7 +617,8 @@ def recover_legacy_builder_text(payload: Dict[str, Any]) -> str:
             return format_builder_message(pick)
         # Same-game quotes cannot be multiplied as if they were independent.
         # Display the authentic individual selections, never a synthetic SGP price.
-        if estimated:
+        # This must hold even if old data erroneously marks estimated_odds=False.
+        if estimated or same_match:
             lines = [
                 "🏗️ <b>NETRATTLER " + html.escape(str(data.get("style") or "BUILDER")) + "</b>",
                 "<b>" + html.escape(str(data.get("variant") or "")) + "</b>",
