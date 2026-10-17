@@ -362,6 +362,39 @@ class SettlementV21Tests(unittest.TestCase):
         row["goals"], row["assists"] = 0, 0
         self.assertEqual(mod.settle_player_market(leg, [row], None)[0], "loss")
 
+    def test_unpriced_same_game_builder_has_leg_result_but_no_fake_stake_or_roi(self):
+        date = mod.TODAY_S
+        tip = {
+            "builder_id": "no-quoted-sgp", "market_group": "builder",
+            "match_date": date, "match": "A vs B", "estimated_odds": True,
+            "total_odds": 0, "stake": 0,
+            "legs": [
+                {"match_date": date, "match": "A vs B", "player": "Player A",
+                 "market": "Shots 1+", "category": "shots", "line": 1},
+                {"match_date": date, "match": "A vs B", "player": "Player B",
+                 "market": "Shots 1+", "category": "shots", "line": 1},
+            ],
+        }
+        stats = [
+            {"match_date": date, "home_team": "A", "away_team": "B",
+             "player_name": "Player A", "shots": 0, "minutes": 90},
+            {"match_date": date, "home_team": "A", "away_team": "B",
+             "player_name": "Player B", "shots": 2, "minutes": 90},
+        ]
+        settled = mod.settle_tip(tip, [], stats)
+        self.assertEqual(settled["status"], "loss")
+        self.assertEqual([leg["status"] for leg in settled["legs_payload"]], ["loss", "win"])
+        self.assertEqual(settled["stake"], 0.0)
+        self.assertIsNone(settled["profit"])
+        self.assertIn("nicht verfügbar", mod.format_direct_summary(settled))
+        report = mod.format_settlement(settled)
+        self.assertIn("BUILDER", report)
+        self.assertIn("Profit: n/a", report)
+        perf = mod.summary([settled], "builder", "today")
+        self.assertEqual(perf["bets"], 1)
+        self.assertEqual(perf["stake"], 0)
+        self.assertEqual(perf["profit"], 0)
+
     def test_espn_parser(self):
         payload = {"events": [{"competitions": [{"status": {"type": {"completed": True, "state": "post"}}, "competitors": [
             {"homeAway": "home", "score": "3", "team": {"displayName": "Home"}},
