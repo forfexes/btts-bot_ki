@@ -132,6 +132,14 @@ hit("footballdata_couk", "https://www.football-data.co.uk/mmz4281/2627/E0.csv", 
 hit("thesportsdb", "https://www.thesportsdb.com/api/v1/json/3/eventsday.php", params={"d": time.strftime("%Y-%m-%d"), "s": "Soccer"},
     signal=lambda r: {"events": len((r.json() or {}).get("events") or [])})
 
+# ---------- Crest sources ----------
+hit("crest_footylogos_home", "https://footylogos.com/", signal=lambda r: {"png": r.text.count(".png"), "svg": r.text.count(".svg"), "sample_links": sorted(set(__import__("re").findall(r'href="(/[a-z0-9\-/]+)"', r.text)))[:25]})
+hit("crest_footylogos_search", "https://footylogos.com/search", params={"q": "Qingdao"}, signal=lambda r: {"png": r.text.count(".png"), "svg": r.text.count(".svg")})
+hit("crest_worldsoccerpins", "https://www.worldsoccerpins.com/actual-football-logos-crests", signal=lambda r: {"img": r.text.count("<img")})
+hit("crest_football_logos_cc", "https://football-logos.cc/china/", signal=lambda r: {"links": r.text.count('href="/china/')})
+hit("crest_wikidata", "https://www.wikidata.org/w/api.php", params={"action": "wbsearchentities", "search": "Qingdao Hainiu", "language": "en", "format": "json"},
+    signal=lambda r: {"hits": len(r.json().get("search", []))})
+
 out = {"probe": "source_sweep", "results": RES}
 print(json.dumps(out, indent=1)[:12000])
 if SB and SK:

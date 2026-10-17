@@ -785,6 +785,17 @@ def send_cards(tips_by_market, target_date, token, stats_chat, log=print):
         _crest_cache_save(teams)
         STATS["teams_total"] = len(teams)
         STATS["teams_with_badge"] = sum(1 for t in teams if _BADGE_CACHE.get(_norm(t)))
+        try:
+            _u = (os.getenv("SUPABASE_URL") or "").rstrip("/")
+            _k = os.getenv("SUPABASE_SERVICE_ROLE_KEY") or os.getenv("SUPABASE_KEY") or ""
+            if _u and _k:
+                _missing = [f"{t} | {_TEAM_LEAGUE.get(_norm(t), '')}"[:80] for t in teams if not _BADGE_CACHE.get(_norm(t))]
+                requests.post(f"{_u}/rest/v1/netrattler_card_diag", timeout=10,
+                              headers={"apikey": _k, "Authorization": f"Bearer {_k}", "Content-Type": "application/json"},
+                              json={"info": {"probe": "crest_coverage", "stats": {k: v for k, v in STATS.items() if isinstance(v, (int, float, str))},
+                                             "missing": _missing[:60]}})
+        except Exception:
+            pass
     except Exception as exc:
         log(f"Crest-Prefetch Fehler: {type(exc).__name__}")
 
