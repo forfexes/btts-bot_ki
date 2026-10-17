@@ -211,7 +211,7 @@ _X1_TYPES = {1: ("1x2", "home"), 2: ("1x2", "draw"), 3: ("1x2", "away"),
              4: ("double_chance", "1x"), 5: ("double_chance", "12"), 6: ("double_chance", "x2")}
 
 
-_X1_PLACEHOLDER_TEAM = re.compile(r"^(?:home|away|team\\s*[12])(?:\\s*\\([^)]*bets?\\))?$", re.I)
+_X1_PLACEHOLDER_TEAM = re.compile(r"^(?:home|away|team\s*[12])(?:\s*\([^)]*bets?\))?$", re.I)
 
 
 def _x1_has_real_teams(home: Any, away: Any) -> bool:
