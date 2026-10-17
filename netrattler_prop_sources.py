@@ -756,7 +756,14 @@ def collect_extra_player_props(
     per_cat: Counter = Counter()
     matched_matches = set()
 
+    import threading as _th
+    _lock = _th.Lock()
+
     def _add(rows, home, away, league, source_name):
+        with _lock:
+            return _add_locked(rows, home, away, league, source_name)
+
+    def _add_locked(rows, home, away, league, source_name):
         added = 0
         for row in rows or []:
             if not isinstance(row, dict):
@@ -794,15 +801,14 @@ def collect_extra_player_props(
     _budget = float(_os_b.environ.get("NETRATTLER_PROP_BUDGET_SEC", "540") or 540)
     _t0 = _time_b.time()
 
-    for fx in (fixtures or [])[:max_matches]:
+    def _do_fixture(fx):
         if _time_b.time() - _t0 > _budget:
-            _log(f"   ⏱ Prop-Budget {int(_budget)}s erreicht - Rest uebersprungen")
-            break
+            return
         home = str(fx.get("home", "")).strip()
         away = str(fx.get("away", "")).strip()
         league = str(fx.get("league", "")).strip()
         if not home or not away:
-            continue
+            return
 
         before_cats = set(per_cat)
         local_cats = set()
@@ -847,6 +853,17 @@ def collect_extra_player_props(
                     rows = []
                 _add(rows, home, away, league, name)
                 local_cats.update((r.get("category") or map_category(r.get("market", ""))) for r in rows if isinstance(r, dict))
+    _workers = max(1, int(_os_b.environ.get("NETRATTLER_PROP_WORKERS", "4") or 4))
+    _fx_list = list((fixtures or [])[:max_matches])
+    if _workers == 1:
+        for _fx in _fx_list:
+            _do_fixture(_fx)
+    else:
+        from concurrent.futures import ThreadPoolExecutor
+        with ThreadPoolExecutor(max_workers=_workers) as _pool:
+            list(_pool.map(lambda _f: _do_fixture(_f), _fx_list))
+    if _time_b.time() - _t0 > _budget:
+        _log(f"   ⏱ Prop-Budget {int(_budget)}s erreicht - Rest uebersprungen")
 
     # --- Transfermarkt Nationalteam-Kandidaten (kein odds, nur Struktur) ---
     try:
