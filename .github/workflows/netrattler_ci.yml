@@ -80,3 +80,5 @@ jobs:
         run: python test_netrattler_aiscore.py
       - name: Player name fuzzy lookup tests
         run: python test_player_name_fuzzy.py
+      - name: Empirical probability blend tests
+        run: python test_empirical_blend.py

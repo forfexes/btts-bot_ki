@@ -7324,7 +7324,7 @@ def _get_market_stats_from_supabase(market_id):
             headers={"apikey": SUPABASE_KEY, "Authorization": f"Bearer {SUPABASE_KEY}"},
             params={
                 "market": f"eq.{market_id}",
-                "status": "in.(won,lost)",
+                "status": "in.(win,loss,won,lost)",
                 "select": "status,odds,units,date,league",
                 "order": "date.desc",
                 "limit": "2000",
@@ -8112,6 +8112,46 @@ def send_top_tips(tips_by_market, target_date):
 # AUTO LEAGUE SWITCH FUNKTIONEN
 # ============================================================
 
+_EMP_RATES = None
+_EMP_MARKETS = ("1x2", "btts", "over25")
+_EMP_K = float(os.getenv("NETRATTLER_EMP_PRIOR_K", "40"))
+
+
+def _empirical_rates():
+    """Observed hit rate (and n) of settled core tips per market, last 60 days.
+    Used to pull over-confident model probabilities down to what actually happened."""
+    global _EMP_RATES
+    if _EMP_RATES is not None:
+        return _EMP_RATES
+    _EMP_RATES = {}
+    if not SUPABASE_URL or not SUPABASE_KEY:
+        return _EMP_RATES
+    try:
+        since = (date.today() - timedelta(days=60)).isoformat()
+        r = requests.get(f"{SUPABASE_URL}/rest/v1/tips",
+                         headers={"apikey": SUPABASE_KEY, "Authorization": f"Bearer {SUPABASE_KEY}"},
+                         params={"select": "market,status", "status": "in.(win,loss)", "date": f"gte.{since}",
+                                 "market": "in.(" + ",".join(_EMP_MARKETS) + ")", "limit": "5000"}, timeout=20)
+        if r.ok:
+            tmp = {}
+            for row in r.json():
+                w, n = tmp.get(row.get("market"), (0, 0))
+                tmp[row.get("market")] = (w + (1 if row.get("status") == "win" else 0), n + 1)
+            _EMP_RATES = {m: (w / n, n) for m, (w, n) in tmp.items() if n}
+    except Exception as e:
+        log(f"Empirical rates error: {e}", "WARN")
+    return _EMP_RATES
+
+
+def _empirical_blend(p, market):
+    """Bayesian blend of model probability p with the observed hit rate of the market."""
+    h = _empirical_rates().get(str(market).lower())
+    if not h or h[1] < 30:
+        return p
+    rate, n = h
+    return (n * rate + _EMP_K * p) / (n + _EMP_K)
+
+
 def fetch_all_closed_tips_from_supabase():
     """
     Holt abgeschlossene Tipps aus Supabase.
@@ -8131,7 +8171,7 @@ def fetch_all_closed_tips_from_supabase():
             },
             params={
                 "select": "league,status,odds,date",
-                "status": "in.(won,lost)",
+                "status": "in.(win,loss,won,lost)",
                 "date": f"gte.{since_date}",
                 "limit": "5000",
             },
@@ -17129,7 +17169,7 @@ def _get_market_stats_from_supabase(market_id):
             headers={"apikey": SUPABASE_KEY, "Authorization": f"Bearer {SUPABASE_KEY}"},
             params={
                 "market": f"eq.{market_id}",
-                "status": "in.(won,lost)",
+                "status": "in.(win,loss,won,lost)",
                 "select": "status,odds,units,date,league",
                 "order": "date.desc",
                 "limit": "2000",
@@ -17787,7 +17827,7 @@ def fetch_all_closed_tips_from_supabase():
             },
             params={
                 "select": "league,status,odds,date",
-                "status": "in.(won,lost)",
+                "status": "in.(win,loss,won,lost)",
                 "date": f"gte.{since_date}",
                 "limit": "5000",
             },
@@ -22945,7 +22985,7 @@ def send_daily_report():
         r = requests.get(
             f"{SUPABASE_URL}/rest/v1/tips",
             headers={"apikey": SUPABASE_KEY, "Authorization": f"Bearer {SUPABASE_KEY}"},
-            params={"select": "date,market,league,status,odds,units", "date": f"gte.{month_start}", "status": "in.(won,lost)"},
+            params={"select": "date,market,league,status,odds,units", "date": f"gte.{month_start}", "status": "in.(win,loss,won,lost)"},
             timeout=15,
         )
         if not r.ok:
@@ -24896,6 +24936,7 @@ def filter_tips_by_edge(tips: List[Dict], market: str = "btts",
                 # generic 55% policy make HT markets impossible.
                 raw_core_p = raw_p / 100.0 if raw_p > 1 else raw_p
                 adjusted_p = max(raw_core_p - 0.08, min(raw_core_p + 0.08, adjusted_p))
+                adjusted_p = min(adjusted_p, _empirical_blend(adjusted_p, _tmk))  # never above observed reality
                 _min_p, _min_o = _core_thresholds[_tmk]
                 policy_ok = adjusted_p >= _min_p and float(market_quote) >= _min_o
             else:
@@ -25767,7 +25808,7 @@ def _fetch_historical_tips(days: int = 60) -> List[Dict]:
             headers={"apikey": SUPABASE_KEY, "Authorization": f"Bearer {SUPABASE_KEY}"},
             params={
                 "select": "*", "date": f"gte.{since}",
-                "status": "in.(won,lost)",
+                "status": "in.(win,loss,won,lost)",
                 "limit": "10000", "order": "date.asc",
             }, timeout=30,
         )
