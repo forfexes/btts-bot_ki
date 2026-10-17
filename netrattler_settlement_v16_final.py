@@ -398,28 +398,55 @@ def telegram(chat_id: str, text: str) -> bool:
 
 
 
+_EDIT_LAST_BY_CHAT: Dict[str, float] = {}
+
+
 def telegram_edit(chat_id: str, message_id: Any, text: str) -> bool:
-    """Original-Tipp direkt bearbeiten."""
+    """Edit the same Telegram tip, respecting rate limits and retry_after."""
     if not TG_TOKEN or not chat_id or not message_id:
         return False
-    try:
-        response = requests.post(
-            f"https://api.telegram.org/bot{TG_TOKEN}/editMessageText",
-            json={
-                "chat_id": chat_id,
-                "message_id": int(message_id),
-                "text": text[:3900],
-                "parse_mode": "HTML",
-                "disable_web_page_preview": True,
-            },
-            timeout=20,
-        )
-        if not response.ok:
-            log(f"TG edit {response.status_code}: {response.text[:180]}", "WARN")
-        return response.ok
-    except Exception as exc:
-        log(f"TG edit: {exc}", "WARN")
-        return False
+    chat_key = str(chat_id)
+    for attempt in range(3):
+        gap = max(0.0, float(os.getenv("SETTLEMENT_TG_EDIT_GAP_SEC", "1.2")))
+        delay = _EDIT_LAST_BY_CHAT.get(chat_key, 0.0) + gap - time.monotonic()
+        if delay > 0:
+            time.sleep(delay)
+        try:
+            _EDIT_LAST_BY_CHAT[chat_key] = time.monotonic()
+            response = requests.post(
+                f"https://api.telegram.org/bot{TG_TOKEN}/editMessageText",
+                json={
+                    "chat_id": chat_id,
+                    "message_id": int(message_id),
+                    "text": text[:3900],
+                    "parse_mode": "HTML",
+                    "disable_web_page_preview": True,
+                },
+                timeout=20,
+            )
+            if response.ok:
+                return True
+            detail = str(response.text or "")
+            # Idempotent replay: Telegram's 400 means the original already carries this result.
+            if response.status_code == 400 and "message is not modified" in detail.lower():
+                return True
+            if response.status_code == 429 and attempt < 2:
+                try:
+                    wait = int(((response.json() or {}).get("parameters") or {}).get("retry_after") or 3)
+                except Exception:
+                    wait = 3
+                wait = min(65, max(1, wait + 1))
+                log(f"TG edit 429: warte {wait}s vor Retry {attempt + 2}/3", "WARN")
+                time.sleep(wait)
+                continue
+            log(f"TG edit {response.status_code}: {detail[:180]}", "WARN")
+            return False
+        except Exception as exc:
+            log(f"TG edit: {exc}", "WARN")
+            if attempt == 2:
+                return False
+            time.sleep(attempt + 1)
+    return False
 
 
 def _strip_old_direct_summary(original: str) -> str:
@@ -570,6 +597,64 @@ def edit_original_tip(settlement: Dict[str, Any]) -> bool:
     else:
         log(f"Original-Tipp konnte nicht editiert werden; KEIN separater Post: {settlement.get('tip_id')}", "WARN")
     return False
+
+def _save_tip_edit_receipt(settlement: Dict[str, Any], edited: bool) -> None:
+    """Persist a durable edit receipt so closed tips can be retried on later runs."""
+    sid = settlement.get("settlement_id")
+    if not sid:
+        return
+    raw = settlement.get("raw") if isinstance(settlement.get("raw"), dict) else {}
+    raw = dict(raw)
+    raw["telegram_edit_attempts"] = as_int(raw.get("telegram_edit_attempts"), 0) + 1
+    if edited:
+        raw["telegram_edit_ok"] = True
+        raw["telegram_edited_at"] = datetime.now(timezone.utc).isoformat()
+    if sb_patch("netrattler_settlements", "settlement_id", sid, {"raw": raw}):
+        settlement["raw"] = raw
+    else:
+        log(f"TG Edit-Receipt konnte nicht gespeichert werden: {sid}", "WARN")
+
+
+def retry_unedited_originals(existing: Sequence[Dict[str, Any]], newly_closed: Sequence[Dict[str, Any]]) -> Tuple[int, int]:
+    """Replay only recent closed tips with a real original Telegram receipt.
+
+    This heals settled posts missed during 429; no new Telegram message is created.
+    The finite per-run budget and persisted attempts prevent infinite edit loops.
+    """
+    excluded = {str(row.get("settlement_id") or "") for row in newly_closed}
+    days = max(1, int(os.getenv("SETTLEMENT_TG_REPLAY_DAYS", "3")))
+    cutoff = (TODAY - timedelta(days=days)).isoformat()
+    limit = max(0, int(os.getenv("SETTLEMENT_TG_REPLAY_MAX", "60")))
+    attempts = successes = 0
+    candidates = sorted(
+        existing,
+        key=lambda row: str(row.get("settled_at") or ""),
+        reverse=True,
+    )
+    for row in candidates:
+        if attempts >= limit:
+            break
+        if normalized_status(row.get("status")) not in {"win", "loss"}:
+            continue
+        if str(row.get("tip_date") or "")[:10] < cutoff:
+            continue
+        if str(row.get("settlement_id") or "") in excluded:
+            continue
+        raw = row.get("raw") if isinstance(row.get("raw"), dict) else {}
+        if raw.get("telegram_edit_ok") or as_int(raw.get("telegram_edit_attempts"), 0) >= 4:
+            continue
+        payload = unpack(row.get("tip_payload") or {})
+        if not anyv(payload, ["telegram_msg_id", "telegram_message_id", "message_id", "tg_message_id"], None):
+            continue
+        if not anyv(payload, ["message_text", "text", "tip_text", "message", "caption"], None):
+            continue
+        attempts += 1
+        edited = edit_original_tip(row)
+        successes += bool(edited)
+        _save_tip_edit_receipt(row, edited)
+    log(f"Original-Tipp-Recovery: {successes}/{attempts} nachbearbeitet")
+    return successes, attempts
+
 
 def market_text(row: Dict[str, Any]) -> str:
     data = unpack(row)
@@ -1997,10 +2082,12 @@ def main() -> None:
     edited_count = 0
     for row in newly_closed:
         update_source_tip(row)
-        if edit_original_tip(row):
-            edited_count += 1
+        edited = edit_original_tip(row)
+        edited_count += bool(edited)
+        _save_tip_edit_receipt(row, edited)
     if newly_closed:
         log(f"Original-Tipps direkt editiert: {edited_count}/{len(newly_closed)}")
+    retry_unedited_originals(existing, newly_closed)
     try:
         _today = datetime.now(timezone.utc).date()
         _recent = [r for r in (list(existing) + list(settled))
