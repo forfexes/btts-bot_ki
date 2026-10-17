@@ -33,6 +33,20 @@ def _get(url, params):
         return type(exc).__name__, None
 
 
+def _shape(val: dict) -> dict:
+    """Top-level keys plus a few raw event dicts (only short scalar fields)."""
+    evs = list(val.get("E") or [])
+    for grp in val.get("GE") or []:
+        for r in grp.get("E") or []:
+            evs.extend(r if isinstance(r, list) else [r])
+    sample = [{k: (v if isinstance(v, (int, float)) else str(v)[:40]) for k, v in e.items()
+               if not isinstance(v, (list, dict))} for e in evs[:8] if isinstance(e, dict)]
+    return {"keys": sorted(val.keys())[:40], "n_E": len(val.get("E") or []),
+            "n_GE": len(val.get("GE") or []), "T_counts": Counter(e.get("T") for e in evs
+            if isinstance(e, dict)).most_common(25), "event_sample": sample,
+            "sg_keys": sorted((val.get("SG") or [{}])[0].keys())[:30] if val.get("SG") else []}
+
+
 def summarize_game(val: dict) -> dict:
     groups = Counter()
     names = {}
@@ -55,7 +69,7 @@ def run() -> list:
         row = {"host": host, "list_http": st}
         games = (data or {}).get("Value") or []
         row["list_events"] = len(games)
-        picked = [g for g in games if any(t in str(g.get("L") or "").lower() for t in TOP)][:3]
+        picked = [g for g in games if any(t in str(g.get("L") or "").lower() for t in TOP)][:1]
         row["fixtures"] = []
         for g in picked:
             gid = g.get("I")
@@ -65,11 +79,12 @@ def run() -> list:
             fx = {"match": f"{g.get('O1')} vs {g.get('O2')}"[:80], "league": str(g.get("L"))[:50], "http": st2}
             if game and game.get("Value"):
                 fx.update(summarize_game(game["Value"]))
+                fx["shape"] = _shape(game["Value"])
                 # Player props usually live in sub-games: check up to 4 of them.
                 sub_details = []
                 for sg in (game["Value"].get("SG") or [])[:60]:
                     title = str(sg.get("TG") or sg.get("PN") or "").lower()
-                    if not any(k in title for k in ("player", "foul", "tackle", "shot", "statistic")):
+                    if not any(k in title for k in ("players' stats", "foul", "tackle", "shots")):
                         continue
                     st3, sub = _get(f"{host}/service-api/LineFeed/GetGameZip",
                                     {"id": sg.get("CI"), "lng": "en", "cfview": 0, "grMode": 4,
@@ -81,7 +96,7 @@ def run() -> list:
                             for r in (grp.get("E") or [])[:1]:
                                 for e in (r if isinstance(r, list) else [r])[:2]:
                                     sample.append({k: e.get(k) for k in ("G", "T", "C", "P", "PN", "B") if k in e})
-                        sub_details.append({"title": title[:50], "http": st3,
+                        sub_details.append({"title": title[:50], "http": st3, "shape": _shape(sv),
                                             "groups": summarize_game(sv)["groups"][:15],
                                             "group_names": summarize_game(sv)["group_names"],
                                             "sample": sample[:6]})
