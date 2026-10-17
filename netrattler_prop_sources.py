@@ -230,7 +230,7 @@ def _teams_match(cand: str, home: str, away: str) -> bool:
 # QUELLE: Kambi (powers Unibet, Betsson, NordicBet, ComeOn, Rizk ...)
 #   Oeffentliche offering-API, sauberes JSON, kein Login.
 # ==================================================================
-_KAMBI_BRANDS = ["ub", "bs", "888", "nb"]  # unibet, betsson, 888sport, nordicbet
+_KAMBI_BRANDS = ["ub", "ubuk", "paf", "ubse", "pafes", "ubbe", "atg", "svenskaspel"]  # probe 2026-10-17: these answer 200; bs/nb/888 give 429/400
 _KAMBI_HOSTS = [
     "https://eu-offering-api.kambicdn.com",
     "https://e0-api.kambi.com",
