@@ -39,8 +39,14 @@ def _shape(val: dict) -> dict:
     for grp in val.get("GE") or []:
         for r in grp.get("E") or []:
             evs.extend(r if isinstance(r, list) else [r])
-    sample = [{k: (v if isinstance(v, (int, float)) else str(v)[:40]) for k, v in e.items()
-               if not isinstance(v, (list, dict))} for e in evs[:8] if isinstance(e, dict)]
+    sample = [{k: (v if isinstance(v, (int, float)) else str(v)[:60]) for k, v in e.items()}
+              for e in evs[:6] if isinstance(e, dict)]
+    # One sample per distinct group G so player-name carriers are visible.
+    seen_g = set()
+    for e in evs:
+        if isinstance(e, dict) and e.get("G") not in seen_g and len(seen_g) < 14:
+            seen_g.add(e.get("G"))
+            sample.append({k: (v if isinstance(v, (int, float)) else str(v)[:60]) for k, v in e.items()})
     return {"keys": sorted(val.keys())[:40], "n_E": len(val.get("E") or []),
             "n_GE": len(val.get("GE") or []), "T_counts": Counter(e.get("T") for e in evs
             if isinstance(e, dict)).most_common(25), "event_sample": sample,
