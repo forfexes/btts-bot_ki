@@ -75,6 +75,7 @@ def check_github() -> List[str]:
     if not r.ok:
         return [f"GitHub Runs HTTP {r.status_code}"]
     by_wf: Dict[str, Dict[str, int]] = {}
+    latest_by_wf: Dict[str, Dict[str, Any]] = {}
     for run in r.json().get("workflow_runs", []):
         name = run.get("name") or "?"
         if "Health" in name:
@@ -87,8 +88,18 @@ def check_github() -> List[str]:
             d["fail"] += 1
         else:
             d["other"] += 1
+        # API results may include retries and unordered runs: compare timestamps.
+        stamp = str(run.get("created_at") or "")
+        previous = latest_by_wf.get(name)
+        if previous is None or stamp > str(previous.get("created_at") or ""):
+            latest_by_wf[name] = run
     for name, d in sorted(by_wf.items()):
-        if d["fail"] and not d["ok"]:
+        latest = latest_by_wf.get(name, {})
+        conclusion = latest.get("conclusion")
+        status = latest.get("status")
+        if status == "completed" and conclusion in ("failure", "timed_out", "startup_failure"):
+            issues.append(f"Workflow '{name}': letzter Lauf fehlgeschlagen ({conclusion}); {d['fail']} Fehler in 26h")
+        elif d["fail"] and not d["ok"]:
             issues.append(f"Workflow '{name}': {d['fail']} Fehlschläge, kein Erfolg in 26h")
         elif d["fail"] > 2:
             issues.append(f"Workflow '{name}': {d['fail']} Fehlschläge (+{d['ok']} ok)")
