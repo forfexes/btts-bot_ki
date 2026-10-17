@@ -357,26 +357,66 @@ def test_x1_loader_queries_only_allowlisted_shadow_markets():
     from datetime import datetime, timezone
     today = datetime.now(timezone.utc).date().isoformat()
     now = datetime.now(timezone.utc).isoformat()
-    srcrow = {"source": "1xbet_platform", "home_team": "Arsenal",
-              "away_team": "Chelsea", "market": "1x2", "selection": "home",
-              "match_date": today, "captured_date": today, "imported_at": now,
-              "odds": 2.1}
     calls = []
     class Response:
+        def __init__(self, records): self.records = records
         def raise_for_status(self): pass
-        def json(self): return [srcrow]
+        def json(self): return self.records
     def get(_url, *, params, **_kwargs):
         calls.append(params)
-        return Response()
+        source = params["source"].removeprefix("eq.")
+        row = {"source": source, "home_team": "Arsenal", "away_team": "Chelsea",
+               "market": "1x2", "selection": "home", "match_date": today,
+               "captured_date": today, "imported_at": now, "odds": 2.1}
+        return Response([row])
     with (patch.object(guard, "SUPABASE_URL", "https://supabase.invalid"),
           patch.object(guard, "SUPABASE_KEY", "test"),
           patch.object(guard.requests, "get", side_effect=get)):
         rows = guard._load_x1_rows(force=True)
-    assert len(rows) == 1
-    assert calls[0]["source"] == "in.(1xbet_platform,altenar_platform)"
-    assert "1x2" in calls[0]["market"] and "totals_2_5" in calls[0]["market"]
-    assert "btts_ht" not in calls[0]["market"]
-    assert "btts" in calls[0]["market"]
+    assert len(rows) == 2
+    assert {row["source"] for row in rows} == {"altenar_platform", "1xbet_platform"}
+    assert {call["source"] for call in calls} == {"eq.1xbet_platform", "eq.altenar_platform"}
+    assert all("1x2" in call["market"] and "totals_2_5" in call["market"]
+               and "btts" in call["market"] and "btts_ht" not in call["market"] for call in calls)
+
+
+def test_x1_shadow_providers_receive_separate_budgets_and_isolated_failures():
+    from unittest.mock import patch
+    from datetime import datetime, timezone
+    today = datetime.now(timezone.utc).date().isoformat()
+    now = datetime.now(timezone.utc).isoformat()
+    calls = []
+    class Response:
+        def __init__(self, records): self.records = records
+        def raise_for_status(self): pass
+        def json(self): return self.records
+    def get(_url, *, params, **_kwargs):
+        calls.append((params["source"], params["offset"], params["limit"]))
+        source = params["source"].removeprefix("eq.")
+        if source == "altenar_platform":
+            # The Altenar feed fills its first page and its second page:
+            # it must not consume the next bookmaker's allocation.
+            if params["offset"] == "0":
+                batch = 2
+            else:
+                batch = 1
+            return Response([{"source": source, "home_team": "Arsenal", "away_team": "Chelsea",
+                              "market": "1x2", "selection": "home", "match_date": today,
+                              "captured_date": today, "imported_at": now, "odds": 2.1}] * batch)
+        raise guard.requests.RequestException("1xBet temporarily unavailable")
+    with (patch.object(guard, "SUPABASE_URL", "https://supabase.invalid"),
+          patch.object(guard, "SUPABASE_KEY", "test"),
+          patch.object(guard, "X1_MAX_ROWS", 8),
+          patch.object(guard, "PAGE_SIZE", 2),
+          patch.object(guard.requests, "get", side_effect=get)):
+        rows = guard._load_x1_rows(force=True)
+    assert len(rows) == 3
+    assert ("eq.altenar_platform", "0", "2") in calls
+    assert ("eq.altenar_platform", "2", "2") in calls
+    assert ("eq.1xbet_platform", "0", "2") in calls
+    assert not any(c[0] == "eq.altenar_platform" and c[1] == "4" for c in calls)
+
+
 
 
 def main():
@@ -396,6 +436,7 @@ def main():
     test_x1_totals_needs_both_lines_and_never_allows_other_markets()
     test_x1_shadow_with_no_fresh_import_never_promoted()
     test_x1_loader_queries_only_allowlisted_shadow_markets()
+    test_x1_shadow_providers_receive_separate_budgets_and_isolated_failures()
     test_x1_corroboration_never_crosses_fixture_teams()
     test_x1_btts_requires_both_yes_and_no_independent_reference()
     print("OK: multi-brand Kambi + corroborated X1 shadow + fresh odds_history fallback")
