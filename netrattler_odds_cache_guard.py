@@ -53,7 +53,7 @@ X1_CROSS_CHECK_MARKETS = {
     "totals_2_5": frozenset({"over_2_5", "under_2_5"}),
     "btts": frozenset({"yes", "no"}),
 }
-X1_MAX_ROWS = max(1000, min(24000, int(os.getenv("NETRATTLER_X1_HISTORY_MAX_ROWS", "18000"))))
+X1_MAX_ROWS = max(1000, min(24000, int(os.getenv("NETRATTLER_X1_HISTORY_MAX_ROWS", "24000"))))
 X1_CORROBORATION_RATIO_MIN = 0.85
 X1_CORROBORATION_RATIO_MAX = 1.18
 
