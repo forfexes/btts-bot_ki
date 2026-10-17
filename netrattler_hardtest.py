@@ -9,6 +9,10 @@ import unittest
 def main():
     critical = [
         "netrattler_source_health.py",
+        "netrattler_open_h2h.py",
+        "test_netrattler_open_h2h.py",
+        "netrattler_health_check.py",
+        "test_netrattler_health_check.py",
         "netrattler_builder_guard.py",
         "netrattler_prop_sources.py",
         "netrattler_runtime_patch.py",
@@ -49,6 +53,13 @@ def main():
     import test_netrattler_settlement_v21 as settlement_v21
 
     source_health.main()
+    import test_netrattler_open_h2h as open_h2h
+    import test_netrattler_health_check as health_check
+    for label, module in (("open H2H", open_h2h), ("health check", health_check)):
+        suite = unittest.defaultTestLoader.loadTestsFromModule(module)
+        outcome = unittest.TextTestRunner(verbosity=1).run(suite)
+        if not outcome.wasSuccessful():
+            raise SystemExit(f"NETRATTLER {label} regression failed")
     delivery_suite = unittest.defaultTestLoader.loadTestsFromTestCase(builder_delivery.BuilderDeliveryTests)
     delivery_result = unittest.TextTestRunner(verbosity=0).run(delivery_suite)
     if not delivery_result.wasSuccessful():
