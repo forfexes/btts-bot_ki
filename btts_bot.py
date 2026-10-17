@@ -8143,6 +8143,18 @@ def _empirical_rates():
     return _EMP_RATES
 
 
+def _empirical_edge_ok(p, odds, market):
+    """Edge rule for markets whose history shows a real but modest advantage (over25):
+    needs n>=150 settled tips, observed hit rate >= 53%, honest p >= 0.53 and
+    p*odds-1 >= 10% with the usual odds window. p is already the empirical blend."""
+    h = _empirical_rates().get(str(market).lower())
+    if not h or h[1] < 150 or h[0] < 0.53:
+        return False
+    if not (1.70 <= odds <= 3.00) or p < 0.53:
+        return False
+    return p * odds - 1.0 >= 0.10
+
+
 def _empirical_blend(p, market):
     """Bayesian blend of model probability p with the observed hit rate of the market."""
     h = _empirical_rates().get(str(market).lower())
@@ -24939,6 +24951,8 @@ def filter_tips_by_edge(tips: List[Dict], market: str = "btts",
                 adjusted_p = min(adjusted_p, _empirical_blend(adjusted_p, _tmk))  # never above observed reality
                 _min_p, _min_o = _core_thresholds[_tmk]
                 policy_ok = adjusted_p >= _min_p and float(market_quote) >= _min_o
+                if (not policy_ok and _tmk == "over25" and _empirical_edge_ok(adjusted_p, float(market_quote), _tmk)):
+                    policy_ok = True  # edge rule: honest p x odds, evidence-based (see _empirical_edge_ok)
             else:
                 policy_ok = allow_pick(
                     adjusted_p, float(market_quote), market=tip_market, league=league,
