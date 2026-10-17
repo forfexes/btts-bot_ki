@@ -364,3 +364,19 @@ homepage itself; sportaza likewise; betinia rendered but never loaded any
 `biahosted.com` JSON on this bounded homepage+one-sports-link crawl.
 **`vegas.hu` remains the only Altenar brand with a confirmed, working
 keyless widget.** No bypass was attempted for the denied/blocked brands.
+
+## Honest outcome (2026-10-17)
+
+What BetClone actually delivered:
+- **Altenar**: ~10,000 match-level quotes per run (1X2, Over/Under 2.5, BTTS) as a *shadow* source
+  (only used when an independent source corroborates it). First live use confirmed (BTTS yes quote).
+- **1xBet family**: match-level quotes as shadow source. Player markets exist but the numeric bet-group
+  ids are NOT mapped (the old `_1X_PLAYER_GROUPS` ids were unverified guesses; 1xBet currently yields 0 player props).
+- The other seven families expose no public feed usable without evasion.
+
+What it did NOT deliver: player-prop quotes. All live player quotes (shots, shots on target, scorer, assists,
+cards, few fouls) come from Kambi, which pre-dates the BetClone work.
+
+Open item with the highest upside: map 1xBet player groups (fouls, fouls won, tackles) from evidence.
+`x1_player_snapshots` collects (G, T, line, odds, player) per match; once the matches are over, compare
+against `player_game_log` (fouls_committed / fouls_won / tackles) to PROVE which group is which. No guessing.
