@@ -9448,6 +9448,59 @@ _GAME_LOG_STATS = ("minutes", "shots", "sot", "goals", "assists", "fouls_committ
                    "tackles", "yellow_cards", "passes", "saves", "offsides")
 
 
+_FUZZY_LOOKUPS = [0]  # per-run cap on fallback lookups (runtime bound)
+
+
+def _fold_player_name(name: str) -> str:
+    """Accent/punctuation-insensitive player name (matches 'Lasse Günther' == 'Lasse Gunther')."""
+    import unicodedata as _ud, re as _re
+    t = str(name or "").lower()
+    for a, b in (("ß", "ss"), ("æ", "ae"), ("œ", "oe"), ("ø", "o"), ("ł", "l"), ("đ", "d"), ("ð", "d"), ("þ", "th")):
+        t = t.replace(a, b)
+    t = "".join(c for c in _ud.normalize("NFKD", t) if not _ud.combining(c))
+    return _re.sub(r"[^a-z0-9]+", " ", t).strip()
+
+
+def _fuzzy_game_log_rows(name: str, per_player: int = 30) -> list:
+    """Fallback when the bookmaker spelling differs from player_game_log (accents, hyphens,
+    abbreviations). Looks up the surname fragment, keeps ONLY rows whose folded full name equals
+    the folded query - or whose surname matches and the first name is an initial/prefix match -
+    and which belong to a single player (single team key), so two different players are never mixed."""
+    folded = _fold_player_name(name)
+    parts = folded.split()
+    if len(parts) < 2:
+        return []
+    surname = parts[-1]
+    if len(surname) < 3:
+        return []
+    frag = surname[:3]
+    try:
+        r = requests.get(
+            f"{SUPABASE_URL}/rest/v1/player_game_log",
+            headers={"apikey": SUPABASE_KEY, "Authorization": f"Bearer {SUPABASE_KEY}"},
+            params={"player_name": f"ilike.*{frag}*", "order": "match_date.desc", "limit": "400",
+                    "select": "player_key,player_name,match_date," + ",".join(_GAME_LOG_STATS)},
+            timeout=15,
+        )
+        rows = r.json() if r.ok else []
+    except Exception:
+        return []
+    first = parts[0]
+    keyed: dict = {}
+    for row in rows if isinstance(rows, list) else []:
+        f2 = _fold_player_name(row.get("player_name"))
+        p2 = f2.split()
+        if len(p2) < 2 or p2[-1] != surname:
+            continue
+        exact = (f2 == folded)
+        loose = (p2[0] == first) or (len(first) <= 2 and p2[0][:1] == first[:1]) or (len(p2[0]) <= 2 and first[:1] == p2[0][:1])
+        if exact or loose:
+            keyed.setdefault(row.get("player_key"), []).append(row)
+    if len(keyed) != 1:  # none, or ambiguous between several players -> refuse to guess
+        return []
+    return list(keyed.values())[0][:per_player]
+
+
 def _supabase_game_log_stats(names: list, per_player: int = 30) -> dict:
     """Per-match player log (player_game_log, 10-30 games per player) -> avg_stats dict
     {stat: {avg, hit_rate, games}}. Real history only; players with <3 games are skipped
@@ -9474,6 +9527,12 @@ def _supabase_game_log_stats(names: list, per_player: int = 30) -> dict:
             by.setdefault(row.get("player_name"), []).append(row)
         for n in chunk:
             games = (by.get(n) or [])[:per_player]
+            if len(games) < 3 and _FUZZY_LOOKUPS[0] < 150:
+                _FUZZY_LOOKUPS[0] += 1
+                try:
+                    games = _fuzzy_game_log_rows(n, per_player) or games
+                except Exception:
+                    pass
             stats = {}
             if len(games) >= 3:
                 for st in _GAME_LOG_STATS:

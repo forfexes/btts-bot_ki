@@ -78,3 +78,5 @@ jobs:
         run: python test_netrattler_odds_cache_guard.py
       - name: AiScore parser tests
         run: python test_netrattler_aiscore.py
+      - name: Player name fuzzy lookup tests
+        run: python test_player_name_fuzzy.py
