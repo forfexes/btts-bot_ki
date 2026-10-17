@@ -14,6 +14,7 @@ Ziele:
 from __future__ import annotations
 
 import re
+from functools import lru_cache
 import unicodedata
 from difflib import SequenceMatcher
 from typing import Any, Dict, Iterable, List, Optional, Tuple
@@ -100,7 +101,16 @@ def canonical_text(value: Any) -> str:
     return text
 
 
+@lru_cache(maxsize=100000)
+def _normalize_team_name_cached(name: str) -> str:
+    return _normalize_team_name_impl(name)
+
+
 def normalize_team_name(name: Any, *, strict_country: bool = True) -> str:
+    return _normalize_team_name_cached(str(name or ""))
+
+
+def _normalize_team_name_impl(name: Any) -> str:
     text = canonical_text(name)
     if not text:
         return ""
@@ -190,6 +200,7 @@ def player_key(player: Any, team: Any = "", provider: str = "") -> str:
 
 
 def load_aliases(payload: Dict[str, Any]) -> None:
+    _normalize_team_name_cached.cache_clear()
     """Load generated alias maps. Format: {team_aliases:{alias:canonical}, player_aliases:{...}}."""
     for alias, canonical in (payload.get("team_aliases") or {}).items():
         a = normalize_team_name(alias, strict_country=False)
@@ -201,6 +212,7 @@ def load_aliases(payload: Dict[str, Any]) -> None:
         c = normalize_player_name(canonical)
         if a and c:
             _DYNAMIC_PLAYER_ALIASES[a] = c
+    _normalize_team_name_cached.cache_clear()
 
 
 def explain_match(name1: Any, name2: Any) -> Dict[str, Any]:

@@ -27,6 +27,7 @@ import re
 import unicodedata
 from collections import Counter, defaultdict
 from datetime import date, datetime, timedelta, timezone
+from functools import lru_cache
 from typing import Any, Dict, Iterable, List, Optional, Sequence, Tuple
 
 import requests
@@ -97,7 +98,16 @@ def hsh(*parts: Any) -> str:
     return hashlib.sha1("||".join(str(x or "") for x in parts).encode("utf-8")).hexdigest()
 
 
+@lru_cache(maxsize=200000)
+def _norm_cached(value: str) -> str:
+    return _norm_uncached(value)
+
+
 def norm(value: Any) -> str:
+    return _norm_cached(str(value or ""))
+
+
+def _norm_uncached(value: Any) -> str:
     text = unicodedata.normalize("NFKD", str(value or "").lower().strip())
     text = "".join(c for c in text if not unicodedata.combining(c))
     text = text.replace("&", " and ")
@@ -1093,6 +1103,22 @@ def _strict_team_match(a: Any, b: Any) -> bool:
     return False
 
 
+_DAY_INDEX: Dict[int, Tuple[int, Dict[str, List[Dict[str, Any]]]]] = {}
+
+
+def _results_by_day(results: Sequence[Dict[str, Any]]) -> Dict[str, List[Dict[str, Any]]]:
+    """Index result rows by day once per results list (row_date parsing dominated runtime)."""
+    key = id(results)
+    cached = _DAY_INDEX.get(key)
+    if cached and cached[0] == len(results):
+        return cached[1]
+    idx: Dict[str, List[Dict[str, Any]]] = {}
+    for row in results:
+        idx.setdefault(row_date(row), []).append(row)
+    _DAY_INDEX[key] = (len(results), idx)
+    return idx
+
+
 def _find_result_strict(tip: Dict[str, Any], results: Sequence[Dict[str, Any]]) -> Optional[Dict[str, Any]]:
     """Find a result only when date + both team identities agree. No fuzzy fallback."""
     tip_home, tip_away, _ = match_parts(tip)
@@ -1101,9 +1127,7 @@ def _find_result_strict(tip: Dict[str, Any], results: Sequence[Dict[str, Any]]) 
         return None
 
     matches: List[Dict[str, Any]] = []
-    for row in results:
-        if row_date(row) != tip_day:
-            continue
+    for row in _results_by_day(results).get(tip_day, []):
         if _malformed_result_row(row):
             continue
         home, away, hs, aw = score_row(row)
@@ -1179,8 +1203,9 @@ def _lenient_find_result(tip: Dict[str, Any], results: Sequence[Dict[str, Any]])
     days = {(base + timedelta(days=d)).isoformat() for d in (-1, 0, 1)}
     tip_flags = _category_flags(tip.get("league"), tip_home, tip_away)
     cands: List[Dict[str, Any]] = []
-    for row in results:
-        if row_date(row) not in days or _malformed_result_row(row):
+    _idx = _results_by_day(results)
+    for row in [r for d in sorted(days) for r in _idx.get(d, [])]:
+        if _malformed_result_row(row):
             continue
         home, away, hs, aw = score_row(row)
         if hs is None or aw is None:
