@@ -148,6 +148,23 @@ def run_variants() -> list:
                             row["sample_event"] = _truncate_deep((payload.get("events") or [None])[0])
                             row["headers_sample"] = _truncate_deep((payload.get("headers") or [None])[:3])
                             row["page"], row["pageCount"] = payload.get("page"), payload.get("pageCount")
+                            odds_by_id = {o.get("id"): o for o in payload.get("odds") or [] if isinstance(o, dict)}
+                            full = {}
+                            for tid in (1, 18, 29):
+                                for m in mk:
+                                    if m.get("typeId") == tid:
+                                        full[str(tid)] = {
+                                            "market": {k: m.get(k) for k in list(m)[:15]},
+                                            "odds": [{k: odds_by_id.get(i, {}).get(k) for k in
+                                                      ("typeId", "name", "price", "oddStatus", "sv", "specialValue")}
+                                                     for i in (m.get("oddIds") or [])[:6]],
+                                        }
+                                        break
+                            row["full_market_samples"] = full
+                            row["headers_all"] = [{"typeId": h.get("typeId"), "name": str(h.get("name"))[:30],
+                                                   "odds": [(o.get("id"), str(o.get("name"))[:15]) for o in (h.get("odds") or [])[:6]],
+                                                   "specialOdd": h.get("specialOdd")}
+                                                  for h in (payload.get("headers") or [])[:8] if isinstance(h, dict)]
                     elif isinstance(payload, list):
                         row["list_len"] = len(payload)
                 except Exception:
