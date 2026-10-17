@@ -95,10 +95,10 @@ def check_github() -> List[str]:
     return issues
 
 
-def check_supabase() -> List[str]:
+def check_supabase() -> tuple[List[str], Optional[float], Optional[int], int]:
     issues: List[str] = []
     if not SUPABASE_URL or not SUPABASE_KEY:
-        return ["Supabase-Zugang fehlt"]
+        return ["Supabase-Zugang fehlt"], None, None, 0
 
     # Frische
     for table, col, max_h, label in (
@@ -143,7 +143,7 @@ def check_supabase() -> List[str]:
         if not row.get("ok"):
             note = str(row.get("note") or "")[:110]
             issues.append(f"Quelle {key}: 0 Zeilen — {note}")
-    return issues, size, total, len(latest)  # type: ignore[return-value]
+    return issues, size, total, len(latest)
 
 
 
