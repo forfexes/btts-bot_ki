@@ -2188,6 +2188,16 @@ def scrape_player_stats(date_str: str) -> int:
     for name, count in source_counts.items():
         icon = "✅" if count else "⚪"
         print(f"  {icon} {name}: {count}")
+    try:
+        _u = (os.getenv("SUPABASE_URL") or "").rstrip("/")
+        _k = os.getenv("SUPABASE_SERVICE_ROLE_KEY") or os.getenv("SUPABASE_KEY") or ""
+        if _u and _k:
+            requests.post(f"{_u}/rest/v1/netrattler_card_diag", timeout=10,
+                          headers={"apikey": _k, "Authorization": f"Bearer {_k}", "Content-Type": "application/json"},
+                          json={"info": {"probe": "scrape_sources", "date": date_str,
+                                         "counts": source_counts, "raw": len(all_rows), "unique": len(clean)}})
+    except Exception:
+        pass
     print(f"  🧹 {len(all_rows)} Roh-Rows → {len(clean)} eindeutige Rows")
     print(f"  💾 {saved} Player-Stat-Rows gespeichert/aktualisiert")
     return saved
