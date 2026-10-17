@@ -32,6 +32,7 @@ jobs:
           python test_netrattler_settlement_v21.py
           python test_netrattler_result_enrichment.py
           python test_netrattler_settlement_runner.py
+          python test_settlement_lenient_match.py
       - name: Run Settlement V25 MULTISOURCE
         env:
           SUPABASE_URL: ${{ secrets.SUPABASE_URL }}

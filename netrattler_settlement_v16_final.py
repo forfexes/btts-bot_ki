@@ -1093,7 +1093,7 @@ def _strict_team_match(a: Any, b: Any) -> bool:
     return False
 
 
-def find_result(tip: Dict[str, Any], results: Sequence[Dict[str, Any]]) -> Optional[Dict[str, Any]]:
+def _find_result_strict(tip: Dict[str, Any], results: Sequence[Dict[str, Any]]) -> Optional[Dict[str, Any]]:
     """Find a result only when date + both team identities agree. No fuzzy fallback."""
     tip_home, tip_away, _ = match_parts(tip)
     tip_day = row_date(tip)
@@ -1136,6 +1136,88 @@ def find_result(tip: Dict[str, Any], results: Sequence[Dict[str, Any]]) -> Optio
     # Prefer rows with HT score and named external source.
     matches.sort(key=lambda m: (m.get("home_score_ht") is not None and m.get("away_score_ht") is not None, bool(m.get("result_source"))), reverse=True)
     return matches[0]
+
+_CATEGORY_RE = {
+    "women": re.compile(r"\b(women|woman|femin\w*|ladies|girls)\b|\bw\b|\(w\)", re.I),
+    "u17": re.compile(r"\bu[- ]?17\b", re.I), "u18": re.compile(r"\bu[- ]?18\b", re.I),
+    "u19": re.compile(r"\bu[- ]?19\b", re.I), "u20": re.compile(r"\bu[- ]?20\b", re.I),
+    "u21": re.compile(r"\bu[- ]?21\b", re.I), "u23": re.compile(r"\bu[- ]?23\b", re.I),
+    "reserve": re.compile(r"\b(ii|iii|reserves?|youth|academy)\b", re.I),
+}
+
+
+def _category_flags(*texts: Any) -> frozenset:
+    blob = " ".join(str(t or "") for t in texts)
+    return frozenset(k for k, rx in _CATEGORY_RE.items() if rx.search(blob))
+
+
+def _contained_team_match(a: Any, b: Any) -> bool:
+    """One normalized name's tokens are a subset of the other's ('Casertana FC' ~ 'Casertana',
+    'SS Monopoli' ~ 'Monopoli', 'Wydad AC' ~ 'Wydad Casablanca'). Needs >=5 shared characters."""
+    ta, tb = set(norm(a).split()), set(norm(b).split())
+    if not ta or not tb:
+        return False
+    small, big = (ta, tb) if len(ta) <= len(tb) else (tb, ta)
+    return small <= big and sum(len(t) for t in small) >= 5
+
+
+def _lenient_find_result(tip: Dict[str, Any], results: Sequence[Dict[str, Any]]) -> Optional[Dict[str, Any]]:
+    """Fallback for naming/timezone differences between the tip and the result feed.
+
+    Accepted only when ALL hold: both teams match by strict identity or token-containment,
+    the result day is the tip day or +-1 day, men/women/youth/reserve flags agree (tip league +
+    names vs result league + names), and exactly ONE distinct score candidate exists.
+    Anything ambiguous stays unsettled."""
+    tip_home, tip_away, _ = match_parts(tip)
+    tip_day = row_date(tip)
+    if not tip_home or not tip_away or not tip_day:
+        return None
+    try:
+        base = date.fromisoformat(tip_day)
+    except ValueError:
+        return None
+    days = {(base + timedelta(days=d)).isoformat() for d in (-1, 0, 1)}
+    tip_flags = _category_flags(tip.get("league"), tip_home, tip_away)
+    cands: List[Dict[str, Any]] = []
+    for row in results:
+        if row_date(row) not in days or _malformed_result_row(row):
+            continue
+        home, away, hs, aw = score_row(row)
+        if hs is None or aw is None:
+            continue
+        ok_h = _strict_team_match(tip_home, home) or _contained_team_match(tip_home, home)
+        ok_a = _strict_team_match(tip_away, away) or _contained_team_match(tip_away, away)
+        if not (ok_h and ok_a):
+            continue
+        if _category_flags(unpack(row).get("league"), home, away) != tip_flags:
+            continue
+        cands.append((row, home, away, hs, aw))
+    if len({(c[3], c[4]) for c in cands}) != 1:
+        return None
+    row, home, away, hs, aw = cands[0]
+    raw = unpack(row)
+    return {
+        "home": home, "away": away, "home_score": hs, "away_score": aw,
+        "home_score_ht": anyv(raw, ["home_score_ht", "ht_home", "halftime_home", "HTHG", "intHomeScoreHT"], None),
+        "away_score_ht": anyv(raw, ["away_score_ht", "ht_away", "halftime_away", "HTAG", "intAwayScoreHT"], None),
+        "raw": row, "match_score": 0.9,
+        "result_source": str(raw.get("_result_table") or raw.get("source") or ""),
+    }
+
+
+def find_result(tip: Dict[str, Any], results: Sequence[Dict[str, Any]]) -> Optional[Dict[str, Any]]:
+    strict = _find_result_strict(tip, results)
+    if strict is not None:
+        # The identity hub equates 'Tokyo Verdy Beleza' (women) with 'Tokyo Verdy' (men):
+        # never settle a women/youth/reserve tip with a differently-categorised result.
+        raw = unpack(strict.get("raw") or {})
+        tip_home, tip_away, _ = match_parts(tip)
+        if _category_flags(tip.get("league"), tip_home, tip_away) != \
+                _category_flags(raw.get("league"), strict.get("home"), strict.get("away")):
+            return None
+        return strict
+    return _lenient_find_result(tip, results)
+
 
 def player_name(row: Dict[str, Any]) -> str:
     return str(anyv(unpack(row), ["player_name", "player", "name", "athlete", "athlete_name", "selection"], ""))
