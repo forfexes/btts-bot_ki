@@ -13,9 +13,9 @@ jobs:
         with:
           python-version: "3.11"
       - run: python -m pip install requests
-      - run: python -m py_compile netrattler_1x_props_probe.py
+      - run: python -m py_compile netrattler_1x_props_probe.py netrattler_1x_groupnames_probe.py
       - env:
           SUPABASE_URL: ${{ secrets.SUPABASE_URL }}
           SUPABASE_KEY: ${{ secrets.SUPABASE_KEY }}
           SUPABASE_SERVICE_ROLE_KEY: ${{ secrets.SUPABASE_SERVICE_ROLE_KEY }}
-        run: python netrattler_1x_props_probe.py
+        run: python netrattler_1x_groupnames_probe.py
