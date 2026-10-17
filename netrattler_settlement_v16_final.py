@@ -477,12 +477,27 @@ def format_direct_summary(settlement: Dict[str, Any]) -> str:
     profit = as_float(settlement.get("profit"), 0.0)
     profit_icon = "🟢" if profit >= 0 else "🔴"
     result = settlement.get("match_result") or {}
+    # PostgREST stores match_result as TEXT. Recovery loads that JSON string,
+    # unlike a newly calculated settlement which already has a dict.
+    if isinstance(result, str):
+        try:
+            result = json.loads(result)
+        except (TypeError, ValueError):
+            result = {}
     raw = result.get("raw") if isinstance(result, dict) else {}
     raw = raw if isinstance(raw, dict) else {}
     home_score = result.get("home_score") if isinstance(result, dict) else None
     away_score = result.get("away_score") if isinstance(result, dict) else None
+    if home_score in (None, ""):
+        home_score = settlement.get("result_home")
+    if away_score in (None, ""):
+        away_score = settlement.get("result_away")
     ht_home = anyv(raw, ["home_score_ht", "ht_home", "home_ht", "HTHG", "intHomeScoreHT"], None)
     ht_away = anyv(raw, ["away_score_ht", "ht_away", "away_ht", "HTAG", "intAwayScoreHT"], None)
+    if ht_home in (None, ""):
+        ht_home = settlement.get("ht_home")
+    if ht_away in (None, ""):
+        ht_away = settlement.get("ht_away")
 
     lines = [f"⸻⸻ <b>{title}</b> ⸻⸻"]
     if ht_home not in (None, "") and ht_away not in (None, ""):
