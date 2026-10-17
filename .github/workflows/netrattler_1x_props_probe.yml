@@ -1,6 +1,15 @@
 name: NETRATTLER 1xBet Player-Props Probe
 on:
   workflow_dispatch:
+  schedule:
+    - cron: '32 7 * * *'  # bounded read-only 1xBet player evidence snapshot
+  push:
+    branches: [main]
+    paths:
+      - 'netrattler_1x_shadow_snapshots.py'
+      - 'test_netrattler_1x_shadow_snapshots.py'
+      - 'netrattler_1x_props_probe.py'
+      - '.github/workflows/netrattler_1x_props_probe.yml'
 permissions:
   contents: read
 jobs:
@@ -13,9 +22,12 @@ jobs:
         with:
           python-version: "3.11"
       - run: python -m pip install requests
-      - run: python -m py_compile netrattler_1x_props_probe.py netrattler_1x_groupnames_probe.py
+      - name: Verify player evidence semantics before network access
+        run: |
+          python -m py_compile netrattler_1x_shadow_snapshots.py netrattler_1x_props_probe.py test_netrattler_1x_shadow_snapshots.py
+          python -m unittest -v test_netrattler_1x_shadow_snapshots.py
       - env:
           SUPABASE_URL: ${{ secrets.SUPABASE_URL }}
           SUPABASE_KEY: ${{ secrets.SUPABASE_KEY }}
           SUPABASE_SERVICE_ROLE_KEY: ${{ secrets.SUPABASE_SERVICE_ROLE_KEY }}
-        run: python netrattler_1x_groupnames_probe.py
+        run: python netrattler_1x_props_probe.py
