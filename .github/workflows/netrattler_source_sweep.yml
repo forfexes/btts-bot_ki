@@ -1,0 +1,25 @@
+name: NETRATTLER Source Sweep
+on:
+  workflow_dispatch:
+permissions:
+  contents: read
+jobs:
+  sweep:
+    runs-on: ubuntu-latest
+    timeout-minutes: 8
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+      - run: pip install requests
+      - env:
+          SUPABASE_URL: ${{ secrets.SUPABASE_URL }}
+          SUPABASE_KEY: ${{ secrets.SUPABASE_KEY }}
+          SUPABASE_SERVICE_ROLE_KEY: ${{ secrets.SUPABASE_SERVICE_ROLE_KEY }}
+          ODDS_API_KEYS: ${{ secrets.ODDS_API_KEYS }}
+          API_FOOTBALL_KEYS: ${{ secrets.API_FOOTBALL_KEYS }}
+          BETFAIR_APP_KEY: ${{ secrets.BETFAIR_APP_KEY }}
+          BETFAIR_SESSION_TOKEN: ${{ secrets.BETFAIR_SESSION_TOKEN }}
+          PINNACLE_GUEST_KEY: ${{ secrets.PINNACLE_GUEST_KEY }}
+        run: python netrattler_source_sweep.py
