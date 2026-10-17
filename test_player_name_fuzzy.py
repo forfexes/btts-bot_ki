@@ -68,6 +68,10 @@ def test_rich_kambi_participant_clean():
     assert r._participant({"label": "Tim Skarke Player's"}) == "Tim Skarke"
 
 
+def test_extract_player_strips_kambi_prefix():
+    assert b._ntr_extract_player("Tim Skarke Player's shots on target Over 0.5", "Over 0.5") == "Tim Skarke"
+
+
 if __name__ == "__main__":
     for k, v in list(globals().items()):
         if k.startswith("test_"):

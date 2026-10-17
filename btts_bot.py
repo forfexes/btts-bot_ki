@@ -21672,6 +21672,11 @@ def _ntr_prop_category(text):
 
 
 def _ntr_extract_player(description, selection=""):
+    name = _ntr_extract_player_raw(description, selection)
+    return re.sub(r"\s+player'?s\s*$", "", str(name or ""), flags=re.I).strip() if name else name
+
+
+def _ntr_extract_player_raw(description, selection=""):
     """
     Pinnacle benutzt je nach Markt entweder:
     - selection = Spielername  (Messi, Otamendi)
@@ -23751,6 +23756,9 @@ def run_pinnacle_props_bot(win_start_utc=None, win_end_utc=None, ch_tz=None, top
                 return None
             _player = str(_xp.get("player") or "").strip()
             _market = str(_xp.get("market") or _xp.get("category") or "").strip()
+            # Kambi market labels start with "Player's ..." ("Player's shots on target");
+            # glued behind the name, the extractor later returned "Tim Skarke Player's".
+            _market = re.sub(r"^\s*player'?s\s+", "", _market, flags=re.I).strip() or _market
             _match = str(_xp.get("match") or "").strip()
             if not _player or not _market or not _match or _od <= 1.01:
                 return None
