@@ -477,7 +477,8 @@ def format_direct_summary(settlement: Dict[str, Any]) -> str:
     title = _direct_summary_title(group)
     status = normalized_status(settlement.get("status"))
     hit = "✅ Hit  <b>✅ V</b>" if status == "win" else "❌ Miss  <b>❌ X</b>"
-    profit = as_float(settlement.get("profit"), 0.0)
+    raw_profit = settlement.get("profit")
+    profit = as_float(raw_profit, 0.0)
     profit_icon = "🟢" if profit >= 0 else "🔴"
     result = settlement.get("match_result") or {}
     # PostgREST stores match_result as TEXT. Recovery loads that JSON string,
@@ -511,7 +512,10 @@ def format_direct_summary(settlement: Dict[str, Any]) -> str:
     if reason:
         lines.append(f"Auswertung: <b>{reason[:180]}</b>")
     lines.append(hit)
-    lines.append(f"{profit_icon} Profit: <b>{profit:+.2f} Units</b>")
+    if raw_profit is None:
+        lines.append("⚪ Profit: <b>nicht verfügbar (keine bestätigte Gesamtquote)</b>")
+    else:
+        lines.append(f"{profit_icon} Profit: <b>{profit:+.2f} Units</b>")
 
     legs = settlement.get("legs_payload") or []
     if isinstance(legs, list) and legs and group in {"combo", "combo_multi", "builder", "props"}:
@@ -1884,9 +1888,15 @@ def settle_tip(tip: Dict[str, Any], results: Sequence[Dict[str, Any]], player_st
         else:
             status, reason = "pending", "kein exaktes Result gefunden"
 
+    data = unpack(tip)
     odds = odds_of(tip)
-    stake = stake_of(tip)
-    if status == "win":
+    # Same-game builders with only individual-leg prices are informational.
+    # Zero provided stake MUST NOT be replaced with an invented 0.01-unit bet.
+    unpriced_builder = group == "builder" and bool(data.get("estimated_odds")) and not odds
+    stake = 0.0 if unpriced_builder else stake_of(tip)
+    if unpriced_builder:
+        profit = None
+    elif status == "win":
         profit = (odds - 1.0) * stake if odds else 0.0
     elif status == "loss":
         profit = -stake
@@ -1895,7 +1905,6 @@ def settle_tip(tip: Dict[str, Any], results: Sequence[Dict[str, Any]], player_st
     else:
         profit = None
 
-    data = unpack(tip)
     result_home = result.get("home_score") if isinstance(result, dict) else None
     result_away = result.get("away_score") if isinstance(result, dict) else None
     ht_home = result.get("home_score_ht") if isinstance(result, dict) else None
@@ -2039,9 +2048,13 @@ def summary(rows: Sequence[Dict[str, Any]], group: str, period: str, style: str 
     bets = len(selected)
     wins = sum(x["status"] == "win" for x in selected)
     losses = bets - wins
-    stake = sum(max(0.01, as_float(x.get("stake"), 1.0)) for x in selected)
-    profit = sum(as_float(x.get("profit"), 0.0) for x in selected)
-    roi = 100.0 * profit / max(0.01, stake)
+    # Count all graded selections, but calculate financial ROI only for
+    # tips with an observed combined quote and a real positive stake.
+    financial = [x for x in selected if as_float(x.get("odds"), 0.0) > 1
+                 and as_float(x.get("stake"), 0.0) > 0 and x.get("profit") is not None]
+    stake = sum(as_float(x.get("stake"), 0.0) for x in financial)
+    profit = sum(as_float(x.get("profit"), 0.0) for x in financial)
+    roi = 100.0 * profit / stake if stake > 0 else 0.0
     return {
         "bets": bets,
         "wins": wins,
@@ -2111,7 +2124,8 @@ def format_settlement(settlement: Dict[str, Any]) -> str:
         f"{match_label(settlement)}\n"
         f"{market_text(payload)}\n"
         f"{settlement.get('reason', '')}\n"
-        f"Profit: {as_float(settlement.get('profit')):+.2f}U"
+        f"Profit: {as_float(settlement.get('profit')):+.2f}U" if settlement.get("profit") is not None
+        else "Profit: n/a (keine bestätigte Gesamtquote)"
     )
 
 
