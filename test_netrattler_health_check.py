@@ -17,6 +17,8 @@ class HealthSourceTests(unittest.TestCase):
         issues, _, _, _ = health.check_supabase()
         self.assertTrue(any('source_health: HTTP 503' in x for x in issues))
 
+    @patch.object(health, 'SUPABASE_URL', 'https://example.supabase.co')
+    @patch.object(health, 'SUPABASE_KEY', 'test-only-key')
     @patch.object(health, '_sb')
     @patch.object(health, '_count', return_value=0)
     @patch.object(health, '_newest')
