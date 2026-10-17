@@ -41,8 +41,8 @@ MAX_AGE_HOURS = float(os.getenv("NETRATTLER_ODDS_CACHE_MAX_AGE_HOURS", "18"))
 LIVE_HISTORY_SOURCES = frozenset({"pinnacle", "kambi", "the_odds_api", "bwin"})
 # Numeric/flat-widget shadow sources: same strict never-auto-promote treatment.
 # Altenar (biahosted.com public widget, e.g. vegas.hu) only ever emits a
-# complete 1x2 market here -- no totals/btts support yet, so it is naturally
-# limited to the one market X1_CROSS_CHECK_MARKETS already requires in full.
+# complete 1x2 / totals_2_5 / btts markets (GetEvents listing), each still
+# required in full and independently corroborated per X1_CROSS_CHECK_MARKETS.
 X1_SHADOW_SOURCES = frozenset({"1xbet_platform", "altenar_platform"})
 X1_CROSS_CHECK_MARKETS = {
     "1x2": frozenset({"home", "draw", "away"}),

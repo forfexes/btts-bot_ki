@@ -372,16 +372,41 @@ ALTENAR_INTEGRATIONS = {"vegas.hu": "https://hu-sb2frontend-altenar2.biahosted.c
 ALTENAR_FOOTBALL_ICON = "soccer"
 
 
-def _altenar_rows(payload: Mapping[str, Any], bookmaker: str) -> List[Dict[str, Any]]:
-    """Normalize one Altenar GetTopEvents response into odds_history rows.
+# Altenar market/selection ids, confirmed from the public GetEvents payload
+# (headers[] + full market samples, 2026-10-17). These are locale-free
+# integers; market/selection NAMES are in the operator's language.
+#   market typeId 1  = 1X2            odds typeId 1/2/3 = home/draw/away
+#   market typeId 18 = total goals    market.sv = line; odds 12/13 = over/under
+#   market typeId 29 = both to score  odds 74/76 = yes/no
+# typeId 20135 ("1X2 - Odds+") is a boosted promo price, never a normal
+# market quote, and is excluded simply by not being listed here.
+ALTENAR_MARKETS = {
+    1: ("1x2", {1: "home", 2: "draw", 3: "away"}),
+    18: ("totals", {12: "over", 13: "under"}),
+    29: ("btts", {74: "yes", 76: "no"}),
+}
+ALTENAR_TOTAL_LINES = {"2.5"}  # only the line the corroboration gate covers
 
-    Join path: event.sportId -> sports[].iconName == "soccer" (locale-proof,
-    unlike team/league names which are shown in the site's own language);
+
+def _altenar_market_kind(market: Mapping[str, Any]):
+    # GetTopEvents markets carry a headerName: keep the original, verified
+    # rule there (only the 1X2 header, 1X2 only). GetEvents markets have no
+    # headerName and are identified by the locale-free market typeId.
+    if "headerName" in market:
+        return 1 if str(market.get("headerName") or "").strip() == "1X2" else None
+    tid = market.get("typeId")
+    return tid if tid in ALTENAR_MARKETS else None
+
+
+def _altenar_rows(payload: Mapping[str, Any], bookmaker: str) -> List[Dict[str, Any]]:
+    """Normalize an Altenar GetEvents / GetTopEvents response into odds_history rows.
+
+    Join path: event.sportId -> sports[].iconName == "soccer" (locale-proof);
     event.competitorIds[0/1] -> competitors[].name for home/away;
-    event.marketIds[] -> markets[] where headerName == "1X2" -> oddIds[] ->
-    odds[] with typeId 1/2/3 = home/draw/away (selection role, not the
-    market.typeId field, which is a different namespace) and oddStatus == 0
-    (active). A market only counts when all three selections are present.
+    event.marketIds[] -> markets[] (by locale-free typeId, see ALTENAR_MARKETS)
+    -> oddIds[] -> odds[] (selection role = odds.typeId, active = oddStatus 0).
+    A market only counts when EVERY selection is present and active, so no
+    partial lines ever reach the corroboration gate.
     """
     out: List[Dict[str, Any]] = []
     if not isinstance(payload, dict):
@@ -393,7 +418,6 @@ def _altenar_rows(payload: Mapping[str, Any], bookmaker: str) -> List[Dict[str, 
     champs = {c.get("id"): c.get("name") for c in (payload.get("champs") or []) if isinstance(c, dict)}
     markets = {m.get("id"): m for m in (payload.get("markets") or []) if isinstance(m, dict)}
     odds_by_id = {o.get("id"): o for o in (payload.get("odds") or []) if isinstance(o, dict)}
-    sel_by_type = {1: "home", 2: "draw", 3: "away"}
     for ev in payload.get("events") or []:
         if not isinstance(ev, dict) or ev.get("sportId") not in football_sport_ids:
             continue
@@ -413,8 +437,16 @@ def _altenar_rows(payload: Mapping[str, Any], bookmaker: str) -> List[Dict[str, 
         league = champs.get(ev.get("champId")) or ""
         for market_id in ev.get("marketIds") or []:
             market = markets.get(market_id)
-            if not market or str(market.get("headerName") or "").strip() != "1X2":
+            kind = _altenar_market_kind(market) if market else None
+            if kind is None:
                 continue
+            market_key, sel_by_type = ALTENAR_MARKETS[kind]
+            line_suffix = ""
+            if market_key == "totals":
+                line = str(market.get("sv") or "").strip()
+                if line not in ALTENAR_TOTAL_LINES:
+                    continue
+                line_suffix = "_" + line.replace(".", "_")
             selections: Dict[str, float] = {}
             for odd_id in market.get("oddIds") or []:
                 odd = odds_by_id.get(odd_id)
@@ -424,41 +456,52 @@ def _altenar_rows(payload: Mapping[str, Any], bookmaker: str) -> List[Dict[str, 
                 if not sel or odd.get("price") is None:
                     continue
                 selections[sel] = odd.get("price")
-            if len(selections) != 3:
-                continue  # only a complete 1x2 market is usable; no partial lines
+            if len(selections) != len(sel_by_type):
+                continue  # only complete markets; no partial lines
             for sel, price in selections.items():
                 row = _row(source="altenar_platform", bookmaker=bookmaker, event_id=f"alt_{ev.get('id')}",
-                           league=league, home=home, away=away, commence_time=start, market="1x2",
-                           selection=sel, odds=price, raw={"platform": "altenar", "integration": bookmaker})
+                           league=league, home=home, away=away, commence_time=start,
+                           market=market_key + line_suffix, selection=sel + line_suffix, odds=price,
+                           raw={"platform": "altenar", "integration": bookmaker,
+                                "line": (line_suffix[1:].replace("_", ".") or None)})
                 if row:
                     out.append(row)
     return out
 
 
+ALTENAR_FOOTBALL_SPORT_ID = os.getenv("ALTENAR_FOOTBALL_SPORT_ID", "66")
+
+
 def collect_altenar_platform(target_date: str) -> List[Dict[str, Any]]:
-    """Altenar public widget 1x2 prices; shadow-only (see cache_guard gate)."""
+    """Altenar public widget prices (1x2, totals 2.5, btts); shadow-only.
+
+    GetEvents (the full football listing the public page itself calls) is
+    used first; GetTopEvents (a handful of featured matches) is the fallback.
+    """
     rows: List[Dict[str, Any]] = []
+    base = {"culture": "hu-HU", "timezoneOffset": "-300", "deviceType": "1",
+            "numFormat": "hu-HU", "countryCode": "", "eventCount": "0", "timePeriod": "0"}
     for brand, host in ALTENAR_INTEGRATIONS.items():
-        js, st = _get(f"{host}/api/widget/GetTopEvents", {
-            "culture": "hu-HU", "timezoneOffset": "-300", "integration": brand, "deviceType": "1",
-            "numFormat": "hu-HU", "countryCode": "", "eventCount": os.getenv("ALTENAR_EVENT_COUNT", "50"),
-            "sportId": "0", "timePeriod": "0",
-        })
+        js, st = _get(f"{host}/api/widget/GetEvents",
+                      {**base, "integration": brand, "sportId": ALTENAR_FOOTBALL_SPORT_ID})
+        endpoint = "GetEvents"
+        if not js or not (js.get("events") if isinstance(js, dict) else None):
+            js, st = _get(f"{host}/api/widget/GetTopEvents", {**base, "integration": brand, "sportId": "0",
+                                                              "eventCount": os.getenv("ALTENAR_EVENT_COUNT", "50")})
+            endpoint = "GetTopEvents"
         if not js:
             KEYLESS_DIAG[f"altenar_{brand}"] = f"http={st} events=0"
             continue
         n_events = len(js.get("events") or []) if isinstance(js, dict) else 0
-        n_1x2_markets = sum(
-            1 for m in (js.get("markets") or []) if isinstance(m, dict)
-            and str(m.get("headerName") or "").strip() == "1X2"
-        ) if isinstance(js, dict) else 0
         new_rows = _altenar_rows(js, bookmaker=f"altenar_{brand}")
+        by_market: Dict[str, int] = {}
+        for r in new_rows:
+            by_market[r.get("market")] = by_market.get(r.get("market"), 0) + 1
         KEYLESS_DIAG[f"altenar_{brand}"] = (
-            f"http={st} events={n_events} markets_1x2={n_1x2_markets} rows={len(new_rows)}"
+            f"{endpoint} http={st} events={n_events} rows={len(new_rows)} markets={by_market}"
         )
         rows.extend(new_rows)
-    # One-time production diagnostic (no logs are retrievable in this
-    # environment), so a dry run of this collector is actually auditable.
+    # Production diagnostic (Actions logs are not retrievable here).
     try:
         SUPABASE_URL = (os.getenv("SUPABASE_URL") or "").rstrip("/")
         SUPABASE_KEY = os.getenv("SUPABASE_SERVICE_ROLE_KEY") or os.getenv("SUPABASE_KEY") or ""
@@ -475,7 +518,6 @@ def collect_altenar_platform(target_date: str) -> List[Dict[str, Any]]:
     except Exception:
         pass
     return rows
-
 
 COLLECTORS = (("bwin", collect_bwin), ("1xbet_platform", collect_1x_platform),
               ("matchbook", collect_matchbook), ("altenar_platform", collect_altenar_platform))

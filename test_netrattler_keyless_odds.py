@@ -92,5 +92,74 @@ class AltenarRowsTests(unittest.TestCase):
         self.assertIn("altenar_platform", names)
 
 
+
+def _events_payload():
+    """Shape of the public GetEvents listing (no headerName, typeId-coded)."""
+    return {
+        "sports": [{"id": 66, "iconName": "soccer"}],
+        "champs": [{"id": 3062, "name": "OTP Bank Liga"}],
+        "competitors": [{"id": 1, "name": "Nyiregyhaza"}, {"id": 2, "name": "Honved"}],
+        "markets": [
+            {"id": 10, "name": "1X2", "typeId": 1, "oddIds": [101, 102, 103]},
+            {"id": 11, "name": "Golok szama", "typeId": 18, "sv": "2.5", "oddIds": [111, 112]},
+            {"id": 12, "name": "Golok szama", "typeId": 18, "sv": "3.5", "oddIds": [121, 122]},
+            {"id": 13, "name": "Mindket csapat", "typeId": 29, "oddIds": [131, 132]},
+            {"id": 14, "name": "1X2 - Odds+", "typeId": 20135, "oddIds": [141, 142, 143]},
+            {"id": 15, "name": "Ketesely", "typeId": 10, "oddIds": [151, 152, 153]},
+        ],
+        "odds": [
+            {"id": 101, "typeId": 1, "price": 2.05, "oddStatus": 0},
+            {"id": 102, "typeId": 2, "price": 3.6, "oddStatus": 0},
+            {"id": 103, "typeId": 3, "price": 3.5, "oddStatus": 0},
+            {"id": 111, "typeId": 12, "price": 1.68, "oddStatus": 0},
+            {"id": 112, "typeId": 13, "price": 2.2, "oddStatus": 0},
+            {"id": 121, "typeId": 12, "price": 2.4, "oddStatus": 0},
+            {"id": 122, "typeId": 13, "price": 1.55, "oddStatus": 0},
+            {"id": 131, "typeId": 74, "price": 1.57, "oddStatus": 0},
+            {"id": 132, "typeId": 76, "price": 2.3, "oddStatus": 0},
+            {"id": 141, "typeId": 1, "price": 2.5, "oddStatus": 0},
+            {"id": 142, "typeId": 2, "price": 4.0, "oddStatus": 0},
+            {"id": 143, "typeId": 3, "price": 4.0, "oddStatus": 0},
+            {"id": 151, "typeId": 9, "price": 1.3, "oddStatus": 0},
+            {"id": 152, "typeId": 10, "price": 1.3, "oddStatus": 0},
+            {"id": 153, "typeId": 11, "price": 1.7, "oddStatus": 0},
+        ],
+        "events": [{"id": 17668677, "sportId": 66, "champId": 3062, "status": 0,
+                    "startDate": "2026-10-17T12:30:00Z", "competitorIds": [1, 2],
+                    "marketIds": [10, 11, 12, 13, 14, 15]}],
+    }
+
+
+class AltenarGetEventsTests(unittest.TestCase):
+    def test_full_listing_maps_1x2_totals_and_btts(self):
+        rows = k._altenar_rows(_events_payload(), bookmaker="altenar_vegas.hu")
+        got = {(r["market"], r["selection"]): r["odds"] for r in rows}
+        self.assertEqual(got, {
+            ("1x2", "home"): 2.05, ("1x2", "draw"): 3.6, ("1x2", "away"): 3.5,
+            ("totals_2_5", "over_2_5"): 1.68, ("totals_2_5", "under_2_5"): 2.2,
+            ("btts", "yes"): 1.57, ("btts", "no"): 2.3,
+        })
+
+    def test_boosted_odds_plus_and_other_lines_excluded(self):
+        rows = k._altenar_rows(_events_payload(), bookmaker="altenar_vegas.hu")
+        self.assertNotIn(2.5, [r["odds"] for r in rows])   # Odds+ promo price
+        self.assertNotIn(2.4, [r["odds"] for r in rows])   # 3.5 line not gated
+        self.assertNotIn(1.3, [r["odds"] for r in rows])   # double chance not mapped
+
+    def test_incomplete_btts_market_dropped(self):
+        payload = _events_payload()
+        payload["odds"][8]["oddStatus"] = 1  # "no" suspended
+        markets = {r["market"] for r in k._altenar_rows(payload, bookmaker="x")}
+        self.assertNotIn("btts", markets)
+        self.assertIn("1x2", markets)
+
+    def test_markets_match_corroboration_gate_vocabulary(self):
+        import netrattler_odds_cache_guard as g
+        rows = k._altenar_rows(_events_payload(), bookmaker="x")
+        for market in {r["market"] for r in rows}:
+            self.assertIn(market, g.X1_CROSS_CHECK_MARKETS)
+            sels = {r["selection"] for r in rows if r["market"] == market}
+            self.assertEqual(sels, set(g.X1_CROSS_CHECK_MARKETS[market]))
+
 if __name__ == "__main__":
     unittest.main()
