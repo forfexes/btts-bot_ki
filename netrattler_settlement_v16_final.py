@@ -87,6 +87,9 @@ RESULT_TABLES = {
 PLAYER_STATS_TABLES = {
     "player_match_stats": ["match_date", "date", "event_date", "created_at"],
     "sofascore_player_match_stats": ["match_date", "date", "event_date", "created_at"],
+    # Live daily player logs are fresher than the older player_match_stats dataset.
+    # These contain real fixture identities and measured values, not model forecasts.
+    "player_game_log": ["match_date"],
 }
 
 
@@ -1220,6 +1223,10 @@ def load_player_stats(tips: Sequence[Dict[str, Any]]) -> List[Dict[str, Any]]:
                 if rows:
                     for row in rows: row["_stats_table"] = table
                     filtered = _aggregate_player_rows(rows, wanted_norms)
+                    if not filtered:
+                        # A nonempty table may have no rows for the requested
+                        # players. Try the next real stats source instead.
+                        continue
                     output.extend(filtered)
                     log(f"Player Stats {table} {day}: raw={len(rows)} relevant={len(filtered)} players={len(players)}")
                     found_for_table = True
@@ -1476,6 +1483,10 @@ def find_player_stat(leg: Dict[str, Any], stats: Sequence[Dict[str, Any]]) -> Op
             m_score = similarity(wanted_match, candidate_match)
             if m_score < 0.78:
                 continue
+        elif wanted_match or (wanted_home and wanted_away):
+            # Name + date alone is insufficient: a player may have multiple
+            # records, or the fixture identity might be missing.
+            continue
         else:
             m_score = 0.0
         score = p_score * 0.78 + m_score * 0.22
