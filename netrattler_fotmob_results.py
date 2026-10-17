@@ -135,15 +135,19 @@ def halftime_from_detail(detail: Any):
     if not events:
         return None
 
-    # 1) expliziter Halbzeit-Event mit Spielstand
+    # 1) explicit half-time event. FotMob (2026-10): type "Half",
+    #    halfStrKey "halftime_short" / halfStrShort "HT"; homeScore/awayScore
+    #    on THIS event are the score at the break (verified on Rapid-Hartberg 2:0).
     for e in events:
-        if str(e.get("type") or "").lower() == "half" and \
-                str(e.get("halfStrKey") or "").lower() in {"ht", "halftime"}:
+        key = str(e.get("halfStrKey") or "").lower()
+        short = str(e.get("halfStrShort") or "").upper()
+        if str(e.get("type") or "").lower() == "half" and (key in {"ht", "halftime", "halftime_short"} or short == "HT"):
             h, a = _num(e.get("homeScore")), _num(e.get("awayScore"))
             if h is not None and a is not None:
                 return int(h), int(a)
 
-    # 2) Laufender Spielstand des letzten Tores in der 1. Halbzeit (Minute <= 45)
+    # 2) Fallback: score AFTER the last first-half goal. On goal events
+    #    homeScore/awayScore are the score BEFORE the goal; newScore is after.
     first_half = []
     for e in events:
         if str(e.get("type") or "").lower() != "goal":
@@ -151,14 +155,18 @@ def halftime_from_detail(detail: Any):
         minute = _num(e.get("time"))
         if minute is None or minute > 45:
             continue
-        if e.get("homeScore") is None or e.get("awayScore") is None:
+        ns = e.get("newScore")
+        if not (isinstance(ns, (list, tuple)) and len(ns) == 2):
             return None
-        first_half.append((minute, _num(e.get("overloadTime")) or 0, e))
+        first_half.append((minute, _num(e.get("overloadTime")) or 0, ns))
     if not first_half:
-        # Keine Tore vor der Pause, aber Events vorhanden -> 0:0 zur Halbzeit
-        return 0, 0
-    last = max(first_half, key=lambda x: (x[0], x[1]))[2]
-    h, a = _num(last.get("homeScore")), _num(last.get("awayScore"))
+        # Goals exist but all after the break -> 0:0 at half time. With no goal
+        # events at all (and no HT event) there is no evidence either way.
+        has_goals = any(str(e.get("type") or "").lower() == "goal" and isinstance(e.get("newScore"), (list, tuple))
+                        for e in events)
+        return (0, 0) if has_goals else None
+    ns = max(first_half, key=lambda x: (x[0], x[1]))[2]
+    h, a = _num(ns[0]), _num(ns[1])
     return (int(h), int(a)) if h is not None and a is not None else None
 
 

@@ -1366,18 +1366,21 @@ def _ht_scores(result: Dict[str, Any]) -> Tuple[int, int]:
     """Half-time score from the matched result: explicit fields first, then the raw row
     (match_results stores ht_home / ht_away)."""
     raw = unpack(result.get("raw") or {})
-    src = str(result.get("result_source") or raw.get("_result_table") or raw.get("source") or "").lower()
-    if "fotmob" in src and os.getenv("FOTMOB_HT_TRUSTED", "false").lower() not in ("1", "true", "yes", "on"):
-        # 2026-10-17: FotMob ht_home/ht_away average 0.67 HT goals vs 3.15 FT goals
-        # (real ratio ~45%); the 0:0 fallback in halftime_from_detail is wrong for
-        # many matches. Never settle half-time markets from it until validated.
-        return -1, -1
+    # FotMob HT was wrong until 2026-10-17 (pre-goal score / unrecognised HT
+    # event). The parser is fixed and old values were cleared; still reject any
+    # HT that is impossible against the full-time score.
     h = result.get("home_score_ht")
     a = result.get("away_score_ht")
     if h is None or a is None:
         h = anyv(raw, ["HTHG", "home_score_ht", "ht_home", "halftime_home", "intHomeScoreHT"], None)
         a = anyv(raw, ["HTAG", "away_score_ht", "ht_away", "halftime_away", "intAwayScoreHT"], None)
-    return (as_int(h, -1) if h is not None else -1), (as_int(a, -1) if a is not None else -1)
+    hh = as_int(h, -1) if h is not None else -1
+    aa = as_int(a, -1) if a is not None else -1
+    ft_h, ft_a = result.get("home_score"), result.get("away_score")
+    if hh >= 0 and aa >= 0 and ft_h is not None and ft_a is not None:
+        if hh > as_int(ft_h, 99) or aa > as_int(ft_a, 99):
+            return -1, -1
+    return hh, aa
 
 
 def settle_score_market(tip: Dict[str, Any], result: Dict[str, Any]) -> Tuple[str, str]:

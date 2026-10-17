@@ -64,8 +64,8 @@ class HalfTime(unittest.TestCase):
         self.assertEqual(mod.settle_score_market(self.TIP, {"home_score": 2, "away_score": 1, "raw": {"ht_home": 1, "ht_away": 1, "source": "thesportsdb"}})[0], "win")
         self.assertEqual(mod.settle_score_market(self.TIP, {"home_score": 2, "away_score": 1, "raw": {"ht_home": 0, "ht_away": 1, "source": "thesportsdb"}})[0], "loss")
 
-    def test_fotmob_ht_not_trusted(self):
-        r = {"home_score": 2, "away_score": 1, "result_source": "fotmob", "raw": {"ht_home": 0, "ht_away": 0, "source": "fotmob"}}
+    def test_impossible_ht_rejected(self):
+        r = {"home_score": 1, "away_score": 0, "raw": {"ht_home": 2, "ht_away": 0, "source": "fotmob"}}
         self.assertEqual(mod.settle_score_market(self.TIP, r)[0], "pending")
 
     def test_missing_ht_stays_pending(self):

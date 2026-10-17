@@ -84,6 +84,7 @@ jobs:
           SOURCE_SLEEP: "0.08"
           DAILY_RESULTS_PARALLEL_WORKERS: "4"
           DAILY_STATS_PARALLEL_WORKERS: "2"
+          FOTMOB_HT_MAX: "400"
         run: |
           if [ -n "${{ github.event.inputs.date }}" ]; then ARGS="--date ${{ github.event.inputs.date }}"; FOTMOB_ARGS="--date ${{ github.event.inputs.date }}"; else ARGS="--yesterday"; FOTMOB_ARGS="--yesterday"; fi
           if [ "${{ github.event.inputs.results_only }}" = "true" ]; then ARGS="$ARGS --results-only"; fi

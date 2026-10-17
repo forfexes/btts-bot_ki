@@ -39,18 +39,29 @@ def test_parse_daily_payload():
 
 def test_halftime_from_detail():
     ev = lambda **k: k
+    # Real FotMob schema (probe 2026-10-17, Rapid Wien 3-1 Hartberg, HT 2-0):
+    # goal events carry the score BEFORE the goal in homeScore/awayScore and the
+    # score AFTER it in newScore; the Half event carries the HT score.
     d = {"content": {"matchFacts": {"events": {"events": [
-        ev(type="Goal", time=12, homeScore=1, awayScore=0),
-        ev(type="Goal", time=44, homeScore=1, awayScore=1),
-        ev(type="Goal", time=70, homeScore=2, awayScore=1),
+        ev(type="Goal", time=5, homeScore=0, awayScore=0, newScore=[1, 0]),
+        ev(type="Goal", time=45, overloadTime=1, homeScore=1, awayScore=0, newScore=[2, 0]),
+        ev(type="Half", time=45, halfStrKey="halftime_short", halfStrShort="HT", homeScore=2, awayScore=0),
+        ev(type="Goal", time=49, homeScore=2, awayScore=0, newScore=[2, 1]),
+        ev(type="Half", time=90, halfStrKey="fulltime_short", halfStrShort="FT", homeScore=3, awayScore=1),
     ]}}}}
-    assert fotmob.halftime_from_detail(d) == (1, 1)
+    assert fotmob.halftime_from_detail(d) == (2, 0)
+    # Without a Half event: newScore of the last first-half goal.
+    d1 = {"content": {"matchFacts": {"events": {"events": [
+        ev(type="Goal", time=12, homeScore=0, awayScore=0, newScore=[1, 0]),
+        ev(type="Goal", time=44, homeScore=1, awayScore=0, newScore=[1, 1]),
+        ev(type="Goal", time=70, homeScore=1, awayScore=1, newScore=[2, 1]),
+    ]}}}}
+    assert fotmob.halftime_from_detail(d1) == (1, 1)
     d2 = {"content": {"matchFacts": {"events": {"events": [
-        ev(type="Card", time=30), ev(type="Goal", time=60, homeScore=1, awayScore=0)]}}}}
+        ev(type="Card", time=30), ev(type="Goal", time=60, homeScore=0, awayScore=0, newScore=[1, 0])]}}}}
     assert fotmob.halftime_from_detail(d2) == (0, 0)
-    d3 = {"content": {"matchFacts": {"events": {"events": [
-        ev(type="Half", halfStrKey="HT", homeScore=2, awayScore=0)]}}}}
-    assert fotmob.halftime_from_detail(d3) == (2, 0)
+    d_unknown = {"content": {"matchFacts": {"events": {"events": [ev(type="Card", time=30)]}}}}
+    assert fotmob.halftime_from_detail(d_unknown) is None
     assert fotmob.halftime_from_detail({"content": {}}) is None
     assert fotmob.halftime_from_detail(None) is None
 
