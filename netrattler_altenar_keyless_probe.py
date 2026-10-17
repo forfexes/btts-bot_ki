@@ -130,7 +130,24 @@ def run_variants() -> list:
                     payload = r.json()
                     row.update(_coverage(payload))
                     if isinstance(payload, dict):
-                        row["keys"] = sorted(payload.keys())[:12]
+                        row["keys"] = sorted(payload.keys())[:20]
+                        if path == "GetEvents":
+                            # Bounded schema sample so a full-list adapter
+                            # can map markets/odds (values truncated).
+                            from collections import Counter
+                            from netrattler_altenar_schema_probe import _truncate_deep
+                            mk = [m for m in payload.get("markets") or [] if isinstance(m, dict)]
+                            row["n_markets"] = len(mk)
+                            row["n_odds"] = len(payload.get("odds") or [])
+                            row["market_names"] = Counter(
+                                str(m.get("name") or m.get("headerName") or "")[:40] for m in mk
+                            ).most_common(12)
+                            row["market_typeids"] = Counter(m.get("typeId") for m in mk).most_common(12)
+                            row["sample_market"] = _truncate_deep(mk[0]) if mk else None
+                            row["sample_odd"] = _truncate_deep((payload.get("odds") or [None])[0])
+                            row["sample_event"] = _truncate_deep((payload.get("events") or [None])[0])
+                            row["headers_sample"] = _truncate_deep((payload.get("headers") or [None])[:3])
+                            row["page"], row["pageCount"] = payload.get("page"), payload.get("pageCount")
                     elif isinstance(payload, list):
                         row["list_len"] = len(payload)
                 except Exception:
