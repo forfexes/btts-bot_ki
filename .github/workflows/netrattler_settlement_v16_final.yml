@@ -35,7 +35,6 @@ jobs:
           python test_settlement_lenient_match.py
       - name: Run Settlement V25 MULTISOURCE
         env:
-          SETTLEMENT_DAYS: "45"
           SUPABASE_URL: ${{ secrets.SUPABASE_URL }}
           SUPABASE_KEY: ${{ secrets.SUPABASE_KEY }}
           SUPABASE_SERVICE_ROLE_KEY: ${{ secrets.SUPABASE_SERVICE_ROLE_KEY }}
@@ -59,7 +58,7 @@ jobs:
           FOOTBALL_DATA_API_KEYS: ${{ secrets.FOOTBALL_DATA_API_KEYS }}
           FOOTBALL_DATA_API_KEY: ${{ secrets.FOOTBALL_DATA_API_KEY }}
           FOOTBALLDATA_IO_API_KEY: ${{ secrets.FOOTBALLDATA_IO_API_KEY }}
-          SETTLEMENT_DAYS: "14"
+          SETTLEMENT_DAYS: "45"
           SETTLEMENT_LIMIT: "3000"
           RESULT_USE_SOFASCORE: "false"
           RESULT_USE_ESPN: "true"
