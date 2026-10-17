@@ -283,6 +283,76 @@ class SettlementV21Tests(unittest.TestCase):
         edit.assert_called_once()
         self.assertTrue(old["raw"]["telegram_edit_ok"])
 
+    def test_recent_player_game_log_is_used_for_builder_settlement(self):
+        tip = {
+            "market_group": "builder", "match_date": mod.TODAY_S,
+            "legs": [{"player": "Player A", "match": "A vs B",
+                      "market": "1+ shots", "category": "shots", "line": 1}],
+        }
+        real_row = {
+            "match_date": mod.TODAY_S, "player_name": "Player A",
+            "home_team": "A", "away_team": "B", "shots": 2,
+            "minutes": 90, "source": "confirmed-game-log",
+        }
+        queried = []
+        def table_rows(table, params, **_kwargs):
+            queried.append(table)
+            return [dict(real_row)] if table == "player_game_log" else []
+        with patch.object(mod, "sb_get_paged", side_effect=table_rows):
+            rows = mod.load_player_stats([tip])
+        self.assertIn("player_game_log", queried)
+        self.assertEqual(len(rows), 1)
+        leg = dict(tip["legs"][0], match_date=mod.TODAY_S)
+        self.assertEqual(mod.settle_player_market(leg, rows, None)[0], "win")
+
+    def test_player_stats_missing_metric_must_not_be_scored_zero(self):
+        leg = {
+            "match_date": mod.TODAY_S, "match": "A vs B",
+            "player": "Player A", "market": "Shots 1+",
+            "category": "shots", "line": 1,
+        }
+        missing = {
+            "match_date": mod.TODAY_S, "player_name": "Player A",
+            "home_team": "A", "away_team": "B", "sot": 2, "shots": None,
+            "minutes": 80,
+        }
+        self.assertEqual(mod.settle_player_market(leg, [missing], None)[0], "pending")
+        missing["shots"] = 0
+        self.assertEqual(mod.settle_player_market(leg, [missing], None)[0], "loss")
+        missing["minutes"] = 0
+        self.assertEqual(mod.settle_player_market(leg, [missing], None)[0], "pending")
+
+    def test_player_stats_require_exact_fixture_or_verifiable_match(self):
+        leg = {
+            "match_date": mod.TODAY_S, "match": "A vs B",
+            "player": "Player A", "market": "Shots 1+",
+            "category": "shots", "line": 1,
+        }
+        unverifiable = {
+            "match_date": mod.TODAY_S, "player_name": "Player A",
+            "shots": 2, "minutes": 90,
+        }
+        self.assertIsNone(mod.find_player_stat(leg, [unverifiable]))
+        wrong_fixture = dict(unverifiable, home_team="C", away_team="D")
+        self.assertIsNone(mod.find_player_stat(leg, [wrong_fixture]))
+
+    def test_score_assist_needs_both_stats_to_declare_loss(self):
+        leg = {
+            "match_date": mod.TODAY_S, "match": "A vs B",
+            "player": "Player A", "category": "score_assist",
+            "market": "Goal or assist 1+", "line": 1,
+        }
+        row = {
+            "match_date": mod.TODAY_S, "player_name": "Player A",
+            "home_team": "A", "away_team": "B", "minutes": 90,
+            "goals": 0, "assists": None,
+        }
+        self.assertEqual(mod.settle_player_market(leg, [row], None)[0], "pending")
+        row["goals"] = 1
+        self.assertEqual(mod.settle_player_market(leg, [row], None)[0], "win")
+        row["goals"], row["assists"] = 0, 0
+        self.assertEqual(mod.settle_player_market(leg, [row], None)[0], "loss")
+
     def test_espn_parser(self):
         payload = {"events": [{"competitions": [{"status": {"type": {"completed": True, "state": "post"}}, "competitors": [
             {"homeAway": "home", "score": "3", "team": {"displayName": "Home"}},
