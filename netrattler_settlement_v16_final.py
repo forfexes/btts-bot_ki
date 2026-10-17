@@ -2119,13 +2119,17 @@ def match_label(settlement: Dict[str, Any]) -> str:
 
 def format_settlement(settlement: Dict[str, Any]) -> str:
     payload = settlement.get("tip_payload") or {}
+    profit = settlement.get("profit")
+    profit_line = (
+        f"Profit: {as_float(profit):+.2f}U" if profit is not None
+        else "Profit: n/a (keine bestätigte Gesamtquote)"
+    )
     return (
         f"{settlement['result_label']} <b>{settlement['market_group'].upper()}</b>\n"
         f"{match_label(settlement)}\n"
         f"{market_text(payload)}\n"
         f"{settlement.get('reason', '')}\n"
-        f"Profit: {as_float(settlement.get('profit')):+.2f}U" if settlement.get("profit") is not None
-        else "Profit: n/a (keine bestätigte Gesamtquote)"
+        f"{profit_line}"
     )
 
 
