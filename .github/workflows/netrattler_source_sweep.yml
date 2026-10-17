@@ -12,6 +12,7 @@ on:
           - netrattler_pinnacle_props_probe.py
           - netrattler_smarkets_probe.py
           - netrattler_fotmob_ht_probe.py
+          - netrattler_kambi_brand_probe.py
 permissions:
   contents: read
 jobs:
