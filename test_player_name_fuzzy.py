@@ -53,6 +53,8 @@ def test_flip_comma_name():
     assert m.flip_comma_name("Gregoritsch, Michael") == "Michael Gregoritsch"
     assert m.flip_comma_name("Michael Gregoritsch") == "Michael Gregoritsch"
     assert m.flip_comma_name("") == ""
+    assert m.flip_comma_name("Tim Skarke Player's") == "Tim Skarke"
+    assert m.flip_comma_name("Skarke, Tim Player's") == "Tim Skarke"
 
 
 def test_comma_name_fuzzy():

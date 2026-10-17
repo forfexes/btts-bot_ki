@@ -129,6 +129,8 @@ def _get_json(url: str, params: Optional[dict] = None, timeout: int = 6):
 def flip_comma_name(value: str) -> str:
     """'Gregoritsch, Michael' -> 'Michael Gregoritsch' (Kambi lists surname first)."""
     v = str(value or "").strip()
+    # Kambi appends a market word to the participant ("Tim Skarke Player's")
+    v = re.sub(r"\s+Player(?:'s|s)?\s*$", "", v, flags=re.I).strip()
     if "," in v:
         last, _, first = v.partition(",")
         last, first = last.strip(), first.strip()
