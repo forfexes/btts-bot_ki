@@ -79,8 +79,28 @@ def _count_path(url: str, path: str) -> None:
     bucket[path] = bucket.get(path, 0) + 1
 
 
+# Circuit breaker: a host that answered N times in a row with a hard
+# "no" (400/403/404/418) is skipped for the rest of the run instead of being
+# hammered once per fixture (footymetrics alone burned 48 failed requests).
+_HOST_FAIL_STREAK: Dict[str, int] = {}
+_HOST_SKIP_AFTER = 4
+_HARD_NO = {400, 403, 404, 418}
+
+
+def _host_of(url: str) -> str:
+    try:
+        from urllib.parse import urlparse as _up
+        return (_up(url).hostname or "?")[:60]
+    except Exception:
+        return "?"
+
+
 def _get_json(url: str, params: Optional[dict] = None, timeout: int = 6):
     """Fast JSON fetch via requests/cloudscraper (no impersonation fallback)."""
+    host = _host_of(url)
+    if _HOST_FAIL_STREAK.get(host, 0) >= _HOST_SKIP_AFTER:
+        _count_path(url, "skipped_after_blocks")
+        return None
     sess = _session()
     status = None
     if sess is not None:
@@ -90,9 +110,12 @@ def _get_json(url: str, params: Optional[dict] = None, timeout: int = 6):
             if getattr(r, "ok", False):
                 data = r.json()
                 _count_path(url, "cloudscraper_ok" if type(sess).__name__ != "Session" else "plain_ok")
+                _HOST_FAIL_STREAK[host] = 0
                 return data
         except Exception:
             pass
+    if status in _HARD_NO or status is None:
+        _HOST_FAIL_STREAK[host] = _HOST_FAIL_STREAK.get(host, 0) + 1
     # curl_cffi Chrome impersonation removed 2026-10-17: a 403/429 block is
     # respected, not evaded.
     _count_path(url, f"failed_{status}")
@@ -765,7 +788,16 @@ def collect_extra_player_props(
 
     desired_depth = {"sot", "shots", "fouls", "fouls_won", "tackles_committed", "tackles_received", "yellow_cards", "score", "assist"}
 
+    # Wall-clock budget: a busy Saturday (29+ fixtures) must never push the
+    # whole tip run past the workflow timeout and lose every tip.
+    import os as _os_b, time as _time_b
+    _budget = float(_os_b.environ.get("NETRATTLER_PROP_BUDGET_SEC", "540") or 540)
+    _t0 = _time_b.time()
+
     for fx in (fixtures or [])[:max_matches]:
+        if _time_b.time() - _t0 > _budget:
+            _log(f"   ⏱ Prop-Budget {int(_budget)}s erreicht - Rest uebersprungen")
+            break
         home = str(fx.get("home", "")).strip()
         away = str(fx.get("away", "")).strip()
         league = str(fx.get("league", "")).strip()
