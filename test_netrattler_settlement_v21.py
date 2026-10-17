@@ -202,6 +202,87 @@ class SettlementV21Tests(unittest.TestCase):
         self.assertEqual(row["raw"]["telegram_edit_attempts"], 3)
         self.assertFalse(row["raw"].get("telegram_edit_ok"))
 
+    @staticmethod
+    def _legacy_prop_builder(*, estimated=False, sent=True, message_id="321"):
+        legs = [
+            {"player": "Player A", "team": "A", "match": "A vs B",
+             "league": "Test", "market": "1+ shots", "category": "shots",
+             "line": 1, "odds": 1.72, "probability": 0.7, "source": "pinnacle"},
+            {"player": "Player B", "team": "B", "match": "A vs B",
+             "league": "Test", "market": "1+ SOT", "category": "sot",
+             "line": 1, "odds": 1.75, "probability": 0.7, "source": "pinnacle"},
+        ]
+        return {
+            "source": "NETRATTLER_BUILDER_ENGINE", "telegram_sent": sent,
+            "telegram_msg_id": message_id,
+            "builder_id": "old-master-builder",
+            "style": "PLAYER PROP BUILDER", "variant": "2L",
+            "market_group": "builder", "match_date": mod.TODAY_S,
+            "estimated_odds": estimated, "total_odds": 0 if estimated else 3.01,
+            "stake": 0 if estimated else 0.5,
+            "leg_count": len(legs), "legs": legs,
+        }
+
+    def test_legacy_master_builder_text_can_be_recovered_with_real_legs(self):
+        original = mod.recover_legacy_builder_text(self._legacy_prop_builder())
+        self.assertIn("Player A", original)
+        self.assertIn("Player B", original)
+        self.assertIn("3.01", original)
+        self.assertIn("\n", original)
+
+    def test_legacy_same_game_builder_does_not_invent_combo_price(self):
+        original = mod.recover_legacy_builder_text(self._legacy_prop_builder(estimated=True))
+        self.assertIn("Player A", original)
+        self.assertIn("live beim Bookmaker prüfen", original)
+        self.assertNotIn("0.00", original)
+        self.assertNotIn("Gesamt-Quote: <b>3.01", original)
+        self.assertIn("\n", original)
+
+    def test_unsent_or_unverified_legacy_builder_is_not_reconstructed(self):
+        self.assertEqual(mod.recover_legacy_builder_text(self._legacy_prop_builder(sent=False)), "")
+        self.assertEqual(mod.recover_legacy_builder_text(self._legacy_prop_builder(message_id="")), "")
+        missing_leg = self._legacy_prop_builder()
+        missing_leg["legs"][0].pop("source")
+        self.assertEqual(mod.recover_legacy_builder_text(missing_leg), "")
+
+    def test_legacy_builder_original_message_is_edited_with_result(self):
+        payload = self._legacy_prop_builder()
+        settlement = {
+            "tip_id": payload["builder_id"], "status": "loss",
+            "market_group": "builder", "profit": -0.5,
+            "tip_payload": payload, "reason": "1 Leg verloren",
+            "match_result": {"home_score": 1, "away_score": 0},
+            "legs_payload": [
+                {"status": "win", "leg": payload["legs"][0], "reason": "getroffen"},
+                {"status": "loss", "leg": payload["legs"][1], "reason": "verfehlt"},
+            ],
+        }
+        edits = []
+        with patch.dict(mod.GROUPS, {"builder": "-100123"}), \
+             patch.object(mod, "telegram_edit", side_effect=lambda *args: edits.append(args) or True), \
+             patch.object(mod, "telegram") as send:
+            self.assertTrue(mod.edit_original_tip(settlement))
+        send.assert_not_called()
+        self.assertEqual(edits[0][:2], ("-100123", "321"))
+        self.assertIn("Player A", edits[0][2])
+        self.assertIn("Player B", edits[0][2])
+        self.assertIn("Leg-Auswertung", edits[0][2])
+        self.assertIn("❌ X", edits[0][2])
+
+    def test_legacy_builder_recovery_is_eligible_on_later_run(self):
+        payload = self._legacy_prop_builder()
+        old = {
+            "settlement_id": "old-legacy-builder", "status": "win",
+            "market_group": "builder", "tip_date": mod.TODAY_S,
+            "settled_at": mod.NOW.isoformat(), "profit": 0.5,
+            "tip_payload": payload, "raw": {},
+        }
+        with patch.object(mod, "edit_original_tip", return_value=True) as edit, \
+             patch.object(mod, "sb_patch", return_value=True):
+            self.assertEqual(mod.retry_unedited_originals([old], []), (1, 1))
+        edit.assert_called_once()
+        self.assertTrue(old["raw"]["telegram_edit_ok"])
+
     def test_espn_parser(self):
         payload = {"events": [{"competitions": [{"status": {"type": {"completed": True, "state": "post"}}, "competitors": [
             {"homeAway": "home", "score": "3", "team": {"displayName": "Home"}},
