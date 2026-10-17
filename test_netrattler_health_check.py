@@ -4,6 +4,8 @@ import netrattler_health_check as health
 
 
 class HealthSourceTests(unittest.TestCase):
+    @patch.object(health, 'SUPABASE_URL', 'https://example.supabase.co')
+    @patch.object(health, 'SUPABASE_KEY', 'test-only-key')
     @patch.object(health, '_sb')
     @patch.object(health, '_count', return_value=0)
     @patch.object(health, '_newest', return_value='2026-10-17T00:00:00Z')
