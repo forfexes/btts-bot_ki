@@ -63,6 +63,22 @@ _HEADERS = {
 }
 
 
+# Measurement before removing the block-evading fallbacks: which fetch path
+# actually delivered each JSON response (per host). Written to
+# netrattler_card_diag at the end of collect_extra_player_props.
+FETCH_PATHS: Dict[str, Dict[str, int]] = {}
+
+
+def _count_path(url: str, path: str) -> None:
+    try:
+        from urllib.parse import urlparse as _up
+        host = (_up(url).hostname or "?")[:60]
+    except Exception:
+        host = "?"
+    bucket = FETCH_PATHS.setdefault(host, {})
+    bucket[path] = bucket.get(path, 0) + 1
+
+
 def _get_json(url: str, params: Optional[dict] = None, timeout: int = 6):
     """Fast JSON fetch: requests/cloudscraper first, curl_cffi Chrome fallback on 403/429/block."""
     sess = _session()
@@ -72,7 +88,9 @@ def _get_json(url: str, params: Optional[dict] = None, timeout: int = 6):
             r = sess.get(url, params=params or {}, headers=_HEADERS, timeout=timeout)
             status = getattr(r, "status_code", None)
             if getattr(r, "ok", False):
-                return r.json()
+                data = r.json()
+                _count_path(url, "cloudscraper_ok" if type(sess).__name__ != "Session" else "plain_ok")
+                return data
         except Exception:
             pass
     # GitHub datacenter IPs are often rejected by plain requests even when the
@@ -81,9 +99,12 @@ def _get_json(url: str, params: Optional[dict] = None, timeout: int = 6):
         from curl_cffi import requests as _creq
         r = _creq.get(url, params=params or {}, headers=_HEADERS, impersonate="chrome", timeout=timeout)
         if r.status_code == 200:
-            return r.json()
+            data = r.json()
+            _count_path(url, "curl_cffi_ok")
+            return data
     except Exception:
         pass
+    _count_path(url, f"failed_{status}")
     return None
 
 
@@ -834,6 +855,18 @@ def collect_extra_player_props(
         _log(f"   🌍 TM-NT: Fehler {str(_tm_exc)[:80]}")
 
     out = list(out_best.values())
+    try:
+        import os as _os
+        import requests as _rq
+        _u = (_os.getenv("SUPABASE_URL") or "").rstrip("/")
+        _k = _os.getenv("SUPABASE_SERVICE_ROLE_KEY") or _os.getenv("SUPABASE_KEY") or ""
+        if _u and _k:
+            _rq.post(f"{_u}/rest/v1/netrattler_card_diag", timeout=8,
+                     headers={"apikey": _k, "Authorization": f"Bearer {_k}", "Content-Type": "application/json"},
+                     json={"info": {"probe": "prop_fetch_paths", "paths": FETCH_PATHS,
+                                    "per_source": per_source, "per_cat": dict(per_cat), "unique": len(out)}})
+    except Exception:
+        pass
     if per_source:
         summary = ", ".join(f"{k}={v}" for k, v in sorted(per_source.items()))
         cats = ", ".join(f"{k}={v}" for k, v in per_cat.most_common())
