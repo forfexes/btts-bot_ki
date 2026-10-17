@@ -1,0 +1,26 @@
+name: NETRATTLER H2H source validation
+
+on:
+  workflow_dispatch:
+  push:
+    paths:
+      - 'netrattler_open_h2h.py'
+      - 'test_netrattler_open_h2h.py'
+      - '.github/workflows/netrattler_h2h_tests.yml'
+
+permissions:
+  contents: read
+
+jobs:
+  test-h2h:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+      - name: Verify H2H CSV parser
+        run: |
+          python -m py_compile netrattler_open_h2h.py test_netrattler_open_h2h.py
+          python -m unittest -v test_netrattler_open_h2h
