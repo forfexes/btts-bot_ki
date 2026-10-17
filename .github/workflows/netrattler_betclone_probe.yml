@@ -1,3 +1,4 @@
+# Schedule removed 2026-10-17: BetClone investigation finished (see BETCLONE_STATUS.md); saves Actions minutes. Run by hand via workflow_dispatch.
 name: NETRATTLER BetClone Platform Probe
 on:
   workflow_dispatch:
@@ -11,8 +12,6 @@ on:
       - 'test_netrattler_betclone_hardprobe.py'
       - 'netrattler_betclone_status.py'
       - 'test_netrattler_betclone_status.py'
-  schedule:
-    - cron: '42 7 * * 1'
 permissions:
   contents: read
 jobs:

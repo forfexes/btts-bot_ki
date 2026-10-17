@@ -1,3 +1,4 @@
+# Schedule removed 2026-10-17: BetClone investigation finished (see BETCLONE_STATUS.md); saves Actions minutes. Run by hand via workflow_dispatch.
 name: NETRATTLER Bookie Market Audit
 on:
   workflow_dispatch:
@@ -11,8 +12,6 @@ on:
       - 'test_netrattler_odds_cache_guard.py'
       - 'netrattler_betclone_live_smoke.py'
       - 'test_netrattler_betclone_live_smoke.py'
-  schedule:
-    - cron: '12 8 * * *'
 permissions:
   contents: read
 jobs:

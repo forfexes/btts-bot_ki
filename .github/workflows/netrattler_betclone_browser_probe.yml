@@ -1,3 +1,4 @@
+# Schedule removed 2026-10-17: BetClone investigation finished (see BETCLONE_STATUS.md); saves Actions minutes. Run by hand via workflow_dispatch.
 name: NETRATTLER BetClone Playwright Audit
 
 on:
@@ -10,8 +11,6 @@ on:
       - 'test_netrattler_betclone_browser_probe.py'
       - '.github/workflows/netrattler_betclone_browser_probe.yml'
   workflow_dispatch:
-  schedule:
-    - cron: "35 8 * * 1"  # weekly after the 07:42 UTC BetClone catalogue scan
 
 jobs:
   browser-probe:
