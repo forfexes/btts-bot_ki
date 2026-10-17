@@ -1337,23 +1337,31 @@ def category_of(row: Dict[str, Any]) -> str:
     return ""
 
 
+def _ht_scores(result: Dict[str, Any]) -> Tuple[int, int]:
+    """Half-time score from the matched result: explicit fields first, then the raw row
+    (match_results stores ht_home / ht_away)."""
+    raw = unpack(result.get("raw") or {})
+    h = result.get("home_score_ht")
+    a = result.get("away_score_ht")
+    if h is None or a is None:
+        h = anyv(raw, ["HTHG", "home_score_ht", "ht_home", "halftime_home", "intHomeScoreHT"], None)
+        a = anyv(raw, ["HTAG", "away_score_ht", "ht_away", "halftime_away", "intAwayScoreHT"], None)
+    return (as_int(h, -1) if h is not None else -1), (as_int(a, -1) if a is not None else -1)
+
+
 def settle_score_market(tip: Dict[str, Any], result: Dict[str, Any]) -> Tuple[str, str]:
     hs, aw = int(result["home_score"]), int(result["away_score"])
     total = hs + aw
     low = (market_text(tip) + " " + str(anyv(unpack(tip), ["message", "text", "tip_text"], ""))).lower()
 
     if "btts ht" in low or "btts_ht" in low:
-        raw = unpack(result.get("raw") or {})
-        hth = as_int(anyv(raw, ["HTHG", "home_score_ht", "halftime_home", "intHomeScoreHT"], -1), -1)
-        hta = as_int(anyv(raw, ["HTAG", "away_score_ht", "halftime_away", "intAwayScoreHT"], -1), -1)
+        hth, hta = _ht_scores(result)
         if hth < 0 or hta < 0:
             return "pending", "Halbzeit-Resultat fehlt"
         return ("win" if hth > 0 and hta > 0 else "loss", f"HT {hth}:{hta}")
 
     if "over 1.5 ht" in low or "over15_ht" in low:
-        raw = unpack(result.get("raw") or {})
-        hth = as_int(anyv(raw, ["HTHG", "home_score_ht", "halftime_home", "intHomeScoreHT"], -1), -1)
-        hta = as_int(anyv(raw, ["HTAG", "away_score_ht", "halftime_away", "intAwayScoreHT"], -1), -1)
+        hth, hta = _ht_scores(result)
         if hth < 0 or hta < 0:
             return "pending", "Halbzeit-Resultat fehlt"
         return ("win" if hth + hta > 1.5 else "loss", f"HT {hth}:{hta}")
@@ -1362,9 +1370,7 @@ def settle_score_market(tip: Dict[str, Any], result: Dict[str, Any]) -> Tuple[st
     selection = str(anyv(unpack(tip), ["tip", "selection", "pick", "bet", "player"], "")).strip().lower()
 
     if category == "half_goals_1st":
-        raw = unpack(result.get("raw") or {})
-        hth = as_int(anyv(raw, ["HTHG", "home_score_ht", "halftime_home", "intHomeScoreHT"], -1), -1)
-        hta = as_int(anyv(raw, ["HTAG", "away_score_ht", "halftime_away", "intAwayScoreHT"], -1), -1)
+        hth, hta = _ht_scores(result)
         if hth < 0 or hta < 0:
             return "pending", "Halbzeit-Resultat fehlt"
         value = hth + hta
@@ -1372,9 +1378,7 @@ def settle_score_market(tip: Dict[str, Any], result: Dict[str, Any]) -> Tuple[st
         return ("win" if value >= line else "loss", f"1.HZ Tore {value} · Linie {line:g}")
 
     if category == "half_goals_2nd":
-        raw = unpack(result.get("raw") or {})
-        hth = as_int(anyv(raw, ["HTHG", "home_score_ht", "halftime_home", "intHomeScoreHT"], -1), -1)
-        hta = as_int(anyv(raw, ["HTAG", "away_score_ht", "halftime_away", "intAwayScoreHT"], -1), -1)
+        hth, hta = _ht_scores(result)
         if hth < 0 or hta < 0:
             return "pending", "Halbzeit-Resultat für 2.HZ fehlt"
         value = total - hth - hta
