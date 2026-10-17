@@ -1,0 +1,49 @@
+name: NETRATTLER BetClone Shadow Coverage CI
+on:
+  push:
+    branches: [main]
+    paths:
+      - 'netrattler_keyless_odds.py'
+      - 'netrattler_odds_cache_guard.py'
+      - 'test_netrattler_keyless_odds.py'
+      - 'test_netrattler_odds_cache_guard.py'
+      - '.github/workflows/netrattler_betclone_shadow_ci.yml'
+  workflow_dispatch:
+jobs:
+  shadow-coverage:
+    runs-on: ubuntu-latest
+    timeout-minutes: 8
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+      - name: Install small odds dependencies
+        run: python -m pip install requests
+      - name: Run fake-match and provider isolation tests
+        run: |
+          python -m py_compile netrattler_keyless_odds.py netrattler_odds_cache_guard.py
+          python -m unittest -v test_netrattler_keyless_odds.py
+          python test_netrattler_odds_cache_guard.py
+      - name: Verify real shadow feed diversity from Supabase (read-only)
+        env:
+          SUPABASE_URL: ${{ secrets.SUPABASE_URL }}
+          SUPABASE_KEY: ${{ secrets.SUPABASE_KEY }}
+        run: |
+          python - <<'PY'
+          import os
+          from collections import Counter
+          import netrattler_odds_cache_guard as cache
+          if not os.getenv("SUPABASE_URL") or not os.getenv("SUPABASE_KEY"):
+              raise SystemExit("Missing Supabase connection")
+          rows = cache._load_x1_rows(force=True)
+          counts = Counter(r.get("source") for r in rows)
+          print("BETCLONE_SHADOW_ROWS", len(rows), dict(counts))
+          if not counts["altenar_platform"] or not counts["1xbet_platform"]:
+              raise SystemExit("Source starvation: a registered BetClone feed yielded zero shadow rows")
+          if any(r.get("source") not in cache.X1_SHADOW_SOURCES for r in rows):
+              raise SystemExit("Unverified source in shadow cache")
+          print("BETCLONE_SHADOW_FEEDS_OK: both sources loaded separately; publication still requires independent matching")
+          PY
