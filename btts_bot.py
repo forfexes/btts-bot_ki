@@ -26921,6 +26921,14 @@ def main():
             odds_data_cache={},
             fixtures_cache=_fixtures_cache,
         )
+        try:
+            _sdiag = dict(getattr(run_corners_and_scorer_bots, "_last_scorer_diag", {}) or {})
+            _sdiag.pop("goal_labels", None)
+            requests.post(f"{SUPABASE_URL}/rest/v1/netrattler_card_diag", timeout=10,
+                          headers={"apikey": SUPABASE_KEY, "Authorization": f"Bearer {SUPABASE_KEY}", "Content-Type": "application/json"},
+                          json={"info": {"probe": "scorer_funnel", "stages": {k: v for k, v in _sdiag.items() if isinstance(v, (int, float, str))}}})
+        except Exception:
+            pass
 
     # 🔑 ADVANCED PROPS BOT
     if env("ENABLE_ADVANCED_PROPS", "true").lower() in ["1", "true", "yes"]:
