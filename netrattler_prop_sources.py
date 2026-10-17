@@ -323,6 +323,54 @@ _1X_PLAYER_GROUPS = {
 }
 
 
+# Evidence collection for the unknown 1xBet group ids (fouls / tackles ...):
+# store (G, T, line, odds, player) of the "Players' stats" sub-games. Once the
+# matches are over, G/T can be matched against player_game_log to PROVE which
+# group is which - no guessing. Bounded: few matches per run, capped rows.
+X1_SNAPSHOT: List[Dict[str, Any]] = []
+_X1_SNAPSHOT_MATCHES = 6
+_X1_SNAPSHOT_MAX_ROWS = 1500
+
+
+def _snapshot_x1_player_markets(host: str, val: Dict[str, Any], match_name: str) -> None:
+    try:
+        if len({r["match_name"] for r in X1_SNAPSHOT}) >= _X1_SNAPSHOT_MATCHES and \
+                match_name not in {r["match_name"] for r in X1_SNAPSHOT}:
+            return
+        if len(X1_SNAPSHOT) >= _X1_SNAPSHOT_MAX_ROWS:
+            return
+        for sg in (val.get("SG") or [])[:60]:
+            title = str(sg.get("TG") or sg.get("PN") or "")
+            if "players' stats" not in title.lower():
+                continue
+            sub = _get_json(f"{host}/service-api/LineFeed/GetGameZip",
+                            params={"id": sg.get("CI"), "lng": "en", "cfview": 0, "grMode": 4,
+                                    "country": 1, "marketType": 1})
+            sv = (sub or {}).get("Value") or {}
+            for e in (sv.get("E") or []):
+                if not isinstance(e, dict):
+                    continue
+                pl = e.get("PL") or {}
+                name = pl.get("N") if isinstance(pl, dict) else None
+                if not name or e.get("G") is None or e.get("T") is None:
+                    continue
+                try:
+                    odds = float(e.get("C") or 0)
+                except (TypeError, ValueError):
+                    continue
+                X1_SNAPSHOT.append({
+                    "match_name": match_name, "subgame_title": title[:60],
+                    "g": int(e["G"]), "t": int(e["T"]),
+                    "line": e.get("P") if isinstance(e.get("P"), (int, float)) else None,
+                    "odds": odds, "player": str(name)[:80],
+                    "side": pl.get("T") if isinstance(pl.get("T"), int) else None,
+                })
+                if len(X1_SNAPSHOT) >= _X1_SNAPSHOT_MAX_ROWS:
+                    return
+    except Exception:
+        return
+
+
 def fetch_1xbet_player_props(home: str, away: str) -> List[Dict[str, Any]]:
     """Best-effort Player-Props aus dem 1xbet LineFeed (JSON)."""
     props: List[Dict[str, Any]] = []
@@ -360,6 +408,7 @@ def fetch_1xbet_player_props(home: str, away: str) -> List[Dict[str, Any]]:
         return []
     val = game.get("Value") or {}
     match_name = f"{home} vs {away}"
+    _snapshot_x1_player_markets(host_used, val, match_name)
     # Player-Props liegen in GE (GroupEvents) / E (Events) mit Spielernamen im PN-Feld.
     for grp in (val.get("GE") or []):
         gid = grp.get("G")
@@ -905,6 +954,19 @@ def collect_extra_player_props(
                      headers={"apikey": _k, "Authorization": f"Bearer {_k}", "Content-Type": "application/json"},
                      json={"info": {"probe": "prop_fetch_paths", "paths": FETCH_PATHS,
                                     "per_source": per_source, "per_cat": dict(per_cat), "unique": len(out)}})
+    except Exception:
+        pass
+    try:
+        if X1_SNAPSHOT:
+            import os as _os2
+            import requests as _rq2
+            _u2 = (_os2.getenv("SUPABASE_URL") or "").rstrip("/")
+            _k2 = _os2.getenv("SUPABASE_SERVICE_ROLE_KEY") or _os2.getenv("SUPABASE_KEY") or ""
+            if _u2 and _k2:
+                _rq2.post(f"{_u2}/rest/v1/x1_player_snapshots", timeout=20,
+                          headers={"apikey": _k2, "Authorization": f"Bearer {_k2}",
+                                   "Content-Type": "application/json", "Prefer": "return=minimal"},
+                          json=list(X1_SNAPSHOT))
     except Exception:
         pass
     if per_source:
