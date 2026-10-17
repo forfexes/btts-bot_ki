@@ -36,7 +36,7 @@ jobs:
           python-version: '3.11'
       - name: Install test dependencies
         run: |
-          python -m pip install --disable-pip-version-check requests python-dotenv pillow beautifulsoup4 lxml numpy scipy scikit-learn
+          python -m pip install --disable-pip-version-check requests python-dotenv pillow beautifulsoup4 lxml numpy scipy scikit-learn pytest
       - name: Run offline consolidated hardtest
         shell: bash
         run: |
@@ -46,7 +46,7 @@ jobs:
         shell: bash
         run: |
           set -o pipefail
-          python -m unittest -v test_netrattler_keyless_odds test_netrattler_odds_cache_guard test_netrattler_scorer_history_fallback test_netrattler_thesportsdb_guard test_netrattler_playwright_runtime test_netrattler_kambi_scorer_market 2>&1 | tee netrattler-source-tests.log
+          python -m pytest -q -ra test_netrattler_keyless_odds.py test_netrattler_odds_cache_guard.py test_netrattler_scorer_history_fallback.py test_netrattler_thesportsdb_guard.py test_netrattler_playwright_runtime.py test_netrattler_kambi_scorer_market.py 2>&1 | tee netrattler-source-tests.log
       - name: Upload diagnostics even when tests fail
         if: always()
         uses: actions/upload-artifact@v4
