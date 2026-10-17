@@ -1446,6 +1446,9 @@ def _fotmob_player_records(detail: Dict[str, Any]) -> List[Dict[str, Any]]:
     return records
 
 
+_UNMAPPED_KEYS: Dict[str, int] = {}
+
+
 def _stats_to_rows(source: str, event_id: Any, player: dict, stats: dict,
                    *, team: str, league: str, home: str, away: str,
                    match_date: str) -> List[Dict]:
@@ -1458,6 +1461,8 @@ def _stats_to_rows(source: str, event_id: Any, player: dict, stats: dict,
     for raw_name, value in _flatten_stats(stats).items():
         stat_name = _STAT_ALIASES.get(_stat_key(raw_name))
         stat_value = _numeric(value)
+        if not stat_name:
+            _UNMAPPED_KEYS[str(raw_name)[:40]] = _UNMAPPED_KEYS.get(str(raw_name)[:40], 0) + 1
         if not stat_name or stat_value is None:
             continue
         result.append(_make_stat_row(
@@ -2290,7 +2295,7 @@ def scrape_player_stats(date_str: str) -> int:
             requests.post(f"{_u}/rest/v1/netrattler_card_diag", timeout=10,
                           headers={"apikey": _k, "Authorization": f"Bearer {_k}", "Content-Type": "application/json"},
                           json={"info": {"probe": "scrape_sources", "date": date_str,
-                                         "counts": source_counts, "raw": len(all_rows), "unique": len(clean), "corners": dict(_CORNER_PATCHES)}})
+                                         "counts": source_counts, "raw": len(all_rows), "unique": len(clean), "corners": dict(_CORNER_PATCHES), "unmapped_keys": dict(sorted(_UNMAPPED_KEYS.items(), key=lambda kv: -kv[1])[:60])}})
     except Exception:
         pass
     print(f"  🧹 {len(all_rows)} Roh-Rows → {len(clean)} eindeutige Rows")
