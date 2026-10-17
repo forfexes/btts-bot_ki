@@ -2,16 +2,6 @@
 name: NETRATTLER Bookie Market Audit
 on:
   workflow_dispatch:
-  push:
-    branches: [main]
-    paths:
-      - '.github/workflows/netrattler_betclone_market_audit.yml'
-      - 'netrattler_betclone_market_audit.py'
-      - 'test_netrattler_betclone_market_audit.py'
-      - 'netrattler_odds_cache_guard.py'
-      - 'test_netrattler_odds_cache_guard.py'
-      - 'netrattler_betclone_live_smoke.py'
-      - 'test_netrattler_betclone_live_smoke.py'
 permissions:
   contents: read
 jobs:
