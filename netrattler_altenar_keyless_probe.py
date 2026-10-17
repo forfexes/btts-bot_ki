@@ -77,7 +77,82 @@ def run() -> dict:
     return result
 
 
+FRONTEND = "https://hu-sb2frontend-altenar2.biahosted.com/api/widget"
+
+
+def _coverage(payload) -> dict:
+    """Bounded coverage summary: how many football events / complete 1X2
+    markets / distinct kickoff days a public widget response contains."""
+    if not isinstance(payload, dict):
+        return {"events": 0}
+    soccer = {s.get("id") for s in payload.get("sports") or []
+              if isinstance(s, dict) and str(s.get("iconName") or "") == "soccer"}
+    events = [e for e in payload.get("events") or [] if isinstance(e, dict)]
+    football = [e for e in events if e.get("sportId") in soccer]
+    days = sorted({str(e.get("startDate") or "")[:10] for e in football if e.get("startDate")})
+    m1x2 = sum(1 for m in payload.get("markets") or []
+               if isinstance(m, dict) and str(m.get("headerName") or "").strip() == "1X2")
+    return {"events": len(events), "football": len(football), "markets_1x2": m1x2,
+            "days": days[:10], "soccer_sport_ids": sorted(x for x in soccer if x is not None)[:3]}
+
+
+def run_variants() -> list:
+    """Same public endpoint/params the vegas.hu page itself uses, varying
+    only eventCount/timePeriod/sportId to find the widest public listing."""
+    base = dict(PARAMS)
+    first = requests.get(ENDPOINT, params=base, headers=HEADERS, timeout=12)
+    soccer_ids = []
+    try:
+        soccer_ids = _coverage(first.json()).get("soccer_sport_ids") or []
+    except Exception:
+        pass
+    sport = str(soccer_ids[0]) if soccer_ids else "0"
+    variants = [
+        ("top_default", "GetTopEvents", {}),
+        ("top_count50", "GetTopEvents", {"eventCount": "50"}),
+        ("top_count500", "GetTopEvents", {"eventCount": "500"}),
+        ("top_soccer", "GetTopEvents", {"sportId": sport}),
+        ("top_soccer_tp1", "GetTopEvents", {"sportId": sport, "timePeriod": "1"}),
+        ("top_soccer_tp2", "GetTopEvents", {"sportId": sport, "timePeriod": "2"}),
+        ("top_soccer_tp3", "GetTopEvents", {"sportId": sport, "timePeriod": "3"}),
+        ("upcoming_soccer", "GetUpcoming", {"sportId": sport, "eventCount": "200"}),
+        ("events_soccer", "GetEvents", {"sportId": sport}),
+        ("fav_champs", "GetFavouritesChamps", {}),
+    ]
+    out = []
+    for name, path, extra in variants:
+        row = {"variant": name, "path": path}
+        try:
+            r = requests.get(f"{FRONTEND}/{path}", params={**base, **extra}, headers=HEADERS, timeout=12)
+            row["http"] = r.status_code
+            if r.status_code == 200:
+                try:
+                    payload = r.json()
+                    row.update(_coverage(payload))
+                    if isinstance(payload, dict):
+                        row["keys"] = sorted(payload.keys())[:12]
+                    elif isinstance(payload, list):
+                        row["list_len"] = len(payload)
+                except Exception:
+                    row["non_json"] = True
+        except Exception as exc:
+            row["error"] = type(exc).__name__
+        out.append(row)
+    return out
+
+
 def main() -> int:
+    if os.getenv("ALTENAR_PROBE_VARIANTS", "").lower() in {"1", "true", "yes"}:
+        rows = run_variants()
+        print(json.dumps(rows, indent=2)[:6000])
+        url = (os.getenv("SUPABASE_URL") or "").rstrip("/")
+        key = os.getenv("SUPABASE_SERVICE_ROLE_KEY") or os.getenv("SUPABASE_KEY") or ""
+        if url and key:
+            requests.post(f"{url}/rest/v1/netrattler_card_diag", timeout=15,
+                          headers={"apikey": key, "Authorization": f"Bearer {key}",
+                                   "Content-Type": "application/json"},
+                          json={"info": {"probe": "altenar_coverage_variants", "rows": rows}})
+        return 0
     result = run()
     print(json.dumps(result, indent=2)[:4000])
     SUPABASE_URL = (os.getenv("SUPABASE_URL") or "").rstrip("/")
