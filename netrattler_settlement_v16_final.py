@@ -568,6 +568,73 @@ def send_result_cards(newly_closed: Sequence[Dict[str, Any]]) -> int:
     return n
 
 
+def recover_legacy_builder_text(payload: Dict[str, Any]) -> str:
+    """Rebuild a missing original *only* from confirmed sent NETRATTLER builder data.
+
+    Some older deliveries saved a Telegram message id but not its text or chat.
+    Never guess a combined bookmaker price or try to edit unverified messages.
+    This is an in-place edit fallback, NOT a new Telegram send.
+    """
+    data = unpack(payload)
+    if str(data.get("source") or "") != "NETRATTLER_BUILDER_ENGINE":
+        return ""
+    if data.get("telegram_sent") is not True:
+        return ""
+    if not str(data.get("telegram_msg_id") or "").isdigit():
+        return ""
+    legs = data.get("legs")
+    if not isinstance(legs, list) or not 2 <= len(legs) <= 11:
+        return ""
+    if as_int(data.get("leg_count"), -1) != len(legs):
+        return ""
+    if not all(isinstance(x, dict) and str(x.get("player") or "").strip()
+               and str(x.get("match") or "").strip()
+               and str(x.get("market") or "").strip()
+               and str(x.get("source") or "").strip()
+               and as_float(x.get("odds"), 0) > 1 for x in legs):
+        return ""
+    try:
+        from netrattler_builder_engine import PropLeg, BuilderPick, format_builder_message
+        from dataclasses import fields
+        import html
+        allowed = {f.name for f in fields(PropLeg)}
+        rebuilt_legs = [PropLeg(**{k: v for k, v in item.items() if k in allowed}) for item in legs]
+        quote = as_float(data.get("total_odds"), 0)
+        estimated = bool(data.get("estimated_odds"))
+        if not estimated and quote > 1 and as_float(data.get("stake"), 0) > 0:
+            pick = BuilderPick(
+                builder_id=str(data.get("builder_id") or ""),
+                style=str(data.get("style") or "BUILDER"),
+                variant=str(data.get("variant") or ""),
+                legs=rebuilt_legs, total_odds=quote,
+                stake=as_float(data.get("stake")), estimated_odds=False,
+                match_date=str(data.get("match_date") or ""),
+            )
+            return format_builder_message(pick)
+        # Same-game quotes cannot be multiplied as if they were independent.
+        # Display the authentic individual selections, never a synthetic SGP price.
+        if estimated:
+            lines = [
+                "🏗️ <b>NETRATTLER " + html.escape(str(data.get("style") or "BUILDER")) + "</b>",
+                "<b>" + html.escape(str(data.get("variant") or "")) + "</b>",
+                "━━━━━━━━━━━━━━━━━━",
+            ]
+            for i, leg in enumerate(legs, 1):
+                player = html.escape(str(leg["player"]))
+                market = html.escape(str(leg["market"]))
+                match = html.escape(str(leg["match"]))
+                lines.append(f"{i}. 🎯 <b>{player}</b> — {market} · {match}")
+            lines.extend([
+                "━━━━━━━━━━━━━━━━━━",
+                "💰 Builder-Quote: <b>live beim Bookmaker prüfen</b>",
+                "🔒 Keine synthetische Same-Game-Gesamtquote",
+            ])
+            return "\\n".join(lines)
+    except (TypeError, ValueError, KeyError, ImportError) as exc:
+        log(f"Builder-Originaltext nicht rekonstruierbar: {type(exc).__name__}", "WARN")
+    return ""
+
+
 def edit_original_tip(settlement: Dict[str, Any]) -> bool:
     """Edit original Telegram post; retry the canonical group if stored chat_id is stale.
 
@@ -582,6 +649,8 @@ def edit_original_tip(settlement: Dict[str, Any]) -> bool:
     message_id = anyv(data, ["telegram_msg_id", "telegram_message_id", "message_id", "tg_message_id"], "")
     original = str(anyv(data, ["message_text", "text", "tip_text", "message", "caption"], ""))
     group = str(settlement.get("market_group") or group_of(payload) or "default")
+    if not original and group == "builder":
+        original = recover_legacy_builder_text(data)
     stored_chat = str(anyv(data, ["telegram_chat_id", "chat_id", "tg_chat_id", "channel_id"], "") or "")
     canonical_chat = str(GROUPS.get(group) or GROUPS.get("default") or "")
     edited = (_strip_old_direct_summary(original) + "\n\n" + format_direct_summary(settlement)).strip()
@@ -662,7 +731,8 @@ def retry_unedited_originals(existing: Sequence[Dict[str, Any]], newly_closed: S
         if not anyv(payload, ["telegram_msg_id", "telegram_message_id", "message_id", "tg_message_id"], None):
             continue
         if not anyv(payload, ["message_text", "text", "tip_text", "message", "caption"], None):
-            continue
+            if str(row.get("market_group") or group_of(payload)) != "builder" or not recover_legacy_builder_text(payload):
+                continue
         attempts += 1
         edited = edit_original_tip(row)
         successes += bool(edited)
