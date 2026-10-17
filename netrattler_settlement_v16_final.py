@@ -1366,6 +1366,12 @@ def _ht_scores(result: Dict[str, Any]) -> Tuple[int, int]:
     """Half-time score from the matched result: explicit fields first, then the raw row
     (match_results stores ht_home / ht_away)."""
     raw = unpack(result.get("raw") or {})
+    src = str(result.get("result_source") or raw.get("_result_table") or raw.get("source") or "").lower()
+    if "fotmob" in src and os.getenv("FOTMOB_HT_TRUSTED", "false").lower() not in ("1", "true", "yes", "on"):
+        # 2026-10-17: FotMob ht_home/ht_away average 0.67 HT goals vs 3.15 FT goals
+        # (real ratio ~45%); the 0:0 fallback in halftime_from_detail is wrong for
+        # many matches. Never settle half-time markets from it until validated.
+        return -1, -1
     h = result.get("home_score_ht")
     a = result.get("away_score_ht")
     if h is None or a is None:

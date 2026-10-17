@@ -61,8 +61,12 @@ class HalfTime(unittest.TestCase):
     TIP = {"market": "over15_ht", "market_name": "Over 1.5 HT", "tip": "Over 1.5 Tore HT", "match": "A vs B", "date": "2026-10-10"}
 
     def test_ht_from_match_results_columns(self):
-        self.assertEqual(mod.settle_score_market(self.TIP, {"home_score": 2, "away_score": 1, "raw": {"ht_home": 1, "ht_away": 1}})[0], "win")
-        self.assertEqual(mod.settle_score_market(self.TIP, {"home_score": 2, "away_score": 1, "raw": {"ht_home": 0, "ht_away": 1}})[0], "loss")
+        self.assertEqual(mod.settle_score_market(self.TIP, {"home_score": 2, "away_score": 1, "raw": {"ht_home": 1, "ht_away": 1, "source": "thesportsdb"}})[0], "win")
+        self.assertEqual(mod.settle_score_market(self.TIP, {"home_score": 2, "away_score": 1, "raw": {"ht_home": 0, "ht_away": 1, "source": "thesportsdb"}})[0], "loss")
+
+    def test_fotmob_ht_not_trusted(self):
+        r = {"home_score": 2, "away_score": 1, "result_source": "fotmob", "raw": {"ht_home": 0, "ht_away": 0, "source": "fotmob"}}
+        self.assertEqual(mod.settle_score_market(self.TIP, r)[0], "pending")
 
     def test_missing_ht_stays_pending(self):
         self.assertEqual(mod.settle_score_market(self.TIP, {"home_score": 2, "away_score": 1, "raw": {}})[0], "pending")
