@@ -124,6 +124,70 @@ class SettlementV21Tests(unittest.TestCase):
             self.assertFalse(mod.edit_original_tip(settlement))
             send_mock.assert_not_called()
 
+    def test_rate_limited_edit_waits_for_telegram_and_retries(self):
+        throttled = FakeResponse({"parameters": {"retry_after": 4}}, status=429)
+        success = FakeResponse({"ok": True})
+        with patch.object(mod, "TG_TOKEN", "test-token"), \
+             patch.dict(os.environ, {"SETTLEMENT_TG_EDIT_GAP_SEC": "0"}), \
+             patch.object(mod.requests, "post", side_effect=[throttled, success]) as post, \
+             patch.object(mod.time, "sleep") as sleep:
+            self.assertTrue(mod.telegram_edit("-1001", 55, "Original + ✅ V"))
+        self.assertEqual(post.call_count, 2)
+        sleep.assert_any_call(5)
+
+    def test_idempotent_original_edit_counts_not_modified_as_success(self):
+        unchanged = FakeResponse({}, status=400)
+        unchanged.text = '{"description":"Bad Request: message is not modified"}'
+        with patch.object(mod, "TG_TOKEN", "test-token"), \
+             patch.dict(os.environ, {"SETTLEMENT_TG_EDIT_GAP_SEC": "0"}), \
+             patch.object(mod.requests, "post", return_value=unchanged):
+            self.assertTrue(mod.telegram_edit("-1001", 55, "Already settled"))
+
+    def test_recover_recent_settled_originals_not_only_newly_closed(self):
+        def old(tid, raw=None, mid=44):
+            return {
+                "settlement_id": tid, "status": "win", "market_group": "over25",
+                "tip_date": mod.TODAY_S, "settled_at": mod.NOW.isoformat(),
+                "raw": raw or {"result_source": "test"},
+                "profit": 1.0, "reason": "Over 2.5",
+                "tip_payload": {
+                    "match": "A vs B", "message_text": "Original Tip",
+                    "telegram_chat_id": "123", "telegram_msg_id": mid,
+                },
+            }
+        needs_replay = old("retry-me")
+        already_edited = old("done", {"telegram_edit_ok": True})
+        no_message = old("no-message", mid=None)
+        fresh = old("fresh")
+        patch_log = []
+        with patch.dict(os.environ, {"SETTLEMENT_TG_REPLAY_MAX": "10"}), \
+             patch.object(mod, "edit_original_tip", return_value=True) as edit, \
+             patch.object(mod, "sb_patch", side_effect=lambda *args: patch_log.append(args) or True):
+            successes, attempted = mod.retry_unedited_originals(
+                [needs_replay, already_edited, no_message, fresh], [fresh])
+        self.assertEqual((successes, attempted), (1, 1))
+        self.assertEqual(edit.call_count, 1)
+        self.assertTrue(needs_replay["raw"]["telegram_edit_ok"])
+        self.assertEqual(needs_replay["raw"]["telegram_edit_attempts"], 1)
+        self.assertEqual(needs_replay["raw"]["result_source"], "test")
+        self.assertEqual(len(patch_log), 1)
+
+    def test_failed_edit_is_retryable_and_attempt_count_is_durable(self):
+        row = {
+            "settlement_id": "failed", "status": "loss", "market_group": "btts",
+            "tip_date": mod.TODAY_S, "settled_at": mod.NOW.isoformat(),
+            "raw": {"telegram_edit_attempts": 2},
+            "tip_payload": {
+                "match": "A vs B", "message_text": "Original",
+                "telegram_chat_id": "123", "telegram_msg_id": 55,
+            },
+        }
+        with patch.object(mod, "edit_original_tip", return_value=False), \
+             patch.object(mod, "sb_patch", return_value=True):
+            self.assertEqual(mod.retry_unedited_originals([row], []), (0, 1))
+        self.assertEqual(row["raw"]["telegram_edit_attempts"], 3)
+        self.assertFalse(row["raw"].get("telegram_edit_ok"))
+
     def test_espn_parser(self):
         payload = {"events": [{"competitions": [{"status": {"type": {"completed": True, "state": "post"}}, "competitors": [
             {"homeAway": "home", "score": "3", "team": {"displayName": "Home"}},
