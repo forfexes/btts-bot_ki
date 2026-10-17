@@ -35,6 +35,7 @@ jobs:
           python test_settlement_lenient_match.py
       - name: Run Settlement V25 MULTISOURCE
         env:
+          SETTLEMENT_DAYS: "45"
           SUPABASE_URL: ${{ secrets.SUPABASE_URL }}
           SUPABASE_KEY: ${{ secrets.SUPABASE_KEY }}
           SUPABASE_SERVICE_ROLE_KEY: ${{ secrets.SUPABASE_SERVICE_ROLE_KEY }}
