@@ -380,3 +380,49 @@ cards, few fouls) come from Kambi, which pre-dates the BetClone work.
 Open item with the highest upside: map 1xBet player groups (fouls, fouls won, tackles) from evidence.
 `x1_player_snapshots` collects (G, T, line, odds, player) per match; once the matches are over, compare
 against `player_game_log` (fouls_committed / fouls_won / tackles) to PROVE which group is which. No guessing.
+
+
+## Verified 2026-10-17: shadow-feed balance and player-code evidence
+
+- **Playwright** remains installed in production and was exercised in
+  [tip run 39023333694](https://github.com/forfexes/btts-bot_ki/actions/runs/39023333694);
+  the four-page/45-second budget was reached. Rendering does not imply
+  that another BetClone bookmaker provides a validated price feed.
+- **Altenar vegas.hu:** Direct database audit for 2026-10-17 found 10,386
+  quote rows across 1,850 fixture IDs (5,550 1x2, 2,454 BTTS, 2,382
+  O/U 2.5). These are one real operator feed, not 1,850 bookmaker brands.
+- **1xBet/22bet:** Direct database audit for 2026-10-17 found 19,228 quote
+  rows across 1,180 fixture IDs. A subset of 307 rows from synthetic
+  `Home vs Away` or `Home (Special bets)` pseudo-events was identified;
+  commit `31e0accf` now suppresses these *before* ingestion. Existing
+  historical rows remain historical data and are not retrospectively deleted.
+- **Balanced cache:** The independent per-platform paging and strict
+  full-market corroboration gate are tested by
+  [shadow coverage CI 39028406560](https://github.com/forfexes/btts-bot_ki/actions/runs/39028406560).
+  It fetched 17,617 real stored rows: 7,231 1xBet and 10,386 Altenar.
+  This is a cache retrieval check, *not* 17,617 released betting tips.
+  Unknown/coded markets remain shadow-only.
+- **Player market evidence:** Today's successful
+  [probe 39028758422](https://github.com/forfexes/btts-bot_ki/actions/runs/39028758422)
+  inserted the first 800 `x1_player_snapshots` records: 77 distinct
+  players, 2 games, and 14 observed opaque group IDs. Player identity is
+  read from the publicly observed `PL.N` and `PL.I` structure; codes
+  `G`/`T` retain their source meaning and are **not** labelled as
+  shots, fouls, tackles or scorer without independent proof.
+  Daily bounded collection is in `netrattler_1x_props_probe.yml`.
+- **Unfinished:** BETBY, BetConstruct, Delasport, Digitain, FIRST, iGate,
+  InPlayNet and SoftSwiss still have no separately verified production odds
+  adapter. Altenar and 1xBet do not cover every skin in their respective
+  catalogues. Player outcomes must be checked against independent historical
+  stats before market names or Telegram tips can be released.
+
+### Regression incident and resolution (2026-10-17)
+
+The intermediate build `2eb16069` changed the source filter to separate
+per-provider queries and briefly broke tests that expected a combined filter
+([Public Sources CI 39028237441](https://github.com/forfexes/btts-bot_ki/actions/runs/39028237441),
+[Core CI 39028237545](https://github.com/forfexes/btts-bot_ki/actions/runs/39028237545)).
+The tests and reader were reconciled in later commits; both
+[Public Sources CI 39028406558](https://github.com/forfexes/btts-bot_ki/actions/runs/39028406558)
+and [Core CI 39028406595](https://github.com/forfexes/btts-bot_ki/actions/runs/39028406595)
+passed. The two earlier Telegram alerts are obsolete historical failures.
