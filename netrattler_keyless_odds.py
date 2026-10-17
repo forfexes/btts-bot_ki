@@ -211,10 +211,21 @@ _X1_TYPES = {1: ("1x2", "home"), 2: ("1x2", "draw"), 3: ("1x2", "away"),
              4: ("double_chance", "1x"), 5: ("double_chance", "12"), 6: ("double_chance", "x2")}
 
 
+_X1_PLACEHOLDER_TEAM = re.compile(r"^(?:home|away|team\\s*[12])(?:\\s*\\([^)]*bets?\\))?$", re.I)
+
+
+def _x1_has_real_teams(home: Any, away: Any) -> bool:
+    """Never emit prices for synthetic Home/Away special-bets pseudo-events."""
+    h, a = str(home or "").strip(), str(away or "").strip()
+    return bool(h and a and h.casefold() != a.casefold()
+                and not _X1_PLACEHOLDER_TEAM.fullmatch(h)
+                and not _X1_PLACEHOLDER_TEAM.fullmatch(a))
+
+
 def _x1_rows(g: Mapping[str, Any], host: str) -> List[Dict[str, Any]]:
     out: List[Dict[str, Any]] = []
     home, away = g.get("O1") or "", g.get("O2") or ""
-    if not home or not away:
+    if not _x1_has_real_teams(home, away):
         return out
     start = datetime.fromtimestamp(int(g.get("S") or 0), tz=timezone.utc).isoformat() if g.get("S") else None
     league = g.get("L") or g.get("LE") or ""
