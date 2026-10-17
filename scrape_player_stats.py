@@ -1585,6 +1585,29 @@ def _walk_fotmob_players(node: Any):
 _FM_DIAG = {"matches": 0, "events": 0, "cards": 0, "keys_logged": False}
 
 
+def _name_overlap(a: str, b: str) -> bool:
+    ta = {t for t in a.split() if len(t) >= 3}
+    tb = {t for t in b.split() if len(t) >= 3}
+    return bool(ta and tb and (ta <= tb or tb <= ta or len(ta & tb) >= 2))
+
+
+def _pending_corner_tip_pairs(date_str: str) -> List[Tuple[str, str]]:
+    url = (os.getenv("SUPABASE_URL") or "").rstrip("/")
+    key = os.getenv("SUPABASE_SERVICE_ROLE_KEY") or os.getenv("SUPABASE_KEY") or ""
+    if not url or not key:
+        return []
+    r = requests.get(f"{url}/rest/v1/tips", timeout=15,
+                     headers={"apikey": key, "Authorization": f"Bearer {key}"},
+                     params={"select": "match", "market": "eq.corners", "status": "eq.pending", "date": f"eq.{date_str}", "limit": "200"})
+    pairs = []
+    for row in (r.json() if r.ok else []) or []:
+        m = str(row.get("match") or "")
+        if " vs " in m:
+            h, a = m.split(" vs ", 1)
+            pairs.append((_norm_entity_name(h), _norm_entity_name(a)))
+    return pairs
+
+
 def _fotmob_team_corners(detail: Dict[str, Any]) -> Optional[Tuple[int, int]]:
     """Team corner counts from FotMob matchDetails stats ({key/title: corners, stats: [home, away]})."""
     content = detail.get("content") or {}
@@ -1682,7 +1705,21 @@ def scrape_fotmob_date(date_str: str) -> List[Dict]:
         for match in data.get("matches") or []:
             matches.append((str(match.get("leagueName") or ""), match))
 
-    matches = matches[:SOURCE_MAX_EVENTS]
+    # Matches that carry a pending corner tip are fetched first (their team
+    # corner counts settle those tips); the normal cap still applies.
+    try:
+        wanted_pairs = _pending_corner_tip_pairs(date_str)
+        if wanted_pairs:
+            def _prio(item):
+                _m = item[1]
+                h = _norm_entity_name((_m.get("home") or {}).get("name") or _m.get("homeName") or "")
+                a = _norm_entity_name((_m.get("away") or {}).get("name") or _m.get("awayName") or "")
+                return 0 if any(_name_overlap(h, th) and _name_overlap(a, ta) for th, ta in wanted_pairs) else 1
+            matches.sort(key=_prio)
+            _CORNER_PATCHES["tip_matches"] = sum(1 for it in matches if _prio(it) == 0)
+    except Exception as exc:
+        print(f"  ⚠️  Ecken-Priorisierung: {str(exc)[:80]}")
+    matches = matches[:SOURCE_MAX_EVENTS + int(_CORNER_PATCHES.get("tip_matches", 0))]
     rows = []
     details_ok = 0
     details_with_player_stats = 0
