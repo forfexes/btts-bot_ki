@@ -61,11 +61,11 @@ def _participant(outcome: Dict[str, Any]) -> str:
     if isinstance(value, dict):
         value = value.get("name") or value.get("label") or value.get("participantName")
     if value:
-        return str(value).strip()
+        return prop_sources.flip_comma_name(str(value).strip())
     label = str(outcome.get("label") or "").strip()
     low = label.lower()
     if low not in {"over", "under", "yes", "no"} and not low.startswith(("over ", "under ")):
-        return label
+        return prop_sources.flip_comma_name(label)
     return ""
 
 

@@ -62,6 +62,12 @@ def test_comma_name_fuzzy():
     assert len(_with(rows, lambda: b._fuzzy_game_log_rows("Gunther, Lasse"))) == 5
 
 
+def test_rich_kambi_participant_clean():
+    import netrattler_runtime_patch as r
+    assert r._participant({"participant": "Skarke, Tim Player's"}) == "Tim Skarke"
+    assert r._participant({"label": "Tim Skarke Player's"}) == "Tim Skarke"
+
+
 if __name__ == "__main__":
     for k, v in list(globals().items()):
         if k.startswith("test_"):
