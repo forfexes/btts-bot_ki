@@ -161,5 +161,30 @@ class AltenarGetEventsTests(unittest.TestCase):
             sels = {r["selection"] for r in rows if r["market"] == market}
             self.assertEqual(sels, set(g.X1_CROSS_CHECK_MARKETS[market]))
 
+class SmarketsTests(unittest.TestCase):
+    def test_back_odds_from_best_offer(self):
+        self.assertAlmostEqual(k._sm_back_odds({"offers": [{"price": 5291}, {"price": 5236}], "bids": [{"price": 5051}]}), 1.91, places=2)
+        self.assertIsNone(k._sm_back_odds({"offers": []}))
+        self.assertIsNone(k._sm_back_odds({"offers": [{"price": 10000}]}))
+
+    def test_market_mapping(self):
+        self.assertEqual(k._sm_market_key({"market_type": {"name": "BTTS"}})[0], "btts")
+        self.assertEqual(k._sm_market_key({"market_type": {"name": "OVER_UNDER", "param": "2.5"}})[0], "totals_2_5")
+        self.assertIsNone(k._sm_market_key({"market_type": {"name": "OVER_UNDER", "param": "3.5"}}))
+        self.assertEqual(k._sm_market_key({"market_type": {"name": "FIRST_HALF_OVER_UNDER", "param": "1.5"}})[0], "totals_ht_1_5")
+
+    def test_incomplete_or_broken_book_dropped(self):
+        self.assertFalse(k._sm_complete("btts", {"yes": 1.9}))
+        self.assertTrue(k._sm_complete("1x2", {"home": 1.91, "draw": 3.4, "away": 4.7}))
+        self.assertFalse(k._sm_complete("1x2", {"home": 1.2, "draw": 1.5, "away": 2.0}))
+
+    def test_vocabulary_matches_cache_guard(self):
+        import netrattler_odds_cache_guard as g
+        self.assertEqual(g._field_for_row({"market": "btts_ht", "selection": "yes"}), "btts_yes_ht")
+        self.assertEqual(g._field_for_row({"market": "totals_ht_1_5", "selection": "over_1_5", "raw": {"line": 1.5}}), "over_15_ht")
+        self.assertIn("smarkets", g.LIVE_HISTORY_SOURCES)
+        self.assertIn("smarkets", dict(k.COLLECTORS))
+
+
 if __name__ == "__main__":
     unittest.main()

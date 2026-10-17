@@ -562,6 +562,7 @@ def collect_live_all(target_date: Optional[str] = None) -> List[Dict[str, Any]]:
         ("1xbet_platform", lambda: _keyless("1xbet_platform", day)),
         ("matchbook", lambda: _keyless("matchbook", day)),
         ("altenar_platform", lambda: _keyless("altenar_platform", day)),
+        ("smarkets", lambda: _keyless("smarkets", day)),
     ):
         note = ""
         got: List[Dict[str, Any]] = []
@@ -570,7 +571,7 @@ def collect_live_all(target_date: Optional[str] = None) -> List[Dict[str, Any]]:
             rows.extend(got)
             if name == "kambi":
                 note = f"diag={KAMBI_DIAG}"
-            if name in {"bwin", "1xbet_platform", "matchbook", "altenar_platform"}:
+            if name in {"bwin", "1xbet_platform", "matchbook", "altenar_platform", "smarkets"}:
                 import netrattler_keyless_odds as _k
                 note = str({kk: vv for kk, vv in _k.KEYLESS_DIAG.items() if kk.startswith(name.split("_")[0][:4]) or kk.startswith("1x")})[:300]
             if name == "the_odds_api":

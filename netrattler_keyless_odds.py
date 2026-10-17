@@ -519,8 +519,125 @@ def collect_altenar_platform(target_date: str) -> List[Dict[str, Any]]:
         pass
     return rows
 
+
+# ------------------------------------------------------------------------ Smarkets
+# Public exchange API (no login, no key). Schema confirmed by
+# netrattler_smarkets_probe.py on 2026-10-17: quotes are order-book entries in
+# basis points of probability; the best OFFER is the price a backer can take,
+# so decimal back odds = 10000 / lowest offer price.
+SMARKETS_API = "https://api.smarkets.com/v3"
+SMARKETS_MARKETS = {
+    ("WINNER_3_WAY", None): ("1x2", {"HOME": "home", "DRAW": "draw", "AWAY": "away"}),
+    ("BTTS", None): ("btts", {"YES": "yes", "NO": "no"}),
+    ("OVER_UNDER", "2.5"): ("totals_2_5", {"OVER": "over_2_5", "UNDER": "under_2_5"}),
+    ("BTTS_FIRST_HALF", None): ("btts_ht", {"YES": "yes", "NO": "no"}),
+    ("FIRST_HALF_OVER_UNDER", "1.5"): ("totals_ht_1_5", {"OVER": "over_1_5", "UNDER": "under_1_5"}),
+}
+
+
+def _sm_market_key(m: Mapping[str, Any]):
+    mt = m.get("market_type") if isinstance(m.get("market_type"), dict) else {}
+    name, param = str(mt.get("name") or ""), mt.get("param")
+    if (name, None) in SMARKETS_MARKETS:
+        return SMARKETS_MARKETS[(name, None)]
+    return SMARKETS_MARKETS.get((name, str(param) if param is not None else None))
+
+
+def _sm_back_odds(quote: Mapping[str, Any]) -> Optional[float]:
+    offers = [o for o in (quote or {}).get("offers") or [] if isinstance(o, dict) and o.get("price")]
+    if not offers:
+        return None
+    best = min(int(o["price"]) for o in offers)
+    if best <= 0 or best >= 10000:
+        return None
+    return round(10000.0 / best, 3)
+
+
+def _sm_complete(market: str, by_sel: Mapping[str, float]) -> bool:
+    need = {"1x2": {"home", "draw", "away"}, "btts": {"yes", "no"}, "btts_ht": {"yes", "no"},
+            "totals_2_5": {"over_2_5", "under_2_5"}, "totals_ht_1_5": {"over_1_5", "under_1_5"}}[market]
+    if not need <= set(by_sel):
+        return False
+    overround = sum(1.0 / by_sel[s] for s in need)
+    return 0.98 <= overround <= 1.15  # thin/broken books are dropped, never "fixed"
+
+
+def collect_smarkets(target_date: str) -> List[Dict[str, Any]]:
+    rows: List[Dict[str, Any]] = []
+    events: List[Dict[str, Any]] = []
+    params = {"type": "football_match", "state": "upcoming", "limit": "50", "sort": "start_datetime,id"}
+    max_events = int(os.getenv("SMARKETS_MAX_EVENTS", "400"))
+    now = datetime.now(timezone.utc)
+    for _ in range(max_events // 50 + 1):
+        js, st = _get(f"{SMARKETS_API}/events/", params)
+        page = (js or {}).get("events") or []
+        for ev in page:
+            day = str(ev.get("start_date") or "")[:10]
+            try:
+                start = datetime.fromisoformat(str(ev.get("start_datetime")).replace("Z", "+00:00"))
+            except Exception:
+                continue
+            if start <= now or not _in_window(day, target_date) or " vs " not in str(ev.get("name") or ""):
+                continue
+            events.append(ev)
+        nxt = ((js or {}).get("pagination") or {}).get("next_page")
+        if not page or not nxt or len(events) >= max_events:
+            break
+        from urllib.parse import parse_qsl
+        params = dict(parse_qsl(nxt.lstrip("?")))
+    events = events[:max_events]
+    n_markets = 0
+    for i in range(0, len(events), 20):
+        batch = events[i:i + 20]
+        ids = ",".join(str(e["id"]) for e in batch)
+        mj, _ = _get(f"{SMARKETS_API}/events/{ids}/markets/")
+        wanted = {}
+        for m in (mj or {}).get("markets") or []:
+            spec = _sm_market_key(m)
+            if spec and m.get("state") == "open":
+                wanted[str(m["id"])] = (m, spec)
+        if not wanted:
+            continue
+        mids = list(wanted)
+        for j in range(0, len(mids), 40):
+            chunk = ",".join(mids[j:j + 40])
+            cj, _ = _get(f"{SMARKETS_API}/markets/{chunk}/contracts/")
+            qj, _ = _get(f"{SMARKETS_API}/markets/{chunk}/quotes/")
+            contracts = (cj or {}).get("contracts") or []
+            quotes = qj or {}
+            per_market: Dict[str, Dict[str, float]] = {}
+            for c in contracts:
+                mid = str(c.get("market_id"))
+                if mid not in wanted:
+                    continue
+                ctype = str((c.get("contract_type") or {}).get("name") or "").upper()
+                sel = wanted[mid][1][1].get(ctype)
+                odds = _sm_back_odds(quotes.get(str(c.get("id"))) or {})
+                if sel and odds:
+                    per_market.setdefault(mid, {})[sel] = odds
+            ev_by_id = {str(e["id"]): e for e in batch}
+            for mid, by_sel in per_market.items():
+                m, (market, _sels) = wanted[mid]
+                if not _sm_complete(market, by_sel):
+                    continue
+                ev = ev_by_id.get(str(m.get("event_id")))
+                if not ev:
+                    continue
+                home, away = [x.strip() for x in str(ev["name"]).split(" vs ", 1)]
+                n_markets += 1
+                for sel, odds in by_sel.items():
+                    line = 2.5 if market == "totals_2_5" else 1.5 if market == "totals_ht_1_5" else None
+                    row = _row(source="smarkets", bookmaker="smarkets_exchange", event_id=f"sm_{ev['id']}",
+                               league="", home=home, away=away, commence_time=ev.get("start_datetime"),
+                               market=market, selection=sel, odds=odds, line=line, raw={"platform": "exchange"})
+                    if row:
+                        rows.append(row)
+    KEYLESS_DIAG["smarkets"] = f"events={len(events)} markets={n_markets} rows={len(rows)}"
+    return rows
+
 COLLECTORS = (("bwin", collect_bwin), ("1xbet_platform", collect_1x_platform),
-              ("matchbook", collect_matchbook), ("altenar_platform", collect_altenar_platform))
+              ("matchbook", collect_matchbook), ("altenar_platform", collect_altenar_platform),
+              ("smarkets", collect_smarkets))
 
 
 if __name__ == "__main__":

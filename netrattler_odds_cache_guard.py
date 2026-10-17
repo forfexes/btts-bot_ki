@@ -38,7 +38,10 @@ MAX_AGE_HOURS = float(os.getenv("NETRATTLER_ODDS_CACHE_MAX_AGE_HOURS", "18"))
 # 1xBet raw numeric-coded offers are NOT generally safe for live tips. Only
 # complete 1X2 or OU2.5 markets independently corroborated at the same
 # fixture/date/selection can pass _corroborated_x1_rows below.
-LIVE_HISTORY_SOURCES = frozenset({"pinnacle", "kambi", "the_odds_api", "bwin"})
+# smarkets (public exchange API, 2026-10-17): back prices from the live order
+# book, only complete markets with a sane overround are stored (see
+# netrattler_keyless_odds.collect_smarkets). Adds independent HT coverage.
+LIVE_HISTORY_SOURCES = frozenset({"pinnacle", "kambi", "the_odds_api", "bwin", "smarkets"})
 # Numeric/flat-widget shadow sources: same strict never-auto-promote treatment.
 # Altenar (biahosted.com public widget, e.g. vegas.hu) only ever emits a
 # complete 1x2 / totals_2_5 / btts markets (GetEvents listing), each still
