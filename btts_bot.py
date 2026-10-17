@@ -25967,6 +25967,17 @@ def _ntr_ht_prob_plausible(prob_pct, odds):
         return False
 
 
+def _stage_diag(name: str) -> None:
+    """Timestamped stage marker in netrattler_card_diag (Actions logs are not readable here)."""
+    try:
+        if SUPABASE_URL and SUPABASE_KEY:
+            requests.post(f"{SUPABASE_URL}/rest/v1/netrattler_card_diag", timeout=6,
+                          headers={"apikey": SUPABASE_KEY, "Authorization": f"Bearer {SUPABASE_KEY}", "Content-Type": "application/json"},
+                          json={"info": {"probe": "stage", "name": name}})
+    except Exception:
+        pass
+
+
 def main():
     log("=" * 60)
     log("AI TIPP BOT - ALL-IN-ONE EDITION")
@@ -26098,6 +26109,7 @@ def main():
     _m42_sent_today = set()  # Dedup: martj42-Match nur einmal analysieren, nicht für jede intl. Liga
 
     # ── Pinnacle global laden ──
+    _stage_diag("main_start")
     log("📊 Pinnacle Matchups laden...")
     try:
         _PINNACLE_MATCHUPS = fetch_pinnacle_matchups()
@@ -26767,6 +26779,7 @@ def main():
         log(f"   • {MARKET_INFO[m]['name']}: {len(tips)}")
 
     log("════════════════════════════════════════")
+    _stage_diag("matches_analysed")
     if APIFOOTBALL_CALL_COUNTER > 0:
         log(f"📊 API-Football Calls verbraucht: {APIFOOTBALL_CALL_COUNTER}/{APIFOOTBALL_MAX_CALLS_PER_RUN}")
     _ntr_mark("after_league_loop")
@@ -27271,6 +27284,7 @@ def main():
     now_utc = datetime.now(timezone.utc)
     if now_utc.hour == 8:
         send_daily_report()
+        _stage_diag("report_sent")
         log("📊 Daily Report gesendet!")
 
     log("⚡ Duplikat-Zusammenfassung: " + ", ".join(f"{k}={v}" for k, v in sorted(_DUP_LOG_COUNTS.items())) if _DUP_LOG_COUNTS else "⚡ Duplikat-Zusammenfassung: keine")
