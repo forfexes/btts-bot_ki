@@ -1736,6 +1736,36 @@ def _settle_result_stat_market(leg: Dict[str, Any], result: Dict[str, Any], cate
     return status, f"{label} {value:g} · {op} {line:g}"
 
 
+_OBSERVED_STAT_COLUMNS = {
+    "shots": ("shots", "total_shots", "shot_total", "shot_attempts"),
+    "sot": ("sot", "shots_on_target", "shot_on_target", "on_target"),
+    "fouls": ("fouls_committed", "fouls", "fouls_made", "fc"),
+    "fouls_won": ("fouls_won", "fouls_drawn", "fouled", "fd"),
+    "tackles": ("tackles", "tackles_won", "total_tackles", "tackles_committed"),
+    "tackles_committed": ("tackles_committed", "tackles", "tackles_won", "total_tackles"),
+    "tackles_received": ("tackles_received", "times_tackled", "tackled"),
+    "yellow_cards": ("yellow_cards", "cards", "yc", "bookings"),
+    "goals": ("goals", "goal", "goals_scored"),
+    "assists": ("assists", "assist"),
+    "corners": ("corners", "corner_kicks"),
+    "saves": ("saves", "goalkeeper_saves", "keeper_saves"),
+}
+
+
+def _has_observed_player_stat(row: Dict[str, Any], category: str) -> bool:
+    """Missing stats are unknown, not 0; reported numerical zero is valid."""
+    key = {"score": "goals", "assist": "assists"}.get(category, category)
+    data = unpack(row)
+    columns = _OBSERVED_STAT_COLUMNS.get(key, ())
+    if any(data.get(col) not in (None, "") for col in columns):
+        return True
+    name = str(anyv(data, ["stat_name", "stat", "metric", "stat_type"], ""))
+    value = anyv(data, ["stat_value", "value", "statValue"], None)
+    recognized = _player_stat_category_name(name) if name else ""
+    aliases = {"tackles_committed": "tackles"}
+    return value not in (None, "") and recognized == aliases.get(key, key)
+
+
 def settle_player_market(leg: Dict[str, Any], stats: Sequence[Dict[str, Any]], result: Optional[Dict[str, Any]]) -> Tuple[str, str]:
     category = category_of(leg)
     text = market_text(leg)
@@ -1754,10 +1784,26 @@ def settle_player_market(leg: Dict[str, Any], stats: Sequence[Dict[str, Any]], r
     row = find_player_stat(leg, stats)
     if not row:
         return "pending", "Player-Stats fehlen"
-    values = player_stats_values(row)
+    played = anyv(unpack(row), ["minutes", "minutes_played"], None)
+    if played not in (None, "") and as_float(played, 0) <= 0:
+        return "pending", "Spielereinsatz nicht bestätigt"
     if category == "score_assist":
+        # One observed goal/assist suffices for WIN; a LOSS needs both stats.
+        has_goals = _has_observed_player_stat(row, "score")
+        has_assists = _has_observed_player_stat(row, "assist")
+        values = player_stats_values(row)
+        if not (has_goals or has_assists):
+            return "pending", "Player-Stats für Tor/Assist fehlen"
+        if values["goals"] + values["assists"] < max(1.0, line) and not (has_goals and has_assists):
+            return "pending", "Tor/Assist-Statistik unvollständig"
         value = values["goals"] + values["assists"]
         line = max(1.0, line)
+    elif not _has_observed_player_stat(row, category):
+        return "pending", f"Player-Stat {category or text} nicht verfügbar"
+    else:
+        values = player_stats_values(row)
+    if category == "score_assist":
+        pass  # already evaluated with partial-stat safeguards above
     elif category == "score":
         value = values["goals"]
         line = max(1.0, line)
