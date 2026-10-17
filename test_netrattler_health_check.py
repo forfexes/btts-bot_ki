@@ -3,6 +3,20 @@ from unittest.mock import patch, Mock
 import netrattler_health_check as health
 
 
+class GitHubWorkflowTests(unittest.TestCase):
+    @patch.object(health, 'GITHUB_TOKEN', 'test-token')
+    @patch.object(health.requests, 'get')
+    def test_latest_failed_run_alerts_even_after_success(self, get):
+        get.return_value = Mock(ok=True, json=lambda: {"workflow_runs": [
+            {"name": "NETRATTLER Offline Sandbox Hardtest", "created_at": "2026-10-17T14:00:00Z",
+             "status": "completed", "conclusion": "failure"},
+            {"name": "NETRATTLER Offline Sandbox Hardtest", "created_at": "2026-10-17T13:00:00Z",
+             "status": "completed", "conclusion": "success"},
+        ]})
+        issues = health.check_github()
+        self.assertTrue(any("letzter Lauf fehlgeschlagen" in issue for issue in issues))
+
+
 class HealthSourceTests(unittest.TestCase):
     @patch.object(health, 'SUPABASE_URL', '')
     @patch.object(health, 'SUPABASE_KEY', '')
