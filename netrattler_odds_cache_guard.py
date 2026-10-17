@@ -42,6 +42,7 @@ MAX_AGE_HOURS = float(os.getenv("NETRATTLER_ODDS_CACHE_MAX_AGE_HOURS", "18"))
 # book, only complete markets with a sane overround are stored (see
 # netrattler_keyless_odds.collect_smarkets). Adds independent HT coverage.
 LIVE_HISTORY_SOURCES = frozenset({"pinnacle", "kambi", "the_odds_api", "bwin", "smarkets"})
+EXCHANGE_SOURCES = frozenset({"smarkets"})
 # Numeric/flat-widget shadow sources: same strict never-auto-promote treatment.
 # Altenar (biahosted.com public widget, e.g. vegas.hu) only ever emits a
 # complete 1x2 / totals_2_5 / btts markets (GetEvents listing), each still
@@ -317,6 +318,18 @@ def best_observed_for_match(home: str, away: str, rows: Optional[Iterable[Mappin
     else:
         candidates = list(rows)
     verified_x1_ids = _corroborated_x1_rows(candidates)
+    # Exchange quotes (smarkets) may only win when another trusted bookmaker
+    # quotes the same field within the corroboration ratio; a lone thin-book
+    # exchange price must never set the "best" observed odds by itself.
+    _peer: Dict[str, List[float]] = {}
+    for _r in candidates:
+        _src = str(_r.get("source") or "").lower()
+        if _src in LIVE_HISTORY_SOURCES and _src not in EXCHANGE_SOURCES and _fresh(_r):
+            if _teams_match(_r.get("home_team"), home) and _teams_match(_r.get("away_team"), away):
+                _f = _field_for_row(_r)
+                _pp = _price(_r.get("odds"), 60.0)
+                if _f and _pp:
+                    _peer.setdefault(_f, []).append(_pp)
     for row in candidates:
         source_type = str(row.get("source") or "").lower()
         if source_type in X1_SHADOW_SOURCES:
@@ -333,6 +346,9 @@ def best_observed_for_match(home: str, away: str, rows: Optional[Iterable[Mappin
             continue
         p = _price(row.get("odds"), 60.0 if field == "btts_over25_yes" else 30.0)
         if p is None:
+            continue
+        if source_type in EXCHANGE_SOURCES and not any(
+                X1_CORROBORATION_RATIO_MIN <= p / q <= X1_CORROBORATION_RATIO_MAX for q in _peer.get(field, [])):
             continue
         if p > best.get(field, 0.0):
             best[field] = p

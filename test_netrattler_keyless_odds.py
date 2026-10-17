@@ -189,6 +189,19 @@ class SmarketsTests(unittest.TestCase):
         self.assertIn("smarkets", g.LIVE_HISTORY_SOURCES)
         self.assertIn("smarkets", dict(k.COLLECTORS))
 
+    def test_exchange_quote_needs_peer(self):
+        import netrattler_odds_cache_guard as g
+        from datetime import datetime, timezone
+        now = datetime.now(timezone.utc).isoformat()
+        d = now[:10]
+
+        def r(src, odds, market="1x2", sel="home"):
+            return {"source": src, "bookmaker": src, "home_team": "Persita", "away_team": "Bali", "match_date": d,
+                    "captured_date": d, "market": market, "selection": sel, "odds": odds, "raw": {"captured_at": now}}
+        self.assertEqual(g.best_observed_for_match("Persita", "Bali", [r("smarkets", 7.0), r("kambi", 4.91)])[0], {"home_win": 4.91})
+        self.assertEqual(g.best_observed_for_match("Persita", "Bali", [r("smarkets", 5.1), r("kambi", 4.91)])[0], {"home_win": 5.1})
+        self.assertEqual(g.best_observed_for_match("Persita", "Bali", [r("smarkets", 1.5, "btts_ht", "yes")])[0], {})
+
 
 if __name__ == "__main__":
     unittest.main()
