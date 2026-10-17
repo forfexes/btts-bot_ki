@@ -1629,6 +1629,7 @@ def persist_builder_pick(
     telegram_sent: bool = False,
     telegram_message_id: Any = None,
     telegram_chat_id: Any = None,
+    message_text: str = "",
 ) -> Optional[bool]:
     """Persist a builder; delivery is recorded only after Telegram confirms success."""
     if not supabase_url or not supabase_key:
@@ -1642,6 +1643,7 @@ def persist_builder_pick(
         payload = pick.to_row()
         if telegram_sent:
             payload["telegram_sent"] = True
+            payload["message_text"] = str(message_text or format_builder_message(pick))
             if telegram_message_id is not None and not isinstance(telegram_message_id, bool):
                 payload["telegram_msg_id"] = str(telegram_message_id)
             if telegram_chat_id is not None:
@@ -1708,13 +1710,14 @@ def run_builder_engine(
                 logger(f"MASTER BUILDER dedupe unavailable; send blocked: {pick.builder_id}")
             continue
         try:
-            send_result = send_message(format_builder_message(pick))
+            message_text = format_builder_message(pick)
+            send_result = send_message(message_text)
             if send_result is None or send_result is False or send_result == 0:
                 if logger:
                     logger(f"MASTER BUILDER send failed/no message_id: {pick.style} {pick.variant}")
                 continue
             telegram_message_id = None
-            telegram_chat_id = None
+            telegram_chat_id = (os.getenv("TELEGRAM_GROUP_BUILDER") or os.getenv("TELEGRAM_GROUP_PLAYER_PROPS") or os.getenv("TELEGRAM_GROUP_PROPS") or os.getenv("TELEGRAM_CHAT_ID") or None)
             if isinstance(send_result, dict):
                 # A Telegram HTTP response can be truthy even when ok=false.
                 payload = send_result.get("result", send_result)
@@ -1736,7 +1739,7 @@ def run_builder_engine(
             persisted = persist_builder_pick(
                 pick, supabase_url, supabase_key, check_existing=False,
                 telegram_sent=True, telegram_message_id=telegram_message_id,
-                telegram_chat_id=telegram_chat_id,
+                telegram_chat_id=telegram_chat_id, message_text=message_text,
             )
             sent += 1
             if logger:
