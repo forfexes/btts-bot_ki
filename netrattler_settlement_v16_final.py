@@ -1175,10 +1175,20 @@ def _category_flags(*texts: Any) -> frozenset:
     return frozenset(k for k, rx in _CATEGORY_RE.items() if rx.search(blob))
 
 
+_ABBR = (("los angeles", "la"), ("saint", "st"), ("sankt", "st"), ("utd", "united"), ("international", "intl"))
+
+
+def _abbr(x: Any) -> str:
+    t = " " + norm(x) + " "
+    for long, short in _ABBR:
+        t = t.replace(f" {long} ", f" {short} ")
+    return t.strip()
+
+
 def _contained_team_match(a: Any, b: Any) -> bool:
     """One normalized name's tokens are a subset of the other's ('Casertana FC' ~ 'Casertana',
     'SS Monopoli' ~ 'Monopoli', 'Wydad AC' ~ 'Wydad Casablanca'). Needs >=5 shared characters."""
-    ta, tb = set(norm(a).split()), set(norm(b).split())
+    ta, tb = set(_abbr(a).split()), set(_abbr(b).split())
     if not ta or not tb:
         return False
     small, big = (ta, tb) if len(ta) <= len(tb) else (tb, ta)

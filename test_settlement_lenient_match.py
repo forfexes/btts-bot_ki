@@ -72,5 +72,23 @@ class HalfTime(unittest.TestCase):
         self.assertEqual(mod.settle_score_market(self.TIP, {"home_score": 2, "away_score": 1, "raw": {}})[0], "pending")
 
 
+class AbbreviationTests(unittest.TestCase):
+    def test_la_galaxy(self):
+        res = [{"home_team": "Minnesota United FC", "away_team": "LA Galaxy", "match_date": "2026-09-19",
+                "home_score": 2, "away_score": 3, "source": "espn"}]
+        tip = {"match": "Minnesota United vs Los Angeles Galaxy", "league": "USA - Major League Soccer",
+               "date": "2026-09-19", "market": "btts", "tip": "YES"}
+        r = mod.find_result(tip, res)
+        self.assertIsNotNone(r)
+        self.assertEqual((r["home_score"], r["away_score"]), (2, 3))
+
+    def test_los_angeles_fc_not_galaxy(self):
+        res = [{"home_team": "Minnesota United FC", "away_team": "LA Galaxy", "match_date": "2026-09-19",
+                "home_score": 2, "away_score": 3, "source": "espn"}]
+        tip = {"match": "Minnesota United vs Los Angeles FC", "league": "USA - Major League Soccer",
+               "date": "2026-09-19", "market": "btts", "tip": "YES"}
+        self.assertIsNone(mod.find_result(tip, res))
+
+
 if __name__ == "__main__":
     unittest.main()
