@@ -124,6 +124,20 @@ class SettlementV21Tests(unittest.TestCase):
             self.assertFalse(mod.edit_original_tip(settlement))
             send_mock.assert_not_called()
 
+    def test_recovered_summary_preserves_scores_from_json_text(self):
+        import json
+        row = {
+            "status": "loss", "market_group": "over25", "profit": -1.0,
+            "match_result": json.dumps({
+                "home_score": 1, "away_score": 0,
+                "raw": {"home_score_ht": 0, "away_score_ht": 0},
+            }),
+        }
+        summary = mod.format_direct_summary(row)
+        self.assertIn("Full-Time Score: <b>1-0</b>", summary)
+        self.assertIn("Half-Time Score: <b>0-0</b>", summary)
+        self.assertIn("❌ X", summary)
+
     def test_rate_limited_edit_waits_for_telegram_and_retries(self):
         throttled = FakeResponse({"parameters": {"retry_after": 4}}, status=429)
         success = FakeResponse({"ok": True})
