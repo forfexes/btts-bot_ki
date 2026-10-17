@@ -9466,6 +9466,9 @@ def _fuzzy_game_log_rows(name: str, per_player: int = 30) -> list:
     abbreviations). Looks up the surname fragment, keeps ONLY rows whose folded full name equals
     the folded query - or whose surname matches and the first name is an initial/prefix match -
     and which belong to a single player (single team key), so two different players are never mixed."""
+    if "," in str(name or ""):
+        _l, _, _f = str(name).partition(",")
+        name = f"{_f.strip()} {_l.strip()}"
     folded = _fold_player_name(name)
     parts = folded.split()
     if len(parts) < 2:
@@ -21909,11 +21912,14 @@ def _ntr_enrich_prop_pool_with_player_ml(rows: list) -> dict:
         _supabase_game_log_stats([str(r.get("player") or "") for r in candidates])
     except Exception:
         pass
+    _unmatched_sample = []
     for row in candidates:
         player = str(row.get("player") or "").strip()
         avg_stats = get_supabase_player_avg_stats(player)
         if not avg_stats:
             stats["missing_stats"] += 1
+            if len(_unmatched_sample) < 12:
+                _unmatched_sample.append(player[:40])
             continue
 
         match = str(row.get("match") or "")
@@ -21973,6 +21979,7 @@ def _ntr_enrich_prop_pool_with_player_ml(rows: list) -> dict:
         row["player_context"] = context
         stats["enriched"] += 1
 
+    stats["unmatched_sample"] = _unmatched_sample
     return stats
 
 
@@ -27032,7 +27039,7 @@ def main():
                                          "matches": len(_pool_matches),
                                          "ge2": sum(1 for v in _pool_matches.values() if v >= 2),
                                          "ge3": sum(1 for v in _pool_matches.values() if v >= 3),
-                                         "player_ml": {k: _pml.get(k) for k in ("eligible", "enriched", "empirical", "models_loaded", "missing_stats", "required_models", "load_error")}}})
+                                         "player_ml": {k: _pml.get(k) for k in ("eligible", "enriched", "empirical", "models_loaded", "missing_stats", "required_models", "load_error", "unmatched_sample")}}})
         except Exception:
             pass
         if len(_builder_prop_pool) >= 3:

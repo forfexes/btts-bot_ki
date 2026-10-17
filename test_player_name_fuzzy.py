@@ -48,6 +48,18 @@ def test_different_first_name_not_matched():
     assert _with(rows, lambda: b._fuzzy_game_log_rows("Hans Wolf")) == []
 
 
+def test_flip_comma_name():
+    import netrattler_prop_sources as m
+    assert m.flip_comma_name("Gregoritsch, Michael") == "Michael Gregoritsch"
+    assert m.flip_comma_name("Michael Gregoritsch") == "Michael Gregoritsch"
+    assert m.flip_comma_name("") == ""
+
+
+def test_comma_name_fuzzy():
+    rows = _rows("Lasse Günther", "lasse günther|elversberg")
+    assert len(_with(rows, lambda: b._fuzzy_game_log_rows("Gunther, Lasse"))) == 5
+
+
 if __name__ == "__main__":
     for k, v in list(globals().items()):
         if k.startswith("test_"):

@@ -126,6 +126,17 @@ def _get_json(url: str, params: Optional[dict] = None, timeout: int = 6):
 # Gemeinsamer Kategorie-Mapper (quellen-unabhaengig).
 # Haelt die Kategorien synchron mit _SHARP_PLAYER_CATS_V31 im Builder.
 # ------------------------------------------------------------------
+def flip_comma_name(value: str) -> str:
+    """'Gregoritsch, Michael' -> 'Michael Gregoritsch' (Kambi lists surname first)."""
+    v = str(value or "").strip()
+    if "," in v:
+        last, _, first = v.partition(",")
+        last, first = last.strip(), first.strip()
+        if last and first and "," not in first:
+            return f"{first} {last}"
+    return v
+
+
 def _norm_name(value: str) -> str:
     return re.sub(r"[^a-z0-9]+", " ", str(value or "").lower()).strip()
 
@@ -287,7 +298,7 @@ def fetch_kambi_player_props(home: str, away: str, brand: str = "ub") -> List[Di
         if cat == "other":
             continue
         for oc in bo.get("outcomes") or []:
-            player = oc.get("participant") or oc.get("label") or ""
+            player = flip_comma_name(oc.get("participant") or oc.get("label") or "")
             if not player or str(oc.get("label", "")).lower() in {"under", "no"}:
                 continue
             try:
