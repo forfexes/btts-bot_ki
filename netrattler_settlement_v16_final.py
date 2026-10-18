@@ -857,6 +857,12 @@ def include_tip(row: Dict[str, Any]) -> bool:
 
 
 
+def confirmed_builder_delivery(row: Dict[str, Any]) -> bool:
+    """Only Telegram-confirmed builder messages count as actual published tips."""
+    data = unpack(row)
+    return data.get("telegram_sent") is True and str(data.get("telegram_msg_id") or "").isdigit()
+
+
 def load_tips() -> List[Dict[str, Any]]:
     output: List[Dict[str, Any]] = []
     start_day = (TODAY - timedelta(days=DAYS)).isoformat()
@@ -870,9 +876,15 @@ def load_tips() -> List[Dict[str, Any]]:
         rows = sb_get_paged(table, params, max_rows=LIMIT, quiet=True)
         if rows:
             log(f"Tip-Tabelle {table}: {len(rows)} Rows geladen (paged)")
+        skipped_unsent = 0
         for row in rows:
+            if table == "netrattler_builder_picks" and not confirmed_builder_delivery(row):
+                skipped_unsent += 1
+                continue
             if include_tip(row):
                 item = dict(row); item["_table"] = table; output.append(item)
+        if skipped_unsent:
+            log(f"Nicht publizierte Builder ignoriert ({table}): {skipped_unsent}")
     seen = set(); clean = []
     for row in output:
         key = (row.get("_table"), tip_id(row))
@@ -1237,8 +1249,9 @@ def load_player_stats(tips: Sequence[Dict[str, Any]]) -> List[Dict[str, Any]]:
                     log(f"Player Stats {table} {day}: raw={len(rows)} relevant={len(filtered)} players={len(players)}")
                     found_for_table = True
                     break
-            if found_for_table:
-                break
+            # Different sources may cover different players or markets.
+            # Continue through other measured data tables rather than stopping
+            # because a single player exists in the first source.
     # Final dedup keeps one merged player/match/day row.
     best: Dict[Tuple[str,str,str], Dict[str, Any]] = {}
     for row in output:
@@ -2033,6 +2046,9 @@ def summary(rows: Sequence[Dict[str, Any]], group: str, period: str, style: str 
     for row in dedup_history(rows):
         if group and row.get("market_group") != group:
             continue
+        if row.get("source_table") == "netrattler_builder_picks":
+            if not confirmed_builder_delivery(row.get("tip_payload") or {}):
+                continue
         if style and str(row.get("builder_style") or "") != style:
             continue
         if leg_count and as_int(row.get("leg_count")) != leg_count:
