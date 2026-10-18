@@ -996,7 +996,7 @@ def _player_photo(name, team=""):
     Photo failures must not affect the tip or invent a different player's face.
     """
     raw_name = str(name or "").strip()
-    clean_name = re.sub(r"\\s+Player['’]?s\\s*$", "", raw_name, flags=re.I).strip()
+    clean_name = re.sub(r"\s+Player['’]?s\s*$", "", raw_name, flags=re.I).strip()
     key = _norm(clean_name) + "|" + _norm(team)
     if not _norm(clean_name):
         return b""
