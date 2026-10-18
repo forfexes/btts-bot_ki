@@ -241,6 +241,22 @@ def normalize_prop_safe(row: Dict[str, Any]):
 builder.normalize_prop = normalize_prop_safe
 
 
+def _pin_btts_kind(desc):
+    """Classify a Pinnacle related-market description: 'plain' (BTTS yes/no), 'combo' (BTTS & Over 2.5) or None.
+    'BTTS & Home win', 'BTTS & Over 3.5', half/team variants are different markets with far higher prices."""
+    d = str(desc or "").lower()
+    if not ("both teams to score" in d or "btts" in d):
+        return None
+    combo = ("over 2.5" in d or "over 2,5" in d or "2.5 goals" in d)
+    if combo:
+        return None if any(w in d for w in ("win", "draw", "result", "3.5", "1.5", "4.5", "half")) else "combo"
+    d = d.replace("1st half", "").replace("first half", "")
+    if any(w in d for w in ("&", " and ", "+", "result", "win", "draw", "double chance", "total", "goals", "corner",
+                            "card", "first", "second", "either", "home", "away", "team to score", "half")):
+        return None
+    return "plain"
+
+
 def _install_pinnacle_guard(bot) -> None:
     """Replace the buggy direct Pinnacle reader that treated American odds as decimal."""
     def fetch_pinnacle_match_odds_safe(match_id: int):
@@ -295,10 +311,10 @@ def _install_pinnacle_guard(bot) -> None:
                 if r2.ok:
                     for sub in r2.json() or []:
                         desc = str((sub.get("special") or {}).get("description") or sub.get("description") or "").lower()
-                        is_btts = "both teams to score" in desc or "btts" in desc
-                        is_combo = is_btts and ("over 2.5" in desc or "over 2,5" in desc or "2.5 goals" in desc)
-                        if not is_btts:
+                        _kind = _pin_btts_kind(desc)
+                        if _kind is None:
                             continue
+                        is_combo = _kind == "combo"
                         sub_id = sub.get("id")
                         if not sub_id:
                             continue
@@ -313,7 +329,7 @@ def _install_pinnacle_guard(bot) -> None:
                             pp = int(m.get("period") or 0)
                             for p in m.get("prices") or []:
                                 designation = str(p.get("designation") or "").lower()
-                                if designation not in {"yes", "over", "home"} and "yes" not in designation:
+                                if designation not in {"yes", "home"} and "yes" not in designation:
                                     continue
                                 observed = _pinnacle_decimal(p.get("price"))
                                 if observed <= 1:

@@ -24545,6 +24545,22 @@ def fetch_pinnacle_matchups() -> List[Dict]:
         return []
 
 
+def _pin_btts_kind(desc):
+    """Classify a Pinnacle related-market description: 'plain' (BTTS yes/no), 'combo' (BTTS & Over 2.5) or None.
+    'BTTS & Home win', 'BTTS & Over 3.5', half/team variants are different markets with far higher prices."""
+    d = str(desc or "").lower()
+    if not ("both teams to score" in d or "btts" in d):
+        return None
+    combo = ("over 2.5" in d or "over 2,5" in d or "2.5 goals" in d)
+    if combo:
+        return None if any(w in d for w in ("win", "draw", "result", "3.5", "1.5", "4.5", "half")) else "combo"
+    d = d.replace("1st half", "").replace("first half", "")
+    if any(w in d for w in ("&", " and ", "+", "result", "win", "draw", "double chance", "total", "goals", "corner",
+                            "card", "first", "second", "either", "home", "away", "team to score", "half")):
+        return None
+    return "plain"
+
+
 def fetch_pinnacle_match_odds(match_id: int) -> Optional[Dict]:
     """Holt alle Quoten für ein einzelnes Pinnacle-Match."""
     cache_key = f"odds_{match_id}"
@@ -24598,19 +24614,10 @@ def fetch_pinnacle_match_odds(match_id: int) -> Optional[Dict]:
             if r2.ok:
                 for sub in r2.json():
                     desc = str((sub.get("special") or {}).get("description") or sub.get("description") or "").lower()
-                    is_btts = "both teams to score" in desc or "btts" in desc
-                    is_combo = is_btts and ("over 2.5" in desc or "over 2,5" in desc or "2.5 goals" in desc)
-                    if not is_btts:
+                    _kind = _pin_btts_kind(desc)
+                    if _kind is None:
                         continue
-                    # Only the PLAIN BTTS market is btts_yes. "BTTS & Home win", "BTTS & Over 3.5",
-                    # half-time/team variants etc. are different markets with much higher prices.
-                    _mixed = any(w in desc for w in ("&", " and ", "+", "result", "win", "draw", "double chance",
-                                                     "total", "goals", "corner", "card", "first", "second", "either",
-                                                     "home", "away", "team to score"))
-                    if _mixed and not is_combo:
-                        continue
-                    if is_combo and any(w in desc for w in ("win", "draw", "result", "3.5", "1.5", "4.5", "half")):
-                        continue
+                    is_combo = _kind == "combo"
                     sub_id = sub.get("id")
                     if not sub_id:
                         continue
@@ -24623,7 +24630,7 @@ def fetch_pinnacle_match_odds(match_id: int) -> Optional[Dict]:
                     for m in rs.json():
                         for p in m.get("prices", []):
                             designation = str(p.get("designation", "")).lower()
-                            if designation != "yes":
+                            if designation not in {"yes", "home"} and "yes" not in designation:
                                 continue
                             try:
                                 observed = round(float(p.get("price") or 0), 2)

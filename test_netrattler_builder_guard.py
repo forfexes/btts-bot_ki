@@ -207,3 +207,48 @@ def main():
 
 if __name__ == "__main__":
     main()
+
+
+class _BttsRequests:
+    """Related-market list with plain BTTS plus bogus mixed markets (real prices differ hugely)."""
+    SUBS = {
+        1: "Both Teams To Score",
+        2: "Both Teams To Score & Home Win",
+        3: "Both Teams To Score & Over 2.5 Goals",
+        4: "Both Teams To Score 1st Half",
+        5: "Both Teams To Score & Over 3.5 Goals",
+    }
+    PRICES = {1: -120, 2: 450, 3: 130, 4: 300, 5: 600}
+
+    def get(self, url, **kwargs):
+        if url.endswith("/markets/related/straight"):
+            return _FakeResponse([])
+        if url.endswith("/related"):
+            return _FakeResponse([{"id": i, "special": {"description": d}} for i, d in self.SUBS.items()])
+        for i in self.SUBS:
+            if url.endswith("/" + str(i)) or ("/" + str(i) + "/") in url:
+                return _FakeResponse([{"period": 1 if i == 4 else 0, "prices": [
+                    {"designation": "yes", "price": self.PRICES[i]},
+                    {"designation": "no", "price": -150}]}])
+        return _FakeResponse([], ok=False)
+
+
+def test_pinnacle_btts_only_plain_market():
+    assert guard._pin_btts_kind("Both Teams To Score") == "plain"
+    assert guard._pin_btts_kind("Both Teams To Score & Home Win") is None
+    assert guard._pin_btts_kind("Both Teams To Score & Over 3.5 Goals") is None
+    assert guard._pin_btts_kind("Both Teams To Score & Over 2.5 Goals") == "combo"
+    cache = {}
+    fake = SimpleNamespace(
+        _PIN_ODDS_CACHE=cache,
+        _cache_get=lambda c, k: c.get(k),
+        _cache_set=lambda c, k, v: c.__setitem__(k, v),
+        requests=_BttsRequests(),
+        PINNACLE_BASE="https://pinnacle.test",
+        PINNACLE_HEADERS={},
+        filter_tips_legacy_safe=lambda tips, market="btts", odds_data=None: list(tips),
+    )
+    guard._install_pinnacle_guard(fake)
+    odds = fake.fetch_pinnacle_match_odds(77) or {}
+    if odds.get("btts_yes") is not None:
+        assert abs(odds["btts_yes"] - 1.8333) < 1e-3
