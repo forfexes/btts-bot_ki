@@ -8113,7 +8113,7 @@ def send_top_tips(tips_by_market, target_date):
 # ============================================================
 
 _EMP_RATES = None
-_EMP_MARKETS = ("1x2", "btts", "over25")
+_EMP_MARKETS = ("1x2", "btts", "over25", "btts_ht", "over15_ht")
 _EMP_K = float(os.getenv("NETRATTLER_EMP_PRIOR_K", "40"))
 
 
