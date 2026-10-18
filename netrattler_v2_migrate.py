@@ -50,34 +50,51 @@ def src_count(t):
     r = requests.get(f"{SRC_URL}/rest/v1/{t}?select=*&limit=1", headers=H({"Prefer": "count=exact", "Range": "0-0"}), timeout=60)
     return int(r.headers.get("content-range", "*/0").split("/")[-1])
 
+def _parse_dsn(dsn):
+    """Manual parse (passwords may contain [ ] @ etc.). Returns (user, password, host, port, db) or None."""
+    import re
+    m = re.match(r"^postgres(?:ql)?://([^:]+):(.*)@([^@/]+?)(?::(\d+))?/([^?]*)", dsn.strip())
+    if not m:
+        return None
+    user, pw, host, port, db = m.groups()
+    if pw.startswith("[") and pw.endswith("]"):  # placeholder brackets copied by mistake
+        pw = pw[1:-1]
+    return user, pw, host, port or "5432", db or "postgres"
+
+
 def _pooler_variants(dsn):
-    """Direct host db.<ref>.supabase.co is IPv6-only (unreachable from GitHub runners): try the IPv4 session pooler."""
-    from urllib.parse import urlsplit, urlunsplit, quote
-    u = urlsplit(dsn)
-    host = u.hostname or ""
-    if not (host.startswith("db.") and host.endswith(".supabase.co")):
+    p = _parse_dsn(dsn)
+    if not p:
         return []
-    ref = host.split(".")[1]
-    user = u.username or "postgres"
-    if "." not in user:
-        user = f"{user}.{ref}"
-    pw = quote(u.password or "", safe="")
-    region = os.environ.get("V2_REGION", "eu-west-2")
+    user, pw, host, port, db = p
     out = []
-    for pre in ("aws-0", "aws-1"):
-        out.append(urlunsplit((u.scheme, f"{user}:{pw}@{pre}-{region}.pooler.supabase.com:5432", u.path or "/postgres", "", "")))
+    if host.startswith("db.") and host.endswith(".supabase.co"):
+        ref = host.split(".")[1]
+        if "." not in user:
+            user = f"{user}.{ref}"
+        region = os.environ.get("V2_REGION", "eu-west-2")
+        for pre in ("aws-0", "aws-1"):
+            out.append(dict(user=user, password=pw, host=f"{pre}-{region}.pooler.supabase.com", port=5432, dbname=db))
     return out
 
 
 def dst():
     import psycopg2
+    p = _parse_dsn(DST_DSN)
+    cands = []
+    if p:
+        user, pw, host, port, db = p
+        cands.append(dict(user=user, password=pw, host=host, port=int(port), dbname=db))
+    cands += _pooler_variants(DST_DSN)
     last = None
-    for dsn in [DST_DSN] + _pooler_variants(DST_DSN):
+    for kw in cands:
         try:
-            return psycopg2.connect(dsn, connect_timeout=20)
+            return psycopg2.connect(connect_timeout=20, sslmode="require", **kw)
         except Exception as e:
             last = e
+            print("connect attempt failed:", kw.get("host"), type(e).__name__)
     raise last
+
 
 def main():
     print("secrets present: src_url=%s src_key=%s v2_dsn=%s" % (bool(SRC_URL), bool(SRC_KEY), bool(DST_DSN)))
