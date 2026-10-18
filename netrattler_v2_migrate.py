@@ -173,6 +173,9 @@ def main():
         for t in TABLES:
             for stmt in DDL[t].split(";"):
                 if stmt.strip(): cur.execute(stmt)
+            cur.execute(f"alter table {t} enable row level security")
+            cur.execute(f"grant select, insert, update, delete on {t} to service_role")
+            cur.execute(f"revoke all on {t} from anon, authenticated")
             print("schema ok", t)
         c.commit(); return
     from psycopg2.extras import execute_values
