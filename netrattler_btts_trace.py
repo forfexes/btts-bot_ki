@@ -54,6 +54,15 @@ for home, away in TARGETS:
     except Exception as e:
         rec["pin_err"] = str(e)[:160]
     out["matches"].append(rec)
+try:
+    _u = os.environ["SUPABASE_URL"].rstrip("/"); _k = os.environ.get("SUPABASE_SERVICE_ROLE_KEY") or os.environ["SUPABASE_KEY"]
+    import netrattler_table_router as _rt
+    _rr = requests.get(f"{_u}/rest/v1/player_game_log?select=player_key&limit=1", headers={"apikey": _k, "Authorization": f"Bearer {_k}"}, timeout=30)
+    out["route_check"] = {"installed": _rt._INSTALLED, "routed_to_v2": _rr.url.startswith((os.getenv("V2_SUPABASE_URL") or "x").rstrip("/")), "status": _rr.status_code}
+    _rt2 = requests.get(f"{_u}/rest/v1/tips?select=id&limit=1", headers={"apikey": _k, "Authorization": f"Bearer {_k}"}, timeout=30)
+    out["route_check"]["tips_stays_main"] = _rt2.url.startswith(_u) and _rt2.ok
+except Exception as e:
+    out["route_check"] = {"err": str(e)[:120]}
 url = os.environ["SUPABASE_URL"].rstrip("/"); key = os.environ.get("SUPABASE_SERVICE_ROLE_KEY") or os.environ["SUPABASE_KEY"]
 requests.post(f"{url}/rest/v1/netrattler_card_diag", headers={"apikey": key, "Authorization": f"Bearer {key}", "Content-Type": "application/json", "Prefer": "return=minimal"},
               data=json.dumps({"info": out}, default=str), timeout=30)
