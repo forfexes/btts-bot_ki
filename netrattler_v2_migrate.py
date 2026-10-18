@@ -50,9 +50,34 @@ def src_count(t):
     r = requests.get(f"{SRC_URL}/rest/v1/{t}?select=*&limit=1", headers=H({"Prefer": "count=exact", "Range": "0-0"}), timeout=60)
     return int(r.headers.get("content-range", "*/0").split("/")[-1])
 
+def _pooler_variants(dsn):
+    """Direct host db.<ref>.supabase.co is IPv6-only (unreachable from GitHub runners): try the IPv4 session pooler."""
+    from urllib.parse import urlsplit, urlunsplit, quote
+    u = urlsplit(dsn)
+    host = u.hostname or ""
+    if not (host.startswith("db.") and host.endswith(".supabase.co")):
+        return []
+    ref = host.split(".")[1]
+    user = u.username or "postgres"
+    if "." not in user:
+        user = f"{user}.{ref}"
+    pw = quote(u.password or "", safe="")
+    region = os.environ.get("V2_REGION", "eu-west-2")
+    out = []
+    for pre in ("aws-0", "aws-1"):
+        out.append(urlunsplit((u.scheme, f"{user}:{pw}@{pre}-{region}.pooler.supabase.com:5432", u.path or "/postgres", "", "")))
+    return out
+
+
 def dst():
     import psycopg2
-    return psycopg2.connect(DST_DSN, connect_timeout=30)
+    last = None
+    for dsn in [DST_DSN] + _pooler_variants(DST_DSN):
+        try:
+            return psycopg2.connect(dsn, connect_timeout=20)
+        except Exception as e:
+            last = e
+    raise last
 
 def main():
     print("secrets present: src_url=%s src_key=%s v2_dsn=%s" % (bool(SRC_URL), bool(SRC_KEY), bool(DST_DSN)))
