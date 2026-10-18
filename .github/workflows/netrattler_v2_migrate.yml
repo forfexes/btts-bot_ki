@@ -29,6 +29,8 @@ jobs:
           SUPABASE_SERVICE_ROLE_KEY: ${{ secrets.SUPABASE_SERVICE_ROLE_KEY }}
           SUPABASE_KEY: ${{ secrets.SUPABASE_KEY }}
           V2_DATABASE_URL: ${{ secrets.V2_DATABASE_URL }}
+          V2_SUPABASE_URL: ${{ secrets.V2_SUPABASE_URL }}
+          V2_SUPABASE_SERVICE_KEY: ${{ secrets.V2_SUPABASE_SERVICE_KEY }}
           MODE: ${{ github.event.inputs.mode }}
           TABLES: ${{ github.event.inputs.tables }}
           START_OFFSET: ${{ github.event.inputs.start_offset }}

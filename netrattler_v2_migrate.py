@@ -8,6 +8,9 @@ import requests
 SRC_URL = os.environ.get("SUPABASE_URL", "").rstrip("/")
 SRC_KEY = os.environ.get("SUPABASE_SERVICE_ROLE_KEY") or os.environ.get("SUPABASE_KEY", "")
 DST_DSN = os.environ.get("V2_DATABASE_URL", "")
+for _k in ("V2_SUPABASE_URL", "V2_SUPABASE_SERVICE_KEY"):  # tolerate a postgres URI saved under another V2 secret name
+    if not DST_DSN.startswith("postgres") and os.environ.get(_k, "").startswith("postgres"):
+        DST_DSN = os.environ[_k]
 MODE = os.environ.get("MODE", "check")
 TABLES = [t for t in os.environ.get("TABLES", "player_game_log,player_match_stats,odds_history").split(",") if t]
 PAGE = 1000
