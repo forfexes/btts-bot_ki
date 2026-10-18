@@ -395,6 +395,97 @@ class SettlementV21Tests(unittest.TestCase):
         self.assertEqual(perf["stake"], 0)
         self.assertEqual(perf["profit"], 0)
 
+    def test_only_confirmed_sent_builders_are_loaded_as_tips(self):
+        base = {"market_group": "builder", "match_date": mod.TODAY_S,
+                "status": "pending", "legs": [{"player": "A", "match": "A vs B"}]}
+        rows = [
+            dict(base, builder_id="actual", telegram_sent=True,
+                 telegram_msg_id="1234"),
+            dict(base, builder_id="dryrun", telegram_sent=False,
+                 telegram_msg_id=""),
+            dict(base, builder_id="no-receipt", telegram_sent=True,
+                 telegram_msg_id=""),
+        ]
+        with patch.object(mod, "TIP_TABLES", ["netrattler_builder_picks"]), \
+             patch.object(mod, "sb_get_paged", return_value=rows):
+            received = mod.load_tips()
+        self.assertEqual([r["builder_id"] for r in received], ["actual"])
+
+    def test_historical_unsent_builders_do_not_distort_roi(self):
+        base = {"source_table": "netrattler_builder_picks",
+                "market_group": "builder", "status": "loss",
+                "tip_date": mod.TODAY_S, "odds": 2.0,
+                "stake": 1.0, "profit": -1.0}
+        unsent = dict(base, settlement_id="skip", tip_id="skip",
+                      tip_payload={"telegram_sent": False})
+        sent = dict(base, settlement_id="count", tip_id="count",
+                    tip_payload={"telegram_sent": True, "telegram_msg_id": "4567"})
+        report = mod.summary([unsent, sent], "builder", "today")
+        self.assertEqual(report["bets"], 1)
+        self.assertEqual(report["losses"], 1)
+        self.assertEqual(report["stake"], 1.0)
+
+    def test_player_stats_combines_two_observed_source_tables(self):
+        day = mod.TODAY_S
+        tip = {"market_group": "builder", "match_date": day,
+               "legs": [
+                   {"match": "A vs B", "player": "Player A",
+                    "category": "shots", "market": "Shots"},
+                   {"match": "A vs B", "player": "Player B",
+                    "category": "sot", "market": "SOT"},
+               ]}
+        records = {
+            "player_match_stats": [{"player_name": "Player A", "shots": 2}],
+            "player_game_log": [{"player_name": "Player B", "sot": 1}],
+        }
+        def get_rows(table, params, **_kwargs):
+            return [dict(r, match_date=day, home_team="A", away_team="B")
+                    for r in records.get(table, [])]
+        with patch.object(mod, "sb_get_paged", side_effect=get_rows):
+            values = mod.load_player_stats([tip])
+        self.assertEqual({r["player_name"] for r in values}, {"Player A", "Player B"})
+
+    def test_cross_match_legs_do_not_borrow_other_fixtures_score(self):
+        day = mod.TODAY_S
+        tip = {
+            "market_group": "builder", "match_date": day,
+            "match": "A vs B", "builder_id": "cross-123",
+            "total_odds": 2.5, "stake": 1.0,
+            "legs": [
+                {"market": "BTTS", "category": "btts",
+                 "match": "A vs B", "match_date": day},
+                {"market": "BTTS", "category": "btts",
+                 "match": "C vs D", "match_date": day},
+            ],
+        }
+        actual = {"home_team": "A", "away_team": "B",
+                  "home_score": 2, "away_score": 1,
+                  "match_date": day}
+        settled = mod.settle_tip(tip, [actual], [])
+        self.assertEqual(settled["status"], "pending")
+        self.assertEqual([r["status"] for r in settled["legs_payload"]],
+                         ["win", "pending"])
+
+    def test_photo_tip_edit_uses_caption_in_same_message(self):
+        original = "⚽ <b>A vs B</b>\n\n⸻⸻ <b>Builder Summary</b> ⸻⸻\n"
+        original += "❌ Miss  ❌ X\nLeg-Auswertung:\n" + "\n".join(
+            f"❌ Player {i} SOT — verified result" for i in range(1, 12))
+        not_text = FakeResponse({}, status=400)
+        not_text.text = '{"description":"Bad Request: there is no text in the message to edit"}'
+        ok = FakeResponse({"ok": True}, status=200)
+        with patch.object(mod, "TG_TOKEN", "test-token"), \
+             patch.dict(os.environ, {"SETTLEMENT_TG_EDIT_GAP_SEC": "0"}), \
+             patch.object(mod.requests, "post", side_effect=[not_text, ok]) as post:
+            self.assertTrue(mod.telegram_edit("-100321", 8765, original))
+        self.assertEqual(post.call_count, 2)
+        self.assertIn("/editMessageText", post.call_args_list[0].args[0])
+        self.assertIn("/editMessageCaption", post.call_args_list[1].args[0])
+        caption = post.call_args_list[1].kwargs["json"]["caption"]
+        self.assertLessEqual(len(caption), 1024)
+        self.assertIn("❌ X", caption)
+        self.assertIn("Leg-Auswertung:", caption)
+        self.assertNotIn("<b>", caption)
+
     def test_espn_parser(self):
         payload = {"events": [{"competitions": [{"status": {"type": {"completed": True, "state": "post"}}, "competitors": [
             {"homeAway": "home", "score": "3", "team": {"displayName": "Home"}},
