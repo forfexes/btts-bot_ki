@@ -991,50 +991,113 @@ _PLAYER_CACHE = {}
 
 
 def _player_photo(name, team=""):
-    """Public player image (TheSportsDB cutout/thumb, then Wikipedia). Presentation only."""
-    key = _norm(name)
-    if not key:
+    """Verified football-player headshot: FotMob, TheSportsDB, Wikipedia.
+
+    Photo failures must not affect the tip or invent a different player's face.
+    """
+    raw_name = str(name or "").strip()
+    clean_name = re.sub(r"\\s+Player['’]?s\\s*$", "", raw_name, flags=re.I).strip()
+    key = _norm(clean_name) + "|" + _norm(team)
+    if not _norm(clean_name):
         return b""
     if key in _PLAYER_CACHE:
         return _PLAYER_CACHE[key]
+
     urls = []
+    # FotMob's football-only search provides a verified player id and team.
     try:
-        r = requests.get("https://www.thesportsdb.com/api/v1/json/%s/searchplayers.php" %
-                         (os.getenv("THESPORTSDB_API_KEY", "3").strip() or "3"),
-                         params={"p": name}, timeout=6)
-        rows = (r.json() or {}).get("player") or [] if r.ok else []
-        rows = [x for x in rows if str(x.get("strSport") or "").lower() == "soccer"] or rows
-        exact = next((x for x in rows if _norm(x.get("strPlayer")) == key), rows[0] if rows else None)
-        if exact:
-            for f in ("strCutout", "strThumb", "strRender"):
-                if exact.get(f):
-                    urls.append(str(exact[f]))
+        resp = requests.get(
+            "https://www.fotmob.com/api/data/search/suggest",
+            params={"term": clean_name, "hits": 15},
+            headers={"User-Agent": "Mozilla/5.0 (NETRATTLER player image fallback)"},
+            timeout=6,
+        )
+        data = resp.json() if resp.ok else {}
+        data = data if isinstance(data, dict) else {}
+        players = data.get("players") or []
+        if not players:
+            for item in data.get("suggestions") or []:
+                if isinstance(item, dict) and item.get("type") == "player":
+                    players.append(item)
+        if not players:
+            for group in data.get("groups") or []:
+                if isinstance(group, dict):
+                    players.extend(p for p in group.get("suggestions") or []
+                                   if isinstance(p, dict) and p.get("type") == "player")
+        exact = [p for p in players if isinstance(p, dict)
+                 and _norm(p.get("name")) == _norm(clean_name)]
+        if team and len(exact) > 1:
+            matching = [
+                p for p in exact
+                if _norm(team) and (
+                    _norm(team) in _norm(p.get("info") or p.get("teamName") or "")
+                    or _norm(p.get("info") or p.get("teamName") or "") in _norm(team)
+                    and len(_norm(p.get("info") or p.get("teamName") or "")) > 4
+                )
+            ]
+            exact = matching
+        if len(exact) == 1 and str(exact[0].get("id") or "").isdigit():
+            urls.append("https://images.fotmob.com/image_resources/playerimages/"
+                        + str(exact[0]["id"]) + ".png")
+        else:
+            STATS["player_fotmob_ambiguous"] = STATS.get("player_fotmob_ambiguous", 0) + 1
+    except Exception:
+        STATS["player_fotmob_err"] = STATS.get("player_fotmob_err", 0) + 1
+
+    # TheSportsDB free v1 key is 123. Keep configurable premium credentials.
+    try:
+        resp = requests.get(
+            "https://www.thesportsdb.com/api/v1/json/%s/searchplayers.php" %
+            (os.getenv("THESPORTSDB_API_KEY", "123").strip() or "123"),
+            params={"p": clean_name}, timeout=6)
+        rows = ((resp.json() or {}).get("player") or []) if resp.ok else []
+        soccer = [p for p in rows if isinstance(p, dict)
+                  and str(p.get("strSport") or "").lower() == "soccer"
+                  and _norm(p.get("strPlayer")) == _norm(clean_name)]
+        if team and len(soccer) > 1:
+            soccer = [p for p in soccer if _norm(team) in _norm(p.get("strTeam"))]
+        if len(soccer) == 1:
+            urls.extend(str(soccer[0][k]) for k in ("strCutout", "strThumb", "strRender")
+                        if soccer[0].get(k))
     except Exception:
         STATS["player_tsdb_err"] = STATS.get("player_tsdb_err", 0) + 1
     try:
-        r = requests.get(
+        resp = requests.get(
             "https://en.wikipedia.org/w/api.php",
-            params={"action": "query", "generator": "search", "gsrsearch": f"{name} footballer",
-                    "gsrlimit": 1, "prop": "pageimages", "piprop": "thumbnail", "pithumbsize": 400,
-                    "format": "json"},
-            headers={"User-Agent": "NETRATTLER-cards/1.0 (match card player image)"}, timeout=6)
-        for page in (((r.json() or {}).get("query") or {}).get("pages") or {}).values():
-            u = str((page.get("thumbnail") or {}).get("source") or "")
-            if u:
-                urls.append(u)
+            params={"action": "query", "generator": "search",
+                    "gsrsearch": f'"{clean_name}" footballer',
+                    "gsrlimit": 1, "prop": "pageimages", "piprop": "thumbnail",
+                    "pithumbsize": 400, "format": "json"},
+            headers={"User-Agent": "NETRATTLER-cards/1.0 (soccer player portrait)"},
+            timeout=6)
+        for page in (((resp.json() or {}).get("query") or {}).get("pages") or {}).values():
+            title = str(page.get("title") or "")
+            if clean_name.split()[0].lower() not in title.lower():
+                continue
+            url = str((page.get("thumbnail") or {}).get("source") or "")
+            if url:
+                urls.append(url)
     except Exception:
         STATS["player_wiki_err"] = STATS.get("player_wiki_err", 0) + 1
+
     payload = b""
-    for u in urls:
+    for url in dict.fromkeys(urls):
         try:
-            r = requests.get(u, timeout=8)
-            if r.ok and r.content:
-                payload = r.content
-                break
+            resp = requests.get(url, timeout=7)
+            if not resp.ok or not resp.content or len(resp.content) > 8_000_000:
+                continue
+            # A 200 HTML error/placeholder must not be pasted as a player face.
+            from PIL import Image
+            with Image.open(io.BytesIO(resp.content)) as parsed:
+                parsed.verify()
+            payload = resp.content
+            if "fotmob.com" in url:
+                STATS["player_fotmob_ok"] = STATS.get("player_fotmob_ok", 0) + 1
+            break
         except Exception:
             continue
-    STATS["player_photo_ok" if payload else "player_photo_missing"] = \
-        STATS.get("player_photo_ok" if payload else "player_photo_missing", 0) + 1
+    flag = "player_photo_ok" if payload else "player_photo_missing"
+    STATS[flag] = STATS.get(flag, 0) + 1
     _PLAYER_CACHE[key] = payload
     return payload
 
