@@ -2,9 +2,19 @@ name: NETRATTLER Settlement Final V25 MULTISOURCE
 
 on:
   workflow_dispatch:
+  # Changing the settlement workflow triggers one guarded production
+  # verification. Ordinary code commits do NOT spam live Telegram groups.
+  push:
+    branches: [main]
+    paths:
+      - '.github/workflows/netrattler_settlement_v16_final.yml'
   schedule:
     - cron: "20 13 * * *"
     - cron: "20 23 * * *"
+
+concurrency:
+  group: netrattler-prod-settlement
+  cancel-in-progress: false
 
 jobs:
   settlement:
@@ -70,6 +80,10 @@ jobs:
           RESULT_ENRICH_MAX_DETAILS: "120"
           RESULT_ENRICH_TIMEOUT: "7"
           SETTLEMENT_ALLOW_SEPARATE_RESULT_UPDATE: "false"
+          # Retry 429 edits with throttling, then restore missed original posts.
+          SETTLEMENT_TG_EDIT_GAP_SEC: "1.5"
+          SETTLEMENT_TG_REPLAY_DAYS: "4"
+          SETTLEMENT_TG_REPLAY_MAX: "50"
         run: python netrattler_settlement_runner.py
       - name: Learn immediately from newly settled picks
         if: success()
