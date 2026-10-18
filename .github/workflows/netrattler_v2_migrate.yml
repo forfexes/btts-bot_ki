@@ -1,0 +1,36 @@
+name: NETRATTLER V2 migrate (copy only)
+on:
+  workflow_dispatch:
+    inputs:
+      mode:
+        description: check | schema | copy | verify
+        default: check
+      tables:
+        description: comma list
+        default: player_game_log,player_match_stats,odds_history
+      start_offset:
+        default: "0"
+concurrency:
+  group: netrattler-v2-migrate
+  cancel-in-progress: false
+jobs:
+  migrate:
+    runs-on: ubuntu-latest
+    timeout-minutes: 40
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+      - run: pip install requests psycopg2-binary
+      - name: Run
+        env:
+          SUPABASE_URL: ${{ secrets.SUPABASE_URL }}
+          SUPABASE_SERVICE_ROLE_KEY: ${{ secrets.SUPABASE_SERVICE_ROLE_KEY }}
+          SUPABASE_KEY: ${{ secrets.SUPABASE_KEY }}
+          V2_DATABASE_URL: ${{ secrets.V2_DATABASE_URL }}
+          MODE: ${{ github.event.inputs.mode }}
+          TABLES: ${{ github.event.inputs.tables }}
+          START_OFFSET: ${{ github.event.inputs.start_offset }}
+          MAX_SECONDS: "1800"
+        run: python netrattler_v2_migrate.py
