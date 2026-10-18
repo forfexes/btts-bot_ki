@@ -38,3 +38,10 @@ jobs:
           BETFAIR_SESSION_TOKEN: ${{ secrets.BETFAIR_SESSION_TOKEN }}
           PINNACLE_GUEST_KEY: ${{ secrets.PINNACLE_GUEST_KEY }}
         run: python ${{ github.event.inputs.script || 'netrattler_source_sweep.py' }}
+
+# Route player tables to the archive project (V2); see netrattler_table_router.py
+env:
+  PYTHONPATH: ${{ github.workspace }}
+  NETRATTLER_ROUTE_TABLES: ""
+  V2_SUPABASE_URL: ${{ secrets.V2_SUPABASE_URL }}
+  V2_SUPABASE_SERVICE_KEY: ${{ secrets.V2_SUPABASE_SERVICE_KEY }}

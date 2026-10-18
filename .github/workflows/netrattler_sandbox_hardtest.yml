@@ -79,3 +79,10 @@ jobs:
             netrattler-source-tests.log
           if-no-files-found: warn
           retention-days: 7
+
+# Route player tables to the archive project (V2); see netrattler_table_router.py
+env:
+  PYTHONPATH: ${{ github.workspace }}
+  NETRATTLER_ROUTE_TABLES: ""
+  V2_SUPABASE_URL: ${{ secrets.V2_SUPABASE_URL }}
+  V2_SUPABASE_SERVICE_KEY: ${{ secrets.V2_SUPABASE_SERVICE_KEY }}

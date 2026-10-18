@@ -27,3 +27,10 @@ jobs:
           TRACE_MATCHES: ${{ github.event.inputs.matches }}
           TELEGRAM_BOT_TOKEN: ""
         run: python netrattler_btts_trace.py
+
+# Route player tables to the archive project (V2); see netrattler_table_router.py
+env:
+  PYTHONPATH: ${{ github.workspace }}
+  NETRATTLER_ROUTE_TABLES: ""
+  V2_SUPABASE_URL: ${{ secrets.V2_SUPABASE_URL }}
+  V2_SUPABASE_SERVICE_KEY: ${{ secrets.V2_SUPABASE_SERVICE_KEY }}

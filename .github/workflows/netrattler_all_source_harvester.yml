@@ -62,3 +62,10 @@ jobs:
             netrattler_source_probe.json
             netrattler_public_source_summary.json
           if-no-files-found: ignore
+
+# Route player tables to the archive project (V2); see netrattler_table_router.py
+env:
+  PYTHONPATH: ${{ github.workspace }}
+  NETRATTLER_ROUTE_TABLES: ""
+  V2_SUPABASE_URL: ${{ secrets.V2_SUPABASE_URL }}
+  V2_SUPABASE_SERVICE_KEY: ${{ secrets.V2_SUPABASE_SERVICE_KEY }}
