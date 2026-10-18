@@ -19,6 +19,7 @@ Wesentliche Fixes:
 from __future__ import annotations
 
 import hashlib
+import html
 import json
 import math
 import os
@@ -404,6 +405,33 @@ def telegram(chat_id: str, text: str) -> bool:
 _EDIT_LAST_BY_CHAT: Dict[str, float] = {}
 
 
+def _photo_caption_from_settled_text(text: str) -> str:
+    """Plain-text caption fallback, within Telegram's 1024-char media limit.
+
+    Keep the original game identification plus V/X, score, profit and as many
+    individual leg results as fit. Plain text cannot contain broken HTML tags.
+    """
+    raw_original, marker, summary = str(text).partition("\n\n⸻⸻")
+    plain = lambda s: html.unescape(re.sub(r"<[^>]*>", "", s)).strip()
+    prefix = plain(raw_original)
+    if not marker:
+        return prefix[:1010]
+    summary = "⸻⸻" + plain(summary)
+    lines = summary.splitlines()
+    try:
+        leg_start = next(i for i, line in enumerate(lines) if "Leg-Auswertung:" in line)
+    except StopIteration:
+        leg_start = len(lines)
+    head = "\n".join(lines[:leg_start])
+    legs = [line[:64] for line in lines[leg_start + 1:] if line.strip()]
+    if leg_start < len(lines):
+        head += "\nLeg-Auswertung:"
+    compact_summary = head + ("\n" + "\n".join(legs) if legs else "")
+    compact_summary = compact_summary[:790]
+    prefix = prefix[:max(0, 1005 - len(compact_summary))]
+    return (prefix + "\n\n" + compact_summary).strip()[:1024]
+
+
 def telegram_edit(chat_id: str, message_id: Any, text: str) -> bool:
     """Edit the same Telegram tip, respecting rate limits and retry_after."""
     if not TG_TOKEN or not chat_id or not message_id:
@@ -430,6 +458,21 @@ def telegram_edit(chat_id: str, message_id: Any, text: str) -> bool:
             if response.ok:
                 return True
             detail = str(response.text or "")
+            if response.status_code == 400 and "there is no text in the message to edit" in detail.lower():
+                # sendPhoto cards have captions, not text messages. Edit the
+                # same message_id instead of posting a duplicate result.
+                response = requests.post(
+                    f"https://api.telegram.org/bot{TG_TOKEN}/editMessageCaption",
+                    json={
+                        "chat_id": chat_id,
+                        "message_id": int(message_id),
+                        "caption": _photo_caption_from_settled_text(text),
+                    },
+                    timeout=20,
+                )
+                if response.ok:
+                    return True
+                detail = str(response.text or "")
             # Idempotent replay: Telegram's 400 means the original already carries this result.
             if response.status_code == 400 and "message is not modified" in detail.lower():
                 return True
@@ -1878,7 +1921,16 @@ def settle_tip(tip: Dict[str, Any], results: Sequence[Dict[str, Any]], player_st
         for leg in legs:
             merged = dict(tip)
             merged.update(leg)
-            leg_result = find_result(merged, results) or result
+            leg_result = find_result(merged, results)
+            if leg_result is None and result is not None:
+                # Never reuse the first match's result for a different
+                # Cross-Match leg, or a corner/card leg can be marked wrongly.
+                base_home, base_away, _ = match_parts(tip)
+                leg_home, leg_away, _ = match_parts(merged)
+                if (row_date(merged) == row_date(tip) and base_home and base_away
+                        and _strict_team_match(base_home, leg_home)
+                        and _strict_team_match(base_away, leg_away)):
+                    leg_result = result
             category = category_of(merged)
             if category or group == "builder":
                 status, reason = settle_player_market(merged, player_stats, leg_result)
