@@ -26485,6 +26485,10 @@ def main():
                         _gf["btts_has_odds"] = _gf.get("btts_has_odds", 0) + 1
                     if prob_b >= BTTS_MIN_PROB:
                         _gf["btts_prob_ok"] = _gf.get("btts_prob_ok", 0) + 1
+                    if prob_b >= BTTS_MIN_PROB and btts_yes:
+                        _gf["btts_odds_ok"] = _gf.get("btts_odds_ok", 0) + (1 if float(btts_yes) >= BTTS_MIN_ODDS else 0)
+                        _gf["btts_edge_ok"] = _gf.get("btts_edge_ok", 0) + (1 if _is_market_value_bet(btts_yes, prob_b, BTTS_MIN_ODDS, BTTS_MIN_EDGE) else 0)
+                        _gf["btts_best_edge_pp"] = round(max(_gf.get("btts_best_edge_pp", -99), (prob_b / 100.0 - 1.0 / float(btts_yes)) * 100), 1)
                     _gf["btts_max_prob"] = max(_gf.get("btts_max_prob", 0), float(prob_b or 0))
                 except Exception:
                     pass
@@ -26533,6 +26537,18 @@ def main():
                     if combo_prob <= 0:
                         combo_prob = max(1.0, float(min(prob_b, prob_o) - 5))
                     combo_prob = max(1.0, min(95.0, combo_prob))
+                    try:
+                        _gf = globals().setdefault("_GROUP_FUNNEL", {})
+                        _gf["combo_evaluated"] = _gf.get("combo_evaluated", 0) + 1
+                        if combo_odds > 1:
+                            _gf["combo_has_odds"] = _gf.get("combo_has_odds", 0) + 1
+                            if min(prob_b, prob_o) >= COMBO_COMPONENT_MIN_PROB:
+                                _gf["combo_components_ok"] = _gf.get("combo_components_ok", 0) + 1
+                                if combo_prob >= COMBO_MIN_PROB:
+                                    _gf["combo_prob_ok"] = _gf.get("combo_prob_ok", 0) + 1
+                                    _gf["combo_best_edge_pp"] = round(max(_gf.get("combo_best_edge_pp", -99), (combo_prob / 100.0 - 1.0 / combo_odds) * 100), 1)
+                    except Exception:
+                        pass
                     if _ntr_combo_candidate_ok(combo_odds, combo_prob, prob_b, prob_o):
                         tip_combo = {
                             "match": mn, "league": league_name or "Pinnacle",
