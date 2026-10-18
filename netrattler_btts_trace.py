@@ -10,8 +10,8 @@ cache_guard.install(bot)
 import netrattler_builder_guard as guard
 guard._install_pinnacle_guard(bot)
 
-TARGETS = [t.split("|") for t in (os.environ.get("TRACE_MATCHES") or
-    "Brighton|Crystal Palace,Udinese|Lecce,PEC Zwolle|Go Ahead Eagles,Fiorentina|Como,Angers|Marseille")).split(",")]
+_DEFAULT = "Brighton|Crystal Palace,Udinese|Lecce,PEC Zwolle|Go Ahead Eagles,Fiorentina|Como,Angers|Marseille"
+TARGETS = [t.split("|") for t in (os.environ.get("TRACE_MATCHES") or _DEFAULT).split(",") if "|" in t]
 out = {"probe": "btts_trace", "matches": []}
 try:
     mus = bot.fetch_pinnacle_matchups() or []
