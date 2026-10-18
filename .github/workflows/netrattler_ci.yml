@@ -82,5 +82,7 @@ jobs:
         run: python test_player_name_fuzzy.py
       - name: Empirical probability blend tests
         run: python test_empirical_blend.py
+      - name: Snapshot BTTS HT isolation test
+        run: python -m pytest -q test_free_odds_btts_snapshot.py
       - name: Pinnacle plain BTTS market test
         run: python test_pinnacle_btts_market.py

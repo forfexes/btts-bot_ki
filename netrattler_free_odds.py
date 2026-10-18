@@ -235,7 +235,7 @@ def get_odds_api_net(home: str, away: str, target_date: Optional[str] = None) ->
                 if _match(sel, home) or sel in ("home","1"): out["home"]=max(out.get("home",0),price)
                 elif _match(sel, away) or sel in ("away","2"): out["away"]=max(out.get("away",0),price)
                 elif sel in ("draw","x"): out["draw"]=max(out.get("draw",0),price)
-            elif "btts" in market or "both teams" in market:
+            elif market in ("btts","both_teams_to_score","both teams to score"):
                 if sel in ("yes","y"): out["btts_yes"]=max(out.get("btts_yes",0),price)
             elif "total" in market or "over_under" in market:
                 p=line.get("line") or line.get("points")
@@ -275,7 +275,7 @@ def get_snapshot(home: str, away: str, target_date: Optional[str] = None) -> Dic
             if s in ("1","home") or _match(s,home): out["home"]=max(out.get("home",0),o)
             elif s in ("x","draw"): out["draw"]=max(out.get("draw",0),o)
             elif s in ("2","away") or _match(s,away): out["away"]=max(out.get("away",0),o)
-        elif "btts" in m and s in ("yes","y"): out["btts_yes"]=max(out.get("btts_yes",0),o)
+        elif m in ("btts","both_teams_to_score","both teams to score") and s in ("yes","y"): out["btts_yes"]=max(out.get("btts_yes",0),o)
         elif ("over" in m or "total" in m) and ("2.5" in m or str((r.get("raw") or {}).get("line"))=="2.5") and "over" in s:
             out["over_25"]=max(out.get("over_25",0),o)
     if out: out["_source"]="odds_snapshot"
