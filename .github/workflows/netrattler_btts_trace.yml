@@ -1,0 +1,29 @@
+name: NETRATTLER BTTS quote trace
+on:
+  workflow_dispatch:
+    inputs:
+      matches:
+        description: "Home|Away,Home|Away"
+        default: ""
+permissions:
+  contents: read
+jobs:
+  trace:
+    runs-on: ubuntu-latest
+    timeout-minutes: 12
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+      - run: |
+          python -m pip install --prefer-binary requests pillow python-dotenv beautifulsoup4 lxml cloudscraper numpy scipy scikit-learn
+          python -m pip install --prefer-binary --no-deps "xgboost==3.2.0"
+      - env:
+          SUPABASE_URL: ${{ secrets.SUPABASE_URL }}
+          SUPABASE_KEY: ${{ secrets.SUPABASE_KEY }}
+          SUPABASE_SERVICE_ROLE_KEY: ${{ secrets.SUPABASE_SERVICE_ROLE_KEY }}
+          PINNACLE_GUEST_KEY: ${{ secrets.PINNACLE_GUEST_KEY }}
+          TRACE_MATCHES: ${{ github.event.inputs.matches }}
+          TELEGRAM_BOT_TOKEN: ""
+        run: python netrattler_btts_trace.py
