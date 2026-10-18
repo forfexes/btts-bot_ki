@@ -24602,6 +24602,15 @@ def fetch_pinnacle_match_odds(match_id: int) -> Optional[Dict]:
                     is_combo = is_btts and ("over 2.5" in desc or "over 2,5" in desc or "2.5 goals" in desc)
                     if not is_btts:
                         continue
+                    # Only the PLAIN BTTS market is btts_yes. "BTTS & Home win", "BTTS & Over 3.5",
+                    # half-time/team variants etc. are different markets with much higher prices.
+                    _mixed = any(w in desc for w in ("&", " and ", "+", "result", "win", "draw", "double chance",
+                                                     "total", "goals", "corner", "card", "first", "second", "either",
+                                                     "home", "away", "team to score"))
+                    if _mixed and not is_combo:
+                        continue
+                    if is_combo and any(w in desc for w in ("win", "draw", "result", "3.5", "1.5", "4.5", "half")):
+                        continue
                     sub_id = sub.get("id")
                     if not sub_id:
                         continue
@@ -24614,7 +24623,7 @@ def fetch_pinnacle_match_odds(match_id: int) -> Optional[Dict]:
                     for m in rs.json():
                         for p in m.get("prices", []):
                             designation = str(p.get("designation", "")).lower()
-                            if designation not in {"yes", "over", "home"} and "yes" not in designation:
+                            if designation != "yes":
                                 continue
                             try:
                                 observed = round(float(p.get("price") or 0), 2)
