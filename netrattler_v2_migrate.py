@@ -128,27 +128,20 @@ def rotate():
         while d0.isoformat() < cutoff:
             days.append(d0.isoformat()); d0 += dt.timedelta(days=1)
     print("days to rotate:", days)
-    archived = deleted = 0
+    deleted = 0
     for d in days:
-        off = 0
-        while True:
-            q = f"{base}?select={COLS['odds_history']}&captured_date=eq.{d}&source=neq.football_data_co_uk&order={ORDER['odds_history']}&limit={PAGE}&offset={off}"
-            rows = requests.get(q, headers=H(), timeout=120).json()
-            if not rows: break
-            keep = []
-            for x in rows:
-                md, cd = x.get("match_date"), x.get("captured_date")
-                if md and cd and (dt.date.fromisoformat(md) - dt.date.fromisoformat(cd)).days <= 1:
-                    keep.append(tuple(x.get(k) for k in cols))
-            if keep and not dry:
-                execute_values(cur, f"insert into odds_history ({','.join(cols)}) values %s on conflict do nothing", keep); c.commit()
-            archived += len(keep); off += len(rows)
-        if not dry:
-            cur.execute("select count(*) from odds_history where captured_date=%s and source<>'football_data_co_uk'", (d,))
-            print("archive rows for", d, cur.fetchone()[0], "(compact copy)")
+        r1 = requests.get(f"{base}?select=source&captured_date=eq.{d}&source=neq.football_data_co_uk&limit=1",
+                          headers=H({"Prefer": "count=exact", "Range": "0-0"}), timeout=120)
+        n1 = int(r1.headers.get("content-range", "*/0").split("/")[-1])
+        cur.execute("select count(*) from odds_history where captured_date=%s and source<>'football_data_co_uk'", (d,))
+        n2 = cur.fetchone()[0]
+        ok = n2 >= n1 and n1 > 0
+        print("day", d, "main", n1, "archive", n2, "ok_to_delete", ok)
+        if ok and not dry:
             rr = requests.delete(f"{base}?captured_date=eq.{d}&source=neq.football_data_co_uk", headers=H({"Prefer": "return=minimal"}), timeout=300)
             print("delete", d, rr.status_code); deleted += 1 if rr.ok else 0
-    print("archived_candidates", archived, "days_deleted", deleted)
+    print("days_deleted", deleted)
+
 
 def main():
     print("secrets present: src_url=%s src_key=%s v2_dsn=%s" % (bool(SRC_URL), bool(SRC_KEY), bool(DST_DSN)))
