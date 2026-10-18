@@ -121,8 +121,12 @@ def rotate():
     old_total = int(r.headers.get("content-range", "*/0").split("/")[-1])
     print("cutoff", cutoff, "old harvester rows in main:", old_total, "dry_run:", dry)
     c = dst(); cur = c.cursor()
-    days = sorted({d for d in requests.get(f"{base}?select=captured_date&{f_old}&order=captured_date&limit=100000", headers=H(), timeout=120).json() and
-                   [x["captured_date"] for x in requests.get(f"{base}?select=captured_date&{f_old}&order=captured_date&limit=100000", headers=H(), timeout=120).json()]})
+    first = requests.get(f"{base}?select=captured_date&{f_old}&order=captured_date.asc&limit=1", headers=H(), timeout=120).json()
+    days = []
+    if first:
+        d0 = dt.date.fromisoformat(first[0]["captured_date"])
+        while d0.isoformat() < cutoff:
+            days.append(d0.isoformat()); d0 += dt.timedelta(days=1)
     print("days to rotate:", days)
     archived = deleted = 0
     for d in days:
