@@ -277,6 +277,8 @@ def fetch_kambi_player_props(home: str, away: str, brand: str = "ub") -> List[Di
             params={"lang": "en_GB", "market": "GB"},
         )
     offer = _KAMBI_OFFER_CACHE.get(_ok)
+    if isinstance(offer, dict) and _kambi_event_live(offer):
+        return {}
     if not offer:
         return []
 
@@ -515,6 +517,48 @@ def fetch_kambi_match_corners(home: str, away: str, brand: str = "ub") -> List[D
 
 
 
+_KAMBI_BAD_WORDS = (
+    "both halves", "each half", "either half", "2nd half", "second half", " by ", "handicap", "asian",
+    "double chance", "draw no bet", "corner", "card", "booking", "odd/even", "exact", "winning margin",
+    "to win", "clean sheet", "minute", "interval", "/full time", "half time/", "first 10", "first 15",
+    "to nil", "player", "scorer", "no bet", "range", "rest of", "next goal", "last goal",
+)
+
+
+def _kambi_kind(text: str) -> Optional[str]:
+    """Strict Kambi criterion classifier: 'btts', 'btts_ht', 'result', 'total', 'total_ht' or None.
+    Team totals ("Total Goals by X"), BTTS in both halves, 2nd-half and handicap markets have very
+    different prices and must never be read as the main market."""
+    low = " " + str(text or "").lower().replace("½", "1/2") + " "
+    combo = ("&" in low) or (" and " in low)
+    first_half = any(t in low for t in ("1st half", "first half", " 1h "))
+    bad = any(w in low for w in _KAMBI_BAD_WORDS)
+    if bad:
+        return None
+    if ("both teams to score" in low or "both teams score" in low or " btts " in low) and not combo:
+        return "btts_ht" if first_half else "btts"
+    if combo:
+        return None
+    if "total goals" in low or "goals over/under" in low or "over/under goals" in low:
+        return "total_ht" if first_half else "total"
+    if any(t in low for t in ("full time", "match result", "1x2", "match odds", "3-way")) and not first_half and "half time" not in low:
+        return "result"
+    return None
+
+
+def _kambi_event_live(offer_or_event: Dict[str, Any]) -> bool:
+    """True when the Kambi event is already running/finished (live prices are not pre-match quotes)."""
+    evs = []
+    if isinstance(offer_or_event, dict):
+        evs = list(offer_or_event.get("events") or [])
+        if offer_or_event.get("state") or offer_or_event.get("id"):
+            evs.append(offer_or_event)
+    for e in evs:
+        if str((e or {}).get("state") or "").upper() in {"STARTED", "FINISHED", "LIVE"}:
+            return True
+    return False
+
+
 def _extract_kambi_team_specials(offer: Dict[str, Any]) -> Dict[str, float]:
     """Parse observed Kambi special markets from one event offer payload.
 
@@ -566,8 +610,10 @@ def _extract_kambi_team_specials(offer: Dict[str, Any]) -> Dict[str, float]:
                 or " yes " in f" {olow} "
             )
 
-            # Exact BTTS full-time / first-half Yes.
-            if is_btts and not is_combo_criterion and positive_yes:
+            # Exact BTTS full-time / first-half Yes (strict criterion only).
+            _kk = _kambi_kind(crit)
+            if _kk in ("btts", "btts_ht") and positive_yes:
+                is_first_half = _kk == "btts_ht"
                 key = "btts_yes_ht" if is_first_half else "btts_yes"
                 if odds > out.get(key, 0):
                     out[key] = round(odds, 3)
@@ -591,7 +637,7 @@ def _extract_kambi_team_specials(offer: Dict[str, Any]) -> Dict[str, float]:
                 "total goals", "goals over/under", "over/under goals", "goals", "total"
             ))
             is_over = olow.startswith("over") or str(oc.get("type") or "").upper() in {"O", "OVER"}
-            if is_first_half and goal_market and is_over and abs(line - 1.5) <= 0.11:
+            if _kambi_kind(crit) == "total_ht" and is_over and abs(line - 1.5) <= 0.11:
                 if odds > out.get("over_15_ht", 0):
                     out["over_15_ht"] = round(odds, 3)
     return out

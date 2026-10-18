@@ -70,6 +70,8 @@ def _offer_for_match(home: str, away: str, brand: str) -> Optional[Dict[str, Any
             name = event.get("name") or event.get("englishName") or ""
             candidate = f"{hn} {an}".strip() or str(name).replace(" - ", " ")
             if ps._teams_match(candidate, home, away):
+                if str(event.get("state") or "").upper() in {"STARTED", "FINISHED", "LIVE"}:
+                    return None
                 event_id = event.get("id")
                 host_used = host
                 break
@@ -90,56 +92,39 @@ def _offer_for_match(home: str, away: str, brand: str) -> Optional[Dict[str, Any
 def parse_offer(offer: Dict[str, Any]) -> Dict[str, float]:
     """Parse only explicitly labelled match/team markets."""
     out: Dict[str, float] = {}
+    if ps._kambi_event_live(offer):
+        return out
     for bet_offer in offer.get("betOffers") or []:
+        kind = ps._kambi_kind((bet_offer.get("criterion") or {}).get("englishLabel") or (bet_offer.get("criterion") or {}).get("label") or "")
+        if kind is None:
+            continue
         market = _market_text(bet_offer)
-        low = market.lower()
         outcomes = bet_offer.get("outcomes") or []
-        first_half = any(t in low for t in ("1st half", "first half", "half time", "halftime", "1h"))
-        is_btts = any(t in low for t in ("both teams to score", "both teams score", "both to score", "btts"))
-        is_result = any(t in low for t in ("match result", "full time result", "1x2", "3-way", "three way"))
-        is_total = any(t in low for t in ("total goals", "goals over/under", "over/under goals", "goal total"))
-
-        # 1X2 full time only.
-        if is_result and not first_half:
-            for oc in outcomes:
-                label = str(oc.get("label") or oc.get("type") or "").strip().lower()
-                price = _odds(oc.get("odds"))
-                if not price:
-                    continue
-                if label in {"1", "home", "home win"}:
-                    out["home_win"] = max(out.get("home_win", 0), price)
-                elif label in {"x", "draw"}:
-                    out["draw"] = max(out.get("draw", 0), price)
-                elif label in {"2", "away", "away win"}:
-                    out["away_win"] = max(out.get("away_win", 0), price)
-
-        # BTTS yes; combo is handled by Kambi's dedicated existing special parser.
-        if is_btts:
-            combo_context = any(t in low for t in ("over 2.5", "total goals", "and total", "& total"))
-            if not combo_context:
-                for oc in outcomes:
-                    label = str(oc.get("label") or oc.get("type") or "").strip().lower()
-                    if label not in {"yes", "ja"} and not label.startswith("yes "):
-                        continue
-                    price = _odds(oc.get("odds"))
-                    if not price:
-                        continue
-                    key = "btts_yes_ht" if first_half else "btts_yes"
+        for oc in outcomes:
+            label = str(oc.get("label") or oc.get("type") or "").strip().lower()
+            price = _odds(oc.get("odds"))
+            if not price:
+                continue
+            if kind == "result":
+                key = {"1": "home_win", "home": "home_win", "x": "draw", "draw": "draw", "2": "away_win", "away": "away_win"}.get(label)
+                if not key:
+                    typ = str(oc.get("type") or "").upper()
+                    key = {"OT_ONE": "home_win", "OT_CROSS": "draw", "OT_TWO": "away_win"}.get(typ)
+                if key:
                     out[key] = max(out.get(key, 0), price)
-
-        # O2.5 FT and O1.5 HT, exact observed line only.
-        if is_total:
-            for oc in outcomes:
-                label = str(oc.get("label") or oc.get("type") or "").strip().lower()
-                if not (label.startswith("over") or label in {"o", "over"}):
+            elif kind in ("btts", "btts_ht"):
+                if label in {"yes", "ja"} or str(oc.get("type") or "").upper() == "OT_YES":
+                    key = "btts_yes_ht" if kind == "btts_ht" else "btts_yes"
+                    out[key] = max(out.get(key, 0), price)
+            elif kind in ("total", "total_ht"):
+                if not (label.startswith("over") or str(oc.get("type") or "").upper() == "OT_OVER"):
                     continue
                 observed_line = _line(oc, f"{market} {label}")
-                price = _odds(oc.get("odds"))
-                if observed_line is None or not price:
+                if observed_line is None:
                     continue
-                if not first_half and abs(observed_line - 2.5) <= 0.01:
+                if kind == "total" and abs(observed_line - 2.5) <= 0.01:
                     out["over_25"] = max(out.get("over_25", 0), price)
-                if first_half and abs(observed_line - 1.5) <= 0.01:
+                if kind == "total_ht" and abs(observed_line - 1.5) <= 0.01:
                     out["over_15_ht"] = max(out.get("over_15_ht", 0), price)
 
     # Reuse the mature dedicated special parser for exact combo/HT variants.
