@@ -8,6 +8,9 @@ on:
       tables:
         description: comma list
         default: player_game_log,player_match_stats,odds_history
+      target:
+        description: v2 or v3
+        default: v2
       start_offset:
         default: "0"
 concurrency:
@@ -29,6 +32,8 @@ jobs:
           SUPABASE_SERVICE_ROLE_KEY: ${{ secrets.SUPABASE_SERVICE_ROLE_KEY }}
           SUPABASE_KEY: ${{ secrets.SUPABASE_KEY }}
           V2_DATABASE_URL: ${{ secrets.V2_DATABASE_URL }}
+          V3_DATABASE_URL: ${{ secrets.V3_DATABASE_URL }}
+          TARGET: ${{ github.event.inputs.target }}
           V2_SUPABASE_URL: ${{ secrets.V2_SUPABASE_URL }}
           V2_SUPABASE_SERVICE_KEY: ${{ secrets.V2_SUPABASE_SERVICE_KEY }}
           MODE: ${{ github.event.inputs.mode }}

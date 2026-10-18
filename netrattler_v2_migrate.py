@@ -53,6 +53,11 @@ def src_count(t):
     r = requests.get(f"{SRC_URL}/rest/v1/{t}?select=*&limit=1", headers=H({"Prefer": "count=exact", "Range": "0-0"}), timeout=60)
     return int(r.headers.get("content-range", "*/0").split("/")[-1])
 
+if os.environ.get("TARGET", "v2") == "v3" and os.environ.get("V3_DATABASE_URL", "").startswith("postgres"):
+    DST_DSN = os.environ["V3_DATABASE_URL"]
+    os.environ["V2_REGION"] = os.environ.get("V3_REGION", os.environ.get("V2_REGION", "eu-west-2"))
+
+
 def _parse_dsn(dsn):
     """Manual parse (passwords may contain [ ] @ etc.). Returns (user, password, host, port, db) or None."""
     import re
