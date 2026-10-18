@@ -149,6 +149,16 @@ def main():
         print("MISSING SECRET(S) - stop"); sys.exit(1)
     c = dst(); cur = c.cursor(); cur.execute("select current_database(), pg_size_pretty(pg_database_size(current_database()))")
     print("v2 reachable:", cur.fetchone()); c.commit()
+    if MODE == "rest":
+        u = os.environ.get("V2_REST_URL", "").rstrip("/"); k = os.environ.get("V2_REST_KEY", "")
+        print("v2 rest url ok:", u.startswith("https://") and u.endswith(".supabase.co"), "key present:", bool(k))
+        for t in ("player_game_log", "player_match_stats", "odds_history"):
+            try:
+                r = requests.get(f"{u}/rest/v1/{t}?select=*&limit=1", headers={"apikey": k, "Authorization": f"Bearer {k}", "Prefer": "count=exact", "Range": "0-0"}, timeout=30)
+                print("rest", t, r.status_code, r.headers.get("content-range"), r.text[:120] if not r.ok else "")
+            except Exception as e:
+                print("rest", t, type(e).__name__)
+        return
     if MODE == "rotate":
         rotate(); return
     if MODE == "size":

@@ -43,5 +43,7 @@ jobs:
           MODE: ${{ github.event.inputs.mode }}
           TABLES: ${{ github.event.inputs.tables }}
           START_OFFSET: ${{ github.event.inputs.start_offset }}
+          V2_REST_URL: ${{ secrets.V2_SUPABASE_URL }}
+          V2_REST_KEY: ${{ secrets.V2_SUPABASE_SERVICE_KEY }}
           MAX_SECONDS: "1800"
         run: python netrattler_v2_migrate.py
