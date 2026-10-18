@@ -105,6 +105,18 @@ jobs:
       - name: Consolidated NETRATTLER hardtest
         run: python netrattler_hardtest.py
 
+      - name: BTTS and combo configuration diagnostics
+        env:
+          BTTS_CHAT: ${{ secrets.TELEGRAM_GROUP_BTTS }}
+          COMBO_CHAT: ${{ secrets.TELEGRAM_GROUP_COMBO }}
+        run: |
+          python - <<'PY'
+          import os
+          print("BTTS channel configured:", bool(os.getenv("BTTS_CHAT")))
+          print("BTTS + Over 2.5 channel configured:", bool(os.getenv("COMBO_CHAT")))
+          print("Diagnostic only: no Telegram messages sent")
+          PY
+
       - name: Run Tips Bot 🤖
         env:
           NETRATTLER_FAST_TIPS:       "true"
