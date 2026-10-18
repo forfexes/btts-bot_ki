@@ -86,5 +86,29 @@ def main():
             c.commit(); off += len(rows); total += len(rows)
         print("copied", t, total, "next_offset", off)
 
+def _report(info):
+    try:
+        if SRC_URL and SRC_KEY:
+            requests.post(f"{SRC_URL}/rest/v1/netrattler_card_diag", headers=H({"Content-Type": "application/json", "Prefer": "return=minimal"}),
+                          data=json.dumps({"info": dict(info, probe="v2_migrate", mode=MODE)}), timeout=30)
+    except Exception:
+        pass
+
+
 if __name__ == "__main__":
-    main()
+    import io, contextlib
+    buf = io.StringIO()
+    status = "ok"
+    try:
+        with contextlib.redirect_stdout(buf):
+            main()
+    except SystemExit as e:
+        status = f"exit {e.code}"
+    except Exception as e:
+        msg = str(e).replace(DST_DSN, "<dsn>") if DST_DSN else str(e)
+        status = f"{type(e).__name__}: {msg[:160]}"
+    out = buf.getvalue()
+    print(out)
+    _report({"status": status, "output": out[-1500:]})
+    if status != "ok":
+        sys.exit(1)
