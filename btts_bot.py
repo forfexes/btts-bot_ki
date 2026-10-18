@@ -26489,6 +26489,10 @@ def main():
                         _gf["btts_odds_ok"] = _gf.get("btts_odds_ok", 0) + (1 if float(btts_yes) >= BTTS_MIN_ODDS else 0)
                         _gf["btts_edge_ok"] = _gf.get("btts_edge_ok", 0) + (1 if _is_market_value_bet(btts_yes, prob_b, BTTS_MIN_ODDS, BTTS_MIN_EDGE) else 0)
                         _gf["btts_best_edge_pp"] = round(max(_gf.get("btts_best_edge_pp", -99), (prob_b / 100.0 - 1.0 / float(btts_yes)) * 100), 1)
+                        if _is_market_value_bet(btts_yes, prob_b, BTTS_MIN_ODDS, BTTS_MIN_EDGE):
+                            _gf.setdefault("btts_candidates", [])
+                            if len(_gf["btts_candidates"]) < 12:
+                                _gf["btts_candidates"].append([f"{home} vs {away}"[:40], float(btts_yes), prob_b, str(ro.get("_btts_source") if isinstance(ro, dict) else "")[:20]])
                     _gf["btts_max_prob"] = max(_gf.get("btts_max_prob", 0), float(prob_b or 0))
                 except Exception:
                     pass
@@ -27156,7 +27160,9 @@ def main():
             requests.post(f"{SUPABASE_URL}/rest/v1/netrattler_card_diag", timeout=15,
                           headers={"apikey": SUPABASE_KEY, "Authorization": f"Bearer {SUPABASE_KEY}", "Content-Type": "application/json"},
                           json={"info": {"probe": "group_funnel", "funnel": dict(globals().get("_GROUP_FUNNEL", {}) or {}),
-                                         "tips_by_market": {k: len(v) for k, v in (tips_by_market or {}).items()}}})
+                                         "tips_by_market": {k: len(v) for k, v in (tips_by_market or {}).items()},
+                                         "edge_filter": dict(globals().get("_NTR_EDGE_FILTER_STATS", {}) or {}),
+                                         "special_diag": dict(globals().get("_NTR_SPECIAL_DIAG", {}) or {})}})
         except Exception:
             pass
         if len(_builder_prop_pool) >= 3:
