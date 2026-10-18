@@ -11,6 +11,9 @@ on:
       target:
         description: v2 or v3
         default: v2
+      dry_run:
+        description: true or false (rotate only)
+        default: "true"
       start_offset:
         default: "0"
 concurrency:
@@ -34,6 +37,7 @@ jobs:
           V2_DATABASE_URL: ${{ secrets.V2_DATABASE_URL }}
           V3_DATABASE_URL: ${{ secrets.V3_DATABASE_URL }}
           TARGET: ${{ github.event.inputs.target }}
+          DRY_RUN: ${{ github.event.inputs.dry_run }}
           V2_SUPABASE_URL: ${{ secrets.V2_SUPABASE_URL }}
           V2_SUPABASE_SERVICE_KEY: ${{ secrets.V2_SUPABASE_SERVICE_KEY }}
           MODE: ${{ github.event.inputs.mode }}

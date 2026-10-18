@@ -104,12 +104,56 @@ def dst():
     raise last
 
 
+
+def rotate():
+    """Archive-rotation for odds_history: keep HOT days in the main project, archive closing-ish rows
+    (captured on/after match_date-1) into the archive DB, then remove old harvester rows from the main project.
+    football_data_co_uk history stays in the main project (used by training). DRY_RUN=true only counts."""
+    import datetime as dt
+    from psycopg2.extras import execute_values
+    hot = int(os.environ.get("HOT_DAYS", "3"))
+    dry = os.environ.get("DRY_RUN", "true").lower() != "false"
+    cutoff = (dt.date.today() - dt.timedelta(days=hot)).isoformat()
+    cols = COLS["odds_history"].split(",")
+    base = f"{SRC_URL}/rest/v1/odds_history"
+    f_old = f"captured_date=lt.{cutoff}&source=neq.football_data_co_uk"
+    r = requests.get(f"{base}?select=source&{f_old}&limit=1", headers=H({"Prefer": "count=exact", "Range": "0-0"}), timeout=120)
+    old_total = int(r.headers.get("content-range", "*/0").split("/")[-1])
+    print("cutoff", cutoff, "old harvester rows in main:", old_total, "dry_run:", dry)
+    c = dst(); cur = c.cursor()
+    days = sorted({d for d in requests.get(f"{base}?select=captured_date&{f_old}&order=captured_date&limit=100000", headers=H(), timeout=120).json() and
+                   [x["captured_date"] for x in requests.get(f"{base}?select=captured_date&{f_old}&order=captured_date&limit=100000", headers=H(), timeout=120).json()]})
+    print("days to rotate:", days)
+    archived = deleted = 0
+    for d in days:
+        off = 0
+        while True:
+            q = f"{base}?select={COLS['odds_history']}&captured_date=eq.{d}&source=neq.football_data_co_uk&order={ORDER['odds_history']}&limit={PAGE}&offset={off}"
+            rows = requests.get(q, headers=H(), timeout=120).json()
+            if not rows: break
+            keep = []
+            for x in rows:
+                md, cd = x.get("match_date"), x.get("captured_date")
+                if md and cd and (dt.date.fromisoformat(md) - dt.date.fromisoformat(cd)).days <= 1:
+                    keep.append(tuple(x.get(k) for k in cols))
+            if keep and not dry:
+                execute_values(cur, f"insert into odds_history ({','.join(cols)}) values %s on conflict do nothing", keep); c.commit()
+            archived += len(keep); off += len(rows)
+        if not dry:
+            cur.execute("select count(*) from odds_history where captured_date=%s and source<>'football_data_co_uk'", (d,))
+            print("archive rows for", d, cur.fetchone()[0], "(compact copy)")
+            rr = requests.delete(f"{base}?captured_date=eq.{d}&source=neq.football_data_co_uk", headers=H({"Prefer": "return=minimal"}), timeout=300)
+            print("delete", d, rr.status_code); deleted += 1 if rr.ok else 0
+    print("archived_candidates", archived, "days_deleted", deleted)
+
 def main():
     print("secrets present: src_url=%s src_key=%s v2_dsn=%s" % (bool(SRC_URL), bool(SRC_KEY), bool(DST_DSN)))
     if not (SRC_URL and SRC_KEY and DST_DSN):
         print("MISSING SECRET(S) - stop"); sys.exit(1)
     c = dst(); cur = c.cursor(); cur.execute("select current_database(), pg_size_pretty(pg_database_size(current_database()))")
     print("v2 reachable:", cur.fetchone()); c.commit()
+    if MODE == "rotate":
+        rotate(); return
     if MODE == "size":
         cur.execute("select pg_size_pretty(pg_database_size(current_database())), pg_database_size(current_database())/1024/1024")
         print("v2 db size:", cur.fetchone())
