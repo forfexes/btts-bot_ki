@@ -703,7 +703,7 @@ def edit_original_tip(settlement: Dict[str, Any]) -> bool:
     group = str(settlement.get("market_group") or group_of(payload) or "default")
     if not original and group == "builder":
         original = recover_legacy_builder_text(data)
-    stored_chat = str(anyv(data, ["telegram_chat_id", "chat_id", "tg_chat_id", "channel_id"], "") or "")
+    stored_chat = str(anyv(data, ["telegram_chat_id", "chat_id", "tg_chat_id", "channel_id"], "") or anyv(settlement, ["telegram_chat_id"], "") or "")
     canonical_chat = str(GROUPS.get(group) or GROUPS.get("default") or "")
     edited = (_strip_old_direct_summary(original) + "\n\n" + format_direct_summary(settlement)).strip()
 
