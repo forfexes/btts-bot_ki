@@ -28,7 +28,7 @@ class BuilderDeliveryTests(unittest.TestCase):
                                        3.01, .1, False, "2026-10-16")
         self.rows = []
 
-    def _run(self, result, *, existing=None):
+    def _run(self, result, *, existing=None, chat_id=None):
         def save(*args, **kwargs):
             self.rows.append(json.loads(kwargs["data"]))
             return _Post()
@@ -38,7 +38,7 @@ class BuilderDeliveryTests(unittest.TestCase):
               patch.object(engine.requests, "post", side_effect=save)):
             sent, _ = engine.run_builder_engine([], lambda _: result,
                                                 supabase_url="https://supabase.invalid",
-                                                supabase_key="test")
+                                                supabase_key="test", chat_id=chat_id)
         return sent
 
     def test_numeric_message_id_is_recorded(self):
@@ -61,6 +61,12 @@ class BuilderDeliveryTests(unittest.TestCase):
         self.assertEqual(stored["telegram_chat_id"], "-10042")
         self.assertIn("Player A", stored["message_text"])
         self.assertTrue(any(label in stored["message_text"] for label in ("Builder-Quote", "Gesamt-Quote")))
+
+    def test_explicit_caller_chat_is_persisted_without_env(self):
+        with patch.dict(engine.os.environ, {}, clear=True):
+            self.assertEqual(self._run(777, chat_id=-100555), 1)
+        self.assertEqual(self.rows[0]["telegram_chat_id"], "-100555")
+        self.assertEqual(self.rows[0]["telegram_msg_id"], "777")
 
     def test_declined_or_missing_send_never_saves(self):
         for result in (None, False, 0, {"ok": False, "description": "blocked"},

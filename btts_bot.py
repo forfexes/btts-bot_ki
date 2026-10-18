@@ -27173,6 +27173,7 @@ def main():
                     supabase_url=SUPABASE_URL,
                     supabase_key=SUPABASE_KEY,
                     logger=lambda m: log(f"   🏗️ {m}"),
+                    chat_id=_builder_chat,
                 )
                 _ntr_builder_sent = int(_sent_n or 0)
                 log(f"   🏗️ Builder Engine: {_sent_n} Builder aus {len(_builder_prop_pool)} Props gesendet")

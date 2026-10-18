@@ -1668,6 +1668,7 @@ def run_builder_engine(
     supabase_url: str = "",
     supabase_key: str = "",
     logger: Optional[Callable[[str], Any]] = None,
+    chat_id: Any = None,
 ) -> Tuple[int, List[BuilderPick]]:
     normalized = deduplicate_props(raw_props)
     picks = build_builder_picks(raw_props, match_contexts, match_date)
@@ -1717,7 +1718,8 @@ def run_builder_engine(
                     logger(f"MASTER BUILDER send failed/no message_id: {pick.style} {pick.variant}")
                 continue
             telegram_message_id = None
-            telegram_chat_id = (os.getenv("TELEGRAM_GROUP_BUILDER") or os.getenv("TELEGRAM_GROUP_PLAYER_PROPS") or os.getenv("TELEGRAM_GROUP_PROPS") or os.getenv("TELEGRAM_CHAT_ID") or None)
+            # Prefer the chat the caller actually sent to; env names are only a fallback.
+            telegram_chat_id = (chat_id or os.getenv("TELEGRAM_GROUP_BUILDER") or os.getenv("TELEGRAM_GROUP_PLAYER_PROPS") or os.getenv("TELEGRAM_GROUP_PROPS") or os.getenv("TELEGRAM_CHAT_ID") or None)
             if isinstance(send_result, dict):
                 # A Telegram HTTP response can be truthy even when ok=false.
                 payload = send_result.get("result", send_result)
