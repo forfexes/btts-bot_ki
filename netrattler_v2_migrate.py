@@ -105,6 +105,11 @@ def main():
         print("MISSING SECRET(S) - stop"); sys.exit(1)
     c = dst(); cur = c.cursor(); cur.execute("select current_database(), pg_size_pretty(pg_database_size(current_database()))")
     print("v2 reachable:", cur.fetchone()); c.commit()
+    if MODE == "size":
+        cur.execute("select pg_size_pretty(pg_database_size(current_database())), pg_database_size(current_database())/1024/1024")
+        print("v2 db size:", cur.fetchone())
+        cur.execute("select relname, pg_size_pretty(pg_total_relation_size(c.oid)) from pg_class c join pg_namespace n on n.oid=c.relnamespace where n.nspname='public' and c.relkind='r' order by pg_total_relation_size(c.oid) desc")
+        print("tables:", cur.fetchall()); return
     if MODE == "check":
         for t in TABLES: print("source rows", t, src_count(t))
         return
