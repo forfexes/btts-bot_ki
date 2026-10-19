@@ -247,6 +247,8 @@ def _pin_btts_kind(desc):
     d = str(desc or "").lower()
     if not ("both teams to score" in d or "btts" in d):
         return None
+    if ("and total goals" in d or "& total goals" in d) and not any(w in d for w in ("half", "corner", "card")):
+        return "combo_total"  # outcomes: "Yes & Over 2.5", "Yes & Under 2.5", ...
     combo = ("over 2.5" in d or "over 2,5" in d or "2.5 goals" in d)
     if combo:
         return None if any(w in d for w in ("win", "draw", "result", "3.5", "1.5", "4.5", "half")) else "combo"
@@ -255,6 +257,25 @@ def _pin_btts_kind(desc):
                             "card", "first", "second", "either", "home", "away", "team to score", "half")):
         return None
     return "plain"
+
+
+def _pin_outcome_name(sub, price) -> str:
+    """Pinnacle special prices carry participantId (designation is null): map it to the outcome name."""
+    pid = price.get("participantId")
+    for part in (sub.get("participants") or []):
+        if pid is not None and part.get("id") == pid:
+            return str(part.get("name") or "").strip().lower()
+    return str(price.get("designation") or "").strip().lower()
+
+
+def _pin_wanted(kind: str, name: str) -> bool:
+    n = " ".join(name.replace("&", " & ").split())
+    if kind == "combo_total":
+        return n in {"yes & over 2.5", "yes & over 2,5"}
+    if kind == "combo":
+        return n in {"yes", "home"} or n.startswith("yes")
+    return n in {"yes", "home"}
+
 
 
 def _install_pinnacle_guard(bot) -> None:
@@ -314,7 +335,7 @@ def _install_pinnacle_guard(bot) -> None:
                         _kind = _pin_btts_kind(desc)
                         if _kind is None:
                             continue
-                        is_combo = _kind == "combo"
+                        is_combo = _kind in ("combo", "combo_total")
                         sub_id = sub.get("id")
                         if not sub_id:
                             continue
@@ -328,8 +349,7 @@ def _install_pinnacle_guard(bot) -> None:
                         for m in rs.json() or []:
                             pp = int(m.get("period") or 0)
                             for p in m.get("prices") or []:
-                                designation = str(p.get("designation") or "").lower()
-                                if designation not in {"yes", "home"} and "yes" not in designation:
+                                if not _pin_wanted(_kind, _pin_outcome_name(sub, p)):
                                     continue
                                 observed = _pinnacle_decimal(p.get("price"))
                                 if observed <= 1:

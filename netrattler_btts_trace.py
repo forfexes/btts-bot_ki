@@ -23,6 +23,7 @@ for home, away in TARGETS:
     try:
         ro = bot.get_pinnacle_match_odds(home, away) or {}
         rec["btts_yes"] = ro.get("btts_yes")
+        rec["combo"] = ro.get("btts_over25_yes")
         rec["over_25"] = ro.get("over_25")
         rec["field_sources"] = ro.get("_ntr_field_sources")
         rec["keys"] = sorted(k for k in ro if not k.startswith("_"))[:40]

@@ -252,3 +252,44 @@ def test_pinnacle_btts_only_plain_market():
     odds = fake.fetch_pinnacle_match_odds(77) or {}
     if odds.get("btts_yes") is not None:
         assert abs(odds["btts_yes"] - 1.8333) < 1e-3
+
+
+class _PinParticipantRequests:
+    """Real Pinnacle shape: designation null, outcome identified by participantId."""
+    def get(self, url, **kwargs):
+        if url.endswith("/markets/related/straight"):
+            return _FakeResponse([])
+        if url.endswith("/related"):
+            return _FakeResponse([
+                {"id": 11, "special": {"description": "Both Teams To Score?"},
+                 "participants": [{"id": 101, "name": "Yes"}, {"id": 102, "name": "No"}]},
+                {"id": 12, "special": {"description": "Both Teams To Score and Total Goals"},
+                 "participants": [{"id": 201, "name": "Yes & Over 2.5"}, {"id": 202, "name": "Yes & Under 2.5"},
+                                  {"id": 203, "name": "No & Over 2.5"}, {"id": 204, "name": "No & Under 2.5"}]},
+                {"id": 13, "special": {"description": "Both Teams To Score and Moneyline"},
+                 "participants": [{"id": 301, "name": "Yes & Brighton"}]},
+            ])
+        if "/11/" in url:
+            return _FakeResponse([{"period": 0, "prices": [{"designation": None, "participantId": 101, "price": -136},
+                                                           {"designation": None, "participantId": 102, "price": 119}]}])
+        if "/12/" in url:
+            return _FakeResponse([{"period": 0, "prices": [{"designation": None, "participantId": 201, "price": 150},
+                                                           {"designation": None, "participantId": 202, "price": 900},
+                                                           {"designation": None, "participantId": 203, "price": 300}]}])
+        if "/13/" in url:
+            return _FakeResponse([{"period": 0, "prices": [{"designation": None, "participantId": 301, "price": 500}]}])
+        return _FakeResponse([], ok=False)
+
+
+def test_pinnacle_participant_prices_and_real_combo():
+    assert guard._pin_btts_kind("Both Teams To Score and Total Goals") == "combo_total"
+    assert guard._pin_btts_kind("Both Teams To Score and Moneyline") is None
+    fake = SimpleNamespace(
+        _PIN_ODDS_CACHE={}, _cache_get=lambda c, k: c.get(k), _cache_set=lambda c, k, v: c.__setitem__(k, v),
+        requests=_PinParticipantRequests(), PINNACLE_BASE="https://pinnacle.test", PINNACLE_HEADERS={},
+        filter_tips_legacy_safe=lambda tips, market="btts", odds_data=None: list(tips),
+    )
+    guard._install_pinnacle_guard(fake)
+    odds = fake.fetch_pinnacle_match_odds(55) or {}
+    assert abs(odds.get("btts_yes", 0) - 1.7353) < 1e-3, odds
+    assert abs(odds.get("btts_over25_yes", 0) - 2.5) < 1e-9, odds   # observed "Yes & Over 2.5", never multiplied
