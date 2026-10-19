@@ -188,20 +188,25 @@ def main():
             cur.execute(f"grant select, insert, update, delete on {t} to service_role")
             cur.execute(f"revoke all on {t} from anon, authenticated")
             print("schema ok", t)
-        extra = [
-            "create unique index if not exists pms_data_hash_key on player_match_stats (data_hash)",
-            "create index if not exists pms_league_date on player_match_stats (league, match_date)",
-            """create or replace function public.prune_player_game_log(keep_games integer default 20) returns bigint
-               language sql security definer set search_path to 'public' as $f$
-               with d as (delete from public.player_game_log where ctid in (select ctid from (select ctid,
-               row_number() over (partition by player_key order by match_date desc nulls last, event_id desc) rn
-               from public.player_game_log) r where rn > keep_games) returning 1) select count(*) from d; $f$""",
-            "revoke all on function public.prune_player_game_log(integer) from public, anon, authenticated",
-            "grant execute on function public.prune_player_game_log(integer) to service_role",
-        ]
+        extra = []
+        if "player_match_stats" in TABLES:
+            extra += [
+                "create unique index if not exists pms_data_hash_key on player_match_stats (data_hash)",
+                "create index if not exists pms_league_date on player_match_stats (league, match_date)",
+            ]
+        if "player_game_log" in TABLES:
+            extra += [
+                """create or replace function public.prune_player_game_log(keep_games integer default 20) returns bigint
+                   language sql security definer set search_path to 'public' as $f$
+                   with d as (delete from public.player_game_log where ctid in (select ctid from (select ctid,
+                   row_number() over (partition by player_key order by match_date desc nulls last, event_id desc) rn
+                   from public.player_game_log) r where rn > keep_games) returning 1) select count(*) from d; $f$""",
+                "revoke all on function public.prune_player_game_log(integer) from public, anon, authenticated",
+                "grant execute on function public.prune_player_game_log(integer) to service_role",
+            ]
         for stmt in extra:
             cur.execute(stmt)
-        print("extras ok")
+        print("extras ok (" + str(len(extra)) + " statements)")
         c.commit(); return
     from psycopg2.extras import execute_values
     for t in TABLES:
