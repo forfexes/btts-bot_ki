@@ -1,0 +1,73 @@
+name: NETRATTLER Key Audit (read-only)
+
+on:
+  workflow_dispatch: {}
+
+jobs:
+  audit:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - name: Checkout Repository
+        uses: actions/checkout@v4
+
+      - name: Setup Python 3.11
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
+      - name: Install requests
+        run: python -m pip install --prefer-binary requests
+
+      - name: Audit which API keys are set (no values printed)
+        env:
+          GEMINI_API_KEYS:            ${{ secrets.GEMINI_API_KEYS }}
+          GROQ_API_KEYS:              ${{ secrets.GROQ_API_KEYS }}
+          OPENROUTER_API_KEYS:        ${{ secrets.OPENROUTER_API_KEYS }}
+          MISTRAL_API_KEYS:           ${{ secrets.MISTRAL_API_KEYS }}
+          COHERE_API_KEY:             ${{ secrets.COHERE_API_KEY }}
+          HUGGINGFACE_API_KEY:        ${{ secrets.HUGGINGFACE_API_KEY }}
+          TAVILY_API_KEY:             ${{ secrets.TAVILY_API_KEY }}
+          ODDS_API_KEYS:              ${{ secrets.ODDS_API_KEYS }}
+          ODDS_API_NET_KEY:           ${{ secrets.ODDS_API_NET_KEY }}
+          FOOTBALL_DATA_API_KEYS:     ${{ secrets.FOOTBALL_DATA_API_KEYS }}
+          API_FOOTBALL_KEYS:          ${{ secrets.API_FOOTBALL_KEYS }}
+          SPORTMONKS_API_KEY:         ${{ secrets.SPORTMONKS_API_KEY }}
+          SPORTDB_API_KEY:            ${{ secrets.SPORTDB_API_KEY }}
+          ALLSPORTS_API_KEY:          ${{ secrets.ALLSPORTS_API_KEY }}
+          FOOTYSTATS_API_KEY:         ${{ secrets.FOOTYSTATS_API_KEY }}
+          OPENWEATHER_API_KEY:        ${{ secrets.OPENWEATHER_API_KEY }}
+          THESTATSAPI_KEY:            ${{ secrets.THESTATSAPI_KEY }}
+          THESTATSAPI_KEYS:           ${{ secrets.THESTATSAPI_KEYS }}
+          API_NINJAS_KEY:             ${{ secrets.API_NINJAS_KEY }}
+          ODDSPAPI_KEYS:              ${{ secrets.ODDSPAPI_KEYS }}
+          ODDSPAPI_KEY:               ${{ secrets.ODDSPAPI_KEY }}
+          FIVEDOLLAR_API_KEY:         ${{ secrets.FIVEDOLLAR_API_KEY }}
+          FIELDFUNDED_API_KEY:        ${{ secrets.FIELDFUNDED_API_KEY }}
+          SOCKODDS_API_KEY:           ${{ secrets.SOCKODDS_API_KEY }}
+          BIGBALLS_API_KEY:           ${{ secrets.BIGBALLS_API_KEY }}
+          BBS_API_KEY:                ${{ secrets.BBS_API_KEY }}
+          TELEGRAM_TOKEN:             ${{ secrets.TELEGRAM_TOKEN }}
+          TELEGRAM_CHAT_ID:           ${{ secrets.TELEGRAM_CHAT_ID }}
+          TELEGRAM_GROUP_BTTS:        ${{ secrets.TELEGRAM_GROUP_BTTS }}
+          TELEGRAM_GROUP_OVER25:      ${{ secrets.TELEGRAM_GROUP_OVER25 }}
+          TELEGRAM_GROUP_COMBO:       ${{ secrets.TELEGRAM_GROUP_COMBO }}
+          TELEGRAM_GROUP_COMBOS:      ${{ secrets.TELEGRAM_GROUP_COMBOS }}
+          TELEGRAM_GROUP_BTTS_HT:     ${{ secrets.TELEGRAM_GROUP_BTTS_HT }}
+          TELEGRAM_GROUP_HZ_LIVE:     ${{ secrets.TELEGRAM_GROUP_HZ_LIVE }}
+          TELEGRAM_GROUP_CORNERS:     ${{ secrets.TELEGRAM_GROUP_CORNERS }}
+          TELEGRAM_GROUP_LATE_GOALS:  ${{ secrets.TELEGRAM_GROUP_LATE_GOALS }}
+          TELEGRAM_GROUP_STATS:       ${{ secrets.TELEGRAM_GROUP_STATS }}
+          TELEGRAM_GROUP_PLAYER_PROPS: ${{ secrets.TELEGRAM_GROUP_PLAYER_PROPS }}
+          TELEGRAM_GROUP_BUILDER:     ${{ secrets.TELEGRAM_GROUP_BUILDER }}
+          TELEGRAM_GROUP_OVER15_HT:   ${{ secrets.TELEGRAM_GROUP_OVER15_HT }}
+          SUPABASE_URL:               ${{ secrets.SUPABASE_URL }}
+          SUPABASE_KEY:               ${{ secrets.SUPABASE_KEY }}
+          SUPABASE_SERVICE_ROLE_KEY:  ${{ secrets.SUPABASE_SERVICE_ROLE_KEY }}
+          SUPABASE_PLAYERS_URL:       ${{ secrets.SUPABASE_PLAYERS_URL }}
+          SUPABASE_PLAYERS_SERVICE_KEY: ${{ secrets.SUPABASE_PLAYERS_SERVICE_KEY }}
+          V2_SUPABASE_URL:            ${{ secrets.V2_SUPABASE_URL }}
+          V2_SUPABASE_SERVICE_KEY:    ${{ secrets.V2_SUPABASE_SERVICE_KEY }}
+          V2_DATABASE_URL:            ${{ secrets.V2_DATABASE_URL }}
+          V3_DATABASE_URL:            ${{ secrets.V3_DATABASE_URL }}
+        run: python netrattler_key_audit.py
