@@ -88,5 +88,7 @@ jobs:
         run: python -m pytest -q test_kambi_strict_markets.py
       - name: Snapshot BTTS HT isolation test
         run: python -m pytest -q test_free_odds_btts_snapshot.py
+      - name: Finishing-radar scorer adjustment test
+        run: python -m pytest -q test_netrattler_finishing_adjust.py
       - name: Pinnacle plain BTTS market test
         run: python test_pinnacle_btts_market.py

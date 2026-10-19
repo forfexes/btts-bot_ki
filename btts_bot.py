@@ -20490,6 +20490,13 @@ def analyze_scorer_tips(fixture, league, scorers, observed_props=None, diag=None
             _d("an_drop_gpg")
             continue
         prob = round((1 - math.exp(-gpg)) * 100)
+        try:
+            import netrattler_finishing_adjust as _fr_adj
+            _fr_adj.load(requests, os.environ.get("SUPABASE_URL", ""),
+                         os.environ.get("SUPABASE_SERVICE_ROLE_KEY") or os.environ.get("SUPABASE_KEY", ""))
+            prob = round(_fr_adj.adjusted_prob_pct(scorer_name, prob))
+        except Exception:
+            pass  # finishing-radar adjustment is best-effort; naive prob stands if unavailable
         scorer_key = _pn(scorer_name)
         quote_key = scorer_key if scorer_key in quote_by_player else ""
         if not quote_key:
