@@ -35,15 +35,26 @@ DDL = {
  position text, opponent text, home_away text, saves numeric, interceptions numeric, clearances numeric, offsides numeric,
  key_passes numeric, duels numeric, duels_won numeric, touches numeric, crosses numeric);
  create index if not exists pms_player_stat_date on player_match_stats (player_name, stat_name, match_date)""",
+"netrattler_match_history": """create table if not exists netrattler_match_history (division text, match_date date,
+ home_team text, away_team text, ft_home smallint, ft_away smallint, ht_home smallint, ht_away smallint,
+ source text, created_at timestamptz, primary key (division, match_date, home_team, away_team))""",
+"netrattler_data_lake_raw": """create table if not exists netrattler_data_lake_raw (id uuid primary key, source text,
+ source_type text, url text, league text, season text, match_date date, entity_type text, entity_name text,
+ market text, category text, payload jsonb, data_hash text unique, collected_at timestamptz);
+ create index if not exists ndlr_source_date on netrattler_data_lake_raw (source, match_date desc)""",
 }
-# columns copied (raw jsonb is intentionally NOT copied: saves ~80 MB)
+# columns copied (raw jsonb is intentionally NOT copied for odds_history: saves ~80 MB)
 COLS = {
 "odds_history": "source,match_id,market,bookmaker,captured_date,home_team,away_team,match_date,selection,odds,imported_at",
 "player_game_log": "player_key,event_id,source,player_id,player_name,team,league,home_team,away_team,match_date,minutes,shots,sot,goals,assists,fouls_committed,fouls_won,tackles,yellow_cards,red_cards,saves,offsides,passes,xg,xa,updated_at",
 "player_match_stats": "id,source,event_id,player_id,player_name,team,league,home_team,away_team,match_date,stat_name,stat_value,stat_text,created_at,match_id,team_name,minutes,shots,sot,goals,assists,passes,tackles,fouls_committed,fouls_won,cards,corners,updated_at,xg,xa,player,match,date,shots_on_target,yellow_cards,red_cards,data_hash,collected_at,position,opponent,home_away,saves,interceptions,clearances,offsides,key_passes,duels,duels_won,touches,crosses",
+"netrattler_match_history": "division,match_date,home_team,away_team,ft_home,ft_away,ht_home,ht_away,source,created_at",
+"netrattler_data_lake_raw": "id,source,source_type,url,league,season,match_date,entity_type,entity_name,market,category,payload,data_hash,collected_at",
 }
 ORDER = {"odds_history": "source,match_id,market,bookmaker,captured_date,selection",
-         "player_game_log": "player_key,event_id", "player_match_stats": "id"}
+         "player_game_log": "player_key,event_id", "player_match_stats": "id",
+         "netrattler_match_history": "division,match_date,home_team,away_team",
+         "netrattler_data_lake_raw": "id"}
 
 def H(extra=None):
     h = {"apikey": SRC_KEY, "Authorization": f"Bearer {SRC_KEY}"}

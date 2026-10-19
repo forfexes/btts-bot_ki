@@ -1,5 +1,7 @@
 name: NETRATTLER V2 migrate (copy only)
 on:
+  schedule:
+    - cron: "30 3 * * *"  # 05:30 CH — daily odds_history rotation (archive older-than-3-days rows to V2, then delete from main)
   workflow_dispatch:
     inputs:
       mode:
@@ -36,12 +38,12 @@ jobs:
           SUPABASE_KEY: ${{ secrets.SUPABASE_KEY }}
           V2_DATABASE_URL: ${{ secrets.V2_DATABASE_URL }}
           V3_DATABASE_URL: ${{ secrets.V3_DATABASE_URL }}
-          TARGET: ${{ github.event.inputs.target }}
-          DRY_RUN: ${{ github.event.inputs.dry_run }}
+          TARGET: ${{ github.event.inputs.target || 'v2' }}
+          DRY_RUN: ${{ github.event.inputs.dry_run || (github.event_name == 'schedule' && 'false') || 'true' }}
           V2_SUPABASE_URL: ${{ secrets.V2_SUPABASE_URL }}
           V2_SUPABASE_SERVICE_KEY: ${{ secrets.V2_SUPABASE_SERVICE_KEY }}
-          MODE: ${{ github.event.inputs.mode }}
-          TABLES: ${{ github.event.inputs.tables }}
+          MODE: ${{ github.event.inputs.mode || (github.event_name == 'schedule' && 'rotate') || 'check' }}
+          TABLES: ${{ github.event.inputs.tables || 'player_game_log,player_match_stats,odds_history' }}
           START_OFFSET: ${{ github.event.inputs.start_offset }}
           V2_REST_URL: ${{ secrets.V2_SUPABASE_URL }}
           V2_REST_KEY: ${{ secrets.V2_SUPABASE_SERVICE_KEY }}
