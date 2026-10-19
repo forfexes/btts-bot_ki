@@ -1,0 +1,34 @@
+name: NETRATTLER Finishing Radar Backtest (read-only, V2 data)
+
+on:
+  workflow_dispatch: {}
+
+jobs:
+  backtest:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+      - run: pip install requests
+
+      - name: Run finishing_radar.py --backtest against V2 player_game_log
+        env:
+          SUPABASE_URL: ${{ secrets.V2_SUPABASE_URL }}
+          SUPABASE_KEY: ${{ secrets.V2_SUPABASE_SERVICE_KEY }}
+          MAIN_SUPABASE_URL: ${{ secrets.SUPABASE_URL }}
+          MAIN_SUPABASE_KEY: ${{ secrets.SUPABASE_SERVICE_ROLE_KEY }}
+        run: |
+          python finishing_radar.py --backtest | tee backtest_output.txt
+          python - <<'PY'
+          import os, json, requests
+          out = open("backtest_output.txt").read()
+          url = os.environ.get("MAIN_SUPABASE_URL", "").rstrip("/")
+          key = os.environ.get("MAIN_SUPABASE_KEY", "")
+          if url and key:
+              requests.post(f"{url}/rest/v1/netrattler_card_diag",
+                  headers={"apikey": key, "Authorization": f"Bearer {key}", "Content-Type": "application/json"},
+                  json={"info": {"probe": "finishing_radar_backtest", "output": out[-3000:]}}, timeout=30)
+          PY
