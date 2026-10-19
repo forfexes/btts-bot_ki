@@ -208,9 +208,11 @@ def main():
             cur.execute(stmt)
         print("extras ok (" + str(len(extra)) + " statements)")
         c.commit(); return
-    from psycopg2.extras import execute_values
+    from psycopg2.extras import execute_values, Json
+    JSONB_COLS = {"netrattler_data_lake_raw": {"payload"}}
     for t in TABLES:
         cols = COLS[t].split(",")
+        jcols = JSONB_COLS.get(t, set())
         if MODE == "verify":
             cur.execute(f"select count(*) from {t}"); print("verify", t, "src", src_count(t), "v2", cur.fetchone()[0]); continue
         off, total = int(os.environ.get("START_OFFSET", "0")), 0
@@ -221,7 +223,7 @@ def main():
             r.raise_for_status(); rows = r.json()
             if not rows: print("done", t, "offset", off); break
             execute_values(cur, f"insert into {t} ({','.join(cols)}) values %s on conflict do nothing",
-                           [tuple(x.get(k) for k in cols) for x in rows])
+                           [tuple(Json(x.get(k)) if k in jcols and x.get(k) is not None else x.get(k) for k in cols) for x in rows])
             c.commit(); off += len(rows); total += len(rows)
         print("copied", t, total, "next_offset", off)
 
