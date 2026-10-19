@@ -19,7 +19,7 @@ jobs:
           SUPABASE_URL: ${{ secrets.V2_SUPABASE_URL }}
           SUPABASE_KEY: ${{ secrets.V2_SUPABASE_SERVICE_KEY }}
           MAIN_SUPABASE_URL: ${{ secrets.SUPABASE_URL }}
-          MAIN_SUPABASE_KEY: ${{ secrets.SUPABASE_SERVICE_ROLE_KEY }}
+          MAIN_SUPABASE_KEY: ${{ secrets.SUPABASE_SERVICE_ROLE_KEY || secrets.SUPABASE_KEY }}
         run: |
           python finishing_radar.py --backtest | tee backtest_output.txt
           python - <<'PY'
