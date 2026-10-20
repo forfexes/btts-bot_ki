@@ -2,7 +2,7 @@
 import os, json, requests
 B = "https://site.api.espn.com/apis/site/v2/sports/soccer"
 out = {"probe": "espn_stats"}
-sb = requests.get(f"{B}/eng.1/scoreboard", params={"dates": "20261018-20261019"}, timeout=20)
+sb = requests.get(f"{B}/eng.1/scoreboard", params={"dates": "20261018"}, timeout=20)
 out["scoreboard_http"] = sb.status_code
 evs = [e for e in (sb.json().get("events") or []) if e["status"]["type"].get("completed")] if sb.ok else []
 out["completed"] = len(evs)
