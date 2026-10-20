@@ -2198,7 +2198,27 @@ def save_dimension_stats(history: Sequence[Dict[str, Any]]) -> None:
 def match_label(settlement: Dict[str, Any]) -> str:
     payload = settlement.get("tip_payload") or {}
     home, away, match = match_parts(payload)
+    if not match and not (home and away):
+        for leg in legs_of(payload):
+            home, away, match = match_parts(leg)
+            if match or (home and away):
+                break
     return match or f"{home} vs {away}".strip(" vs") or "Unbekanntes Spiel"
+
+
+def report_market_text(payload: Dict[str, Any]) -> str:
+    text = market_text(payload)
+    if text != "Market nicht erkannt":
+        return text
+    parts = []
+    for leg in legs_of(payload):
+        label = str(leg.get("player") or "").strip()
+        cat = str(leg.get("category") or "").strip()
+        line = leg.get("line")
+        piece = " ".join(x for x in (label, cat, f"O{line}" if line not in (None, "") else "") if x)
+        if piece:
+            parts.append(piece)
+    return " + ".join(parts) or text
 
 
 def format_settlement(settlement: Dict[str, Any]) -> str:
@@ -2211,7 +2231,7 @@ def format_settlement(settlement: Dict[str, Any]) -> str:
     return (
         f"{settlement['result_label']} <b>{settlement['market_group'].upper()}</b>\n"
         f"{match_label(settlement)}\n"
-        f"{market_text(payload)}\n"
+        f"{report_market_text(payload)}\n"
         f"{settlement.get('reason', '')}\n"
         f"{profit_line}"
     )

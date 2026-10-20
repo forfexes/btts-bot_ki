@@ -5,5 +5,12 @@ class T(unittest.TestCase):
         self.assertEqual(m.MAX_SINGLE_ODDS, 100.0)
         self.assertEqual(m.MAX_COMBO_ODDS, 2000.0)
 
+    def test_builder_labels(self):
+        pl = {"legs": [{"match": "A vs B", "player": "X", "category": "shots", "line": 1}]}
+        st = {"tip_payload": pl}
+        self.assertEqual(m.match_label(st), "A vs B")
+        self.assertEqual(m.report_market_text(pl), "X shots O1")
+
+
 if __name__ == "__main__":
     unittest.main()
