@@ -1,0 +1,146 @@
+#!/usr/bin/env python3
+"""Targeted result backfill for still-pending tips.
+
+The daily FotMob job only fetches *yesterday* and fills half-time scores for the
+first 150 matches.  Tips whose day was missed, or whose HT score was never
+fetched, stay pending forever.  This job re-reads the FotMob day feed for every
+day that still has pending tips (plus the adjacent days) and fetches half-time
+scores only for matches that a pending tip refers to.  Only real reported
+scores are written; nothing is estimated.
+"""
+from __future__ import annotations
+
+import os
+import re
+import time
+import unicodedata
+from datetime import datetime, timedelta, timezone
+from typing import Any, Dict, List, Optional, Set, Tuple
+
+import requests
+
+import netrattler_fotmob_results as fr
+
+SB = (os.getenv("SUPABASE_URL") or "").rstrip("/")
+SK = os.getenv("SUPABASE_SERVICE_ROLE_KEY") or os.getenv("SUPABASE_KEY") or ""
+H = {"apikey": SK, "Authorization": f"Bearer {SK}"}
+MAX_DAYS = int(os.getenv("BACKFILL_MAX_DAYS", "21"))
+MAX_HT = int(os.getenv("BACKFILL_MAX_HT", "400"))
+
+_STOP = {"fc", "cf", "sc", "ac", "afc", "cd", "ud", "sd", "fk", "sk", "if", "bk", "club", "de", "the"}
+_PAIR = re.compile(r"<b>\s*([^<]+?)\s+vs\.?\s+([^<]+?)\s*</b>", re.I)
+
+
+def norm_team(name: Any) -> str:
+    t = unicodedata.normalize("NFKD", str(name or "")).encode("ascii", "ignore").decode().lower()
+    t = re.sub(r"[^a-z0-9 ]+", " ", t)
+    toks = [x for x in t.split() if x not in _STOP]
+    return " ".join(toks)
+
+
+def team_match(a: Any, b: Any) -> bool:
+    x, y = norm_team(a), norm_team(b)
+    if not x or not y:
+        return False
+    if x == y:
+        return True
+    # containment only for reasonably specific names (avoid 'united' matching everything)
+    return (len(x) >= 5 and len(y) >= 5) and (x in y or y in x)
+
+
+def tip_pair(row: Dict[str, Any]) -> Optional[Tuple[str, str]]:
+    m = _PAIR.search(str(row.get("message_text") or ""))
+    if m:
+        return m.group(1).strip(), m.group(2).strip()
+    return None
+
+
+def tip_day(row: Dict[str, Any]) -> Optional[str]:
+    m = re.search(r"(20\d\d-\d\d-\d\d)", str(row.get("tip_id") or ""))
+    if m:
+        return m.group(1)
+    c = str(row.get("created_at") or "")
+    return c[:10] if len(c) >= 10 else None
+
+
+def pending_tips() -> List[Dict[str, Any]]:
+    since = (datetime.now(timezone.utc) - timedelta(days=MAX_DAYS)).isoformat()
+    until = (datetime.now(timezone.utc) - timedelta(hours=6)).isoformat()
+    r = requests.get(f"{SB}/rest/v1/tips", headers=H, timeout=40, params={
+        "select": "tip_id,market,message_text,created_at", "status": "eq.pending",
+        "created_at": f"gte.{since}", "and": f"(created_at.lte.{until})", "limit": "5000"})
+    return r.json() if r.ok and isinstance(r.json(), list) else []
+
+
+def plan(tips: List[Dict[str, Any]]):
+    """Return {day: [(home, away, needs_ht)]} including adjacent days."""
+    by_day: Dict[str, List[Tuple[str, str, bool]]] = {}
+    for t in tips:
+        pair, d = tip_pair(t), tip_day(t)
+        if not pair or not d:
+            continue
+        needs_ht = str(t.get("market") or "").endswith("_ht")
+        try:
+            base = datetime.fromisoformat(d).date()
+        except ValueError:
+            continue
+        for off in (0, 1, -1):
+            by_day.setdefault((base + timedelta(days=off)).isoformat(), []).append((pair[0], pair[1], needs_ht))
+    return by_day
+
+
+def select_rows(rows: List[Dict[str, Any]], wanted: List[Tuple[str, str, bool]]):
+    """Rows matching a pending tip (both teams), with a flag whether HT is needed."""
+    out = []
+    for row in rows:
+        need = None
+        for h, a, ht in wanted:
+            if team_match(h, row.get("home_team")) and team_match(a, row.get("away_team")):
+                need = bool(need) or ht
+        if need is not None:
+            out.append((row, need))
+    return out
+
+
+def run() -> Dict[str, int]:
+    stats = {"days": 0, "matched": 0, "ht": 0, "saved": 0}
+    if not SB or not SK:
+        return stats
+    today = datetime.now(timezone.utc).date().isoformat()
+    by_day = plan(pending_tips())
+    ht_budget = MAX_HT
+    for day in sorted(by_day):
+        if day >= today:
+            continue
+        payload = None
+        compact = day.replace("-", "")
+        for url, params in (("https://www.fotmob.com/api/data/matches", {"date": compact}),
+                            ("https://www.fotmob.com/api/matches", {"date": compact})):
+            payload = fr._fetch_json(url, params)
+            if isinstance(payload, dict) and (payload.get("leagues") or payload.get("matches")):
+                break
+        rows = fr.parse_daily_payload(payload, day)
+        stats["days"] += 1
+        hits = select_rows(rows, by_day[day])
+        save = []
+        for row, need_ht in hits:
+            row = dict(row)
+            row.pop("ht_home", None)
+            row.pop("ht_away", None)  # never overwrite a stored HT score with null
+            if need_ht and ht_budget > 0:
+                ht_budget -= 1
+                ht = fr.fetch_halftime(row.get("event_id"))
+                if ht is not None:
+                    row["ht_home"], row["ht_away"] = ht
+                    stats["ht"] += 1
+                time.sleep(0.15)
+            save.append(row)
+        stats["matched"] += len(save)
+        stats["saved"] += fr.persist(save)
+        time.sleep(0.3)
+    print(f"Pending result backfill: {stats}")
+    return stats
+
+
+if __name__ == "__main__":
+    run()

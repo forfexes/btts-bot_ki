@@ -112,3 +112,5 @@ jobs:
         run: python test_espn_ht_backfill.py
       - name: Settlement adjacent-day test
         run: python test_settlement_adjacent_day.py
+      - name: Pending result backfill test
+        run: python test_pending_result_backfill.py
