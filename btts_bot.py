@@ -7066,6 +7066,12 @@ def get_overall_stats():
         return None
 
 
+def _multi_combo_allowed_markets():
+    """Multi-combos consist only of the safest team markets (default 1x2, over25, corners, btts)."""
+    raw = env("NETRATTLER_MULTI_COMBO_MARKETS", "1x2,over25,corners,btts") or "1x2,over25,corners,btts"
+    return {x.strip().lower() for x in str(raw).split(",") if x.strip()}
+
+
 _COMBO_MAIN_MARKETS = {"btts", "over25", "combo", "btts_ht", "over15_ht", "1x2", "corners", "scorer"}
 
 
@@ -7109,6 +7115,8 @@ def generate_multi_combo_bets(all_tips, num_tips=3):
             market = str(t.get("market", "btts") or "btts").lower()
             odds = float(str(t.get("oddsYes", t.get("odds", 0)) or 0).replace(",", "."))
             if t.get("_no_real_odds") is True:
+                continue
+            if market not in _multi_combo_allowed_markets():
                 continue
             if odds < 1.40 or odds > _leg_cap(market):
                 continue
@@ -17017,6 +17025,8 @@ def generate_multi_combo_bets(all_tips, num_tips=3):
             market = str(t.get("market", "btts") or "btts").lower()
             odds = float(str(t.get("oddsYes", t.get("odds", 0)) or 0).replace(",", "."))
             if t.get("_no_real_odds") is True:
+                continue
+            if market not in _multi_combo_allowed_markets():
                 continue
             if odds < 1.40 or odds > _leg_cap(market):
                 continue
