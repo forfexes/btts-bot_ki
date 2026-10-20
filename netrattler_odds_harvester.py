@@ -328,7 +328,7 @@ def collect_kambi(target_date: str) -> List[Dict[str, Any]]:
                     seen = {(r["market"], r["selection"]) for r in rows if r["match_id"] == str(ev.get("id"))}
                     for bo in (dr.json() or {}).get("betOffers") or []:
                         lb = str((bo.get("criterion") or {}).get("label") or "")
-                        if "both teams" in lb.lower() and ("total" in lb.lower() or "&" in lb or " and " in lb.lower()):
+                        if "both teams" in lb.lower() and "to win" not in lb.lower() and ("total" in lb.lower() or "over" in lb.lower()):
                             KAMBI_DIAG.setdefault(f"{brand}_combo_labels", [])
                             if len(KAMBI_DIAG[f"{brand}_combo_labels"]) < 4:
                                 KAMBI_DIAG[f"{brand}_combo_labels"].append([lb, [str(o.get("label")) for o in (bo.get("outcomes") or [])][:4]])

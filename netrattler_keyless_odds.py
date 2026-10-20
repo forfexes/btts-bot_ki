@@ -297,9 +297,16 @@ def _x1_collect_ht(host: str, games: List[Mapping[str, Any]]) -> List[Dict[str, 
     stats = {"tried": 0, "no_json": 0, "no_sg": 0, "has_1h": 0, "rows0": 0}
     for g in games[:cap]:
         stats["tried"] += 1
-        gj, _ = _get(f"{host}/service-api/LineFeed/GetGameZip",
-                     {"id": str(g.get("I")), "lng": "en", "isSubGames": "true", "GroupEvents": "true",
-                      "countevents": "250", "grMode": "2"})
+        gj, code = None, None
+        for attempt in range(3):
+            gj, code = _get(f"{host}/service-api/LineFeed/GetGameZip",
+                            {"id": str(g.get("I")), "lng": "en", "isSubGames": "true", "GroupEvents": "true",
+                             "countevents": "250", "grMode": "2"})
+            if gj:
+                break
+            time.sleep(0.8 * (attempt + 1))
+        if not gj:
+            stats.setdefault("codes", {})[str(code)] = stats.get("codes", {}).get(str(code), 0) + 1
         if not gj:
             stats["no_json"] += 1
         sgs = ((gj or {}).get("Value") or {}).get("SG") or []
@@ -316,7 +323,7 @@ def _x1_collect_ht(host: str, games: List[Mapping[str, Any]]) -> List[Dict[str, 
                     stats["rows0"] += 1
                 rows.extend(new)
                 break
-        time.sleep(0.05)
+        time.sleep(0.3)
     KEYLESS_DIAG["1x_ht_stats"] = stats
     return rows
 
