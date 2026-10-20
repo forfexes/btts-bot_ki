@@ -30,7 +30,7 @@ import hashlib
 import json
 import os
 import re
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from typing import Any, Dict, Iterable, List, Optional, Tuple
 
 import requests
@@ -60,6 +60,8 @@ WATCH_REPOS: List[Dict[str, Any]] = [
     {"repo": "jordantete/OddsHarvester", "priority": 88, "role": "odds_scraping"},
     {"repo": "withqwerty/reep", "priority": 86, "role": "entity_identity_mapping"},
     {"repo": "openfootball/football.json", "priority": 82, "role": "results_fixtures"},
+    {"repo": "oseymour/ScraperFC", "priority": 90, "role": "player_stats_scrapers"},
+    {"repo": "JaseZiv/worldfootballR", "priority": 70, "role": "player_stats_fbref"},
 ]
 
 RELEVANCE_RULES: List[Tuple[re.Pattern[str], int, str]] = [
@@ -404,6 +406,40 @@ def inspect_huggingface() -> Dict[str, Any]:
     return {"found": len(found), "new_or_updated": len(new_or_updated), "relevant": [d["id"] for d in relevant[:20]]}
 
 
+DISCOVERY_QUERIES = (
+    "football player props odds scraper",
+    "soccer player stats fouls tackles dataset",
+    "football betting odds api open source",
+)
+
+
+def discover_new_repos() -> List[Dict[str, Any]]:
+    """Monthly GitHub search for new, active football odds/stats repos that are not on the watchlist yet.
+    Report only; nothing is installed or run automatically."""
+    known = {c["repo"].lower() for c in WATCH_REPOS}
+    seen: Dict[str, Dict[str, Any]] = {}
+    headers = {"Accept": "application/vnd.github+json"}
+    tok = os.getenv("GITHUB_TOKEN")
+    if tok:
+        headers["Authorization"] = f"Bearer {tok}"
+    for q in DISCOVERY_QUERIES:
+        try:
+            r = requests.get("https://api.github.com/search/repositories", headers=headers, timeout=25,
+                             params={"q": f"{q} pushed:>{(datetime.now(timezone.utc) - timedelta(days=120)).date()} stars:>15",
+                                     "sort": "stars", "order": "desc", "per_page": 8})
+            if not r.ok:
+                continue
+            for it in r.json().get("items", []):
+                name = it.get("full_name", "")
+                if name.lower() in known or it.get("archived") or name in seen:
+                    continue
+                seen[name] = {"repo": name, "stars": it.get("stargazers_count"), "pushed_at": it.get("pushed_at"),
+                              "description": (it.get("description") or "")[:140], "license": (it.get("license") or {}).get("spdx_id")}
+        except Exception as exc:
+            log(f"discovery '{q}': {str(exc)[:100]}", "WARN")
+    return sorted(seen.values(), key=lambda x: -(x.get("stars") or 0))[:15]
+
+
 def main() -> int:
     log("=" * 68)
     log("NETRATTLER GitHub Watch V1 startet")
@@ -435,6 +471,10 @@ def main() -> int:
             summary["huggingface"] = inspect_huggingface()
         except Exception as exc:
             log(f"HF watch: FAIL {str(exc)[:160]}", "WARN")
+    try:
+        summary["discovered"] = discover_new_repos()
+    except Exception as exc:
+        log(f"discovery: FAIL {str(exc)[:160]}", "WARN")
     with open("netrattler_github_watch_summary.json", "w", encoding="utf-8") as fh:
         json.dump(summary, fh, ensure_ascii=False, indent=2)
     log(f"Fertig: ok={len(results)} fail={failures} changed={len(changed)} relevant={len(relevant)}")
