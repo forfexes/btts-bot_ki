@@ -22,6 +22,18 @@ def main():
             names = {str(x.get("G")): x.get("GN") for x in v.get("SG") or []}
             sub = [(s.get("PN") or s.get("TG"), s.get("I")) for s in v.get("SG") or []][:15]
             found["_sub"] = sub
+            for s_ in v.get("SG") or []:
+                if str(s_.get("PN") or "").lower().startswith("1st"):
+                    hj, _ = k._get(f"{host}/service-api/LineFeed/GetGameZip",
+                                   {"id": str(s_["I"]), "lng": "en", "GroupEvents": "true", "countevents": "250", "grMode": "2"})
+                    hv = (hj or {}).get("Value") or {}
+                    for grp in hv.get("GE") or []:
+                        for arr in grp.get("E") or []:
+                            for e in arr:
+                                found.setdefault(f"HT_G{grp.get('G')}/T{e.get('T')}", {"P": e.get("P"), "C": e.get("C")})
+                    break
+            if any(x.startswith("HT_") for x in found):
+                break
         out["hosts"][host] = {"http": st, "games": len(games), "keys": found}
         if games:
             break
