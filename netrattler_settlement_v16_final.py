@@ -96,6 +96,7 @@ PLAYER_STATS_TABLES = {
 
 MAX_SINGLE_ODDS = 100.0
 MAX_COMBO_ODDS = 2000.0
+MAX_OVER15_HT_ODDS = 4.5
 
 
 def log(message: str, level: str = "INFO") -> None:
@@ -1972,6 +1973,7 @@ def settle_tip(tip: Dict[str, Any], results: Sequence[Dict[str, Any]], player_st
     if odds and status in {"win", "loss"} and (
         (group not in {"combo", "combo_multi", "builder"} and odds >= MAX_SINGLE_ODDS)
         or odds > MAX_COMBO_ODDS
+        or (group == "over15_ht" and odds > MAX_OVER15_HT_ODDS)
     ):
         # Impossible single odds (e.g. American odds read as decimal): never count in ROI.
         status, reason = "void", f"unplausible odds {odds}"
