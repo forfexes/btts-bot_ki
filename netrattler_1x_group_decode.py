@@ -52,7 +52,8 @@ def main():
     for g, d in agg.items():
         rk = sorted(((round(b / n, 4), st, n) for st, (n, b) in d.items() if n >= 15))
         res[g] = rk[:3]
-    out = {"probe": "1x_group_decode", "snaps": len(snaps), "logs": len(logs), "matched": matched, "ranking": res}
+    espn = [l for l in logs if l.get("fouls_committed") is not None]
+    out = {"probe": "1x_group_decode", "rows_with_fouls": len(espn), "rows_total": len(logs), "snaps": len(snaps), "logs": len(logs), "matched": matched, "ranking": res}
     print(json.dumps(out)[:4000])
     r = requests.post(f"{mu.rstrip('/')}/rest/v1/netrattler_card_diag",
                       headers={"apikey": mk, "Authorization": f"Bearer {mk}", "Content-Type": "application/json"},
