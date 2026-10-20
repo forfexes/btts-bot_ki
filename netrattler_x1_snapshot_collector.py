@@ -78,29 +78,45 @@ def run() -> Dict[str, int]:
         print("no supabase env"); return stats
     done = already_snapshotted()
     now_ts = time.time()
-    for host in ps._1X_HOSTS:
+    # 22bet itself is slow from runners; the mirrors answer well -> try mirrors first.
+    hosts = [h for h in ps._1X_HOSTS if "22bet" not in h] + [h for h in ps._1X_HOSTS if "22bet" in h]
+    items, seen = [], set()
+    for host in hosts:
         data = ps._get_json(f"{host}/service-api/LineFeed/Get1x2_VZip",
                             params={"sports": 1, "count": 1000, "lng": "en", "mode": 4, "country": 1}, timeout=15)
-        items = (data or {}).get("Value") or []
-        if not items:
-            continue
-        stats["listed"] = len(items)
-        games = pick_games(items, done, now_ts, HOURS_AHEAD, MAX_NEW)
-        stats["picked"] = len(games)
-        for gid, name in games:
-            game = ps._get_json(f"{host}/service-api/LineFeed/GetGameZip",
+        for g in (data or {}).get("Value") or []:
+            key = (g.get("O1"), g.get("O2"))
+            if key not in seen:
+                seen.add(key); items.append((host, g))
+    stats["listed"] = len(items)
+    picked = []
+    for host, g in items:
+        for gid, name in pick_games([g], done | {n for _, _, n in picked}, now_ts, HOURS_AHEAD, 1):
+            picked.append((host, gid, name))
+        if len(picked) >= MAX_NEW:
+            break
+    stats["picked"] = len(picked)
+    stats["with_player_subgames"] = 0
+    for host, gid, name in picked:
+        rows = []
+        for h in [host] + [x for x in hosts if x != host]:
+            game = ps._get_json(f"{h}/service-api/LineFeed/GetGameZip",
                                 params={"id": gid, "lng": "en", "cfview": 0, "grMode": 4, "country": 1}, timeout=15)
             val = (game or {}).get("Value") or {}
+            if not val:
+                continue  # id is host-specific only for unrelated brands; try the next mirror
+            if any("players' stats" in str(sg.get("TG") or sg.get("PN") or "").lower() for sg in (val.get("SG") or [])):
+                stats["with_player_subgames"] += 1
             ps.X1_SNAPSHOT.clear()
-            ps._snapshot_x1_player_markets(host, val, name)
+            ps._snapshot_x1_player_markets(h, val, name)
             rows = list(ps.X1_SNAPSHOT)
-            if rows:
-                p = requests.post(f"{SB}/rest/v1/x1_player_snapshots", headers={**H, "Prefer": "return=minimal"},
-                                  json=rows, timeout=60)
-                if p.ok:
-                    stats["matches_saved"] += 1; stats["rows"] += len(rows)
-            time.sleep(0.4)
-        break  # one working mirror is enough
+            break
+        if rows:
+            p = requests.post(f"{SB}/rest/v1/x1_player_snapshots", headers={**H, "Prefer": "return=minimal"},
+                              json=rows, timeout=60)
+            if p.ok:
+                stats["matches_saved"] += 1; stats["rows"] += len(rows)
+        time.sleep(0.4)
     prune()
     print(f"x1 snapshot collector: {stats}")
     try:
