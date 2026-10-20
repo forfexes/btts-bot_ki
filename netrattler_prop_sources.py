@@ -343,8 +343,8 @@ _1X_PLAYER_GROUPS = {
 # matches are over, G/T can be matched against player_game_log to PROVE which
 # group is which - no guessing. Bounded: few matches per run, capped rows.
 X1_SNAPSHOT: List[Dict[str, Any]] = []
-_X1_SNAPSHOT_MATCHES = 24
-_X1_SNAPSHOT_MAX_ROWS = 6000
+_X1_SNAPSHOT_MATCHES = 60
+_X1_SNAPSHOT_MAX_ROWS = 14000
 
 
 def _snapshot_x1_player_markets(host: str, val: Dict[str, Any], match_name: str) -> None:
