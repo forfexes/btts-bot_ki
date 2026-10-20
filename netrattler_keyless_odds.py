@@ -82,6 +82,11 @@ def _bwin_market(mname: str, oname: str, home: str, away: str):
             return "1x2", "home", None
         if o in {"2", an} or (an and o.startswith(an[:6])):
             return "1x2", "away", None
+    if ("both teams to score" in m) and ("total" in m or "over" in m or "&" in m or " and " in m) \
+            and not any(t in m for t in ("1st half", "first half", "2nd half", "second half")):
+        if re.search(r"(?:yes|ja)\s*(?:&|and)\s*(?:over|o)\s*2[.,]5", o):
+            return "btts_over_2_5", "yes", 2.5
+        return None
     if m == "both teams to score":
         if o in {"yes", "no"}:
             return "btts", o, None

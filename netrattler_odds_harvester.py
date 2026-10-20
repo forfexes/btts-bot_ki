@@ -218,6 +218,30 @@ KAMBI_BRANDS = [x.strip() for x in os.getenv("KAMBI_BRANDS", "ubse,ub,ubnl,svens
 KAMBI_DIAG: Dict[str, Any] = {}
 KAMBI_DETAIL_EVENTS = int(os.getenv("KAMBI_DETAIL_EVENTS", "60"))
 
+_COMBO_OVER25 = re.compile(r"(?:yes|ja)\s*(?:&|and)\s*(?:over|o)\s*2[.,]5|(?:over|o)\s*2[.,]5\s*(?:&|and)\s*(?:yes|ja)")
+
+
+def _is_btts_over25_combo(criterion: str, outcome: str, line: Any) -> bool:
+    """Exact observed BTTS & Over 2.5 outcome only. Never built from single-market prices."""
+    crit, out = str(criterion).lower(), str(outcome).lower().strip()
+    if not any(t in crit for t in ("both teams to score", "both teams score", "btts")):
+        return False
+    if any(t in crit for t in ("1st half", "first half", "2nd half", "second half", "team", "handicap")) and \
+            "total goals" not in crit and "over" not in crit:
+        return False
+    if any(t in crit for t in ("1st half", "first half", "2nd half", "second half")):
+        return False
+    if "&" not in crit and " and " not in crit and "total" not in crit and "over" not in crit:
+        return False
+    if _COMBO_OVER25.search(out):
+        return True
+    try:
+        ln = float(line) / 1000.0 if line and float(line) > 100 else float(line or 0)
+    except (TypeError, ValueError):
+        ln = 0.0
+    return abs(ln - 2.5) < 0.01 and out in {"yes & over", "yes and over", "ja & over"}
+
+
 def _kambi_rows(brand: str, ev: Mapping[str, Any], offers: Sequence[Mapping[str, Any]], league: str) -> List[Dict[str, Any]]:
     out: List[Dict[str, Any]] = []
     home, away, start = ev.get("homeName"), ev.get("awayName"), ev.get("start") or ""
@@ -247,6 +271,8 @@ def _kambi_rows(brand: str, ev: Mapping[str, Any], offers: Sequence[Mapping[str,
                 tag = str(pts).replace(".", "_")
                 market, sel = f"totals_ht_{tag}", f"{'over' if otype == 'OT_OVER' else 'under'}_{tag}"
                 line = pts
+            if not market and _is_btts_over25_combo(label, str(oc.get("label") or ""), line):
+                market, sel, line = "btts_over_2_5", "yes", 2.5
             if not market:
                 continue
             row = _row(source="kambi", bookmaker=f"kambi_{brand}", event_id=ev.get("id"), league=league,

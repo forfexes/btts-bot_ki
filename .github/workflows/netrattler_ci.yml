@@ -98,3 +98,5 @@ jobs:
         run: python test_x1_ht_rows.py
       - name: ESPN player stats scrape test
         run: python test_espn_players_scrape.py
+      - name: BTTS+Over2.5 combo rows test
+        run: python test_btts_over25_combo_rows.py
