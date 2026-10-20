@@ -7,13 +7,13 @@ from playwright.sync_api import sync_playwright
 
 BLOCKED = ["allyspin.com", "5gringos.com", "westace.com", "spinbara.com", "posido.com", "wazamba.com",
            "amunra.com", "bankonbet.com", "powbet.com", "5gcasino.com", "ivibet.com", "betify.com"]
-WORDS = ("foul", "tackle", "offside", "shots on target", "passes")
+WORDS = ("tackles", "fouls committed", "fouls won", "offsides", "shots on target", "player's stats")
 
 def main():
     out = {"probe": "plain_browser", "sites": [], "dict_hits": []}
     with sync_playwright() as p:
         b = p.chromium.launch()
-        for d in BLOCKED:
+        for d in []:
             pg = b.new_page()
             try:
                 r = pg.goto("https://" + d + "/", timeout=20000, wait_until="domcontentloaded")
@@ -22,29 +22,26 @@ def main():
                 out["sites"].append({"d": d, "error": type(e).__name__})
             pg.close()
         pg = b.new_page()
-        seen = []
+        seen = []; urls = []
         def on_resp(resp):
+            if "genfiles" in resp.url: urls.append(re.sub(r"\?.*", "", resp.url)[-110:])
             try:
-                if "json" in (resp.headers.get("content-type") or "") and len(seen) < 80:
+                if "genfiles" in resp.url and len(seen) < 80:
                     t = resp.text()
                     low = t.lower()
                     hits = [w for w in WORDS if w in low]
                     if hits:
                         seen.append({"url": re.sub(r"\?.*", "", resp.url)[:140], "bytes": len(t), "hits": hits,
-                                     "sample": low[max(0, low.find(hits[0]) - 80): low.find(hits[0]) + 120]})
+                                     "sample": low[max(0, low.find(hits[0]) - 150): low.find(hits[0]) + 250]})
             except Exception:
                 pass
         pg.on("response", on_resp)
         try:
-            pg.goto("https://22bet.com/line/football", timeout=30000, wait_until="networkidle")
-            link = pg.locator("a[href*='/line/football/']").nth(5)
-            href = link.get_attribute("href")
-            if href:
-                pg.goto("https://22bet.com" + href if href.startswith("/") else href, timeout=30000, wait_until="networkidle")
-            pg.wait_for_timeout(4000)
+            pg.goto("https://22bet.com/line/football", timeout=30000, wait_until="domcontentloaded")
+            pg.wait_for_timeout(12000)
         except Exception as e:
             out["nav_error"] = type(e).__name__
-        out["dict_hits"] = seen[:12]
+        out["dict_hits"] = seen[:12]; out["urls"] = [u for u in urls][:40]
         b.close()
     print(json.dumps(out)[:3500])
     url = os.environ.get("SUPABASE_URL", "").rstrip("/"); key = os.environ.get("SUPABASE_SERVICE_ROLE_KEY") or os.environ.get("SUPABASE_KEY", "")
