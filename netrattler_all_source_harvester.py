@@ -189,7 +189,45 @@ def data_lake_row(source: str, source_type: str, entity_type: str, payload: Dict
     }
 
 
+_LAKE_COLS = ["source", "source_type", "url", "league", "season", "match_date", "entity_type",
+              "entity_name", "market", "category", "payload", "data_hash", "collected_at"]
+
+
+def lake_insert_pg(dsn: str, rows: List[Dict[str, Any]], keep_days: int) -> Tuple[int, int]:
+    """Write raw lake rows to the archive project (V3 Postgres) and apply retention there.
+    The main operational project stays small (no reader of the lake exists on main)."""
+    import psycopg2
+    from psycopg2.extras import execute_values, Json
+    ok = 0
+    with psycopg2.connect(dsn, connect_timeout=20) as conn:
+        with conn.cursor() as cur:
+            for part in chunks(rows, 500):
+                vals = [tuple(Json(r.get(c)) if c == "payload" and r.get(c) is not None else r.get(c) for c in _LAKE_COLS)
+                        for r in part]
+                execute_values(cur, "insert into netrattler_data_lake_raw (id," + ",".join(_LAKE_COLS) + ") values %s "
+                               "on conflict (data_hash) do nothing",
+                               vals, template="(gen_random_uuid()," + ",".join(["%s"] * len(_LAKE_COLS)) + ")")
+                ok += len(part)
+            if keep_days > 0:
+                cur.execute("delete from netrattler_data_lake_raw where collected_at < now() - make_interval(days => %s)", (keep_days,))
+        conn.commit()
+    return ok, len(rows) - ok
+
+
 def push_lake(rows: List[Dict[str, Any]]) -> None:
+    dsn = os.getenv("DATA_LAKE_DSN", "")
+    if dsn.startswith("postgres"):
+        try:
+            ok, fail = lake_insert_pg(dsn, rows, int(os.getenv("DATA_LAKE_KEEP_DAYS", "5")))
+            log(f"data_lake (archive): {ok} ok / {fail} fail")
+            return
+        except Exception as e:
+            # never fall back to main: the main project is at its size limit
+            log(f"data_lake archive write failed, rows dropped: {str(e)[:160]}", "WARN")
+            return
+    if os.getenv("DATA_LAKE_MAIN_FALLBACK", "0") != "1":
+        log(f"data_lake: no archive DSN — {len(rows)} rows not stored (main project protected)", "WARN")
+        return
     ok, fail = sb_insert("netrattler_data_lake_raw", rows, on_conflict="data_hash")
     log(f"data_lake: {ok} ok / {fail} fail")
 

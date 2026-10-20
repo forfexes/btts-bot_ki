@@ -18,7 +18,7 @@ jobs:
       - name: Install source adapters
         run: |
           pip install -r requirements_all_source.txt
-          pip install playwright
+          pip install playwright psycopg2-binary
           python -m playwright install --with-deps chromium
       - name: Compile
         run: python -m py_compile netrattler_all_source_harvester.py netrattler_source_hub.py netrattler_odds_harvester.py netrattler_source_probe.py netrattler_public_source_features.py
@@ -29,6 +29,8 @@ jobs:
         run: |
           python netrattler_source_probe.py || true
           python netrattler_public_source_features.py || true
+      - name: Lake archive write test
+        run: python test_lake_archive_write.py
       - name: Run all sources; failed source continues to next
         env:
           SUPABASE_URL: ${{ secrets.SUPABASE_URL }}
@@ -50,6 +52,8 @@ jobs:
           SEASONS: "2526,2425,2324"
           HARVEST_PARALLEL_WORKERS: "4"
           ALL_SOURCE_INCLUDE_ODDS: "false"
+          DATA_LAKE_DSN: ${{ secrets.V3_DATABASE_URL }}
+          DATA_LAKE_KEEP_DAYS: "5"
         run: python netrattler_all_source_harvester.py
       - uses: actions/upload-artifact@v4
         if: always()
