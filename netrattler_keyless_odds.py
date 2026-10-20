@@ -29,7 +29,7 @@ KEYLESS_DIAG: Dict[str, Any] = {}
 BWIN_BASE = "https://sports.bwin.com/cds-api/bettingoffer"
 BWIN_PARAMS = {"x-bwin-accessid": os.getenv("BWIN_ACCESS_ID", "NTZiMjk3OGMtNjU5Mi00NjA5LWI2MWItZmU4MDRhN2QxZmEz"),
                "lang": "en", "country": "GB", "userCountry": "GB"}
-X1_HOSTS = [h.strip() for h in os.getenv("ONEX_HOSTS", "https://22bet.com,https://melbet.com,https://betwinner.com").split(",") if h.strip()]
+X1_HOSTS = [h.strip() for h in os.getenv("ONEX_HOSTS", "https://22bet.com,https://melbet.com,https://betwinner.com,https://megapari.com,https://betandyou.com").split(",") if h.strip()]
 
 
 def _row(**kw):

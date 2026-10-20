@@ -328,7 +328,7 @@ def fetch_kambi_player_props(home: str, away: str, brand: str = "ub") -> List[Di
 # QUELLE: 1xbet-Familie (Melbet, Megapari, 888starz, Betwinner ...)
 #   LineFeed-JSON. Groesste Prop-Tiefe, aber Bot-Schutz auf Single-IP.
 # ==================================================================
-_1X_HOSTS = ["https://22bet.com", "https://melbet.com", "https://betwinner.com"]  # 1xbet.com itself blocks runners
+_1X_HOSTS = ["https://22bet.com", "https://melbet.com", "https://betwinner.com", "https://megapari.com", "https://betandyou.com"]  # 1xbet.com itself blocks runners
 _1X_LIST_CACHE: Dict[str, Any] = {}
 _1X_GAME_CACHE: Dict[tuple, Any] = {}
 # 1xbet bet-group IDs fuer Player-Props (aus dem LineFeed-Schema):
