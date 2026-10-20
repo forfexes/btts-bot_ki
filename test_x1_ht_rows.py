@@ -14,5 +14,23 @@ class T(unittest.TestCase):
     def test_placeholder_teams_skipped(self):
         self.assertEqual(k._x1_ht_rows({"O1": "Home", "O2": "Away"}, {"GE": []}, "https://22bet.com"), [])
 
+
+
+class TestHtSpread(unittest.TestCase):
+    def test_spread_over_hosts_and_mismatch_skipped(self):
+        from unittest import mock
+        game = lambda i, o1: {"I": i, "O1": o1, "O2": "Beta FC", "S": 1900000000, "L": "L"}
+        games = [game(1, "Alpha FC"), game(2, "Gamma FC")]
+        def fake_get(url, params=None, timeout=None):
+            if params.get("isSubGames"):
+                return {"Value": {"O1": "Alpha FC" if params["id"] == "1" else "Other FC", "SG": [{"PN": "1st half", "I": 99}]}}, 200
+            return {"Value": {"GE": [{"G": 21, "E": [[{"T": 180, "C": 3.1}]]}]}}, 200
+        with mock.patch.object(k, "_get", side_effect=fake_get), mock.patch.object(k.time, "sleep"), \
+                mock.patch.object(k, "X1_HOSTS", ["https://22bet.com", "https://melbet.com"]):
+            rows = k._x1_collect_ht("https://22bet.com", games)
+        self.assertEqual(len(rows), 1)          # fixture 2 id points at another team on that mirror -> skipped
+        self.assertEqual(rows[0]["market"], "btts_ht")
+
+
 if __name__ == "__main__":
     unittest.main()

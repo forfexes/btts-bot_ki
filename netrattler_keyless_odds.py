@@ -291,16 +291,13 @@ def _x1_ht_rows(g: Mapping[str, Any], sub: Mapping[str, Any], host: str) -> List
     return out
 
 
-def _x1_collect_ht(host: str, games: List[Mapping[str, Any]]) -> List[Dict[str, Any]]:
+def _x1_ht_worker(host: str, games: List[Mapping[str, Any]], deadline: float, stats: Dict[str, Any]) -> List[Dict[str, Any]]:
     rows: List[Dict[str, Any]] = []
-    cap = int(os.getenv("ONEX_HT_GAMES", "120"))
-    stats = {"tried": 0, "no_json": 0, "no_sg": 0, "has_1h": 0, "rows0": 0}
-    deadline = time.time() + float(os.getenv("ONEX_HT_BUDGET_S", "240"))
-    for g in games[:cap]:
+    for g in games:
         if time.time() > deadline:
-            stats["budget_stop"] = True
+            stats["budget_stop"] = stats.get("budget_stop", 0) + 1
             break
-        stats["tried"] += 1
+        stats["tried"] = stats.get("tried", 0) + 1
         gj, code = None, None
         for attempt in range(2):
             gj, code = _get(f"{host}/service-api/LineFeed/GetGameZip",
@@ -310,25 +307,50 @@ def _x1_collect_ht(host: str, games: List[Mapping[str, Any]]) -> List[Dict[str, 
                 break
             time.sleep(0.6)
         if not gj:
-            stats.setdefault("codes", {})[str(code)] = stats.get("codes", {}).get(str(code), 0) + 1
-        if not gj:
-            stats["no_json"] += 1
-        sgs = ((gj or {}).get("Value") or {}).get("SG") or []
+            stats["no_json"] = stats.get("no_json", 0) + 1
+            c = stats.setdefault("codes", {})
+            c[str(code)] = c.get(str(code), 0) + 1
+            continue
+        val = gj.get("Value") or {}
+        # Mirrors share the LineFeed, but never trust an id that points at a different fixture.
+        if val.get("O1") and g.get("O1") and str(val.get("O1")).strip().lower() != str(g.get("O1")).strip().lower():
+            stats["id_mismatch"] = stats.get("id_mismatch", 0) + 1
+            continue
+        sgs = val.get("SG") or []
         if not sgs:
-            stats["no_sg"] += 1
+            stats["no_sg"] = stats.get("no_sg", 0) + 1
         for sg in sgs:
             if str(sg.get("PN") or "").lower().startswith("1st") and sg.get("I"):
-                stats["has_1h"] += 1
+                stats["has_1h"] = stats.get("has_1h", 0) + 1
                 hj, _ = _get(f"{host}/service-api/LineFeed/GetGameZip",
                              {"id": str(sg["I"]), "lng": "en", "GroupEvents": "true",
                               "countevents": "250", "grMode": "2"})
                 new = _x1_ht_rows(g, (hj or {}).get("Value") or {}, host)
                 if not new:
-                    stats["rows0"] += 1
+                    stats["rows0"] = stats.get("rows0", 0) + 1
                 rows.extend(new)
                 break
         time.sleep(0.15)
-    KEYLESS_DIAG["1x_ht_stats"] = stats
+    return rows
+
+
+def _x1_collect_ht(host: str, games: List[Mapping[str, Any]]) -> List[Dict[str, Any]]:
+    """1st-half lookups spread over all mirror hosts (one worker per host) so one slow host cannot starve the run."""
+    from concurrent.futures import ThreadPoolExecutor
+    cap = int(os.getenv("ONEX_HT_GAMES", "200"))
+    hosts = [host] + [h for h in X1_HOSTS if h != host]
+    slices = [games[:cap][i::len(hosts)] for i in range(len(hosts))]
+    deadline = time.time() + float(os.getenv("ONEX_HT_BUDGET_S", "300"))
+    stats_all: List[Dict[str, Any]] = [{} for _ in hosts]
+    with ThreadPoolExecutor(max_workers=len(hosts)) as pool:
+        futs = [pool.submit(_x1_ht_worker, h, sl, deadline, st) for h, sl, st in zip(hosts, slices, stats_all)]
+        rows: List[Dict[str, Any]] = []
+        for f in futs:
+            try:
+                rows.extend(f.result() or [])
+            except Exception:
+                pass
+    KEYLESS_DIAG["1x_ht_stats"] = {h.split("//")[-1]: st for h, st in zip(hosts, stats_all)}
     return rows
 
 
