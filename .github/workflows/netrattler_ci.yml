@@ -102,3 +102,5 @@ jobs:
         run: python test_btts_over25_combo_rows.py
       - name: Combo leg text cleaning test
         run: python test_combo_leg_text.py
+      - name: Settlement odds guard test
+        run: python test_settlement_odds_guard.py
