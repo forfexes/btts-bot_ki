@@ -326,6 +326,12 @@ def collect_kambi(target_date: str) -> List[Dict[str, Any]]:
                                   params={"lang": "en_GB", "market": "GB"}, headers={"User-Agent": "Mozilla/5.0"}, timeout=15)
                 if dr.ok:
                     seen = {(r["market"], r["selection"]) for r in rows if r["match_id"] == str(ev.get("id"))}
+                    for bo in (dr.json() or {}).get("betOffers") or []:
+                        lb = str((bo.get("criterion") or {}).get("label") or "")
+                        if "both teams" in lb.lower() and ("total" in lb.lower() or "&" in lb or " and " in lb.lower()):
+                            KAMBI_DIAG.setdefault(f"{brand}_combo_labels", [])
+                            if len(KAMBI_DIAG[f"{brand}_combo_labels"]) < 4:
+                                KAMBI_DIAG[f"{brand}_combo_labels"].append([lb, [str(o.get("label")) for o in (bo.get("outcomes") or [])][:4]])
                     for r2 in _kambi_rows(brand, ev, (dr.json() or {}).get("betOffers") or [], league):
                         if (r2["market"], r2["selection"]) not in seen:
                             rows.append(r2); got += 1
@@ -579,6 +585,21 @@ def _keyless(name: str, day: str) -> List[Dict[str, Any]]:
     return rows
 
 
+def _persist_collector_diag() -> None:
+    """Write collector diagnostics (Kambi combo labels, 1x HT stats) to netrattler_card_diag; best effort."""
+    if not (SUPABASE_URL and SUPABASE_KEY):
+        return
+    try:
+        import netrattler_keyless_odds as k
+        info = {"probe": "collector_diag", "kambi": dict(KAMBI_DIAG),
+                "keyless": {kk: vv for kk, vv in k.KEYLESS_DIAG.items() if str(kk).startswith("1x")}}
+        requests.post(f"{SUPABASE_URL}/rest/v1/netrattler_card_diag",
+                      headers={"apikey": SUPABASE_KEY, "Authorization": f"Bearer {SUPABASE_KEY}", "Content-Type": "application/json"},
+                      json={"info": json.loads(json.dumps(info, default=str))}, timeout=20)
+    except Exception:
+        pass
+
+
 def collect_live_all(target_date: Optional[str] = None) -> List[Dict[str, Any]]:
     day = str(target_date or date.today().isoformat())[:10]
     rows: List[Dict[str, Any]] = []
@@ -619,6 +640,7 @@ def collect_live_all(target_date: Optional[str] = None) -> List[Dict[str, Any]]:
             record("odds_harvester", name, len(got), note=note)
         except Exception:
             pass
+    _persist_collector_diag()
     clean = _dedupe(rows)
     log(f"Live odds total={len(clean)} sources={dict(Counter(x.get('source') for x in clean))}")
     return clean

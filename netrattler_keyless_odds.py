@@ -294,18 +294,30 @@ def _x1_ht_rows(g: Mapping[str, Any], sub: Mapping[str, Any], host: str) -> List
 def _x1_collect_ht(host: str, games: List[Mapping[str, Any]]) -> List[Dict[str, Any]]:
     rows: List[Dict[str, Any]] = []
     cap = int(os.getenv("ONEX_HT_GAMES", "120"))
+    stats = {"tried": 0, "no_json": 0, "no_sg": 0, "has_1h": 0, "rows0": 0}
     for g in games[:cap]:
+        stats["tried"] += 1
         gj, _ = _get(f"{host}/service-api/LineFeed/GetGameZip",
                      {"id": str(g.get("I")), "lng": "en", "isSubGames": "true", "GroupEvents": "true",
                       "countevents": "250", "grMode": "2"})
-        for sg in ((gj or {}).get("Value") or {}).get("SG") or []:
+        if not gj:
+            stats["no_json"] += 1
+        sgs = ((gj or {}).get("Value") or {}).get("SG") or []
+        if not sgs:
+            stats["no_sg"] += 1
+        for sg in sgs:
             if str(sg.get("PN") or "").lower().startswith("1st") and sg.get("I"):
+                stats["has_1h"] += 1
                 hj, _ = _get(f"{host}/service-api/LineFeed/GetGameZip",
                              {"id": str(sg["I"]), "lng": "en", "GroupEvents": "true",
                               "countevents": "250", "grMode": "2"})
-                rows.extend(_x1_ht_rows(g, (hj or {}).get("Value") or {}, host))
+                new = _x1_ht_rows(g, (hj or {}).get("Value") or {}, host)
+                if not new:
+                    stats["rows0"] += 1
+                rows.extend(new)
                 break
         time.sleep(0.05)
+    KEYLESS_DIAG["1x_ht_stats"] = stats
     return rows
 
 
