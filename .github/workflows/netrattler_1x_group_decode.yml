@@ -1,5 +1,7 @@
 name: NETRATTLER 1x Group Decode
 on:
+  schedule:
+    - cron: "40 6 * * *"
   workflow_dispatch: {}
 permissions:
   contents: read
