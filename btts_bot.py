@@ -10708,6 +10708,14 @@ def _ml_load_models():
                 if unknown:
                     log(f"   🤖 ML: {name} unbekannte Features {unknown[:4]} — skip", "WARN")
                     continue
+                try:
+                    from netrattler_model_quality import model_has_skill
+                    _ok_skill, _why = model_has_skill(row.get("meta") or obj.get("meta"))
+                except Exception:
+                    _ok_skill, _why = True, "quality gate unavailable"
+                if not _ok_skill:
+                    log(f"   🤖 ML: {name} ohne Mehrwert ({_why}) — Fallback Elo/Poisson", "WARN")
+                    continue
                 model = obj["model"]
                 expected = getattr(model, "n_features_in_", None)
                 if expected not in (None, len(feature_cols)):

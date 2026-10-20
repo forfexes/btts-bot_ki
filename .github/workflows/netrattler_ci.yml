@@ -116,3 +116,5 @@ jobs:
         run: python test_pending_result_backfill.py
       - name: Stale pending void test
         run: python test_stale_pending_void.py
+      - name: ML model quality gate test
+        run: python test_model_quality.py

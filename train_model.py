@@ -1133,6 +1133,33 @@ FEATURE_COLS = [
 ]
 
 
+def _honest_holdout(base_model, X, y, model_name, frac=0.8):
+    """Fit a clone on the chronologically first `frac` rows, score the rest.
+    Returns (brier, auc, n_eval). The production model is fitted separately on all rows,
+    so these metrics are genuinely out-of-sample (the old code scored data it had trained on)."""
+    from sklearn.base import clone
+    split = int(len(X) * frac)
+    X_tr, y_tr, X_ev, y_ev = X[:split], y[:split], X[split:], y[split:]
+    if len(X_ev) < 20 or len(np.unique(y_tr)) < 2:
+        return None, None, len(X_ev)
+    try:
+        ev_model = _safe_fit_classifier(clone(base_model), X_tr, y_tr, model_name + "_holdout")
+        proba = ev_model.predict_proba(X_ev)[:, 1]
+        return float(brier_score_loss(y_ev, proba)), float(_safe_auc(y_ev, proba)), len(X_ev)
+    except Exception as exc:
+        print(f"   ⚠️ Holdout-Eval fehlgeschlagen für {model_name}: {str(exc)[:120]}")
+        return None, None, len(X_ev)
+
+
+def _skill_meta(brier, auc, y_eval_rate):
+    base = float(y_eval_rate) * (1.0 - float(y_eval_rate))
+    return {
+        "base_brier": round(base, 4),
+        "no_skill": bool(brier is None or brier >= base * 0.995),
+        "eval": "temporal_holdout_20pct",
+    }
+
+
 def train_model(df, target_col, model_name):
     """Trainiert XGBoost-Klassifikator mit Time-Series-CV und Kalibrierung."""
     # 🆕 Diagnostik VOR dropna — zeigt welche Spalte das Problem verursacht
@@ -1197,7 +1224,6 @@ def train_model(df, target_col, model_name):
         subsample=0.8,
         colsample_bytree=0.8,
         min_child_weight=10,
-        scale_pos_weight=(1 - y.mean()) / y.mean(),
         eval_metric="logloss",
         random_state=42,
         n_jobs=-1,
@@ -1206,24 +1232,27 @@ def train_model(df, target_col, model_name):
     # V32B: robuste Calibration.
     # TimeSeriesSplit kann bei schiefen Targets einzelne Folds mit nur einer Klasse erzeugen
     # und XGBoost crasht dann: "Expected [0], got [1]".
-    calibrated = _safe_fit_classifier(base_model, X, y, model_name)
-
-    # Evaluierung auf letzten 20% (Out-of-Sample)
+    # Ehrliche Evaluierung: Klon nur auf den ersten 80% (chronologisch) trainieren,
+    # auf den letzten 20% messen. Das Produktionsmodell danach auf allen Daten.
     split = int(len(X) * 0.8)
-    X_eval, y_eval = X[split:], y[split:]
-    proba = calibrated.predict_proba(X_eval)[:, 1]
-    brier = brier_score_loss(y_eval, proba)
-    auc = _safe_auc(y_eval, proba)
-    print(f"   ✅ Brier Score: {brier:.4f} (niedriger = besser, Baseline ~0.24)")
-    print(f"   ✅ ROC-AUC:     {auc:.4f} (höher = besser, Zuffall = 0.5)")
+    brier, auc, n_eval = _honest_holdout(base_model, X, y, model_name)
+    calibrated = _safe_fit_classifier(base_model, X, y, model_name)
+    eval_rate = float(np.mean(y[split:])) if len(y[split:]) else float(y.mean())
+    skill = _skill_meta(brier, auc, eval_rate)
+    if brier is None:
+        brier, auc = 1.0, 0.5
+    print(f"   ✅ Holdout Brier: {brier:.4f} vs Basis {skill['base_brier']:.4f} | AUC {auc:.4f} | n={n_eval}")
+    if skill["no_skill"]:
+        print(f"   ⚠️ {model_name}: kein Mehrwert gegenüber Basisrate — Laufzeit nutzt Fallback")
 
     return calibrated, {
         "model_name": model_name,
         "feature_cols": FEATURE_COLS,
         "brier_score": round(brier, 4),
         "roc_auc": round(auc, 4),
+        **skill,
         "training_samples": len(X),
-        "positive_rate": round(float(y.mean()), 3),
+        "positive_rate": round(eval_rate, 3),
         "trained_at": datetime.now(timezone.utc).isoformat(),
         "training_fingerprint": _TRAINING_FINGERPRINT or None,
         "model_family": "match",
@@ -1433,6 +1462,10 @@ def load_player_prop_training_frame():
     combined["match_date"] = pd.to_datetime(combined["match_date"], errors="coerce")
     combined = combined.dropna(subset=["match_date", "player_key"]).sort_values(["player_key", "match_date"])
 
+    # Which stats a source actually reported. Missing must NOT become a 0-label
+    # (e.g. ESPN reports no tackles/passes -> those rows would teach "0 tackles").
+    for c in stat_cols:
+        combined[f"{c}__reported"] = pd.to_numeric(combined[c], errors="coerce").notna()
     # Missing Stats: 0, Minuten unbekannt: Median/0
     for c in stat_cols:
         combined[c] = pd.to_numeric(combined[c], errors="coerce").fillna(0.0)
@@ -1476,10 +1509,11 @@ def load_player_prop_training_frame():
         feat["games_prior"] = len(h)
 
         def avg_stat(stat, default=0.0):
-            last = h[-8:]
-            if not last:
+            vals = [x.get(stat) for x in h[-8:]]
+            vals = [v for v in vals if v is not None and not (isinstance(v, float) and math.isnan(v))]
+            if not vals:
                 return default
-            return float(np.mean([x.get(stat, 0.0) for x in last]))
+            return float(np.mean(vals))
 
         for stat in stat_cols:
             feat[f"avg_{stat}"] = avg_stat(stat, 0.0)
@@ -1500,7 +1534,8 @@ def load_player_prop_training_frame():
         feat["is_favorite"] = 1.0 if (_team_elo - _opp_elo + (65 if _is_home else -65)) > 0 else 0.0
 
         rows.append(feat)
-        hist.setdefault(pk, []).append({**{s: float(row.get(s, 0.0)) for s in stat_cols}, "source_count": float(row.get("source_count", 1.0))})
+        hist.setdefault(pk, []).append({**{s: (float(row.get(s, 0.0)) if bool(row.get(f"{s}__reported", True)) else None)
+                                            for s in stat_cols}, "source_count": float(row.get("source_count", 1.0))})
 
     out = pd.DataFrame(rows)
     for c in PLAYER_FEATURE_COLS:
@@ -1508,6 +1543,8 @@ def load_player_prop_training_frame():
             out[c] = 0.0
         out[c] = pd.to_numeric(out[c], errors="coerce").fillna(0.0)
 
+    if "match_date" in out.columns:
+        out = out.sort_values("match_date", kind="stable").reset_index(drop=True)  # chronological for the holdout
     print(f"   ✅ Player-Prop Trainingsframe: {len(out)} Spieler-Matches")
     return out
 
@@ -1518,6 +1555,9 @@ def train_player_prop_model(dfp, stat, line, model_name):
         return None, {"model_name": model_name, "skipped": True, "reason": f"no data for {stat}", "trained_at": datetime.now(timezone.utc).isoformat()}
 
     d = dfp.copy()
+    rep = f"{stat}__reported"
+    if rep in d.columns:
+        d = d[d[rep].astype(bool)]
     d["target"] = (pd.to_numeric(d[stat], errors="coerce").fillna(0.0) > line).astype(int)
     d = d.dropna(subset=PLAYER_FEATURE_COLS + ["target"])
     d = d[d["games_prior"] >= 1].reset_index(drop=True)
@@ -1545,20 +1585,18 @@ def train_player_prop_model(dfp, stat, line, model_name):
         subsample=0.85,
         colsample_bytree=0.85,
         min_child_weight=8,
-        scale_pos_weight=max(0.2, (1 - y.mean()) / max(y.mean(), 1e-6)),
         eval_metric="logloss",
         random_state=42,
         n_jobs=-1,
     )
-    calibrated = _safe_fit_classifier(base_model, X, y, model_name)
-
     split = int(len(X) * 0.8)
-    proba = calibrated.predict_proba(X[split:])[:, 1]
-    brier = brier_score_loss(y[split:], proba)
-    auc = _safe_auc(y[split:], proba)
-
-    print(f"   ✅ Brier Score: {brier:.4f}")
-    print(f"   ✅ ROC-AUC:     {auc:.4f}")
+    brier, auc, n_eval = _honest_holdout(base_model, X, y, model_name)
+    calibrated = _safe_fit_classifier(base_model, X, y, model_name)
+    eval_rate = float(np.mean(y[split:])) if len(y[split:]) else float(y.mean())
+    skill = _skill_meta(brier, auc, eval_rate)
+    if brier is None:
+        brier, auc = 1.0, 0.5
+    print(f"   ✅ Holdout Brier: {brier:.4f} vs Basis {skill['base_brier']:.4f} | AUC {auc:.4f} | n={n_eval}")
 
     meta = {
         "model_name": model_name,
@@ -1568,8 +1606,9 @@ def train_player_prop_model(dfp, stat, line, model_name):
         "line": line,
         "brier_score": round(float(brier), 4),
         "roc_auc": round(float(auc), 4),
+        **skill,
         "training_samples": int(len(X)),
-        "positive_rate": round(float(y.mean()), 3),
+        "positive_rate": round(eval_rate, 3),
         "trained_at": datetime.now(timezone.utc).isoformat(),
         "training_fingerprint": _TRAINING_FINGERPRINT or None,
     }
@@ -1621,6 +1660,9 @@ if __name__ == "__main__":
     # V37 stage-1 retraining guard: skip even the expensive history/source load when
     # normalized Supabase input state is unchanged. Fail-open on first install/outage.
     _quick_train, _quick_reason, _INPUT_STATE_FINGERPRINT, _INPUT_STATE_SAMPLES = _quick_input_guard()
+    _FORCE = os.getenv("NETRATTLER_FORCE_RETRAIN", "0") == "1"
+    if _FORCE:
+        _quick_train, _quick_reason = True, "forced"
     print(f"🧾 Input Guard: {_quick_reason} | fingerprint={_INPUT_STATE_FINGERPRINT or 'n/a'}")
     if not _quick_train:
         print("✅ Input-Tabellen unverändert — kompletter Trainingslauf übersprungen.")
@@ -1633,6 +1675,8 @@ if __name__ == "__main__":
     # work is skipped when no meaningful new training state exists.
     global_guard = _training_guard(df)
     _do_train, _guard_reason, _TRAINING_FINGERPRINT, _TRAINING_STATE_SAMPLES = global_guard
+    if _FORCE:
+        _do_train, _guard_reason = True, "forced"
     print(f"🧾 Retrain Guard: {_guard_reason} | fingerprint={_TRAINING_FINGERPRINT or 'n/a'}")
     if not _do_train:
         print("✅ Trainingsdaten unverändert/zu wenig neu — teures Retraining übersprungen.")

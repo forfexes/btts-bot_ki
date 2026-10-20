@@ -56,6 +56,7 @@ _LINE_MODELS: Dict[str, Dict[float, str]] = {
 _ALL_PLAYER_MODELS = sorted({m for tbl in _LINE_MODELS.values() for m in tbl.values()})
 
 _MODEL_CACHE: Dict[str, Any] = {}
+_REJECTED: Dict[str, str] = {}  # model_name -> reason rejected by the quality gate
 _LOADED = False
 _LAST_LOAD_ERROR = ""
 
@@ -155,7 +156,7 @@ def load_player_models(
         for name in wanted:
             _MODEL_CACHE.pop(name, None)
 
-    missing = [name for name in wanted if name not in _MODEL_CACHE]
+    missing = [name for name in wanted if name not in _MODEL_CACHE and name not in _REJECTED]
     if not missing:
         _LOADED = all(name in _MODEL_CACHE for name in _ALL_PLAYER_MODELS)
         _LAST_LOAD_ERROR = ""
@@ -182,6 +183,15 @@ def load_player_models(
                 continue
             try:
                 obj = pickle.load(io.BytesIO(base64.b64decode(data)))
+                try:
+                    from netrattler_model_quality import model_has_skill
+                    _meta = row.get("meta") or (obj.get("meta") if isinstance(obj, dict) else None)
+                    _ok_skill, _why = model_has_skill(_meta)
+                except Exception:
+                    _ok_skill, _why = True, ""
+                if not _ok_skill:
+                    _REJECTED[name] = _why
+                    continue
                 model = obj.get("model") if isinstance(obj, dict) else obj
                 if model is not None:
                     _MODEL_CACHE[name] = model
@@ -207,7 +217,7 @@ def load_player_models(
         try:
             names = ",".join(chunk)
             r = _request({
-                "select": "model_name,model_data",
+                "select": "model_name,model_data,meta",
                 "model_name": f"in.({names})",
                 "limit": str(len(chunk)),
             }, timeout)
@@ -224,11 +234,11 @@ def load_player_models(
         # Robust fallback: retry each missing model by exact name.  This also
         # handles Supabase/PostgREST deployments where a large base64 batch is
         # slow even though single-row downloads work.
-        still_missing = [name for name in chunk if name not in loaded_here and name not in _MODEL_CACHE]
+        still_missing = [name for name in chunk if name not in loaded_here and name not in _MODEL_CACHE and name not in _REJECTED]
         for name in still_missing:
             try:
                 r = _request({
-                    "select": "model_name,model_data",
+                    "select": "model_name,model_data,meta",
                     "model_name": f"eq.{name}",
                     "limit": "1",
                 }, max(timeout, 25))
@@ -240,13 +250,13 @@ def load_player_models(
                 except Exception as exc:
                     errors.append(f"{name} bad json: {str(exc)[:90]}")
                     got = set()
-                if name not in got:
+                if name not in got and name not in _REJECTED:
                     errors.append(f"{name} not returned")
             except Exception as exc:
                 errors.append(f"{name} request {type(exc).__name__}: {str(exc)[:90]}")
 
     _LOADED = all(name in _MODEL_CACHE for name in _ALL_PLAYER_MODELS)
-    unresolved = [name for name in wanted if name not in _MODEL_CACHE]
+    unresolved = [name for name in wanted if name not in _MODEL_CACHE and name not in _REJECTED]
     if unresolved:
         errors.append("unresolved=" + ",".join(unresolved[:8]))
     _LAST_LOAD_ERROR = "; ".join(errors)[:1200]
@@ -260,6 +270,7 @@ def player_model_load_status() -> Dict[str, Any]:
         "complete": bool(_LOADED),
         "error": _LAST_LOAD_ERROR,
         "models": sorted(_MODEL_CACHE.keys()),
+        "rejected": dict(_REJECTED),
     }
 
 
