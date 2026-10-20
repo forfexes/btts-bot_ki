@@ -432,6 +432,9 @@ def _photo_caption_from_settled_text(text: str) -> str:
     return (prefix + "\n\n" + compact_summary).strip()[:1024]
 
 
+_LAST_EDIT_ERROR: Dict[str, str] = {}
+
+
 def telegram_edit(chat_id: str, message_id: Any, text: str) -> bool:
     """Edit the same Telegram tip, respecting rate limits and retry_after."""
     if not TG_TOKEN or not chat_id or not message_id:
@@ -486,6 +489,7 @@ def telegram_edit(chat_id: str, message_id: Any, text: str) -> bool:
                 time.sleep(wait)
                 continue
             log(f"TG edit {response.status_code}: {detail[:180]}", "WARN")
+            _LAST_EDIT_ERROR["last"] = f"{chat_key} {response.status_code} {detail[:160]}"
             return False
         except Exception as exc:
             log(f"TG edit: {exc}", "WARN")
@@ -742,6 +746,8 @@ def _save_tip_edit_receipt(settlement: Dict[str, Any], edited: bool) -> None:
     raw = settlement.get("raw") if isinstance(settlement.get("raw"), dict) else {}
     raw = dict(raw)
     raw["telegram_edit_attempts"] = as_int(raw.get("telegram_edit_attempts"), 0) + 1
+    if not edited and _LAST_EDIT_ERROR.get("last"):
+        raw["telegram_edit_error"] = _LAST_EDIT_ERROR["last"]
     if edited:
         raw["telegram_edit_ok"] = True
         raw["telegram_edited_at"] = datetime.now(timezone.utc).isoformat()
