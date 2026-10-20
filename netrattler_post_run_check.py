@@ -74,6 +74,10 @@ def evaluate(run):
 
 
 def notify(message):
+    # Run status is visible in Actions only; no Telegram run alerts (user request).
+    if os.getenv("NETRATTLER_RUN_ALERTS", "0") != "1":
+        print(message, flush=True)
+        return
     token = os.getenv("TELEGRAM_TOKEN") or ""
     chat = os.getenv("TELEGRAM_GROUP_ALERTS") or os.getenv("TELEGRAM_GROUP_STATS") or os.getenv("TELEGRAM_CHAT_ID") or ""
     if not token or not chat:
