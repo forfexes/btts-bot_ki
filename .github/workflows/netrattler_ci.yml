@@ -106,3 +106,5 @@ jobs:
         run: python test_settlement_odds_guard.py
       - name: odds_history special quotes fallback test
         run: python test_oh_special_quotes.py
+      - name: Combo prop-leg cap test
+        run: python test_combo_prop_cap.py

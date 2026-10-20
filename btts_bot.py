@@ -7066,6 +7066,14 @@ def get_overall_stats():
         return None
 
 
+_COMBO_MAIN_MARKETS = {"btts", "over25", "combo", "btts_ht", "over15_ht", "1x2", "corners", "scorer"}
+
+
+def _is_combo_prop_leg(tip):
+    """True for player-prop legs (shots, sot, fouls ...), i.e. anything outside the main team markets."""
+    return str((tip or {}).get("market", "") or "").lower() not in _COMBO_MAIN_MARKETS
+
+
 def generate_multi_combo_bets(all_tips, num_tips=3):
     """Generate cross-match multi-combos from validated REAL-ODDS tips.
 
@@ -7146,10 +7154,20 @@ def generate_multi_combo_bets(all_tips, num_tips=3):
     )
     selected = []
     used_matches = set()
+    try:
+        _max_prop_legs = max(0, int(env("NETRATTLER_MULTI_COMBO_MAX_PROP_LEGS", "1")))
+    except Exception:
+        _max_prop_legs = 1
+    _prop_legs = 0
     for tip in sorted_tips:
         match_key = normalize_team_name(tip.get("match", "")) or str(tip.get("match", "")).lower().strip()
         if not match_key or match_key in used_matches:
             continue
+        # Player props (shots etc.) have the highest hit rates and would otherwise fill every combo.
+        if _is_combo_prop_leg(tip):
+            if _prop_legs >= _max_prop_legs:
+                continue
+            _prop_legs += 1
         used_matches.add(match_key)
         selected.append(tip)
         if len(selected) >= num_tips:
@@ -7216,6 +7234,9 @@ def _clean_combo_leg_text(selection: str) -> str:
     side = ("Über" if m.group(1).lower() == "over" else "Unter") if m else ""
     line = m.group(2).replace(",", ".") if m else ""
     player = _re.split(r"\s+(?:shots?|fouls?|tackles?|assists?|cards?)\b", text, maxsplit=1, flags=_re.I)[0].strip(" —-|")
+    if " — " in player:
+        _a, _b = [x.strip() for x in player.split(" — ", 1)]
+        player = _b if _b.lower().startswith(_a.lower()) else _a
     if "on target" in low or "on goal" in low:
         stat = "Schüsse aufs Tor"
     elif "shot" in low:
@@ -17041,10 +17062,20 @@ def generate_multi_combo_bets(all_tips, num_tips=3):
     )
     selected = []
     used_matches = set()
+    try:
+        _max_prop_legs = max(0, int(env("NETRATTLER_MULTI_COMBO_MAX_PROP_LEGS", "1")))
+    except Exception:
+        _max_prop_legs = 1
+    _prop_legs = 0
     for tip in sorted_tips:
         match_key = normalize_team_name(tip.get("match", "")) or str(tip.get("match", "")).lower().strip()
         if not match_key or match_key in used_matches:
             continue
+        # Player props (shots etc.) have the highest hit rates and would otherwise fill every combo.
+        if _is_combo_prop_leg(tip):
+            if _prop_legs >= _max_prop_legs:
+                continue
+            _prop_legs += 1
         used_matches.add(match_key)
         selected.append(tip)
         if len(selected) >= num_tips:
