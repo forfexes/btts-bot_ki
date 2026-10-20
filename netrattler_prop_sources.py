@@ -239,6 +239,23 @@ _KAMBI_LIST_CACHE: Dict[tuple, Any] = {}
 _KAMBI_OFFER_CACHE: Dict[tuple, Any] = {}
 
 
+_CRIT_STAT_SPLIT = re.compile(
+    r"\s+(?:shots?|fouls?|tackles?|cards?|assists?|passes|offsides|saves|to be|to score|to get|"
+    r"total|goals?|headers?|crosses|interceptions|clearances)\b", re.I)
+
+
+def kambi_player_from_criterion(crit: str) -> str:
+    """'Florian Lejeune fouls committed (Settled using Opta data)' -> 'Florian Lejeune'.
+    Generic criteria ("Player's shots ...", "Total Goals") return ''."""
+    text = re.sub(r"\(.*?\)", "", str(crit or "")).strip()
+    head = _CRIT_STAT_SPLIT.split(text, maxsplit=1)[0].strip(" -|:")
+    if not head or head.lower().startswith(("player", "total", "match", "both", "team", "home", "away")):
+        return ""
+    if len(head.split()) > 5 or any(ch.isdigit() for ch in head):
+        return ""
+    return flip_comma_name(head)
+
+
 def fetch_kambi_player_props(home: str, away: str, brand: str = "ub") -> List[Dict[str, Any]]:
     """Holt Player-Props fuer ein Spiel ueber die Kambi offering-API."""
     props: List[Dict[str, Any]] = []
@@ -302,8 +319,19 @@ def fetch_kambi_player_props(home: str, away: str, brand: str = "ub") -> List[Di
         if cat == "other":
             continue
         for oc in bo.get("outcomes") or []:
-            player = flip_comma_name(oc.get("participant") or oc.get("label") or "")
-            if not player or str(oc.get("label", "")).lower() in {"under", "no"}:
+            _label = str(oc.get("label") or "")
+            _llow = _label.lower().strip()
+            if _llow in {"under", "no"} or _llow.startswith("under "):
+                continue
+            if oc.get("participant"):
+                player = flip_comma_name(oc.get("participant"))
+            elif _llow.startswith("over") or _llow in {"yes"}:
+                # Per-player line offers ("<Player> fouls committed (Settled using Opta data)",
+                # outcomes "Over 0.5"/"Under 0.5") carry the player only in the criterion.
+                player = kambi_player_from_criterion(crit)
+            else:
+                player = flip_comma_name(_label)
+            if not player:
                 continue
             try:
                 odds = float(oc.get("odds", 0)) / 1000.0  # Kambi: millidds
