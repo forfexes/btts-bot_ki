@@ -75,7 +75,7 @@ def evaluate(run):
 
 def notify(message):
     token = os.getenv("TELEGRAM_TOKEN") or ""
-    chat = os.getenv("TELEGRAM_GROUP_STATS") or os.getenv("TELEGRAM_CHAT_ID") or ""
+    chat = os.getenv("TELEGRAM_GROUP_ALERTS") or os.getenv("TELEGRAM_GROUP_STATS") or os.getenv("TELEGRAM_CHAT_ID") or ""
     if not token or not chat:
         print("Telegram not configured; status visible in Actions", flush=True)
         return
