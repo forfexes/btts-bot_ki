@@ -24,9 +24,9 @@ def main():
         pg = b.new_page()
         seen = []; urls = []
         def on_resp(resp):
-            if "genfiles" in resp.url: urls.append(re.sub(r"\?.*", "", resp.url)[-110:])
+            if "genfiles" in resp.url or "dictionary" in resp.url: urls.append(re.sub(r"\?.*", "", resp.url)[-110:])
             try:
-                if "genfiles" in resp.url and len(seen) < 80:
+                if len(seen) < 80:
                     t = resp.text()
                     low = t.lower()
                     hits = [w for w in WORDS if w in low]
@@ -38,7 +38,17 @@ def main():
         pg.on("response", on_resp)
         try:
             pg.goto("https://22bet.com/line/football", timeout=30000, wait_until="domcontentloaded")
-            pg.wait_for_timeout(12000)
+            pg.wait_for_timeout(10000)
+            hrefs = pg.eval_on_selector_all("a[href]", "els=>els.map(e=>e.getAttribute('href'))")
+            ms = [h for h in hrefs if h and re.search(r"/line/football/\d+-[^/]+/\d+-", h)]
+            out["match_links"] = len(ms)
+            if ms:
+                pg.goto("https://22bet.com" + ms[3 % len(ms)], timeout=30000, wait_until="domcontentloaded")
+                pg.wait_for_timeout(15000)
+                out["title"] = pg.title()[:80]
+                try:
+                    out["dom_hits"] = [w for w in ("tackles", "fouls", "offsides", "passes") if w in pg.inner_text("body").lower()]
+                except Exception: pass
         except Exception as e:
             out["nav_error"] = type(e).__name__
         out["dict_hits"] = seen[:12]; out["urls"] = [u for u in urls][:40]
