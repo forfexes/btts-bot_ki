@@ -7202,6 +7202,37 @@ def generate_multi_combo_bets(all_tips, num_tips=3):
     }
 
 
+
+def _clean_combo_leg_text(selection: str) -> str:
+    """Strip raw bookmaker market text (data-provider names, 'Player Occurrence Line') from a combo leg.
+    '<P> shots (Settled using ... data) | Player's shots (...) | Player Occurrence Line Over 0.5'
+    -> '<P> — Schüsse Über 0.5'. Texts without those markers are returned unchanged."""
+    import re as _re
+    text = str(selection or "").strip()
+    low = text.lower()
+    if "settled using" not in low and "occurrence line" not in low:
+        return text
+    m = _re.search(r"\b(over|under)\s*(\d+(?:[.,]\d+)?)", text, _re.I)
+    side = ("Über" if m.group(1).lower() == "over" else "Unter") if m else ""
+    line = m.group(2).replace(",", ".") if m else ""
+    player = _re.split(r"\s+(?:shots?|fouls?|tackles?|assists?|cards?)\b", text, maxsplit=1, flags=_re.I)[0].strip(" —-|")
+    if "on target" in low or "on goal" in low:
+        stat = "Schüsse aufs Tor"
+    elif "shot" in low:
+        stat = "Schüsse"
+    elif "foul" in low:
+        stat = "Fouls"
+    elif "tackle" in low:
+        stat = "Tackles"
+    elif "assist" in low:
+        stat = "Assists"
+    else:
+        stat = ""
+    if not (player and stat and line):
+        return text
+    return f"{player} — {stat} {side} {line}"
+
+
 def format_combo_telegram_message(combo):
     """Formatiert Multi-Combo für Telegram — V31 clean, stake capped."""
     if not combo:
@@ -7232,7 +7263,7 @@ def format_combo_telegram_message(combo):
         stake = min(stake, 0.10)
     combo["stake_suggestion"] = stake
 
-    win = round(total_odds * stake, 1) if total_odds else "?"
+    win = round((total_odds - 1) * stake, 1) if total_odds else "?"
     label = combo.get("label", "COMBO")
     if nlegs >= 7:
         risk = "LOTTERY"
@@ -7259,6 +7290,7 @@ def format_combo_telegram_message(combo):
             if _line is None:
                 continue  # Ungültiges Corner-Leg niemals anzeigen/senden.
             _selection = f"Over {_line} Ecken"
+        _selection = _clean_combo_leg_text(_selection)
         display_pick = _selection if _selection and _selection.upper() != "YES" else market_label
         msg += f"{i}. {market_emoji} <b>{tip.get('match','?')}</b> · {display_pick} @ {odds_val}\n"
 
@@ -17095,7 +17127,7 @@ def format_combo_telegram_message(combo):
         stake = min(stake, 0.10)
     combo["stake_suggestion"] = stake
 
-    win = round(total_odds * stake, 1) if total_odds else "?"
+    win = round((total_odds - 1) * stake, 1) if total_odds else "?"
     label = combo.get("label", "COMBO")
     if nlegs >= 7:
         risk = "LOTTERY"
@@ -17122,6 +17154,7 @@ def format_combo_telegram_message(combo):
             if _line is None:
                 continue
             _selection = f"Over {_line} Ecken"
+        _selection = _clean_combo_leg_text(_selection)
         display_pick = _selection if _selection and _selection.upper() != "YES" else market_label
         msg += f"{i}. {market_emoji} <b>{tip.get('match','?')}</b> · {display_pick} @ {odds_val}\n"
 
