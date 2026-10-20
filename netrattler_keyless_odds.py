@@ -340,7 +340,7 @@ def _x1_collect_ht(host: str, games: List[Mapping[str, Any]]) -> List[Dict[str, 
     cap = int(os.getenv("ONEX_HT_GAMES", "200"))
     hosts = [host] + [h for h in X1_HOSTS if h != host]
     slices = [games[:cap][i::len(hosts)] for i in range(len(hosts))]
-    deadline = time.time() + float(os.getenv("ONEX_HT_BUDGET_S", "300"))
+    deadline = time.time() + float(os.getenv("ONEX_HT_BUDGET_S", "480"))
     stats_all: List[Dict[str, Any]] = [{} for _ in hosts]
     with ThreadPoolExecutor(max_workers=len(hosts)) as pool:
         futs = [pool.submit(_x1_ht_worker, h, sl, deadline, st) for h, sl, st in zip(hosts, slices, stats_all)]
