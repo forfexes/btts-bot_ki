@@ -109,11 +109,11 @@ Minimal metadata needed from the user (never keys/passwords in chat): for each p
 1. Document authoritative project per table in this file (table → project → writer → reader).
 2. Add a health check that reports DB size per project and fails loudly at 450 MB (no production writes, read-only).
 3. Make the router fail-safe: on 404/5xx from V2 for a routed table, log and fall back to MAIN for reads only (never for writes), with a unit test.
-4. Decide on V4: either remove it or assign it the raw/lake role; run schema-only `schema` mode + `verify`.
+4. V4 stays reserve (user decision). If MAIN/V2/V3 run out of space later, V4 is the first candidate for the raw/lake role (schema-only `schema` mode + `verify` first).
 5. Only after 0–4 are stable, consider moving more historical tables.
 
 #### Decisions needed
-- Is V4 intended to replace V3, or is it a spare?
+- ~~Is V4 intended to replace V3, or is it a spare?~~ **Answered by the user 2026-10-20: V4 is a reserve project** (stays empty and unwired until a need arises; do not point any writer at it without a new decision here).
 - Approve stage 0 (delete the MAIN copy of `netrattler_data_lake_raw` after `verify`)?
 
 #### Honest disclosure — production changes made today before this handoff was read
