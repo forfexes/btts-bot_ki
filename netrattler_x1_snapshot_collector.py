@@ -78,8 +78,9 @@ def run() -> Dict[str, int]:
         print("no supabase env"); return stats
     done = already_snapshotted()
     now_ts = time.time()
-    # 22bet itself is slow from runners; the mirrors answer well -> try mirrors first.
-    hosts = [h for h in ps._1X_HOSTS if "22bet" not in h] + [h for h in ps._1X_HOSTS if "22bet" in h]
+    # The "Players' stats" sub-games were only ever seen on 22bet (mirrors return games without SG),
+    # and game ids are brand-specific -> list AND detail from 22bet first, mirrors as fallback.
+    hosts = list(ps._1X_HOSTS)
     items, seen = [], set()
 
     def _add(host, data):
@@ -118,7 +119,7 @@ def run() -> Dict[str, int]:
     stats["with_player_subgames"] = 0
     for host, gid, name in picked:
         rows = []
-        for h in [host] + [x for x in hosts if x != host]:
+        for h in [host]:
             game = ps._get_json(f"{h}/service-api/LineFeed/GetGameZip",
                                 params={"id": gid, "lng": "en", "cfview": 0, "grMode": 4, "country": 1}, timeout=15)
             val = (game or {}).get("Value") or {}
