@@ -104,3 +104,5 @@ jobs:
         run: python test_combo_leg_text.py
       - name: Settlement odds guard test
         run: python test_settlement_odds_guard.py
+      - name: odds_history special quotes fallback test
+        run: python test_oh_special_quotes.py

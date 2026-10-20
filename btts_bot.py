@@ -20050,6 +20050,59 @@ def _ntr_odds_history_corner_quotes(home, away):
     return out
 
 
+_NTR_OH_SPECIALS = None
+_NTR_OH_SPECIAL_FLOORS = {"btts_yes_ht": 1.7, "over_15_ht": 1.4, "btts_over25_yes": 1.5}
+
+
+def _ntr_odds_history_special_quotes(home, away, rows=None):
+    """Fallback: real HT/combo prices harvested into odds_history (bwin, 1x family, pinnacle, kambi).
+    Median over plausible bookmaker prices; implausibly low prices (wrong sub-market) are dropped."""
+    global _NTR_OH_SPECIALS
+    if rows is None:
+        if _NTR_OH_SPECIALS is None:
+            _NTR_OH_SPECIALS = []
+            try:
+                _url = (os.getenv("SUPABASE_URL") or "").rstrip("/")
+                _key = os.getenv("SUPABASE_SERVICE_ROLE_KEY") or os.getenv("SUPABASE_KEY") or ""
+                if _url and _key:
+                    _since = (datetime.utcnow() - timedelta(days=1)).date().isoformat()
+                    _r = requests.get(f"{_url}/rest/v1/odds_history", timeout=25,
+                                      headers={"apikey": _key, "Authorization": f"Bearer {_key}"},
+                                      params={"select": "bookmaker,home_team,away_team,market,selection,odds",
+                                              "market": "in.(btts_ht,totals_ht_1_5,btts_over_2_5)",
+                                              "selection": "in.(yes,over_1_5)",
+                                              "match_date": f"gte.{_since}", "limit": "8000"})
+                    if _r.ok:
+                        _NTR_OH_SPECIALS = _r.json() or []
+            except Exception:
+                _NTR_OH_SPECIALS = []
+        rows = _NTR_OH_SPECIALS
+    hn, an = normalize_team_name(home), normalize_team_name(away)
+
+    def _tm(x, y):
+        return bool(x and y and (x == y or x in y or y in x or (len(x) >= 6 and len(y) >= 6 and x[:6] == y[:6])))
+    keymap = {"btts_ht": "btts_yes_ht", "totals_ht_1_5": "over_15_ht", "btts_over_2_5": "btts_over25_yes"}
+    vals = {}
+    for row in rows:
+        key = keymap.get(str(row.get("market")))
+        if not key:
+            continue
+        if not (_tm(normalize_team_name(row.get("home_team", "")), hn) and _tm(normalize_team_name(row.get("away_team", "")), an)):
+            continue
+        try:
+            odds = float(row.get("odds") or 0)
+        except Exception:
+            continue
+        if odds >= _NTR_OH_SPECIAL_FLOORS[key]:
+            vals.setdefault(key, []).append((odds, str(row.get("bookmaker") or "")))
+    out = {}
+    for key, items in vals.items():
+        items.sort()
+        mid = items[len(items) // 2]
+        out[key] = (round(mid[0], 3), "odds_history:" + mid[1])
+    return out
+
+
 def _ntr_observed_corner_quotes(fixture, target_date=None):
     """Observed full-match corner lines. Kambi first; OddsPapi only opt-in."""
     home = str(fixture.get("home") or "").strip()
@@ -26508,6 +26561,17 @@ def main():
                                 if not ro.get("btts_over25_yes") and _merged_ks.get("btts_over25_combo"):
                                     ro["btts_over25_yes"] = _merged_ks["btts_over25_combo"]
                                     ro["_combo_source"] = _merged_src.get("btts_over25_combo", "kambi")
+                    try:
+                        _oh = _ntr_odds_history_special_quotes(home, away)
+                        for _k, (_v, _src) in _oh.items():
+                            if ro is None:
+                                ro = {}
+                            if not ro.get(_k):
+                                ro[_k] = _v
+                                ro[{"btts_yes_ht": "_btts_ht_source", "over_15_ht": "_over15_ht_source",
+                                    "btts_over25_yes": "_combo_source"}[_k]] = "history"
+                    except Exception:
+                        pass
                     if (ro or {}).get("btts_yes_ht"):
                         globals()["_NTR_SPECIAL_DIAG"]["btts_ht_quotes"] += 1
                     if (ro or {}).get("over_15_ht"):
