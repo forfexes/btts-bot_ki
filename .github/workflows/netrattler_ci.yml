@@ -108,3 +108,7 @@ jobs:
         run: python test_oh_special_quotes.py
       - name: Combo prop-leg cap test
         run: python test_combo_prop_cap.py
+      - name: ESPN HT backfill test
+        run: python test_espn_ht_backfill.py
+      - name: Settlement adjacent-day test
+        run: python test_settlement_adjacent_day.py

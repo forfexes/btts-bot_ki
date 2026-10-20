@@ -1377,7 +1377,18 @@ def _find_result_strict(tip: Dict[str, Any], results: Sequence[Dict[str, Any]]) 
         return None
 
     matches: List[Dict[str, Any]] = []
-    for row in _results_by_day(results).get(tip_day, []):
+    by_day = _results_by_day(results)
+    day_rows = list(by_day.get(tip_day, []))
+    if not day_rows:
+        # Kick-off after midnight UTC / date shifts: accept the adjacent day only if both team
+        # identities agree strictly (and the scores of all hits agree, see below).
+        try:
+            _d = datetime.fromisoformat(str(tip_day)[:10]).date()
+            for _off in (1, -1):
+                day_rows += by_day.get((_d + timedelta(days=_off)).isoformat(), [])
+        except Exception:
+            pass
+    for row in day_rows:
         if _malformed_result_row(row):
             continue
         home, away, hs, aw = score_row(row)

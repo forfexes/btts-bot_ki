@@ -43,6 +43,13 @@ jobs:
           python test_netrattler_result_enrichment.py
           python test_netrattler_settlement_runner.py
           python test_settlement_lenient_match.py
+      - name: ESPN half-time backfill
+        continue-on-error: true
+        env:
+          SUPABASE_URL: ${{ secrets.SUPABASE_URL }}
+          SUPABASE_KEY: ${{ secrets.SUPABASE_KEY }}
+          SUPABASE_SERVICE_ROLE_KEY: ${{ secrets.SUPABASE_SERVICE_ROLE_KEY }}
+        run: python netrattler_espn_ht_backfill.py
       - name: Run Settlement V25 MULTISOURCE
         env:
           SUPABASE_URL: ${{ secrets.SUPABASE_URL }}
