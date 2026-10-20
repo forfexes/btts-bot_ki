@@ -81,13 +81,32 @@ def run() -> Dict[str, int]:
     # 22bet itself is slow from runners; the mirrors answer well -> try mirrors first.
     hosts = [h for h in ps._1X_HOSTS if "22bet" not in h] + [h for h in ps._1X_HOSTS if "22bet" in h]
     items, seen = [], set()
-    for host in hosts:
-        data = ps._get_json(f"{host}/service-api/LineFeed/Get1x2_VZip",
-                            params={"sports": 1, "count": 1000, "lng": "en", "mode": 4, "country": 1}, timeout=15)
+
+    def _add(host, data):
         for g in (data or {}).get("Value") or []:
             key = (g.get("O1"), g.get("O2"))
             if key not in seen:
                 seen.add(key); items.append((host, g))
+
+    # The plain list only returns ~50 "top" games, so most fixtures were never found.
+    # Walk the league list (GetChampsZip) and fetch the games per wanted league.
+    stats["champs"] = 0
+    for host in hosts:
+        champs = ps._get_json(f"{host}/service-api/LineFeed/GetChampsZip",
+                              params={"sport": 1, "lng": "en", "tf": 2200000, "tz": 0, "country": 1}, timeout=15)
+        wanted = [c for c in (champs or {}).get("Value") or [] if wanted_league(c.get("L"))]
+        if not wanted:
+            continue
+        stats["champs"] = len(wanted)
+        for c in wanted[:40]:
+            _add(host, ps._get_json(f"{host}/service-api/LineFeed/Get1x2_VZip",
+                                    params={"sports": 1, "champs": c.get("LI"), "count": 100, "lng": "en",
+                                            "mode": 4, "country": 1}, timeout=15))
+            time.sleep(0.2)
+        break
+    for host in hosts:  # top list as an extra source
+        _add(host, ps._get_json(f"{host}/service-api/LineFeed/Get1x2_VZip",
+                                params={"sports": 1, "count": 1000, "lng": "en", "mode": 4, "country": 1}, timeout=15))
     stats["listed"] = len(items)
     picked = []
     for host, g in items:
@@ -105,7 +124,10 @@ def run() -> Dict[str, int]:
             val = (game or {}).get("Value") or {}
             if not val:
                 continue  # id is host-specific only for unrelated brands; try the next mirror
-            if any("players' stats" in str(sg.get("TG") or sg.get("PN") or "").lower() for sg in (val.get("SG") or [])):
+            titles = [str(sg.get("TG") or sg.get("PN") or "") for sg in (val.get("SG") or [])]
+            if len(stats.setdefault("sample_subgames", [])) < 3:
+                stats["sample_subgames"].append({"match": name, "n_sg": len(titles), "titles": titles[:25]})
+            if any("players' stats" in t.lower() for t in titles):
                 stats["with_player_subgames"] += 1
             ps.X1_SNAPSHOT.clear()
             ps._snapshot_x1_player_markets(h, val, name)
