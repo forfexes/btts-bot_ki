@@ -92,3 +92,5 @@ jobs:
         run: python -m pytest -q test_netrattler_finishing_adjust.py
       - name: Pinnacle plain BTTS market test
         run: python test_pinnacle_btts_market.py
+      - name: Pinnacle 1st-half totals test
+        run: python test_pinnacle_ht_totals.py

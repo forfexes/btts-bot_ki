@@ -179,8 +179,10 @@ def collect_pinnacle(target_date: str) -> List[Dict[str, Any]]:
                 continue
             mtype = str(market.get("type") or "").lower()
             period = int(market.get("period") or 0)
-            if period != 0 or mtype not in {"moneyline", "total"}:
+            if period not in (0, 1) or mtype not in {"moneyline", "total"}:
                 continue
+            if period == 1 and mtype != "total":
+                continue  # 1st-half: only totals are stored (real prices only)
             for price in market.get("prices") or []:
                 designation = str(price.get("designation") or "").lower()
                 points = price.get("points")
@@ -192,6 +194,8 @@ def collect_pinnacle(target_date: str) -> List[Dict[str, Any]]:
                         continue
                     selection = f"{designation}_{str(points).replace('.', '_')}"
                     market_name = f"totals_{str(points).replace('.', '_')}"
+                    if period == 1:
+                        market_name = f"totals_ht_{str(points).replace('.', '_')}"
                 if not selection:
                     continue
                 item = _row(
