@@ -407,10 +407,14 @@ def inspect_huggingface() -> Dict[str, Any]:
 
 
 DISCOVERY_QUERIES = (
-    "football player props odds scraper",
-    "soccer player stats fouls tackles dataset",
-    "football betting odds api open source",
+    "football odds scraper",
+    "soccer player stats scraper",
+    "football betting odds api",
+    "soccer player props",
 )
+
+
+DISCOVERY_LOG: List[Dict[str, Any]] = []
 
 
 def discover_new_repos() -> List[Dict[str, Any]]:
@@ -425,8 +429,9 @@ def discover_new_repos() -> List[Dict[str, Any]]:
     for q in DISCOVERY_QUERIES:
         try:
             r = requests.get("https://api.github.com/search/repositories", headers=headers, timeout=25,
-                             params={"q": f"{q} pushed:>{(datetime.now(timezone.utc) - timedelta(days=120)).date()} stars:>15",
+                             params={"q": f"{q} pushed:>{(datetime.now(timezone.utc) - timedelta(days=120)).date()} stars:>5",
                                      "sort": "stars", "order": "desc", "per_page": 8})
+            DISCOVERY_LOG.append({"q": q, "http": r.status_code, "n": len(r.json().get("items", [])) if r.ok else 0})
             if not r.ok:
                 continue
             for it in r.json().get("items", []):
@@ -473,6 +478,10 @@ def main() -> int:
             log(f"HF watch: FAIL {str(exc)[:160]}", "WARN")
     try:
         summary["discovered"] = discover_new_repos()
+        sb_insert("netrattler_source_discovery", {
+            "source_name": "github_discovery_run", "url": "https://github.com", "kind": "github_discovery_run",
+            "tags": ["github-discovery"], "score": len(summary["discovered"]), "payload": {"log": DISCOVERY_LOG},
+            "data_hash": stable_hash("github_discovery_run", str(NOW)), "collected_at": NOW})
         for d in summary["discovered"]:
             sb_insert("netrattler_source_discovery", {
                 "source_name": d["repo"], "url": f"https://github.com/{d['repo']}", "kind": "github_discovery",
