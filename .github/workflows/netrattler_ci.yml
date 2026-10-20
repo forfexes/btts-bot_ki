@@ -96,3 +96,5 @@ jobs:
         run: python test_pinnacle_ht_totals.py
       - name: 1xBet 1st-half rows test
         run: python test_x1_ht_rows.py
+      - name: ESPN player stats scrape test
+        run: python test_espn_players_scrape.py

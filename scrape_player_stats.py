@@ -1475,6 +1475,55 @@ def _stats_to_rows(source: str, event_id: Any, player: dict, stats: dict,
     return result
 
 
+_ESPN_LEAGUES = ("eng.1", "eng.2", "eng.3", "esp.1", "esp.2", "ger.1", "ger.2", "ita.1", "ita.2", "fra.1", "fra.2",
+                 "ned.1", "por.1", "bel.1", "sco.1", "tur.1", "uefa.champions", "uefa.europa", "uefa.europa.conf",
+                 "usa.1", "swe.1", "nor.1", "den.1", "aut.1", "sui.1", "gre.1")
+_ESPN_STAT_MAP = {"totalShots": "shots", "shotsOnTarget": "sot", "totalGoals": "goals", "goalAssists": "assists",
+                  "foulsCommitted": "fouls_committed", "foulsSuffered": "fouls_won", "yellowCards": "yellow_cards",
+                  "redCards": "red_cards", "saves": "saves", "offsides": "offsides"}
+
+
+def scrape_espn_players_date(date_str: str) -> List[Dict]:
+    """ESPN public summary endpoint: real per-player match stats (fouls, shots, cards, ...).
+    Only stats ESPN actually reports are emitted; ESPN has no tackles/passes here -> never invented."""
+    rows: List[Dict] = []
+    base = "https://site.api.espn.com/apis/site/v2/sports/soccer"
+    compact = date_str.replace("-", "")
+    for slug in _ESPN_LEAGUES:
+        try:
+            sb = requests.get(f"{base}/{slug}/scoreboard", params={"dates": compact}, headers=HEADERS, timeout=15)
+            if not sb.ok:
+                continue
+            sbj = sb.json()
+            lname = ((sbj.get("leagues") or [{}])[0].get("name")) or slug
+            for ev in sbj.get("events", []):
+                comp = (ev.get("competitions") or [{}])[0]
+                if not (comp.get("status") or ev.get("status") or {}).get("type", {}).get("completed"):
+                    continue
+                teams = {t.get("homeAway"): (t.get("team") or {}).get("displayName") for t in comp.get("competitors", [])}
+                sm = requests.get(f"{base}/{slug}/summary", params={"event": ev.get("id")}, headers=HEADERS, timeout=20)
+                if not sm.ok:
+                    continue
+                for ros in sm.json().get("rosters") or []:
+                    team = (ros.get("team") or {}).get("displayName")
+                    for pl in ros.get("roster") or []:
+                        ath = pl.get("athlete") or {}
+                        name = ath.get("displayName")
+                        stats = {x.get("name"): x.get("value") for x in pl.get("stats") or []}
+                        if not name or not stats or not stats.get("appearances"):
+                            continue
+                        for k, col in _ESPN_STAT_MAP.items():
+                            if isinstance(stats.get(k), (int, float)):
+                                rows.append(_make_stat_row("espn", f"espn_{ev.get('id')}", ath.get("id"), name, col,
+                                                           stats[k], team=team, league=lname, home_team=teams.get("home"),
+                                                           away_team=teams.get("away"), match_date=date_str))
+                time.sleep(0.3)
+        except Exception as exc:
+            print(f"  ⚠️  ESPN players {slug}: {str(exc)[:80]}")
+    print(f"  ✅ ESPN players: {len(rows)} stat rows for {date_str}")
+    return rows
+
+
 def scrape_sofascore_date(date_str: str) -> List[Dict]:
     """
     SofaScore Tagesereignisse + fertige Lineup-Spielerstatistiken.
@@ -2241,9 +2290,10 @@ def scrape_player_stats(date_str: str) -> int:
     # der teuerste Teil des Daily-Runs, daher parallel statt seriell.
     current_jobs = [
         ("SofaScore", lambda: scrape_sofascore_date(date_str)),
+        ("ESPN players", lambda: scrape_espn_players_date(date_str)),
         ("FotMob direct API / davidrocha9-fotmob-scraper fallback", lambda: scrape_fotmob_date(date_str)),
     ]
-    current_workers = max(1, min(2, int(os.environ.get("DAILY_STATS_PARALLEL_WORKERS", "2"))))
+    current_workers = max(1, min(3, int(os.environ.get("DAILY_STATS_PARALLEL_WORKERS", "2"))))
     with ThreadPoolExecutor(max_workers=current_workers) as pool:
         futures = {pool.submit(fn): name for name, fn in current_jobs}
         for fut in as_completed(futures):
