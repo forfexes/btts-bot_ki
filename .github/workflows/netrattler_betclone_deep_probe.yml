@@ -1,0 +1,33 @@
+name: NETRATTLER BetClone Deep Probe v2
+on:
+  workflow_dispatch:
+    inputs:
+      settle:
+        description: seconds to wait for the sportsbook to render
+        default: "8"
+permissions:
+  contents: read
+jobs:
+  probe:
+    runs-on: ubuntu-latest
+    timeout-minutes: 25
+    strategy:
+      fail-fast: false
+      matrix:
+        family: [altenar, betby, betconstruct, delasport, digitain, igate, inplaynet, first, softswiss]
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+      - run: |
+          python -m pip install requests beautifulsoup4 playwright
+          python -m playwright install --with-deps --only-shell chromium
+      - name: Offline tests (incl. local browser test)
+        run: python test_betclone_deep_probe.py
+      - name: Probe ${{ matrix.family }}
+        env:
+          SUPABASE_URL: ${{ secrets.SUPABASE_URL }}
+          SUPABASE_KEY: ${{ secrets.SUPABASE_KEY }}
+          SUPABASE_SERVICE_ROLE_KEY: ${{ secrets.SUPABASE_SERVICE_ROLE_KEY }}
+        run: python netrattler_betclone_deep_probe.py --family ${{ matrix.family }} --settle ${{ github.event.inputs.settle || '8' }}
