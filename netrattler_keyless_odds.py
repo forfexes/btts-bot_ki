@@ -254,6 +254,56 @@ def _x1_rows(g: Mapping[str, Any], host: str) -> List[Dict[str, Any]]:
     return out
 
 
+def _x1_ht_rows(g: Mapping[str, Any], sub: Mapping[str, Any], host: str) -> List[Dict[str, Any]]:
+    """1st-half subgame of a 1xBet event. Same type codes as full time:
+    9/10 = total over/under (P=line), 180/181 = BTTS yes/no. Real prices only."""
+    out: List[Dict[str, Any]] = []
+    home, away = g.get("O1") or "", g.get("O2") or ""
+    if not _x1_has_real_teams(home, away):
+        return out
+    start = datetime.fromtimestamp(int(g.get("S") or 0), tz=timezone.utc).isoformat() if g.get("S") else None
+    league = g.get("L") or g.get("LE") or ""
+    bk = "1x_" + re.sub(r"^https?://(www\.)?|\.com.*$", "", host)
+    evs = []
+    for grp in sub.get("GE") or []:
+        for arr in grp.get("E") or []:
+            evs.extend(arr if isinstance(arr, list) else [arr])
+    for e in evs:
+        t = e.get("T")
+        line = None
+        if t in (180, 181) and e.get("P") is None:
+            market, sel = "btts_ht", "yes" if t == 180 else "no"
+        elif t in (9, 10) and e.get("P") is not None:
+            line = float(e.get("P"))
+            market, sel = f"totals_ht_{_line_tag(line)}", f"{'over' if t == 9 else 'under'}_{_line_tag(line)}"
+        else:
+            continue
+        row = _row(source="1xbet_platform", bookmaker=bk, event_id=f"1x_{g.get('I')}", league=league,
+                   home=home, away=away, commence_time=start, market=market, selection=sel,
+                   odds=e.get("C"), line=line, raw={"platform": "1xbet", "host": host, "period": 1})
+        if row:
+            out.append(row)
+    return out
+
+
+def _x1_collect_ht(host: str, games: List[Mapping[str, Any]]) -> List[Dict[str, Any]]:
+    rows: List[Dict[str, Any]] = []
+    cap = int(os.getenv("ONEX_HT_GAMES", "120"))
+    for g in games[:cap]:
+        gj, _ = _get(f"{host}/service-api/LineFeed/GetGameZip",
+                     {"id": str(g.get("I")), "lng": "en", "isSubGames": "true", "GroupEvents": "true",
+                      "countevents": "250", "grMode": "2"})
+        for sg in ((gj or {}).get("Value") or {}).get("SG") or []:
+            if str(sg.get("PN") or "").lower().startswith("1st") and sg.get("I"):
+                hj, _ = _get(f"{host}/service-api/LineFeed/GetGameZip",
+                             {"id": str(sg["I"]), "lng": "en", "GroupEvents": "true",
+                              "countevents": "250", "grMode": "2"})
+                rows.extend(_x1_ht_rows(g, (hj or {}).get("Value") or {}, host))
+                break
+        time.sleep(0.05)
+    return rows
+
+
 def collect_1x_platform(target_date: str) -> List[Dict[str, Any]]:
     """1xBet platform prices; the mirrors share one book, so stop at the first that works."""
     for host in X1_HOSTS:
@@ -292,6 +342,14 @@ def collect_1x_platform(target_date: str) -> List[Dict[str, Any]]:
                 continue
             kept += 1
             rows.extend(_x1_rows(g, host))
+        kept_games = [g for g in games if not g.get("SC") and g.get("S")
+                      and _in_window(datetime.fromtimestamp(int(g["S"]), tz=timezone.utc).date().isoformat(), target_date)]
+        try:
+            ht = _x1_collect_ht(host, kept_games)
+        except Exception:
+            ht = []
+        rows.extend(ht)
+        KEYLESS_DIAG["1x_ht_rows"] = len(ht)
         KEYLESS_DIAG["1x_platform"] = f"host={host} games={len(games)} kept={kept} rows={len(rows)}"
         return rows
     return []

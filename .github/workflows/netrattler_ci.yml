@@ -94,3 +94,5 @@ jobs:
         run: python test_pinnacle_btts_market.py
       - name: Pinnacle 1st-half totals test
         run: python test_pinnacle_ht_totals.py
+      - name: 1xBet 1st-half rows test
+        run: python test_x1_ht_rows.py
