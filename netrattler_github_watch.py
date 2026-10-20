@@ -473,6 +473,11 @@ def main() -> int:
             log(f"HF watch: FAIL {str(exc)[:160]}", "WARN")
     try:
         summary["discovered"] = discover_new_repos()
+        for d in summary["discovered"]:
+            sb_insert("netrattler_source_discovery", {
+                "source_name": d["repo"], "url": f"https://github.com/{d['repo']}", "kind": "github_discovery",
+                "tags": ["github-discovery"], "score": int(d.get("stars") or 0), "payload": d,
+                "data_hash": stable_hash("github_discovery", d["repo"], str(NOW)[:7]), "collected_at": NOW})
     except Exception as exc:
         log(f"discovery: FAIL {str(exc)[:160]}", "WARN")
     with open("netrattler_github_watch_summary.json", "w", encoding="utf-8") as fh:
