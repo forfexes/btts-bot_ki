@@ -100,6 +100,15 @@ jobs:
           SETTLEMENT_TG_REPLAY_DAYS: "4"
           SETTLEMENT_TG_REPLAY_MAX: "50"
         run: python netrattler_settlement_runner.py
+      - name: Void tips pending > 7 days with no result (DB only, backed up)
+        if: always()
+        continue-on-error: true
+        env:
+          SUPABASE_URL: ${{ secrets.SUPABASE_URL }}
+          SUPABASE_KEY: ${{ secrets.SUPABASE_KEY }}
+          SUPABASE_SERVICE_ROLE_KEY: ${{ secrets.SUPABASE_SERVICE_ROLE_KEY }}
+          STALE_APPLY: "1"
+        run: python netrattler_stale_pending_void.py
       - name: Learn immediately from newly settled picks
         if: success()
         env:
