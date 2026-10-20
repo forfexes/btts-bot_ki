@@ -1,0 +1,21 @@
+name: NETRATTLER 1x Group Decode
+on:
+  workflow_dispatch: {}
+permissions:
+  contents: read
+jobs:
+  decode:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+      - run: python -m pip install --prefer-binary requests
+      - env:
+          MAIN_URL: ${{ secrets.SUPABASE_URL }}
+          MAIN_KEY: ${{ secrets.SUPABASE_SERVICE_ROLE_KEY || secrets.SUPABASE_KEY }}
+          V2_URL: ${{ secrets.V2_SUPABASE_URL }}
+          V2_KEY: ${{ secrets.V2_SUPABASE_SERVICE_KEY }}
+        run: python netrattler_1x_group_decode.py
