@@ -213,6 +213,17 @@ def main():
     for t in TABLES:
         cols = COLS[t].split(",")
         jcols = JSONB_COLS.get(t, set())
+        if MODE == "missing":
+            # read-only: how many source rows are NOT present in the target (by unique data_hash)?
+            miss, seen, off2 = 0, 0, 0
+            while True:
+                r = requests.get(f"{SRC_URL}/rest/v1/{t}?select=data_hash&order=data_hash&limit={PAGE}&offset={off2}", headers=H(), timeout=120)
+                r.raise_for_status(); rows = [x["data_hash"] for x in r.json() if x.get("data_hash")]
+                if not r.json(): break
+                cur.execute(f"select data_hash from {t} where data_hash = any(%s)", (rows,))
+                have = {x[0] for x in cur.fetchall()}
+                miss += len([h for h in rows if h not in have]); seen += len(rows); off2 += PAGE
+            print("missing", t, "checked", seen, "missing_in_target", miss); continue
         if MODE == "verify":
             cur.execute(f"select count(*) from {t}"); print("verify", t, "src", src_count(t), "v2", cur.fetchone()[0]); continue
         off, total = int(os.environ.get("START_OFFSET", "0")), 0
