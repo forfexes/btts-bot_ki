@@ -95,6 +95,7 @@ PLAYER_STATS_TABLES = {
 
 
 MAX_SINGLE_ODDS = 100.0
+MAX_COMBO_ODDS = 2000.0
 
 
 def log(message: str, level: str = "INFO") -> None:
@@ -1968,7 +1969,10 @@ def settle_tip(tip: Dict[str, Any], results: Sequence[Dict[str, Any]], player_st
     # Zero provided stake MUST NOT be replaced with an invented 0.01-unit bet.
     unpriced_builder = group == "builder" and bool(data.get("estimated_odds")) and not odds
     stake = 0.0 if unpriced_builder else stake_of(tip)
-    if group not in {"combo", "combo_multi", "builder"} and odds and odds >= MAX_SINGLE_ODDS and status in {"win", "loss"}:
+    if odds and status in {"win", "loss"} and (
+        (group not in {"combo", "combo_multi", "builder"} and odds >= MAX_SINGLE_ODDS)
+        or odds > MAX_COMBO_ODDS
+    ):
         # Impossible single odds (e.g. American odds read as decimal): never count in ROI.
         status, reason = "void", f"unplausible odds {odds}"
     if unpriced_builder:
