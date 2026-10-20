@@ -6,6 +6,9 @@ on:
     paths:
       - 'netrattler_hardtest.py'
       - 'test_netrattler_keyless_odds.py'
+      - 'test_netrattler_open_source_registry.py'
+      - 'netrattler_source_hub.py'
+      - 'netrattler_identity_hub.py'
       - 'test_netrattler_odds_cache_guard.py'
       - 'test_netrattler_scorer_history_fallback.py'
       - 'test_netrattler_thesportsdb_guard.py'
@@ -68,7 +71,7 @@ jobs:
         shell: bash
         run: |
           set -o pipefail
-          python -m pytest -q -ra test_netrattler_keyless_odds.py test_netrattler_odds_cache_guard.py test_netrattler_scorer_history_fallback.py test_netrattler_thesportsdb_guard.py test_netrattler_playwright_runtime.py test_netrattler_kambi_scorer_market.py test_netrattler_goalhunter_photos.py 2>&1 | tee netrattler-source-tests.log
+          python -m pytest -q -ra test_netrattler_keyless_odds.py test_netrattler_odds_cache_guard.py test_netrattler_scorer_history_fallback.py test_netrattler_thesportsdb_guard.py test_netrattler_playwright_runtime.py test_netrattler_kambi_scorer_market.py test_netrattler_goalhunter_photos.py test_netrattler_open_source_registry.py 2>&1 | tee netrattler-source-tests.log
       - name: Upload diagnostics even when tests fail
         if: always()
         uses: actions/upload-artifact@v4
