@@ -109,6 +109,14 @@ jobs:
           SUPABASE_SERVICE_ROLE_KEY: ${{ secrets.SUPABASE_SERVICE_ROLE_KEY }}
           STALE_APPLY: "1"
         run: python netrattler_stale_pending_void.py
+      - name: Closing-line value for single tips (read-only on odds)
+        if: always()
+        continue-on-error: true
+        env:
+          SUPABASE_URL: ${{ secrets.SUPABASE_URL }}
+          SUPABASE_KEY: ${{ secrets.SUPABASE_KEY }}
+          SUPABASE_SERVICE_ROLE_KEY: ${{ secrets.SUPABASE_SERVICE_ROLE_KEY }}
+        run: python netrattler_clv.py
       - name: Learn immediately from newly settled picks
         if: success()
         env:

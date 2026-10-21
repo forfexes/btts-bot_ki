@@ -122,3 +122,5 @@ jobs:
         run: python test_kambi_criterion_player.py
       - name: Gamdom adapter
         run: python -m pytest -q test_gamdom_adapter.py
+      - name: CLV test
+        run: python -m pytest -q test_clv.py
