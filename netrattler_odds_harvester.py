@@ -614,6 +614,7 @@ def collect_live_all(target_date: Optional[str] = None) -> List[Dict[str, Any]]:
         ("matchbook", lambda: _keyless("matchbook", day)),
         ("altenar_platform", lambda: _keyless("altenar_platform", day)),
         ("smarkets", lambda: _keyless("smarkets", day)),
+        ("gamdom_platform", lambda: _keyless("gamdom_platform", day)),
     ):
         note = ""
         got: List[Dict[str, Any]] = []
