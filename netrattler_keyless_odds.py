@@ -766,9 +766,89 @@ def collect_smarkets(target_date: str) -> List[Dict[str, Any]]:
     KEYLESS_DIAG["smarkets"] = f"events={len(events)} markets={n_markets} rows={len(rows)}"
     return rows
 
+
+# --------------------------------------------------------------- Gamdom (Sportradar list)
+# Public JSON list the sportsbook page itself loads (plain GET, no auth).
+# Shadow-only; names via Info.Competidores, markets via Modalidades/Ofertas.
+GAMDOM_FEEDS = ("https://api.gamdom.onebittech.com/api/vaix/featured-matches",
+                "https://api.gamdom.onebittech.com/api/partidos")
+
+
+def _gamdom_rows(payload: Any, bookmaker: str = "gamdom") -> List[Dict[str, Any]]:
+    out: List[Dict[str, Any]] = []
+    for ev in payload if isinstance(payload, list) else []:
+        if not isinstance(ev, dict) or str(ev.get("Deporte") or "").lower() != "soccer":
+            continue
+        if ev.get("Estado") != "N" or ev.get("EsOutright") == "S":
+            continue  # pre-match only
+        comps = ((ev.get("Info") or {}).get("Competidores") or [])
+        by_id = {c.get("Id"): c.get("Nombre") for c in comps if isinstance(c, dict)}
+        home, away = by_id.get(ev.get("EquipoLocalCod")), by_id.get(ev.get("EquipoVisitanteCod"))
+        if not home or not away:
+            continue
+        for mod in ev.get("Modalidades") or []:
+            if not isinstance(mod, dict) or mod.get("Estado") != "A":
+                continue
+            name = str(mod.get("Modalidad") or "").strip().lower()
+            spec = str(mod.get("Especificador") or "")
+            sels: Dict[str, float] = {}
+            key = None
+            if name == "1x2":
+                key, want = "1x2", {"home", "draw", "away"}
+            elif name == "both teams to score":
+                key, want = "btts", {"yes", "no"}
+            elif name == "total" and spec.replace(" ", "") == "{total=2.5}":
+                key, want = "totals_2_5", {"over_2_5", "under_2_5"}
+            else:
+                continue
+            for o in mod.get("Ofertas") or []:
+                if not isinstance(o, dict) or o.get("Estado") != "A":
+                    continue
+                t = str(o.get("OfertaEvento") or "").strip().lower()
+                if key == "1x2":
+                    sel = "draw" if t in ("draw", "x") else {1: "home", 2: "away"}.get(o.get("Localia"))
+                elif key == "btts":
+                    sel = t if t in ("yes", "no") else None
+                else:
+                    sel = ("over_2_5" if t.startswith("over") else "under_2_5" if t.startswith("under") else None)
+                try:
+                    price = float(o.get("CotizacionWeb"))
+                except (TypeError, ValueError):
+                    continue
+                if sel in want and price > 1.0:
+                    sels[sel] = price
+            if set(sels) != want:
+                continue  # complete markets only
+            for sel, price in sels.items():
+                row = _row(source="gamdom_platform", bookmaker=bookmaker, event_id=f"gd_{ev.get('IdPartido')}",
+                           league=str(ev.get("Pais") or ""), home=home, away=away,
+                           commence_time=ev.get("FechaInicioPartido"), market=key, selection=sel, odds=price,
+                           line=2.5 if key == "totals_2_5" else None, raw={"platform": "gamdom"})
+                if row:
+                    out.append(row)
+    return out
+
+
+def collect_gamdom_platform(target_date: str) -> List[Dict[str, Any]]:
+    rows: List[Dict[str, Any]] = []
+    seen = set()
+    info = []
+    for u in GAMDOM_FEEDS:
+        js, st = _get(u)
+        got = _gamdom_rows(js) if js else []
+        info.append(f"{u.rsplit('/', 1)[-1]}:{st}:{len(got)}")
+        for r in got:
+            k = (r["event_id"], r["market"], r["selection"])
+            if k not in seen:
+                seen.add(k)
+                rows.append(r)
+    KEYLESS_DIAG["gamdom"] = " ".join(info)
+    return rows
+
+
 COLLECTORS = (("bwin", collect_bwin), ("1xbet_platform", collect_1x_platform),
               ("matchbook", collect_matchbook), ("altenar_platform", collect_altenar_platform),
-              ("smarkets", collect_smarkets))
+              ("smarkets", collect_smarkets), ("gamdom_platform", collect_gamdom_platform))
 
 
 if __name__ == "__main__":

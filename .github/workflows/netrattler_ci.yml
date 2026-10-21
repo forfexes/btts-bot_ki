@@ -120,3 +120,5 @@ jobs:
         run: python test_model_quality.py
       - name: Kambi criterion player name test
         run: python test_kambi_criterion_player.py
+      - name: Gamdom adapter
+        run: python -m pytest -q test_gamdom_adapter.py
