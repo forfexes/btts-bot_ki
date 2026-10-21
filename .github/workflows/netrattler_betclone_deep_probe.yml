@@ -5,6 +5,12 @@ on:
       settle:
         description: seconds to wait for the sportsbook to render
         default: "8"
+      families:
+        description: JSON list of families
+        default: '["altenar","betby","betconstruct","delasport","digitain","igate","inplaynet","first","softswiss"]'
+      brands:
+        description: optional comma list of brands
+        default: ""
 permissions:
   contents: read
 jobs:
@@ -14,7 +20,7 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        family: [altenar, betby, betconstruct, delasport, digitain, igate, inplaynet, first, softswiss]
+        family: ${{ fromJSON(github.event.inputs.families || '["altenar","betby","betconstruct","delasport","digitain","igate","inplaynet","first","softswiss"]') }}
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-python@v5
@@ -30,4 +36,4 @@ jobs:
           SUPABASE_URL: ${{ secrets.SUPABASE_URL }}
           SUPABASE_KEY: ${{ secrets.SUPABASE_KEY }}
           SUPABASE_SERVICE_ROLE_KEY: ${{ secrets.SUPABASE_SERVICE_ROLE_KEY }}
-        run: python netrattler_betclone_deep_probe.py --family ${{ matrix.family }} --settle ${{ github.event.inputs.settle || '8' }}
+        run: python netrattler_betclone_deep_probe.py --family ${{ matrix.family }} --settle ${{ github.event.inputs.settle || '8' }} --brands "${{ github.event.inputs.brands }}"

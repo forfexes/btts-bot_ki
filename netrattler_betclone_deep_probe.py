@@ -118,6 +118,54 @@ def top_keys(payload: Any) -> List[str]:
     return []
 
 
+def _num(v: Any) -> Optional[float]:
+    if isinstance(v, bool) or not isinstance(v, (int, float, str)):
+        return None
+    try:
+        return float(v)
+    except (TypeError, ValueError):
+        return None
+
+
+def decimal_key_paths(payload: Any, budget: int = 60000) -> Dict[str, int]:
+    """Key paths (list indices -> []) whose values look like decimal odds: non-integer 1.01..60.
+    Finds price fields whatever they are called ("Cotizacion", "k", "coef" ...)."""
+    out: Dict[str, int] = {}
+    stack = [(payload, "")]
+    seen = 0
+    while stack and seen < budget:
+        node, path = stack.pop()
+        seen += 1
+        if isinstance(node, list):
+            stack.extend((x, path + "[]") for x in node[:300])
+        elif isinstance(node, dict):
+            for k, v in list(node.items())[:120]:
+                if SECRET_KEY.search(str(k)):
+                    continue
+                kp = f"{path}.{str(k)[:30]}"
+                if isinstance(v, (dict, list)):
+                    stack.append((v, kp))
+                else:
+                    x = _num(v)
+                    if x is not None and 1.01 <= x <= 60 and abs(x - round(x)) > 1e-9:
+                        if re.search(r"\d{2,}", str(k)) and len(out) > 40:
+                            continue
+                        out[kp] = out.get(kp, 0) + 1
+    return dict(sorted(out.items(), key=lambda kv: -kv[1])[:12])
+
+
+def skeleton(node: Any, depth: int = 0, max_depth: int = 6) -> Any:
+    """Structure with keys and one example per list; values truncated; no secret keys."""
+    if depth >= max_depth:
+        return "..."
+    if isinstance(node, dict):
+        return {str(k)[:30]: skeleton(v, depth + 1, max_depth)
+                for k, v in list(node.items())[:14] if not SECRET_KEY.search(str(k))}
+    if isinstance(node, list):
+        return [skeleton(node[0], depth + 1, max_depth), f"<{len(node)}>"] if node else []
+    return str(node)[:30]
+
+
 def is_denied(status: int, text: str) -> bool:
     low = (text or "").lower()[:5000]
     return status in (401, 403, 407, 429, 451) or any(t in low for t in DENIAL_TEXT)
@@ -134,17 +182,32 @@ class Collector:
         key = (kind, host, path)
         sig = price_signals(payload)
         e = self.endpoints.setdefault(key, {"kind": kind, "host": host, "path": path, "n": 0, "bytes": 0,
-                                            "max_priced": 0, "top_keys": top_keys(payload), "sample": None})
+                                            "max_priced": 0, "top_keys": top_keys(payload), "sample": None,
+                                            "decimal_paths": {}, "skeleton": None, "_best_dec": 0})
         e["n"] += 1
         e["bytes"] += size
+        if size >= 5000 and not re.search(r"config|translation|countr|currenc|banner|casino|promo|seo|i18n|geoloc", path, re.I):
+            dp = decimal_key_paths(payload)
+            tot = sum(dp.values())
+            if tot > e["_best_dec"]:
+                e["_best_dec"] = tot
+                e["decimal_paths"] = dp
+                e["skeleton"] = skeleton(payload)
         if sig["priced"] > e["max_priced"]:
             e["max_priced"] = sig["priced"]
             e["sample"] = sig["sample"]
             e["top_keys"] = top_keys(payload)
 
     def summary(self) -> List[Dict[str, Any]]:
-        rows = sorted(self.endpoints.values(), key=lambda e: (-e["max_priced"], -e["n"]))
-        return rows[:MAX_ENDPOINTS]
+        rows = sorted(self.endpoints.values(), key=lambda e: (-e["max_priced"], -e["_best_dec"], -e["bytes"]))
+        out = []
+        for i, e in enumerate(rows[:MAX_ENDPOINTS]):
+            e = dict(e)
+            e["decimal_values"] = e.pop("_best_dec")
+            if i >= 4 or not e["decimal_values"]:
+                e["skeleton"] = None  # keep the diagnostic row small
+            out.append(e)
+        return out
 
 
 def probe_brand(browser, family: str, brand: str, url: str, settle_s: float = 8.0) -> Dict[str, Any]:
@@ -260,20 +323,22 @@ def probe_brand(browser, family: str, brand: str, url: str, settle_s: float = 8.
         res["endpoints"] = col.summary()
         res["websockets"] = [{"host": h, **v} for h, v in list(col.ws_hosts.items())[:6]]
         res["best_priced"] = max([e["max_priced"] for e in res["endpoints"]] or [0])
+        res["best_decimal_values"] = max([e["decimal_values"] for e in res["endpoints"]] or [0])
         try:
             ctx.close()
         except Exception:
             pass
 
 
-def targets(family: str = "") -> List[Tuple[str, str, str]]:
+def targets(family: str = "", brands: str = "") -> List[Tuple[str, str, str]]:
+    want = {b.strip().lower() for b in brands.split(",") if b.strip()}
     out = []
     for fam, brands in HARD_CANDIDATES.items():
         if fam == "1xbet":
             continue  # already integrated through its public LineFeed
         if family and fam != family:
             continue
-        out.extend((fam, b, u) for b, u in brands)
+        out.extend((fam, b, u) for b, u in brands if not want or b.lower() in want)
     return out
 
 
@@ -295,12 +360,13 @@ def main() -> None:
     ap = argparse.ArgumentParser()
     ap.add_argument("--family", default="")
     ap.add_argument("--settle", type=float, default=8.0)
+    ap.add_argument("--brands", default="")
     args = ap.parse_args()
     from playwright.sync_api import sync_playwright
     with sync_playwright() as pw:
         browser = pw.chromium.launch(headless=True, args=["--no-sandbox"])
         try:
-            for fam, brand, url in targets(args.family):
+            for fam, brand, url in targets(args.family, args.brands):
                 row = probe_brand(browser, fam, brand, url, settle_s=args.settle)
                 row["checked_utc"] = datetime.now(timezone.utc).isoformat()
                 print("BETCLONE_DEEP", json.dumps(row, ensure_ascii=False)[:3000], flush=True)

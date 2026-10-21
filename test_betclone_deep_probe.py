@@ -36,6 +36,16 @@ class Pure(unittest.TestCase):
         self.assertIn("betby", fams)
         self.assertTrue(all(f == "betby" for f, _, _ in dp.targets("betby")))
 
+    def test_decimal_paths_find_any_price_key_name(self):
+        payload = [{"IdPartido": 7, "Mercados": [{"Id": 1, "Cotizacion": "1.85"}, {"Id": 2, "Cotizacion": 2.4}],
+                    "Year": 2026, "Count": 3}]
+        self.assertEqual(dp.decimal_key_paths(payload), {"[].Mercados[].Cotizacion": 2})
+
+    def test_skeleton_is_small_and_secret_free(self):
+        sk = dp.skeleton({"data": [{"a": 1, "odds": [{"k": "1.9"}]}], "sessionToken": "x"})
+        self.assertNotIn("sessionToken", sk)
+        self.assertEqual(sk["data"][1], "<1>")
+
     def test_denial(self):
         self.assertTrue(dp.is_denied(403, ""))
         self.assertTrue(dp.is_denied(200, "Just a moment... checking your browser"))
