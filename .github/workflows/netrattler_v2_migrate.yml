@@ -11,7 +11,7 @@ on:
         description: comma list
         default: player_game_log,player_match_stats,odds_history
       target:
-        description: v2 or v3
+        description: v2, v3 or v4
         default: v2
       dry_run:
         description: true or false (rotate only)
@@ -40,6 +40,7 @@ jobs:
           V3_DATABASE_URL: ${{ secrets.V3_DATABASE_URL }}
           TARGET: ${{ github.event.inputs.target || 'v2' }}
           DRY_RUN: ${{ github.event.inputs.dry_run || (github.event_name == 'schedule' && 'false') || 'true' }}
+          V4_DATABASE_URL: ${{ secrets.V4_DATABASE_URL }}
           V2_SUPABASE_URL: ${{ secrets.V2_SUPABASE_URL }}
           V2_SUPABASE_SERVICE_KEY: ${{ secrets.V2_SUPABASE_SERVICE_KEY }}
           MODE: ${{ github.event.inputs.mode || (github.event_name == 'schedule' && 'rotate') || 'check' }}

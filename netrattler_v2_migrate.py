@@ -42,6 +42,15 @@ DDL = {
  source_type text, url text, league text, season text, match_date date, entity_type text, entity_name text,
  market text, category text, payload jsonb, data_hash text unique, collected_at timestamptz);
  create index if not exists ndlr_source_date on netrattler_data_lake_raw (source, match_date desc)""",
+"ml_tips": """create table if not exists ml_tips (id bigint primary key, match_id text, home_team text, away_team text, league text,
+ date text, time text, market text, tip text, odds float8, confidence integer, probability float8, value_rating text,
+ features jsonb, created_at timestamptz, bot_version text, result text, settled boolean, settled_at timestamptz, actual_score text)""",
+"netrattler_learning_events": """create table if not exists netrattler_learning_events (event_id text primary key, pick_key text,
+ tip_date date, market text, league text, source text, player text, builder_type text, legs integer, odds_bucket text,
+ probability float8, odds float8, closing_odds float8, clv float8, outcome smallint, profit_units float8, brier float8,
+ logloss float8, payload jsonb, settled_at timestamptz, created_at timestamptz)""",
+"x1_player_snapshots": """create table if not exists x1_player_snapshots (id bigint primary key, captured_at timestamptz,
+ match_name text, subgame_title text, g integer, t integer, line numeric, odds numeric, player text, side integer)""",
 }
 # columns copied (raw jsonb is intentionally NOT copied for odds_history: saves ~80 MB)
 COLS = {
@@ -51,7 +60,13 @@ COLS = {
 "netrattler_match_history": "division,match_date,home_team,away_team,ft_home,ft_away,ht_home,ht_away,source,created_at",
 "netrattler_data_lake_raw": "id,source,source_type,url,league,season,match_date,entity_type,entity_name,market,category,payload,data_hash,collected_at",
 }
-ORDER = {"odds_history": "source,match_id,market,bookmaker,captured_date,selection",
+COLS.update({
+"ml_tips": "id,match_id,home_team,away_team,league,date,time,market,tip,odds,confidence,probability,value_rating,features,created_at,bot_version,result,settled,settled_at,actual_score",
+"netrattler_learning_events": "event_id,pick_key,tip_date,market,league,source,player,builder_type,legs,odds_bucket,probability,odds,closing_odds,clv,outcome,profit_units,brier,logloss,payload,settled_at,created_at",
+"x1_player_snapshots": "id,captured_at,match_name,subgame_title,g,t,line,odds,player,side",
+})
+ORDER = {"ml_tips": "id", "netrattler_learning_events": "event_id", "x1_player_snapshots": "id",
+         "odds_history": "source,match_id,market,bookmaker,captured_date,selection",
          "player_game_log": "player_key,event_id", "player_match_stats": "id",
          "netrattler_match_history": "division,match_date,home_team,away_team",
          "netrattler_data_lake_raw": "id"}
@@ -67,6 +82,11 @@ def src_count(t):
 if os.environ.get("TARGET", "v2") == "v3" and os.environ.get("V3_DATABASE_URL", "").startswith("postgres"):
     DST_DSN = os.environ["V3_DATABASE_URL"]
     os.environ["V2_REGION"] = os.environ.get("V3_REGION", os.environ.get("V2_REGION", "eu-west-2"))
+
+
+if os.environ.get("TARGET", "v2") == "v4" and os.environ.get("V4_DATABASE_URL", "").startswith("postgres"):
+    DST_DSN = os.environ["V4_DATABASE_URL"]
+    os.environ["V2_REGION"] = os.environ.get("V4_REGION", os.environ.get("V2_REGION", "eu-west-2"))
 
 
 def _parse_dsn(dsn):
@@ -209,7 +229,7 @@ def main():
         print("extras ok (" + str(len(extra)) + " statements)")
         c.commit(); return
     from psycopg2.extras import execute_values, Json
-    JSONB_COLS = {"netrattler_data_lake_raw": {"payload"}}
+    JSONB_COLS = {"netrattler_data_lake_raw": {"payload"}, "ml_tips": {"features"}, "netrattler_learning_events": {"payload"}}
     for t in TABLES:
         cols = COLS[t].split(",")
         jcols = JSONB_COLS.get(t, set())
