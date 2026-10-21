@@ -16,19 +16,4 @@ jobs:
           SUPABASE_KEY: ${{ secrets.SUPABASE_KEY }}
           SUPABASE_SERVICE_ROLE_KEY: ${{ secrets.SUPABASE_SERVICE_ROLE_KEY }}
           PYTHONPATH: ${{ github.workspace }}
-        run: |
-          python - <<'PY'
-          import os, json, requests
-          import netrattler_keyless_odds as k
-          rows = k.collect_gamdom_platform("")
-          mk = {}
-          for r in rows:
-              mk[r["market"]] = mk.get(r["market"], 0) + 1
-          info = {"probe": "gamdom_probe", "rows": len(rows), "markets": mk, "diag": k.KEYLESS_DIAG.get("gamdom"),
-                  "events": len({r["event_id"] for r in rows}),
-                  "sample": [{x: r.get(x) for x in ("home_team", "away_team", "commence_time", "market", "selection", "odds")} for r in rows[:4]]}
-          print(info)
-          u = os.environ["SUPABASE_URL"].rstrip("/"); key = os.environ.get("SUPABASE_SERVICE_ROLE_KEY") or os.environ["SUPABASE_KEY"]
-          requests.post(u + "/rest/v1/netrattler_card_diag", json={"info": info}, timeout=20,
-                        headers={"apikey": key, "Authorization": "Bearer " + key, "Content-Type": "application/json"})
-          PY
+        run: python netrattler_gamdom_probe.py
