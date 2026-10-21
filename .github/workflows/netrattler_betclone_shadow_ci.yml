@@ -44,13 +44,13 @@ jobs:
           rows = cache._load_x1_rows(force=True)
           counts = Counter(r.get("source") for r in rows)
           print("BETCLONE_SHADOW_ROWS", len(rows), dict(counts))
-          if not counts["1xbet_platform"]:
-              print("BETCLONE_SHADOW_EMPTY: no 1xBet quotes currently available; no production feed promoted")
-          if not counts["altenar_platform"]:
-              print("BETCLONE_ALTENAR_EMPTY: optional candidate feed unavailable; no production feed promoted")
+          if not counts["1xbet_platform"] or not counts["altenar_platform"]:
+              print("BETCLONE_SHADOW_SOURCE_GAP: missing source data; investigate ingestion and credentials")
           if any(r.get("source") not in cache.X1_SHADOW_SOURCES for r in rows):
               raise SystemExit("Unverified source in shadow cache")
-          print("BETCLONE_SHADOW_FEEDS_CHECKED: observed availability reported; publication still requires independent matching")
+          if not counts["1xbet_platform"] and not counts["altenar_platform"]:
+              raise SystemExit("Both expected shadow sources are empty: cannot verify ingestion")
+          print("BETCLONE_SHADOW_FEEDS_CHECKED: publication still requires independent matching")
           PY
 
 # Route player tables to the archive project (V2); see netrattler_table_router.py
