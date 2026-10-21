@@ -786,6 +786,10 @@ def _gamdom_rows(payload: Any, bookmaker: str = "gamdom") -> List[Dict[str, Any]
         home, away = by_id.get(ev.get("EquipoLocalCod")), by_id.get(ev.get("EquipoVisitanteCod"))
         if not home or not away:
             continue
+        start = str(ev.get("FechaPlanInicioPartido") or "").strip()
+        if not re.match(r"^\d{4}-\d{2}-\d{2}", start):
+            continue  # without a start date the row would default to today
+        start = start.replace(" ", "T")
         for mod in ev.get("Modalidades") or []:
             if not isinstance(mod, dict) or mod.get("Estado") != "A":
                 continue
@@ -822,7 +826,7 @@ def _gamdom_rows(payload: Any, bookmaker: str = "gamdom") -> List[Dict[str, Any]
             for sel, price in sels.items():
                 row = _row(source="gamdom_platform", bookmaker=bookmaker, event_id=f"gd_{ev.get('IdPartido')}",
                            league=str(ev.get("Pais") or ""), home=home, away=away,
-                           commence_time=ev.get("FechaInicioPartido"), market=key, selection=sel, odds=price,
+                           commence_time=start, market=key, selection=sel, odds=price,
                            line=2.5 if key == "totals_2_5" else None, raw={"platform": "gamdom"})
                 if row:
                     out.append(row)

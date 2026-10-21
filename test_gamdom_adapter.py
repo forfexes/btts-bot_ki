@@ -1,7 +1,7 @@
 import netrattler_keyless_odds as k
 
 def _ev(**kw):
-    ev = {"Deporte": "Soccer", "Estado": "N", "EsOutright": "N", "IdPartido": 7,
+    ev = {"Deporte": "Soccer", "Estado": "N", "EsOutright": "N", "IdPartido": 7, "FechaPlanInicioPartido": "2026-10-22 16:00:00",
           "EquipoLocalCod": "a", "EquipoVisitanteCod": "b", "Pais": "ESP",
           "Info": {"Competidores": [{"Id": "a", "Nombre": "Real Madrid"}, {"Id": "b", "Nombre": "RB Leipzig"}]},
           "Modalidades": [
@@ -33,3 +33,9 @@ def test_skips_live_and_non_football():
     assert k._gamdom_rows([_ev(Estado="J")]) == []
     assert k._gamdom_rows([_ev(Deporte="Tennis")]) == []
     assert k._gamdom_rows([_ev(Info={"Competidores": []})]) == []
+
+def test_start_date_mapped_and_required():
+    rows = k._gamdom_rows([_ev()])
+    assert rows and all(r["match_date"] == "2026-10-22" for r in rows)
+    e = _ev(); e.pop("FechaPlanInicioPartido")
+    assert k._gamdom_rows([e]) == []
