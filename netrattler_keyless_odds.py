@@ -838,7 +838,7 @@ def collect_gamdom_platform(target_date: str) -> List[Dict[str, Any]]:
         got = _gamdom_rows(js) if js else []
         info.append(f"{u.rsplit('/', 1)[-1]}:{st}:{len(got)}")
         for r in got:
-            k = (r["event_id"], r["market"], r["selection"])
+            k = (r["match_id"], r["market"], r["selection"])
             if k not in seen:
                 seen.add(k)
                 rows.append(r)

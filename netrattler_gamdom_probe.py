@@ -10,11 +10,18 @@ def post(info):
 try:
     import netrattler_keyless_odds as k
     rows = k.collect_gamdom_platform("")
+    datekeys = {}
+    for u in k.GAMDOM_FEEDS:
+        js, _ = k._get(u)
+        for ev in (js if isinstance(js, list) else []):
+            if isinstance(ev, dict) and ev.get("Deporte") == "Soccer":
+                datekeys[u[-12:]] = {a: str(b)[:40] for a, b in ev.items() if any(t in a.lower() for t in ("fecha", "hora", "inicio", "time", "date", "start"))}
+                break
     mk = {}
     for r in rows:
         mk[r["market"]] = mk.get(r["market"], 0) + 1
     info = {"probe": "gamdom_probe", "rows": len(rows), "markets": mk, "diag": k.KEYLESS_DIAG.get("gamdom"),
-            "events": len({r["event_id"] for r in rows}),
+            "datekeys": datekeys, "events": len({r["match_id"] for r in rows}),
             "sample": [{x: r.get(x) for x in ("home_team", "away_team", "commence_time", "market", "selection", "odds")} for r in rows[:4]]}
 except Exception:
     info = {"probe": "gamdom_probe", "error": traceback.format_exc()[-900:]}
