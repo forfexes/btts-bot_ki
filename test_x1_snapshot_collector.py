@@ -19,5 +19,10 @@ class T(unittest.TestCase):
         got = c.pick_games(items, {"Leeds vs Hull"}, now, 36, 10)
         self.assertEqual(got, [(1, "Arsenal vs Chelsea")])
 
+    def test_game_detail_requests_subgames(self):
+        import inspect, netrattler_prop_sources as ps
+        self.assertIn('"isSubGames": "true"', inspect.getsource(c.run))
+        self.assertIn('"isSubGames": "true"', inspect.getsource(ps.fetch_1xbet_player_props))
+
 if __name__ == "__main__":
     unittest.main()

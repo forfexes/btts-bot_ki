@@ -444,7 +444,9 @@ def fetch_1xbet_player_props(home: str, away: str) -> List[Dict[str, Any]]:
     if _gk not in _1X_GAME_CACHE:
         _1X_GAME_CACHE[_gk] = _get_json(
             f"{host_used}/service-api/LineFeed/GetGameZip",
-            params={"id": event_id, "lng": "en", "cfview": 0, "grMode": 4, "country": 1},
+            # isSubGames=true: without it the response has no SG list, so the
+            # "Players' stats" sub-game (fouls/tackles/shots per player) was never seen.
+            params={"id": event_id, "lng": "en", "cfview": 0, "grMode": 4, "country": 1, "isSubGames": "true"},
         )
     game = _1X_GAME_CACHE.get(_gk)
     if not game:

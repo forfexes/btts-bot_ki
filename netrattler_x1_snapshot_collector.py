@@ -121,7 +121,8 @@ def run() -> Dict[str, int]:
         rows = []
         for h in [host]:
             game = ps._get_json(f"{h}/service-api/LineFeed/GetGameZip",
-                                params={"id": gid, "lng": "en", "cfview": 0, "grMode": 4, "country": 1}, timeout=15)
+                                params={"id": gid, "lng": "en", "cfview": 0, "grMode": 4, "country": 1,
+                                        "isSubGames": "true"}, timeout=15)
             val = (game or {}).get("Value") or {}
             if not val:
                 continue  # id is host-specific only for unrelated brands; try the next mirror
