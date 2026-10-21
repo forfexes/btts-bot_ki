@@ -226,16 +226,16 @@ MIN_ODDS_VALUE = MIN_ODDS  # Alias — globale Mindestquote für "nur Value Bets
 # Goal Hunter / 1X2 has its own production thresholds. These values already
 # exist in the GitHub workflow; V37 now consumes them instead of accidentally
 # forcing the generic 55% / 3% runtime-policy gate onto 1X2.
-ONE_X_TWO_MIN_PROB = float(env("NETRATTLER_1X2_MIN_PROB", "52"))
+ONE_X_TWO_MIN_PROB = float(env("NETRATTLER_1X2_MIN_PROB", "65"))
 ONE_X_TWO_MIN_EDGE = float(env("NETRATTLER_1X2_MIN_EDGE", "0.01"))
 ONE_X_TWO_MIN_ODDS = float(env("NETRATTLER_1X2_MIN_ODDS", "1.55"))
 
 # V37 market-specific production gates.  The old global 67% gate predates the
 # calibrated ML blend and made several markets mathematically unreachable.
-BTTS_MIN_PROB = float(env("NETRATTLER_BTTS_MIN_PROB", "58"))
+BTTS_MIN_PROB = float(env("NETRATTLER_BTTS_MIN_PROB", "65"))
 BTTS_MIN_EDGE = float(env("NETRATTLER_BTTS_MIN_EDGE", "0.08"))
 BTTS_MIN_ODDS = float(env("NETRATTLER_BTTS_MIN_ODDS", str(MIN_ODDS_VALUE)))
-OVER25_MIN_PROB = float(env("NETRATTLER_OVER25_MIN_PROB", "58"))
+OVER25_MIN_PROB = float(env("NETRATTLER_OVER25_MIN_PROB", "65"))
 OVER25_MIN_EDGE = float(env("NETRATTLER_OVER25_MIN_EDGE", "0.08"))
 OVER25_MIN_ODDS = float(env("NETRATTLER_OVER25_MIN_ODDS", str(MIN_ODDS_VALUE)))
 COMBO_MIN_PROB = float(env("NETRATTLER_COMBO_MIN_PROB", "55"))
@@ -247,10 +247,10 @@ COMBO_COMPONENT_MIN_PROB = float(env("NETRATTLER_COMBO_COMPONENT_MIN_PROB", "48"
 BTTS_HT_MIN_PROB = float(env("NETRATTLER_BTTS_HT_MIN_PROB", "38"))
 BTTS_HT_MIN_EDGE = float(env("NETRATTLER_BTTS_HT_MIN_EDGE", "0.05"))
 BTTS_HT_MIN_ODDS = float(env("NETRATTLER_BTTS_HT_MIN_ODDS", str(MIN_ODDS_VALUE)))
-OVER15_HT_MIN_PROB = float(env("NETRATTLER_OVER15_HT_MIN_PROB", "42"))
+OVER15_HT_MIN_PROB = float(env("NETRATTLER_OVER15_HT_MIN_PROB", "60"))
 OVER15_HT_MIN_EDGE = float(env("NETRATTLER_OVER15_HT_MIN_EDGE", "0.05"))
 OVER15_HT_MIN_ODDS = float(env("NETRATTLER_OVER15_HT_MIN_ODDS", str(MIN_ODDS_VALUE)))
-CORNER_MIN_PROB = float(env("NETRATTLER_CORNER_MIN_PROB", "55"))
+CORNER_MIN_PROB = float(env("NETRATTLER_CORNER_MIN_PROB", "70"))
 CORNER_MIN_EDGE = float(env("NETRATTLER_CORNER_MIN_EDGE", "0.02"))
 CORNER_MIN_ODDS = float(env("NETRATTLER_CORNER_MIN_ODDS", "1.60"))
 
