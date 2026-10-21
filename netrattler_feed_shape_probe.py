@@ -38,6 +38,11 @@ def run():
                 fb = football(items)
                 e["shape"] = shape(fb if fb else (items[0] if isinstance(items, list) and items else j))
                 e["football_found"] = bool(fb)
+                if fb:
+                    mods = fb.get("Modalidades") or []
+                    e["mod_names"] = [{k: str(m.get(k))[:40] for k in m if k != "Ofertas"} for m in mods[:6]]
+                    e["n_mod"] = len(mods)
+                    e["offers_sample"] = [(mods[0].get("Ofertas") or [])[:3]] if mods else []
             else:
                 e["body"] = r.text[:120]
             out["res"][name] = e
