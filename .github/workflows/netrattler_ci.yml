@@ -134,3 +134,5 @@ jobs:
         run: python -m pytest -q test_1x_group_map.py
       - name: Builder disabled styles test
         run: python -m pytest -q test_builder_disabled_styles.py
+      - name: footballdata.io adapter
+        run: python -m pytest -q test_footballdata_io.py
