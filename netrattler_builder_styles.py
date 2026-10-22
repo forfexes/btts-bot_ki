@@ -460,6 +460,16 @@ def _pick_rank(pick: builder.BuilderPick) -> Tuple[float, float, float, float]:
     return score, avg_p, avg_e, -pick.total_odds
 
 
+# Styles with >=11 settled picks in 14 days and <=1 win (2026-10-22): SAME GAME MIXED 0/45, CROSS MATCH PROP ACCA 1/37,
+# CROSS MATCH 0/20, SAME MATCH AVAILABLE 0/19, SOT LADDER 0/11. Override: NETRATTLER_BUILDER_DISABLED_STYLES (comma list, "-" = none).
+_DEFAULT_DISABLED = "SAME GAME MIXED,CROSS MATCH PROP ACCA,CROSS MATCH,SAME MATCH AVAILABLE,SOT LADDER"
+
+
+def disabled_styles() -> set:
+    raw = os.getenv("NETRATTLER_BUILDER_DISABLED_STYLES", _DEFAULT_DISABLED).strip()
+    return set() if raw in ("", "-") else {x.strip().upper() for x in raw.split(",") if x.strip()}
+
+
 def _strict_edge() -> bool:
     return str(os.getenv("NETRATTLER_BUILDER_STRICT_EDGE", "false")).lower() in {"1", "true", "yes", "on"}
 
@@ -520,6 +530,7 @@ def _build_modelled(raw_props, match_contexts=None, match_date=None, max_builder
             continue
         seen.add(pick.builder_id)
         unique.append(pick)
+    unique = [p for p in unique if p.style not in disabled_styles()]
     unique.sort(key=_pick_rank, reverse=True)
 
     limits = {

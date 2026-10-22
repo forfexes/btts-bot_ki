@@ -132,3 +132,5 @@ jobs:
         run: python -m pytest -q test_group_decode_rank.py
       - name: 1x group map test
         run: python -m pytest -q test_1x_group_map.py
+      - name: Builder disabled styles test
+        run: python -m pytest -q test_builder_disabled_styles.py
