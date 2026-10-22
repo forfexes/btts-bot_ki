@@ -136,3 +136,5 @@ jobs:
         run: python -m pytest -q test_builder_disabled_styles.py
       - name: footballdata.io adapter
         run: python -m pytest -q test_footballdata_io.py
+      - name: API-Football players test
+        run: python -m pytest -q test_apifootball_players.py
