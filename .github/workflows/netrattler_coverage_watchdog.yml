@@ -1,0 +1,25 @@
+name: NETRATTLER Coverage Watchdog
+on:
+  schedule:
+    - cron: "41 */3 * * *"
+  workflow_dispatch: {}
+permissions:
+  contents: read
+jobs:
+  guard:
+    runs-on: ubuntu-latest
+    timeout-minutes: 8
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+      - run: python -m pip install --prefer-binary requests pytest
+      - run: python -m pytest -q test_coverage_watchdog.py
+      - env:
+          SUPABASE_URL: ${{ secrets.SUPABASE_URL }}
+          SUPABASE_KEY: ${{ secrets.SUPABASE_KEY }}
+          SUPABASE_SERVICE_ROLE_KEY: ${{ secrets.SUPABASE_SERVICE_ROLE_KEY }}
+          TELEGRAM_BOT_TOKEN: ${{ secrets.TELEGRAM_BOT_TOKEN }}
+          TELEGRAM_GROUP_ALERTS: ${{ secrets.TELEGRAM_GROUP_ALERTS }}
+        run: python netrattler_coverage_watchdog.py
