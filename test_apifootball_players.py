@@ -18,3 +18,10 @@ def test_pick_priority_and_known():
     mk = lambda i, l, s="FT": {"fixture": {"id": i, "status": {"short": s}}, "league": {"id": l}}
     got = a.pick_fixtures([mk(1, 999), mk(2, 39), mk(3, 2, "NS"), mk(4, 140)], {4}, 5)
     assert [x["fixture"]["id"] for x in got] == [2, 1]
+
+
+def test_pick_known_fixture_ids_from_supabase_strings():
+    # Supabase JSON can return fixture IDs as strings while API-Football uses ints.
+    fixtures = [{"fixture": {"id": 5, "status": {"short": "FT"}}, "league": {"id": 2}}]
+    assert a.pick_fixtures(fixtures, {"5"}, 10) == []
+    assert a.pick_fixtures(fixtures, {5}, 10) == []
