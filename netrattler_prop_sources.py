@@ -241,6 +241,7 @@ _KAMBI_OFFER_CACHE: Dict[tuple, Any] = {}
 
 _CRIT_STAT_SPLIT = re.compile(
     r"\s+(?:shots?|fouls?|tackles?|cards?|assists?|passes|offsides|saves|to be|to score|to get|"
+    r"to give|to have|to make|to win|to commit|to provide|to receive|goalkeeper|was fouled|player's|"
     r"total|goals?|headers?|crosses|interceptions|clearances)\b", re.I)
 
 

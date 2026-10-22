@@ -26,3 +26,11 @@ class T(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+def test_to_give_assist_and_goalkeeper_not_glued_to_name():
+    import netrattler_prop_sources as p
+    assert p.kambi_player_from_criterion("Thomas Jorgensen To give an assist (Settled using Opta data)") == "Thomas Jorgensen"
+    assert p.kambi_player_from_criterion("Jan Oblak Goalkeeper saves (Settled using Opta data)") == "Jan Oblak"
+    assert p.kambi_player_from_criterion("Ryan Gravenberch Player's fouls conceded") == "Ryan Gravenberch"
+    assert p.kambi_player_from_criterion("Player's shots on target (Settled using Opta data)") == ""
