@@ -1,0 +1,21 @@
+name: NETRATTLER Footballdata.io Probe
+on:
+  workflow_dispatch: {}
+permissions:
+  contents: read
+jobs:
+  check:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+      - run: python -m pip install --prefer-binary requests
+      - env:
+          FOOTBALLDATA_IO_KEY: ${{ secrets.FOOTBALLDATA_IO_KEY }}
+          SUPABASE_URL: ${{ secrets.SUPABASE_URL }}
+          SUPABASE_KEY: ${{ secrets.SUPABASE_KEY }}
+          SUPABASE_SERVICE_ROLE_KEY: ${{ secrets.SUPABASE_SERVICE_ROLE_KEY }}
+        run: python netrattler_footballdata_io_probe.py
