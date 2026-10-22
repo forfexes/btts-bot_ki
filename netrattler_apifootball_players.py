@@ -21,8 +21,9 @@ def _i(v):
 
 
 def pick_fixtures(resp, known, limit):
+    known_ids = {str(fid) for fid in known}
     ft = [x for x in resp if (x.get("fixture") or {}).get("status", {}).get("short") == "FT"
-          and x["fixture"]["id"] not in known]
+          and str(x["fixture"]["id"]) not in known_ids]
     def rank(x):
         lid = (x.get("league") or {}).get("id")
         return PRIORITY.index(lid) if lid in PRIORITY else len(PRIORITY)
