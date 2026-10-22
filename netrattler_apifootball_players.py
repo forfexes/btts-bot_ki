@@ -48,6 +48,7 @@ def parse_players(resp, fx):
                 "fouls_committed": _i((s.get("fouls") or {}).get("committed")),
                 "fouls_drawn": _i((s.get("fouls") or {}).get("drawn")),
                 "yellow": _i((s.get("cards") or {}).get("yellow")), "red": _i((s.get("cards") or {}).get("red")),
+                "tackles": _i((s.get("tackles") or {}).get("total")), "passes": _i((s.get("passes") or {}).get("total")),
             })
     return rows
 
