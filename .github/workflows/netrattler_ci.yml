@@ -128,3 +128,5 @@ jobs:
         run: python -m pytest -q test_min_prob_floors.py test_storage_guard.py
       - name: Coverage watchdog test
         run: python -m pytest -q test_coverage_watchdog.py
+      - name: Group decode ranking test
+        run: python -m pytest -q test_group_decode_rank.py
