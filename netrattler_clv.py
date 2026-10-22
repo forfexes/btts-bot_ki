@@ -19,6 +19,7 @@ SB = (os.getenv("SUPABASE_URL") or "").rstrip("/")
 KEY = os.getenv("SUPABASE_SERVICE_ROLE_KEY") or os.getenv("SUPABASE_KEY") or ""
 H = {"apikey": KEY, "Authorization": f"Bearer {KEY}", "Content-Type": "application/json"}
 SOURCES = ("bwin", "1xbet_platform", "altenar_platform", "matchbook", "smarkets", "gamdom_platform", "kambi")
+MAX_ABS_CLV = float(os.getenv("CLV_MAX_ABS", "0.4"))
 LOOKBACK_DAYS = int(os.getenv("CLV_LOOKBACK_DAYS", "4"))
 
 
@@ -64,7 +65,8 @@ def clv_value(taken: Any, closing: Optional[float]) -> Optional[float]:
         return None
     if not closing or t <= 1:
         return None
-    return round(t / closing - 1.0, 4)
+    v = round(t / closing - 1.0, 4)
+    return v if abs(v) <= MAX_ABS_CLV else None  # a gap this large means a different line/match, not value
 
 
 def run() -> Dict[str, Any]:

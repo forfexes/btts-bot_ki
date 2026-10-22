@@ -23,3 +23,7 @@ def test_selection_map():
     assert c.tip_selection({"market": "btts", "tip": "YES"}) == ("btts", "yes")
     assert c.tip_selection({"market": "corners", "tip": "Over 7.5 Ecken"}) is None
     assert c.clv_value("abc", 1.8) is None and c.clv_value(2.0, None) is None
+
+def test_implausible_gap_not_written():
+    assert c.clv_value(3.0, 1.556) is None
+    assert c.clv_value(2.0, 1.9) is not None
