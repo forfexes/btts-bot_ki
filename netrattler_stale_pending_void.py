@@ -46,13 +46,26 @@ def run():
         inlist = "in.(" + ",".join('"' + c.replace('"', "") + '"' for c in chunk) + ")"
         # backup first (idempotent upsert on tip_id)
         full = requests.get(f"{SB}/rest/v1/tips", headers=H, timeout=60, params={"tip_id": inlist, "select": "*"})
-        if full.ok and isinstance(full.json(), list):
-            b = requests.post(f"{SB}/rest/v1/tips_stale_void_backup", timeout=60,
-                              headers={**H, "Prefer": "resolution=merge-duplicates,return=minimal"},
-                              params={"on_conflict": "tip_id"}, json=full.json())
-            if not b.ok:
-                print("backup failed, skipping chunk", b.status_code, b.text[:120])
-                continue
+        # Never change a tip without a complete, verified rollback copy.
+        if not full.ok:
+            print("backup source fetch failed, skipping chunk", full.status_code)
+            continue
+        try:
+            backup_rows = full.json()
+        except ValueError:
+            print("backup source response invalid, skipping chunk")
+            continue
+        if (not isinstance(backup_rows, list)
+                or len(backup_rows) != len(chunk)
+                or {row.get("tip_id") for row in backup_rows if isinstance(row, dict)} != set(chunk)):
+            print("backup source incomplete, skipping chunk")
+            continue
+        b = requests.post(f"{SB}/rest/v1/tips_stale_void_backup", timeout=60,
+                          headers={**H, "Prefer": "resolution=merge-duplicates,return=minimal"},
+                          params={"on_conflict": "tip_id"}, json=backup_rows)
+        if not b.ok:
+            print("backup failed, skipping chunk", b.status_code, b.text[:120])
+            continue
         u = requests.patch(f"{SB}/rest/v1/tips", headers={**H, "Prefer": "return=minimal"}, timeout=60,
                            params={"tip_id": inlist, "status": "eq.pending"},
                            json={"status": "void", "profit_units": 0})
