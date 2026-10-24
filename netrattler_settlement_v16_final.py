@@ -2288,6 +2288,17 @@ def performance_lines(history: Sequence[Dict[str, Any]], group: str) -> List[str
     return lines
 
 
+def learned_chat(group: str, rows: Sequence[Dict[str, Any]]) -> str:
+    """Gruppen-Chat: Secret, sonst der Chat, in den die Tipps der Gruppe real gesendet wurden."""
+    configured = GROUPS.get(group) or ""
+    if configured and configured != TG_DEFAULT:
+        return configured
+    cnt = Counter(str(r.get("telegram_chat_id")) for r in rows
+                  if r.get("market_group") == group and r.get("telegram_chat_id")
+                  and str(r.get("telegram_chat_id")) != str(TG_DEFAULT))
+    return cnt.most_common(1)[0][0] if cnt else (configured or GROUPS.get("default") or "")
+
+
 def send_group_reports(newly_closed: Sequence[Dict[str, Any]], current: Sequence[Dict[str, Any]], history: Sequence[Dict[str, Any]]) -> None:
     by_group: Dict[str, List[Dict[str, Any]]] = defaultdict(list)
     for settlement in newly_closed:
@@ -2299,7 +2310,7 @@ def send_group_reports(newly_closed: Sequence[Dict[str, Any]], current: Sequence
         items = by_group.get(group, [])
         if not items and not (SEND_PENDING_SUMMARY and pending_counts[group]):
             continue
-        chat = GROUPS.get(group) or GROUPS.get("default")
+        chat = learned_chat(group, list(history) + list(newly_closed))
         if not chat:
             continue
         lines = [f"📊 <b>NETRATTLER AUSWERTUNG {group.upper()}</b>", TODAY_S, ""]
