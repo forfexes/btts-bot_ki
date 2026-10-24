@@ -21,8 +21,10 @@ jobs:
           set -euo pipefail
           # Never spend the entire Actions budget on thousands of old runs.
           # Some protected runs return 403; log them but clean the rest.
-          gh run list --repo "$GH_REPO" --limit 300 --json databaseId -q '.[].databaseId' |
-            awk 'NR>=50 && NR<130' |
+          # Preserve settlement evidence and offline hardtests for audit/monitoring.
+          # Select the same run positions as before, then exclude protected workflows.
+          gh run list --repo "$GH_REPO" --limit 300 --json databaseId,workflowName |
+            jq -r '.[49:129][] | select(.workflowName != "NETRATTLER Offline Sandbox Hardtest" and .workflowName != "NETRATTLER Settlement Final V25 MULTISOURCE") | .databaseId' |
             while read -r id; do
               if ! gh run delete "$id" --repo "$GH_REPO"; then
                 echo "::warning::Run $id could not be removed (permissions/protection). Continuing cleanup."
