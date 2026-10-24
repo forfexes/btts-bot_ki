@@ -502,5 +502,51 @@ class SettlementV21Tests(unittest.TestCase):
             rows = mod._openligadb_results("2026-07-01")
         self.assertEqual(rows[0]["away_score"], 2)
 
+
+    def test_repeat_upsert_preserves_original_edit_receipt(self):
+        old = {
+            "settlement_id": "same", "tip_id": "t-1", "status": "win",
+            "telegram_msg_id": 45, "telegram_chat_id": "-100",
+            "raw": {"telegram_edit_ok": True, "telegram_edit_attempts": 2,
+                    "telegram_edited_at": "2026-10-23T10:00:00Z",
+                    "result_source": "old"},
+        }
+        new = {
+            "settlement_id": "same", "tip_id": "t-1", "status": "win",
+            "telegram_msg_id": 45, "telegram_chat_id": "-100",
+            "raw": {"result_source": "new", "strict_match": True},
+        }
+        self.assertEqual(mod.preserve_telegram_edit_receipts([new], [old]), 1)
+        self.assertTrue(new["raw"]["telegram_edit_ok"])
+        self.assertEqual(new["raw"]["telegram_edit_attempts"], 2)
+        self.assertEqual(new["raw"]["result_source"], "new")
+        self.assertEqual(old["raw"]["result_source"], "old")
+
+    def test_failed_edit_retry_budget_survives_repeat_upsert(self):
+        old = {
+            "settlement_id": "retry", "tip_id": "t-2", "status": "loss",
+            "telegram_msg_id": 88, "telegram_chat_id": "-100",
+            "raw": {"telegram_edit_attempts": 4, "telegram_edit_error": "HTTP 400"},
+        }
+        new = dict(old, raw={"result_source": "new"})
+        self.assertEqual(mod.preserve_telegram_edit_receipts([new], [old]), 1)
+        self.assertEqual(new["raw"]["telegram_edit_attempts"], 4)
+        self.assertEqual(new["raw"]["telegram_edit_error"], "HTTP 400")
+
+    def test_receipt_not_carried_to_changed_tip_status_or_message(self):
+        old = {
+            "settlement_id": "same", "tip_id": "t-3", "status": "win",
+            "telegram_msg_id": 45, "telegram_chat_id": "-100",
+            "raw": {"telegram_edit_ok": True},
+        }
+        for changed in (
+            {"status": "loss"}, {"status": "pending"}, {"status": "void"},
+            {"tip_id": "another"}, {"telegram_msg_id": 46},
+            {"telegram_chat_id": "-101"},
+        ):
+            new = dict(old, raw={"result_source": "new"}, **changed)
+            self.assertEqual(mod.preserve_telegram_edit_receipts([new], [old]), 0)
+            self.assertNotIn("telegram_edit_ok", new["raw"])
+
 if __name__ == "__main__":
     unittest.main()

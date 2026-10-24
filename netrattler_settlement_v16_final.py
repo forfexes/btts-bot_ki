@@ -2054,6 +2054,41 @@ def settle_tip(tip: Dict[str, Any], results: Sequence[Dict[str, Any]], player_st
     }
 
 
+
+def preserve_telegram_edit_receipts(rows: Sequence[Dict[str, Any]],
+                                    existing: Sequence[Dict[str, Any]]) -> int:
+    """Keep original-message edit receipts across repeat settlement upserts.
+
+    Only reuse a receipt for the same closed tip and the same Telegram message.
+    New or changed results/messages must remain eligible for their own edit.
+    """
+    previous = {str(item.get("settlement_id")): item for item in existing
+                if item.get("settlement_id")}
+    preserved = 0
+    keys = ("telegram_edit_ok", "telegram_edit_attempts",
+            "telegram_edit_error", "telegram_edited_at")
+    for row in rows:
+        old = previous.get(str(row.get("settlement_id") or ""))
+        if not old or row.get("status") not in {"win", "loss"}:
+            continue
+        if old.get("status") != row.get("status") or old.get("tip_id") != row.get("tip_id"):
+            continue
+        if not (row.get("telegram_msg_id") and row.get("telegram_chat_id")
+                and str(row["telegram_msg_id"]) == str(old.get("telegram_msg_id"))
+                and str(row["telegram_chat_id"]) == str(old.get("telegram_chat_id"))):
+            continue
+        old_raw = old.get("raw")
+        if not isinstance(old_raw, dict):
+            continue
+        raw = dict(row.get("raw") or {})
+        for key in keys:
+            if key in old_raw:
+                raw[key] = old_raw[key]
+        row["raw"] = raw
+        preserved += 1
+    return preserved
+
+
 def existing_settlements() -> List[Dict[str, Any]]:
     rows = sb_get_paged(
         "netrattler_settlements",
@@ -2380,6 +2415,9 @@ def main() -> None:
         log(f"V25 enrichment fallback skipped: {str(exc)[:120]}", "WARN")
 
     settled = [settle_tip(tip, results, player_stats) for tip in tips]
+    preserved = preserve_telegram_edit_receipts(settled, existing)
+    if preserved:
+        log(f"Telegram-Edit-Receipts vor Upsert erhalten: {preserved}")
     log(f"Counts: {dict(Counter(x['status'] for x in settled))}")
     log(f"Nach Gruppen: {dict(Counter(x['market_group'] for x in settled))}")
     pending_reasons = Counter(x.get("reason") or "" for x in settled if x.get("status") == "pending")
