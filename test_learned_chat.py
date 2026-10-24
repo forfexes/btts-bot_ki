@@ -5,3 +5,8 @@ def test_learned():
     assert s.learned_chat("builder",rows)=="-100123"
     s.GROUPS["builder"]="-9"
     assert s.learned_chat("builder",rows)=="-9"
+
+def test_roi_text_base():
+    assert "n/a" in s.roi_text({"bets": 50, "priced": 3, "roi": 50.0, "profit": 1.0})
+    t = s.roi_text({"bets": 50, "priced": 20, "roi": -5.0, "profit": -1.0})
+    assert "Basis 20/50" in t and "-5.0%" in t

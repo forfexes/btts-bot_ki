@@ -2213,6 +2213,7 @@ def summary(rows: Sequence[Dict[str, Any]], group: str, period: str, style: str 
     roi = 100.0 * profit / stake if stake > 0 else 0.0
     return {
         "bets": bets,
+        "priced": len(financial),
         "wins": wins,
         "losses": losses,
         "stake": round(stake, 2),
@@ -2309,17 +2310,26 @@ def format_settlement(settlement: Dict[str, Any]) -> str:
     )
 
 
+MIN_ROI_BASE = 10
+
+
+def roi_text(stats: Dict[str, Any]) -> str:
+    """ROI nur mit ausgewiesener Basis; zu kleine Basis (echte Quote) wird nicht als ROI verkauft."""
+    priced = stats.get("priced", stats["bets"])
+    if priced < MIN_ROI_BASE:
+        return f"ROI n/a (nur {priced} Tipps mit echter Quote)"
+    icon = "🟢" if stats["profit"] >= 0 else "🔴"
+    suffix = "" if priced == stats["bets"] else f" (Basis {priced}/{stats['bets']} mit echter Quote)"
+    return f"ROI <b>{stats['roi']:+.1f}%</b> · {stats['profit']:+.2f}U {icon}{suffix}"
+
+
 def performance_lines(history: Sequence[Dict[str, Any]], group: str) -> List[str]:
     labels = [("Heute", "today"), ("7 Tage", "week"), ("Monat", "month"), ("Jahr", "year"), ("All Time", "alltime")]
     lines = []
     for label, period in labels:
         stats = summary(history, group, period)
         if stats["bets"]:
-            icon = "🟢" if stats["profit"] >= 0 else "🔴"
-            lines.append(
-                f"{label}: <b>{stats['wins']}-{stats['losses']}</b> / {stats['bets']} · "
-                f"ROI <b>{stats['roi']:+.1f}%</b> · {stats['profit']:+.2f}U {icon}"
-            )
+            lines.append(f"{label}: <b>{stats['wins']}-{stats['losses']}</b> / {stats['bets']} · {roi_text(stats)}")
     return lines
 
 
