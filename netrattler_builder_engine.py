@@ -1615,9 +1615,34 @@ def builder_pick_exists(pick: BuilderPick, supabase_url: str, supabase_key: str)
         )
         if not existing.ok:
             return None
-        return bool(existing.json())
+        if existing.json():
+            return True
+        # Gleiche Legs unter anderem Stil/Variante am selben Tag = Duplikat.
+        same_day = requests.get(
+            f"{base}/rest/v1/netrattler_builder_picks",
+            headers=_supabase_headers(supabase_key, "return=representation"),
+            params={"match_date": f"eq.{pick.match_date}", "telegram_sent": "eq.true",
+                    "select": "legs", "limit": "500"},
+            timeout=8,
+        )
+        if not same_day.ok:
+            return None
+        mine = legset_from_legs([{"player": x.player, "match": x.match, "category": x.category, "line": x.line}
+                                 for x in pick.legs])
+        return any(legset_from_legs(r.get("legs")) == mine for r in same_day.json())
     except Exception:
         return None
+
+
+def legset_from_legs(legs: Any) -> frozenset:
+    out = set()
+    for x in legs or []:
+        try:
+            out.add((norm(x.get("player")), norm(x.get("match")), str(x.get("category") or ""),
+                     round(float(x.get("line") or 0), 2)))
+        except Exception:
+            continue
+    return frozenset(out)
 
 
 def persist_builder_pick(

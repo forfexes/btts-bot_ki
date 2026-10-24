@@ -149,3 +149,4 @@ jobs:
       - name: Card signature test
         run: python -m pytest -q test_card_signature.py
       - run: python -m pytest -q test_learned_chat.py
+      - run: python -m pytest -q test_builder_legset.py
