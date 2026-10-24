@@ -141,7 +141,7 @@ def rotate():
     (captured on/after match_date-1) into the archive DB, then remove old harvester rows from the main project.
     football_data_co_uk history stays in the main project (used by training). DRY_RUN=true only counts."""
     import datetime as dt
-    from psycopg2.extras import execute_values
+    from psycopg2.extras import execute_values, Json
     hot = int(os.environ.get("HOT_DAYS", "3"))
     dry = os.environ.get("DRY_RUN", "true").lower() != "false"
     cutoff = (dt.date.today() - dt.timedelta(days=hot)).isoformat()
@@ -161,7 +161,23 @@ def rotate():
     print("days to rotate:", days)
     deleted = 0
     diag = []
+    import time as _t
     for d in days:
+        # copy this day into the archive first (idempotent: on conflict do nothing), then compare counts
+        if not dry:
+            off, t0 = 0, _t.time()
+            while _t.time() - t0 < 600:
+                rr0 = requests.get(f"{base}?select={COLS['odds_history']}&captured_date=eq.{d}&source=neq.football_data_co_uk&order={ORDER['odds_history']}&limit={PAGE}&offset={off}",
+                                   headers=H(), timeout=120)
+                if rr0.status_code == 429:
+                    _t.sleep(5); continue
+                rr0.raise_for_status(); got = rr0.json()
+                if not got:
+                    break
+                execute_values(cur, f"insert into odds_history ({','.join(cols)}) values %s on conflict do nothing",
+                               [tuple(Json(x.get(k)) if k in {"raw"} and x.get(k) is not None else x.get(k) for k in cols) for x in got])
+                c.commit(); off += len(got)
+            print("copied day", d, off)
         r1 = requests.get(f"{base}?select=source&captured_date=eq.{d}&source=neq.football_data_co_uk&limit=1",
                           headers=H({"Prefer": "count=exact", "Range": "0-0"}), timeout=120)
         n1 = int(r1.headers.get("content-range", "*/0").split("/")[-1])
