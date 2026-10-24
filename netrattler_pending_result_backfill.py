@@ -21,6 +21,7 @@ import requests
 
 import netrattler_fotmob_results as fr
 import netrattler_apifootball_results as apif
+import netrattler_rapid_results as rapid
 
 SB = (os.getenv("SUPABASE_URL") or "").rstrip("/")
 SK = os.getenv("SUPABASE_SERVICE_ROLE_KEY") or os.getenv("SUPABASE_KEY") or ""
@@ -28,6 +29,7 @@ H = {"apikey": SK, "Authorization": f"Bearer {SK}"}
 MAX_DAYS = int(os.getenv("BACKFILL_MAX_DAYS", "21"))
 MAX_HT = int(os.getenv("BACKFILL_MAX_HT", "400"))
 APIF_MAX_DAYS = int(os.getenv("BACKFILL_APIF_MAX_DAYS", "10"))
+RAPID_MAX_DAYS = int(os.getenv("BACKFILL_RAPID_MAX_DAYS", "3"))
 
 _STOP = {"fc", "cf", "sc", "ac", "afc", "cd", "ud", "sd", "fk", "sk", "if", "bk", "club", "de", "the"}
 _PAIR = re.compile(r"<b>\s*([^<]+?)\s+vs\.?\s+([^<]+?)\s*</b>", re.I)
@@ -117,6 +119,7 @@ def run() -> Dict[str, int]:
     by_day = plan(pending_tips())
     ht_budget = MAX_HT
     apif_budget = APIF_MAX_DAYS
+    rapid_budget = RAPID_MAX_DAYS
     for day in sorted(by_day):
         if day >= today:
             continue
@@ -136,6 +139,13 @@ def run() -> Dict[str, int]:
             alt = apif.fetch_day(day)
             extra = select_rows(alt, rest)
             stats["apif"] = stats.get("apif", 0) + len(extra)
+            hits = hits + extra
+        found_rows = [r for r, _ in hits]
+        rest = unmatched(found_rows, rest)
+        if rest and rapid_budget > 0:
+            rapid_budget -= 1
+            extra = select_rows(rapid.fetch_day(day), rest)
+            stats["rapid"] = stats.get("rapid", 0) + len(extra)
             hits = hits + extra
         save = []
         for row, need_ht in hits:

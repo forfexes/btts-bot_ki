@@ -48,6 +48,7 @@ jobs:
         timeout-minutes: 15
         env:
           API_FOOTBALL_KEYS: ${{ secrets.API_FOOTBALL_KEYS }}
+          RAPIDAPI_KEY: ${{ secrets.RAPIDAPI_KEY }}
           SUPABASE_URL: ${{ secrets.SUPABASE_URL }}
           SUPABASE_KEY: ${{ secrets.SUPABASE_KEY }}
           SUPABASE_SERVICE_ROLE_KEY: ${{ secrets.SUPABASE_SERVICE_ROLE_KEY }}
