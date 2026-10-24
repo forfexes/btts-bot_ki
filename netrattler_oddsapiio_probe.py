@@ -30,7 +30,16 @@ if KEY:
     st, ev = get("/events", sport="football", status="pending")
     out["events"] = {"http": st, "shape": shape(ev)}
     lst = ev if isinstance(ev, list) else (ev or {}).get("data") if isinstance(ev, dict) else None
-    eid = lst[0].get("id") if lst and isinstance(lst[0], dict) else None
+    eid = None
+    for e in lst or []:
+        ln = ((e.get("league") or {}).get("name") or "").lower()
+        if any(t in ln for t in ("premier league", "la liga", "bundesliga", "serie a", "ligue 1", "champions league")) and "u19" not in ln and "u21" not in ln and "women" not in ln:
+            eid = e.get("id")
+            out["odds_event"] = f'{e.get("home")} - {e.get("away")} ({(e.get("league") or {}).get("name")})'
+            break
+    st, se = get("/events", sport="football", status="settled")
+    sl = se if isinstance(se, list) else []
+    out["settled"] = {"http": st, "n": len(sl), "dates": sorted({(x.get("date") or "")[:10] for x in sl if isinstance(x, dict)})[:12], "has_scores": bool(sl and sl[0].get("scores"))}
     st, bk = get("/bookmakers")
     out["bookmakers"] = {"http": st, "n": len(bk) if isinstance(bk, list) else None, "names": [b.get("name") if isinstance(b, dict) else b for b in (bk or [])][:40] if isinstance(bk, list) else shape(bk)}
     if eid:
@@ -42,6 +51,11 @@ if KEY:
         except Exception:
             pass
         out["odds"] = {"http": st, "shape": shape(od), "markets": mk}
+        try:
+            first = next(iter((od.get("bookmakers") or {}).values()))
+            out["odds"]["sample_market"] = shape(first[:2] if isinstance(first, list) else first)
+        except Exception:
+            pass
 print(json.dumps(out)[:400])
 if SB and SK:
     requests.post(f"{SB}/rest/v1/netrattler_card_diag", json={"info": out}, timeout=20,
