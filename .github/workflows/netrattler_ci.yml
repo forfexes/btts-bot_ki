@@ -34,7 +34,7 @@ jobs:
         with:
           python-version: "3.11"
       - name: Install lean test dependencies
-        run: python -m pip install --prefer-binary requests beautifulsoup4 cloudscraper pytest
+        run: python -m pip install --prefer-binary requests beautifulsoup4 cloudscraper pytest pandas
       - name: Compile changed runtime modules
         run: |
           python -m py_compile \
