@@ -160,6 +160,7 @@ def rotate():
             days.append(d0.isoformat()); d0 += dt.timedelta(days=1)
     print("days to rotate:", days)
     deleted = 0
+    diag = []
     for d in days:
         r1 = requests.get(f"{base}?select=source&captured_date=eq.{d}&source=neq.football_data_co_uk&limit=1",
                           headers=H({"Prefer": "count=exact", "Range": "0-0"}), timeout=120)
@@ -168,10 +169,17 @@ def rotate():
         n2 = cur.fetchone()[0]
         ok = n2 >= n1 and n1 > 0
         print("day", d, "main", n1, "archive", n2, "ok_to_delete", ok)
+        diag.append({"d": d, "main": n1, "archive": n2, "ok": ok})
         if ok and not dry:
             rr = requests.delete(f"{base}?captured_date=eq.{d}&source=neq.football_data_co_uk", headers=H({"Prefer": "return=minimal"}), timeout=300)
             print("delete", d, rr.status_code); deleted += 1 if rr.ok else 0
     print("days_deleted", deleted)
+    try:
+        info = {"probe": "odds_rotate", "cutoff": cutoff, "hot": hot, "dry": dry, "days": diag, "deleted": deleted}
+        requests.post(f"{SRC_URL}/rest/v1/netrattler_card_diag", json={"info": info}, timeout=30,
+                      headers={"apikey": SRC_KEY, "Authorization": f"Bearer {SRC_KEY}", "Content-Type": "application/json"})
+    except Exception:
+        pass
 
 
 def main():
