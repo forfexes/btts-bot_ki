@@ -154,6 +154,13 @@ def run() -> Dict[str, int]:
         stats["saved"] += fr.persist(save)
         time.sleep(0.3)
     print(f"Pending result backfill: {stats}")
+    try:
+        requests.post(f"{SB}/rest/v1/netrattler_card_diag", timeout=20,
+                      json={"info": {"probe": "pending_backfill", "stats": stats, "apif_key": bool(apif._key()),
+                                     "pending": sum(len(v) for v in by_day.values()), "days": sorted(by_day)[:25]}},
+                      headers={**H, "Content-Type": "application/json"})
+    except Exception:
+        pass
     return stats
 
 
