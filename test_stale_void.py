@@ -43,3 +43,14 @@ def test_corner_tip_prefers_source_with_corners():
     fm = dict(base, source="fotmob", raw={"home_corners": 5, "away_corners": 3})
     out = s.settle_tip(tip, [espn, fm], [])
     assert out["status"] == "win", out["reason"]
+
+
+def test_load_results_dedupe_keeps_corners(monkeypatch):
+    import netrattler_settlement_v16_final as s
+    base = {"home": "AFC Bournemouth", "away": "Sunderland", "home_team": "AFC Bournemouth", "away_team": "Sunderland",
+            "match_date": "2026-10-18", "home_score": 2, "away_score": 0}
+    rows = {"espn": dict(base, raw={}), "fotmob": dict(base, raw={"home_corners": 5, "away_corners": 3})}
+    monkeypatch.setattr(s, "RESULT_TABLES", {"espn": ["match_date"], "fotmob": ["match_date"]})
+    monkeypatch.setattr(s, "sb_get_paged", lambda t, p, **k: [dict(rows[t])])
+    out = s.load_results(["2026-10-18"])
+    assert len(out) == 1 and s._has_corners(out[0])

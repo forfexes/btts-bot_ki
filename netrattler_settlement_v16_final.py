@@ -1208,6 +1208,18 @@ def public_results(day: str) -> List[Dict[str, Any]]:
     return output
 
 
+def _merge_corners(keep: Dict[str, Any], other: Dict[str, Any]) -> None:
+    """Duplikat-Ergebniszeile (z.B. ESPN) bekommt Ecken der Schwesterquelle (z.B. FotMob), statt sie zu verlieren."""
+    if _has_corners(keep) or not _has_corners(other):
+        return
+    raw_other = unpack(other.get("raw") or {})
+    raw_keep = dict(unpack(keep.get("raw") or {}))
+    for k in ("home_corners", "away_corners", "corners_source"):
+        if raw_other.get(k) is not None:
+            raw_keep[k] = raw_other[k]
+    keep["raw"] = raw_keep
+
+
 def load_results(dates: Sequence[str]) -> List[Dict[str, Any]]:
     output: List[Dict[str, Any]] = []
     min_db_rows = int(os.getenv("RESULT_PUBLIC_FALLBACK_IF_DB_ROWS_LT", "5"))
@@ -1230,7 +1242,7 @@ def load_results(dates: Sequence[str]) -> List[Dict[str, Any]]:
         if public:
             output.extend(public)
             log(f"Public Results {day}: {len(public)}")
-    seen = set()
+    seen: Dict[Any, Dict[str, Any]] = {}
     clean = []
     for row in output:
         home, away, hs, aw = score_row(row)
@@ -1238,8 +1250,10 @@ def load_results(dates: Sequence[str]) -> List[Dict[str, Any]]:
             continue
         key = (norm(home), norm(away), hs, aw, row_date(row))
         if key not in seen:
-            seen.add(key)
+            seen[key] = row
             clean.append(row)
+        else:
+            _merge_corners(seen[key], row)
     log(f"Result candidates mit Score: {len(clean)}")
     return clean
 
