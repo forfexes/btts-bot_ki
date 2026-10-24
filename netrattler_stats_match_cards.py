@@ -827,8 +827,8 @@ def send_cards(tips_by_market, target_date, token, stats_chat, log=print):
 def _card_signature(entries):
     parts = []
     for m, t in entries:
-        o = _number(t.get("odds") or t.get("oddsYes"))
-        parts.append(f"{m}|{t.get('tip') or t.get('selection') or ''}|{round(o, 2) if o else ''}")
+        # odds are deliberately NOT part of the signature: a moved price must not re-post the same card
+        parts.append(f"{m}|{t.get('tip') or t.get('selection') or ''}")
     return match_key(str(entries[0][1].get("match", ""))) + "#" + ";".join(sorted(parts))
 
 

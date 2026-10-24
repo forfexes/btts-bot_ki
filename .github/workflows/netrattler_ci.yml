@@ -146,3 +146,5 @@ jobs:
         run: python -m pytest -q test_rapid_results.py
       - name: sportapi.ai collector test
         run: python -m pytest -q test_sportapiai.py
+      - name: Card signature test
+        run: python -m pytest -q test_card_signature.py
