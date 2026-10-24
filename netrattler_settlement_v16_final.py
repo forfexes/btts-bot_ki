@@ -323,6 +323,21 @@ def sb_patch_in(table: str, column: str, values: Sequence[Any], payload: Dict[st
     return changed
 
 
+STALE_VOID_DAYS = int(os.getenv("NETRATTLER_STALE_VOID_DAYS", "3"))
+
+
+def stale_no_result(status: str, result: Any, tip_date: str, today: Any = None) -> bool:
+    """Pending tip whose match ended >STALE_VOID_DAYS ago and for which no score was ever found
+    (leagues without any result source). Counted as VOID, not as win/loss."""
+    if status != "pending" or (isinstance(result, dict) and result.get("home_score") is not None):
+        return False
+    try:
+        d = date.fromisoformat(str(tip_date)[:10])
+    except ValueError:
+        return False
+    return ((today or NOW.date()) - d).days > STALE_VOID_DAYS
+
+
 def _genuine_void_reason(reason: Any) -> bool:
     text = norm(str(reason or ""))
     genuine = (
@@ -1988,6 +2003,8 @@ def settle_tip(tip: Dict[str, Any], results: Sequence[Dict[str, Any]], player_st
     ):
         # Impossible single odds (e.g. American odds read as decimal): never count in ROI.
         status, reason = "void", f"unplausible odds {odds}"
+    if stale_no_result(status, result, row_date(tip)):
+        status, reason = "void", f"void: kein Ergebnis nach {STALE_VOID_DAYS} Tagen verfuegbar (Liga ohne Datenquelle)"
     if unpriced_builder:
         profit = None
     elif status == "win":
