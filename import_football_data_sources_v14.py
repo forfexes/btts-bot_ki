@@ -343,7 +343,9 @@ def fd_row_to_match(raw: Dict[str, Any], season_code: str, code: str, country: s
 
 def odds_rows_from_match(m: Dict[str, Any]) -> List[Dict[str, Any]]:
     rows = []
-    cap_date = date.today().isoformat()
+    # Stabiler Schlüssel: historische Quoten gehören zum Spieltag, nicht zum Importtag
+    # (sonst entstehen bei jedem Wochenimport ~100k neue Duplikat-Zeilen).
+    cap_date = str(m.get("match_date") or date.today().isoformat())[:10]
     mid = m["match_id"]
     base = {
         "source": "football_data_co_uk",
