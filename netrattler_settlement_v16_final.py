@@ -2382,6 +2382,11 @@ def main() -> None:
 
     saved = sb_upsert("netrattler_settlements", settled, "settlement_id")
     log(f"Settlements gespeichert: {saved}")
+    stale_voids = [row for row in settled if row["status"] == "void" and _writes_to_source(row)][:300]
+    for row in stale_voids:  # idempotent: keeps tips.status in sync with the settlement (no Telegram edit)
+        update_source_tip(row)
+    if stale_voids:
+        log(f"Stale-VOIDs in tips synchronisiert: {len(stale_voids)}")
     edited_count = 0
     for row in newly_closed:
         update_source_tip(row)
