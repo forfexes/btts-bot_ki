@@ -140,3 +140,5 @@ jobs:
         run: python -m pytest -q test_apifootball_players.py
       - name: Stale void test
         run: python -m pytest -q test_stale_void.py
+      - name: API-Football results fallback test
+        run: python -m pytest -q test_apifootball_results.py

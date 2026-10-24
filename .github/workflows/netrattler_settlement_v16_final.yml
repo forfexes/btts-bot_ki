@@ -47,6 +47,7 @@ jobs:
         continue-on-error: true
         timeout-minutes: 15
         env:
+          API_FOOTBALL_KEYS: ${{ secrets.API_FOOTBALL_KEYS }}
           SUPABASE_URL: ${{ secrets.SUPABASE_URL }}
           SUPABASE_KEY: ${{ secrets.SUPABASE_KEY }}
           SUPABASE_SERVICE_ROLE_KEY: ${{ secrets.SUPABASE_SERVICE_ROLE_KEY }}
