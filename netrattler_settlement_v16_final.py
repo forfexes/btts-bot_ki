@@ -338,6 +338,21 @@ def stale_no_result(status: str, result: Any, tip_date: str, today: Any = None) 
     return ((today or NOW.date()) - d).days > STALE_VOID_DAYS
 
 
+STALE_HARD_DAYS = int(os.getenv("NETRATTLER_STALE_HARD_DAYS", "6"))
+
+
+def stale_unresolvable(status: str, tip_date: str, today: Any = None) -> bool:
+    """Pending tip, das trotz vorhandenem Spielergebnis nach STALE_HARD_DAYS Tagen nicht bewertbar ist
+    (fehlende Ecken-/Spielerstatistik, offene Combo-Legs). Wird VOID, nie win/loss geraten."""
+    if status != "pending":
+        return False
+    try:
+        d = date.fromisoformat(str(tip_date)[:10])
+    except ValueError:
+        return False
+    return ((today or NOW.date()) - d).days > STALE_HARD_DAYS
+
+
 def _genuine_void_reason(reason: Any) -> bool:
     text = norm(str(reason or ""))
     genuine = (
@@ -2005,6 +2020,8 @@ def settle_tip(tip: Dict[str, Any], results: Sequence[Dict[str, Any]], player_st
         status, reason = "void", f"unplausible odds {odds}"
     if stale_no_result(status, result, row_date(tip)):
         status, reason = "void", f"void: kein Ergebnis nach {STALE_VOID_DAYS} Tagen verfuegbar (Liga ohne Datenquelle)"
+    if stale_unresolvable(status, row_date(tip)):
+        status, reason = "void", f"void: nicht bewertbar nach {STALE_HARD_DAYS} Tagen (Daten/Legs fehlen) · {reason}"
     if unpriced_builder:
         profit = None
     elif status == "win":
@@ -2112,7 +2129,7 @@ def _writes_to_source(settlement: Dict[str, Any]) -> bool:
     """win/loss always; VOID only for the explicit stale-no-result case (never for legacy missing-data voids)."""
     if settlement.get("status") in {"win", "loss"}:
         return True
-    return settlement.get("status") == "void" and str(settlement.get("reason") or "").startswith("void: kein Ergebnis nach")
+    return settlement.get("status") == "void" and str(settlement.get("reason") or "").startswith(("void: kein Ergebnis nach", "void: nicht bewertbar nach"))
 
 
 def update_source_tip(settlement: Dict[str, Any]) -> None:

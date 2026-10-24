@@ -22,3 +22,12 @@ def test_stale_void_is_written_to_source_but_legacy_void_is_not():
     assert s._writes_to_source({"status": "void", "reason": "void: kein Ergebnis nach 3 Tagen verfuegbar (Liga ohne Datenquelle)"})
     assert not s._writes_to_source({"status": "void", "reason": "Score fehlt"})
     assert not s._writes_to_source({"status": "pending", "reason": "x"})
+
+
+def test_stale_unresolvable():
+    import datetime as dt
+    import netrattler_settlement_v16_final as s
+    today = dt.date(2026, 10, 24)
+    assert s.stale_unresolvable("pending", "2026-10-17", today)
+    assert not s.stale_unresolvable("pending", "2026-10-20", today)
+    assert not s.stale_unresolvable("win", "2026-10-01", today)
