@@ -31,3 +31,15 @@ def test_stale_unresolvable():
     assert s.stale_unresolvable("pending", "2026-10-17", today)
     assert not s.stale_unresolvable("pending", "2026-10-20", today)
     assert not s.stale_unresolvable("win", "2026-10-01", today)
+
+
+def test_corner_tip_prefers_source_with_corners():
+    import netrattler_settlement_v16_final as s
+    tip = {"_table": "tips", "tip_id": "t1", "market": "corners", "date": "2026-10-18", "league": "Premier League",
+           "match": "AFC Bournemouth vs Sunderland AFC", "tip": "Over 7.5 Ecken", "odds": 1.8}
+    base = {"home": "AFC Bournemouth", "away": "Sunderland", "home_team": "AFC Bournemouth", "away_team": "Sunderland",
+            "match_date": "2026-10-18", "home_score": 2, "away_score": 0}
+    espn = dict(base, source="espn", raw={})
+    fm = dict(base, source="fotmob", raw={"home_corners": 5, "away_corners": 3})
+    out = s.settle_tip(tip, [espn, fm], [])
+    assert out["status"] == "win", out["reason"]

@@ -1531,7 +1531,26 @@ def _lenient_find_result(tip: Dict[str, Any], results: Sequence[Dict[str, Any]])
     }
 
 
+def _has_corners(res: Optional[Dict[str, Any]]) -> bool:
+    if not isinstance(res, dict):
+        return False
+    h, a = _result_team_pair(res, ["home_corners", "corners_home", "HC", "homeCorners"],
+                             ["away_corners", "corners_away", "AC", "awayCorners"])
+    return h is not None and a is not None
+
+
 def find_result(tip: Dict[str, Any], results: Sequence[Dict[str, Any]]) -> Optional[Dict[str, Any]]:
+    """Ergebnis finden; bei Ecken-Tipps bevorzugt eine Quelle (z.B. FotMob), die Ecken wirklich liefert."""
+    res = _find_result_core(tip, results)
+    if res is not None and not _has_corners(res) and (group_of(tip) == "corners" or category_of(tip) in {"corners", "team_corners", "match_corners"}):
+        with_c = [r for r in results if _has_corners(r)]
+        alt = _find_result_core(tip, with_c) if with_c else None
+        if alt is not None:
+            return alt
+    return res
+
+
+def _find_result_core(tip: Dict[str, Any], results: Sequence[Dict[str, Any]]) -> Optional[Dict[str, Any]]:
     strict = _find_result_strict(tip, results)
     if strict is not None:
         # The identity hub equates 'Tokyo Verdy Beleza' (women) with 'Tokyo Verdy' (men):
