@@ -144,3 +144,5 @@ jobs:
         run: python -m pytest -q test_apifootball_results.py
       - name: RapidAPI results fallback test
         run: python -m pytest -q test_rapid_results.py
+      - name: sportapi.ai collector test
+        run: python -m pytest -q test_sportapiai.py
