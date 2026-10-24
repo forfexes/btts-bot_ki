@@ -8,4 +8,4 @@ def test_floors_not_loosened():
     assert b.OVER25_MIN_PROB >= 65 and b.BTTS_MIN_PROB >= 65
     assert b.CORNER_MIN_PROB >= 70
     assert b.ONE_X_TWO_MIN_PROB >= 65
-    assert b.OVER15_HT_MIN_PROB >= 60
+    assert b.OVER15_HT_MIN_PROB >= 70
