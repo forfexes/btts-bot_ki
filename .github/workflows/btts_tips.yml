@@ -9,6 +9,11 @@ on:
     - cron: "0 13 * * 6,0" # 15:00 CH — Sa/So Nachmittag (BuLi 15:30)
     - cron: "0 16 * * 6,0" # 18:00 CH — Sa/So Nachmittag (PL 18:30, BuLi 18:30)
     - cron: "0 19 * * *"  # 21:00 CH — Abend (CL 21:00, LaLiga 21:00, Serie A 20:45)
+    # Backup-Slots (2026-10-24: GitHub verwarf/verspaetete die Slots oben um bis zu 3 h -> keine Tipps)
+    - cron: "23 10 * * *"  # 12:23 CH
+    - cron: "13 12 * * *"  # 14:13 CH
+    - cron: "43 14 * * *"  # 16:43 CH
+    - cron: "23 17 * * *"  # 19:23 CH
   workflow_dispatch:
     inputs:
       mode:
