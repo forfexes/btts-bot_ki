@@ -52,5 +52,6 @@ def test_load_results_dedupe_keeps_corners(monkeypatch):
     rows = {"espn": dict(base, raw={}), "fotmob": dict(base, raw={"home_corners": 5, "away_corners": 3})}
     monkeypatch.setattr(s, "RESULT_TABLES", {"espn": ["match_date"], "fotmob": ["match_date"]})
     monkeypatch.setattr(s, "sb_get_paged", lambda t, p, **k: [dict(rows[t])])
+    monkeypatch.setattr(s, "public_results", lambda day: [])
     out = s.load_results(["2026-10-18"])
     assert len(out) == 1 and s._has_corners(out[0])
