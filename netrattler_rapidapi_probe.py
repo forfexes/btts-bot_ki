@@ -17,15 +17,18 @@ def shape(o, d=0):
     return str(o)[:40]
 
 
-out = {"probe": "rapidapi_probe", "key_present": bool(KEY), "host": HOST}
+out = {"probe": "rapidapi_probe2", "key_present": bool(KEY), "host": HOST}
 if KEY:
-    for name, path, q in (("root", "/", {}), ("matches_by_date", "/football-get-matches-by-date", {"date": "20261023"})):
-        r = requests.get(f"https://{HOST}{path}", headers={"x-rapidapi-key": KEY, "x-rapidapi-host": HOST}, params=q, timeout=30)
+    for d in ("20261018", "20261017"):
+        r = requests.get(f"https://{HOST}/football-get-matches-by-date", headers={"x-rapidapi-key": KEY, "x-rapidapi-host": HOST}, params={"date": d}, timeout=30)
         try:
             body = r.json()
         except Exception:
-            body = r.text[:200]
-        out[name] = {"http": r.status_code, "shape": shape(body), "limit_left": r.headers.get("x-ratelimit-requests-remaining")}
+            body = {}
+        ms = ((body.get("response") or {}).get("matches")) if isinstance(body, dict) else None
+        ms = ms if isinstance(ms, list) else []
+        out[d] = {"http": r.status_code, "n": len(ms), "sample": ms[0] if ms else str(body)[:200],
+                  "limit_left": r.headers.get("x-ratelimit-requests-remaining"), "limit": r.headers.get("x-ratelimit-requests-limit")}
 print(json.dumps(out)[:400])
 if SB and SK:
     requests.post(f"{SB}/rest/v1/netrattler_card_diag", json={"info": out}, timeout=20,
