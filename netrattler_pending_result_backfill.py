@@ -131,7 +131,7 @@ def run() -> Dict[str, int]:
         stats["days"] += 1
         hits = select_rows(rows, by_day[day])
         rest = unmatched(rows, by_day[day])
-        if rest and apif_budget > 0:
+        if rest and apif_budget > 0 and day >= (datetime.now(timezone.utc).date() - timedelta(days=1)).isoformat():  # free plan: only yesterday..tomorrow
             apif_budget -= 1
             alt = apif.fetch_day(day)
             extra = select_rows(alt, rest)
