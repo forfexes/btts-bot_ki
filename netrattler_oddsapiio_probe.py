@@ -32,8 +32,8 @@ if KEY:
     lst = ev if isinstance(ev, list) else (ev or {}).get("data") if isinstance(ev, dict) else None
     eid = None
     for e in lst or []:
-        ln = ((e.get("league") or {}).get("name") or "").lower()
-        if any(t in ln for t in ("premier league", "la liga", "bundesliga", "serie a", "ligue 1", "champions league")) and "u19" not in ln and "u21" not in ln and "women" not in ln:
+        slug = ((e.get("league") or {}).get("slug") or "").lower()
+        if slug in ("england-premier-league", "spain-laliga", "germany-bundesliga", "italy-serie-a", "france-ligue-1", "europe-champions-league", "england-championship", "netherlands-eredivisie", "portugal-liga-portugal"):
             eid = e.get("id")
             out["odds_event"] = f'{e.get("home")} - {e.get("away")} ({(e.get("league") or {}).get("name")})'
             break
