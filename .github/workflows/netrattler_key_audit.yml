@@ -61,6 +61,9 @@ jobs:
           TELEGRAM_GROUP_PLAYER_PROPS: ${{ secrets.TELEGRAM_GROUP_PLAYER_PROPS }}
           TELEGRAM_GROUP_BUILDER:     ${{ secrets.TELEGRAM_GROUP_BUILDER }}
           TELEGRAM_GROUP_OVER15_HT:   ${{ secrets.TELEGRAM_GROUP_OVER15_HT }}
+          ODDSAPIIO_KEY:              ${{ secrets.ODDSAPIIO_KEY }}
+          RAPIDAPI_KEY:               ${{ secrets.RAPIDAPI_KEY }}
+          SPORTAPI_AI_KEY:            ${{ secrets.SPORTAPI_AI_KEY }}
           SUPABASE_URL:               ${{ secrets.SUPABASE_URL }}
           SUPABASE_KEY:               ${{ secrets.SUPABASE_KEY }}
           SUPABASE_SERVICE_ROLE_KEY:  ${{ secrets.SUPABASE_SERVICE_ROLE_KEY }}
