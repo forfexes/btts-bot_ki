@@ -15,3 +15,10 @@ def test_recent_or_with_result_untouched():
 
 def test_reason_counts_as_genuine_void():
     assert s._genuine_void_reason("void: kein Ergebnis nach 3 Tagen verfuegbar (Liga ohne Datenquelle)")
+
+
+def test_stale_void_is_written_to_source_but_legacy_void_is_not():
+    assert s._writes_to_source({"status": "win"})
+    assert s._writes_to_source({"status": "void", "reason": "void: kein Ergebnis nach 3 Tagen verfuegbar (Liga ohne Datenquelle)"})
+    assert not s._writes_to_source({"status": "void", "reason": "Score fehlt"})
+    assert not s._writes_to_source({"status": "pending", "reason": "x"})

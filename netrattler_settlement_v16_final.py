@@ -2073,8 +2073,15 @@ def existing_status_map(rows: Sequence[Dict[str, Any]]) -> Dict[str, str]:
     return output
 
 
+def _writes_to_source(settlement: Dict[str, Any]) -> bool:
+    """win/loss always; VOID only for the explicit stale-no-result case (never for legacy missing-data voids)."""
+    if settlement.get("status") in {"win", "loss"}:
+        return True
+    return settlement.get("status") == "void" and str(settlement.get("reason") or "").startswith("void: kein Ergebnis nach")
+
+
 def update_source_tip(settlement: Dict[str, Any]) -> None:
-    if not UPDATE_SOURCE_TIPS or settlement["status"] not in {"win", "loss"}:
+    if not UPDATE_SOURCE_TIPS or not _writes_to_source(settlement):
         return
     payload = settlement.get("tip_payload") or {}
     table = settlement.get("source_table") or payload.get("_table") or ""
