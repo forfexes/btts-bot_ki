@@ -8,6 +8,22 @@ from psycopg2.extras import execute_values, Json
 SB = (os.getenv("SUPABASE_URL") or "").rstrip("/")
 SK = os.getenv("SUPABASE_SERVICE_ROLE_KEY") or os.getenv("SUPABASE_KEY") or ""
 DSN = os.getenv("V4_DATABASE_URL") or ""
+
+
+def fix_dsn(dsn):
+    """Passwoerter mit '@' o.ae. unescaped in der URL: am LETZTEN '@' trennen und Zugangsdaten URL-kodieren."""
+    from urllib.parse import quote
+    if "://" not in dsn:
+        return dsn
+    scheme, rest = dsn.split("://", 1)
+    if "@" not in rest:
+        return dsn
+    cred, hostpart = rest.rsplit("@", 1)
+    user, _, pw = cred.partition(":")
+    return f"{scheme}://{quote(user, safe='.')}:{quote(pw, safe='')}@{hostpart}"
+
+
+DSN = fix_dsn(DSN)
 KEEP_DAYS = int(os.getenv("ARCHIVE_KEEP_DAYS", "14"))
 COLS = ["source", "match_id", "market", "bookmaker", "captured_date", "home_team", "away_team", "match_date",
         "selection", "odds", "raw", "imported_at"]
