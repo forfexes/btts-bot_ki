@@ -97,7 +97,7 @@ def _fresh(row: Mapping[str, Any]) -> bool:
         if dt.tzinfo is None:
             dt = dt.replace(tzinfo=timezone.utc)
         age = (datetime.now(timezone.utc) - dt.astimezone(timezone.utc)).total_seconds() / 3600.0
-        return -1.0 <= age <= MAX_AGE_HOURS
+        return -(5.0 / 60.0) <= age <= MAX_AGE_HOURS
     except Exception:
         return False
 
