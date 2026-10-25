@@ -1,0 +1,51 @@
+name: NETRATTLER DataMB Chromium Hardtest
+on:
+  workflow_dispatch:
+permissions:
+  contents: read
+jobs:
+  datamb:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+      - name: Install Chromium
+        run: |
+          python -m pip install playwright
+          python -m playwright install --with-deps --only-shell chromium
+      - name: Read-only DataMB browser probe
+        run: |
+          python - <<'PY'
+          import json
+          from urllib.parse import urlparse
+          from playwright.sync_api import sync_playwright
+          targets = ["https://datamb.football/teams/", "https://datamb.football/Porto_Team_stats/"]
+          results = []
+          with sync_playwright() as pw:
+              browser = pw.chromium.launch(headless=True, args=["--no-sandbox"])
+              context = browser.new_context()
+              for url in targets:
+                  page = context.new_page()
+                  observed = []
+                  def capture(response):
+                      parsed = urlparse(response.url)
+                      if parsed.hostname and (parsed.hostname == "datamb.football" or parsed.hostname.endswith(".datamb.football")):
+                          if len(observed) < 40 and (response.request.resource_type in ("xhr", "fetch") or "json" in response.headers.get("content-type", "")):
+                              observed.append({"url": response.url.split("?")[0], "status": response.status, "type": response.request.resource_type, "content_type": response.headers.get("content-type", "")})
+                  page.on("response", capture)
+                  item = {"url": url}
+                  try:
+                      response = page.goto(url, wait_until="domcontentloaded", timeout=25000)
+                      page.wait_for_timeout(3500)
+                      item.update({"status": response.status if response else None, "title": page.title(), "body_chars": len(page.locator("body").inner_text(timeout=5000)), "tables": page.locator("table").count(), "json_candidates": observed})
+                  except Exception as exc:
+                      item["error"] = str(exc)[:300]
+                  print(json.dumps(item, ensure_ascii=False))
+                  results.append(item)
+                  page.close()
+              browser.close()
+          assert all("error" not in r and r.get("status") == 200 for r in results), "DataMB access incomplete; inspect log"
+          PY
