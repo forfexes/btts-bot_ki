@@ -91,7 +91,16 @@ PLAYER_STATS_TABLES = {
     # Live daily player logs are fresher than the older player_match_stats dataset.
     # These contain real fixture identities and measured values, not model forecasts.
     "player_game_log": ["match_date"],
+    # API-Football Spieler-pro-Spiel (Tackles, Fouls, Fouls drawn, Shots, Cards) - echte Messwerte.
+    "apif_player_match": ["match_date"],
 }
+
+
+def _normalize_apif_row(row: Dict[str, Any]) -> Dict[str, Any]:
+    row.setdefault("sot", row.get("shots_on"))
+    row.setdefault("yellow_cards", row.get("yellow"))
+    row.setdefault("fouls_won", row.get("fouls_drawn"))
+    return row
 
 
 MAX_SINGLE_ODDS = 100.0
@@ -1337,7 +1346,10 @@ def load_player_stats(tips: Sequence[Dict[str, Any]]) -> List[Dict[str, Any]]:
             for column in columns:
                 rows = sb_get_paged(table, {"select": "*", column: f"eq.{day}"}, max_rows=12000, quiet=True)
                 if rows:
-                    for row in rows: row["_stats_table"] = table
+                    for row in rows:
+                        row["_stats_table"] = table
+                        if table == "apif_player_match":
+                            _normalize_apif_row(row)
                     filtered = _aggregate_player_rows(rows, wanted_norms)
                     if not filtered:
                         # A nonempty table may have no rows for the requested
@@ -1630,6 +1642,11 @@ def find_player_stat(leg: Dict[str, Any], stats: Sequence[Dict[str, Any]]) -> Op
             m_score = similarity(wanted_match, candidate_match)
             if m_score < 0.78:
                 continue
+        elif (wanted_home and wanted_away) and str(unpack(row).get("team") or "").strip() and (
+                _strict_team_match(wanted_home, str(unpack(row).get("team")))
+                or _strict_team_match(wanted_away, str(unpack(row).get("team")))):
+            # Quelle ohne Gegner-Spalte (apif_player_match): Team des Spielers muss eine Seite des Spiels sein.
+            m_score = 0.9
         elif wanted_match or (wanted_home and wanted_away):
             # Name + date alone is insufficient: a player may have multiple
             # records, or the fixture identity might be missing.
