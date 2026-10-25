@@ -29,3 +29,30 @@ def test_consensus_rejects_line_mismatch():
     rows=[{"match":"A vs B","market":"corners","selection":"over","line":9.5,"odds":1.9,"source":"oddspapi"},
           {"match":"A vs B","market":"corners","selection":"over","line":10.5,"odds":1.9,"source":"5dollar"}]
     assert qc.consensus(rows)["ok"] is False
+
+
+def test_odds_api_io_opt_in_and_exact_1x2(monkeypatch):
+    import netrattler_odds_harvester as h
+    monkeypatch.delenv("ODDS_API_IO_KEY", raising=False)
+    assert h.collect_odds_api_io("2026-10-25") == []
+    monkeypatch.setenv("ODDS_API_IO_KEY", "test-only")
+    monkeypatch.setenv("ODDS_API_IO_MAX_EVENTS", "1")
+    class Response:
+        status_code = 200
+        def __init__(self, value): self.value = value
+        def raise_for_status(self): pass
+        def json(self): return self.value
+    calls = []
+    def get(url, params, timeout):
+        calls.append(url)
+        if url.endswith("/events"):
+            return Response([{"id": 42, "home": "A", "away": "B", "date": "2026-10-25T17:00:00Z"}])
+        return Response({"bookmakers": {"Book": [
+            {"name": "ML", "odds": {"home": "2.10", "draw": "3.30", "away": "3.40"}},
+            {"name": "Player Shots", "odds": {"home": "99", "draw": "99", "away": "99"}}]}})
+    monkeypatch.setattr(h.requests, "get", get)
+    rows = h.collect_odds_api_io("2026-10-25")
+    assert len(calls) == 2
+    assert len(rows) == 3
+    assert {x["selection"] for x in rows} == {"home", "draw", "away"}
+    assert all(x["source"] == "odds_api_io" and x["market"] == "1x2" for x in rows)
