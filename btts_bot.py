@@ -23048,6 +23048,52 @@ Antworte NUR JSON:
 
     log(f"✅ Prop Builder: {len(combos)} Kombis gesendet")
 
+def _live_status(n_keys: int, probe) -> str:
+    """✅ nur wenn mindestens ein Key wirklich antwortet (kostenlose Listen-Endpunkte, kein Quota-Verbrauch)."""
+    if not n_keys:
+        return "❌ kein Key"
+    ok, bad, note = 0, 0, ""
+    for i in range(min(n_keys, 6)):
+        try:
+            res = probe(i)
+        except Exception as exc:
+            res = (False, type(exc).__name__)
+        if res[0]:
+            ok += 1
+            note = res[1] or note
+        else:
+            bad += 1
+    sign = "✅" if ok else "❌"
+    return f"{sign} {ok}/{n_keys} Keys antworten{(' · ' + note) if note else ''}" + (f" · {bad} fehlerhaft" if bad else "")
+
+
+def key_live_check() -> dict:
+    out = {}
+    def odds(i):
+        r = requests.get("https://api.the-odds-api.com/v4/sports", params={"apiKey": ODDS_API_KEYS[i]}, timeout=8)
+        return r.status_code == 200, f"Rest {r.headers.get('x-requests-remaining', '?')}"
+    def fd(i):
+        r = requests.get("https://api.football-data.org/v4/competitions/PL", headers={"X-Auth-Token": FOOTBALL_DATA_API_KEYS[i]}, timeout=8)
+        return r.status_code == 200, ""
+    def gem(i):
+        r = requests.get("https://generativelanguage.googleapis.com/v1beta/models", params={"key": GEMINI_API_KEYS[i], "pageSize": 1}, timeout=8)
+        return r.status_code == 200, ""
+    def groq(i):
+        r = requests.get("https://api.groq.com/openai/v1/models", headers={"Authorization": f"Bearer {GROQ_API_KEYS[i]}"}, timeout=8)
+        return r.status_code == 200, ""
+    out["odds_api"] = _live_status(len(ODDS_API_KEYS), odds)
+    out["football_data"] = _live_status(len(FOOTBALL_DATA_API_KEYS), fd)
+    out["gemini"] = _live_status(len(GEMINI_API_KEYS), gem)
+    out["groq"] = _live_status(len(GROQ_API_KEYS), groq)
+    try:
+        requests.post(f"{SUPABASE_URL}/rest/v1/netrattler_card_diag", timeout=8,
+                      headers={"apikey": SUPABASE_KEY, "Authorization": f"Bearer {SUPABASE_KEY}", "Content-Type": "application/json"},
+                      json={"info": {"probe": "key_live", **out}})
+    except Exception:
+        pass
+    return out
+
+
 def check_config():
     warnings = []
 
@@ -23059,8 +23105,10 @@ def check_config():
     log(f"   • Mistral: {'✅ aktiv' if MISTRAL_API_KEYS else '❌ kein Key'}")
     log(f"   • Cohere: {'✅ aktiv' if COHERE_API_KEY else '❌ kein Key'}")
     log(f"   • HuggingFace: {'✅ aktiv' if HUGGINGFACE_API_KEY else '❌ kein Key'}")
-    log(f"   • Odds API: {len(ODDS_API_KEYS)} Keys")
-    log(f"   • Football-Data: {len(FOOTBALL_DATA_API_KEYS)} Keys" if FOOTBALL_DATA_API_KEYS else "   • Football-Data: ❌")
+    _live = key_live_check()
+    log(f"   • Odds API: {_live['odds_api']}")
+    log(f"   • Football-Data: {_live['football_data']}")
+    log(f"   • Gemini live: {_live['gemini']} | Groq live: {_live['groq']}")
     log(f"   • BSD: ✅ (8 Top-Ligen, unlimited Calls)")
     log(f"   • Sportmonks: ✅ (Dänemark + Schottland, Free Forever)")
     log(f"   • Wetter: {'✅ OpenWeatherMap aktiv!' if WEATHER_API_KEY else '❌ OPENWEATHER_API_KEY fehlt'}")

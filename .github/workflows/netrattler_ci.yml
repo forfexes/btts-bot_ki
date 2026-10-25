@@ -154,3 +154,4 @@ jobs:
       - run: python -m pytest -q test_card_expected_goals.py
       - run: python -m pytest -q test_apif_player_settlement.py
       - run: python -m pytest -q test_odds_band_policy.py
+      - run: python -m pytest -q test_key_live.py
