@@ -277,6 +277,27 @@ def sb_upsert(table: str, rows: Sequence[Dict[str, Any]], conflict: str) -> int:
             )
             if response.status_code in (200, 201, 204):
                 saved += len(part)
+            elif (
+                table in {"netrattler_group_stats", "netrattler_performance_stats"}
+                and response.status_code == 400
+                and '"code":"PGRST204"' in response.text.replace(" ", "")
+                and "'priced' column" in response.text
+            ):
+                # Legacy stats tables lack the optional priced column.
+                # Retry only this known schema mismatch, preserving all other metrics.
+                legacy_part = [{k: v for k, v in row.items() if k != "priced"} for row in part]
+                retry = requests.post(
+                    f"{SUPABASE_URL}/rest/v1/{table}",
+                    headers=headers("resolution=merge-duplicates,return=minimal"),
+                    params={"on_conflict": conflict},
+                    data=json.dumps(legacy_part, ensure_ascii=False, default=str),
+                    timeout=35,
+                )
+                if retry.status_code in (200, 201, 204):
+                    saved += len(part)
+                    log(f"UPSERT {table}: legacy schema fallback without priced ({len(part)} rows)")
+                else:
+                    log(f"UPSERT {table} fallback {retry.status_code}: {retry.text[:220]}", "WARN")
             else:
                 log(f"UPSERT {table} {response.status_code}: {response.text[:220]}", "WARN")
         except Exception as exc:
