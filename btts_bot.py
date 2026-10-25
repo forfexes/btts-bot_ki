@@ -235,7 +235,7 @@ ONE_X_TWO_MIN_ODDS = float(env("NETRATTLER_1X2_MIN_ODDS", "1.55"))
 BTTS_MIN_PROB = float(env("NETRATTLER_BTTS_MIN_PROB", "65"))
 BTTS_MIN_EDGE = float(env("NETRATTLER_BTTS_MIN_EDGE", "0.08"))
 BTTS_MIN_ODDS = float(env("NETRATTLER_BTTS_MIN_ODDS", str(MIN_ODDS_VALUE)))
-OVER25_MIN_PROB = float(env("NETRATTLER_OVER25_MIN_PROB", "65"))
+OVER25_MIN_PROB = float(env("NETRATTLER_OVER25_MIN_PROB", "60"))
 OVER25_MIN_EDGE = float(env("NETRATTLER_OVER25_MIN_EDGE", "0.08"))
 OVER25_MIN_ODDS = float(env("NETRATTLER_OVER25_MIN_ODDS", str(MIN_ODDS_VALUE)))
 COMBO_MIN_PROB = float(env("NETRATTLER_COMBO_MIN_PROB", "55"))
@@ -25235,6 +25235,9 @@ def filter_tips_legacy_safe(tips: List[Dict], market: str = "btts",
         if edge < float(min_edge):
             stats["below_min"] += 1
             continue
+        if not odds_band_policy_ok(market_key, prob_pct, quote):
+            stats["policy_reject"] += 1
+            continue
 
         row = dict(tip)
         row["raw_probability"] = round(prob01, 6)
@@ -25257,6 +25260,21 @@ def filter_tips_legacy_safe(tips: List[Dict], market: str = "btts",
     _log("EDGE", f"[SAFE:{market}] {stats['kept']}/{stats['total']} kept "
                  f"(no_quote={stats['no_quote']} below={stats['below_min']})")
     return out
+
+
+def odds_band_policy_ok(market: str, prob_pct: float, quote: float) -> bool:
+    """Evidenzbasierte Quoten-Zonen (Backtest settled tips seit 2026-08, ~700 Over2.5-Wetten):
+    Over 2.5 mit Quote 1.90-2.19 verliert (-14u / 245 Wetten), Quote >=2.20 (+58u / 198) und <1.90 (+23u / 271)
+    gewinnen. Modell-Prob 60-64.9 nur bei Quote >=2.20 zulassen. Abschaltbar: NETRATTLER_ODDS_BAND_POLICY=false."""
+    if env("NETRATTLER_ODDS_BAND_POLICY", "true").lower() not in ("1", "true", "yes", "on"):
+        return True
+    if str(market).lower() != "over25":
+        return True
+    if 1.90 <= quote < 2.20:
+        return False
+    if prob_pct < 65.0 and quote < 2.20:
+        return False
+    return True
 
 
 # Anti-Correlation Check
