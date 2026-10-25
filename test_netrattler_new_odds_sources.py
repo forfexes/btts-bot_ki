@@ -56,3 +56,16 @@ def test_odds_api_io_opt_in_and_exact_1x2(monkeypatch):
     assert len(rows) == 3
     assert {x["selection"] for x in rows} == {"home", "draw", "away"}
     assert all(x["source"] == "odds_api_io" and x["market"] == "1x2" for x in rows)
+
+
+def test_scraper_dedupe_keeps_distinct_lines_and_freshest_price():
+    import netrattler_odds_harvester as h
+    def quote(price, stamp, line):
+        return {"home_team": "A", "away_team": "B", "market": "totals", "selection": "over",
+                "source": "bwin", "bookmaker": "bwin", "match_date": "2026-10-25",
+                "odds": price, "raw": {"line": line, "captured_at": stamp}}
+    rows = h._dedupe([quote(4.5, "2026-10-25T10:00:00Z", 2.5),
+                      quote(1.9, "2026-10-25T10:05:00Z", 2.5),
+                      quote(2.3, "2026-10-25T10:04:00Z", 3.5)])
+    assert len(rows) == 2
+    assert {r["raw"]["line"]: r["odds"] for r in rows} == {2.5: 1.9, 3.5: 2.3}
