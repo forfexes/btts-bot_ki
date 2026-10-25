@@ -94,6 +94,7 @@ def rows_for(season, gw):
             "tackles": inum(s.get("tackles")), "tackles_won": inum(s.get("tackles_won")),
             "fouls_committed": inum(s.get("fouls_committed")), "fouls_drawn": inum(s.get("was_fouled")),
             "interceptions": inum(s.get("interceptions")), "xg": fnum(s.get("xg")),
+            "goals": inum(s.get("goals")), "assists": inum(s.get("assists")),
         })
     return out
 
