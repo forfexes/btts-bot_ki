@@ -117,6 +117,10 @@ def test_library_cross_match_uses_distinct_games():
     assert any(len(p.legs) >= 3 for p in cross), cross
     for pick in cross:
         assert len({x.match for x in pick.legs}) == len(pick.legs), pick
+        msg = builder.format_builder_message(pick)
+        assert "Rechnerische Kombi-Quote" in msg
+        assert "Kein bestätigtes Kombi-Angebot" in msg
+        assert "Gesamt-Quote:" not in msg
 
 
 def test_unmodelled_and_bad_correlation_rejected():

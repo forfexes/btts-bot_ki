@@ -629,8 +629,9 @@ def format_builder_message(pick: builder.BuilderPick) -> str:
         lines.append("🔒 Keine synthetische Produktquote für Same-Game-Builder")
         lines.append("🔥 Einsatz: <b>erst nach echter Builder-Quote</b>")
     else:
-        lines.append(f"💰 Gesamt-Quote: <b>{pick.total_odds:.2f}</b>")
-        lines.append(f"🔥 Einsatz: <b>{pick.stake:.2f} Units</b>")
+        lines.append(f"💰 Rechnerische Kombi-Quote: <b>{pick.total_odds:.2f}</b> (aus echten Einzelquoten)")
+        lines.append("⚠️ Kein bestätigtes Kombi-Angebot · Quote und Kombinierbarkeit beim Buchmacher prüfen")
+        lines.append(f"🔥 Einsatz: <b>{pick.stake:.2f} Units</b> (nur bei bestätigter Quote)")
     lines.append("🧠 Daten: echte Buchmacher-Quoten")
     return "\n".join(lines)
 
