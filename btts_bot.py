@@ -27655,6 +27655,10 @@ def main():
         log(f"⚠️ Stats Match-Cards optional: {type(_cards_exc).__name__}", "WARN")
 
     _ntr_mark("after_cards")
+    try:
+        _ntr_persist_marks("done")  # Laufzeit-Profil auch bei erfolgreichen Laeufen (Phasen-Dauer)
+    except Exception:
+        pass
     # V37 Coverage Watchdog / No-Tip Diagnose. Pure diagnostics: never blocks run.
     try:
         from netrattler_coverage_watchdog_v37 import run_watchdog
