@@ -557,19 +557,37 @@ def collect_the_odds_api(target_date: str) -> List[Dict[str, Any]]:
 
 
 def _dedupe(rows: Iterable[Mapping[str, Any]]) -> List[Dict[str, Any]]:
-    best: Dict[Tuple[str, str, str, str, str, str], Dict[str, Any]] = {}
+    """Keep one observation per exact source, market, selection and line.
+
+    Never silently replace a recent quote with a higher stale price or merge
+    distinct Asian/goal lines into the same selection.
+    """
+    best: Dict[Tuple[str, ...], Dict[str, Any]] = {}
     for raw in rows:
         row = dict(raw)
-        odds = float(row.get("odds") or 0)
-        if odds <= 1:
+        try:
+            odds = float(row.get("odds") or 0)
+        except (ValueError, TypeError):
             continue
+        if not (1.0001 < odds <= 100):
+            continue
+        metadata = row.get("raw") if isinstance(row.get("raw"), dict) else {}
+        line = metadata.get("line")
         key = (
             _norm(row.get("home_team")), _norm(row.get("away_team")),
             str(row.get("market") or ""), str(row.get("selection") or ""),
-            _norm(row.get("bookmaker") or row.get("source")), str(row.get("match_date") or ""),
+            _norm(row.get("bookmaker") or row.get("source")),
+            str(row.get("source") or ""), str(row.get("match_date") or ""),
+            str(line) if line is not None else "",
         )
         previous = best.get(key)
-        if previous is None or odds > float(previous.get("odds") or 0):
+        if previous is None:
+            best[key] = row
+            continue
+        previous_raw = previous.get("raw") if isinstance(previous.get("raw"), dict) else {}
+        current_stamp = str(metadata.get("captured_at") or "")
+        previous_stamp = str(previous_raw.get("captured_at") or "")
+        if current_stamp > previous_stamp:
             best[key] = row
     return list(best.values())
 
