@@ -698,6 +698,7 @@ def collect_live_all(target_date: Optional[str] = None) -> List[Dict[str, Any]]:
         ("altenar_platform", lambda: _keyless("altenar_platform", day)),
         ("smarkets", lambda: _keyless("smarkets", day)),
         ("gamdom_platform", lambda: _keyless("gamdom_platform", day)),
+        ("html_odds_shadow", lambda: __import__("netrattler_html_odds_scraper").collect_html_odds(day)),
     ):
         note = ""
         got: List[Dict[str, Any]] = []
