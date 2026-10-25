@@ -64,5 +64,19 @@ def main():
             pass
 
 
+def _report_error(e):
+    msg = (type(e).__name__ + ": " + str(e))[:300].replace(DSN, "<dsn>") if DSN else (type(e).__name__ + ": " + str(e))[:300]
+    print("FEHLER", msg)
+    try:
+        requests.post(f"{SB}/rest/v1/netrattler_card_diag", headers={**H, "Content-Type": "application/json"}, timeout=15,
+                      json={"info": {"probe": "odds_archive_error", "has_dsn": bool(DSN), "error": msg}})
+    except Exception:
+        pass
+
+
 if __name__ == "__main__":
-    main()
+    try:
+        main()
+    except Exception as exc:
+        _report_error(exc)
+        sys.exit(1)
