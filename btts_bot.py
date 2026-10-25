@@ -27010,6 +27010,7 @@ def main():
     _ntr_mark("league_loop_start")
     for league in ([] if _skip_league_loop else active_leagues):
         log(f"╔══ Liga: {league} ══╗")
+        _ntr_mark(f"L:{str(league)[:36]}")  # Diagnose: welche Liga bremst (wird beim Watchdog persistiert)
 
         try:
             odds, fixtures = fetch_league_data_once(league, target_date)
