@@ -23063,8 +23063,12 @@ def _live_status(n_keys: int, probe) -> str:
             note = res[1] or note
         else:
             bad += 1
+    checked = min(n_keys, 6)
     sign = "✅" if ok else "❌"
-    return f"{sign} {ok}/{n_keys} Keys antworten{(' · ' + note) if note else ''}" + (f" · {bad} fehlerhaft" if bad else "")
+    if ok and note.strip() == "Rest 0":
+        sign = "⚠️"
+        note = "Kontingent leer (Rest 0)"
+    return f"{sign} {ok}/{checked} geprueft antworten (von {n_keys}){(' · ' + note) if note else ''}" + (f" · {bad} fehlerhaft" if bad else "")
 
 
 def key_live_check() -> dict:
