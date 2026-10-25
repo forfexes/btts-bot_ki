@@ -66,8 +66,8 @@ GROUPS = {
     "combo_multi": os.getenv("TELEGRAM_GROUP_COMBOS") or os.getenv("TELEGRAM_GROUP_COMBO") or TG_DEFAULT,
     "btts_ht": os.getenv("TELEGRAM_GROUP_BTTS_HT") or TG_DEFAULT,
     "over15_ht": os.getenv("TELEGRAM_GROUP_OVER15_HT") or os.getenv("TELEGRAM_GROUP_BTTS_HT") or os.getenv("TELEGRAM_GROUP_STATS") or TG_DEFAULT,
-    "builder": os.getenv("TELEGRAM_GROUP_BUILDER") or os.getenv("TELEGRAM_GROUP_PLAYER_PROPS") or os.getenv("TELEGRAM_GROUP_PROPS") or TG_DEFAULT,
-    "props": os.getenv("TELEGRAM_GROUP_PLAYER_PROPS") or os.getenv("TELEGRAM_GROUP_PROPS") or TG_DEFAULT,
+    "builder": os.getenv("TELEGRAM_GROUP_BUILDER") or os.getenv("TELEGRAM_GROUP_PLAYER_PROPS") or os.getenv("TELEGRAM_GROUP_PROPS") or os.getenv("TELEGRAM_GROUP_STATS") or TG_DEFAULT,
+    "props": os.getenv("TELEGRAM_GROUP_PLAYER_PROPS") or os.getenv("TELEGRAM_GROUP_PROPS") or os.getenv("TELEGRAM_GROUP_STATS") or TG_DEFAULT,
     "corners": os.getenv("TELEGRAM_GROUP_CORNERS") or os.getenv("TELEGRAM_GROUP_HZ_LIVE") or os.getenv("TELEGRAM_GROUP_STATS") or TG_DEFAULT,
     "1x2": os.getenv("TELEGRAM_GROUP_LATE_GOALS") or TG_DEFAULT,
     "scorer": os.getenv("TELEGRAM_GROUP_LATE_GOALS") or TG_DEFAULT,
@@ -2253,7 +2253,42 @@ def dedup_history(rows: Iterable[Dict[str, Any]]) -> List[Dict[str, Any]]:
         row_ts = str(row.get("settled_at") or "")
         if current is None or row_ts >= current_ts:
             best[tid] = row
-    return list(best.values())
+    return _dedup_builder_legsets(list(best.values()))
+
+
+def _builder_legset_key(row: Dict[str, Any]) -> Optional[tuple]:
+    """Gleicher Tag + identische Leg-Menge (Spieler/Markt/Linie/Spiel) = dieselbe Wette, auch bei anderer builder_id."""
+    if row.get("market_group") != "builder" and row.get("source_table") != "netrattler_builder_picks":
+        return None
+    legs = legs_of(row.get("tip_payload") or {})
+    if not legs:
+        return None
+    sig = frozenset(
+        (str(l.get("player") or "").strip().lower(), str(l.get("market") or l.get("category") or "").strip().lower(),
+         str(l.get("line") or ""), str(l.get("match") or "").strip().lower())
+        for l in legs
+    )
+    return (str(row.get("tip_date") or "")[:10], sig)
+
+
+def _dedup_builder_legsets(rows: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
+    seen: Dict[tuple, Dict[str, Any]] = {}
+    out: List[Dict[str, Any]] = []
+    for row in rows:
+        key = _builder_legset_key(row)
+        if key is None:
+            out.append(row)
+            continue
+        cur = seen.get(key)
+        if cur is None:
+            seen[key] = row
+            out.append(row)
+            continue
+        # Ergebnisse bevorzugen: abgeschlossene Zeile ersetzt eine offene; sonst die erste behalten.
+        if normalized_status(cur.get("status")) not in {"win", "loss"} and normalized_status(row.get("status")) in {"win", "loss"}:
+            out[out.index(cur)] = row
+            seen[key] = row
+    return out
 
 
 def period_start(period: str) -> str:
@@ -2387,7 +2422,7 @@ def format_settlement(settlement: Dict[str, Any]) -> str:
     profit = settlement.get("profit")
     profit_line = (
         f"Profit: {as_float(profit):+.2f}U" if profit is not None
-        else "Profit: n/a (keine bestätigte Gesamtquote)"
+        else "Profit: n/a (keine echte Gesamtquote, nicht im ROI)"
     )
     return (
         f"{settlement['result_label']} <b>{settlement['market_group'].upper()}</b>\n"

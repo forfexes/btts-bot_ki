@@ -23,6 +23,15 @@ def decide(mb: float) -> str:
     return "ok"
 
 
+def trim_keep_days(mb: float) -> int:
+    """Gestaffelt: je voller die DB, desto kuerzer bleiben die (regenerierbaren) x1-Snapshots erhalten."""
+    if mb >= TRIM_MB + 60:
+        return 1
+    if mb >= TRIM_MB + 25:
+        return 2
+    return TRIM_KEEP_DAYS
+
+
 def alert(text: str) -> None:
     tok, chat = os.getenv("TELEGRAM_BOT_TOKEN"), os.getenv("TELEGRAM_GROUP_ALERTS")
     if tok and chat:
@@ -43,7 +52,7 @@ def run() -> dict:
         action = decide(mb)
         info.update(mb=mb, action=action, tables=d.get("tables"))
         if action == "trim":
-            cut = (datetime.now(timezone.utc) - timedelta(days=TRIM_KEEP_DAYS)).isoformat()
+            cut = (datetime.now(timezone.utc) - timedelta(days=trim_keep_days(mb))).isoformat()
             dr = requests.delete(f"{SB}/rest/v1/x1_player_snapshots", headers={**H, "Prefer": "return=minimal"},
                                  params={"captured_at": f"lt.{cut}"}, timeout=120)
             info["trim_status"] = dr.status_code

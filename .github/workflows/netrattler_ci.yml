@@ -125,7 +125,7 @@ jobs:
       - name: CLV test
         run: python -m pytest -q test_clv.py
       - name: Min-prob floors and storage guard tests
-        run: python -m pytest -q test_min_prob_floors.py test_storage_guard.py
+        run: python -m pytest -q test_min_prob_floors.py test_storage_guard.py test_builder_dedup_legset.py
       - name: Coverage watchdog test
         run: python -m pytest -q test_coverage_watchdog.py
       - name: Group decode ranking test
