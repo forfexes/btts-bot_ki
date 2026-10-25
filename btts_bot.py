@@ -14482,7 +14482,7 @@ def call_gemini(prompt, use_tools=True):
             r = requests.post(
                 f"https://generativelanguage.googleapis.com/v1beta/models/{GEMINI_MODEL}:generateContent?key={key}",
                 json=payload,
-                timeout=240 if use_tools else 120,
+                timeout=int(env("NETRATTLER_GEMINI_TIMEOUT_TOOLS", "100")) if use_tools else int(env("NETRATTLER_GEMINI_TIMEOUT", "60")),
             )
 
             data = r.json()
@@ -27011,6 +27011,13 @@ def main():
     for league in ([] if _skip_league_loop else active_leagues):
         log(f"╔══ Liga: {league} ══╗")
         _ntr_mark(f"L:{str(league)[:36]}")  # Diagnose: welche Liga bremst (wird beim Watchdog persistiert)
+        # Zeitbudget: Liga-Schleife darf Specialist-Pipelines/Versand nicht verdraengen
+        if (time.time() - _NTR_T0) > float(env("NETRATTLER_LEAGUE_LOOP_DEADLINE_SEC", "1050")):
+            log("⏱️ Liga-Schleife beendet: Gesamtbudget erreicht, Rest-Ligen uebersprungen", "WARN")
+            _ntr_mark("league_loop_deadline")
+            break
+        _league_t0 = time.time()
+        _league_budget = float(env("NETRATTLER_LEAGUE_BUDGET_SEC", "150"))
 
         try:
             odds, fixtures = fetch_league_data_once(league, target_date)
@@ -27099,6 +27106,9 @@ def main():
 
             log(f"   📅 {len(fixtures)} Spiele | 💰 {len(odds)} mit Quoten")
             for market in MARKETS_TO_RUN:
+                if (time.time() - _league_t0) > _league_budget:
+                    log(f"   ⏱️ Liga-Budget {_league_budget:.0f}s erreicht, restliche Maerkte uebersprungen", "WARN")
+                    break
                 log(f"   → Markt: {MARKET_INFO[market]['name']}")
 
                 results, source = analyze_market_with_data(
