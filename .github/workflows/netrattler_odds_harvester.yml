@@ -6,6 +6,8 @@ on:
     paths:
       - '.github/workflows/netrattler_odds_harvester.yml'
       - 'netrattler_keyless_odds.py'
+      - 'netrattler_odds_harvester.py'
+      - 'netrattler_html_odds_scraper.py'
   schedule:
     - cron: "45 6,11,17 * * *"  # 3 daily refreshes ahead of main football tip windows (UTC)
     - cron: "35 3 * * 0"
@@ -35,7 +37,7 @@ jobs:
           pip install oddsharvester || pip install git+https://github.com/jordantete/OddsHarvester.git || true
           python -m playwright install chromium --with-deps
       - name: Compile
-        run: python -m py_compile netrattler_odds_harvester.py netrattler_keyless_odds.py
+        run: python -m py_compile netrattler_odds_harvester.py netrattler_keyless_odds.py netrattler_html_odds_scraper.py
       - name: Test bookmaker odds parser and bounded detail fallback
         run: python -m unittest -v test_netrattler_betclone_market_audit.py
       - name: Collect Bet365 and every available bookmaker
@@ -45,6 +47,9 @@ jobs:
           SUPABASE_SERVICE_ROLE_KEY: ${{ secrets.SUPABASE_SERVICE_ROLE_KEY }}
           ODDS_API_KEYS: ${{ secrets.ODDS_API_KEYS }}
           ODDS_API_KEY: ${{ secrets.ODDS_API_KEY }}
+          ODDS_API_IO_KEY: ${{ secrets.ODDS_API_IO_KEY }}
+          NETRATTLER_HTML_ODDS_URLS: ${{ vars.NETRATTLER_HTML_ODDS_URLS }}
+          NETRATTLER_HTML_ODDS_HOSTS: ${{ vars.NETRATTLER_HTML_ODDS_HOSTS }}
           BETFAIR_APP_KEY: ${{ secrets.BETFAIR_APP_KEY }}
           BETFAIR_SESSION_TOKEN: ${{ secrets.BETFAIR_SESSION_TOKEN }}
           ENABLE_ODDSHARVESTER: "true"
