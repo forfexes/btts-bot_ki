@@ -453,3 +453,12 @@ def test_shadow_and_fuzzy_names_never_enter_live():
 
 if __name__ == "__main__":
     main()
+
+
+def test_future_dated_odds_rejected():
+    from datetime import datetime, timedelta, timezone
+    now = datetime.now(timezone.utc)
+    def row(minutes):
+        return {"source": "pinnacle", "raw": {"captured_at": (now + timedelta(minutes=minutes)).isoformat()}}
+    assert guard._fresh(row(2))
+    assert not guard._fresh(row(15))
