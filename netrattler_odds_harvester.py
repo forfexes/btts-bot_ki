@@ -600,6 +600,70 @@ def _persist_collector_diag() -> None:
         pass
 
 
+def collect_odds_api_io(target_date: str) -> List[Dict[str, Any]]:
+    """Optional independent odds-api.io ML/1X2 feed; never estimates prices.
+
+    Disabled without a separate ODDS_API_IO_KEY. Conservative bounded request
+    budget; only explicitly labelled full-time match-result markets are mapped.
+    """
+    key = os.getenv("ODDS_API_IO_KEY", "").strip()
+    if not key:
+        return []
+    base = "https://api.odds-api.io/v3"
+    cap = max(0, min(20, int(os.getenv("ODDS_API_IO_MAX_EVENTS", "5"))))
+    if not cap:
+        return []
+    events_response = requests.get(f"{base}/events", params={
+        "apiKey": key, "sport": "football", "status": "pending", "limit": min(100, cap * 10),
+    }, timeout=TIMEOUT)
+    events_response.raise_for_status()
+    payload = events_response.json()
+    events = payload if isinstance(payload, list) else payload.get("events", []) if isinstance(payload, dict) else []
+    rows: List[Dict[str, Any]] = []
+    for ev in events:
+        if not isinstance(ev, dict):
+            continue
+        home, away = ev.get("home"), ev.get("away")
+        kickoff = ev.get("date")
+        if not home or not away or not kickoff or _date_of(kickoff, "") != target_date:
+            continue
+        event_id = ev.get("id")
+        if not event_id:
+            continue
+        response = requests.get(f"{base}/odds", params={"apiKey": key, "eventId": event_id}, timeout=TIMEOUT)
+        if response.status_code == 429:
+            break
+        response.raise_for_status()
+        odds_data = response.json()
+        if not isinstance(odds_data, dict):
+            continue
+        bookmakers = odds_data.get("bookmakers") or {}
+        if not isinstance(bookmakers, dict):
+            continue
+        for bookmaker, markets in bookmakers.items():
+            if not isinstance(markets, list):
+                continue
+            for market in markets:
+                if not isinstance(market, dict) or str(market.get("name", "")).strip().lower() not in {"ml", "match winner", "full time result", "1x2"}:
+                    continue
+                prices = market.get("odds")
+                if not isinstance(prices, dict):
+                    prices = market
+                if not all(k in prices for k in ("home", "draw", "away")):
+                    continue
+                for selection in ("home", "draw", "away"):
+                    item = _row(source="odds_api_io", bookmaker=str(bookmaker), event_id=f"oddsio_{event_id}",
+                                league=str(ev.get("league") or ""), home=str(home), away=str(away),
+                                commence_time=kickoff, market="1x2", selection=selection,
+                                odds=prices[selection], raw={"provider_event_id": event_id, "market_name": market.get("name")})
+                    if item:
+                        rows.append(item)
+        cap -= 1
+        if cap <= 0:
+            break
+    return rows
+
+
 def collect_live_all(target_date: Optional[str] = None) -> List[Dict[str, Any]]:
     day = str(target_date or date.today().isoformat())[:10]
     rows: List[Dict[str, Any]] = []
@@ -609,6 +673,7 @@ def collect_live_all(target_date: Optional[str] = None) -> List[Dict[str, Any]]:
         ("football_data", lambda: collect_football_data_fixtures(day)),
         ("espn", lambda: collect_espn(day)),
         ("the_odds_api", lambda: collect_the_odds_api(day)),
+        ("odds_api_io", lambda: collect_odds_api_io(day)),
         ("bwin", lambda: _keyless("bwin", day)),
         ("1xbet_platform", lambda: _keyless("1xbet_platform", day)),
         ("matchbook", lambda: _keyless("matchbook", day)),
