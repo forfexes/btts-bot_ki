@@ -740,8 +740,25 @@ def _headers(prefer: str = "resolution=merge-duplicates,return=minimal") -> Dict
     }
 
 
+_KEEP_TOTAL_LINES = {"1_5", "2_5", "3_5"}
+_KEEP_HT_LINES = {"0_5", "1_5"}
+
+
+def _storage_worthy(row: Mapping[str, Any]) -> bool:
+    """Speicherbudget (Supabase 500 MB): krumme Alternativlinien (2.25, 2.75, 3.0 ...) werden nicht gespeichert,
+    sie liefen auf ~100k Zeilen/Tag. Genutzt werden nur Hauptlinien; alle anderen Maerkte bleiben unveraendert."""
+    if os.getenv("NETRATTLER_ODDS_KEEP_ALL_LINES", "").lower() in {"1", "true", "yes"}:
+        return True
+    m = str(row.get("market") or "")
+    if m.startswith("totals_ht_"):
+        return m[len("totals_ht_"):] in _KEEP_HT_LINES
+    if m.startswith("totals_"):
+        return m[len("totals_"):] in _KEEP_TOTAL_LINES
+    return True
+
+
 def persist_odds(rows: Sequence[Mapping[str, Any]], snapshot_path: str = "netrattler_odds_snapshot.json") -> Dict[str, int]:
-    clean = _dedupe(rows)
+    clean = [r for r in _dedupe(rows) if _storage_worthy(r)]
     payload = {
         "version": "V37",
         "captured_at": datetime.now(timezone.utc).isoformat(),
