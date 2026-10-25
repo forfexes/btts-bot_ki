@@ -16532,6 +16532,38 @@ def send_telegram(text, chat_id=None, reply_markup=None):
 _SENT_TIPS_CACHE = set()
 _PREFETCHED_DUP_DATES = set()
 
+_SENT_MATCHES = {}
+
+
+def _split_match(match):
+    parts = [x.strip() for x in str(match or "").split(" vs ")]
+    return (parts[0], parts[1]) if len(parts) == 2 and parts[0] and parts[1] else None
+
+
+def _remember_sent_match(match, market, day):
+    pair = _split_match(match)
+    if pair:
+        _SENT_MATCHES.setdefault((str(day), str(market)), []).append(pair)
+
+
+def _fuzzy_sent_match(match, market, day):
+    """Gleiches Spiel unter anderem Namen ('Real Sociedad de Futbol' vs 'Real Sociedad') = Duplikat."""
+    pair = _split_match(match)
+    if not pair:
+        return False
+    try:
+        from netrattler_identity_hub import teams_match
+    except Exception:
+        return False
+    for h, a in _SENT_MATCHES.get((str(day), str(market)), []):
+        try:
+            if teams_match(pair[0], h) and teams_match(pair[1], a):
+                return True
+        except Exception:
+            continue
+    return False
+
+
 def _dup_cache_key(match, market, target_date):
     match_norm = normalize_team_name(match)
     return f"{match_norm[:20]}_{market}_{target_date}"
@@ -16583,6 +16615,7 @@ def prefetch_sent_tips_for_date(target_date):
                 tip_id = row.get("tip_id")
                 if match and market:
                     _SENT_TIPS_CACHE.add(_dup_cache_key(match, market, day))
+                    _remember_sent_match(match, market, day)
                 if tip_id:
                     _SENT_TIPS_CACHE.add(f"combo_{tip_id}")
 
@@ -16607,6 +16640,8 @@ def is_duplicate_tip(match, market, target_date):
 
     # 1. In-Memory Check
     if cache_key in _SENT_TIPS_CACHE:
+        return True
+    if _fuzzy_sent_match(match, market, day):
         return True
 
     # 2. Wenn Tag vorgeladen wurde, ist 'nicht im Cache' = kein Duplikat.
@@ -16700,6 +16735,7 @@ def mark_tip_sent(match, market, target_date):
     """Markiert Tipp als gesendet im In-Memory Cache"""
     global _SENT_TIPS_CACHE
     _SENT_TIPS_CACHE.add(_dup_cache_key(match, market, str(target_date)))
+    _remember_sent_match(match, market, str(target_date))
 
 
 def is_valid_tip(tip, target_date):
