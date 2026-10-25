@@ -26991,6 +26991,13 @@ def main():
                 total_analyzed += 1
             except Exception as pe:
                 log(f"   ⚠️ Pinnacle Match Fehler: {str(pe)[:60]}")
+                try:
+                    import traceback as _tb
+                    _gfe = globals().setdefault("_GROUP_FUNNEL", {})
+                    _gfe["match_errors"] = _gfe.get("match_errors", 0) + 1
+                    _gfe["last_match_error"] = (type(pe).__name__ + ": " + str(pe))[:120] + " @" + str(_tb.extract_tb(pe.__traceback__)[-1].lineno)
+                except Exception:
+                    pass
         _ntr_mark("pinnacle_done")
         log(f"🎰 Pinnacle fertig: {pinnacle_tips_count} Tipps generiert")
         try:
