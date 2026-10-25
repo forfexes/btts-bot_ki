@@ -26909,6 +26909,15 @@ def main():
                             pass
 
                 # 🏆 1X2 -> GOAL HUNTER. Quote real, Wahrscheinlichkeit aus ML/Elo-Poisson.
+                try:
+                    _gf = globals().setdefault("_GROUP_FUNNEL", {})
+                    _gf["x2_matches"] = _gf.get("x2_matches", 0) + 1
+                    _gf["x2_has_ro"] = _gf.get("x2_has_ro", 0) + (1 if ro else 0)
+                    _gf["x2_has_quotes"] = _gf.get("x2_has_quotes", 0) + (1 if (ro or {}).get("home_win") and (ro or {}).get("away_win") else 0)
+                    _gf["x2_has_ml"] = _gf.get("x2_has_ml", 0) + (1 if (_ml or {}).get("home_win_pct") else 0)
+                    _gf["x2_in_market"] = 1 if "1x2" in tips_by_market else 0
+                except Exception:
+                    pass
                 if "1x2" in tips_by_market and ro:
                     # Use the already-computed club ML output. If unavailable/incomplete,
                     # fill from one coherent Elo/Poisson 1X2 distribution.
