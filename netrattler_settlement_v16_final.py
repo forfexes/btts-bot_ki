@@ -93,6 +93,8 @@ PLAYER_STATS_TABLES = {
     "player_game_log": ["match_date"],
     # API-Football Spieler-pro-Spiel (Tackles, Fouls, Fouls drawn, Shots, Cards) - echte Messwerte.
     "apif_player_match": ["match_date"],
+    # Offener Datensatz olbauday/FPL-Core-Insights (Premier League + Europacup engl. Teams), gleiche Spaltennamen wie apif.
+    "fplci_player_match": ["match_date"],
 }
 
 
@@ -1369,7 +1371,7 @@ def load_player_stats(tips: Sequence[Dict[str, Any]]) -> List[Dict[str, Any]]:
                 if rows:
                     for row in rows:
                         row["_stats_table"] = table
-                        if table == "apif_player_match":
+                        if table in ("apif_player_match", "fplci_player_match"):
                             _normalize_apif_row(row)
                     filtered = _aggregate_player_rows(rows, wanted_norms)
                     if not filtered:
