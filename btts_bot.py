@@ -232,7 +232,7 @@ ONE_X_TWO_MIN_ODDS = float(env("NETRATTLER_1X2_MIN_ODDS", "1.55"))
 
 # V37 market-specific production gates.  The old global 67% gate predates the
 # calibrated ML blend and made several markets mathematically unreachable.
-BTTS_MIN_PROB = float(env("NETRATTLER_BTTS_MIN_PROB", "65"))
+BTTS_MIN_PROB = float(env("NETRATTLER_BTTS_MIN_PROB", "63"))
 BTTS_MIN_EDGE = float(env("NETRATTLER_BTTS_MIN_EDGE", "0.08"))
 BTTS_MIN_ODDS = float(env("NETRATTLER_BTTS_MIN_ODDS", str(MIN_ODDS_VALUE)))
 OVER25_MIN_PROB = float(env("NETRATTLER_OVER25_MIN_PROB", "60"))
