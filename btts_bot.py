@@ -226,8 +226,8 @@ MIN_ODDS_VALUE = MIN_ODDS  # Alias — globale Mindestquote für "nur Value Bets
 # Goal Hunter / 1X2 has its own production thresholds. These values already
 # exist in the GitHub workflow; V37 now consumes them instead of accidentally
 # forcing the generic 55% / 3% runtime-policy gate onto 1X2.
-ONE_X_TWO_MIN_PROB = float(env("NETRATTLER_1X2_MIN_PROB", "65"))
-ONE_X_TWO_MIN_EDGE = float(env("NETRATTLER_1X2_MIN_EDGE", "0.01"))
+ONE_X_TWO_MIN_PROB = float(env("NETRATTLER_1X2_MIN_PROB", "58"))
+ONE_X_TWO_MIN_EDGE = float(env("NETRATTLER_1X2_MIN_EDGE", "0.05"))
 ONE_X_TWO_MIN_ODDS = float(env("NETRATTLER_1X2_MIN_ODDS", "1.55"))
 
 # V37 market-specific production gates.  The old global 67% gate predates the
@@ -26950,6 +26950,13 @@ def main():
                             continue
                         _implied_1x2 = (1.0 / q) if q > 1 else 1.0
                         _edge_1x2 = (sel_prob / 100.0) - _implied_1x2
+                        try:
+                            _gf = globals().setdefault("_GROUP_FUNNEL", {})
+                            _gf["x2_evaluated"] = _gf.get("x2_evaluated", 0) + 1
+                            _gf["x2_max_prob"] = round(max(_gf.get("x2_max_prob", 0), sel_prob))
+                            _gf["x2_best_edge_pp"] = round(max(_gf.get("x2_best_edge_pp", -99), _edge_1x2 * 100), 1)
+                        except Exception:
+                            pass
                         if (
                             sel_prob < ONE_X_TWO_MIN_PROB
                             or q < ONE_X_TWO_MIN_ODDS
