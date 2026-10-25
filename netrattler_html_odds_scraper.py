@@ -72,8 +72,10 @@ def collect_html_odds(target_date):
         if parsed.hostname.lower() not in hosts:
             continue
         try:
-            response = requests.get(url, timeout=8, headers={"User-Agent": "NETRATTLER-OddsResearch/1.0"})
+            response = requests.get(url, timeout=8, allow_redirects=False, headers={"User-Agent": "NETRATTLER-OddsResearch/1.0"})
             response.raise_for_status()
+            if response.status_code != 200:
+                continue
             if len(response.content) > 2_000_000:
                 continue
             rows.extend(parse_html(response.text, url, target_date))
