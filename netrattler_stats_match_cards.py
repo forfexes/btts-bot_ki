@@ -1509,7 +1509,8 @@ def render_bis_card(entries, target_date, result=None):
         tc("(W-D-L)", cx, top + 120, f(12, False), "#d9ecff")
     draw.line((x0 + 141, top + 40, x0 + 141, top + 140), fill="#5cc8ff", width=1)
     srows = [("GOALS / GAME", num("avg_goals_home"), num("avg_goals_away"), "{:.1f}"),
-             ("xG", num("xg_home"), num("xg_away"), "{:.1f}"),
+             (("xG", num("xg_home"), num("xg_away"), "{:.1f}") if num("xg_home") or num("xg_away")
+              else ("EXP. GOALS", num("exp_goals_home"), num("exp_goals_away"), "{:.1f}")),
              ("BTTS-RATE", _pct(ctx.get("btts_rate_home")), _pct(ctx.get("btts_rate_away")), "{:.0f}%")]
     for i, (k, a, b, fmt) in enumerate(srows):
         y = top + 150 + i * 36
@@ -1549,8 +1550,10 @@ def render_bis_card(entries, target_date, result=None):
     tc("STAT", x0 + 135, top + 42, f(13), "#ffd84a")
     draw.text((x0 + 256 - draw.textlength(away[:11], font=f(15)), top + 40), away[:11], font=f(15), fill="#ffffff")
     trows = [("Goals / game", num("avg_goals_home"), num("avg_goals_away"), "{:.1f}"),
-             ("xG for", num("xg_home"), num("xg_away"), "{:.1f}"),
-             ("xG against", num("xga_home"), num("xga_away"), "{:.1f}"),
+             (("xG for", num("xg_home"), num("xg_away"), "{:.1f}") if num("xg_home") or num("xg_away")
+              else ("Exp. goals (Modell)", num("exp_goals_home"), num("exp_goals_away"), "{:.1f}")),
+             (("xG against", num("xga_home"), num("xga_away"), "{:.1f}") if num("xga_home") or num("xga_away")
+              else ("Conceded / game", num("avg_conceded_home"), num("avg_conceded_away"), "{:.1f}")),
              ("BTTS-Rate", _pct(ctx.get("btts_rate_home")), _pct(ctx.get("btts_rate_away")), "{:.0f}%"),
              ("Elo", num("elo_home"), num("elo_away"), "{:.0f}")]
     for i, (k, a, b, fmt) in enumerate(trows):
@@ -1897,7 +1900,7 @@ def attach_history_context(tips_by_market, log=print):
             mine, opp = (hs, as_) if hk == key else (as_, hs)
             res.append("W" if mine > opp else "D" if mine == opp else "L")
             gf += mine; ga += opp; bt += 1 if hs > 0 and as_ > 0 else 0; n += 1
-        return {"form": "".join(res[:5][::-1]), "n": n, "gf": gf / n, "bt": 100 * bt / n}
+        return {"form": "".join(res[:5][::-1]), "n": n, "gf": gf / n, "ga": ga / n, "bt": 100 * bt / n}
 
     done = 0
     for tips in tips_by_market.values():
@@ -1914,6 +1917,10 @@ def attach_history_context(tips_by_market, log=print):
             t.setdefault("homeForm", hs_["form"]); t.setdefault("awayForm", as_["form"])
             t.setdefault("avg_goals_home", round(hs_["gf"], 2)); t.setdefault("avg_goals_away", round(as_["gf"], 2))
             t.setdefault("btts_rate_home", round(hs_["bt"])); t.setdefault("btts_rate_away", round(as_["bt"]))
+            t.setdefault("avg_conceded_home", round(hs_["ga"], 2)); t.setdefault("avg_conceded_away", round(as_["ga"], 2))
+            # Erwartete Tore (Modell, KEIN xG): Angriff gegen gegnerische Abwehr aus echter Historie
+            t.setdefault("exp_goals_home", round((hs_["gf"] + as_["ga"]) / 2, 2))
+            t.setdefault("exp_goals_away", round((as_["gf"] + hs_["ga"]) / 2, 2))
             h2h = [g for g in by_team[hk] if {g[1], g[2]} == {hk, ak}]
             if h2h:
                 t.setdefault("h2h_matches", len(h2h))
