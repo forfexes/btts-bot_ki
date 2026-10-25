@@ -20,6 +20,8 @@ on:
       - 'test_netrattler_health_check.py'
       - 'netrattler_odds_harvester.py'
       - 'netrattler_html_odds_scraper.py'
+      - 'netrattler_open_matchday.py'
+      - 'test_netrattler_open_matchday.py'
       - 'test_netrattler_html_odds_scraper.py'
       - 'test_netrattler_new_odds_sources.py'
       - 'netrattler_keyless_odds.py'
@@ -74,7 +76,7 @@ jobs:
         shell: bash
         run: |
           set -o pipefail
-          python -m pytest -q -ra test_netrattler_keyless_odds.py test_netrattler_odds_cache_guard.py test_netrattler_scorer_history_fallback.py test_netrattler_thesportsdb_guard.py test_netrattler_playwright_runtime.py test_netrattler_kambi_scorer_market.py test_netrattler_goalhunter_photos.py test_netrattler_open_source_registry.py test_netrattler_html_odds_scraper.py test_netrattler_new_odds_sources.py 2>&1 | tee netrattler-source-tests.log
+          python -m pytest -q -ra test_netrattler_keyless_odds.py test_netrattler_odds_cache_guard.py test_netrattler_scorer_history_fallback.py test_netrattler_thesportsdb_guard.py test_netrattler_playwright_runtime.py test_netrattler_kambi_scorer_market.py test_netrattler_goalhunter_photos.py test_netrattler_open_source_registry.py test_netrattler_html_odds_scraper.py test_netrattler_new_odds_sources.py test_netrattler_open_matchday.py 2>&1 | tee netrattler-source-tests.log
       - name: Upload diagnostics even when tests fail
         if: always()
         uses: actions/upload-artifact@v4
