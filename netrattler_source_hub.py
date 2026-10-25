@@ -87,6 +87,8 @@ SOURCES: Tuple[SourceAdapter, ...] = (
     SourceAdapter("openfootball_clubs", "openfootball/clubs", "identity", "club alias/source registry", "ENABLE_OPENFOOTBALL_CLUBS", True, "", "CC0"),
     SourceAdapter("football_datasets", "salimt/football-datasets", "features", "Transfermarkt-like features: players/clubs/values/transfers", "ENABLE_FOOTBALL_DATASETS", True, "", "check-upstream"),
     SourceAdapter("football_analytics", "eddwebster/football_analytics", "feature_catalog", "research catalog for models/features/data recipes", "ENABLE_FOOTBALL_ANALYTICS", True, "", "check-upstream"),
+    SourceAdapter("open_matchday_2026", "oladeeayo/open-matchday", "fixtures_results_stats", "daily 75-league fixture/result CSV; selected leagues include corners/cards; never live bookmaker odds", "ENABLE_OPEN_MATCHDAY", False, "", "non-commercial only; verify terms", urls=("https://raw.githubusercontent.com/oladeeayo/open-matchday/master/data/ENG_1_premier-league/results_2627.csv",)),
+    SourceAdapter("matchgrind_free_api", "api.matchgrind.space", "fixtures_results", "free keyless football fixtures/results and standings; no bookmaker odds", "ENABLE_MATCHGRIND", False, "", "verify API terms"),
     SourceAdapter("martj42_international_results", "martj42/international_results", "results", "international match results", "ENABLE_MARTJ42", True, "", "open-data"),
     SourceAdapter("openfootball_worldcup_txt", "openfootball/worldcup", "worldcup_results", "World Cup Football.TXT source", "ENABLE_OPENFOOTBALL_WC", True, "", "CC0"),
     SourceAdapter("openfootball_world", "openfootball/world", "world_results", "worldwide Football.TXT leagues", "ENABLE_OPENFOOTBALL_WORLD", True, "", "CC0"),
