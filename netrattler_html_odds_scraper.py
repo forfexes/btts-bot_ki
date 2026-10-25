@@ -13,7 +13,7 @@ from html import unescape
 from urllib.parse import urlparse
 import requests
 
-SCRIPT = re.compile(r'<script\\b[^>]*type=["\\\']application/ld\\+json["\\\'][^>]*>(.*?)</script>', re.I | re.S)
+SCRIPT = re.compile(r'<script\b[^>]*type=["\x27]application/ld\+json["\x27][^>]*>(.*?)</script>', re.I | re.S)
 MARKETS = {"1x2": {"home", "draw", "away"}, "btts": {"yes", "no"}}
 
 def parse_html(html, url, target_date):
