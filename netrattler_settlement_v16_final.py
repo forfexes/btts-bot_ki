@@ -390,6 +390,7 @@ def _genuine_void_reason(reason: Any) -> bool:
     genuine = (
         "cancel", "cancell", "abandon", "postpon", "annull", "abgesagt",
         "void", "push", "walkover", "walk over", "w.o", "nicht angetreten",
+        "unplausible odds",  # protective odds guard; never reopen as missing-data VOID
     )
     return any(token in text for token in genuine)
 

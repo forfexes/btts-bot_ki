@@ -548,5 +548,28 @@ class SettlementV21Tests(unittest.TestCase):
             self.assertEqual(mod.preserve_telegram_edit_receipts([new], [old]), 0)
             self.assertNotIn("telegram_edit_ok", new["raw"])
 
+    def test_invalid_odds_void_is_not_reopened(self):
+        rows = [{
+            "status": "void", "reason": "unplausible odds 9.0",
+            "tip_id": "bad-odds", "settlement_id": "s-bad-odds",
+            "source_table": "tips", "tip_payload": {"id": 42},
+        }]
+        with patch.object(mod, "sb_patch_in") as patched_write:
+            self.assertEqual(mod.repair_legacy_false_voids(rows), 0)
+            patched_write.assert_not_called()
+        self.assertEqual(rows[0]["status"], "void")
+        self.assertTrue(mod._genuine_void_reason("unplausible odds 6.25"))
+
+    def test_missing_stats_legacy_void_can_still_reopen(self):
+        rows = [{
+            "status": "void", "reason": "Score fehlt",
+            "tip_id": "missing-stats", "settlement_id": "s-missing-stats",
+            "source_table": "tips", "tip_payload": {"id": 43},
+        }]
+        with patch.object(mod, "sb_patch_in", return_value=1) as patched_write:
+            self.assertEqual(mod.repair_legacy_false_voids(rows), 1)
+            self.assertEqual(patched_write.call_count, 2)
+        self.assertEqual(rows[0]["status"], "pending")
+
 if __name__ == "__main__":
     unittest.main()
