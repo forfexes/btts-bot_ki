@@ -66,5 +66,15 @@ class T(unittest.TestCase):
         self.assertEqual(len(out), 1); self.assertEqual(out[0]["player_key"], "bruno fernandes")
 
 
+    def test_trim_keeps_last_n_and_active_only(self):
+        from datetime import date
+        rows = [{"player_key": "a", "match_date": f"2026-10-{d:02d}"} for d in range(1, 21)]
+        rows += [{"player_key": "b", "match_date": "2026-05-01"}]
+        out = g.trim_rows(rows, max_games=5, active_days=60, today=date(2026, 10, 26))
+        self.assertEqual(len(out), 5)
+        self.assertTrue(all(r["player_key"] == "a" for r in out))
+        self.assertEqual(max(r["match_date"] for r in out), "2026-10-20")
+
+
 if __name__ == "__main__":
     unittest.main()

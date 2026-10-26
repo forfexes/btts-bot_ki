@@ -135,6 +135,23 @@ def build_canonical(rows):
     return list(merged.values())
 
 
+def trim_rows(rows, max_games=25, active_days=60, today=None):
+    """Speicher sparen: je Spieler nur die letzten max_games Spiele, Spieler ohne Einsatz seit active_days entfallen."""
+    from datetime import date, timedelta
+    ref = today or date.today()
+    cutoff = (ref - timedelta(days=active_days)).isoformat()
+    by = defaultdict(list)
+    for r in rows:
+        by[r["player_key"]].append(r)
+    out = []
+    for lst in by.values():
+        lst.sort(key=lambda x: x["match_date"], reverse=True)
+        if lst[0]["match_date"] < cutoff:
+            continue
+        out.extend(lst[:max_games])
+    return out
+
+
 def fetch_all():
     rows, off = [], 0
     while True:
@@ -153,7 +170,7 @@ def main():
     if not SB or not SK:
         print("SUPABASE fehlt"); return 1
     rows = fetch_all()
-    out = build_canonical(rows)
+    out = trim_rows(build_canonical(rows), int(os.getenv('GAME_LOG_MAX_GAMES', '25')), int(os.getenv('GAME_LOG_ACTIVE_DAYS', '60')))
     run_start = datetime.now(timezone.utc).isoformat()
     for o in out:
         o["updated_at"] = run_start
