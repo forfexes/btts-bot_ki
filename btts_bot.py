@@ -9671,6 +9671,9 @@ def _merge_player_history(rows: list, per_player: int = 20) -> list:
     return keep[:per_player]
 
 
+_GL_DEBUG = {"chunks": 0, "http_fail": 0, "exc": 0, "rows": 0, "last_err": ""}
+
+
 def _supabase_game_log_stats(names: list, per_player: int = 20) -> dict:
     """Per-match player log (player_game_log) -> avg_stats {stat: {avg, hit_rate, games}}.
 
@@ -9698,8 +9701,15 @@ def _supabase_game_log_stats(names: list, per_player: int = 20) -> dict:
                     timeout=25,
                 )
                 rows = r.json() if r.ok else []
-            except Exception:
+                _GL_DEBUG["chunks"] += 1
+                if not r.ok:
+                    _GL_DEBUG["http_fail"] += 1
+                    _GL_DEBUG["last_err"] = f"{r.status_code} {r.text[:120]}"
+                _GL_DEBUG["rows"] += len(rows) if isinstance(rows, list) else 0
+            except Exception as _exc:
                 rows = []
+                _GL_DEBUG["exc"] += 1
+                _GL_DEBUG["last_err"] = f"{type(_exc).__name__} {str(_exc)[:100]}"
         by_key = {}
         for row in rows if isinstance(rows, list) else []:
             by_key.setdefault(row.get("player_key"), []).append(row)
@@ -22295,6 +22305,7 @@ def _ntr_enrich_prop_pool_with_player_ml(rows: list) -> dict:
             pass
 
     stats["unmatched_sample"] = _unmatched_sample
+    stats["gl_debug"] = dict(_GL_DEBUG)
     return stats
 
 
