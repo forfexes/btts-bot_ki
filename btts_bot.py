@@ -9702,6 +9702,8 @@ def _supabase_game_log_stats(names: list, per_player: int = 20) -> dict:
                 )
                 rows = r.json() if r.ok else []
                 _GL_DEBUG["chunks"] += 1
+                if _GL_DEBUG["chunks"] == 1:
+                    _GL_DEBUG["first"] = f"{r.status_code} {r.url[:260]} -> {r.text[:120]}"
                 if not r.ok:
                     _GL_DEBUG["http_fail"] += 1
                     _GL_DEBUG["last_err"] = f"{r.status_code} {r.text[:120]}"
