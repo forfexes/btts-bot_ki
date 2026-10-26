@@ -61,8 +61,9 @@ def test_extra_concepts_real_odds_only():
 def test_estimated_or_unmodelled_never_enters_new_concepts():
     bad = row("Bad", "shots", 2.5, 3.0, 0.0)
     leg = builder.normalize_prop(bad)
-    # With no independent probability the engine explicitly keeps edge at zero.
-    assert leg is not None and leg.edge == 0
+    # Ohne unabhaengige Wahrscheinlichkeit: Engine allein -> edge 0; mit installiertem
+    # Produktions-Guard wird das Bein ganz gesperrt (None). Beides darf nie in Konzepte.
+    assert leg is None or leg.edge == 0
     assert concepts._extra([bad], "2026-09-26") == []
 
 

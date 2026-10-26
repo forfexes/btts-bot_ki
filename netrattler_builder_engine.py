@@ -1524,10 +1524,14 @@ def build_builder_picks(
     style_counts: Dict[str, int] = {}
     match_counts: Dict[str, int] = {}
     selected_ids = set()
+    selected_legsets: List[frozenset] = []
 
     def _try_add(pick: BuilderPick, force_style: bool = False) -> bool:
         if pick.builder_id in selected_ids:
             return False
+        _pls = frozenset(x.key() for x in pick.legs)
+        if any(legsets_overlap(_pls, _prev) for _prev in selected_legsets):
+            return False  # Fast-Duplikat eines besser gerankten Builders
         match_key = pick.legs[0].match if len({x.match for x in pick.legs}) == 1 else "CROSS"
         if not force_style and style_counts.get(pick.style, 0) >= 8:
             return False
@@ -1535,6 +1539,7 @@ def build_builder_picks(
             return False
         diversified.append(pick)
         selected_ids.add(pick.builder_id)
+        selected_legsets.append(_pls)
         style_counts[pick.style] = style_counts.get(pick.style, 0) + 1
         match_counts[match_key] = match_counts.get(match_key, 0) + 1
         return True
@@ -1629,9 +1634,23 @@ def builder_pick_exists(pick: BuilderPick, supabase_url: str, supabase_key: str)
             return None
         mine = legset_from_legs([{"player": x.player, "match": x.match, "category": x.category, "line": x.line}
                                  for x in pick.legs])
-        return any(legset_from_legs(r.get("legs")) == mine for r in same_day.json())
+        return any(legsets_overlap(legset_from_legs(r.get("legs")), mine) for r in same_day.json())
     except Exception:
         return None
+
+
+def legsets_overlap(a: frozenset, b: frozenset, threshold: float = None) -> bool:
+    """Fast-Duplikat: gleich, Teilmenge oder >= 2/3 gemeinsame Beine (bezogen auf den kleineren Builder)."""
+    if not a or not b:
+        return False
+    if a == b:
+        return True
+    if threshold is None:
+        try:
+            threshold = float(os.getenv("NETRATTLER_BUILDER_MAX_OVERLAP", "0.66"))
+        except Exception:
+            threshold = 0.66
+    return len(a & b) / float(min(len(a), len(b))) >= threshold
 
 
 def legset_from_legs(legs: Any) -> frozenset:
@@ -1721,7 +1740,14 @@ def run_builder_engine(
         )
 
     sent = 0
+    _sent_legsets: List[frozenset] = []
     for pick in picks:
+        _mine = legset_from_legs([{"player": x.player, "match": x.match, "category": x.category, "line": x.line}
+                                  for x in pick.legs])
+        if any(legsets_overlap(_mine, _prev) for _prev in _sent_legsets):
+            if logger:
+                logger(f"MASTER BUILDER near-duplicate skipped: {pick.style} {pick.variant}")
+            continue
         # Check duplicate before Telegram, but write only after a confirmed send.
         # A Telegram 429 must never create a DB row that blocks the retry next run.
         exists = builder_pick_exists(pick, supabase_url, supabase_key)
@@ -1769,6 +1795,7 @@ def run_builder_engine(
                 telegram_chat_id=telegram_chat_id, message_text=message_text,
             )
             sent += 1
+            _sent_legsets.append(_mine)
             if logger:
                 logger(
                     f"MASTER BUILDER {pick.style} {pick.variant}: "

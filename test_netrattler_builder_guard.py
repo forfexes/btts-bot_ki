@@ -185,6 +185,7 @@ def test_real_odds_only_and_edge_sanity():
         expected = (0.58 - 1 / 2.20) * 100
         assert abs(leg.edge - expected) < 0.02
     finally:
+        os.environ.pop("NETRATTLER_BUILDER_ALLOW_UNMODELLED", None)
         if old_min is None:
             os.environ.pop("NETRATTLER_PROP_BUILDER_MIN_EDGE", None)
         else:

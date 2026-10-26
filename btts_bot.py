@@ -9617,32 +9617,97 @@ def _fuzzy_game_log_rows(name: str, per_player: int = 30) -> list:
     return list(keyed.values())[0][:per_player]
 
 
+_GAME_LOG_NICKNAMES = {
+    "kike": "enrique", "nacho": "ignacio", "paco": "francisco", "pepe": "jose",
+    "rafa": "rafael", "dani": "daniel", "fran": "francisco", "chema": "jose maria",
+    "manu": "manuel", "isco": "francisco", "juanma": "juan manuel", "javi": "javier",
+}
+
+
+def _game_log_key(name: str) -> str:
+    """Gleiche Normalisierung wie netrattler_game_log_sync.key_of (ASCII, klein, nur a-z)."""
+    import unicodedata as _ud, re as _re
+    t = _ud.normalize("NFKD", str(name or "")).encode("ascii", "ignore").decode().lower()
+    return " ".join(_re.sub(r"[^a-z ]", " ", t).split())
+
+
+def _game_log_key_variants(name: str) -> list:
+    k = _game_log_key(name)
+    if "," in str(name or ""):
+        _l, _, _f = str(name).partition(",")
+        k = _game_log_key(f"{_f} {_l}")
+    out = [k] if k else []
+    parts = k.split()
+    if len(parts) >= 2 and parts[0] in _GAME_LOG_NICKNAMES:
+        out.append(" ".join([_GAME_LOG_NICKNAMES[parts[0]]] + parts[1:]))
+    return out
+
+
+def _merge_player_history(rows: list, per_player: int = 20) -> list:
+    """Zeilen eines player_key ueber Vereine zusammenfuehren.
+
+    Aktueller Verein = Verein mit dem juengsten Spiel. Andere Vereine zaehlen nur, wenn ihre
+    Spiele komplett VOR dem ersten Spiel beim aktuellen Verein liegen (Transfer). Ueberlappen
+    zwei Vereine zeitlich, sind es verschiedene Spieler gleichen Namens -> [] (nicht raten).
+    """
+    by_team: dict = {}
+    for r in rows or []:
+        if r.get("match_date"):
+            by_team.setdefault(str(r.get("team") or ""), []).append(r)
+    if not by_team:
+        return []
+    spans = {t: (min(str(x["match_date"]) for x in rs), max(str(x["match_date"]) for x in rs)) for t, rs in by_team.items()}
+    current = max(spans, key=lambda t: spans[t][1])
+    cur_first = spans[current][0]
+    keep = list(by_team[current])
+    for t, (first, last) in spans.items():
+        if t == current:
+            continue
+        if last < cur_first:
+            keep.extend(by_team[t])
+        else:
+            return []  # zeitliche Ueberlappung -> Namensvetter
+    keep.sort(key=lambda x: str(x.get("match_date")), reverse=True)
+    return keep[:per_player]
+
+
 def _supabase_game_log_stats(names: list, per_player: int = 20) -> dict:
-    """Per-match player log (player_game_log, 10-30 games per player) -> avg_stats dict
-    {stat: {avg, hit_rate, games}}. Real history only; players with <3 games are skipped
-    so the view fallback (or no model probability) applies instead."""
+    """Per-match player log (player_game_log) -> avg_stats {stat: {avg, hit_rate, games}}.
+
+    Suche ueber den normalisierten player_key (Akzente, Spitznamen wie Kike=Enrique),
+    Vereinswechsel werden zeitlich zusammengefuehrt, Namensvettern nie gemischt.
+    Spieler mit < 8 Spielen bekommen keine Statistik (kein Modellwert)."""
     out = {}
     names = [n for n in dict.fromkeys(str(x or "").strip() for x in names) if n]
     todo = [n for n in names if ("gl", n) not in _SUPABASE_PLAYER_STATS_CACHE]
+    variants = {n: _game_log_key_variants(n) for n in todo}
     for i in range(0, len(todo), 30):
         chunk = todo[i:i + 30]
-        quoted = ",".join('"' + n.replace('"', "") + '"' for n in chunk)
-        try:
-            r = requests.get(
-                f"{SUPABASE_URL}/rest/v1/player_game_log",
-                headers={"apikey": SUPABASE_KEY, "Authorization": f"Bearer {SUPABASE_KEY}"},
-                params={"player_name": f"in.({quoted})", "order": "match_date.desc", "limit": str(len(chunk) * per_player),
-                        "select": "player_name,match_date," + ",".join(_GAME_LOG_STATS)},
-                timeout=25,
-            )
-            rows = r.json() if r.ok else []
-        except Exception:
-            rows = []
-        by = {}
+        keys = sorted({k for n in chunk for k in variants[n]})
+        rows = []
+        if keys:
+            quoted = ",".join('"' + k.replace('"', "") + '"' for k in keys)
+            try:
+                r = requests.get(
+                    f"{SUPABASE_URL}/rest/v1/player_game_log",
+                    headers={"apikey": SUPABASE_KEY, "Authorization": f"Bearer {SUPABASE_KEY}"},
+                    params={"player_key": f"in.({quoted})", "order": "match_date.desc",
+                            "limit": str(max(200, len(keys) * 60)),
+                            "select": "player_key,player_name,team,match_date," + ",".join(_GAME_LOG_STATS)},
+                    timeout=25,
+                )
+                rows = r.json() if r.ok else []
+            except Exception:
+                rows = []
+        by_key = {}
         for row in rows if isinstance(rows, list) else []:
-            by.setdefault(row.get("player_name"), []).append(row)
+            by_key.setdefault(row.get("player_key"), []).append(row)
         for n in chunk:
-            games = (by.get(n) or [])[:per_player]
+            games = []
+            for k in variants[n]:
+                games = _merge_player_history(by_key.get(k) or [], per_player)
+                if games:
+                    break
             if len(games) < 3 and _FUZZY_LOOKUPS[0] < 150:
                 _FUZZY_LOOKUPS[0] += 1
                 try:

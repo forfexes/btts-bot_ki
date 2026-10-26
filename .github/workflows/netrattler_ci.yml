@@ -158,6 +158,8 @@ jobs:
       - run: python -m pytest -q test_builder_unmodelled_block.py
       - run: python -m pytest -q test_combo_leg_filters.py
       - run: python -m pytest -q test_keep_existing_model.py
+      - run: python -m pytest -q test_builder_overlap.py
+      - run: python -m pytest -q test_game_log_lookup.py
       - run: python -m pytest -q test_odds_storage_filter.py
       - run: python -m pytest -q test_void_reconcile.py
       - run: python -m pytest -q test_settle_prefers_observed.py
