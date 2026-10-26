@@ -1429,6 +1429,9 @@ def load_player_stats(tips: Sequence[Dict[str, Any]]) -> List[Dict[str, Any]]:
                         row["_stats_table"] = table
                         if table in ("apif_player_match", "fplci_player_match"):
                             _normalize_apif_row(row)
+                        _t = str(unpack(row).get("team") or "")
+                        if _t:
+                            _TEAM_ROW_COUNTS.setdefault(day, {}).setdefault(_t, set()).add(norm(player_name(row)))
                     filtered = _aggregate_player_rows(rows, wanted_norms)
                     if not filtered:
                         # A nonempty table may have no rows for the requested
@@ -2009,6 +2012,35 @@ def _has_observed_player_stat(row: Dict[str, Any], category: str) -> bool:
     return value not in (None, "") and recognized == aliases.get(key, key)
 
 
+_TEAM_ROW_COUNTS: Dict[str, Dict[str, set]] = {}  # Tag -> Team -> Spielernamen aller geladenen Rohzeilen
+
+
+def _match_covered_player_absent(leg: Dict[str, Any], stats: Sequence[Dict[str, Any]]) -> bool:
+    """Spiel ist in den Spielerdaten vollstaendig vorhanden (>=14 Spielerzeilen beider Teams), der Spieler aber nicht
+    (auch kein aehnlicher Name im Team) -> er hat nicht gespielt; Buchmacher erstatten Einsatz => void."""
+    data = unpack(leg)
+    wanted_player = str(anyv(data, ["player", "player_name", "selection"], ""))
+    home, away, _ = match_parts(leg)
+    day = row_date(leg)
+    if not (wanted_player and home and away and day):
+        return False
+    cover = 0
+    teams: Dict[str, set] = {}
+    for team, names in _TEAM_ROW_COUNTS.get(day, {}).items():
+        teams.setdefault(team, set()).update(names)
+    for row in stats:
+        if row_date(row) == day:
+            team = str(unpack(row).get("team") or "")
+            if team:
+                teams.setdefault(team, set()).add(norm(player_name(row)))
+    for team, names in teams.items():
+        if _strict_team_match(home, team) or _strict_team_match(away, team):
+            cover += len(names)
+            if any(similarity(wanted_player, n) >= 0.6 for n in names):
+                return False
+    return cover >= 14
+
+
 def settle_player_market(leg: Dict[str, Any], stats: Sequence[Dict[str, Any]], result: Optional[Dict[str, Any]]) -> Tuple[str, str]:
     category = category_of(leg)
     text = market_text(leg)
@@ -2031,6 +2063,8 @@ def settle_player_market(leg: Dict[str, Any], stats: Sequence[Dict[str, Any]], r
         if alt is not None:
             row = alt
     if not row:
+        if _match_covered_player_absent(leg, stats):
+            return "void", "void: Spieler ohne Einsatz (Spiel in Spielerdaten, Spieler nicht gelistet)"
         return "pending", "Player-Stats fehlen"
     played = anyv(unpack(row), ["minutes", "minutes_played"], None)
     if played not in (None, "") and as_float(played, 0) <= 0:
