@@ -133,6 +133,7 @@ def test_installed_pinnacle_guard_and_single_cap():
         )
         assert kept == [{"odds": 2.09}]
     finally:
+        os.environ.pop("NETRATTLER_BUILDER_ALLOW_UNMODELLED", None)
         if old_cap is None:
             os.environ.pop("NETRATTLER_MAX_SINGLE_ODDS", None)
         else:
@@ -158,6 +159,9 @@ def test_real_odds_only_and_edge_sanity():
         expected = (0.58 - 1 / 2.20) * 100
         assert abs(leg.edge - expected) < 0.02
 
+        # Ungeratene Spieler-Legs (ohne Modell/Historie) sind in Produktion gesperrt.
+        assert guard.normalize_prop_safe(_row(odds=2.20)) is None
+        os.environ["NETRATTLER_BUILDER_ALLOW_UNMODELLED"] = "1"  # nur Legacy-Pfad
         leg = guard.normalize_prop_safe(_row(odds=2.20))
         assert leg is not None
         assert leg.edge == 0.0

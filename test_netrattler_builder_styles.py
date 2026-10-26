@@ -147,6 +147,8 @@ def test_unmodelled_and_bad_correlation_rejected():
 
 def test_compat_real_odds_fallback_run802():
     """Run #802: 84 real Kambi legs without model edge produced generated=0."""
+    os.environ["NETRATTLER_BUILDER_ALLOW_UNMODELLED"] = "1"  # Legacy-Pfad explizit; Produktion sperrt ungeratene Legs
+    import atexit; atexit.register(lambda: os.environ.pop("NETRATTLER_BUILDER_ALLOW_UNMODELLED", None))
     os.environ.pop("NETRATTLER_BUILDER_STRICT_EDGE", None)
     rows = []
     for m in range(4):

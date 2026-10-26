@@ -155,7 +155,7 @@ jobs:
       - run: python -m pytest -q test_apif_player_settlement.py
       - run: python -m pytest -q test_fplci_import.py
       - run: python -m pytest -q test_game_log_sync.py
-      - run: python -m pytest -q test_game_log_sync.py
+      - run: python -m pytest -q test_builder_unmodelled_block.py
       - run: python -m pytest -q test_odds_storage_filter.py
       - run: python -m pytest -q test_void_reconcile.py
       - run: python -m pytest -q test_espn_player_import.py

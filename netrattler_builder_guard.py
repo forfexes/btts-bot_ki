@@ -104,6 +104,8 @@ def _is_generic_player_label(player: str) -> bool:
         return True
     if low.startswith("over ") or low.startswith("under "):
         return True
+    if any(t in low for t in ("same amount", "player's", "players'", "any other", "no goalscorer")):
+        return True
     return False
 
 
@@ -233,6 +235,10 @@ def normalize_prop_safe(row: Dict[str, Any]):
         fair = 1.0 / leg.probability if leg.probability > 0 else 0.0
         leg = replace(leg, edge=round(edge_pp, 2), fair_odds=round(fair, 2))
     else:
+        # Spieler-Legs ohne unabhaengige Historien-/Modellwahrscheinlichkeit sind geraten -> nie in Builder.
+        if (leg.category in builder.PLAYER_CATEGORIES
+                and os.getenv("NETRATTLER_BUILDER_ALLOW_UNMODELLED", "0") != "1"):
+            return None
         leg = replace(leg, edge=0.0)
 
     return leg
