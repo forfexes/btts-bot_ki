@@ -1263,12 +1263,45 @@ def train_model(df, target_col, model_name):
 # 5. IN SUPABASE SPEICHERN
 # ═══════════════════════════════════════════════════════════════════════════════
 
+def _existing_model_meta(model_name):
+    try:
+        r = requests.get(
+            f"{SUPABASE_URL}/rest/v1/ml_models",
+            headers={"apikey": SUPABASE_KEY, "Authorization": f"Bearer {SUPABASE_KEY}"},
+            params={"select": "meta", "model_name": f"eq.{model_name}", "limit": "1"},
+            timeout=20,
+        )
+        rows = r.json() if r.ok else []
+        if not rows:
+            return None
+        m = rows[0].get("meta")
+        return json.loads(m) if isinstance(m, str) else (m or None)
+    except Exception:
+        return None
+
+
+def _keep_existing_model(meta, existing=None):
+    """True = altes Modell behalten (neues hat keinen Mehrwert, altes schon)."""
+    if os.getenv("NETRATTLER_ALLOW_NO_SKILL_OVERWRITE", "0") == "1":
+        return False
+    if not meta.get("no_skill"):
+        return False
+    old = existing if existing is not None else _existing_model_meta(meta.get("model_name", ""))
+    return bool(old) and old.get("no_skill") is False
+
+
 def save_model_to_supabase(model, meta):
     """Serialisiert Modell via pickle + base64 und speichert in Supabase."""
     if not SUPABASE_URL or not SUPABASE_KEY:
         print("⚠️  Kein Supabase-Zugang — Modell lokal gespeichert als Fallback")
         with open(f"{meta['model_name']}.pkl", "wb") as f:
             pickle.dump({"model": model, "meta": meta, "feature_cols": FEATURE_COLS}, f)
+        return
+
+    # Schutz bei taeglichem Training: ein neues Modell ohne Mehrwert darf ein
+    # gespeichertes Modell mit Mehrwert nicht ueberschreiben.
+    if _keep_existing_model(meta):
+        print(f"   ⏭️ {meta['model_name']}: neues Modell ohne Mehrwert — bestehendes Modell bleibt aktiv")
         return
 
     buf = io.BytesIO()

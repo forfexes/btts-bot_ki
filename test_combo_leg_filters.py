@@ -43,3 +43,12 @@ def test_sane_1x2_kept():
     tips = [tip("A vs B", "over25", 1.7), tip("C vs D", "1x2", 2.1), tip("E vs F", "btts", 1.8)]
     bot, res = run(tips)
     assert res is not None and {t["market"] for t in bot.seen} == {"over25", "1x2", "btts"}
+
+
+def test_combo_leg_pool_rows_accepted():
+    # Form der Zeilen aus _NTR_COMBO_LEG_POOL (Prozent-Wkt, oddsYes, _combo_leg_only)
+    rows = [{"match": m, "market": mk, "tip": "YES", "selection": "YES", "probability": 62.0,
+             "oddsYes": 1.75, "odds": 1.75, "_no_real_odds": False, "_combo_leg_only": True}
+            for m, mk in (("A vs B", "over25"), ("C vs D", "btts"), ("E vs F", "over25"))]
+    bot, res = run(rows)
+    assert res is not None and len(bot.seen) == 3

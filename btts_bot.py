@@ -26309,6 +26309,7 @@ def main():
     log("=" * 60)
     log("AI TIPP BOT - ALL-IN-ONE EDITION")
     log("=" * 60)
+    globals()["_NTR_COMBO_LEG_POOL"] = []  # run-lokal, nie Beine aus früheren Läufen
 
     # ── HARD WATCHDOG ──────────────────────────────────────────────
     # GitHub-Actions killt den Job nach timeout-minutes (15 min) → verbrannte
@@ -26800,6 +26801,30 @@ def main():
                     enrich_pinnacle_tip(tip_over25, home, away, league_name)
                     tips_by_market["over25"].append(tip_over25)
                     pinnacle_tips_count += 1
+
+                # 🎰 Kombi-Beinpool: echte Pinnacle-Quote + Modell-Wkt > implizite Wkt.
+                # Kein Value-Zwang pro Bein (Einzeltipps bleiben streng), aber Mindest-Wkt.
+                try:
+                    if ro and os.getenv("NETRATTLER_COMBO_EXTRA_LEGS", "1") == "1":
+                        _clp = globals().setdefault("_NTR_COMBO_LEG_POOL", [])
+                        for _cmk, _cq, _cp, _cmin in (
+                            ("over25", ro.get("over_25"), prob_o, float(os.getenv("NETRATTLER_COMBO_LEG_MIN_PROB_OVER25", "58"))),
+                            ("btts", ro.get("btts_yes"), prob_b, float(os.getenv("NETRATTLER_COMBO_LEG_MIN_PROB_BTTS", "60"))),
+                        ):
+                            _cq = float(_cq or 0)
+                            _cp = float(_cp or 0)
+                            if _cq >= 1.40 and _cp >= _cmin and _cp / 100.0 > 1.0 / _cq:
+                                _clp.append({
+                                    "match": mn, "league": league_name or "Pinnacle", "time": tstr,
+                                    "tip": "YES", "selection": "YES", "market": _cmk,
+                                    "probability": _cp, "confidence": 3,
+                                    "oddsYes": _cq, "odds": _cq,
+                                    "edge_pct": round((_cp / 100.0 - 1.0 / _cq) * 100.0, 2),
+                                    "_no_real_odds": False, "_source": "pinnacle", "_kickoff": _ko_sort,
+                                    "_combo_leg_only": True,
+                                })
+                except Exception:
+                    pass
 
                 # 🔥 Combo: BTTS + Over 2.5 — NUR beobachtete Kombi-Quote.
                 # Keine Multiplikation einzelner Legs und kein Korrelationsfaktor als Quote.
@@ -27506,24 +27531,19 @@ def main():
             row["market"] = market_id
             all_tips_flat.append(row)
 
-    # Kombi-Beine brauchen keinen Value pro Bein: gleiche Echtquoten-/Policy-Pruefung, aber min_edge=0.
-    if os.getenv("NETRATTLER_COMBO_EXTRA_LEGS", "1") == "1":
-        try:
-            _have = {(r.get("match"), r.get("market"), str(r.get("tip", r.get("selection", "")))) for r in all_tips_flat}
-            _extra_added = 0
-            for _xm in ("btts", "over25", "1x2"):
-                _cands = [dict(t) for t in (locals().get("_ntr_coverage_before", {}) or {}).get(_xm, []) or []]
-                for t in filter_tips_by_edge(_cands, market=_xm, min_edge=0.0):
-                    row = dict(t)
-                    row["market"] = _xm
-                    k = (row.get("match"), _xm, str(row.get("tip", row.get("selection", ""))))
-                    if k not in _have:
-                        _have.add(k)
-                        all_tips_flat.append(row)
-                        _extra_added += 1
-            log(f"   🎰 Kombi-Zusatzbeine (Edge>0, Echtquote): {_extra_added}")
-        except Exception as _cx:
-            log(f"   🎰 Kombi-Zusatzbeine übersprungen: {str(_cx)[:80]}", "WARN")
+    # Kombi-Beinpool aus der Pinnacle-Schleife (echte Quote, Modell-Wkt > implizit).
+    try:
+        _have = {(r.get("match"), str(r.get("market")), str(r.get("tip", r.get("selection", "")))) for r in all_tips_flat}
+        _extra_added = 0
+        for row in list(globals().get("_NTR_COMBO_LEG_POOL", []) or []):
+            k = (row.get("match"), str(row.get("market")), str(row.get("tip", "")))
+            if k not in _have:
+                _have.add(k)
+                all_tips_flat.append(dict(row))
+                _extra_added += 1
+        log(f"   🎰 Kombi-Zusatzbeine (Echtquote, Wkt > implizit): {_extra_added}")
+    except Exception as _cx:
+        log(f"   🎰 Kombi-Zusatzbeine übersprungen: {str(_cx)[:80]}", "WARN")
 
     for _extra_market, _attr in (("corners", "_last_corner_tips"), ("scorer", "_last_scorer_tips")):
         for tip in getattr(run_corners_and_scorer_bots, _attr, []) or []:

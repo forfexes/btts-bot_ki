@@ -1491,19 +1491,21 @@ def _strict_team_match(a: Any, b: Any) -> bool:
     return False
 
 
-_DAY_INDEX: Dict[int, Tuple[int, Dict[str, List[Dict[str, Any]]]]] = {}
+_DAY_INDEX: Dict[int, Tuple[Any, ...]] = {}
 
 
 def _results_by_day(results: Sequence[Dict[str, Any]]) -> Dict[str, List[Dict[str, Any]]]:
     """Index result rows by day once per results list (row_date parsing dominated runtime)."""
     key = id(results)
     cached = _DAY_INDEX.get(key)
-    if cached and cached[0] == len(results):
+    # Identitaet pruefen: id() wird nach Garbage Collection wiederverwendet; ohne
+    # diesen Check landen Ergebnisse einer alten Liste in einer neuen Abrechnung.
+    if cached and cached[2] is results and cached[0] == len(results):
         return cached[1]
     idx: Dict[str, List[Dict[str, Any]]] = {}
     for row in results:
         idx.setdefault(row_date(row), []).append(row)
-    _DAY_INDEX[key] = (len(results), idx)
+    _DAY_INDEX[key] = (len(results), idx, results)
     return idx
 
 
