@@ -394,6 +394,35 @@ def _genuine_void_reason(reason: Any) -> bool:
     return any(token in text for token in genuine)
 
 
+def reconcile_pending_with_void_sources(existing: List[Dict[str, Any]], void_tip_ids: Any = None) -> int:
+    """Settlement-Zeilen, die noch 'pending' sind, obwohl der Quell-Tipp (tips) schon VOID ist
+    (stale-Void wurde in tips geschrieben, aber load_tips() laedt nur offene Tipps und schreibt die
+    Settlement-Zeile nie mehr neu). Setzt sie auf VOID (profit 0, zaehlt nicht im ROI). Idempotent."""
+    if void_tip_ids is None:
+        start_day = (TODAY - timedelta(days=DAYS)).isoformat()
+        rows = sb_get_paged("tips", {"select": "tip_id,status", "status": "eq.void", "date": f"gte.{start_day}"},
+                            max_rows=LIMIT, quiet=True) or []
+        void_tip_ids = {str(r.get("tip_id")) for r in rows if r.get("tip_id") not in (None, "")}
+    ids = []
+    for row in existing:
+        if normalized_status(row.get("status")) != "pending":
+            continue
+        if str(row.get("source_table") or "") != "tips":
+            continue
+        if str(row.get("tip_id") or "") in void_tip_ids:
+            ids.append(row.get("settlement_id"))
+            row["status"] = "void"
+            row["result_label"] = "VOID"
+            row["profit"] = 0.0
+            row["profit_units"] = 0.0
+    if not ids:
+        return 0
+    payload = {"status": "void", "result_label": "VOID", "profit": 0.0, "profit_units": 0.0,
+               "reason": f"void: kein Ergebnis nach {STALE_VOID_DAYS} Tagen verfuegbar (Liga ohne Datenquelle) · abgeglichen"}
+    sb_patch_in("netrattler_settlements", "settlement_id", ids, payload)
+    return len(ids)
+
+
 def repair_legacy_false_voids(existing: List[Dict[str, Any]]) -> int:
     """
     Reopens historical VOID rows that were actually unresolved/missing-data settlements.
@@ -2527,6 +2556,12 @@ def main() -> None:
 
     existing = existing_settlements()
     repaired_voids = repair_legacy_false_voids(existing)
+    try:
+        reconciled = reconcile_pending_with_void_sources(existing)
+        if reconciled:
+            log(f"Pending-Settlements mit VOID-Quelltipp abgeglichen: {reconciled}")
+    except Exception as exc:
+        log(f"VOID-Abgleich uebersprungen: {str(exc)[:120]}", "WARN")
     if repaired_voids:
         log(f"Legacy-False-VOIDs wieder auf pending gesetzt: {repaired_voids}")
     previous = existing_status_map(existing)
