@@ -15,6 +15,16 @@ LEAGUES = {
     "arg.1": "Liga Argentinien", "aus.1": "A-League", "jpn.1": "J1 League Japan", "kor.1": "K League 1",
     "sau.1": "Saudi Pro League", "eng.2": "Championship", "ned.1": "Eredivisie", "por.1": "Primeira Liga",
     "tur.1": "Super Lig", "bel.1": "Pro League Belgien", "sco.1": "Scottish Premiership",
+    # Pokale und Wettbewerbe mit Kambi-Spieler-Props (unbekannte Slugs liefern leer, kein Fehler)
+    "conmebol.libertadores": "Copa Libertadores", "conmebol.sudamericana": "Copa Sudamericana",
+    "eng.league_cup": "EFL Cup", "eng.fa": "FA Cup", "ger.dfb_pokal": "DFB-Pokal", "esp.copa_del_rey": "Copa del Rey",
+    "ita.coppa_italia": "Coppa Italia", "fra.coupe_de_france": "Coupe de France", "club.friendly": "Club Friendlies",
+    "rsa.1": "South Africa PSL", "uefa.champions_qual": "CL Qualifikation", "fifa.world": "FIFA World Cup",
+    "ger.2": "2. Bundesliga", "esp.2": "Segunda Division", "ita.2": "Serie B", "fra.2": "Ligue 2", "eng.3": "League One",
+    "swe.1": "Allsvenskan", "nor.1": "Eliteserien", "den.1": "Superliga Daenemark", "sui.1": "Super League Schweiz",
+    "aut.1": "Bundesliga Oesterreich", "gre.1": "Super League Griechenland", "chi.1": "Primera Chile",
+    "col.1": "Primera Colombia", "ecu.1": "LigaPro Ecuador", "uru.1": "Primera Uruguay", "par.1": "Primera Paraguay",
+    "per.1": "Liga 1 Peru", "chn.1": "Chinese Super League", "bra.2": "Brasileirao Serie B",
 }
 DAYS = int(os.getenv("ESPN_DAYS", "3"))
 START = int(os.getenv("ESPN_START_OFFSET", "0"))  # Tage ab heute rueckwaerts, ab denen geholt wird
