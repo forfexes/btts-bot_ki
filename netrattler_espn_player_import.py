@@ -89,8 +89,10 @@ def main():
     dry = "--dry" in sys.argv
     total, events_n, blocked = 0, 0, None
     rows_all = []
+    written = 0
     try:
         for back in range(DAYS):
+            day_rows = []
             d = (date.today() - timedelta(days=back)).strftime("%Y%m%d")
             for slug, name in LEAGUES.items():
                 sbd = get_json(f"{BASE}/{slug}/scoreboard", {"dates": d})
@@ -101,12 +103,14 @@ def main():
                     events_n += 1
                     js = get_json(f"{BASE}/{slug}/summary", {"event": ev.get("id")})
                     time.sleep(PAUSE)
-                    rows_all.extend(rows_from_summary(js, ev, name))
+                    day_rows.extend(rows_from_summary(js, ev, name))
+            rows_all.extend(day_rows)
+            if not dry:
+                written += upsert(day_rows)  # tageweise speichern, damit ein Abbruch nichts verliert
     except Blocked as exc:
         blocked = str(exc)[:120]
         print("ESPN blockiert, Abbruch ohne Umgehung:", blocked)
     total = len(rows_all)
-    written = 0 if dry else upsert(rows_all)
     info = {"probe": "espn_player_import", "events": events_n, "rows": total, "written": written, "blocked": blocked}
     print(info)
     if SB and SK and not dry:
