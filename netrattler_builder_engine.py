@@ -1640,30 +1640,27 @@ def builder_pick_exists(pick: BuilderPick, supabase_url: str, supabase_key: str)
 
 
 def legsets_overlap(a: frozenset, b: frozenset, threshold: float = None) -> bool:
-    """Fast-Duplikat: gleich, Teilmenge oder >= 2/3 gemeinsame Beine (bezogen auf den kleineren Builder)."""
+    """Duplikat = exakt gleiche Beine (Spieler, Spiel, Markt, Linie).
+
+    Erlaubt bleiben: Erweiterungen (3L -> 4L), Leitern (gleicher Spieler, andere Linie)
+    und Varianten, in denen ein anderer Spieler ein Bein ersetzt. Optional strenger ueber
+    NETRATTLER_BUILDER_MAX_OVERLAP (Anteil gemeinsamer Beine, z. B. 0.66)."""
     if not a or not b:
         return False
     if a == b:
         return True
-    if threshold is None:
-        try:
-            threshold = float(os.getenv("NETRATTLER_BUILDER_MAX_OVERLAP", "0.66"))
-        except Exception:
-            threshold = 0.66
-    if len(a & b) / float(min(len(a), len(b))) < threshold:
+    try:
+        threshold = float(os.getenv("NETRATTLER_BUILDER_MAX_OVERLAP", "0")) if threshold is None else threshold
+    except Exception:
+        threshold = 0.0
+    if threshold <= 0:
         return False
-    # Leiter-Variante erlaubt (z. B. Fonseca 1+ / 2+ / 3+): unterscheiden sich die Builder nur
-    # darin, dass derselbe Spieler im selben Markt eine andere Linie hat, ist es kein Duplikat.
     only_a, only_b = a - b, b - a
-    # Erweiterung erlaubt: derselbe Builder mit zusaetzlichem Bein (3L -> 4L -> 5L).
     if bool(only_a) != bool(only_b):
         return False
-    if only_a and only_b:
-        heads_a = {tuple(x[:3]) for x in only_a}
-        heads_b = {tuple(x[:3]) for x in only_b}
-        if heads_a == heads_b:
-            return False
-    return True
+    if {tuple(x[:3]) for x in only_a} == {tuple(x[:3]) for x in only_b}:
+        return False
+    return len(a & b) / float(min(len(a), len(b))) >= threshold
 
 
 def legset_from_legs(legs: Any) -> frozenset:

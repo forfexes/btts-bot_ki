@@ -8,8 +8,9 @@ def test_superset_one_more_leg_allowed():
     assert not e.legsets_overlap(frozenset({S, R, K}), frozenset({S, R, K, G}))
 
 
-def test_two_of_three_shared_is_duplicate():
-    assert e.legsets_overlap(frozenset({A, S, K}), frozenset({S, R, K}))
+def test_two_of_three_shared_other_player_allowed():
+    assert not e.legsets_overlap(frozenset({A, S, K}), frozenset({S, R, K}))
+    assert e.legsets_overlap(frozenset({A, S, K}), frozenset({S, R, K}), threshold=0.66)
 
 
 def test_half_shared_kept():
@@ -28,8 +29,8 @@ def test_ladder_lines_allowed():
     assert not e.legsets_overlap(frozenset({F2, S, K}), frozenset({F3, S, K}))
 
 
-def test_same_tips_other_player_blocked():
-    assert e.legsets_overlap(frozenset({F1, S, K}), frozenset({A, S, K}))
+def test_other_player_replacing_leg_allowed():
+    assert not e.legsets_overlap(frozenset({F1, S, K}), frozenset({A, S, K}))
 
 
 def test_identical_blocked():
