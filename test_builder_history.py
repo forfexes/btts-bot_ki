@@ -24,3 +24,15 @@ def test_history_text():
 
 if __name__ == "__main__":
     test_history_text(); print("ok")
+
+
+def test_booking_series():
+    def mk(i, p, o):
+        return _leg(player=f"Spieler {chr(65+i)}", category="yellow_cards", line=0.5, odds=o, probability=p,
+                    edge=3.0, match=f"H{i} - A{i}", team=f"H{i}")
+    legs = [mk(0, 0.45, 2.2), mk(1, 0.40, 2.5), mk(2, 0.35, 3.0), mk(3, 0.10, 4.0)]
+    out = be._booking_series_builders(legs, "2026-10-27")
+    styles = [(p.style, p.variant, len(p.legs)) for p in out]
+    assert styles.count(("BOOKING SINGLE", "1x BOOKED", 1)) == 3
+    assert ("BOOKING SERIES", "TREBLE", 3) in styles
+    assert all(p.legs[0].player != "Spieler D" for p in out)

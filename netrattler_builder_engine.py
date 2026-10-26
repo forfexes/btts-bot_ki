@@ -1466,6 +1466,38 @@ def _correlated_duel_builders(props: Sequence[PropLeg], match_date: str) -> List
             if pick: out.append(pick)
     return out
 
+def _booking_series_builders(props: Sequence[PropLeg], match_date: str) -> List[BuilderPick]:
+    """Booking-Singles (Top-3) plus Booking-Double/Treble/4-Fold ueber verschiedene Spiele.
+
+    Nur echte Quoten, nur Legs mit positivem Edge und Mindest-Wahrscheinlichkeit
+    (env NETRATTLER_BOOKING_MIN_PROB, default 0.30). Ein Spieler pro Spiel.
+    """
+    min_prob = as_float(os.getenv("NETRATTLER_BOOKING_MIN_PROB", "0.30"), 0.30)
+    best: Dict[str, PropLeg] = {}
+    for leg in props:
+        if leg.category != "yellow_cards" or not leg.player or leg.estimated:
+            continue
+        if leg.edge <= 0 or leg.probability < min_prob or not (1.5 <= leg.odds <= 8.0):
+            continue
+        k = norm(leg.match)
+        cur = best.get(k)
+        if cur is None or (leg.quality, leg.probability, leg.edge) > (cur.quality, cur.probability, cur.edge):
+            best[k] = leg
+    ranked = sorted(best.values(), key=lambda x: (x.quality, x.probability, x.edge), reverse=True)
+    out: List[BuilderPick] = []
+    for leg in ranked[:3]:
+        out.append(BuilderPick(
+            builder_id=builder_signature("BOOKING SINGLE", [leg], match_date),
+            style="BOOKING SINGLE", variant="1x BOOKED", legs=[leg], total_odds=leg.odds,
+            stake=0.5, estimated_odds=False, match_date=match_date))
+    for n, label in ((2, "DOUBLE"), (3, "TREBLE"), (4, "4-FOLD")):
+        if len(ranked) >= n:
+            pick = _make_builder("BOOKING SERIES", label, ranked[:n], match_date, 0.5)
+            if pick:
+                out.append(pick)
+    return out
+
+
 def build_builder_picks(
     raw_props: Sequence[Dict[str, Any]],
     match_contexts: Optional[Sequence[Dict[str, Any]]] = None,
@@ -1497,6 +1529,7 @@ def build_builder_picks(
     candidates.extend(_correlated_duel_builders(props, run_date))
     candidates.extend(_match_market_builders(props, run_date))
     candidates.extend(_cross_match_prop_accas(props, run_date))
+    candidates.extend(_booking_series_builders(props, run_date))
     candidates.extend(_category_trios(props, run_date))
     candidates.extend(_mixed_builders(props, run_date))
     candidates.extend(_same_match_available_builders(props, run_date))
@@ -1592,7 +1625,7 @@ def format_builder_message(pick: BuilderPick) -> str:
         "btts_ht": "BTTS HT", "over15_ht": "Over 1.5 HT", "corners": "Ecken",
         "shots": "Schüsse", "cards": "Karte", "goals": "Tor",
     }
-    same_match = len({x.match for x in pick.legs}) == 1
+    same_match = len({x.match for x in pick.legs}) == 1 and len(pick.legs) > 1
     if same_match and pick.legs:
         lines.append(f"⚽ <b>{pick.legs[0].match}</b>")
     for index, leg in enumerate(pick.legs, 1):

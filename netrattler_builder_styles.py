@@ -611,7 +611,7 @@ def _clean_market(leg):
 
 def format_builder_message(pick: builder.BuilderPick) -> str:
     sep = "━" * 18
-    same_match = len({x.match for x in pick.legs}) == 1
+    same_match = len({x.match for x in pick.legs}) == 1 and len(pick.legs) > 1
     lines = [f"🏗️ <b>NETRATTLER {pick.style}</b>", f"<b>{pick.variant}</b>", sep]
     if same_match:
         lines.append(f"⚽ <b>{pick.legs[0].match}</b>")
@@ -644,7 +644,7 @@ def format_builder_message(pick: builder.BuilderPick) -> str:
 
 def _to_row(self: builder.BuilderPick):
     row = _ORIG_TO_ROW(self)
-    if len({x.match for x in self.legs}) == 1:
+    if len({x.match for x in self.legs}) == 1 and len(self.legs) > 1:
         row["total_odds"] = 0.0
         row["stake"] = 0.0
         row["estimated_odds"] = True
