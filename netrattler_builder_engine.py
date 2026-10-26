@@ -108,7 +108,8 @@ def history_text(leg: "PropLeg", n: int = 10) -> str:
     if len(series) < 5:
         return ""
     series = series[:n]
-    need = math.floor(leg.line) + 1 if leg.line else 1  # Over 1.5 -> 2+, Over 0.5 -> 1+
+    ln = float(leg.line or 1)  # ganzzahlig = 'N+' (Ueber 2 -> 2+); Bruch 1.5 -> 2+
+    need = int(ln) if ln == int(ln) else math.floor(ln) + 1
     hits = sum(1 for v in series if v >= need)
     seq = ",".join(str(v) for v in series)
     return f"L{len(series)}: {seq} ({need}+ in {hits}/{len(series)})"
