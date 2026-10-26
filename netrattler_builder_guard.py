@@ -398,6 +398,11 @@ def _install_pinnacle_guard(bot) -> None:
     bot.filter_tips_legacy_safe = filter_tips_legacy_safe_guarded
 
 
+def _combo_blocked_groups():
+    raw = os.getenv("NETRATTLER_COMBO_BLOCK_GROUPS", "over15_ht,btts_ht")
+    return {x.strip() for x in raw.split(",") if x.strip()}
+
+
 def _combo_group(row: Dict[str, Any]) -> str:
     market = str(row.get("market") or "").lower()
     if market in {"btts", "over25", "combo", "btts_ht", "over15_ht", "1x2", "corners", "scorer"}:
@@ -509,6 +514,15 @@ def _install_multi_combo_guard(bot) -> None:
             selection = str(row.get("selection") or row.get("tip") or "").strip()
             if not match or " vs " not in match or q <= 1 or p <= 0 or row.get("_no_real_odds") is True:
                 continue
+            grp = _combo_group(row)
+            # Abgerechnete Kombis: Halbzeit-Maerkte (ohne Modell) 6 % Treffer, 1x2-Legs mit Fantasiequoten 13 %.
+            if grp in _combo_blocked_groups():
+                continue
+            if grp == "1x2" and q > _as_float(os.getenv("NETRATTLER_COMBO_MAX_1X2_ODDS", "4.5"), 4.5):
+                continue
+            if q > builder.max_sane_leg_odds({"btts": "btts", "over25": "over_goals", "corners": "corners",
+                                              "scorer": "score", "player_prop": "shots"}.get(grp, grp)):
+                continue
             key = (
                 match.lower(), _combo_group(row), selection.lower(),
                 str(row.get("player") or "").lower(), str(row.get("line") or ""),
@@ -518,7 +532,9 @@ def _install_multi_combo_guard(bot) -> None:
                 best[key] = row
         pool = list(best.values())
         if len(pool) < n:
-            return original_generate(all_tips, num_tips=n)
+            if os.getenv("NETRATTLER_COMBO_ALLOW_UNFILTERED_FALLBACK", "0") == "1":
+                return original_generate(all_tips, num_tips=n)
+            return None
 
         by_group: Dict[str, List[Dict[str, Any]]] = {}
         for row in pool:
