@@ -28,7 +28,15 @@ class Blocked(Exception):
 
 
 def get_json(url, params=None):
-    r = requests.get(url, params=params, headers={"Accept": "application/json"}, timeout=20)
+    r = None
+    for _ in range(2):  # ein Timeout/Verbindungsfehler bricht nicht den ganzen Lauf ab
+        try:
+            r = requests.get(url, params=params, headers={"Accept": "application/json"}, timeout=20)
+            break
+        except requests.exceptions.RequestException:
+            time.sleep(2)
+    if r is None:
+        return None
     if r.status_code in (403, 429):
         raise Blocked(f"{r.status_code} {url}")
     if r.status_code != 200:
