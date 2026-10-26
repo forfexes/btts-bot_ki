@@ -17,6 +17,7 @@ LEAGUES = {
     "tur.1": "Super Lig", "bel.1": "Pro League Belgien", "sco.1": "Scottish Premiership",
 }
 DAYS = int(os.getenv("ESPN_DAYS", "3"))
+START = int(os.getenv("ESPN_START_OFFSET", "0"))  # Tage ab heute rueckwaerts, ab denen geholt wird
 PAUSE = float(os.getenv("ESPN_PAUSE_SEC", "0.4"))
 STAT_MAP = {"totalShots": "shots", "shotsOnTarget": "shots_on", "totalGoals": "goals", "goalAssists": "assists",
             "foulsCommitted": "fouls_committed", "foulsSuffered": "fouls_drawn", "yellowCards": "yellow",
@@ -99,7 +100,7 @@ def main():
     rows_all = []
     written = 0
     try:
-        for back in range(DAYS):
+        for back in range(START, START + DAYS):
             day_rows = []
             d = (date.today() - timedelta(days=back)).strftime("%Y%m%d")
             for slug, name in LEAGUES.items():

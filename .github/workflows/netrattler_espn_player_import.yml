@@ -3,8 +3,11 @@ on:
   workflow_dispatch:
     inputs:
       days:
-        description: Tage zurueck
+        description: Anzahl Tage
         default: "3"
+      offset:
+        description: Start in Tagen vor heute
+        default: "0"
   schedule:
     - cron: "40 3,9,15,21 * * *"
 permissions:
@@ -27,6 +30,7 @@ jobs:
           SUPABASE_KEY: ${{ secrets.SUPABASE_KEY }}
           SUPABASE_SERVICE_ROLE_KEY: ${{ secrets.SUPABASE_SERVICE_ROLE_KEY }}
           ESPN_DAYS: ${{ github.event.inputs.days || '3' }}
+          ESPN_START_OFFSET: ${{ github.event.inputs.offset || '0' }}
         run: python netrattler_espn_player_import.py
       - if: always()
         env:
