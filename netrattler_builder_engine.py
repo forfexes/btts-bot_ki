@@ -1650,7 +1650,17 @@ def legsets_overlap(a: frozenset, b: frozenset, threshold: float = None) -> bool
             threshold = float(os.getenv("NETRATTLER_BUILDER_MAX_OVERLAP", "0.66"))
         except Exception:
             threshold = 0.66
-    return len(a & b) / float(min(len(a), len(b))) >= threshold
+    if len(a & b) / float(min(len(a), len(b))) < threshold:
+        return False
+    # Leiter-Variante erlaubt (z. B. Fonseca 1+ / 2+ / 3+): unterscheiden sich die Builder nur
+    # darin, dass derselbe Spieler im selben Markt eine andere Linie hat, ist es kein Duplikat.
+    only_a, only_b = a - b, b - a
+    if only_a and only_b:
+        heads_a = {tuple(x[:3]) for x in only_a}
+        heads_b = {tuple(x[:3]) for x in only_b}
+        if heads_a == heads_b:
+            return False
+    return True
 
 
 def legset_from_legs(legs: Any) -> frozenset:
