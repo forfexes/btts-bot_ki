@@ -27578,7 +27578,7 @@ def main():
                                          "matches": len(_pool_matches),
                                          "ge2": sum(1 for v in _pool_matches.values() if v >= 2),
                                          "ge3": sum(1 for v in _pool_matches.values() if v >= 3),
-                                         "player_ml": {k: _pml.get(k) for k in ("eligible", "enriched", "empirical", "models_loaded", "missing_stats", "required_models", "load_error", "unmatched_sample")}}})
+                                         "player_ml": {k: _pml.get(k) for k in ("eligible", "enriched", "empirical", "models_loaded", "missing_stats", "required_models", "load_error", "unmatched_sample", "gl_debug")}}})
         except Exception:
             pass
         try:
