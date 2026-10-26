@@ -2025,6 +2025,11 @@ def settle_player_market(leg: Dict[str, Any], stats: Sequence[Dict[str, Any]], r
         return settle_score_market(leg, result)
 
     row = find_player_stat(leg, stats)
+    if row is not None and category not in {"score_assist"} and not _has_observed_player_stat(row, category):
+        # Mehrere Quellen fuer dieselbe Person/dasselbe Spiel: Zeile mit beobachtetem Wert bevorzugen.
+        alt = find_player_stat(leg, [r for r in stats if _has_observed_player_stat(r, category)])
+        if alt is not None:
+            row = alt
     if not row:
         return "pending", "Player-Stats fehlen"
     played = anyv(unpack(row), ["minutes", "minutes_played"], None)
