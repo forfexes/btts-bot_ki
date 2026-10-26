@@ -2606,8 +2606,8 @@ def send_roi_report(history: Sequence[Dict[str, Any]]) -> None:
             continue
         lines.append(
             f"<b>{group.upper()}</b>\n"
-            f"Monat: {month['wins']}-{month['losses']} · ROI {month['roi']:+.1f}% · {month['profit']:+.2f}U\n"
-            f"Jahr: {year['wins']}-{year['losses']} · ROI {year['roi']:+.1f}% · {year['profit']:+.2f}U"
+            f"Monat: {month['wins']}-{month['losses']} / {month['bets']} · {roi_text(month)}\n"
+            f"Jahr: {year['wins']}-{year['losses']} / {year['bets']} · {roi_text(year)}"
         )
     if len(lines) > 3:
         telegram(chat, "\n\n".join(lines))
