@@ -433,7 +433,8 @@ def _player_prop_combo_candidates(bot) -> List[Dict[str, Any]]:
     min_prob = _as_float(os.getenv("NETRATTLER_PLAYER_PROP_MIN_PROB", "0.55"), 0.55)
     if min_prob > 1:
         min_prob /= 100.0
-    min_edge = _as_float(os.getenv("NETRATTLER_PROP_BUILDER_MIN_EDGE", "0.02"), 0.02)
+    # Kombi-Beine muessen nur positiven Modell-Edge haben (kein Value-Zwang pro Bein).
+    min_edge = _as_float(os.getenv("NETRATTLER_COMBO_PROP_MIN_EDGE", "0.0"), 0.0)
     if min_edge > 1:
         min_edge /= 100.0
 
@@ -454,7 +455,7 @@ def _player_prop_combo_candidates(bot) -> List[Dict[str, Any]]:
         if p < min_prob:
             continue
         edge = p - (1.0 / q)
-        if edge < min_edge:
+        if edge <= min_edge:
             continue
 
         player = str(safe.get("player") or "").strip()
