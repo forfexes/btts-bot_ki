@@ -9617,7 +9617,7 @@ def _fuzzy_game_log_rows(name: str, per_player: int = 30) -> list:
     return list(keyed.values())[0][:per_player]
 
 
-def _supabase_game_log_stats(names: list, per_player: int = 30) -> dict:
+def _supabase_game_log_stats(names: list, per_player: int = 20) -> dict:
     """Per-match player log (player_game_log, 10-30 games per player) -> avg_stats dict
     {stat: {avg, hit_rate, games}}. Real history only; players with <3 games are skipped
     so the view fallback (or no model probability) applies instead."""
@@ -9650,7 +9650,7 @@ def _supabase_game_log_stats(names: list, per_player: int = 30) -> dict:
                 except Exception:
                     pass
             stats = {}
-            if len(games) >= 3:
+            if len(games) >= 8:
                 for st in _GAME_LOG_STATS:
                     vals = [float(g[st]) for g in games if g.get(st) is not None]
                     if len(vals) >= 3:
