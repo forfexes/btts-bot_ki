@@ -10,5 +10,8 @@ class T(unittest.TestCase):
     def test_skips_no_minutes(self):
         self.assertIsNone(to_log_row({"match_id": 1, "player_name": "A", "match_date": "2026-01-01", "minutes": 0}))
         self.assertIsNone(to_log_row({"match_id": 1, "player_name": "", "match_date": "2026-01-01", "minutes": 90}))
+    def test_espn_without_minutes_kept(self):
+        r = to_log_row({'match_id': 7, 'player_name': 'B', 'match_date': '2026-10-01', 'minutes': None, 'source': 'espn', 'shots': 1})
+        self.assertIsNotNone(r)
 if __name__ == "__main__":
     unittest.main()
