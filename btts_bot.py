@@ -1286,6 +1286,22 @@ def get_local_time(utc_iso_str):
         return "TBD"
 
 
+def _kickoff_from_pinnacle(match: str) -> str:
+    """Fallback fuer fehlende Anstosszeit: Pinnacle-Matchup mit gleichen Teams -> lokale Zeit (HH:MM)."""
+    try:
+        if " vs " not in str(match):
+            return ""
+        h, a = [x.strip() for x in str(match).split(" vs ", 1)]
+        for pm in _PINNACLE_MATCHUPS or []:
+            if teams_match(h, pm.get("home", "")) and teams_match(a, pm.get("away", "")):
+                t = get_local_time(str(pm.get("starts") or ""))
+                if t and t != "TBD":
+                    return t
+    except Exception:
+        pass
+    return ""
+
+
 def extract_json_array(text):
     cleaned = text.replace("```json", "").replace("```", "").strip()
 
@@ -20806,8 +20822,13 @@ def format_corners_message(tip):
         except Exception:
             pass
 
+    _t = str(tip.get("time") or "").strip()
+    if _t in ("", "TBD", "?", "N/A", "-"):
+        _t = _kickoff_from_pinnacle(tip.get("match", "")) or "TBD"
+        if _t != "TBD":
+            tip["time"] = _t
     msg = f"🔵 <b>CORNER SNIPER</b>\n"
-    msg += f"📍 {tip.get('league','?')} · ⏰ {tip.get('time','?')}{wstr}\n"
+    msg += f"📍 {tip.get('league','?')} · ⏰ {_t}{wstr}\n"
     msg += f"━━━━━━━━━━━━━━━━━━\n"
     msg += f"💎 <b>{tip['match']}</b>\n"
     msg += f"🎯 Tipp: <b>{tip['tip']}</b>\n"
