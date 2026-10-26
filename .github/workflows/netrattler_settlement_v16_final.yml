@@ -85,7 +85,7 @@ jobs:
           FOOTBALL_DATA_API_KEYS: ${{ secrets.FOOTBALL_DATA_API_KEYS }}
           FOOTBALL_DATA_API_KEY: ${{ secrets.FOOTBALL_DATA_API_KEY }}
           FOOTBALLDATA_IO_API_KEY: ${{ secrets.FOOTBALLDATA_IO_API_KEY }}
-          SETTLEMENT_DAYS: "45"
+          SETTLEMENT_DAYS: "110"
           SETTLEMENT_LIMIT: "12000"
           RESULT_USE_SOFASCORE: "false"
           RESULT_USE_ESPN: "true"
