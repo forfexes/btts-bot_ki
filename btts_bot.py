@@ -9681,8 +9681,9 @@ def _supabase_game_log_stats(names: list, per_player: int = 20) -> dict:
     names = [n for n in dict.fromkeys(str(x or "").strip() for x in names) if n]
     todo = [n for n in names if ("gl", n) not in _SUPABASE_PLAYER_STATS_CACHE]
     variants = {n: _game_log_key_variants(n) for n in todo}
-    for i in range(0, len(todo), 30):
-        chunk = todo[i:i + 30]
+    # Supabase kappt Antworten bei 1000 Zeilen -> kleine Pakete (je <= ~40 Spiele/Spieler)
+    for i in range(0, len(todo), 8):
+        chunk = todo[i:i + 8]
         keys = sorted({k for n in chunk for k in variants[n]})
         rows = []
         if keys:
@@ -9692,7 +9693,7 @@ def _supabase_game_log_stats(names: list, per_player: int = 20) -> dict:
                     f"{SUPABASE_URL}/rest/v1/player_game_log",
                     headers={"apikey": SUPABASE_KEY, "Authorization": f"Bearer {SUPABASE_KEY}"},
                     params={"player_key": f"in.({quoted})", "order": "match_date.desc",
-                            "limit": str(max(200, len(keys) * 60)),
+                            "limit": "1000",
                             "select": "player_key,player_name,team,match_date," + ",".join(_GAME_LOG_STATS)},
                     timeout=25,
                 )
