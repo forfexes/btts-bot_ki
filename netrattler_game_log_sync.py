@@ -169,9 +169,26 @@ def main():
             print("schreiben fehlgeschlagen", w.status_code, w.text[:200])
     print(f"player_game_log: {ok}/{len(out)} Zeilen geschrieben")
     if ok == len(out) and len(out) > 1000 and os.getenv("GAME_LOG_PRUNE_OLD", "1") == "1":
-        # Nur Zeilen aelter als dieser Lauf (veraltete Namen/Formate) entfernen; abgeleitete Tabelle, jederzeit neu aufbaubar
-        d = requests.delete(f"{SB}/rest/v1/player_game_log", params={"updated_at": f"lt.{run_start}"}, headers={**H, "Prefer": "return=minimal"}, timeout=180)
-        print("veraltete Zeilen entfernt:", d.status_code)
+        # Veraltete Zeilen (aelter als dieser Lauf) in kleinen Paketen entfernen: abgeleitete Tabelle, neu aufbaubar.
+        stale, off = set(), 0
+        while True:
+            r = requests.get(f"{SB}/rest/v1/player_game_log", headers=H, timeout=60, params={
+                "select": "player_key", "updated_at": f"lt.{run_start}", "order": "player_key.asc",
+                "limit": "1000", "offset": str(off)})
+            if not r.ok or not r.json():
+                break
+            stale.update(x["player_key"] for x in r.json())
+            off += 1000
+        keys = sorted(stale)
+        removed_calls = bad = 0
+        for i in range(0, len(keys), 40):
+            chunk = keys[i:i + 40]
+            inlist = ",".join('"' + k.replace('"', "") + '"' for k in chunk)
+            d = requests.delete(f"{SB}/rest/v1/player_game_log", timeout=120, headers={**H, "Prefer": "return=minimal"},
+                                params={"player_key": f"in.({inlist})", "updated_at": f"lt.{run_start}"})
+            removed_calls += 1
+            bad += 0 if d.ok else 1
+        print(f"veraltete Schluessel: {len(keys)}, Loesch-Pakete: {removed_calls}, Fehler: {bad}")
     return 0
 
 
