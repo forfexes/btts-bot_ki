@@ -40,13 +40,19 @@ def main():
         rows = r.json()
         if not rows:
             break
-        out = [x for x in (to_log_row(y) for y in rows) if x]
+        uniq = {}
+        for x in (to_log_row(y) for y in rows):
+            if x:
+                uniq[(x['player_key'], x['event_id'])] = x  # gleicher Name im selben Spiel: nur eine Zeile pro Batch
+        out = list(uniq.values())
         if out:
             w = requests.post(f"{SB}/rest/v1/player_game_log?on_conflict=player_key,event_id", timeout=60, json=out,
                               headers={**H, "Content-Type": "application/json",
                                        "Prefer": "resolution=merge-duplicates,return=minimal"})
             if not w.ok:
-                print("schreiben fehlgeschlagen", w.status_code, w.text[:200]); return 1
+                print("schreiben fehlgeschlagen", w.status_code, w.text[:200])
+                off += 1000
+                continue
             done += len(out)
         off += 1000
     print(f"player_game_log synchronisiert: {done} Zeilen")
