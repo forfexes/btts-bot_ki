@@ -27631,7 +27631,7 @@ def main():
         combo_header = f"<b>🎰 MULTI-COMBO TIPPS</b>" + "\n"
         combo_header += f"<i>📅 {target_date}</i>" + "\n"
         combo_header += f"<i>Basis: {len(all_tips_flat)} Top-Tipps</i>"
-        send_telegram(combo_header, combo_chat)
+        _combo_header_sent = False  # Kopfzeile erst senden, wenn wirklich eine Kombi folgt
 
         # V37: 3 bis NETRATTLER_MULTI_COMBO_MAX_LEGS (max. 11), nur Real-Odds-Tipps.
         _combo_run_ts = datetime.now(timezone.utc).strftime("%H%M%S")
@@ -27648,6 +27648,9 @@ def main():
                 log(f"   {combo['label']}: Quote {combo['total_odds']}")
                 msg = format_combo_telegram_message(combo)
                 if msg:
+                    if not _combo_header_sent:
+                        send_telegram(combo_header, combo_chat)
+                        _combo_header_sent = True
                     _combo_mid = send_telegram(msg, combo_chat)
                     if _combo_mid is None:
                         log(f"   ⚠️ Combo {n} Telegram nicht zugestellt — nicht speichern", "WARN")
@@ -27705,6 +27708,18 @@ def main():
         log(f"✅ {generated} Combos generiert und gesendet!")
     else:
         log(f"ℹ️ Nur {len(all_tips_flat)} Tipps - min. 3 für Combos nötig")
+    try:
+        _cm = {}
+        for _r in all_tips_flat:
+            _cm[str(_r.get("market"))] = _cm.get(str(_r.get("market")), 0) + 1
+        requests.post(f"{SUPABASE_URL}/rest/v1/netrattler_card_diag", timeout=10,
+                      headers={"apikey": SUPABASE_KEY, "Authorization": f"Bearer {SUPABASE_KEY}", "Content-Type": "application/json"},
+                      json={"info": {"probe": "combo_pool", "flat": len(all_tips_flat), "by_market": _cm,
+                                     "leg_pool": len(globals().get("_NTR_COMBO_LEG_POOL", []) or []),
+                                     "matches": len({str(_r.get("match")) for _r in all_tips_flat}),
+                                     "generated": generated}})
+    except Exception:
+        pass
 
     _ntr_mark("before_send_top_tips")
     # Main single-market tips are sent only after specialist pipelines.
