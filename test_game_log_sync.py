@@ -46,5 +46,18 @@ class T(unittest.TestCase):
         self.assertEqual(len(out), 2)
 
 
+    def test_fpl_id_reuse_across_seasons_not_merged(self):
+        other = fpl(player_id=355, player_name="Mykolenko", team="Everton", match_date="2025-09-01", match_id=50)
+        out = g.build_canonical([fpl(match_date="2026-09-01"), espn(match_date="2026-09-01"), other])
+        self.assertEqual({r["player_key"] for r in out}, {"erling haaland", "mykolenko"})
+
+    def test_previous_season_short_name_mapped_by_name_and_team(self):
+        prev = fpl(player_id=999, match_date="2025-09-01", match_id=77)
+        cur = fpl(player_id=411, match_date="2026-09-01", match_id=78)
+        out = g.build_canonical([prev, cur, espn(match_date="2026-09-01")])
+        self.assertEqual({r["player_key"] for r in out}, {"erling haaland"})
+        self.assertEqual(len(out), 2)
+
+
 if __name__ == "__main__":
     unittest.main()

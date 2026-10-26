@@ -4,6 +4,7 @@ ESPN volle Namen ('Erling Haaland'): FPL-Zeilen werden dem ESPN-Namen zugeordnet
 (FPL liefert Tackles/Minuten/xG, ESPN den Rest). Alte Zeilen im frueheren Format (event_id ohne ':') werden nach
 erfolgreichem Schreiben entfernt (abgeleitete Tabelle, jederzeit aus fplci_player_match neu aufbaubar)."""
 import os, re, sys, unicodedata, requests
+from datetime import datetime, timezone
 from collections import defaultdict
 
 SB = (os.getenv("SUPABASE_URL") or "").rstrip("/")
@@ -28,6 +29,11 @@ def team_sim(a, b):
         return False
     short, long_ = (ta, tb) if len(ta) <= len(tb) else (tb, ta)
     return all(any(l.startswith(t[:3]) for l in long_) for t in short)
+
+
+def season_of(day):
+    y, m = int(str(day)[:4]), int(str(day)[5:7])
+    return y if m >= 7 else y - 1
 
 
 def to_log_row(r):
@@ -57,8 +63,8 @@ def build_canonical(rows):
     for r in rows:
         if r.get("source") == "espn" and r.get("player_name"):
             espn_by_day[r["match_date"]].append(r)
-    # FPL-Spieler-ID -> ESPN-Vollname (aus allen Tagen mit eindeutigem Treffer)
-    name_of = {}
+    # FPL-Spieler-ID ist nur pro Saison gueltig -> Schluessel (Saison, ID); zusaetzlich Kurzname+Verein
+    name_of, short_to = {}, defaultdict(set)
     for r in rows:
         if r.get("source") == "espn" or not r.get("player_name"):
             continue
@@ -71,12 +77,18 @@ def build_canonical(rows):
             if et and et[-1] == toks[-1] and set(toks) <= set(et) and team_sim(r.get("team"), e.get("team")):
                 cands.append(e)
         if len(cands) == 1:
-            name_of.setdefault(("fpl", str(r.get("player_id"))), cands[0]["player_name"])
+            name_of.setdefault((season_of(r["match_date"]), str(r.get("player_id"))), cands[0]["player_name"])
+            short_to[key_of(r["player_name"])].add((cands[0]["player_name"], cands[0].get("team")))
     merged = {}
     for r in rows:
         rr = dict(r)
         if r.get("source") != "espn":
-            canon = name_of.get(("fpl", str(r.get("player_id"))))
+            canon = name_of.get((season_of(r["match_date"]), str(r.get("player_id"))))
+            if not canon:  # Vorsaison: Kurzname eindeutig und gleicher Verein
+                opts = short_to.get(key_of(r["player_name"]), set())
+                names = {n for n, _ in opts}
+                if len(names) == 1 and any(team_sim(r.get("team"), t) for _, t in opts):
+                    canon = next(iter(names))
             if canon:
                 rr["player_name"] = canon
         row = to_log_row(rr)
@@ -118,6 +130,9 @@ def main():
         print("SUPABASE fehlt"); return 1
     rows = fetch_all()
     out = build_canonical(rows)
+    run_start = datetime.now(timezone.utc).isoformat()
+    for o in out:
+        o["updated_at"] = run_start
     ok = 0
     for i in range(0, len(out), 800):
         part = out[i:i + 800]
@@ -129,9 +144,10 @@ def main():
         else:
             print("schreiben fehlgeschlagen", w.status_code, w.text[:200])
     print(f"player_game_log: {ok}/{len(out)} Zeilen geschrieben")
-    if ok == len(out) and os.getenv("GAME_LOG_PRUNE_OLD", "1") == "1":
-        d = requests.delete(f"{SB}/rest/v1/player_game_log?event_id=not.like.*:*", headers={**H, "Prefer": "return=minimal"}, timeout=120)
-        print("alte Zeilen (Altformat) entfernt:", d.status_code)
+    if ok == len(out) and len(out) > 1000 and os.getenv("GAME_LOG_PRUNE_OLD", "1") == "1":
+        # Nur Zeilen aelter als dieser Lauf (veraltete Namen/Formate) entfernen; abgeleitete Tabelle, jederzeit neu aufbaubar
+        d = requests.delete(f"{SB}/rest/v1/player_game_log", params={"updated_at": f"lt.{run_start}"}, headers={**H, "Prefer": "return=minimal"}, timeout=180)
+        print("veraltete Zeilen entfernt:", d.status_code)
     return 0
 
 
