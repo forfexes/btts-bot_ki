@@ -1655,6 +1655,9 @@ def legsets_overlap(a: frozenset, b: frozenset, threshold: float = None) -> bool
     # Leiter-Variante erlaubt (z. B. Fonseca 1+ / 2+ / 3+): unterscheiden sich die Builder nur
     # darin, dass derselbe Spieler im selben Markt eine andere Linie hat, ist es kein Duplikat.
     only_a, only_b = a - b, b - a
+    # Erweiterung erlaubt: derselbe Builder mit zusaetzlichem Bein (3L -> 4L -> 5L).
+    if bool(only_a) != bool(only_b):
+        return False
     if only_a and only_b:
         heads_a = {tuple(x[:3]) for x in only_a}
         heads_b = {tuple(x[:3]) for x in only_b}

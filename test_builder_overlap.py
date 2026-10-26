@@ -4,8 +4,8 @@ S = ("salas", "m", "shots", 1.5); R = ("ruben", "m", "sot", 1.5); K = ("koch", "
 A = ("agoume", "m", "shots", 1.5); G = ("raul", "m", "sot", 1.5)
 
 
-def test_superset_is_duplicate():
-    assert e.legsets_overlap(frozenset({S, R, K}), frozenset({S, R, K, G}))
+def test_superset_one_more_leg_allowed():
+    assert not e.legsets_overlap(frozenset({S, R, K}), frozenset({S, R, K, G}))
 
 
 def test_two_of_three_shared_is_duplicate():
