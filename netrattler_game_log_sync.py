@@ -23,8 +23,32 @@ def key_of(name):
     return " ".join(norm_name(name))
 
 
+def name_covers(short, full):
+    """Kurzname (auch 'B Fernandes', Initialen) passt in den vollen Namen; gleicher Nachname Pflicht."""
+    if not short or not full or short[-1] != full[-1]:
+        return False
+    for t in short:
+        if len(t) == 1:
+            if not any(f.startswith(t) for f in full[:-1]):
+                return False
+        elif t not in full:
+            return False
+    return True
+
+
+_TEAM_ALIAS = {"utd": "united", "spurs": "tottenham", "wolves": "wolverhampton", "forest": "nottingham",
+               "brighton": "brighton", "newcastle": "newcastle", "villa": "aston"}
+
+
+def _team_tokens(x):
+    toks = set()
+    for t in norm_name(x):
+        toks.add(_TEAM_ALIAS.get(t, t))
+    return toks - {"fc", "afc", "cf", "and", "hove", "albion", "hotspur"}
+
+
 def team_sim(a, b):
-    ta, tb = set(norm_name(a)) - {"fc", "afc", "cf"}, set(norm_name(b)) - {"fc", "afc", "cf"}
+    ta, tb = _team_tokens(a), _team_tokens(b)
     if not ta or not tb:
         return False
     short, long_ = (ta, tb) if len(ta) <= len(tb) else (tb, ta)
@@ -74,7 +98,7 @@ def build_canonical(rows):
         cands = []
         for e in espn_by_day.get(r["match_date"], []):
             et = norm_name(e["player_name"])
-            if et and et[-1] == toks[-1] and set(toks) <= set(et) and team_sim(r.get("team"), e.get("team")):
+            if name_covers(toks, et) and team_sim(r.get("team"), e.get("team")):
                 cands.append(e)
         if len(cands) == 1:
             name_of.setdefault((season_of(r["match_date"]), str(r.get("player_id"))), cands[0]["player_name"])

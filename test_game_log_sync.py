@@ -59,5 +59,12 @@ class T(unittest.TestCase):
         self.assertEqual(len(out), 2)
 
 
+    def test_initial_short_name(self):
+        a = fpl(player_name="B.Fernandes", team="Man Utd", match_date="2026-09-01")
+        b = espn(player_name="Bruno Fernandes", team="Manchester United", match_date="2026-09-01")
+        out = g.build_canonical([a, b])
+        self.assertEqual(len(out), 1); self.assertEqual(out[0]["player_key"], "bruno fernandes")
+
+
 if __name__ == "__main__":
     unittest.main()
