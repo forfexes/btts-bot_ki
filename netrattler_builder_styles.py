@@ -623,6 +623,12 @@ def format_builder_message(pick: builder.BuilderPick) -> str:
             f"{i}. {icon} <b>{_clean_player(leg.player)}</b> — {_clean_market(leg)} @ {leg.odds:.2f}"
             f"{edge_txt}{match_suffix}"
         )
+        try:
+            _hist = builder.history_text(leg)
+        except Exception:
+            _hist = ""
+        if _hist:
+            lines.append(f"    📈 <i>{_hist}</i>")
     lines.append(sep)
     if same_match:
         lines.append("💰 Builder-Quote: <b>live beim Bookmaker prüfen</b>")

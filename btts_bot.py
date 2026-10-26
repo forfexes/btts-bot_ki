@@ -9721,7 +9721,8 @@ def _supabase_game_log_stats(names: list, per_player: int = 20) -> dict:
                     if len(vals) >= 3:
                         stats[st] = {"avg": round(sum(vals) / len(vals), 3),
                                      "hit_rate": round(100.0 * sum(1 for v in vals if v > 0) / len(vals), 1),
-                                     "games": len(vals)}
+                                     "games": len(vals),
+                                     "series": [int(v) if float(v).is_integer() else round(v, 1) for v in vals[:10]]}
                 if "yellow_cards" in stats:
                     stats["cards"] = stats["yellow_cards"]
             _SUPABASE_PLAYER_STATS_CACHE[("gl", n)] = stats
@@ -22278,6 +22279,19 @@ def _ntr_enrich_prop_pool_with_player_ml(rows: list) -> dict:
         row["probability_source"] = source
         row["player_context"] = context
         stats["enriched"] += 1
+        try:  # Spielverlauf (neueste zuerst) fuer die Telegram-Anzeige
+            import netrattler_builder_engine as _be
+            _stat_key = {"shots": "shots", "sot": "sot", "sot_outside_box": "sot", "score": "goals",
+                         "assist": "assists", "passes": "passes", "tackles": "tackles",
+                         "tackles_committed": "tackles", "fouls": "fouls_committed",
+                         "fouls_committed": "fouls_committed", "fouls_won": "fouls_won",
+                         "yellow_cards": "yellow_cards", "cards": "yellow_cards",
+                         "saves": "saves", "offsides": "offsides"}.get(category)
+            _series = (avg_stats.get(_stat_key) or {}).get("series") if _stat_key else None
+            if _series:
+                _be.LEG_HISTORY[(_be.norm(player), category)] = list(_series)
+        except Exception:
+            pass
 
     stats["unmatched_sample"] = _unmatched_sample
     return stats

@@ -98,6 +98,22 @@ TEAM_CATEGORIES = {
 }
 
 
+# (norm(player), category) -> letzte Spielwerte, neueste zuerst; von btts_bot befuellt, nur Anzeige.
+LEG_HISTORY: Dict[Tuple[str, str], List[float]] = {}
+
+
+def history_text(leg: "PropLeg", n: int = 10) -> str:
+    """z. B. 'L10: 1,3,2,3,3,2,6,4,2,4 (2+ in 9/10)'; leer ohne echte Historie."""
+    series = LEG_HISTORY.get((norm(leg.player), leg.category)) or []
+    if len(series) < 5:
+        return ""
+    series = series[:n]
+    need = math.floor(leg.line) + 1 if leg.line else 1  # Over 1.5 -> 2+, Over 0.5 -> 1+
+    hits = sum(1 for v in series if v >= need)
+    seq = ",".join(str(v) for v in series)
+    return f"L{len(series)}: {seq} ({need}+ in {hits}/{len(series)})"
+
+
 @dataclass(frozen=True)
 class PropLeg:
     player: str
