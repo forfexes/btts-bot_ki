@@ -156,6 +156,7 @@ jobs:
       - run: python -m pytest -q test_fplci_import.py
       - run: python -m pytest -q test_odds_storage_filter.py
       - run: python -m pytest -q test_void_reconcile.py
+      - run: python -m pytest -q test_espn_player_import.py
       - run: python -m pytest -q test_odds_band_policy.py
       - run: python -m pytest -q test_key_live.py
       - run: python -m pytest -q test_fuzzy_dup.py
