@@ -15,3 +15,20 @@ def test_pending_with_void_source_gets_void(monkeypatch):
     assert calls and calls[0][2] == ["a"] and calls[0][3]["status"] == "void" and calls[0][3]["reason"].startswith("void: kein Ergebnis nach")
     # idempotent: zweiter Durchlauf aendert nichts
     assert s.reconcile_pending_with_void_sources(existing, {"1"}) == 0
+
+
+def test_unpublished_builders_get_void(monkeypatch):
+    calls = []
+    monkeypatch.setattr(s, "sb_patch_in", lambda t, c, v, p: calls.append((list(v), p)) or len(v))
+    existing = [
+        {"settlement_id": "x", "tip_id": "b1", "status": "pending", "source_table": "netrattler_builder_picks"},
+        {"settlement_id": "y", "tip_id": "b2", "status": "pending", "source_table": "netrattler_builder_picks"},
+    ]
+    assert s.reconcile_unpublished_builders(existing, {"b1"}) == 1
+    assert existing[0]["status"] == "void" and existing[1]["status"] == "pending"
+    assert calls[0][0] == ["x"] and calls[0][1]["reason"].startswith("void:")
+
+
+def test_msg_id_confirms_delivery():
+    assert s.confirmed_builder_delivery({"telegram_sent": False, "telegram_msg_id": "123"})
+    assert not s.confirmed_builder_delivery({"telegram_sent": True, "telegram_msg_id": None})
