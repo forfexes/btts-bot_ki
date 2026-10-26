@@ -7,7 +7,7 @@ on:
         description: "1 = retrain even if inputs unchanged"
         default: "0"
   schedule:
-    - cron: "20 5 * * 0"
+    - cron: "20 5 * * *"
 
 jobs:
   train:
@@ -40,8 +40,8 @@ jobs:
           NETRATTLER_XGB_ESTIMATORS: "200"
           NETRATTLER_PLAYER_XGB_ESTIMATORS: "160"
           NETRATTLER_CALIBRATION_FOLDS: "2"
-          NETRATTLER_RETRAIN_MIN_NEW_SAMPLES: "75"
-          NETRATTLER_RETRAIN_MAX_AGE_DAYS: "14"
+          NETRATTLER_RETRAIN_MIN_NEW_SAMPLES: "30"
+          NETRATTLER_RETRAIN_MAX_AGE_DAYS: "3"
           NETRATTLER_FORCE_RETRAIN: ${{ github.event.inputs.force || '0' }}
         run: |
           python train_model.py
