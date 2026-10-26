@@ -27506,6 +27506,25 @@ def main():
             row["market"] = market_id
             all_tips_flat.append(row)
 
+    # Kombi-Beine brauchen keinen Value pro Bein: gleiche Echtquoten-/Policy-Pruefung, aber min_edge=0.
+    if os.getenv("NETRATTLER_COMBO_EXTRA_LEGS", "1") == "1":
+        try:
+            _have = {(r.get("match"), r.get("market"), str(r.get("tip", r.get("selection", "")))) for r in all_tips_flat}
+            _extra_added = 0
+            for _xm in ("btts", "over25", "1x2"):
+                _cands = [dict(t) for t in (locals().get("_ntr_coverage_before", {}) or {}).get(_xm, []) or []]
+                for t in filter_tips_by_edge(_cands, market=_xm, min_edge=0.0):
+                    row = dict(t)
+                    row["market"] = _xm
+                    k = (row.get("match"), _xm, str(row.get("tip", row.get("selection", ""))))
+                    if k not in _have:
+                        _have.add(k)
+                        all_tips_flat.append(row)
+                        _extra_added += 1
+            log(f"   🎰 Kombi-Zusatzbeine (Edge>0, Echtquote): {_extra_added}")
+        except Exception as _cx:
+            log(f"   🎰 Kombi-Zusatzbeine übersprungen: {str(_cx)[:80]}", "WARN")
+
     for _extra_market, _attr in (("corners", "_last_corner_tips"), ("scorer", "_last_scorer_tips")):
         for tip in getattr(run_corners_and_scorer_bots, _attr, []) or []:
             row = dict(tip)
