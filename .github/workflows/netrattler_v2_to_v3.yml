@@ -4,6 +4,9 @@ on:
     inputs:
       table:
         default: odds_history
+      mode:
+        description: copy oder count
+        default: copy
 permissions:
   contents: read
 jobs:
@@ -22,5 +25,6 @@ jobs:
           SUPABASE_URL: ${{ secrets.SUPABASE_URL }}
           SUPABASE_SERVICE_ROLE_KEY: ${{ secrets.SUPABASE_SERVICE_ROLE_KEY }}
           TABLE: ${{ github.event.inputs.table || 'odds_history' }}
+          MODE: ${{ github.event.inputs.mode || 'copy' }}
           V2_REGION: eu-west-2
         run: python netrattler_v2_to_v3.py

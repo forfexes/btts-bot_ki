@@ -26,7 +26,31 @@ def connect(dsn):
     raise last
 
 
+def _diag(info):
+    import requests
+    url = (os.getenv("SUPABASE_URL") or "").rstrip("/"); key = os.getenv("SUPABASE_SERVICE_ROLE_KEY") or ""
+    if url and key:
+        try:
+            requests.post(f"{url}/rest/v1/netrattler_card_diag", timeout=20, json={"info": info},
+                          headers={"apikey": key, "Authorization": f"Bearer {key}", "Content-Type": "application/json"})
+        except Exception:
+            pass
+
+
+def count_only():
+    v2 = connect(os.environ["V2_DATABASE_URL"]); v3 = connect(os.environ["V3_DATABASE_URL"])
+    out = {"probe": "v2_v3_count", "table": TABLE}
+    for name, c in (("v2", v2), ("v3", v3)):
+        cur = c.cursor()
+        cur.execute(f"select count(*), min(captured_date)::text, max(captured_date)::text from {TABLE}")
+        n, a, b = cur.fetchone(); out[name] = {"rows": n, "min": a, "max": b}
+    out["complete"] = out["v3"]["rows"] >= out["v2"]["rows"]
+    print(out); _diag(out)
+
+
 def main():
+    if os.getenv("MODE") == "count":
+        return count_only()
     v2 = connect(os.environ["V2_DATABASE_URL"]); v3 = connect(os.environ["V3_DATABASE_URL"])
     c2 = v2.cursor(); c3 = v3.cursor()
     c2.execute("select column_name from information_schema.columns where table_name=%s order by ordinal_position", (TABLE,))
@@ -60,6 +84,7 @@ def main():
     c2.execute(f"select count(*) from {TABLE}"); a = c2.fetchone()[0]
     c3.execute(f"select count(*) from {TABLE}"); b = c3.fetchone()[0]
     print({"probe": "v2_to_v3", "table": TABLE, "v2": a, "v3": b, "copied_this_run": n, "complete": b >= a})
+    _diag({"probe": "v2_to_v3", "table": TABLE, "v2": a, "v3": b, "copied_this_run": n, "complete": b >= a})
     c3.execute("select pg_size_pretty(pg_database_size(current_database()))"); print("v3 size", c3.fetchone()[0])
 
 
