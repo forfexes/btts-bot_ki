@@ -2104,7 +2104,27 @@ def settle_player_market(leg: Dict[str, Any], stats: Sequence[Dict[str, Any]], r
     return status, f"{player_name(row)} · {category} {value:g} · Linie {line:g}"
 
 
+def _dedup_legs(legs: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
+    """Identische Beine (Spieler/Markt/Linie/Spiel/Seite) nur einmal fuehren - sonst doppelte Legs in Auswertung/Quote."""
+    seen = set()
+    out: List[Dict[str, Any]] = []
+    for leg in legs:
+        key = (str(leg.get("player") or "").strip().lower(),
+               str(leg.get("market") or leg.get("category") or leg.get("selection") or "").strip().lower(),
+               str(leg.get("line") or ""), str(leg.get("side") or "").strip().lower(),
+               str(leg.get("match") or "").strip().lower())
+        if any(key[:3]) and key in seen:
+            continue
+        seen.add(key)
+        out.append(leg)
+    return out
+
+
 def legs_of(tip: Dict[str, Any]) -> List[Dict[str, Any]]:
+    return _dedup_legs(_legs_of_raw(tip))
+
+
+def _legs_of_raw(tip: Dict[str, Any]) -> List[Dict[str, Any]]:
     data = unpack(tip)
     for key in ("legs", "builder_legs", "combo_legs", "selections", "legs_payload"):
         value = data.get(key)

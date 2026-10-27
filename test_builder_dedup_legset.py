@@ -23,3 +23,11 @@ def test_different_day_or_legs_kept():
 def test_closed_replaces_open():
     out = s.dedup_history([_row("a", "pending", LEGS), _row("b", "win", LEGS)])
     assert len(out) == 1 and out[0]["status"] == "win"
+
+
+def test_legs_of_removes_duplicate_legs_within_one_bet():
+    import netrattler_settlement_v16_final as S
+    leg = {"player": "A B", "market": "shots", "line": 1.5, "match": "X vs Y"}
+    other = {"player": "C D", "market": "shots", "line": 1.5, "match": "X vs Y"}
+    legs = S.legs_of({"legs": [leg, dict(leg), other]})
+    assert len(legs) == 2

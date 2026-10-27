@@ -23343,7 +23343,7 @@ def send_daily_report():
         r = requests.get(
             f"{SUPABASE_URL}/rest/v1/tips",
             headers={"apikey": SUPABASE_KEY, "Authorization": f"Bearer {SUPABASE_KEY}"},
-            params={"select": "date,market,league,status,odds,units", "date": f"gte.{month_start}", "status": "in.(win,loss,won,lost)"},
+            params={"select": "date,market,league,status,odds,units,profit_units", "date": f"gte.{min(month_start, week_ago)}", "status": "in.(win,loss,won,lost)"},
             timeout=15,
         )
         if not r.ok:
@@ -23353,21 +23353,25 @@ def send_daily_report():
             return
 
         def get_stats(tip_list):
-            won = sum(1 for t in tip_list if t.get("status") == "won")
+            # 'win'/'won' und 'loss'/'lost' sind beide in Gebrauch; profit_units (Settlement) hat Vorrang.
+            won = sum(1 for t in tip_list if t.get("status") in ("won", "win"))
             total = len(tip_list)
             profit = 0
             for t in tip_list:
                 try:
+                    if t.get("profit_units") is not None:
+                        profit += float(t["profit_units"])
+                        continue
                     odds = float(t.get("odds", 1.5) or 1.5)
                     units = float(t.get("units", 1.0) or 1.0)
-                    profit += (odds - 1) * units if t.get("status") == "won" else -units
+                    profit += (odds - 1) * units if t.get("status") in ("won", "win") else -units
                 except Exception:
                     pass
             return won, total, round(profit, 2)
 
         y_won, y_total, y_roi = get_stats([t for t in tips if t.get("date") == str(yesterday)])
         w_won, w_total, w_roi = get_stats([t for t in tips if t.get("date", "") >= str(week_ago)])
-        m_won, m_total, m_roi = get_stats(tips)
+        m_won, m_total, m_roi = get_stats([t for t in tips if t.get("date", "") >= str(month_start)])
 
         def line(won, total, roi, label):
             if total == 0:
@@ -23392,7 +23396,7 @@ def send_daily_report():
             if lg not in league_stats:
                 league_stats[lg] = {"won": 0, "total": 0}
             league_stats[lg]["total"] += 1
-            if t.get("status") == "won":
+            if t.get("status") in ("won", "win"):
                 league_stats[lg]["won"] += 1
 
         top = [(lg, s["won"], s["total"], round(s["won"]/s["total"]*100)) for lg, s in league_stats.items() if s["total"] >= 3]
