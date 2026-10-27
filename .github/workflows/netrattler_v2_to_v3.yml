@@ -1,0 +1,26 @@
+name: NETRATTLER V2 nach V3 (Kopie, loescht nichts)
+on:
+  workflow_dispatch:
+    inputs:
+      table:
+        default: odds_history
+permissions:
+  contents: read
+jobs:
+  copy:
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+      - run: pip install requests psycopg2-binary
+      - env:
+          V2_DATABASE_URL: ${{ secrets.V2_DATABASE_URL }}
+          V3_DATABASE_URL: ${{ secrets.V3_DATABASE_URL }}
+          SUPABASE_URL: ${{ secrets.SUPABASE_URL }}
+          SUPABASE_SERVICE_ROLE_KEY: ${{ secrets.SUPABASE_SERVICE_ROLE_KEY }}
+          TABLE: ${{ github.event.inputs.table || 'odds_history' }}
+          V2_REGION: eu-west-2
+        run: python netrattler_v2_to_v3.py
