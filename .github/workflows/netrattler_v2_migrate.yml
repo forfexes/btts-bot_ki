@@ -39,7 +39,7 @@ jobs:
           V2_DATABASE_URL: ${{ secrets.V2_DATABASE_URL }}
           V3_DATABASE_URL: ${{ secrets.V3_DATABASE_URL }}
           HOT_DAYS: "2"
-          TARGET: ${{ github.event.inputs.target || 'v2' }}
+          TARGET: ${{ github.event.inputs.target || (github.event_name == 'schedule' && 'v4') || 'v2' }}
           DRY_RUN: ${{ github.event.inputs.dry_run || (github.event_name == 'schedule' && 'false') || 'true' }}
           V4_DATABASE_URL: ${{ secrets.V4_DATABASE_URL }}
           V2_SUPABASE_URL: ${{ secrets.V2_SUPABASE_URL }}
