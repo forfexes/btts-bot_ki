@@ -28,13 +28,16 @@ def connect(dsn):
 
 def _diag(info):
     import requests
-    url = (os.getenv("SUPABASE_URL") or "").rstrip("/"); key = os.getenv("SUPABASE_SERVICE_ROLE_KEY") or ""
+    url = (os.getenv("SUPABASE_URL") or "").rstrip("/"); key = os.getenv("SUPABASE_SERVICE_ROLE_KEY") or os.getenv("SUPABASE_KEY") or ""
     if url and key:
         try:
-            requests.post(f"{url}/rest/v1/netrattler_card_diag", timeout=20, json={"info": info},
-                          headers={"apikey": key, "Authorization": f"Bearer {key}", "Content-Type": "application/json"})
-        except Exception:
-            pass
+            r = requests.post(f"{url}/rest/v1/netrattler_card_diag", timeout=20, json={"info": info},
+                              headers={"apikey": key, "Authorization": f"Bearer {key}", "Content-Type": "application/json"})
+            print("diag status", r.status_code)
+        except Exception as exc:
+            print("diag error", type(exc).__name__)
+    else:
+        print("diag: kein SUPABASE_URL/KEY")
 
 
 def count_only():

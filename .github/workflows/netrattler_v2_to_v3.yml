@@ -24,6 +24,7 @@ jobs:
           V3_DATABASE_URL: ${{ secrets.V3_DATABASE_URL }}
           SUPABASE_URL: ${{ secrets.SUPABASE_URL }}
           SUPABASE_SERVICE_ROLE_KEY: ${{ secrets.SUPABASE_SERVICE_ROLE_KEY }}
+          SUPABASE_KEY: ${{ secrets.SUPABASE_KEY }}
           TABLE: ${{ github.event.inputs.table || 'odds_history' }}
           MODE: ${{ github.event.inputs.mode || 'copy' }}
           V2_REGION: eu-west-2
