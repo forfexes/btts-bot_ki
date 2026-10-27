@@ -50,11 +50,21 @@ def clear_winner(rk, min_n=40, min_gap=0.05, min_skill=0.05):
     return rk[0][1]
 
 
+def load_player_logs(vu, vk, mu, mk, params):
+    """Use the archive first; recover from a missing V2 REST endpoint using MAIN."""
+    try:
+        return fetch(vu, vk, "player_game_log", params)
+    except requests.HTTPError as exc:
+        if getattr(exc.response, "status_code", None) != 404:
+            raise
+        print("V2 player_game_log returned HTTP 404; reading MAIN player_game_log instead")
+        return fetch(mu, mk, "player_game_log", params)
+
 def main():
     mu, mk = os.environ["MAIN_URL"], os.environ["MAIN_KEY"]
     vu, vk = os.environ["V2_URL"], os.environ["V2_KEY"]
     snaps = fetch(mu, mk, "x1_player_snapshots", {"select": "captured_at,match_name,g,t,line,odds,player,side", "line": "not.is.null"})
-    logs = fetch(vu, vk, "player_game_log", {"select": "player_name,home_team,away_team,match_date," + ",".join(STATS), "match_date": "gte.2026-10-10"})
+    logs = load_player_logs(vu, vk, mu, mk, {"select": "player_name,home_team,away_team,match_date," + ",".join(STATS), "match_date": "gte.2026-10-10"})
     idx = {}
     for l in logs:
         idx.setdefault(norm(l["player_name"]), []).append(l)
