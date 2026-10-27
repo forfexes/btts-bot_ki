@@ -4,3 +4,8 @@ try:
     _ntr_router.install()
 except Exception:
     pass
+try:
+    import netrattler_odds_api_budget as _ntr_budget
+    _ntr_budget.install()
+except Exception:
+    pass
