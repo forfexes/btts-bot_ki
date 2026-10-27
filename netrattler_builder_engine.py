@@ -1684,7 +1684,28 @@ def builder_pick_exists(pick: BuilderPick, supabase_url: str, supabase_key: str)
             return None
         mine = legset_from_legs([{"player": x.player, "match": x.match, "category": x.category, "line": x.line}
                                  for x in pick.legs])
-        return any(legsets_overlap(legset_from_legs(r.get("legs")), mine) for r in same_day.json())
+        rows = same_day.json()
+        if any(legsets_overlap(legset_from_legs(r.get("legs")), mine) for r in rows):
+            return True
+        # Tages-Deckel pro Spiel (ueber alle Laeufe): Same-Game-Builder aus demselben Spiel sind stark korreliert
+        matches = {x.match for x in pick.legs}
+        if len(matches) == 1:
+            cap = as_int(os.getenv("NETRATTLER_MAX_BUILDERS_PER_MATCH_DAY", "6"), 6)
+            m = norm(next(iter(matches)))
+            same_game = 0
+            for r in rows:
+                legs = r.get("legs") or []
+                if isinstance(legs, str):
+                    try:
+                        legs = json.loads(legs)
+                    except Exception:
+                        legs = []
+                ms = {norm((l or {}).get("match")) for l in legs if isinstance(l, dict)}
+                if ms == {m}:
+                    same_game += 1
+            if cap > 0 and same_game >= cap:
+                return True
+        return False
     except Exception:
         return None
 

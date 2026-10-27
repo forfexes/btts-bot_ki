@@ -36,3 +36,31 @@ def test_booking_series():
     assert styles.count(("BOOKING SINGLE", "1x BOOKED", 1)) == 3
     assert ("BOOKING SERIES", "TREBLE", 3) in styles
     assert all(p.legs[0].player != "Spieler D" for p in out)
+
+
+def test_day_cap_per_match(monkeypatch=None):
+    import json as _j
+    sent = []
+    for i in range(6):
+        sent.append({"legs": _j.dumps([{"player": f"P{i}", "match": "X - Y", "category": "shots", "line": 2.0}])})
+
+    class R:
+        def __init__(self, data, ok=True): self._d, self.ok = data, ok
+        def json(self): return self._d
+    calls = {"n": 0}
+
+    def fake_get(url, **kw):
+        calls["n"] += 1
+        return R([]) if calls["n"] == 1 else R(sent)
+    orig = be.requests.get
+    be.requests.get = fake_get
+    try:
+        l = _leg(player="Neu", category="shots", line=2.0, match="X - Y")
+        pick = be.BuilderPick(builder_id="n", style="S", variant="v", legs=[l], total_odds=2.0, stake=.5,
+                              estimated_odds=False, match_date="2026-10-27")
+        assert be.builder_pick_exists(pick, "https://x", "k") is True
+        calls["n"] = 0
+        sent.pop()  # nur 5 -> noch Platz
+        assert be.builder_pick_exists(pick, "https://x", "k") is False
+    finally:
+        be.requests.get = orig
