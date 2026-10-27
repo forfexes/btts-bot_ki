@@ -26,3 +26,10 @@ def test_limit_newest_first():
     r = rows("A", [f"2026-01-{d:02d}" for d in range(1, 29)])
     got = b._merge_player_history(r, 20)
     assert len(got) == 20 and got[0]["match_date"] == "2026-01-28"
+
+
+def test_first_last_variant():
+    import btts_bot
+    v = btts_bot._game_log_key_variants("Juan Ignacio Mendez")
+    assert v[0] == "juan ignacio mendez" and "juan mendez" in v
+    assert btts_bot._game_log_key_variants("Ángel Mario Stringa")[-1] == "angel stringa"

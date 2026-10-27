@@ -9656,7 +9656,9 @@ def _game_log_key_variants(name: str) -> list:
     parts = k.split()
     if len(parts) >= 2 and parts[0] in _GAME_LOG_NICKNAMES:
         out.append(" ".join([_GAME_LOG_NICKNAMES[parts[0]]] + parts[1:]))
-    return out
+    if len(parts) >= 3:  # zweiter Vorname/Namenszusatz weglassen: "juan ignacio mendez" -> "juan mendez"
+        out.append(f"{parts[0]} {parts[-1]}")
+    return list(dict.fromkeys(out))
 
 
 def _merge_player_history(rows: list, per_player: int = 20) -> list:
