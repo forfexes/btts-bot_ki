@@ -682,6 +682,16 @@ def collect_odds_api_io(target_date: str) -> List[Dict[str, Any]]:
     return rows
 
 
+_VIRTUAL_FOOTBALL_LEAGUE = re.compile(r"\b(?:e-?sports?|e-?soccer|cyber|virtual)\b", re.I)
+
+
+def _is_virtual_football(row: Mapping[str, Any]) -> bool:
+    """Reject eSoccer/virtual fixtures before real-football odds enter the pool."""
+    raw = row.get("raw")
+    league = raw.get("league") if isinstance(raw, Mapping) else ""
+    return bool(_VIRTUAL_FOOTBALL_LEAGUE.search(str(league or "")))
+
+
 def collect_live_all(target_date: Optional[str] = None) -> List[Dict[str, Any]]:
     day = str(target_date or date.today().isoformat())[:10]
     rows: List[Dict[str, Any]] = []
@@ -726,7 +736,7 @@ def collect_live_all(target_date: Optional[str] = None) -> List[Dict[str, Any]]:
         except Exception:
             pass
     _persist_collector_diag()
-    clean = _dedupe(rows)
+    clean = [row for row in _dedupe(rows) if not _is_virtual_football(row)]
     log(f"Live odds total={len(clean)} sources={dict(Counter(x.get('source') for x in clean))}")
     return clean
 
@@ -747,6 +757,8 @@ _KEEP_HT_LINES = {"0_5", "1_5"}
 def _storage_worthy(row: Mapping[str, Any]) -> bool:
     """Speicherbudget (Supabase 500 MB): krumme Alternativlinien (2.25, 2.75, 3.0 ...) werden nicht gespeichert,
     sie liefen auf ~100k Zeilen/Tag. Genutzt werden nur Hauptlinien; alle anderen Maerkte bleiben unveraendert."""
+    if _is_virtual_football(row):
+        return False
     if os.getenv("NETRATTLER_ODDS_KEEP_ALL_LINES", "").lower() in {"1", "true", "yes"}:
         return True
     m = str(row.get("market") or "")
