@@ -172,6 +172,31 @@ class MarketAuditTests(unittest.TestCase):
         self.assertEqual(get.call_count, 2)
         self.assertIn("detail_attempts=1", KEYLESS_DIAG["bwin"])
 
+    def test_virtual_esoccer_odds_never_enter_real_football_storage(self):
+        from netrattler_odds_harvester import _is_virtual_football, _storage_worthy
+        virtual_leagues = (
+            "Esports Battle (2x4min)",
+            "Cyber Live Arena (2x5 min)",
+            "Esoccer Battle Volta",
+            "Virtual eComp. Copa Libertadores",
+            "FC 26. eSports Battle. World Cup",
+        )
+        for league in virtual_leagues:
+            with self.subTest(league=league):
+                row = {"market": "btts", "raw": {"league": league}}
+                self.assertTrue(_is_virtual_football(row))
+                self.assertFalse(_storage_worthy(row))
+                with patch.dict("os.environ", {"NETRATTLER_ODDS_KEEP_ALL_LINES": "true"}):
+                    self.assertFalse(_storage_worthy(row))
+
+    def test_real_football_leagues_still_eligible(self):
+        from netrattler_odds_harvester import _is_virtual_football, _storage_worthy
+        for league in ("Serie A", "Premier League", "Holland 2"):
+            with self.subTest(league=league):
+                row = {"market": "btts", "raw": {"league": league}}
+                self.assertFalse(_is_virtual_football(row))
+                self.assertTrue(_storage_worthy(row))
+
     def test_specific_markets(self):
         self.assertEqual(market_family("Both Teams To Score - 1st Half"), "btts_ht")
         self.assertEqual(market_family("Anytime Goalscorer"), "goalscorer")
