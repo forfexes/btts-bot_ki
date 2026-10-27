@@ -20,6 +20,6 @@ jobs:
 # Route player tables to the archive project (V2); see netrattler_table_router.py
 env:
   PYTHONPATH: ${{ github.workspace }}
-  NETRATTLER_ROUTE_TABLES: player_game_log,player_match_stats
+  NETRATTLER_ROUTE_TABLES: player_match_stats
   V2_SUPABASE_URL: ${{ secrets.V2_SUPABASE_URL }}
   V2_SUPABASE_SERVICE_KEY: ${{ secrets.V2_SUPABASE_SERVICE_KEY }}
