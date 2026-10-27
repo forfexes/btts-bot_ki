@@ -51,6 +51,59 @@ def is_alt(m):
     return m.startswith("totals_") and m not in KEEP_MARKETS and all(c.isdigit() or c in "_" for c in m.replace("totals_", "").replace("ht_", ""))
 
 
+def prune_verified(cur, today=None, dry=None):
+    """Loescht Alt-Linien aus MAIN, aber NUR fuer Tage < heute und nur wenn das Archiv pro Tag mindestens
+    so viele Zeilen mit denselben Maerkten enthaelt wie MAIN. Standard: ARCHIVE_PRUNE=true (sonst nur zaehlen)."""
+    from datetime import date
+    dry = (os.getenv("ARCHIVE_PRUNE", "true").lower() != "true") if dry is None else dry
+    today = today or date.today().isoformat()
+    report = []
+    base = f"{SB}/rest/v1/odds_history"
+    last_d = "1900-01-01"
+    for _guard in range(400):
+        r = requests.get(base, headers=H, timeout=60, params=[
+            ("select", "captured_date"), ("market", "like.totals_*"),
+            ("and", f"(captured_date.gt.{last_d},captured_date.lt.{today})"),
+            ("order", "captured_date.asc"), ("limit", "1")])
+        r.raise_for_status()
+        first = r.json()
+        # Tage ohne Alt-Linien ueberspringen wir nicht blind: wir suchen den naechsten Tag mit Alt-Markt
+        if not first:
+            break
+        d = first[0]["captured_date"]
+        last_d = d
+        cur.execute("select distinct market from odds_history_archive where captured_date=%s and market like 'totals\\_%%'", (d,))
+        markets = sorted(m[0] for m in cur.fetchall() if is_alt(m[0]))
+        if not markets:
+            continue  # Tag hat nur Standard-Maerkte (oder noch nichts Archiviertes) -> nichts zu loeschen
+        mk = "in.(" + ",".join(markets) + ")"
+        rc = requests.get(base, headers={**H, "Prefer": "count=exact", "Range": "0-0"}, timeout=120,
+                          params={"select": "market", "captured_date": f"eq.{d}", "market": mk})
+        n_main = int(rc.headers.get("content-range", "*/0").split("/")[-1])
+        cur.execute("select count(*) from odds_history_archive where captured_date=%s and market = any(%s)", (d, markets))
+        n_arch = cur.fetchone()[0]
+        # Alle nicht-Standard-Totals in MAIN muessen exakt die geprueften Maerkte sein (sonst Abbruch fuer den Tag)
+        keep = ",".join(sorted(KEEP_MARKETS))
+        rn = requests.get(base, headers={**H, "Prefer": "count=exact", "Range": "0-0"}, timeout=120, params=[
+            ("select", "market"), ("captured_date", f"eq.{d}"),
+            ("and", f"(market.like.totals_*,market.not.in.({keep}))")])
+        n_nonkeep = int(rn.headers.get("content-range", "*/0").split("/")[-1])
+        extra = ["nicht-geprueft"] if n_nonkeep != n_main else []
+        ok = n_main > 0 and n_arch >= n_main and not extra
+        report.append({"d": d, "main": n_main, "archive": n_arch, "ok": ok, "extra": sorted(extra)[:3]})
+        if not ok or dry:
+            continue  # ungepruefter Tag bleibt unangetastet
+        for i in range(0, len(markets), 5):
+            chunk = markets[i:i + 5]
+            dr = requests.delete(base, headers={**H, "Prefer": "return=minimal"}, timeout=300,
+                                 params={"captured_date": f"eq.{d}", "market": "in.(" + ",".join(chunk) + ")"})
+            if not dr.ok:
+                report[-1]["ok"] = False; report[-1]["delete_status"] = dr.status_code
+                return report
+        report[-1]["deleted"] = n_main
+    return report
+
+
 def main():
     from datetime import date, timedelta
     cutoff = (date.today() - timedelta(days=KEEP_DAYS)).isoformat()
@@ -71,11 +124,16 @@ def main():
             conn.commit()
             cur.execute("select count(*) from odds_history_archive")
             total = cur.fetchone()[0]
+            try:
+                pruned = prune_verified(cur)
+            except Exception as exc:
+                pruned = [{"error": type(exc).__name__}]
+            print({"probe": "odds_prune", "days": pruned})
     print({"probe": "odds_archive", "copied": copied, "archive_total": total, "cutoff": cutoff})
     if SB and SK:
         try:
             requests.post(f"{SB}/rest/v1/netrattler_card_diag", headers={**H, "Content-Type": "application/json"}, timeout=15,
-                          json={"info": {"probe": "odds_archive", "copied": copied, "archive_total": total, "cutoff": cutoff}})
+                          json={"info": {"probe": "odds_archive", "copied": copied, "archive_total": total, "cutoff": cutoff, "pruned": pruned}})
         except Exception:
             pass
 

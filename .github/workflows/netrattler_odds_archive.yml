@@ -1,6 +1,8 @@
 name: NETRATTLER Odds Archiv (Kopie nach V4)
 on:
   workflow_dispatch: {}
+  schedule:
+    - cron: "40 3 * * *"
 permissions:
   contents: read
 jobs:
@@ -18,4 +20,5 @@ jobs:
           SUPABASE_KEY: ${{ secrets.SUPABASE_KEY }}
           SUPABASE_SERVICE_ROLE_KEY: ${{ secrets.SUPABASE_SERVICE_ROLE_KEY }}
           V4_DATABASE_URL: ${{ secrets.V4_DATABASE_URL }}
+          ARCHIVE_PRUNE: "true"
         run: python netrattler_odds_archive.py
