@@ -216,6 +216,18 @@ def main():
         return
     if MODE == "rotate":
         rotate(); return
+    if MODE == "drop_dup":
+        # Entfernt eine nicht mehr genutzte Kopie im Ziel NUR, wenn die Quelle (MAIN) mindestens so viele Zeilen hat.
+        c = dst(); cur = c.cursor()
+        for t in TABLES:
+            if t not in ("player_game_log",):
+                print("drop_dup nicht erlaubt fuer", t); continue
+            cur.execute(f"select count(*) from {t}"); n_dst = cur.fetchone()[0]
+            n_src = src_count(t)
+            print("drop_dup", t, "src", n_src, "dst", n_dst)
+            if n_src >= n_dst and os.environ.get("DRY_RUN", "true").lower() == "false":
+                cur.execute(f"drop table if exists {t}"); c.commit(); print("dropped", t)
+        return
     if MODE == "size":
         cur.execute("select pg_size_pretty(pg_database_size(current_database())), pg_database_size(current_database())/1024/1024")
         print("v2 db size:", cur.fetchone())
