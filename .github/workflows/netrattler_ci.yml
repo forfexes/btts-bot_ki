@@ -166,6 +166,7 @@ jobs:
       - run: python -m pytest -q test_foul_props.py
       - run: python -m pytest -q test_model_builders.py
       - run: python -m pytest -q test_corner_guard.py
+      - run: python -m pytest -q test_calibration_report.py
       - run: python -m pytest -q test_game_log_lookup.py
       - run: python -m pytest -q test_odds_storage_filter.py
       - run: python -m pytest -q test_void_reconcile.py
