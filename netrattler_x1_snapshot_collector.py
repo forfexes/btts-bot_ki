@@ -23,7 +23,8 @@ SK = os.getenv("SUPABASE_SERVICE_ROLE_KEY") or os.getenv("SUPABASE_KEY") or ""
 H = {"apikey": SK, "Authorization": f"Bearer {SK}", "Content-Type": "application/json"}
 MAX_NEW = int(os.getenv("X1_SNAP_MAX_NEW", "40"))
 HOURS_AHEAD = int(os.getenv("X1_SNAP_HOURS_AHEAD", "10"))  # sub-games appear only on match day
-KEEP_DAYS = int(os.getenv("X1_SNAP_KEEP_DAYS", "2"))
+KEEP_DAYS = int(os.getenv("X1_SNAP_KEEP_DAYS", "1"))
+MAX_ROWS_PER_MATCH = int(os.getenv("X1_SNAP_MAX_ROWS_PER_MATCH", "1500"))  # Speicher: begrenzt Zeilen pro Spiel
 
 # leagues for which FotMob/ESPN later deliver per-player stats (needed to prove a group)
 _LEAGUE_KEYS = ("england. premier", "england. championship", "england. league one", "england. league two",
@@ -61,7 +62,7 @@ def pick_games(items: List[Dict[str, Any]], done: set, now_ts: float, hours_ahea
 
 
 def already_snapshotted() -> set:
-    since = (datetime.now(timezone.utc) - timedelta(days=4)).isoformat()
+    since = (datetime.now(timezone.utc) - timedelta(days=max(1, KEEP_DAYS))).isoformat()
     r = requests.get(f"{SB}/rest/v1/x1_player_snapshots", headers=H, timeout=30,
                      params={"select": "match_name", "captured_at": f"gte.{since}", "limit": "20000"})
     return {x["match_name"] for x in r.json()} if r.ok and isinstance(r.json(), list) else set()
@@ -133,7 +134,7 @@ def run() -> Dict[str, int]:
                 stats["with_player_subgames"] += 1
             ps.X1_SNAPSHOT.clear()
             ps._snapshot_x1_player_markets(h, val, name)
-            rows = list(ps.X1_SNAPSHOT)
+            rows = list(ps.X1_SNAPSHOT)[:MAX_ROWS_PER_MATCH]
             break
         if rows:
             p = requests.post(f"{SB}/rest/v1/x1_player_snapshots", headers={**H, "Prefer": "return=minimal"},
