@@ -10,7 +10,7 @@ import requests
 MIN_GAMES = 8
 MIN_AVG_MINUTES = 55.0
 STATS = {"fouls_committed": "fouls", "fouls_won": "fouls_won", "tackles": "tackles_committed", "shots": "shots", "sot": "sot"}
-LINES = {"fouls_committed": (2, 3), "fouls_won": (2, 3), "tackles": (2, 3, 4), "shots": (2, 3, 4), "sot": (1, 2)}  # 1+ ist zu banal
+LINES = {"fouls_committed": (1, 2, 3), "fouls_won": (1, 2, 3), "tackles": (2, 3, 4), "shots": (2, 3, 4), "sot": (1, 2)}  # 1+ ist zu banal
 LABEL = {"fouls_committed": "Fouls", "fouls_won": "Fouls gezogen", "tackles": "Tackles", "shots": "Schüsse", "sot": "Schüsse aufs Tor"}
 MIN_HIT = float(os.getenv("NETRATTLER_FOUL_MIN_HIT", "0.70"))
 MAX_PER_TEAM = int(os.getenv("NETRATTLER_FOUL_MAX_PER_TEAM", "8"))
@@ -47,7 +47,8 @@ def legs_for_player(name, games, n=10):
         for line in lines:
             hits = sum(1 for v in vals if v >= line)
             rate = hits / len(vals)
-            if rate >= MIN_HIT:
+            need = 0.90 if line == 1 and stat in ("fouls_committed", "fouls_won") else MIN_HIT  # 1+ nur bei sehr hoher Quote
+            if rate >= need:
                 out.append((stat, line, rate, len(vals), [int(v) for v in vals]))
     # pro Statistik nur die hoechste Linie, die die Huerde noch schafft
     best = {}
