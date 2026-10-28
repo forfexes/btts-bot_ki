@@ -10,7 +10,7 @@ import requests
 MIN_GAMES = 8
 MIN_AVG_MINUTES = 55.0
 STATS = {"fouls_committed": "fouls", "fouls_won": "fouls_won", "tackles": "tackles_committed"}
-LINES = {"fouls_committed": (1, 2, 3), "fouls_won": (1, 2, 3), "tackles": (1, 2, 3, 4)}
+LINES = {"fouls_committed": (2, 3), "fouls_won": (2, 3), "tackles": (2, 3, 4)}  # 1+ ist zu banal
 LABEL = {"fouls_committed": "Fouls", "fouls_won": "Fouls gezogen", "tackles": "Tackles"}
 MIN_HIT = float(os.getenv("NETRATTLER_FOUL_MIN_HIT", "0.70"))
 MAX_PER_TEAM = int(os.getenv("NETRATTLER_FOUL_MAX_PER_TEAM", "6"))

@@ -6,7 +6,7 @@ import requests
 
 MODEL_SOURCES = {"model_line_fouls"}
 MAX_PER_RUN = int(os.getenv("NETRATTLER_MODEL_BUILDERS_MAX", "6"))
-MAX_PER_MATCH = int(os.getenv("NETRATTLER_MODEL_BUILDERS_PER_MATCH", "2"))
+MAX_PER_MATCH = int(os.getenv("NETRATTLER_MODEL_BUILDERS_PER_MATCH", "1"))
 MIN_JOINT = {2: 0.40, 3: 0.30}
 CORR = 0.97  # kleiner Abschlag je zusaetzlichem Bein (Spielverlauf-Korrelation)
 
