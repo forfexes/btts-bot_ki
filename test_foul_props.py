@@ -35,3 +35,11 @@ def test_zero_action_rows_without_minutes_are_not_games():
     games = [played] * 8 + [bench] * 4
     legs = {l[0]: l for l in fp.legs_for_player("X", games)}
     assert legs["fouls_committed"][3] == 8  # nur die 8 echten Einsaetze
+
+
+def test_same_team_suffix_and_false_friends():
+    assert fp.same_team("Chicago Fire FC", "Chicago Fire")
+    assert fp.same_team("Botafogo", "Botafogo FR RJ")
+    assert not fp.same_team("Internazionale", "Inter Miami")
+    assert not fp.same_team("Deportes Tolima", "Deportes Quindio")
+    assert not fp.same_team("Manchester City", "Manchester United")

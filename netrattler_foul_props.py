@@ -22,11 +22,27 @@ def _sig(name):
     return max(words, key=len) if words else str(name or "")
 
 
-def player_rows(rows, team_norm, norm):
+_STOP = {"fc", "sc", "cf", "afc", "fk", "sk", "ac", "as", "cd", "ca", "club"}
+
+
+def same_team(a, b):
+    ta = {t for t in str(a or "").lower().replace(".", " ").split() if t not in _STOP}
+    tb = {t for t in str(b or "").lower().replace(".", " ").split() if t not in _STOP}
+    if not ta or not tb:
+        return False
+    if ta == tb:
+        return True
+    small, big = (ta, tb) if len(ta) <= len(tb) else (tb, ta)
+    if small <= big:
+        return len(small) >= 2 or max(len(t) for t in small) >= 7
+    return False
+
+
+def player_rows(rows, team_norm, norm, team_raw=None):
     """rows: player_game_log-Zeilen (neueste zuerst) -> {player: [rows]} nur fuer dieses Team."""
     by = {}
     for r in rows or []:
-        if norm(r.get("team")) != team_norm:
+        if norm(r.get("team")) != team_norm and not same_team(r.get("team"), team_raw):
             continue
         by.setdefault(r.get("player_name") or r.get("player_key"), []).append(r)
     return by
@@ -113,7 +129,7 @@ def rows_for_matches(matches, url, key, norm):
             STATS_LAST["teams"] += 1
             rows = fetch_team_rows(url, key, team.strip())
             STATS_LAST["teams_with_rows"] += 1 if rows else 0
-            by = player_rows(rows, norm(team), norm)
+            by = player_rows(rows, norm(team), norm, team)
             STATS_LAST["teams_with_players"] += 1 if by else 0
             if rows and not by and len(STATS_LAST["unmatched"]) < 6:
                 STATS_LAST["unmatched"].append([team.strip(), str(rows[0].get("team"))])
