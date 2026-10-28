@@ -7,7 +7,8 @@ def leg(player, p=80, line=2, match="A vs B"):
 
 
 def test_builds_three_leg_when_joint_high_enough():
-    picks = mb.build([leg("X", 90), leg("Y", 88), leg("Z", 86)], "2026-10-28")
+    z = leg("Z", 86); z["category"] = "sot"
+    picks = mb.build([leg("X", 90), leg("Y", 88), z], "2026-10-28")
     assert any(p["size"] == 3 for p in picks) and all(p["fair"] > 1 for p in picks)
 
 
