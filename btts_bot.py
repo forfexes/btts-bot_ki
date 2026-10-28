@@ -27539,6 +27539,7 @@ def main():
                                   category=_r["category"], line=_r["line"], odds=0,
                                   probability=_r["probability"], source=_r["source"], kickoff=_r["kickoff"],
                                   hit_rate=_r["hit_rate"], games=_r["games"])
+            globals()["_NTR_MODEL_ROWS"] = _fp_rows
             log(f"   🟨 Foul-Props (Modellquote): {len(_fp_rows)} Legs aus {len(_seen_m)} Spielen")
         except Exception as _fp_exc:
             log(f"   🟨 Foul-Props übersprungen: {str(_fp_exc)[:80]}", "WARN")
@@ -27662,6 +27663,13 @@ def main():
                 )
                 _ntr_builder_sent = int(_sent_n or 0)
                 log(f"   🏗️ Builder Engine: {_sent_n} Builder aus {len(_builder_prop_pool)} Props gesendet")
+                try:  # Modell-Builder (Fouls/Tackles, ohne Buchmacherquote)
+                    import netrattler_model_builders as _mbld
+                    _mrows = list(globals().get("_NTR_MODEL_ROWS", []) or [])
+                    _mbld.run(_mrows, str(target_date), _send_builder, SUPABASE_URL, SUPABASE_KEY,
+                              logger=lambda m: log(f"   🧪 {m}"))
+                except Exception as _mb_exc:
+                    log(f"   🧪 Modell-Builder übersprungen: {str(_mb_exc)[:80]}", "WARN")
     except ImportError:
         log("   🏗️ netrattler_builder_engine nicht gefunden — skip", "WARN")
     except Exception as _be:

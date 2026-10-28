@@ -1,16 +1,17 @@
-"""Foul-Props (begangene / gezogene Fouls) aus der Spielerhistorie, ohne Buchmacherquote.
+"""Foul-/Tackle-Props (begangene / gezogene Fouls) aus der Spielerhistorie, ohne Buchmacherquote.
 
 Die Quote ist die faire Modellquote (1/p) und wird als solche markiert
 (source="model_line_fouls", odds=0 -> die Quote muss beim Buchmacher geprueft werden).
-Tackles gibt es in player_game_log nicht (ESPN liefert sie nicht) -> hier nicht modellierbar.
+Tackles gibt es nur fuer Spieler mit FPL-/API-Football-Daten (Premier League u.a.); fehlende Werte werden ignoriert.
 """
 import os
 import requests
 
 MIN_GAMES = 8
 MIN_AVG_MINUTES = 55.0
-STATS = {"fouls_committed": "fouls", "fouls_won": "fouls_won"}
-LINES = {"fouls_committed": (1, 2, 3), "fouls_won": (1, 2, 3)}
+STATS = {"fouls_committed": "fouls", "fouls_won": "fouls_won", "tackles": "tackles_committed"}
+LINES = {"fouls_committed": (1, 2, 3), "fouls_won": (1, 2, 3), "tackles": (1, 2, 3, 4)}
+LABEL = {"fouls_committed": "Fouls", "fouls_won": "Fouls gezogen", "tackles": "Tackles"}
 MIN_HIT = float(os.getenv("NETRATTLER_FOUL_MIN_HIT", "0.70"))
 MAX_PER_TEAM = int(os.getenv("NETRATTLER_FOUL_MAX_PER_TEAM", "6"))
 
@@ -40,8 +41,8 @@ def legs_for_player(name, games, n=10):
         return []
     out = []
     for stat, lines in LINES.items():
-        vals = [g.get(stat) for g in games]
-        if any(v is None for v in vals):
+        vals = [g.get(stat) for g in games if g.get(stat) is not None]
+        if len(vals) < MIN_GAMES:
             continue
         for line in lines:
             hits = sum(1 for v in vals if v >= line)
@@ -64,7 +65,7 @@ def build_rows(by_player, team, match, league, kickoff):
             p = (rate * ngames + 0.5 * 2) / (ngames + 2)
             cands.append({
                 "player": name, "team": team, "match": match, "league": league,
-                "market": f"{name} {line}+ {'Fouls' if stat == 'fouls_committed' else 'Fouls gezogen'}",
+                "market": f"{name} {line}+ {LABEL[stat]}",
                 "category": STATS[stat], "line": float(line), "odds": 0.0,
                 "probability": round(p * 100, 1), "source": "model_line_fouls",
                 "kickoff": kickoff, "games": ngames, "hit_rate": round(rate * 100, 1),
@@ -79,7 +80,7 @@ def fetch_team_rows(url, key, team):
         f"{url}/rest/v1/player_game_log",
         headers={"apikey": key, "Authorization": f"Bearer {key}"},
         params={"team": f"ilike.*{_sig(team)}*", "order": "match_date.desc", "limit": "1000",
-                "select": "player_name,player_key,team,match_date,minutes,fouls_committed,fouls_won"},
+                "select": "player_name,player_key,team,match_date,minutes,fouls_committed,fouls_won,tackles"},
         timeout=25,
     )
     return r.json() if r.ok and isinstance(r.json(), list) else []
