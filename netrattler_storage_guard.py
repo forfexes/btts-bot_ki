@@ -12,7 +12,7 @@ KEY = os.getenv("SUPABASE_SERVICE_ROLE_KEY") or os.getenv("SUPABASE_KEY") or ""
 H = {"apikey": KEY, "Authorization": f"Bearer {KEY}", "Content-Type": "application/json"}
 WARN_MB = float(os.getenv("STORAGE_WARN_MB", "420"))
 TRIM_MB = float(os.getenv("STORAGE_TRIM_MB", "450"))
-TRIM_KEEP_DAYS = int(os.getenv("STORAGE_TRIM_KEEP_DAYS", "4"))
+TRIM_KEEP_DAYS = int(os.getenv("STORAGE_TRIM_KEEP_DAYS", "2"))
 
 
 def decide(mb: float) -> str:
@@ -25,10 +25,8 @@ def decide(mb: float) -> str:
 
 def trim_keep_days(mb: float) -> int:
     """Gestaffelt: je voller die DB, desto kuerzer bleiben die (regenerierbaren) x1-Snapshots erhalten."""
-    if mb >= TRIM_MB + 60:
+    if mb >= TRIM_MB + 30:  # 480+ MB (Limit 500): nur noch 1 Tag behalten
         return 1
-    if mb >= TRIM_MB + 25:
-        return 2
     return TRIM_KEEP_DAYS
 
 
