@@ -155,3 +155,26 @@ def test_dedupe_overlap_prefers_ladder_over_subset_builders():
     allp = mb.dedupe_overlap(mb.build_ladders(rows, "d") + mb.build_fouls(rows, "d") + mb.build(rows, "d"))
     a_vs_b = [p for p in allp if p["match"] == "A vs B"]
     assert a_vs_b[0]["style"] == "MODEL FOULS LADDER"
+
+
+def _prof2(player, match, **series):
+    d = {"source": "foul_profile", "player": player, "team": "T", "match": match, "league": "L", "kickoff": "k"}
+    d.update(series)
+    return d
+
+
+def test_shot_ladder_and_cards_and_seven_legs():
+    import netrattler_model_builders as mb
+    rows = []
+    for i, m in enumerate(("A vs B", "C vs D")):
+        for j in range(4):
+            rows.append(_prof2(f"P{i}{j}", m, fouls=[2, 3, 2, 2, 3, 2, 2, 3, 2, 2], fouls_won=[2, 2, 3, 2, 2, 3, 2, 2, 2, 3],
+                               shots=[2, 3, 2, 4, 2, 3, 2, 2, 3, 2], sot=[1, 1, 2, 1, 1, 1, 2, 1, 1, 1],
+                               yellow=[1, 0, 1, 0, 1, 0, 1, 0, 1, 0]))
+    lad = mb.build_ladders(rows, "2026-10-28")
+    assert lad and lad[0]["size"] == 4 and lad[0]["extra_lines"] and "7 Beine" in lad[0]["extra_lines"][0]
+    sh = mb.build_shot_ladders(rows, "2026-10-28")
+    assert any(p["style"] == "MODEL SHOT LADDER" for p in sh) and any(p["style"] == "MODEL SOT LADDER" for p in sh)
+    cd = mb.build_cards(rows, "2026-10-28")
+    assert cd and cd[0]["size"] == 2 and cd[0]["legs"][0]["odds"] == 0
+    assert "7 Beine" in mb.message(lad[0], "2026-10-28")

@@ -57,8 +57,9 @@ def _played(g):
 
 
 def foul_profiles(by_player, team, match, league, kickoff, n=10):
-    """Je Spieler beide Foul-Reihen (begangen/gezogen) fuer die Foul-Leiter, unabhaengig von Schwellen."""
+    """Je Spieler die Reihen der letzten Spiele (Fouls begangen/gezogen, Schuesse, Schuesse aufs Tor, Gelbe) fuer Leitern/Karten."""
     out = []
+    keys = {"fouls": "fouls_committed", "fouls_won": "fouls_won", "shots": "shots", "sot": "sot", "yellow": "yellow_cards"}
     for name, games in by_player.items():
         games = [g for g in games if _played(g)][:n]
         if len(games) < MIN_GAMES:
@@ -66,12 +67,13 @@ def foul_profiles(by_player, team, match, league, kickoff, n=10):
         known = [g["minutes"] for g in games if g.get("minutes") is not None]
         if known and sum(known) / len(known) < MIN_AVG_MINUTES:
             continue
-        fc = [g.get("fouls_committed") for g in games]
-        fw = [g.get("fouls_won") for g in games]
-        if any(v is None for v in fc) or any(v is None for v in fw):
-            continue
-        out.append({"source": "foul_profile", "player": name, "team": team, "match": match, "league": league,
-                    "kickoff": kickoff, "fouls": [int(v) for v in fc], "fouls_won": [int(v) for v in fw]})
+        prof = {"source": "foul_profile", "player": name, "team": team, "match": match, "league": league, "kickoff": kickoff}
+        for k, col in keys.items():
+            vals = [g.get(col) for g in games]
+            if all(v is not None for v in vals):
+                prof[k] = [int(v) for v in vals]
+        if "fouls" in prof or "shots" in prof or "yellow" in prof:
+            out.append(prof)
     return out
 
 
@@ -125,7 +127,7 @@ def fetch_team_rows(url, key, team):
         f"{url}/rest/v1/player_game_log",
         headers={"apikey": key, "Authorization": f"Bearer {key}"},
         params={"team": f"ilike.*{_sig(team)}*", "order": "match_date.desc", "limit": "1000",
-                "select": "player_name,player_key,team,match_date,minutes,fouls_committed,fouls_won,tackles,shots,sot,passes"},
+                "select": "player_name,player_key,team,match_date,minutes,fouls_committed,fouls_won,tackles,shots,sot,passes,yellow_cards"},
         timeout=25,
     )
     return r.json() if r.ok and isinstance(r.json(), list) else []

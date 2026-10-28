@@ -109,44 +109,125 @@ def _rate(series, line):
     return (sum(1 for v in series if v >= line) + 1.0) / (n + 2.0)  # geglaettet
 
 
-def build_ladders(rows, match_date):
-    """Foul-Leiter wie bei Bet-Builder-X: je Spiel 2 Spieler 'Fouls' + 2 Spieler 'Fouls gezogen' (darf dieselben Spieler sein),
-    Stufen 2+/3+/4+ mit kumulierter Wahrscheinlichkeit und fairer Quote."""
+def _profiles_by_match(rows, *keys):
     by_match = {}
     for r in rows:
-        if r.get("source") == "foul_profile":
+        if r.get("source") == "foul_profile" and all(k in r for k in keys):
             by_match.setdefault(r["match"], []).append(r)
+    return by_match
+
+
+def _leg_from(r, key, line, label, category):
+    ser = r[key]
+    return {"player": r["player"], "team": r["team"], "match": r["match"], "league": r["league"],
+            "market": f"{r['player']} {line}+ {label}", "category": category, "line": float(line), "odds": 0.0,
+            "probability": round(_rate(ser, line) * 100, 1), "series": ser, "source": "model_line_fouls",
+            "kickoff": r.get("kickoff", ""), "games": len(ser),
+            "hit_rate": round(100.0 * sum(1 for v in ser if v >= line) / len(ser), 1)}
+
+
+def _tiers(spec, lines, floor=0.002):
     out = []
-    for match, profs in by_match.items():
+    for t in lines:
+        p = 1.0
+        for r, key, _label, _cat in spec:
+            p *= _rate(r[key], t)
+        p *= CORR ** (len(spec) - 1)
+        if p >= floor:
+            out.append((t, p))
+    return out
+
+
+def _ladder_pick(match, spec, lines, title, style, prefix, match_date, base_line, extra=None, min_base=0.20):
+    tiers = _tiers(spec, lines)
+    if not tiers or tiers[0][1] < min_base:
+        return None
+    legs = [_leg_from(r, key, base_line, label, cat) for r, key, label, cat in spec]
+    keyset = tuple(sorted((l["player"], l["category"]) for l in legs))
+    pick = {"builder_id": prefix + hashlib.sha1((match_date + match + repr(keyset)).encode()).hexdigest()[:24],
+            "match": match, "legs": legs, "joint": tiers[0][1], "fair": round(1 / tiers[0][1], 2),
+            "size": len(legs), "title": title, "style": style, "tiers": tiers}
+    if extra:
+        pick["extra_lines"] = extra
+    return pick
+
+
+def build_ladders(rows, match_date):
+    """Foul-Leiter wie Bet-Builder-X: je Spiel 2 Spieler 'Fouls' + 2 Spieler 'Fouls gezogen' (auch dieselben), Stufen 2+/3+/4+;
+    dazu die 7-Beine-Variante (4 Fouls + 3 Fouls gezogen) auf 2+ als Zusatzzeile."""
+    out = []
+    for match, profs in _profiles_by_match(rows, "fouls", "fouls_won").items():
         if len(profs) < 2:
             continue
-        top_f = sorted(profs, key=lambda r: -_rate(r["fouls"], 2))[:2]
-        top_w = sorted(profs, key=lambda r: -_rate(r["fouls_won"], 2))[:2]
-        legs_spec = [(r, "fouls", "Fouls") for r in top_f] + [(r, "fouls_won", "Fouls gezogen") for r in top_w]
-        tiers = []
-        for t in (2, 3, 4):
-            p = 1.0
-            for r, key, _ in legs_spec:
-                p *= _rate(r[key], t)
-            p *= CORR ** (len(legs_spec) - 1)
-            if p >= 0.002:
-                tiers.append((t, p))
-        if not tiers or tiers[0][1] < 0.20:
-            continue
-        legs = []
-        for r, key, label in legs_spec:
-            ser = r[key]
-            legs.append({"player": r["player"], "team": r["team"], "match": match, "league": r["league"],
-                         "market": f"{r['player']} 2+ {label}", "category": "fouls" if key == "fouls" else "fouls_won",
-                         "line": 2.0, "odds": 0.0, "probability": round(_rate(ser, 2) * 100, 1), "series": ser,
-                         "source": "model_line_fouls", "kickoff": r.get("kickoff", ""), "games": len(ser),
-                         "hit_rate": round(100.0 * sum(1 for v in ser if v >= 2) / len(ser), 1)})
-        keyset = tuple(sorted((l["player"], l["category"]) for l in legs))
-        out.append({"builder_id": "ml_" + hashlib.sha1((match_date + match + repr(keyset)).encode()).hexdigest()[:24],
-                    "match": match, "legs": legs, "joint": tiers[0][1], "fair": round(1 / tiers[0][1], 2),
-                    "size": len(legs), "title": "FOUL LEITER", "style": "MODEL FOULS LADDER", "tiers": tiers})
+        top_f = sorted(profs, key=lambda r: -_rate(r["fouls"], 2))
+        top_w = sorted(profs, key=lambda r: -_rate(r["fouls_won"], 2))
+        spec = [(r, "fouls", "Fouls", "fouls") for r in top_f[:2]] + [(r, "fouls_won", "Fouls gezogen", "fouls_won") for r in top_w[:2]]
+        extra = None
+        if len(profs) >= 4:
+            big = [(r, "fouls", "Fouls", "fouls") for r in top_f[:4]] + [(r, "fouls_won", "Fouls gezogen", "fouls_won") for r in top_w[:3]]
+            tb = _tiers(big, (2,), floor=0.0)
+            if tb:
+                extra = [f"🔥 Variante 7 Beine (4× Fouls, 3× gezogen) bei 2+: {tb[0][1] * 100:.1f}% · faire Quote {1 / tb[0][1]:.1f}"]
+                extra += ["    " + ", ".join(sorted({r['player'] for r, *_ in big}))]
+        pk = _ladder_pick(match, spec, (2, 3, 4), "FOUL LEITER", "MODEL FOULS LADDER", "ml_", match_date, 2, extra)
+        if pk:
+            out.append(pk)
     out.sort(key=lambda p: -p["joint"])
     return out[:3]
+
+
+def build_shot_ladders(rows, match_date):
+    """Schuss-Leiter: 2 Spieler im selben Spiel auf 2+/3+/4+ Schuesse; SOT-Leiter auf 1+/2+."""
+    out = []
+    for match, profs in _profiles_by_match(rows, "shots").items():
+        if len(profs) < 2:
+            continue
+        top = sorted(profs, key=lambda r: -_rate(r["shots"], 2))[:2]
+        pk = _ladder_pick(match, [(r, "shots", "Schüsse", "shots") for r in top], (2, 3, 4), "SCHUSS LEITER",
+                          "MODEL SHOT LADDER", "ms_", match_date, 2, min_base=0.25)
+        if pk:
+            out.append(pk)
+    for match, profs in _profiles_by_match(rows, "sot").items():
+        if len(profs) < 2:
+            continue
+        top = sorted(profs, key=lambda r: -_rate(r["sot"], 1))[:2]
+        pk = _ladder_pick(match, [(r, "sot", "Schüsse aufs Tor", "sot") for r in top], (1, 2, 3), "SOT LEITER",
+                          "MODEL SOT LADDER", "mo_", match_date, 1, min_base=0.25)
+        if pk:
+            out.append(pk)
+    out.sort(key=lambda p: -p["joint"])
+    return out[:4]
+
+
+def build_cards(rows, match_date):
+    """Karten: beste 'Player to be Booked'-Kandidaten (Gelbe in den letzten Spielen) als Doppel aus zwei Spielen."""
+    cands = []
+    for r in rows:
+        if r.get("source") == "foul_profile" and "yellow" in r:
+            rate = _rate(r["yellow"], 1)
+            if rate >= 0.35:
+                cands.append((rate, r))
+    cands.sort(key=lambda x: -x[0])
+    picks, used = [], set()
+    for rate, r in cands:
+        if r["match"] in used:
+            continue
+        used.add(r["match"])
+        picks.append((rate, r))
+        if len(picks) == 4:
+            break
+    if len(picks) < 2:
+        return []
+    legs = []
+    for rate, r in picks[:2]:
+        leg = _leg_from(r, "yellow", 1, "Karte", "yellow_cards")
+        leg["market"] = f"{r['player']} Karte (booked)"
+        legs.append(leg)
+    jp = joint_probability(legs)
+    extra = ["Weitere Kandidaten:"] + [f"    {r['player']} ({r['match']}): {sum(1 for v in r['yellow'] if v >= 1)}/{len(r['yellow'])} Spiele mit Karte" for _, r in picks[2:]]
+    return [{"builder_id": "mk_" + hashlib.sha1((match_date + repr(sorted(l['player'] for l in legs))).encode()).hexdigest()[:24],
+             "match": "Cross-Match", "legs": legs, "joint": jp, "fair": round(1 / jp, 2), "size": 2,
+             "title": "KARTEN DOPPEL", "style": "MODEL CARDS", "extra_lines": extra if len(extra) > 1 else None}]
 
 
 def message(pick, match_date):
@@ -162,8 +243,12 @@ def message(pick, match_date):
         lines += ["", "🪜 <b>Leiter</b> (alle Beine auf derselben Linie):"]
         for t, jp in pick["tiers"]:
             lines.append(f"    {t}+ bei allen Beinen · {jp * 100:.1f}% · faire Quote {1 / jp:.1f}")
+        if pick.get("extra_lines"):
+            lines += [""] + pick["extra_lines"]
         lines += ["", "💡 Nur setzen, wenn dein Buchmacher mindestens die faire Quote der gewählten Stufe bietet."]
         return "\n".join(lines)
+    if pick.get("extra_lines"):
+        lines += [""] + pick["extra_lines"]
     lines += ["", f"📊 Modell-Wahrscheinlichkeit: {pick['joint'] * 100:.0f}% · faire Quote: {pick['fair']:.2f}",
               "💡 Nur setzen, wenn dein Buchmacher mindestens diese Quote bietet."]
     return "\n".join(lines)
@@ -203,7 +288,7 @@ def run(rows, match_date, send, url, key, logger=print):
     if os.getenv("NETRATTLER_MODEL_BUILDERS", "on").lower() == "off":
         return 0
     sent = 0
-    for pick in dedupe_overlap(build_ladders(rows, match_date) + build_fouls(rows, match_date) + build(rows, match_date)):
+    for pick in dedupe_overlap(build_ladders(rows, match_date) + build_shot_ladders(rows, match_date) + build_cards(rows, match_date) + build_fouls(rows, match_date) + build(rows, match_date)):
         msg = message(pick, match_date)
         hdr = {"apikey": key, "Authorization": f"Bearer {key}", "Content-Type": "application/json",
                "Prefer": "resolution=ignore-duplicates,return=representation"}
