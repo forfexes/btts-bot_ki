@@ -126,7 +126,7 @@ def _leg_from(r, key, line, label, category):
             "hit_rate": round(100.0 * sum(1 for v in ser if v >= line) / len(ser), 1)}
 
 
-def _tiers(spec, lines, floor=0.002):
+def _tiers(spec, lines, floor=0.01):
     out = []
     for t in lines:
         p = 1.0
@@ -209,10 +209,12 @@ def build_cards(rows, match_date):
                 cands.append((rate, r))
     cands.sort(key=lambda x: -x[0])
     picks, used = [], set()
+    seen_players = set()
     for rate, r in cands:
-        if r["match"] in used:
+        if r["match"] in used or r["player"] in seen_players:
             continue
         used.add(r["match"])
+        seen_players.add(r["player"])
         picks.append((rate, r))
         if len(picks) == 4:
             break
