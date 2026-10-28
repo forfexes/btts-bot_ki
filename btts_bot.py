@@ -27528,6 +27528,17 @@ def main():
 
         # Echte Player-Props aus Advanced Props + Pinnacle/Kambi/Bet365 hinzufügen.
         # Vor der Edge-Auswahl: unabhängige Player-ML/Historie anwenden.
+        try:  # SportsGameOdds (Gratisplan MLS + CL): echte Spieler-Prop-Quoten, Wahrscheinlichkeit kommt vom ML-Modell
+            import netrattler_sgo_props as _sgo
+            _sgo_rows = _sgo.fetch_rows()
+            for _r in _sgo_rows:
+                _ntr_collect_prop(_r["player"], _r["team"], _r["match"], _r["league"], _r["market"],
+                                  category=_r["category"], line=_r["line"], odds=_r["odds"],
+                                  probability=0, source=_r["source"], kickoff=_r["kickoff"], games=0)
+            if _sgo_rows:
+                log(f"   🌎 SportsGameOdds: {len(_sgo_rows)} Spieler-Props (MLS/CL) in den Builder-Pool")
+        except Exception as _sgo_exc:
+            log(f"   🌎 SportsGameOdds übersprungen: {str(_sgo_exc)[:80]}", "WARN")
         _pml = _ntr_enrich_prop_pool_with_player_ml(_NTR_BUILDER_PROP_POOL)
         if _pml.get("eligible"):
             _pml_msg = (
