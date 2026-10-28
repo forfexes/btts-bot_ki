@@ -6,6 +6,7 @@
 - Direkt handeln, prüfen, committen, pushen (main). Einzelne Dateien statt Zips.
 - Vor dem Löschen von Produktionsdaten verifizieren (archiviert/kopiert).
 - Sprache: Deutsch (Schweiz).
+- Altes Handover (Oktober): REAL_ODDS_ONLY, keine künstlichen Tipps nur um Gruppen zu füllen, Qualität vor Quantität, 0 Picks sind akzeptabel, keine Quellennamen in sichtbaren Tipps. Einzige Ausnahme laut Besitzer (2026-10-28): Modell-Builder ohne Buchmacherquote, klar als faire Modellquote gekennzeichnet.
 
 ## Betrieb
 - Läuft auf GitHub Actions (Repo forfexes/btts-bot_ki). Workflows per REST starten:
