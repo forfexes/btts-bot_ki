@@ -20385,13 +20385,17 @@ def analyze_corners_tip(fixture, league, target_date=None):
     home_id = fixture.get("home_id")
     away_id = fixture.get("away_id")
     league_id = API_FOOTBALL_LEAGUES.get(league)
+    _need_stats = env("NETRATTLER_CORNER_REQUIRE_TEAM_STATS", "true").lower() in {"1", "true", "yes", "on"}
     if not home_id or not away_id or not league_id:
-        return analyze_corners_tip_simple(fixture, league, target_date)
+        # Ohne Team-Ecken-Statistik gaebe das Modell fuer jedes Spiel denselben Pauschalwert -> kein Tipp.
+        return None if _need_stats else analyze_corners_tip_simple(fixture, league, target_date)
 
     now_utc = datetime.now(timezone.utc)
     season = now_utc.year if now_utc.month > 6 else now_utc.year - 1
     home_stats = get_team_corner_stats(home_id, league_id, season)
     away_stats = get_team_corner_stats(away_id, league_id, season)
+    if _need_stats and not (home_stats and away_stats):
+        return None
     home_avg = (home_stats["avg_corners_for"] + home_stats["avg_corners_against"]) / 2 if home_stats else 4.8
     away_avg = (away_stats["avg_corners_for"] + away_stats["avg_corners_against"]) / 2 if away_stats else 4.5
     expected_total = max(0.5, home_avg + away_avg)
@@ -21182,7 +21186,7 @@ def run_corners_and_scorer_bots(target_date, active_leagues, odds_data_cache, fi
                             _c_fair = float(tip.get("fair_odds") or 0)
                         except Exception:
                             _c_fair = 0
-                        if _c_odds_f > 4.0 or (_c_fair > 1 and _c_odds_f / _c_fair > 2.0):
+                        if _c_odds_f > 4.0 or (_c_fair > 1 and _c_odds_f / _c_fair > float(env("NETRATTLER_CORNER_MAX_ODDS_RATIO", "1.35"))):
                             log(f"   ⛔ Ecken-Quote unplausibel verworfen: {tip['match']} ({_c_odds_f} vs fair {_c_fair})", "WARN")
                             continue
                         corners_tips.append(tip)

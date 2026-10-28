@@ -529,7 +529,7 @@ def fetch_kambi_match_corners(home: str, away: str, brand: str = "ub") -> List[D
         low = crit.lower()
         # Match-total corners only. Exclude team/player/handicap/1H markets because
         # Corner Sniper's probability model is for full-match total corners.
-        if "corner" not in low or any(tok in low for tok in ("team corner", "player corner", "1st half", "first half", "handicap")):
+        if "corner" not in low or any(tok in low for tok in ("team corner", "player corner", "1st half", "first half", "2nd half", "second half", "handicap", "3 way", "3-way", "odd/even", "exact", "range", "both teams", "most corners", "race", "asian")):
             continue
         for oc in bo.get("outcomes") or []:
             lab = str(oc.get("label") or oc.get("type") or "")
