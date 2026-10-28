@@ -21,3 +21,12 @@ def test_message_flags_no_bookmaker_quote():
     p = mb.build([leg("X", 90), leg("Y", 90)], "d")[0]
     m = mb.message(p, "d")
     assert "keine Buchmacherquote" in m and "L10:" in m and "faire Quote" in m
+
+
+def test_mixes_categories():
+    rows = [leg("A", 90), leg("B", 89), leg("C", 88)]
+    for r, c in zip(rows, ("shots", "shots", "shots")):
+        r["category"] = c
+    rows.append({**leg("D", 80), "category": "fouls"})
+    picks = mb.build(rows, "d")
+    assert all(sum(1 for l in p["legs"] if l["category"] == "shots") <= 2 for p in picks)

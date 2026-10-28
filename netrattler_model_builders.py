@@ -32,11 +32,12 @@ def build(rows, match_date):
         legs = sorted(legs, key=lambda x: (-x["probability"], -x["line"]))
         used, made = set(), 0
         for size in (3, 2):
-            chosen, players = [], set()
+            chosen, players, cats = [], set(), {}
             for leg in legs:
-                if leg["player"] in players:
+                if leg["player"] in players or cats.get(leg["category"], 0) >= 2:
                     continue
                 chosen.append(leg); players.add(leg["player"])
+                cats[leg["category"]] = cats.get(leg["category"], 0) + 1
                 if len(chosen) == size:
                     break
             if len(chosen) < size:

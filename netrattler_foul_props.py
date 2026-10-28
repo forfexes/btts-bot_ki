@@ -9,11 +9,11 @@ import requests
 
 MIN_GAMES = 8
 MIN_AVG_MINUTES = 55.0
-STATS = {"fouls_committed": "fouls", "fouls_won": "fouls_won", "tackles": "tackles_committed"}
-LINES = {"fouls_committed": (2, 3), "fouls_won": (2, 3), "tackles": (2, 3, 4)}  # 1+ ist zu banal
-LABEL = {"fouls_committed": "Fouls", "fouls_won": "Fouls gezogen", "tackles": "Tackles"}
+STATS = {"fouls_committed": "fouls", "fouls_won": "fouls_won", "tackles": "tackles_committed", "shots": "shots", "sot": "sot"}
+LINES = {"fouls_committed": (2, 3), "fouls_won": (2, 3), "tackles": (2, 3, 4), "shots": (2, 3, 4), "sot": (1, 2)}  # 1+ ist zu banal
+LABEL = {"fouls_committed": "Fouls", "fouls_won": "Fouls gezogen", "tackles": "Tackles", "shots": "Schüsse", "sot": "Schüsse aufs Tor"}
 MIN_HIT = float(os.getenv("NETRATTLER_FOUL_MIN_HIT", "0.70"))
-MAX_PER_TEAM = int(os.getenv("NETRATTLER_FOUL_MAX_PER_TEAM", "6"))
+MAX_PER_TEAM = int(os.getenv("NETRATTLER_FOUL_MAX_PER_TEAM", "8"))
 
 
 def _sig(name):
@@ -80,7 +80,7 @@ def fetch_team_rows(url, key, team):
         f"{url}/rest/v1/player_game_log",
         headers={"apikey": key, "Authorization": f"Bearer {key}"},
         params={"team": f"ilike.*{_sig(team)}*", "order": "match_date.desc", "limit": "1000",
-                "select": "player_name,player_key,team,match_date,minutes,fouls_committed,fouls_won,tackles"},
+                "select": "player_name,player_key,team,match_date,minutes,fouls_committed,fouls_won,tackles,shots,sot"},
         timeout=25,
     )
     return r.json() if r.ok and isinstance(r.json(), list) else []
