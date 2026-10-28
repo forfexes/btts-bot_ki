@@ -87,17 +87,28 @@ def fetch_team_rows(url, key, team):
     return r.json() if r.ok and isinstance(r.json(), list) else []
 
 
+STATS_LAST = {}
+
+
 def rows_for_matches(matches, url, key, norm):
     """matches: [{'match': 'A vs B', 'league':..., 'kickoff':...}] -> Pool-Zeilen."""
     if os.getenv("NETRATTLER_FOUL_PROPS", "on").lower() == "off":
         return []
     out = []
+    STATS_LAST.clear()
+    STATS_LAST.update({"matches": len(matches), "teams": 0, "teams_with_rows": 0, "teams_with_players": 0, "legs": 0, "unmatched": []})
     for m in matches:
         parts = str(m.get("match", "")).split(" vs ")
         if len(parts) != 2:
             continue
         for team in parts:
+            STATS_LAST["teams"] += 1
             rows = fetch_team_rows(url, key, team.strip())
+            STATS_LAST["teams_with_rows"] += 1 if rows else 0
             by = player_rows(rows, norm(team), norm)
+            STATS_LAST["teams_with_players"] += 1 if by else 0
+            if rows and not by and len(STATS_LAST["unmatched"]) < 6:
+                STATS_LAST["unmatched"].append([team.strip(), str(rows[0].get("team"))])
             out += build_rows(by, team.strip(), m["match"], m.get("league", ""), m.get("kickoff", ""))
+    STATS_LAST["legs"] = len(out)
     return out

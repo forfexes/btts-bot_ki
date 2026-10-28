@@ -27545,6 +27545,12 @@ def main():
                                   hit_rate=_r["hit_rate"], games=_r["games"])
             globals()["_NTR_MODEL_ROWS"] = _fp_rows
             log(f"   🟨 Foul-Props (Modellquote): {len(_fp_rows)} Legs aus {len(_seen_m)} Spielen")
+            try:
+                requests.post(f"{SUPABASE_URL}/rest/v1/netrattler_card_diag", timeout=15,
+                              headers={"apikey": SUPABASE_KEY, "Authorization": f"Bearer {SUPABASE_KEY}", "Content-Type": "application/json"},
+                              json={"info": {"probe": "foul_props", **dict(_fp.STATS_LAST)}})
+            except Exception:
+                pass
         except Exception as _fp_exc:
             log(f"   🟨 Foul-Props übersprungen: {str(_fp_exc)[:80]}", "WARN")
         try:  # SportsGameOdds (Gratisplan MLS + CL): echte Spieler-Prop-Quoten, Wahrscheinlichkeit kommt vom ML-Modell
