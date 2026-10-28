@@ -58,13 +58,60 @@ def build(rows, match_date):
     return picks[:MAX_PER_RUN]
 
 
+FOUL_CATS = {"fouls", "fouls_won"}
+
+
+def build_fouls(rows, match_date):
+    """Eigene Foul-Builder: 3 Foul-Spieler pro Spiel (beide Teams) + ein Cross-Match-Builder aus den besten Spielen."""
+    pool = [r for r in rows if r.get("source") in MODEL_SOURCES and r.get("series") and r.get("category") in FOUL_CATS]
+    by_match = {}
+    for r in pool:
+        by_match.setdefault(r["match"], []).append(r)
+    picks = []
+    for match, legs in by_match.items():
+        legs = sorted(legs, key=lambda x: (-x["probability"], -x["line"]))
+        chosen, players = [], set()
+        for leg in legs:
+            if leg["player"] in players:
+                continue
+            chosen.append(leg); players.add(leg["player"])
+            if len(chosen) == 3:
+                break
+        if len(chosen) < 2:
+            continue
+        jp = joint_probability(chosen)
+        if jp < MIN_JOINT[len(chosen)]:
+            continue
+        key = tuple(sorted((x["player"], x["category"], x["line"]) for x in chosen))
+        picks.append({"builder_id": "mf_" + hashlib.sha1((match_date + match + repr(key)).encode()).hexdigest()[:24],
+                      "match": match, "legs": chosen, "joint": jp, "fair": round(1 / jp, 2), "size": len(chosen),
+                      "title": "FOUL BUILDER", "style": "MODEL FOULS BUILDER"})
+    picks.sort(key=lambda p: -p["joint"])
+    picks = picks[:MAX_PER_RUN]
+    # Cross-Match: bestes Foul-Bein je Spiel, 4 Spiele
+    best = []
+    for match, legs in by_match.items():
+        top = max(legs, key=lambda x: (x["probability"], x["line"]))
+        best.append(top)
+    best = sorted(best, key=lambda x: -x["probability"])[:4]
+    if len(best) >= 3:
+        jp = joint_probability(best)
+        if jp >= 0.20:
+            key = tuple(sorted((x["player"], x["category"], x["line"]) for x in best))
+            picks.append({"builder_id": "mf_" + hashlib.sha1((match_date + "CROSS" + repr(key)).encode()).hexdigest()[:24],
+                          "match": "Cross-Match", "legs": best, "joint": jp, "fair": round(1 / jp, 2), "size": len(best),
+                          "title": "FOUL BUILDER · CROSS", "style": "MODEL FOULS BUILDER"})
+    return picks
+
+
 def message(pick, match_date):
-    lines = ["🧪 <b>MODELL-BUILDER</b> · <i>keine Buchmacherquote</i>",
+    lines = [f"🧪 <b>{pick.get('title', 'MODELL-BUILDER')}</b> · <i>keine Buchmacherquote</i>",
              f"⚽ {html.escape(pick['match'])}", ""]
+    multi = len({l['match'] for l in pick["legs"]}) > 1
     for leg in pick["legs"]:
         s = leg["series"]
         hits = sum(1 for v in s if v >= leg["line"])
-        lines.append(f"• <b>{html.escape(leg['market'])}</b>")
+        lines.append(f"• <b>{html.escape(leg['market'])}</b>" + (f" <i>({html.escape(leg['match'])})</i>" if multi else ""))
         lines.append(f"    📈 <i>L{len(s)}: {','.join(str(v) for v in s)} ({int(leg['line'])}+ in {hits}/{len(s)})</i>")
     lines += ["", f"📊 Modell-Wahrscheinlichkeit: {pick['joint'] * 100:.0f}% · faire Quote: {pick['fair']:.2f}",
               "💡 Nur setzen, wenn dein Buchmacher mindestens diese Quote bietet."]
@@ -73,7 +120,7 @@ def message(pick, match_date):
 
 def row_for_db(pick, match_date):
     return {
-        "builder_id": pick["builder_id"], "tip_id": pick["builder_id"], "style": "MODEL BUILDER",
+        "builder_id": pick["builder_id"], "tip_id": pick["builder_id"], "style": pick.get("style", "MODEL BUILDER"),
         "variant": f"{pick['size']} LEGS", "market_group": "builder", "match_date": match_date,
         "status": "pending", "stake": 0, "total_odds": None, "estimated_odds": True,
         "leg_count": pick["size"], "source": "MODEL_LINE",
@@ -86,7 +133,7 @@ def run(rows, match_date, send, url, key, logger=print):
     if os.getenv("NETRATTLER_MODEL_BUILDERS", "on").lower() == "off":
         return 0
     sent = 0
-    for pick in build(rows, match_date):
+    for pick in build(rows, match_date) + build_fouls(rows, match_date):
         hdr = {"apikey": key, "Authorization": f"Bearer {key}", "Content-Type": "application/json",
                "Prefer": "resolution=ignore-duplicates,return=representation"}
         try:

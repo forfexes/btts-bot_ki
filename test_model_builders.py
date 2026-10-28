@@ -31,3 +31,15 @@ def test_mixes_categories():
     rows.append({**leg("D", 80), "category": "fouls"})
     picks = mb.build(rows, "d")
     assert all(sum(1 for l in p["legs"] if l["category"] == "shots") <= 2 for p in picks)
+
+
+def test_foul_builders_only_foul_categories_and_cross():
+    rows = []
+    for m in ("A vs B", "C vs D", "E vs F"):
+        for pl in ("p1", "p2", "p3"):
+            rows.append({**leg(pl + m[0], 85, match=m)})
+        rows.append({**leg("sh" + m[0], 95, match=m), "category": "shots"})
+    picks = mb.build_fouls(rows, "d")
+    assert picks and all(l["category"] in mb.FOUL_CATS for p in picks for l in p["legs"])
+    assert any(p["match"] == "Cross-Match" for p in picks)
+    assert "FOUL BUILDER" in mb.message(picks[0], "d")
