@@ -16,6 +16,9 @@ on:
       dry_run:
         description: true or false (rotate only)
         default: "true"
+      hot_days:
+        description: Tage im Hauptspeicher behalten
+        default: "1"
       start_offset:
         default: "0"
 concurrency:
@@ -38,7 +41,7 @@ jobs:
           SUPABASE_KEY: ${{ secrets.SUPABASE_KEY }}
           V2_DATABASE_URL: ${{ secrets.V2_DATABASE_URL }}
           V3_DATABASE_URL: ${{ secrets.V3_DATABASE_URL }}
-          HOT_DAYS: "2"
+          HOT_DAYS: ${{ github.event.inputs.hot_days || (github.event_name == 'schedule' && '1') || '2' }}
           TARGET: ${{ github.event.inputs.target || (github.event_name == 'schedule' && 'v4') || 'v2' }}
           DRY_RUN: ${{ github.event.inputs.dry_run || (github.event_name == 'schedule' && 'false') || 'true' }}
           V4_DATABASE_URL: ${{ secrets.V4_DATABASE_URL }}
