@@ -1,0 +1,27 @@
+name: NETRATTLER Soccer Player Props Probe
+on:
+  push:
+    branches: [main]
+    paths:
+      - '.github/workflows/netrattler_soccer_props_probe.yml'
+  workflow_dispatch:
+permissions:
+  contents: read
+jobs:
+  probe:
+    runs-on: ubuntu-latest
+    timeout-minutes: 8
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+      - run: pip install requests pytest
+      - run: python -m pytest -q test_netrattler_soccer_player_props.py
+      - name: Bounded live test (one league, one event, US region)
+        env:
+          ODDS_API_KEYS: ${{ secrets.ODDS_API_KEYS }}
+          ODDS_API_KEY: ${{ secrets.ODDS_API_KEY }}
+          PROPS_MAX_EVENTS: '1'
+          PROPS_MAX_LEAGUES: '1'
+        run: python netrattler_soccer_player_props.py
