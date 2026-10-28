@@ -34,10 +34,18 @@ def player_rows(rows, team_norm, norm):
 
 def legs_for_player(name, games, n=10):
     """Gibt Liste von (stat, line, hit_rate, games, series) fuer starke Linien zurueck."""
-    games = [g for g in games if (g.get("minutes") or 0) > 0][:n]
+    # ESPN-Zeilen haben oft keine Minuten (None) -> nicht ausschliessen; nur echte 0 Minuten zaehlen nicht.
+    def _played(g):
+        if g.get("minutes") is not None:
+            return g["minutes"] > 0
+        # ohne Minutenangabe: nur Zeilen mit irgendeiner Aktion gelten als gespielt (Bank/Nichteinsatz ausschliessen)
+        return any((g.get(k) or 0) > 0 for k in ("shots", "sot", "fouls_committed", "fouls_won", "tackles", "passes"))
+
+    games = [g for g in games if _played(g)][:n]
     if len(games) < MIN_GAMES:
         return []
-    if sum((g.get("minutes") or 0) for g in games) / len(games) < MIN_AVG_MINUTES:
+    known = [g["minutes"] for g in games if g.get("minutes") is not None]
+    if known and sum(known) / len(known) < MIN_AVG_MINUTES:
         return []
     out = []
     for stat, lines in LINES.items():
@@ -81,7 +89,7 @@ def fetch_team_rows(url, key, team):
         f"{url}/rest/v1/player_game_log",
         headers={"apikey": key, "Authorization": f"Bearer {key}"},
         params={"team": f"ilike.*{_sig(team)}*", "order": "match_date.desc", "limit": "1000",
-                "select": "player_name,player_key,team,match_date,minutes,fouls_committed,fouls_won,tackles,shots,sot"},
+                "select": "player_name,player_key,team,match_date,minutes,fouls_committed,fouls_won,tackles,shots,sot,passes"},
         timeout=25,
     )
     return r.json() if r.ok and isinstance(r.json(), list) else []

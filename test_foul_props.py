@@ -21,3 +21,17 @@ def test_build_rows_marks_model_line_without_odds():
     rows = fp.build_rows(by, "Sevilla", "Sevilla vs Osasuna", "La Liga", "k")
     assert rows and rows[0]["odds"] == 0 and rows[0]["source"] == "model_line_fouls"
     assert rows[0]["category"] in ("fouls", "fouls_won")
+
+
+def test_missing_minutes_do_not_exclude_player():
+    games = [{"minutes": None, "fouls_committed": 2, "fouls_won": 1, "shots": 2, "sot": 1, "tackles": None} for _ in range(10)]
+    legs = {l[0] for l in fp.legs_for_player("X", games)}
+    assert "fouls_committed" in legs
+
+
+def test_zero_action_rows_without_minutes_are_not_games():
+    played = {"minutes": None, "fouls_committed": 2, "fouls_won": 1, "shots": 1, "sot": 0, "tackles": None, "passes": 30}
+    bench = {"minutes": None, "fouls_committed": 0, "fouls_won": 0, "shots": 0, "sot": 0, "tackles": None, "passes": 0}
+    games = [played] * 8 + [bench] * 4
+    legs = {l[0]: l for l in fp.legs_for_player("X", games)}
+    assert legs["fouls_committed"][3] == 8  # nur die 8 echten Einsaetze
