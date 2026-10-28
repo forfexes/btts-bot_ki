@@ -1,5 +1,5 @@
 """Probe: ParlayAPI - gibt es Fussball-Spielerprops (Tackles/Fouls/Shots) fuer Top-5-Ligen? Nur lesende Abrufe, Key (falls vorhanden) wird nie ausgegeben."""
-import os, re, json, requests
+import os, re, json, collections, requests
 
 KEY = os.getenv("PARLAYAPI_KEY", "")
 BASE = "https://parlay-api.com"
@@ -37,8 +37,10 @@ def main():
         tgt = [k for k in out["soccer_keys"] if any(t in k for t in ("epl", "spain_la_liga", "germany_bundesliga", "italy_serie_a", "france_ligue_one"))][:3]
         out["props"] = {}
         for k in tgt:
-            st, d = get(f"/v1/sports/{k}/props", markets="player_tackles,player_fouls_committed,player_shots", regions="eu")
-            out["props"][k] = {"status": st, "sample": json.dumps(d)[:500]}
+            st, d = get(f"/v1/sports/{k}/props", regions="eu,uk,us")
+            txt = json.dumps(d) if d is not None else ""
+            mk = collections.Counter(re.findall(r'"(?:market|key|market_key)"\s*:\s*"([a-z0-9_]+)"', txt))
+            out["props"][k] = {"status": st, "bytes": len(txt), "markets": dict(mk.most_common(40)), "head": txt[:300].replace(KEY, "<key>")}
     print(json.dumps(out)[:3000]); post(out)
 
 
