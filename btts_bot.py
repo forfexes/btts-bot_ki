@@ -27528,6 +27528,20 @@ def main():
 
         # Echte Player-Props aus Advanced Props + Pinnacle/Kambi/Bet365 hinzufügen.
         # Vor der Edge-Auswahl: unabhängige Player-ML/Historie anwenden.
+        try:  # Foul-Props aus der Spielerhistorie (Modellquote, ohne Buchmacher)
+            import netrattler_foul_props as _fp
+            _seen_m = {}
+            for _p in _NTR_BUILDER_PROP_POOL:
+                _seen_m.setdefault(_p.get("match"), {"match": _p.get("match"), "league": _p.get("league"), "kickoff": _p.get("kickoff")})
+            _fp_rows = _fp.rows_for_matches(list(_seen_m.values())[:40], SUPABASE_URL, SUPABASE_KEY, normalize_team_name)
+            for _r in _fp_rows:
+                _ntr_collect_prop(_r["player"], _r["team"], _r["match"], _r["league"], _r["market"],
+                                  category=_r["category"], line=_r["line"], odds=0,
+                                  probability=_r["probability"], source=_r["source"], kickoff=_r["kickoff"],
+                                  hit_rate=_r["hit_rate"], games=_r["games"])
+            log(f"   🟨 Foul-Props (Modellquote): {len(_fp_rows)} Legs aus {len(_seen_m)} Spielen")
+        except Exception as _fp_exc:
+            log(f"   🟨 Foul-Props übersprungen: {str(_fp_exc)[:80]}", "WARN")
         try:  # SportsGameOdds (Gratisplan MLS + CL): echte Spieler-Prop-Quoten, Wahrscheinlichkeit kommt vom ML-Modell
             import netrattler_sgo_props as _sgo
             _sgo_rows = _sgo.fetch_rows()
