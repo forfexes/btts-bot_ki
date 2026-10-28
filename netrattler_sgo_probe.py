@@ -35,13 +35,12 @@ def main():
             stat_books = collections.defaultdict(set); stat_n = collections.Counter()
             for ev in events:
                 for oid, od in (ev.get("odds") or {}).items():
-                    m = re.match(r"^([A-Za-z_]+)-[A-Z0-9_]+-game-", oid)
-                    if not m or m.group(1) not in STATS or not oid.endswith("-over") and "-yes" not in oid:
-                        continue
-                    st = m.group(1); stat_n[st] += 1
+                    m = re.match(r"^([A-Za-z_]+)-([A-Z0-9_]+)-(game|1h|2h)-", oid)
+                    key = (m.group(1) if m else oid.split("-")[0]) + ("_player" if m else "")
+                    stat_n[key] += 1
                     for b in (od.get("byBookmaker") or {}):
-                        stat_books[st].add(b)
-            info["stats"] = {s: {"odds": stat_n[s], "books": sorted(stat_books[s])[:8]} for s in stat_n}
+                        stat_books[key].add(b)
+            info["stats"] = {s: {"odds": stat_n[s], "books": sorted(stat_books[s])[:8]} for s in sorted(stat_n, key=lambda k: -stat_n[k])[:40]}
             if events:
                 info["sample"] = f'{(events[0].get("teams") or {}).get("home", {}).get("names", {}).get("long")} vs {(events[0].get("teams") or {}).get("away", {}).get("names", {}).get("long")}'
         except Exception as exc:
