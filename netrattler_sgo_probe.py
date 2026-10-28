@@ -13,6 +13,13 @@ def main():
     out = {"probe": "sgo_probe", "has_key": bool(KEY), "leagues": {}}
     if not KEY:
         print(out); post(out); return
+    try:
+        rl = requests.get(f"{BASE}/leagues", headers={"X-Api-Key": KEY}, params={"sportID": "SOCCER"}, timeout=30)
+        out["leagues_list_status"] = rl.status_code
+        if rl.ok:
+            out["soccer_leagues"] = [x.get("leagueID") for x in (rl.json().get("data") or [])][:60]
+    except Exception as exc:
+        out["leagues_list_error"] = type(exc).__name__
     for lg in LEAGUES:
         info = {}
         try:
