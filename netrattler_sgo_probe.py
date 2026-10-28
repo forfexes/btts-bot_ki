@@ -40,6 +40,19 @@ def main():
                     stat_n[key] += 1
                     for b in (od.get("byBookmaker") or {}):
                         stat_books[key].add(b)
+            try:
+                ev0 = events[0]; ex = {}
+                for oid, od in (ev0.get("odds") or {}).items():
+                    if oid.startswith(("shots_onGoal-", "tackles-", "shots-")) and od.get("byBookmaker") and len(ex) < 2:
+                        bb = next(iter(od["byBookmaker"].items()))
+                        ex[oid] = {"odd_keys": sorted(od.keys()), "book": bb[0], "book_keys": sorted(bb[1].keys()),
+                                   "book_val": {k: v for k, v in bb[1].items() if k in ("odds", "overUnder", "available", "lastUpdatedAt")},
+                                   "top": {k: od.get(k) for k in ("bookOdds", "bookOverUnder", "fairOdds", "fairOverUnder", "playerID", "statID", "sideID", "betTypeID", "periodID") }}
+                info["example"] = ex
+                info["event_keys"] = sorted(ev0.keys())
+                info["status_obj"] = ev0.get("status")
+            except Exception as _e:
+                info["example_error"] = type(_e).__name__
             info["stats"] = {s: {"odds": stat_n[s], "books": sorted(stat_books[s])[:8]} for s in sorted(stat_n, key=lambda k: -stat_n[k])[:40]}
             if events:
                 info["sample"] = f'{(events[0].get("teams") or {}).get("home", {}).get("names", {}).get("long")} vs {(events[0].get("teams") or {}).get("away", {}).get("names", {}).get("long")}'
