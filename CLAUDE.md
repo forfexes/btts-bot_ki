@@ -35,3 +35,8 @@
 ## Auswertungsstand (30 Tage)
 - Over 2.5 ca. +14 % ROI (n=530), Corners hohe Trefferquote (Quoten prüfen, Verdacht auf unrealistische Quote), 1x2 negativ, Combo-Multi 3-11 Beine ca. 3-9 % Trefferquote -> auf max. 4 Beine begrenzt.
 - Builder mit echter Quote: ROI deutlich negativ (n klein). Quote-lose Builder nie als ROI zählen.
+
+## Kalibrierung (45 Tage, 2026-10-28)
+- Brier-Score Modell vs. Markt (1/Quote): Modell ist in over25, btts, over15_ht, 1x2, btts_ht, combo schlechter als der Markt und teils schlechter als eine Münze; Modell ist 10-33 Prozentpunkte zu optimistisch (z.B. 1x2: Modell 62 %, real 37 %).
+- Bestes Mischgewicht Modell vs. Markt: 0-10 % Modell bei 1x2, btts, btts_ht, combo. Vorsicht: Selektionsverzerrung (Tipps wurden dort gewählt, wo das Modell über dem Markt lag).
+- Folge: "Edge" = Modell-p minus Marktwahrscheinlichkeit misst überwiegend Modellfehler. Schwellen nicht senken; Modell braucht echte Zusatzinformation (Aufstellungen, xG, Schiedsrichter) oder Wahrscheinlichkeiten werden zum Markt hin geschrumpft.
