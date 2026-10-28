@@ -118,32 +118,85 @@ def message(pick, match_date):
     return "\n".join(lines)
 
 
-def row_for_db(pick, match_date):
+def row_for_db(pick, match_date, message_text=None):
     return {
         "builder_id": pick["builder_id"], "tip_id": pick["builder_id"], "style": pick.get("style", "MODEL BUILDER"),
         "variant": f"{pick['size']} LEGS", "market_group": "builder", "match_date": match_date,
         "status": "pending", "stake": 0, "total_odds": None, "estimated_odds": True,
         "leg_count": pick["size"], "source": "MODEL_LINE",
-        "joint_probability": round(pick["joint"], 4), "telegram_sent": True,
+        "joint_probability": round(pick["joint"], 4), "telegram_sent": False,
+        "message_text": message_text,
         "legs": [{k: v for k, v in leg.items() if k != "series"} | {"series": leg["series"]} for leg in pick["legs"]],
     }
 
 
 def run(rows, match_date, send, url, key, logger=print):
+    """Reserve each deterministic builder before sending; record actual Telegram receipt.
+
+    A failed/ambiguous DB insert must never send an untracked Telegram message.
+    An inserted reservation is never resent automatically, even if delivery or
+    receipt persistence fails (duplicate-send protection).
+    """
     if os.getenv("NETRATTLER_MODEL_BUILDERS", "on").lower() == "off":
         return 0
     sent = 0
     for pick in build(rows, match_date) + build_fouls(rows, match_date):
+        msg = message(pick, match_date)
         hdr = {"apikey": key, "Authorization": f"Bearer {key}", "Content-Type": "application/json",
                "Prefer": "resolution=ignore-duplicates,return=representation"}
         try:
             r = requests.post(f"{url}/rest/v1/netrattler_builder_picks?on_conflict=builder_id", headers=hdr,
-                              data=json.dumps(row_for_db(pick, match_date)), timeout=20)
-            if r.ok and r.json() == []:
-                continue  # schon gesendet
+                              data=json.dumps(row_for_db(pick, match_date, msg)), timeout=20)
+            if not r.ok:
+                logger(f"Modell-Builder DB-Reservierung fehlgeschlagen: HTTP {r.status_code}; kein Telegram-Send")
+                continue
+            inserted = r.json()
+            if not isinstance(inserted, list):
+                logger("Modell-Builder DB-Antwort unklar; kein Telegram-Send")
+                continue
+            if not inserted:
+                continue  # Bereits reserviert: niemals erneut senden.
         except Exception as exc:
-            logger(f"Modell-Builder speichern fehlgeschlagen: {type(exc).__name__}")
-        send(message(pick, match_date))
+            logger(f"Modell-Builder DB-Reservierung fehlgeschlagen: {type(exc).__name__}; kein Telegram-Send")
+            continue
+
+        try:
+            receipt = send(msg)
+        except Exception as exc:
+            logger(f"Modell-Builder Telegram-Send fehlgeschlagen: {type(exc).__name__}")
+            continue  # Reservierung bleibt bestehen, kein automatischer Zweitversuch.
+
+        if isinstance(receipt, dict):
+            msg_id = receipt.get("message_id")
+            tg_chat = receipt.get("chat_id")
+            actual_text = receipt.get("text") or msg
+        else:
+            msg_id = receipt
+            # Identische Fallback-Reihenfolge wie TELEGRAM_GROUPS['builder'].
+            tg_chat = (os.getenv("TELEGRAM_GROUP_BUILDER")
+                       or os.getenv("TELEGRAM_GROUP_PLAYER_PROPS")
+                       or os.getenv("TELEGRAM_GROUP_STATS")
+                       or os.getenv("TELEGRAM_CHAT_ID"))
+            actual_text = msg
+
+        if isinstance(msg_id, bool) or not msg_id or not tg_chat:
+            logger("Modell-Builder Telegram-Receipt unvollstaendig; reserviert, nicht erneut senden")
+            continue
+
+        patch = {"telegram_sent": True, "telegram_msg_id": str(msg_id),
+                 "telegram_chat_id": str(tg_chat), "message_text": actual_text}
+        try:
+            confirm = requests.patch(
+                f"{url}/rest/v1/netrattler_builder_picks",
+                params={"builder_id": f"eq.{pick['builder_id']}"},
+                headers={**hdr, "Prefer": "return=representation"},
+                data=json.dumps(patch), timeout=20)
+            if not confirm.ok or not isinstance(confirm.json(), list) or not confirm.json():
+                logger("Modell-Builder Telegram gesendet, aber Receipt-DB-Update nicht bestaetigt")
+                continue
+        except Exception as exc:
+            logger(f"Modell-Builder Telegram gesendet, Receipt-DB-Update fehlgeschlagen: {type(exc).__name__}")
+            continue
         sent += 1
-    logger(f"Modell-Builder: {sent} gesendet")
+    logger(f"Modell-Builder: {sent} gesendet und mit Telegram-Receipt bestaetigt")
     return sent
