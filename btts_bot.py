@@ -27667,6 +27667,13 @@ def main():
                 )
                 _ntr_builder_sent = int(_sent_n or 0)
                 log(f"   🏗️ Builder Engine: {_sent_n} Builder aus {len(_builder_prop_pool)} Props gesendet")
+                try:  # Diagnose: wo gehen Builder-Kandidaten verloren?
+                    import netrattler_builder_engine as _be_mod
+                    requests.post(f"{SUPABASE_URL}/rest/v1/netrattler_card_diag", timeout=15,
+                                  headers={"apikey": SUPABASE_KEY, "Authorization": f"Bearer {SUPABASE_KEY}", "Content-Type": "application/json"},
+                                  json={"info": {"probe": "builder_funnel", "sent": int(_sent_n or 0), **dict(_be_mod.FUNNEL)}})
+                except Exception:
+                    pass
                 try:  # Modell-Builder (Fouls/Tackles, ohne Buchmacherquote)
                     import netrattler_model_builders as _mbld
                     _mrows = list(globals().get("_NTR_MODEL_ROWS", []) or [])

@@ -1499,6 +1499,27 @@ def _booking_series_builders(props: Sequence[PropLeg], match_date: str) -> List[
     return out
 
 
+FUNNEL: Dict[str, Any] = {}
+
+
+def _cat_counts(props) -> Dict[str, int]:
+    out: Dict[str, int] = {}
+    for p in props:
+        out[p.category] = out.get(p.category, 0) + 1
+    return out
+
+
+def _ext(candidates, name, fn, *args):
+    """Generator-Aufruf mit Zaehler fuer die Diagnose (builder_funnel)."""
+    try:
+        got = fn(*args)
+    except Exception as exc:
+        FUNNEL.setdefault("errors", {})[name] = type(exc).__name__
+        return
+    FUNNEL.setdefault("generated", {})[name] = len(got)
+    candidates.extend(got)
+
+
 def build_builder_picks(
     raw_props: Sequence[Dict[str, Any]],
     match_contexts: Optional[Sequence[Dict[str, Any]]] = None,
@@ -1506,6 +1527,9 @@ def build_builder_picks(
     max_builders: Optional[int] = None,
 ) -> List[BuilderPick]:
     props = deduplicate_props(raw_props)
+    FUNNEL.clear()
+    FUNNEL['props_in'] = len(props)
+    FUNNEL['cats_in'] = _cat_counts(props)
     run_date = match_date or date.today().isoformat()
     max_count = max_builders or as_int(os.getenv("NETRATTLER_MAX_BUILDERS_PER_RUN", "30"), 30)
 
@@ -1520,32 +1544,35 @@ def build_builder_picks(
     # A known negative edge is never a publishable builder leg. edge=0 remains
     # allowed in COMPAT mode only for real bookmaker rows lacking an independent
     # player model/history signal.
+    FUNNEL['after_player_filter'] = len(props)
     props = [p for p in props if p.edge >= 0]
+    FUNNEL['after_edge_ge0'] = len(props)
+    FUNNEL['cats_after_edge'] = _cat_counts(props)
 
     candidates: List[BuilderPick] = []
-    candidates.extend(_shot_ladders(props, match_contexts or [], run_date))
-    candidates.extend(_goalkeeper_save_builders(props, run_date))
-    candidates.extend(_same_player_correlation_builders(props, run_date))
-    candidates.extend(_long_fouls_builders(props, run_date))
-    candidates.extend(_correlated_duel_builders(props, run_date))
-    candidates.extend(_match_market_builders(props, run_date))
-    candidates.extend(_cross_match_prop_accas(props, run_date))
-    candidates.extend(_booking_series_builders(props, run_date))
-    candidates.extend(_category_trios(props, run_date))
-    candidates.extend(_mixed_builders(props, run_date))
-    candidates.extend(_same_match_available_builders(props, run_date))
-    candidates.extend(_alternate_real_prop_builders(props, run_date))
-    candidates.extend(_same_game_narratives(props, run_date))
-    candidates.extend(_cross_match_builder(props, run_date))
+    _ext(candidates, '_shot_ladders', _shot_ladders, props, match_contexts or [], run_date)
+    _ext(candidates, '_goalkeeper_save_builders', _goalkeeper_save_builders, props, run_date)
+    _ext(candidates, '_same_player_correlation_builders', _same_player_correlation_builders, props, run_date)
+    _ext(candidates, '_long_fouls_builders', _long_fouls_builders, props, run_date)
+    _ext(candidates, '_correlated_duel_builders', _correlated_duel_builders, props, run_date)
+    _ext(candidates, '_match_market_builders', _match_market_builders, props, run_date)
+    _ext(candidates, '_cross_match_prop_accas', _cross_match_prop_accas, props, run_date)
+    _ext(candidates, '_booking_series_builders', _booking_series_builders, props, run_date)
+    _ext(candidates, '_category_trios', _category_trios, props, run_date)
+    _ext(candidates, '_mixed_builders', _mixed_builders, props, run_date)
+    _ext(candidates, '_same_match_available_builders', _same_match_available_builders, props, run_date)
+    _ext(candidates, '_alternate_real_prop_builders', _alternate_real_prop_builders, props, run_date)
+    _ext(candidates, '_same_game_narratives', _same_game_narratives, props, run_date)
+    _ext(candidates, '_cross_match_builder', _cross_match_builder, props, run_date)
     # Team & Korrelations-Builder
-    candidates.extend(_team_correlation_builders(props, run_date))
-    candidates.extend(_goalscorer_combo_builder(props, run_date))
+    _ext(candidates, '_team_correlation_builders', _team_correlation_builders, props, run_date)
+    _ext(candidates, '_goalscorer_combo_builder', _goalscorer_combo_builder, props, run_date)
     # High-Odds High-Odds Builder
-    candidates.extend(_high_odds_booking_builder(props, run_date))    # 2-5× Booked
-    candidates.extend(_fouls_tackles_combo_builder(props, run_date))  # Fouls + Tackles = 170/1
-    candidates.extend(_jk_multi_shot_builder(props, run_date))        # 3-5 Spieler Shots = 100/1+
-    candidates.extend(_outside_box_sot_builder(props, run_date))      # SOT Outside Box = 21/1
-    candidates.extend(_full_profile_builder(props, run_date))         # Messi+Bellingham+Tackles+Corners
+    _ext(candidates, '_high_odds_booking_builder', _high_odds_booking_builder, props, run_date)    # 2-5× Booked
+    _ext(candidates, '_fouls_tackles_combo_builder', _fouls_tackles_combo_builder, props, run_date)  # Fouls + Tackles = 170/1
+    _ext(candidates, '_jk_multi_shot_builder', _jk_multi_shot_builder, props, run_date)        # 3-5 Spieler Shots = 100/1+
+    _ext(candidates, '_outside_box_sot_builder', _outside_box_sot_builder, props, run_date)      # SOT Outside Box = 21/1
+    _ext(candidates, '_full_profile_builder', _full_profile_builder, props, run_date)         # Messi+Bellingham+Tackles+Corners
 
     # Stable dedup, then rank safe/high-quality builders first.
     seen = set()
@@ -1569,6 +1596,7 @@ def build_builder_picks(
         return (avg_quality - odds_penalty, avg_prob, -pick.total_odds)
 
     unique.sort(key=rank, reverse=True)
+    FUNNEL['unique'] = len(unique)
 
     diversified: List[BuilderPick] = []
     style_counts: Dict[str, int] = {}
