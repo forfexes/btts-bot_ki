@@ -16,6 +16,8 @@ on:
       - "test_netrattler_odds_cache_guard.py"
       - "test_netrattler_kambi_team_odds.py"
       - "test_netrattler_aiscore.py"
+      - "netrattler_model_builders.py"
+      - "test_model_builders.py"
       - "netrattler_builder_engine.py"
       - "test_netrattler_builder_delivery.py"
       - "btts_bot.py"
