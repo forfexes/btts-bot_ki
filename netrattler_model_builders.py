@@ -165,6 +165,18 @@ def row_for_db(pick, match_date, message_text=None):
     }
 
 
+def dedupe_overlap(picks):
+    """Reihenfolge = Prioritaet (Leiter > Foul-Builder > gemischt). Pro Spiel keine zwei Builder mit >=2 gleichen Spielern."""
+    kept = []
+    for p in picks:
+        names = {l["player"] for l in p["legs"]}
+        if p["match"] != "Cross-Match" and any(
+                k["match"] == p["match"] and len(names & {l["player"] for l in k["legs"]}) >= 2 for k in kept):
+            continue
+        kept.append(p)
+    return kept
+
+
 def run(rows, match_date, send, url, key, logger=print):
     """Reserve each deterministic builder before sending; record actual Telegram receipt.
 
@@ -175,7 +187,7 @@ def run(rows, match_date, send, url, key, logger=print):
     if os.getenv("NETRATTLER_MODEL_BUILDERS", "on").lower() == "off":
         return 0
     sent = 0
-    for pick in build(rows, match_date) + build_fouls(rows, match_date) + build_ladders(rows, match_date):
+    for pick in dedupe_overlap(build_ladders(rows, match_date) + build_fouls(rows, match_date) + build(rows, match_date)):
         msg = message(pick, match_date)
         hdr = {"apikey": key, "Authorization": f"Bearer {key}", "Content-Type": "application/json",
                "Prefer": "resolution=ignore-duplicates,return=representation"}

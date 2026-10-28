@@ -136,3 +136,10 @@ def test_ladder_five_players_same_match():
     assert len(lad) == 1 and lad[0]["size"] == 5 and [t[0] for t in lad[0]["tiers"]] == [2, 3, 4, 5]
     m = mb.message(lad[0], "d")
     assert "Leiter" in m and "5 Beine" in m
+
+
+def test_dedupe_overlap_prefers_ladder_over_subset_builders():
+    rows = [leg(f"p{i}", 92 - i, match="A vs B") for i in range(6)]
+    allp = mb.dedupe_overlap(mb.build_ladders(rows, "d") + mb.build_fouls(rows, "d") + mb.build(rows, "d"))
+    a_vs_b = [p for p in allp if p["match"] == "A vs B"]
+    assert len(a_vs_b) == 1 and a_vs_b[0]["size"] == 5
