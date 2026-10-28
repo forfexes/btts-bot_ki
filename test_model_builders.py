@@ -128,3 +128,11 @@ def test_model_builder_actual_chat_receipt_overrides_config(monkeypatch):
     assert mb.run([], "2026-10-28", lambda msg: receipt, "https://db.invalid", "key") == 1
     assert captured["telegram_chat_id"] == "-100actual"
     assert captured["message_text"] == "actual text"
+
+
+def test_ladder_five_players_same_match():
+    rows = [leg(f"p{i}", 90 - i, match="A vs B") for i in range(6)]
+    lad = mb.build_ladders(rows, "d")
+    assert len(lad) == 1 and lad[0]["size"] == 5 and [t[0] for t in lad[0]["tiers"]] == [2, 3, 4, 5]
+    m = mb.message(lad[0], "d")
+    assert "Leiter" in m and "5 Beine" in m

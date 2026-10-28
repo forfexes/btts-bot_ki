@@ -104,6 +104,35 @@ def build_fouls(rows, match_date):
     return picks
 
 
+def build_ladders(rows, match_date):
+    """Foul-Leiter: pro Spiel bis zu 5 Spieler (beide Teams), Stufen 2/3/4/5 Beine kumuliert."""
+    pool = [r for r in rows if r.get("source") in MODEL_SOURCES and r.get("series") and r.get("category") in FOUL_CATS]
+    by_match = {}
+    for r in pool:
+        by_match.setdefault(r["match"], []).append(r)
+    out = []
+    for match, legs in by_match.items():
+        legs = sorted(legs, key=lambda x: (-x["probability"], -x["line"]))
+        chosen, players = [], set()
+        for leg in legs:
+            if leg["player"] in players:
+                continue
+            chosen.append(leg); players.add(leg["player"])
+            if len(chosen) == 5:
+                break
+        if len(chosen) < 5:
+            continue
+        tiers = [(n, joint_probability(chosen[:n])) for n in (2, 3, 4, 5)]
+        if tiers[-1][1] < 0.10:
+            continue
+        key = tuple(sorted((x["player"], x["category"], x["line"]) for x in chosen))
+        out.append({"builder_id": "ml_" + hashlib.sha1((match_date + match + repr(key)).encode()).hexdigest()[:24],
+                    "match": match, "legs": chosen, "joint": tiers[-1][1], "fair": round(1 / tiers[-1][1], 2),
+                    "size": 5, "title": "FOUL LEITER", "style": "MODEL FOULS LADDER", "tiers": tiers})
+    out.sort(key=lambda p: -p["joint"])
+    return out[:3]
+
+
 def message(pick, match_date):
     lines = [f"🧪 <b>{pick.get('title', 'MODELL-BUILDER')}</b> · <i>keine Buchmacherquote</i>",
              f"⚽ {html.escape(pick['match'])}", ""]
@@ -113,6 +142,12 @@ def message(pick, match_date):
         hits = sum(1 for v in s if v >= leg["line"])
         lines.append(f"• <b>{html.escape(leg['market'])}</b>" + (f" <i>({html.escape(leg['match'])})</i>" if multi else ""))
         lines.append(f"    📈 <i>L{len(s)}: {','.join(str(v) for v in s)} ({int(leg['line'])}+ in {hits}/{len(s)})</i>")
+    if pick.get("tiers"):
+        lines += ["", "🪜 <b>Leiter</b> (Beine von oben nach unten dazunehmen):"]
+        for n, jp in pick["tiers"]:
+            lines.append(f"    {n} Beine · {jp * 100:.0f}% · faire Quote {1 / jp:.2f}")
+        lines += ["", "💡 Nur setzen, wenn dein Buchmacher mindestens die faire Quote der gewählten Stufe bietet."]
+        return "\n".join(lines)
     lines += ["", f"📊 Modell-Wahrscheinlichkeit: {pick['joint'] * 100:.0f}% · faire Quote: {pick['fair']:.2f}",
               "💡 Nur setzen, wenn dein Buchmacher mindestens diese Quote bietet."]
     return "\n".join(lines)
@@ -140,7 +175,7 @@ def run(rows, match_date, send, url, key, logger=print):
     if os.getenv("NETRATTLER_MODEL_BUILDERS", "on").lower() == "off":
         return 0
     sent = 0
-    for pick in build(rows, match_date) + build_fouls(rows, match_date):
+    for pick in build(rows, match_date) + build_fouls(rows, match_date) + build_ladders(rows, match_date):
         msg = message(pick, match_date)
         hdr = {"apikey": key, "Authorization": f"Bearer {key}", "Content-Type": "application/json",
                "Prefer": "resolution=ignore-duplicates,return=representation"}
