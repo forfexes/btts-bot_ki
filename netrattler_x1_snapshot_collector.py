@@ -23,7 +23,7 @@ SK = os.getenv("SUPABASE_SERVICE_ROLE_KEY") or os.getenv("SUPABASE_KEY") or ""
 H = {"apikey": SK, "Authorization": f"Bearer {SK}", "Content-Type": "application/json"}
 MAX_NEW = int(os.getenv("X1_SNAP_MAX_NEW", "40"))
 HOURS_AHEAD = int(os.getenv("X1_SNAP_HOURS_AHEAD", "10"))  # sub-games appear only on match day
-KEEP_DAYS = int(os.getenv("X1_SNAP_KEEP_DAYS", "4"))
+KEEP_DAYS = int(os.getenv("X1_SNAP_KEEP_DAYS", "2"))
 
 # leagues for which FotMob/ESPN later deliver per-player stats (needed to prove a group)
 _LEAGUE_KEYS = ("england. premier", "england. championship", "england. league one", "england. league two",

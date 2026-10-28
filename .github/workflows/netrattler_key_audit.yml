@@ -64,6 +64,9 @@ jobs:
           ODDSAPIIO_KEY:              ${{ secrets.ODDSAPIIO_KEY }}
           RAPIDAPI_KEY:               ${{ secrets.RAPIDAPI_KEY }}
           SPORTAPI_AI_KEY:            ${{ secrets.SPORTAPI_AI_KEY }}
+          TELEGRAM_BOT_TOKEN:         ${{ secrets.TELEGRAM_BOT_TOKEN }}
+          TELEGRAM_GROUP_ALERTS:      ${{ secrets.TELEGRAM_GROUP_ALERTS }}
+          V4_DATABASE_URL:            ${{ secrets.V4_DATABASE_URL }}
           SUPABASE_URL:               ${{ secrets.SUPABASE_URL }}
           SUPABASE_KEY:               ${{ secrets.SUPABASE_KEY }}
           SUPABASE_SERVICE_ROLE_KEY:  ${{ secrets.SUPABASE_SERVICE_ROLE_KEY }}
