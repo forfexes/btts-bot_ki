@@ -48,15 +48,35 @@ def player_rows(rows, team_norm, norm, team_raw=None):
     return by
 
 
+def _played(g):
+    # ESPN-Zeilen haben oft keine Minuten (None) -> nicht ausschliessen; nur echte 0 Minuten zaehlen nicht.
+    if g.get("minutes") is not None:
+        return g["minutes"] > 0
+    # ohne Minutenangabe: nur Zeilen mit irgendeiner Aktion gelten als gespielt (Bank/Nichteinsatz ausschliessen)
+    return any((g.get(k) or 0) > 0 for k in ("shots", "sot", "fouls_committed", "fouls_won", "tackles", "passes"))
+
+
+def foul_profiles(by_player, team, match, league, kickoff, n=10):
+    """Je Spieler beide Foul-Reihen (begangen/gezogen) fuer die Foul-Leiter, unabhaengig von Schwellen."""
+    out = []
+    for name, games in by_player.items():
+        games = [g for g in games if _played(g)][:n]
+        if len(games) < MIN_GAMES:
+            continue
+        known = [g["minutes"] for g in games if g.get("minutes") is not None]
+        if known and sum(known) / len(known) < MIN_AVG_MINUTES:
+            continue
+        fc = [g.get("fouls_committed") for g in games]
+        fw = [g.get("fouls_won") for g in games]
+        if any(v is None for v in fc) or any(v is None for v in fw):
+            continue
+        out.append({"source": "foul_profile", "player": name, "team": team, "match": match, "league": league,
+                    "kickoff": kickoff, "fouls": [int(v) for v in fc], "fouls_won": [int(v) for v in fw]})
+    return out
+
+
 def legs_for_player(name, games, n=10):
     """Gibt Liste von (stat, line, hit_rate, games, series) fuer starke Linien zurueck."""
-    # ESPN-Zeilen haben oft keine Minuten (None) -> nicht ausschliessen; nur echte 0 Minuten zaehlen nicht.
-    def _played(g):
-        if g.get("minutes") is not None:
-            return g["minutes"] > 0
-        # ohne Minutenangabe: nur Zeilen mit irgendeiner Aktion gelten als gespielt (Bank/Nichteinsatz ausschliessen)
-        return any((g.get(k) or 0) > 0 for k in ("shots", "sot", "fouls_committed", "fouls_won", "tackles", "passes"))
-
     games = [g for g in games if _played(g)][:n]
     if len(games) < MIN_GAMES:
         return []
@@ -134,5 +154,7 @@ def rows_for_matches(matches, url, key, norm):
             if rows and not by and len(STATS_LAST["unmatched"]) < 6:
                 STATS_LAST["unmatched"].append([team.strip(), str(rows[0].get("team"))])
             out += build_rows(by, team.strip(), m["match"], m.get("league", ""), m.get("kickoff", ""))
-    STATS_LAST["legs"] = len(out)
+            out += foul_profiles(by, team.strip(), m["match"], m.get("league", ""), m.get("kickoff", ""))
+    STATS_LAST["legs"] = sum(1 for r in out if r.get("source") == "model_line_fouls")
+    STATS_LAST["profiles"] = sum(1 for r in out if r.get("source") == "foul_profile")
     return out

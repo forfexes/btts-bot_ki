@@ -104,31 +104,47 @@ def build_fouls(rows, match_date):
     return picks
 
 
+def _rate(series, line):
+    n = len(series)
+    return (sum(1 for v in series if v >= line) + 1.0) / (n + 2.0)  # geglaettet
+
+
 def build_ladders(rows, match_date):
-    """Foul-Leiter: pro Spiel bis zu 5 Spieler (beide Teams), Stufen 2/3/4/5 Beine kumuliert."""
-    pool = [r for r in rows if r.get("source") in MODEL_SOURCES and r.get("series") and r.get("category") in FOUL_CATS]
+    """Foul-Leiter wie bei Bet-Builder-X: je Spiel 2 Spieler 'Fouls' + 2 Spieler 'Fouls gezogen' (darf dieselben Spieler sein),
+    Stufen 2+/3+/4+ mit kumulierter Wahrscheinlichkeit und fairer Quote."""
     by_match = {}
-    for r in pool:
-        by_match.setdefault(r["match"], []).append(r)
+    for r in rows:
+        if r.get("source") == "foul_profile":
+            by_match.setdefault(r["match"], []).append(r)
     out = []
-    for match, legs in by_match.items():
-        legs = sorted(legs, key=lambda x: (-x["probability"], -x["line"]))
-        chosen, players = [], set()
-        for leg in legs:
-            if leg["player"] in players:
-                continue
-            chosen.append(leg); players.add(leg["player"])
-            if len(chosen) == 5:
-                break
-        if len(chosen) < 5:
+    for match, profs in by_match.items():
+        if len(profs) < 2:
             continue
-        tiers = [(n, joint_probability(chosen[:n])) for n in (2, 3, 4, 5)]
-        if tiers[-1][1] < 0.10:
+        top_f = sorted(profs, key=lambda r: -_rate(r["fouls"], 2))[:2]
+        top_w = sorted(profs, key=lambda r: -_rate(r["fouls_won"], 2))[:2]
+        legs_spec = [(r, "fouls", "Fouls") for r in top_f] + [(r, "fouls_won", "Fouls gezogen") for r in top_w]
+        tiers = []
+        for t in (2, 3, 4):
+            p = 1.0
+            for r, key, _ in legs_spec:
+                p *= _rate(r[key], t)
+            p *= CORR ** (len(legs_spec) - 1)
+            if p >= 0.002:
+                tiers.append((t, p))
+        if not tiers or tiers[0][1] < 0.20:
             continue
-        key = tuple(sorted((x["player"], x["category"], x["line"]) for x in chosen))
-        out.append({"builder_id": "ml_" + hashlib.sha1((match_date + match + repr(key)).encode()).hexdigest()[:24],
-                    "match": match, "legs": chosen, "joint": tiers[-1][1], "fair": round(1 / tiers[-1][1], 2),
-                    "size": 5, "title": "FOUL LEITER", "style": "MODEL FOULS LADDER", "tiers": tiers})
+        legs = []
+        for r, key, label in legs_spec:
+            ser = r[key]
+            legs.append({"player": r["player"], "team": r["team"], "match": match, "league": r["league"],
+                         "market": f"{r['player']} 2+ {label}", "category": "fouls" if key == "fouls" else "fouls_won",
+                         "line": 2.0, "odds": 0.0, "probability": round(_rate(ser, 2) * 100, 1), "series": ser,
+                         "source": "model_line_fouls", "kickoff": r.get("kickoff", ""), "games": len(ser),
+                         "hit_rate": round(100.0 * sum(1 for v in ser if v >= 2) / len(ser), 1)})
+        keyset = tuple(sorted((l["player"], l["category"]) for l in legs))
+        out.append({"builder_id": "ml_" + hashlib.sha1((match_date + match + repr(keyset)).encode()).hexdigest()[:24],
+                    "match": match, "legs": legs, "joint": tiers[0][1], "fair": round(1 / tiers[0][1], 2),
+                    "size": len(legs), "title": "FOUL LEITER", "style": "MODEL FOULS LADDER", "tiers": tiers})
     out.sort(key=lambda p: -p["joint"])
     return out[:3]
 
@@ -143,9 +159,9 @@ def message(pick, match_date):
         lines.append(f"• <b>{html.escape(leg['market'])}</b>" + (f" <i>({html.escape(leg['match'])})</i>" if multi else ""))
         lines.append(f"    📈 <i>L{len(s)}: {','.join(str(v) for v in s)} ({int(leg['line'])}+ in {hits}/{len(s)})</i>")
     if pick.get("tiers"):
-        lines += ["", "🪜 <b>Leiter</b> (Beine von oben nach unten dazunehmen):"]
-        for n, jp in pick["tiers"]:
-            lines.append(f"    {n} Beine · {jp * 100:.0f}% · faire Quote {1 / jp:.2f}")
+        lines += ["", "🪜 <b>Leiter</b> (alle Beine auf derselben Linie):"]
+        for t, jp in pick["tiers"]:
+            lines.append(f"    {t}+ bei allen Beinen · {jp * 100:.1f}% · faire Quote {1 / jp:.1f}")
         lines += ["", "💡 Nur setzen, wenn dein Buchmacher mindestens die faire Quote der gewählten Stufe bietet."]
         return "\n".join(lines)
     lines += ["", f"📊 Modell-Wahrscheinlichkeit: {pick['joint'] * 100:.0f}% · faire Quote: {pick['fair']:.2f}",

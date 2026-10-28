@@ -43,3 +43,10 @@ def test_same_team_suffix_and_false_friends():
     assert not fp.same_team("Internazionale", "Inter Miami")
     assert not fp.same_team("Deportes Tolima", "Deportes Quindio")
     assert not fp.same_team("Manchester City", "Manchester United")
+
+
+def test_foul_profiles_need_both_series():
+    g = {"minutes": None, "fouls_committed": 2, "fouls_won": 1, "shots": 1, "sot": 0, "tackles": None, "passes": 20}
+    prof = fp.foul_profiles({"X": [g] * 10, "Y": [g] * 3}, "T", "T vs U", "L", "k")
+    assert [p["player"] for p in prof] == ["X"] and prof[0]["source"] == "foul_profile"
+    assert prof[0]["fouls"] == [2] * 10 and prof[0]["fouls_won"] == [1] * 10

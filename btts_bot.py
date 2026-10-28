@@ -27539,12 +27539,14 @@ def main():
                 _seen_m.setdefault(_p.get("match"), {"match": _p.get("match"), "league": _p.get("league"), "kickoff": _p.get("kickoff")})
             _fp_rows = _fp.rows_for_matches(list(_seen_m.values())[:40], SUPABASE_URL, SUPABASE_KEY, normalize_team_name)
             for _r in _fp_rows:
+                if _r.get("source") != "model_line_fouls":
+                    continue  # foul_profile-Zeilen sind nur fuer die Foul-Leiter
                 _ntr_collect_prop(_r["player"], _r["team"], _r["match"], _r["league"], _r["market"],
                                   category=_r["category"], line=_r["line"], odds=0,
                                   probability=_r["probability"], source=_r["source"], kickoff=_r["kickoff"],
                                   hit_rate=_r["hit_rate"], games=_r["games"])
             globals()["_NTR_MODEL_ROWS"] = _fp_rows
-            log(f"   🟨 Foul-Props (Modellquote): {len(_fp_rows)} Legs aus {len(_seen_m)} Spielen")
+            log(f"   🟨 Foul-Props (Modellquote): {sum(1 for _x in _fp_rows if _x.get('source') == 'model_line_fouls')} Legs aus {len(_seen_m)} Spielen")
             try:
                 requests.post(f"{SUPABASE_URL}/rest/v1/netrattler_card_diag", timeout=15,
                               headers={"apikey": SUPABASE_KEY, "Authorization": f"Bearer {SUPABASE_KEY}", "Content-Type": "application/json"},

@@ -130,16 +130,28 @@ def test_model_builder_actual_chat_receipt_overrides_config(monkeypatch):
     assert captured["message_text"] == "actual text"
 
 
-def test_ladder_five_players_same_match():
-    rows = [leg(f"p{i}", 90 - i, match="A vs B") for i in range(6)]
+def _profile(name, fouls, won, match="A vs B"):
+    return {"source": "foul_profile", "player": name, "team": "A", "match": match, "league": "L", "kickoff": "k",
+            "fouls": fouls, "fouls_won": won}
+
+
+def test_ladder_two_players_both_stats_with_tiers():
+    rows = [_profile("Caicedo", [3, 2, 4, 2, 3, 2, 5, 2, 3, 2], [2, 3, 2, 2, 4, 2, 3, 2, 2, 3]),
+            _profile("McConnell", [2, 3, 2, 3, 2, 2, 4, 2, 3, 2], [3, 2, 2, 4, 2, 3, 2, 2, 3, 2]),
+            _profile("Other", [0, 1, 0, 1, 0, 1, 0, 0, 1, 0], [1, 0, 1, 0, 1, 0, 0, 1, 0, 0])]
     lad = mb.build_ladders(rows, "d")
-    assert len(lad) == 1 and lad[0]["size"] == 5 and [t[0] for t in lad[0]["tiers"]] == [2, 3, 4, 5]
+    assert len(lad) == 1 and lad[0]["size"] == 4
+    names = {l["player"] for l in lad[0]["legs"]}
+    assert names == {"Caicedo", "McConnell"}
+    ts = [t for t, _ in lad[0]["tiers"]]
+    assert ts[0] == 2 and all(lad[0]["tiers"][i][1] > lad[0]["tiers"][i + 1][1] for i in range(len(ts) - 1))
     m = mb.message(lad[0], "d")
-    assert "Leiter" in m and "5 Beine" in m
+    assert "Leiter" in m and "2+ bei allen Beinen" in m and "faire Quote" in m
 
 
 def test_dedupe_overlap_prefers_ladder_over_subset_builders():
     rows = [leg(f"p{i}", 92 - i, match="A vs B") for i in range(6)]
+    rows += [_profile(f"p{i}", [3, 2, 3, 2, 3, 2, 3, 2, 3, 2], [3, 2, 3, 2, 3, 2, 3, 2, 3, 2]) for i in range(2)]
     allp = mb.dedupe_overlap(mb.build_ladders(rows, "d") + mb.build_fouls(rows, "d") + mb.build(rows, "d"))
     a_vs_b = [p for p in allp if p["match"] == "A vs B"]
-    assert len(a_vs_b) == 1 and a_vs_b[0]["size"] == 5
+    assert a_vs_b[0]["style"] == "MODEL FOULS LADDER"
