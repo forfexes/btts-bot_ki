@@ -25,6 +25,7 @@ on:
       - "test_storage_guard.py"
       - "netrattler_settlement_v16_final.py"
       - "test_settle_prefers_observed.py"
+      - "test_netrattler_future_player_stats.py"
       - "netrattler_apif_response.py"
       - "netrattler_apifootball_players.py"
       - "netrattler_pending_result_backfill.py"
@@ -192,3 +193,5 @@ jobs:
 
       - name: Operational failure regression
         run: python -m pytest -q test_netrattler_operational_failures.py test_netrattler_post_run_check.py
+      - name: Future-dated player stats guard regression
+        run: python -m pytest -q test_netrattler_future_player_stats.py
