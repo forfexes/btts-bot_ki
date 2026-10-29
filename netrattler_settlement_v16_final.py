@@ -1414,6 +1414,12 @@ def _aggregate_player_rows(rows: Sequence[Dict[str, Any]], wanted_norms: Optiona
 
 def load_player_stats(tips: Sequence[Dict[str, Any]]) -> List[Dict[str, Any]]:
     requirements = _player_requirements(tips)
+    # Timezone differences can put a verified fixture on the adjacent calendar day.
+    for day, players in list(requirements.items()):
+        base = parse_dt(day)
+        if base:
+            for offset in (-1, 1):
+                requirements[(base + timedelta(days=offset)).date().isoformat()].update(players)
     if not requirements:
         log("Player Stats: keine offenen Player-Props/Builder-Legs → Skip")
         return []
@@ -1741,7 +1747,32 @@ def find_player_stat(leg: Dict[str, Any], stats: Sequence[Dict[str, Any]]) -> Op
         score = p_score * 0.78 + m_score * 0.22
         if score > best_score:
             best_score, best = score, row
-    return best if best and best_score >= 0.74 else None
+    if best and best_score >= 0.74:
+        return best
+    # Adjacent-day fallback requires an exact player name and BOTH teams.
+    # A team-only log is insufficient; ambiguous fixture identities stay pending.
+    adjacent = {}
+    wanted_dt = parse_dt(wanted_day)
+    for row in stats:
+        data = unpack(row)
+        observed_dt = parse_dt(row_date(row))
+        if not wanted_dt or not observed_dt or abs((observed_dt.date() - wanted_dt.date()).days) != 1:
+            continue
+        if norm(wanted_player) != norm(player_name(row)):
+            continue
+        home, away, _ = match_parts(row)
+        team, opponent = str(data.get("team") or ""), str(data.get("opponent") or "")
+        pair = (home, away) if home and away else (team, opponent)
+        if not all(pair) or not wanted_home or not wanted_away:
+            continue
+        if not ((_strict_team_match(wanted_home, pair[0]) and _strict_team_match(wanted_away, pair[1]))
+                or (_strict_team_match(wanted_home, pair[1]) and _strict_team_match(wanted_away, pair[0]))):
+            continue
+        event = str(anyv(data, ["event_id", "match_id", "fixture_id"], ""))
+        if not event:
+            continue
+        adjacent.setdefault((row_date(row), event), row)
+    return next(iter(adjacent.values())) if len(adjacent) == 1 else None
 
 def market_line(text: str, default: float = 1.0) -> float:
     low_txt = str(text).lower()

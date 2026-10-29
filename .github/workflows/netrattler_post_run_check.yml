@@ -14,6 +14,9 @@ on:
       - NETRATTLER V36D MANUAL SOURCE LEARNING
       - NETRATTLER Settlement Final V25 MULTISOURCE
       - NETRATTLER Health Check
+      - NETRATTLER Storage Guard
+      - NETRATTLER Odds Archiv (Kopie nach V4)
+      - NETRATTLER 1x Player Snapshot Collector
       - NETRATTLER Lineup Builders
       - NETRATTLER APIFootball Players Daily
       - NETRATTLER Core CI

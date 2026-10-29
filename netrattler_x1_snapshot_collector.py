@@ -70,13 +70,16 @@ def already_snapshotted() -> set:
 
 def prune() -> None:
     cut = (datetime.now(timezone.utc) - timedelta(days=KEEP_DAYS)).isoformat()
-    requests.delete(f"{SB}/rest/v1/x1_player_snapshots", headers=H, timeout=60, params={"captured_at": f"lt.{cut}"})
+    r = requests.delete(f"{SB}/rest/v1/x1_player_snapshots", headers=H, timeout=60, params={"captured_at": f"lt.{cut}"})
+    r.raise_for_status()
 
 
 def run() -> Dict[str, int]:
     stats = {"listed": 0, "picked": 0, "matches_saved": 0, "rows": 0}
     if not SB or not SK:
         print("no supabase env"); return stats
+    # Free regenerable rows before adding a batch; database capacity trigger is the final guard.
+    prune()
     done = already_snapshotted()
     now_ts = time.time()
     # The "Players' stats" sub-games were only ever seen on 22bet (mirrors return games without SG),
@@ -139,8 +142,8 @@ def run() -> Dict[str, int]:
         if rows:
             p = requests.post(f"{SB}/rest/v1/x1_player_snapshots", headers={**H, "Prefer": "return=minimal"},
                               json=rows, timeout=60)
-            if p.ok:
-                stats["matches_saved"] += 1; stats["rows"] += len(rows)
+            p.raise_for_status()
+            stats["matches_saved"] += 1; stats["rows"] += len(rows)
         time.sleep(0.4)
     prune()
     print(f"x1 snapshot collector: {stats}")

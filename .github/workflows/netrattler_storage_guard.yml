@@ -1,7 +1,7 @@
 name: NETRATTLER Storage Guard
 on:
   schedule:
-    - cron: "11 */6 * * *"
+    - cron: "11 * * * *"
   workflow_dispatch: {}
 permissions:
   contents: read

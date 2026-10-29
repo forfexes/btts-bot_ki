@@ -23,3 +23,16 @@ def test_pending_when_match_not_covered():
     leg = {"player": "Nicht Dabei", "match": "Ajax vs PSV", "category": "shots", "line": 0.5, "match_date": "2026-10-25"}
     st, _ = s.settle_player_market(leg, _rows("Ajax", 3), None)
     assert st == "pending"
+
+
+def test_adjacent_day_needs_exact_player_both_teams_and_unique_fixture():
+    leg = {"player": "Milton Celiz", "match": "Instituto vs Deportivo Riestra", "category": "sot", "line": 1,
+           "match_date": "2026-10-26"}
+    row = {"player_name": "Milton Céliz", "team": "Deportivo Riestra", "opponent": "Instituto",
+           "match_date": "2026-10-27", "match_id": "espn-123", "sot": 1}
+    assert s.settle_player_market(leg, [row], None)[0] == "win"
+    assert s.find_player_stat(leg, [dict(row, opponent=None)]) is None
+    assert s.find_player_stat(leg, [dict(row, opponent="Other")]) is None
+    assert s.find_player_stat(leg, [dict(row, player_name="Other Celiz")]) is None
+    assert s.find_player_stat(leg, [row, dict(row, match_id="espn-456")]) is None
+    assert s.find_player_stat(leg, [dict(row, match_date="2026-10-28")]) is None

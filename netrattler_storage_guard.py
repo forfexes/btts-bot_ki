@@ -11,7 +11,7 @@ SB = (os.getenv("SUPABASE_URL") or "").rstrip("/")
 KEY = os.getenv("SUPABASE_SERVICE_ROLE_KEY") or os.getenv("SUPABASE_KEY") or ""
 H = {"apikey": KEY, "Authorization": f"Bearer {KEY}", "Content-Type": "application/json"}
 WARN_MB = float(os.getenv("STORAGE_WARN_MB", "420"))
-TRIM_MB = float(os.getenv("STORAGE_TRIM_MB", "450"))
+TRIM_MB = float(os.getenv("STORAGE_TRIM_MB", "430"))
 TRIM_KEEP_DAYS = int(os.getenv("STORAGE_TRIM_KEEP_DAYS", "2"))
 
 
@@ -25,7 +25,7 @@ def decide(mb: float) -> str:
 
 def trim_keep_days(mb: float) -> int:
     """Gestaffelt: je voller die DB, desto kuerzer bleiben die (regenerierbaren) x1-Snapshots erhalten."""
-    if mb >= TRIM_MB + 30:  # 480+ MB (Limit 500): nur noch 1 Tag behalten
+    if mb >= TRIM_MB + 30:  # 460+ MiB: only retain one day
         return 1
     return TRIM_KEEP_DAYS
 
@@ -40,13 +40,19 @@ def alert(text: str) -> None:
 
 
 def run() -> dict:
+    if not SB or not KEY:
+        raise RuntimeError("Storage guard configuration missing")
     r = requests.post(f"{SB}/rest/v1/rpc/db_size_mb", headers=H, json={}, timeout=30)
     info = {"probe": "storage_guard"}
     if not r.ok:
-        info["error"] = r.text[:160]
+        raise RuntimeError(f"Storage measurement failed: HTTP {r.status_code}")
     else:
         d = r.json()
-        mb = float(d.get("mb") or 0)
+        if not isinstance(d, dict) or d.get("mb") is None:
+            raise RuntimeError("Storage measurement missing mb")
+        mb = float(d["mb"])
+        if not (0 < mb < float("inf")):
+            raise RuntimeError("Storage measurement invalid")
         action = decide(mb)
         info.update(mb=mb, action=action, tables=d.get("tables"))
         if action == "trim":
@@ -54,6 +60,7 @@ def run() -> dict:
             dr = requests.delete(f"{SB}/rest/v1/x1_player_snapshots", headers={**H, "Prefer": "return=minimal"},
                                  params={"captured_at": f"lt.{cut}"}, timeout=120)
             info["trim_status"] = dr.status_code
+            dr.raise_for_status()
         if action != "ok":
             alert(f"⚠️ Supabase Hauptdatenbank {mb:.0f} MB (Limit 500). Aktion: {action}")
     if SB and KEY:
