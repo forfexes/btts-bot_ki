@@ -2622,10 +2622,14 @@ def send_group_reports(newly_closed: Sequence[Dict[str, Any]], current: Sequence
         chat = learned_chat(group, list(history) + list(newly_closed))
         if not chat:
             continue
-        lines = [f"📊 <b>NETRATTLER AUSWERTUNG {group.upper()}</b>", TODAY_S, ""]
-        lines.extend(performance_lines(history, group))
+        if group == "builder":
+            # Reines Result Settlement: nur die abgeschlossenen Builder, Bein fuer Bein, ohne ROI-/Statistikzeilen
+            lines = ["✅❌ <b>RESULT SETTLEMENT · BUILDER</b>", TODAY_S, ""]
+        else:
+            lines = [f"📊 <b>NETRATTLER AUSWERTUNG {group.upper()}</b>", TODAY_S, ""]
+            lines.extend(performance_lines(history, group))
         if items:
-            lines.extend(["", "✅❌ <b>Neu abgeschlossen</b>", ""])
+            lines.extend(([] if group == "builder" else ["", "✅❌ <b>Neu abgeschlossen</b>", ""]))
             for item in items[:30]:
                 block = format_settlement(item)
                 if len("\n".join(lines)) + len(block) > 3650:
