@@ -180,6 +180,62 @@ def build_ladders(rows, match_date):
     return base[:3] + xl[:2]
 
 
+def _shift_tiers(spec, shifts=(0, 1, 2), floor=0.01):
+    """spec: [(profil, key, label, cat, basislinie)] -> [(shift, p)]; jede Linie wird um 'shift' erhoeht."""
+    out = []
+    for sh in shifts:
+        p = 1.0
+        for r, key, _l, _c, ln in spec:
+            p *= _rate(r[key], ln + sh)
+        p *= CORR ** (len(spec) - 1)
+        if p >= floor:
+            out.append((sh, p))
+    return out
+
+
+def build_nate_mix(rows, match_date):
+    """Nate-Mix: 4-5 Beine im selben Spiel aus Fouls, Fouls gezogen, Tackles und Schuessen, jedes Bein auf seiner eigenen
+    stabilen Linie (2+ oder 3+). Leiter = alle Linien +1 / +2."""
+    cats = (("fouls", "Fouls", "fouls"), ("fouls_won", "Fouls gezogen", "fouls_won"),
+            ("tackles", "Tackles", "tackles"), ("shots", "Schüsse", "shots"))
+    out = []
+    for match, profs in _profiles_by_match(rows, "fouls").items():
+        cands = []
+        for r in profs:
+            for key, label, cat in cats:
+                if key not in r:
+                    continue
+                best = None
+                for ln in (2, 3):
+                    pr = _rate(r[key], ln)
+                    if pr >= 0.62:
+                        best = (pr, ln)
+                if best:
+                    cands.append((best[0], r, key, label, cat, best[1]))
+        cands.sort(key=lambda c: -c[0])
+        spec, per_player, per_key = [], {}, {}
+        for pr, r, key, label, cat, ln in cands:
+            if per_player.get(r["player"], 0) >= 2 or per_key.get(key, 0) >= (3 if key == "shots" else 2):
+                continue
+            spec.append((r, key, label, cat, ln))
+            per_player[r["player"]] = per_player.get(r["player"], 0) + 1
+            per_key[key] = per_key.get(key, 0) + 1
+            if len(spec) == 5:
+                break
+        if len(spec) < 4 or len({k for _r, k, *_ in spec}) < 2:
+            continue
+        tiers = _shift_tiers(spec)
+        if not tiers or tiers[0][1] < 0.12:
+            continue
+        legs = [_leg_from(r, key, ln, label, cat) for r, key, label, cat, ln in spec]
+        keyset = tuple(sorted((l["player"], l["category"], l["line"]) for l in legs))
+        out.append({"builder_id": "mn_" + hashlib.sha1((match_date + match + repr(keyset)).encode()).hexdigest()[:24],
+                    "match": match, "legs": legs, "joint": tiers[0][1], "fair": round(1 / tiers[0][1], 2), "size": len(legs),
+                    "title": "BET BUILDER · NATE MIX", "style": "MODEL NATE MIX", "tiers": tiers, "tier_shift": True, "xl": True})
+    out.sort(key=lambda p: -p["joint"])
+    return out[:3]
+
+
 def build_shot_ladders(rows, match_date):
     """Schuss-Leiter: 2 Spieler im selben Spiel auf 2+/3+/4+ Schuesse; SOT-Leiter auf 1+/2+."""
     out = []
@@ -253,7 +309,8 @@ def message(pick, match_date):
     if pick.get("tiers"):
         lines += ["", "🪜 <b>Leiter</b> (alle Beine auf derselben Linie):"]
         for t, jp in pick["tiers"]:
-            lines.append(f"    {t}+ bei allen Beinen · {jp * 100:.1f}% · faire Quote {1 / jp:.1f}")
+            lbl = ("Basis" if t == 0 else f"alle Linien +{t}") if pick.get("tier_shift") else f"{t}+ bei allen Beinen"
+            lines.append(f"    {lbl} · {jp * 100:.1f}% · faire Quote {1 / jp:.1f}")
         if pick.get("extra_lines"):
             lines += [""] + pick["extra_lines"]
         lines += ["", "💡 Nur setzen, wenn dein Buchmacher mindestens die faire Quote der gewählten Stufe bietet."]
@@ -284,7 +341,7 @@ def dedupe_overlap(picks):
         names = {l["player"] for l in p["legs"]}
         # XL-Leiter (7 Beine) darf neben der 4-Beine-Leiter desselben Spiels stehen; sonst keine Dubletten
         if p["match"] != "Cross-Match" and any(
-                k["match"] == p["match"] and (not p.get("xl") or k.get("xl"))
+                k["match"] == p["match"] and (not p.get("xl") or (k.get("xl") and k.get("style") == p.get("style")))
                 and len(names & {l["player"] for l in k["legs"]}) >= 2 for k in kept):
             continue
         kept.append(p)
@@ -301,7 +358,7 @@ def run(rows, match_date, send, url, key, logger=print):
     if os.getenv("NETRATTLER_MODEL_BUILDERS", "on").lower() == "off":
         return 0
     sent = 0
-    for pick in dedupe_overlap(build_ladders(rows, match_date) + build_shot_ladders(rows, match_date) + build_cards(rows, match_date) + build_fouls(rows, match_date) + build(rows, match_date)):
+    for pick in dedupe_overlap(build_ladders(rows, match_date) + build_nate_mix(rows, match_date) + build_shot_ladders(rows, match_date) + build_cards(rows, match_date) + build_fouls(rows, match_date) + build(rows, match_date)):
         msg = message(pick, match_date)
         hdr = {"apikey": key, "Authorization": f"Bearer {key}", "Content-Type": "application/json",
                "Prefer": "resolution=ignore-duplicates,return=representation"}

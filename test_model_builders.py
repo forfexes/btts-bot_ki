@@ -190,3 +190,19 @@ def test_weak_leg_filter_and_leg_reuse():
     be.LEG_HISTORY[(be.norm("Test Spieler"), "shots")] = [2, 3, 2, 4, 2, 3, 2, 3, 2, 2]
     assert not be.weak_leg(leg)
     be.LEG_HISTORY.clear()
+
+
+def test_nate_mix_mixed_markets_own_lines_and_shift_tiers():
+    import re
+    base = [2, 3, 2, 4, 2, 3, 2, 2, 3, 2]
+    rows = []
+    for n in ("A", "B", "C"):
+        rows.append({**_prof2(n, "A vs B", fouls=base, fouls_won=base, tackles=[2, 3, 2, 2, 3, 2, 4, 2, 2, 3],
+                              shots=[1, 2, 2, 3, 2, 2, 1, 2, 3, 2])})
+    mix = mb.build_nate_mix(rows, "d")
+    assert mix and 4 <= mix[0]["size"] <= 5 and len({l["category"] for l in mix[0]["legs"]}) >= 2
+    assert [t for t, _ in mix[0]["tiers"]][0] == 0
+    msg = re.sub(r"</?[bi]>", "", mb.message(mix[0], "d"))
+    assert "Basis" in msg and "alle Linien +1" in msg
+    allp = mb.dedupe_overlap(mb.build_ladders(rows, "d") + mix)
+    assert any(p["style"] == "MODEL NATE MIX" for p in allp) and any(p["style"] == "MODEL FOULS LADDER" for p in allp)

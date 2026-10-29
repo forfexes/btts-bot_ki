@@ -59,7 +59,7 @@ def _played(g):
 def foul_profiles(by_player, team, match, league, kickoff, n=10):
     """Je Spieler die Reihen der letzten Spiele (Fouls begangen/gezogen, Schuesse, Schuesse aufs Tor, Gelbe) fuer Leitern/Karten."""
     out = []
-    keys = {"fouls": "fouls_committed", "fouls_won": "fouls_won", "shots": "shots", "sot": "sot", "yellow": "yellow_cards"}
+    keys = {"fouls": "fouls_committed", "fouls_won": "fouls_won", "tackles": "tackles", "shots": "shots", "sot": "sot", "yellow": "yellow_cards"}
     for name, games in by_player.items():
         games = [g for g in games if _played(g)][:n]
         if len(games) < MIN_GAMES:
