@@ -167,7 +167,17 @@ def run():
     if used >= MAX_REQ:
         print("Lineup daily request budget exhausted")
         return 0
-    fixtures, _ = load_fixtures(day, now)
+    if _diag_rows("lineup_suspended", day):
+        print("API-Football suspended today; lineup run skipped")
+        return 0
+    try:
+        fixtures, _ = load_fixtures(day, now)
+    except RuntimeError as exc:
+        if "account suspended" not in str(exc):
+            raise
+        _diag({"probe": "lineup_suspended", "day": day})  # Anbieter-Sperre: einmal je Tag vermerken, kein 20-Min-Fehlalarm
+        print("API-Football account suspended; lineup run skipped")
+        return 0
     state = {}
     for s in _diag_rows("lineup_state", day):
         state[str(s.get("fixture_id"))] = {"done": s.get("done", False), "tries": s.get("tries", 0)}

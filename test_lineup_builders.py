@@ -47,3 +47,26 @@ def test_message_marks_lineup_confirmed(monkeypatch):
     assert "Startelf bestätigt" in mb.message(pick, "d")
     monkeypatch.delenv("NETRATTLER_LINEUP_CONFIRMED")
     assert "Startelf bestätigt" not in mb.message(pick, "d")
+
+
+def test_run_skips_quietly_when_provider_suspended(monkeypatch):
+    diags = []
+    monkeypatch.setattr(lb, "KEYS", ["k"]); monkeypatch.setattr(lb, "SB", "u"); monkeypatch.setattr(lb, "SK", "k")
+    monkeypatch.setattr(lb, "_diag_rows", lambda probe, day: [])
+    monkeypatch.setattr(lb, "_diag", lambda info: diags.append(info))
+    def boom(day, now):
+        raise RuntimeError("API-Football provider error (account suspended; fields: access); check provider dashboard")
+    monkeypatch.setattr(lb, "load_fixtures", boom)
+    assert lb.run() == 0
+    assert diags and diags[0]["probe"] == "lineup_suspended"
+
+
+def test_run_still_raises_other_provider_errors(monkeypatch):
+    import pytest
+    monkeypatch.setattr(lb, "KEYS", ["k"]); monkeypatch.setattr(lb, "SB", "u"); monkeypatch.setattr(lb, "SK", "k")
+    monkeypatch.setattr(lb, "_diag_rows", lambda probe, day: [])
+    def boom(day, now):
+        raise RuntimeError("API-Football HTTP 500")
+    monkeypatch.setattr(lb, "load_fixtures", boom)
+    with pytest.raises(RuntimeError):
+        lb.run()
