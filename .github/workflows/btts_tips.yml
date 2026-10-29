@@ -225,6 +225,11 @@ jobs:
           NETRATTLER_SKIP_REQUIRED_MARKETS: "btts,over25,combo,btts_ht,over15_ht,1x2"
           NETRATTLER_SKIP_MIN_PER_MARKET: "1"
           NETRATTLER_SKIP_TOTAL_MIN: "10"
+          # 2026-10-29 (Besitzer): Schwellen leicht gesenkt, damit wieder Tipps kommen. 1x2 bleibt unveraendert (negativer ROI).
+          NETRATTLER_BTTS_MIN_PROB: "60"
+          NETRATTLER_BTTS_MIN_EDGE: "0.05"
+          NETRATTLER_OVER25_MIN_PROB: "57"
+          NETRATTLER_OVER25_MIN_EDGE: "0.05"
           NETRATTLER_COMBO_MIN_PROB: "45"
           NETRATTLER_COMBO_MIN_EDGE: "0.02"
           NETRATTLER_COMBO_COMPONENT_MIN_PROB: "45"
