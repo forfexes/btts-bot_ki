@@ -7,6 +7,7 @@ from __future__ import annotations
 
 import os
 import re
+from datetime import date
 from typing import Any, Callable, Dict, Iterable, List, Optional
 
 import requests
@@ -65,6 +66,7 @@ def fetch_l20_rows(team_names: Iterable[str], max_rows: int = 40000,
                     f"{PLAYERS_DB_URL}/rest/v1/player_game_log",
                     headers={**headers, "Range": f"{offset}-{offset + 999}"},
                     params={"select": _SELECT, "or": f"({cond})",
+                            "match_date": f"lte.{date.today().isoformat()}",
                             "order": "match_date.desc.nullslast,event_id.desc"},
                     timeout=40,
                 )
@@ -77,7 +79,7 @@ def fetch_l20_rows(team_names: Iterable[str], max_rows: int = 40000,
                     log(f"🔑 player_game_log HTTP {r.status_code}: {r.text[:120]}")
                 break
             batch = r.json() or []
-            rows.extend(batch)
+            rows.extend(row for row in batch if str(row.get("match_date") or "")[:10] <= date.today().isoformat())
             if len(batch) < 1000:
                 break
             offset += 1000
