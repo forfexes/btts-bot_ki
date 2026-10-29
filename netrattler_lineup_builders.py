@@ -101,9 +101,9 @@ def _api(path, params):
 
 
 def load_fixtures(day, now):
-    rows = _diag_rows("lineup_fixtures", day)
+    rows = [x for x in _diag_rows("lineup_fixtures", day) if x.get("fixtures")]  # leere Listen zaehlen nicht als Cache
     if rows:
-        return rows[-1].get("fixtures") or [], 0
+        return rows[-1]["fixtures"], 0
     r = _api("/fixtures", {"date": day})
     body = r.json() if r.ok else {}
     resp = body.get("response") or []
