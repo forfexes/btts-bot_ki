@@ -66,11 +66,17 @@ def rows_for(season, gw):
             "pos": p.get("position"),
         }
     mi = {}
+    today = date.today().isoformat()
     for m in matches:
         if str(m.get("finished")).lower() != "true":
             continue
+        match_day = str(m.get("kickoff_time") or "")[:10]
+        # Some upstream rows claim 'finished' while kickoff is in the future.
+        # Never import future results as observed player history.
+        if not match_day or match_day > today:
+            continue
         mi[m["match_id"]] = {
-            "date": str(m.get("kickoff_time") or "")[:10],
+            "date": match_day,
             "home": tname.get(str(inum(m.get("home_team")))),
             "away": tname.get(str(inum(m.get("away_team")))),
         }
