@@ -652,9 +652,21 @@ def ladder_tiers(pick, steps=3, floor=0.03):
     return out
 
 
+PUBLIC_STYLE = {
+    "NATE ALT-LINE": "Alt-Line", "NATE CATEGORY": "Kategorie", "GODTIPSTER PROFILE": "Profil",
+    "TIPS BIBLE": "Standard", "AYSTAR BOOKING": "Karten", "AYSTAR MIX": "Mix",
+    "LIBRARY SAME GAME": "Same Game", "LIBRARY CROSS MATCH": "Cross Match",
+}
+
+
+def public_style(style):
+    """Sichtbarer Stilname ohne Quellen-/Personennamen."""
+    return PUBLIC_STYLE.get(str(style).upper(), str(style).title())
+
+
 def format_builder_message(pick: builder.BuilderPick) -> str:
     same_match = len({x.match for x in pick.legs}) == 1 and len(pick.legs) > 1
-    lines = [f"🔥 <b>BET BUILDER</b> · {pick.style.title()}", f"<i>{pick.variant}</i>"]
+    lines = [f"🔥 <b>BET BUILDER</b> · {public_style(pick.style)}", f"<i>{pick.variant}</i>"]
     if same_match:
         lines.append(f"⚽ <b>{pick.legs[0].match}</b>")
     lines.append("")

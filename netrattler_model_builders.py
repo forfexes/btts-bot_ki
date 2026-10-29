@@ -231,7 +231,7 @@ def build_nate_mix(rows, match_date):
         keyset = tuple(sorted((l["player"], l["category"], l["line"]) for l in legs))
         out.append({"builder_id": "mn_" + hashlib.sha1((match_date + match + repr(keyset)).encode()).hexdigest()[:24],
                     "match": match, "legs": legs, "joint": tiers[0][1], "fair": round(1 / tiers[0][1], 2), "size": len(legs),
-                    "title": "BET BUILDER · NATE MIX", "style": "MODEL NATE MIX", "tiers": tiers, "tier_shift": True, "xl": True})
+                    "title": "BET BUILDER · MIX", "style": "MODEL NATE MIX", "tiers": tiers, "tier_shift": True, "xl": True})
     out.sort(key=lambda p: -p["joint"])
     return out[:3]
 
