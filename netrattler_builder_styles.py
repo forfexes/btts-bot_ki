@@ -622,6 +622,36 @@ def _nate_market(leg):
     return _clean_market(leg)
 
 
+_LADDER_CATS = {"shots", "sot", "fouls", "fouls_won", "tackles", "tackles_committed", "shots_outside_box", "sot_outside_box"}
+
+
+def ladder_tiers(pick, steps=3, floor=0.03):
+    """Nate-Leiter: alle Beine zusammen eine Stufe hoeher (2+ -> 3+ -> 4+), Wahrscheinlichkeit aus der L10-Reihe.
+    Nur wenn jedes Bein eine Historie hat und eine zaehlbare Kategorie ist; Rueckgabe [(shift, [(leg, need)], p)]."""
+    legs = list(pick.legs)
+    if len(legs) < 2 or any(l.category not in _LADDER_CATS for l in legs):
+        return []
+    series = []
+    for l in legs:
+        ser = (builder.LEG_HISTORY.get((builder.norm(l.player), l.category)) or [])[:10]
+        if len(ser) < 5:
+            return []
+        series.append(ser)
+    out = []
+    for shift in range(steps):
+        p, needs = 1.0, []
+        for l, ser in zip(legs, series):
+            ln = float(l.line or 1)
+            need = (int(ln) if ln == int(ln) else int(ln) + 1) + shift
+            hits = sum(1 for v in ser if v >= need)
+            p *= (hits + 1) / (len(ser) + 2)
+            needs.append(need)
+        p *= 0.97 ** (len(legs) - 1)
+        if p >= floor:
+            out.append((shift, needs, p))
+    return out
+
+
 def format_builder_message(pick: builder.BuilderPick) -> str:
     same_match = len({x.match for x in pick.legs}) == 1 and len(pick.legs) > 1
     lines = [f"🔥 <b>BET BUILDER</b> · {pick.style.title()}", f"<i>{pick.variant}</i>"]
@@ -638,6 +668,13 @@ def format_builder_message(pick: builder.BuilderPick) -> str:
             _hist = ""
         if _hist:
             lines.append(f"      📈 <i>{_hist}</i>")
+    tiers = ladder_tiers(pick)
+    if len(tiers) >= 2:
+        lines += ["", "🪜 <b>Leiter</b> (alle Beine eine Stufe höher):"]
+        for shift, needs, p in tiers:
+            lbl = f"{needs[0]}+" if len(set(needs)) == 1 else "/".join(f"{n}+" for n in needs)
+            lines.append(f"    {lbl} bei allen Beinen · {p * 100:.0f}% · faire Quote {1 / p:.1f}")
+        lines.append("    <i>faire Modellquote, Buchmacherquote der Stufe prüfen</i>")
     lines.append("")
     if same_match:
         lines.append("💰 Builder-Quote: <b>live beim Bookmaker prüfen</b> · Keine synthetische Produktquote für Same-Game-Builder")

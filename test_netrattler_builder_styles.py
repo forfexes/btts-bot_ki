@@ -185,3 +185,16 @@ def main():
 
 if __name__ == "__main__":
     main()
+
+
+def test_ladder_tiers_added_to_builder_message():
+    import netrattler_builder_styles as st
+    for n in ("A", "B"):
+        builder.LEG_HISTORY[(builder.norm(n), "shots")] = [2, 3, 2, 4, 2, 3, 2, 3, 2, 2]
+    legs = [builder.PropLeg(player=n, team="", match="X vs Y", league="L", market="shots", category="shots", line=2.0,
+                            odds=1.5, probability=.7, source="kambi_ub", quality=.7, edge=3.0) for n in ("A", "B")]
+    pick = builder.BuilderPick(builder_id="t", style="NATE CATEGORY", variant="v", legs=legs, total_odds=2.25, stake=0.0,
+                               estimated_odds=True, match_date="2026-10-29")
+    msg = st.format_builder_message(pick)
+    assert "Leiter" in msg and "3+ bei allen Beinen" in msg
+    builder.LEG_HISTORY.clear()
