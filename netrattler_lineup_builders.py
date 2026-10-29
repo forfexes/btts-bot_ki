@@ -105,7 +105,12 @@ def load_fixtures(day, now):
     if rows:
         return rows[-1].get("fixtures") or [], 0
     r = _api("/fixtures", {"date": day})
-    resp = r.json().get("response") if r.ok else []
+    body = r.json() if r.ok else {}
+    resp = body.get("response") or []
+    if not resp:  # nicht zwischenspeichern, sonst bleibt der Tag leer; Fehlertext zur Diagnose ablegen
+        _diag({"probe": "lineup_error", "day": day, "http": r.status_code, "errors": str(body.get("errors"))[:300],
+               "results": body.get("results")})
+        return [], 1
     fixtures = []
     for x in resp or []:
         if (x.get("fixture", {}).get("status") or {}).get("short") != "NS":
