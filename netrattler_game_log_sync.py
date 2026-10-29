@@ -65,6 +65,9 @@ def to_log_row(r):
     name = str(r.get("player_name") or "").strip()
     if not name or not r.get("match_date") or not r.get("match_id"):
         return None
+    # Reject future-dated 'finished' source rows, including legacy rows already in Supabase.
+    if str(r["match_date"])[:10] > datetime.now(timezone.utc).date().isoformat():
+        return None
     if r.get("source") != "espn":  # ESPN liefert nur eingesetzte Spieler, aber keine Minuten
         try:
             if float(r.get("minutes") or 0) <= 0:
@@ -141,7 +144,10 @@ def trim_rows(rows, max_games=25, active_days=60, today=None):
     ref = today or date.today()
     cutoff = (ref - timedelta(days=active_days)).isoformat()
     by = defaultdict(list)
+    today_s = ref.isoformat()
     for r in rows:
+        if str(r.get("match_date") or "")[:10] > today_s:
+            continue
         by[r["player_key"]].append(r)
     out = []
     for lst in by.values():
