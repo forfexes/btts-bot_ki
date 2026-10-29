@@ -172,12 +172,12 @@ def test_shot_ladder_and_cards_and_seven_legs():
                                shots=[2, 3, 2, 4, 2, 3, 2, 2, 3, 2], sot=[1, 1, 2, 1, 1, 1, 2, 1, 1, 1],
                                yellow=[1, 1, 1, 0, 1, 1, 1, 0, 1, 1]))
     lad = mb.build_ladders(rows, "2026-10-28")
-    assert lad and lad[0]["size"] in (4, 5) and lad[0]["extra_lines"] and "7 Beine" in lad[0]["extra_lines"][0]
+    assert lad and lad[0]["size"] in (4, 5, 7)
     sh = mb.build_shot_ladders(rows, "2026-10-28")
     assert any(p["style"] == "MODEL SHOT LADDER" for p in sh) and any(p["style"] == "MODEL SOT LADDER" for p in sh)
     cd = mb.build_cards(rows, "2026-10-28")
     assert cd and cd[0]["size"] == 2 and cd[0]["legs"][0]["odds"] == 0
-    assert "7 Beine" in mb.message(lad[0], "2026-10-28")
+    assert "Leiter" in mb.message(lad[0], "2026-10-28")
 
 
 def test_weak_leg_filter_and_leg_reuse():

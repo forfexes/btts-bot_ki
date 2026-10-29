@@ -153,28 +153,30 @@ def _ladder_pick(match, spec, lines, title, style, prefix, match_date, base_line
 
 
 def build_ladders(rows, match_date):
-    """Foul-Leiter wie Bet-Builder-X: je Spiel 2 Spieler 'Fouls' + 2 Spieler 'Fouls gezogen' (auch dieselben), Stufen 2+/3+/4+;
-    dazu die 7-Beine-Variante (4 Fouls + 3 Fouls gezogen) auf 2+ als Zusatzzeile."""
+    """Foul-Leiter wie bei Nate: EIN Builder im selben Spiel mit bis zu 7 Beinen (Fouls und Fouls gezogen gemischt,
+    derselbe Spieler darf in beiden vorkommen), alle Beine auf derselben Linie, angeboten als Leiter 2+/3+/4+.
+    Es wird die groesste Variante gewaehlt, die noch eine brauchbare Basis-Wahrscheinlichkeit hat (7, sonst 5, sonst 4 Beine)."""
     out = []
     for match, profs in _profiles_by_match(rows, "fouls", "fouls_won").items():
         if len(profs) < 2:
             continue
         top_f = sorted(profs, key=lambda r: -_rate(r["fouls"], 2))
         top_w = sorted(profs, key=lambda r: -_rate(r["fouls_won"], 2))
-        spec = [(r, "fouls", "Fouls", "fouls") for r in top_f[:2]] + [(r, "fouls_won", "Fouls gezogen", "fouls_won") for r in top_w[:2]]
-        extra = None
-        if len(profs) >= 4:
-            big = [(r, "fouls", "Fouls", "fouls") for r in top_f[:4]] + [(r, "fouls_won", "Fouls gezogen", "fouls_won") for r in top_w[:3]]
-            tb = _tiers(big, (2,), floor=0.0)
-            if tb:
-                extra = [f"🔥 Variante 7 Beine (4× Fouls, 3× gezogen) bei 2+: {tb[0][1] * 100:.1f}% · faire Quote {1 / tb[0][1]:.1f}"]
-                extra += ["    " + ", ".join(sorted({r['player'] for r, *_ in big}))]
+
+        def spec(nf, nw):
+            return [(r, "fouls", "Fouls", "fouls") for r in top_f[:nf]] + [(r, "fouls_won", "Fouls gezogen", "fouls_won") for r in top_w[:nw]]
+
         pk = None
-        if len(profs) >= 3:  # Nate: bis 5 Beine (3x Fouls + 2x gezogen), sonst 4 Beine
-            spec5 = [(r, "fouls", "Fouls", "fouls") for r in top_f[:3]] + [(r, "fouls_won", "Fouls gezogen", "fouls_won") for r in top_w[:2]]
-            pk = _ladder_pick(match, spec5, (2, 3, 4), "FOUL LEITER", "MODEL FOULS LADDER", "ml_", match_date, 2, extra, min_base=0.12)
-        if pk is None:
-            pk = _ladder_pick(match, spec, (2, 3, 4), "FOUL LEITER", "MODEL FOULS LADDER", "ml_", match_date, 2, extra)
+        for nf, nw, min_base in ((4, 3, 0.04), (3, 2, 0.12), (2, 2, 0.20)):
+            if len(top_f) < nf or len(top_w) < nw:
+                continue
+            tiers = _tiers(spec(nf, nw), (2, 3, 4), floor=0.002)
+            if tiers and tiers[0][1] >= min_base:
+                pk = _ladder_pick(match, spec(nf, nw), (2, 3, 4), "FOUL LEITER", "MODEL FOULS LADDER", "ml_", match_date, 2,
+                                  min_base=min_base)
+                if pk:
+                    pk["tiers"] = tiers
+                    break
         if pk:
             out.append(pk)
     out.sort(key=lambda p: -p["joint"])
