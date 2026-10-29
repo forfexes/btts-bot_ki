@@ -2,7 +2,7 @@ import netrattler_model_builders as mb
 
 
 def leg(player, p=80, line=2, match="A vs B"):
-    return {"player": player, "match": match, "market": f"{player} {line}+ Fouls", "category": "fouls",
+    return {"kickoff": "2099-10-29T20:00:00+00:00", "player": player, "match": match, "market": f"{player} {line}+ Fouls", "category": "fouls",
             "line": float(line), "probability": p, "source": "model_line_fouls", "series": [3, 2, 2, 3, 2, 1, 2, 3, 2, 2]}
 
 
@@ -131,7 +131,7 @@ def test_model_builder_actual_chat_receipt_overrides_config(monkeypatch):
 
 
 def _profile(name, fouls, won, match="A vs B"):
-    return {"source": "foul_profile", "player": name, "team": "A", "match": match, "league": "L", "kickoff": "k",
+    return {"source": "foul_profile", "player": name, "team": "A", "match": match, "league": "L", "kickoff": "2099-10-29T20:00:00+00:00",
             "fouls": fouls, "fouls_won": won}
 
 
@@ -158,7 +158,7 @@ def test_dedupe_overlap_prefers_ladder_over_subset_builders():
 
 
 def _prof2(player, match, **series):
-    d = {"source": "foul_profile", "player": player, "team": "T", "match": match, "league": "L", "kickoff": "k"}
+    d = {"source": "foul_profile", "player": player, "team": "T", "match": match, "league": "L", "kickoff": "2099-10-29T20:00:00+00:00"}
     d.update(series)
     return d
 
@@ -206,3 +206,23 @@ def test_nate_mix_mixed_markets_own_lines_and_shift_tiers():
     assert "Basis" in msg and "alle Linien +1" in msg
     allp = mb.dedupe_overlap(mb.build_ladders(rows, "d") + mix)
     assert any(p["style"] == "MODEL NATE MIX" for p in allp) and any(p["style"] == "MODEL FOULS LADDER" for p in allp)
+
+
+def test_late_model_builder_never_reserves_or_sends(monkeypatch):
+    pick = _one_pick(monkeypatch)
+    for kickoff in ("2020-01-01T12:00:00Z", "", "2026-10-29T20:00:00", "invalid"):
+        for l in pick["legs"]:
+            l["kickoff"] = kickoff
+        monkeypatch.setattr(mb.requests, "post", lambda *a, **kw: (_ for _ in ()).throw(AssertionError("no DB reservation")))
+        assert mb.run([], "2026-10-29", lambda _: (_ for _ in ()).throw(AssertionError("no Telegram")), "https://db.invalid", "key") == 0
+
+
+def test_cross_match_rejects_one_started_leg():
+    p = {"legs": [{"kickoff": "2099-01-01T12:00:00Z"}, {"kickoff": "2020-01-01T12:00:00Z"}]}
+    assert not mb._pick_not_started(p, mb.datetime.now(mb.timezone.utc))
+
+
+def test_future_timezone_offset_and_exact_kickoff():
+    now = mb.datetime(2026, 10, 29, 20, 0, tzinfo=mb.timezone.utc)
+    assert mb._future_kickoff("2026-10-29T22:00:00+01:00", now)
+    assert not mb._future_kickoff("2026-10-29T21:00:00+01:00", now)
