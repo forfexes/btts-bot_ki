@@ -609,36 +609,41 @@ def _clean_market(leg):
     return " ".join(text.split()) or str(leg.market or "")
 
 
+def _nate_market(leg):
+    """'Schüsse Über 2' -> '2+ Schüsse' (Nate-Schreibweise); sonst der bereinigte Markt."""
+    label = _CAT_DE.get(leg.category)
+    try:
+        line = float(leg.line)
+    except (TypeError, ValueError):
+        line = 0.0
+    if label and leg.category not in ("score", "first_scorer", "last_scorer", "yellow_cards", "assist") and line:
+        need = int(line) if line == int(line) else int(line) + 1
+        return f"{need}+ {label}"
+    return _clean_market(leg)
+
+
 def format_builder_message(pick: builder.BuilderPick) -> str:
-    sep = "━" * 18
     same_match = len({x.match for x in pick.legs}) == 1 and len(pick.legs) > 1
-    lines = [f"🏗️ <b>NETRATTLER {pick.style}</b>", f"<b>{pick.variant}</b>", sep]
+    lines = [f"🔥 <b>BET BUILDER</b> · {pick.style.title()}", f"<i>{pick.variant}</i>"]
     if same_match:
         lines.append(f"⚽ <b>{pick.legs[0].match}</b>")
-    for i, leg in enumerate(pick.legs, 1):
+    lines.append("")
+    for leg in pick.legs:
         icon = builder.CATEGORY_ICON.get(leg.category, "🎯")
-        match_suffix = "" if same_match else f" · {leg.match}"
-        edge_txt = f" · Edge {leg.edge:+.1f}%" if leg.edge > 0 else ""
-        lines.append(
-            f"{i}. {icon} <b>{_clean_player(leg.player)}</b> — {_clean_market(leg)} @ {leg.odds:.2f}"
-            f"{edge_txt}{match_suffix}"
-        )
+        match_suffix = "" if same_match else f"  <i>({leg.match})</i>"
+        lines.append(f"{icon} <b>{_clean_player(leg.player)}</b> {_nate_market(leg)} @ {leg.odds:.2f}{match_suffix}")
         try:
             _hist = builder.history_text(leg)
         except Exception:
             _hist = ""
         if _hist:
-            lines.append(f"    📈 <i>{_hist}</i>")
-    lines.append(sep)
+            lines.append(f"      📈 <i>{_hist}</i>")
+    lines.append("")
     if same_match:
-        lines.append("💰 Builder-Quote: <b>live beim Bookmaker prüfen</b>")
-        lines.append("🔒 Keine synthetische Produktquote für Same-Game-Builder")
-        lines.append("🔥 Einsatz: <b>erst nach echter Builder-Quote</b>")
+        lines.append("💰 Builder-Quote: <b>live beim Bookmaker prüfen</b> · Keine synthetische Produktquote für Same-Game-Builder")
     else:
-        lines.append(f"💰 Rechnerische Kombi-Quote: <b>{pick.total_odds:.2f}</b> (aus echten Einzelquoten)")
-        lines.append("⚠️ Kein bestätigtes Kombi-Angebot · Quote und Kombinierbarkeit beim Buchmacher prüfen")
+        lines.append(f"💰 Rechnerische Kombi-Quote: <b>{pick.total_odds:.2f}</b> · Kein bestätigtes Kombi-Angebot, beim Buchmacher prüfen")
         lines.append(f"🔥 Einsatz: <b>{pick.stake:.2f} Units</b> (nur bei bestätigter Quote)")
-    lines.append("🧠 Daten: echte Buchmacher-Quoten")
     return "\n".join(lines)
 
 
