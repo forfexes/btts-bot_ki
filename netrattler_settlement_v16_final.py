@@ -695,7 +695,7 @@ def format_direct_summary(settlement: Dict[str, Any]) -> str:
             if not isinstance(item, dict):
                 continue
             st = normalized_status(item.get("status"))
-            icon = "✅" if st == "win" else "❌" if st == "loss" else "⏳"
+            icon = "✅" if st == "win" else "❌" if st == "loss" else "➖" if st == "void" else "⏳"
             leg = item.get("leg") if isinstance(item.get("leg"), dict) else {}
             label = market_text(leg) if leg else str(item.get("reason") or "Leg")
             reason_txt = str(item.get("reason") or "")
@@ -819,7 +819,7 @@ def edit_original_tip(settlement: Dict[str, Any]) -> bool:
 
     Telegram cannot retrieve an arbitrary old message by id. If neither candidate chat owns
     the message, the default is to keep settlement silent rather than create a duplicate post.
-    A separate compact result update is available only via explicit emergency opt-in.
+    Separate result messages are disabled, including emergency fallbacks.
     """
     if normalized_status(settlement.get("status")) not in {"win", "loss"}:
         return False
@@ -843,23 +843,9 @@ def edit_original_tip(settlement: Dict[str, Any]) -> bool:
             if telegram_edit(chat_id, message_id, edited):
                 return True
 
-    # Default: result MUST stay in the same posted tip. A separate result post is
-    # only an explicit emergency fallback, never the normal path.
-    allow_separate = str(os.getenv("SETTLEMENT_ALLOW_SEPARATE_RESULT_UPDATE", "false")).lower() in {"1", "true", "yes", "on"}
-    if allow_separate and canonical_chat:
-        match = match_label(settlement)
-        status = normalized_status(settlement.get("status"))
-        icon = "✅" if status == "win" else "❌"
-        reason = str(settlement.get("reason") or "")
-        profit = settlement.get("profit_units")
-        msg = f"{icon} <b>RESULT UPDATE</b>\n{match}\n{reason}"
-        if profit is not None:
-            msg += f"\nProfit: <b>{as_float(profit):+.2f}U</b>"
-        if telegram(canonical_chat, msg):
-            log(f"Original-Tipp nicht editierbar; separater Fallback gesendet: {settlement.get('tip_id')}", "WARN")
-    else:
-        log(f"Original-Tipp konnte nicht editiert werden; KEIN separater Post: {settlement.get('tip_id')}", "WARN")
+    log(f"Original-Tipp konnte nicht editiert werden; KEIN separater Post: {settlement.get('tip_id')}", "WARN")
     return False
+
 
 def _save_tip_edit_receipt(settlement: Dict[str, Any], edited: bool) -> None:
     """Persist a durable edit receipt so closed tips can be retried on later runs."""
@@ -2639,57 +2625,33 @@ def learned_chat(group: str, rows: Sequence[Dict[str, Any]]) -> str:
     return cnt.most_common(1)[0][0] if cnt else (configured or GROUPS.get("default") or "")
 
 
-def send_group_reports(newly_closed: Sequence[Dict[str, Any]], current: Sequence[Dict[str, Any]], history: Sequence[Dict[str, Any]]) -> None:
-    by_group: Dict[str, List[Dict[str, Any]]] = defaultdict(list)
-    for settlement in newly_closed:
-        by_group[settlement.get("market_group", "default")].append(settlement)
-    pending_counts = Counter(x.get("market_group", "default") for x in current if x.get("status") == "pending")
-
-    statuses = []
-    for group in GROUP_ORDER:
-        items = by_group.get(group, [])
-        if not items and not (SEND_PENDING_SUMMARY and pending_counts[group]):
-            continue
-        chat = learned_chat(group, list(history) + list(newly_closed))
-        if not chat:
-            continue
-        if group == "builder":
-            # Reines Result Settlement: nur die abgeschlossenen Builder, Bein fuer Bein, ohne ROI-/Statistikzeilen
-            lines = ["✅❌ <b>RESULT SETTLEMENT · BUILDER</b>", TODAY_S, ""]
-        else:
-            lines = [f"📊 <b>NETRATTLER AUSWERTUNG {group.upper()}</b>", TODAY_S, ""]
-            lines.extend(performance_lines(history, group))
-        if items:
-            lines.extend(([] if group == "builder" else ["", "✅❌ <b>Neu abgeschlossen</b>", ""]))
-            for item in items[:30]:
-                block = format_settlement(item)
-                if len("\n".join(lines)) + len(block) > 3650:
-                    break
-                lines.extend([block, ""])
-        if SEND_PENDING_SUMMARY and pending_counts[group]:
-            lines.append(f"⏳ Noch offen: {pending_counts[group]}")
-        ok = telegram(chat, "\n".join(lines))
-        statuses.append(f"{group}:{'OK' if ok else 'FAIL'}")
-    log("Gruppenreports: " + (", ".join(statuses) if statuses else "keine neuen Abschlüsse"))
+def send_group_reports(newly_closed, current, history):
+    """Settlement is shown exclusively inside the original tips."""
+    log("Separate Gruppen-Ergebnisberichte deaktiviert; Auswertung nur im Original-Tipp")
 
 
-def send_roi_report(history: Sequence[Dict[str, Any]]) -> None:
-    chat = GROUPS.get("stats") or GROUPS.get("default")
-    if not chat:
-        return
-    lines = [f"📈 <b>NETRATTLER ROI REPORT</b>", TODAY_S, ""]
-    for group in GROUP_ORDER:
-        month = summary(history, group, "month")
-        year = summary(history, group, "year")
-        if not month["bets"] and not year["bets"]:
+def send_roi_report(history):
+    """No separate settlement/ROI messages."""
+    return None
+
+
+def refreshable_closed_builders(existing):
+    """A lost builder can still have unresolved legs; keep grading those legs."""
+    cutoff = (TODAY - timedelta(days=7)).isoformat()
+    out = []
+    for row in existing:
+        if row.get("market_group") != "builder" or row.get("status") not in {"win", "loss"}:
             continue
-        lines.append(
-            f"<b>{group.upper()}</b>\n"
-            f"Monat: {month['wins']}-{month['losses']} / {month['bets']} · {roi_text(month)}\n"
-            f"Jahr: {year['wins']}-{year['losses']} / {year['bets']} · {roi_text(year)}"
-        )
-    if len(lines) > 3:
-        telegram(chat, "\n\n".join(lines))
+        if str(row.get("tip_date") or "") < cutoff:
+            continue
+        if not any(isinstance(leg, dict) and leg.get("status") == "pending" for leg in row.get("legs_payload") or []):
+            continue
+        payload = dict(row.get("tip_payload") or {})
+        if not confirmed_builder_delivery(payload):
+            continue
+        payload["_table"] = row.get("source_table") or "netrattler_builder_picks"
+        out.append(payload)
+    return out
 
 
 def main() -> None:
@@ -2712,6 +2674,8 @@ def main() -> None:
         log(f"Legacy-False-VOIDs wieder auf pending gesetzt: {repaired_voids}")
     previous = existing_status_map(existing)
     tips = load_tips()
+    loaded_ids = {tip_id(tip) for tip in tips}
+    tips.extend(tip for tip in refreshable_closed_builders(existing) if tip_id(tip) not in loaded_ids)
     dates = sorted({row_date(tip) for tip in tips})
     log(f"Dates: {dates}")
     results = load_results(dates)
@@ -2753,14 +2717,18 @@ def main() -> None:
     if stale_voids:
         log(f"Stale-VOIDs in tips synchronisiert: {len(stale_voids)}")
     edited_count = 0
-    for row in newly_closed:
+    old_rows = {str(row.get("tip_id")): row for row in existing}
+    edit_updates = [row for row in settled if row["status"] in {"win", "loss"} and (
+        previous.get(str(row["tip_id"])) not in {"win", "loss"}
+        or row.get("legs_payload") != old_rows.get(str(row["tip_id"]), {}).get("legs_payload"))]
+    for row in edit_updates:
         update_source_tip(row)
         edited = edit_original_tip(row)
         edited_count += bool(edited)
         _save_tip_edit_receipt(row, edited)
-    if newly_closed:
-        log(f"Original-Tipps direkt editiert: {edited_count}/{len(newly_closed)}")
-    retry_unedited_originals(existing, newly_closed)
+    if edit_updates:
+        log(f"Original-Tipps direkt editiert: {edited_count}/{len(edit_updates)}")
+    retry_unedited_originals(existing, edit_updates)
     try:
         _today = datetime.now(timezone.utc).date()
         _recent = [r for r in (list(existing) + list(settled))

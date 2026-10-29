@@ -100,7 +100,7 @@ jobs:
           SETTLEMENT_ALLOW_SEPARATE_RESULT_UPDATE: "false"
           # Retry 429 edits with throttling, then restore missed original posts.
           SETTLEMENT_TG_EDIT_GAP_SEC: "1.5"
-          SETTLEMENT_TG_REPLAY_DAYS: "4"
+          SETTLEMENT_TG_REPLAY_DAYS: "7"
           SETTLEMENT_TG_REPLAY_MAX: "50"
         run: python netrattler_settlement_runner.py
       - name: Void tips pending > 7 days with no result (DB only, backed up)

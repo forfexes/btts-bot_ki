@@ -26,6 +26,7 @@ def test_settlement_routes():
         assert fake.GROUPS["scorer"] == "LATE"
         assert fake.GROUPS["over15_ht"] == "HT"
         assert fake.send_roi_report([]) is None
+        assert fake.send_group_reports([], [], []) is None
     finally:
         if old is None:
             sys.modules.pop("netrattler_settlement_v16_final", None)

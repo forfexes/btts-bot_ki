@@ -36,3 +36,23 @@ def test_adjacent_day_needs_exact_player_both_teams_and_unique_fixture():
     assert s.find_player_stat(leg, [dict(row, player_name="Other Celiz")]) is None
     assert s.find_player_stat(leg, [row, dict(row, match_id="espn-456")]) is None
     assert s.find_player_stat(leg, [dict(row, match_date="2026-10-28")]) is None
+
+
+def test_no_separate_settlement_reports_even_with_emergency_flag(monkeypatch):
+    from unittest.mock import Mock
+    send = Mock()
+    monkeypatch.setattr(s, "telegram", send)
+    monkeypatch.setenv("SETTLEMENT_ALLOW_SEPARATE_RESULT_UPDATE", "true")
+    row = {"tip_id": "test", "status": "loss", "market_group": "builder", "tip_payload": {}}
+    s.send_group_reports([row], [], [])
+    s.send_roi_report([])
+    assert not s.edit_original_tip(row)
+    send.assert_not_called()
+
+
+def test_lost_builder_with_open_legs_is_rechecked():
+    row = {"market_group": "builder", "status": "loss", "tip_date": s.TODAY_S,
+           "legs_payload": [{"status": "loss"}, {"status": "pending"}],
+           "tip_payload": {"tip_id": "b1", "telegram_msg_id": "123"}}
+    assert len(s.refreshable_closed_builders([row])) == 1
+    assert s.refreshable_closed_builders([dict(row, legs_payload=[{"status": "loss"}])]) == []
