@@ -13,6 +13,7 @@ import re
 import unicodedata
 
 import requests
+from netrattler_apif_response import checked_response
 
 import netrattler_foul_props as fp
 import netrattler_model_builders as mb
@@ -85,15 +86,20 @@ def _sbh(extra=None):
 
 def _diag(info):
     try:
-        requests.post(f"{SB}/rest/v1/netrattler_card_diag", headers=_sbh(), data=json.dumps({"info": info}), timeout=15)
-    except Exception:
-        pass
+        r = requests.post(f"{SB}/rest/v1/netrattler_card_diag", headers=_sbh(), data=json.dumps({"info": info}), timeout=15)
+        r.raise_for_status()
+    except requests.RequestException:
+        raise RuntimeError("Lineup state persistence failed") from None
 
 
 def _diag_rows(probe, day):
     r = requests.get(f"{SB}/rest/v1/netrattler_card_diag", headers=_sbh(), timeout=20,
-                     params={"select": "info", "info->>probe": f"eq.{probe}", "info->>day": f"eq.{day}", "limit": "1000"})
-    return [x["info"] for x in r.json()] if r.ok and isinstance(r.json(), list) else []
+                     params={"select": "info", "order": "id.asc", "info->>probe": f"eq.{probe}", "info->>day": f"eq.{day}", "limit": "1000"})
+    r.raise_for_status()
+    rows = r.json()
+    if not isinstance(rows, list) or len(rows) >= 1000:
+        raise RuntimeError("Incomplete lineup state read")
+    return [x["info"] for x in rows]
 
 
 def _api(path, params):
@@ -104,9 +110,10 @@ def load_fixtures(day, now):
     rows = [x for x in _diag_rows("lineup_fixtures", day) if x.get("fixtures")]  # leere Listen zaehlen nicht als Cache
     if rows:
         return rows[-1]["fixtures"], 0
+    _diag({"probe": "lineup_req", "day": day, "request": "fixtures"})
     r = _api("/fixtures", {"date": day})
-    body = r.json() if r.ok else {}
-    resp = body.get("response") or []
+    resp = checked_response(r)
+    body = r.json()
     if not resp:  # nicht zwischenspeichern, sonst bleibt der Tag leer; Fehlertext zur Diagnose ablegen
         _diag({"probe": "lineup_error", "day": day, "http": r.status_code, "errors": str(body.get("errors"))[:300],
                "results": body.get("results")})
@@ -153,34 +160,43 @@ def make_sender():
 
 def run():
     if not (KEYS and SB and SK):
-        print("missing secrets")
-        return 0
+        raise RuntimeError("Lineup configuration missing")
     now = dt.datetime.now(dt.timezone.utc)
     day = now.date().isoformat()
-    fixtures, used = load_fixtures(day, now)
+    used = len(_diag_rows("lineup_req", day))
+    if used >= MAX_REQ:
+        print("Lineup daily request budget exhausted")
+        return 0
+    fixtures, _ = load_fixtures(day, now)
     state = {}
     for s in _diag_rows("lineup_state", day):
         state[str(s.get("fixture_id"))] = {"done": s.get("done", False), "tries": s.get("tries", 0)}
-    used += sum(1 for _ in _diag_rows("lineup_req", day))
+    used = len(_diag_rows("lineup_req", day))
     todo = due_fixtures(fixtures, state, now, used)
-    matches, starters_by_match = [], {}
+    matches, starters_by_match, confirmed_ids = [], {}, []
     for f in todo:
-        r = _api("/fixtures/lineups", {"fixture": f["id"]})
         _diag({"probe": "lineup_req", "day": day, "fixture_id": f["id"]})
-        names = starters_from(r.json().get("response") if r.ok else [])
+        r = _api("/fixtures/lineups", {"fixture": f["id"]})
+        names = starters_from(checked_response(r))
         tries = state.get(str(f["id"]), {}).get("tries", 0) + 1
-        _diag({"probe": "lineup_state", "day": day, "fixture_id": f["id"], "done": bool(names), "tries": tries})
+        _diag({"probe": "lineup_state", "day": day, "fixture_id": f["id"], "done": False, "tries": tries})
         if not names:
             continue
         match = f"{f['home']} vs {f['away']}"
         matches.append({"match": match, "league": f.get("league", ""), "kickoff": f["ko"]})
         starters_by_match[match] = names
+        confirmed_ids.append(f["id"])
     sent = 0
     if matches:
         os.environ["NETRATTLER_LINEUP_CONFIRMED"] = "1"
         rows = fp.rows_for_matches(matches, SB, SK, norm)
         rows = filter_to_starters(rows, starters_by_match)
-        sent = mb.run(rows, day, make_sender(), SB, SK)
+        try:
+            sent = mb.run(rows, day, make_sender(), SB, SK)
+        finally:
+            os.environ.pop("NETRATTLER_LINEUP_CONFIRMED", None)
+        for fid in confirmed_ids:
+            _diag({"probe": "lineup_state", "day": day, "fixture_id": fid, "done": True, "tries": state.get(str(fid), {}).get("tries", 0) + 1})
     _diag({"probe": "lineup_run", "day": day, "fixtures": len(fixtures), "checked": len(todo), "confirmed": len(matches), "sent": sent})
     print(f"fixtures={len(fixtures)} checked={len(todo)} confirmed={len(matches)} sent={sent}")
     return sent

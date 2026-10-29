@@ -20,6 +20,10 @@ on:
       - "test_model_builders.py"
       - "test_lineup_builders.py"
       - "netrattler_lineup_builders.py"
+      - "netrattler_apif_response.py"
+      - "netrattler_apifootball_players.py"
+      - "netrattler_pending_result_backfill.py"
+      - "test_netrattler_operational_failures.py"
       - "netrattler_builder_engine.py"
       - "test_netrattler_builder_delivery.py"
       - "btts_bot.py"
@@ -180,3 +184,6 @@ jobs:
       - run: python -m pytest -q test_odds_band_policy.py
       - run: python -m pytest -q test_key_live.py
       - run: python -m pytest -q test_fuzzy_dup.py
+
+      - name: Operational failure regression
+        run: python -m pytest -q test_netrattler_operational_failures.py test_netrattler_post_run_check.py

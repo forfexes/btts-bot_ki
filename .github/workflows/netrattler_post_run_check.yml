@@ -14,6 +14,8 @@ on:
       - NETRATTLER V36D MANUAL SOURCE LEARNING
       - NETRATTLER Settlement Final V25 MULTISOURCE
       - NETRATTLER Health Check
+      - NETRATTLER Lineup Builders
+      - NETRATTLER APIFootball Players Daily
       - NETRATTLER Core CI
       - NETRATTLER Public Sources CI
     types: [completed]

@@ -53,6 +53,11 @@ def team_match(a: Any, b: Any) -> bool:
 
 
 def tip_pair(row: Dict[str, Any]) -> Optional[Tuple[str, str]]:
+    match = str(row.get("match") or "")
+    if " vs " in match:
+        home, away = match.split(" vs ", 1)
+        if home.strip() and away.strip():
+            return home.strip(), away.strip()
     m = _PAIR.search(str(row.get("message_text") or ""))
     if m:
         return m.group(1).strip(), m.group(2).strip()
@@ -60,6 +65,9 @@ def tip_pair(row: Dict[str, Any]) -> Optional[Tuple[str, str]]:
 
 
 def tip_day(row: Dict[str, Any]) -> Optional[str]:
+    explicit = row.get("date") or row.get("match_date")
+    if explicit:
+        return str(explicit)[:10]
     m = re.search(r"(20\d\d-\d\d-\d\d)", str(row.get("tip_id") or ""))
     if m:
         return m.group(1)
@@ -71,15 +79,37 @@ def pending_tips() -> List[Dict[str, Any]]:
     since = (datetime.now(timezone.utc) - timedelta(days=MAX_DAYS)).isoformat()
     until = (datetime.now(timezone.utc) - timedelta(hours=6)).isoformat()
     r = requests.get(f"{SB}/rest/v1/tips", headers=H, timeout=40, params={
-        "select": "tip_id,market,message_text,created_at", "status": "eq.pending",
+        "select": "tip_id,market,match,date,builder_legs,message_text,created_at", "status": "eq.pending",
         "created_at": f"gte.{since}", "and": f"(created_at.lte.{until})", "limit": "5000"})
-    return r.json() if r.ok and isinstance(r.json(), list) else []
+    r.raise_for_status()
+    tips = r.json()
+    if not isinstance(tips, list):
+        raise RuntimeError("Invalid pending-tip response")
+    # Builders are stored separately; include all published legs and their own dates.
+    r = requests.get(f"{SB}/rest/v1/netrattler_builder_picks", headers=H, timeout=40, params={
+        "select": "tip_id,match_date,legs,created_at", "status": "eq.pending",
+        "telegram_msg_id": "not.is.null", "created_at": f"gte.{since}",
+        "and": f"(created_at.lte.{until})", "limit": "5000"})
+    r.raise_for_status()
+    builders = r.json()
+    if not isinstance(builders, list) or len(tips) >= 5000 or len(builders) >= 5000:
+        raise RuntimeError("Incomplete pending backfill read")
+    return tips + builders
 
 
 def plan(tips: List[Dict[str, Any]]):
     """Return {day: [(home, away, needs_ht)]} including adjacent days."""
     by_day: Dict[str, List[Tuple[str, str, bool]]] = {}
+    expanded = []
     for t in tips:
+        legs = t.get("legs") or t.get("builder_legs")
+        if isinstance(legs, list) and legs:
+            for leg in legs:
+                if isinstance(leg, dict):
+                    expanded.append({**t, **leg})
+        else:
+            expanded.append(t)
+    for t in expanded:
         pair, d = tip_pair(t), tip_day(t)
         if not pair or not d:
             continue

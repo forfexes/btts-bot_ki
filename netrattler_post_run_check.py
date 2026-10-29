@@ -10,6 +10,7 @@ import sys
 import urllib.error
 import urllib.request
 import re
+import urllib.parse
 
 
 def coverage_warnings(log_text):
@@ -38,23 +39,41 @@ def coverage_warnings(log_text):
     return list(dict.fromkeys(issues))
 
 
+class LogRedirectHandler(urllib.request.HTTPRedirectHandler):
+    """Signed log downloads must not receive the GitHub API bearer token."""
+    def redirect_request(self, req, fp, code, msg, headers, newurl):
+        redirected = super().redirect_request(req, fp, code, msg, headers, newurl)
+        if redirected and urllib.parse.urlsplit(req.full_url).netloc != urllib.parse.urlsplit(newurl).netloc:
+            redirected.remove_header('Authorization')
+        return redirected
+
+
 def fetch_job_logs(run):
     token = os.getenv('GITHUB_TOKEN') or ''
     repo = os.getenv('GITHUB_REPOSITORY') or ''
     run_id = run.get('id')
     if not (token and repo and run_id):
-        return ''
+        raise ValueError('GitHub log configuration missing')
     headers = {'Authorization': 'Bearer ' + token, 'Accept': 'application/vnd.github+json'}
     url = f'https://api.github.com/repos/{repo}/actions/runs/{int(run_id)}/jobs?per_page=30'
     with urllib.request.urlopen(urllib.request.Request(url, headers=headers), timeout=20) as response:
         jobs = json.load(response).get('jobs', [])
     chunks = []
-    for job in jobs[:5]:
+    if not jobs or len(jobs) > 5:
+        raise ValueError('Incomplete job log coverage')
+    opener = urllib.request.build_opener(LogRedirectHandler())
+    for job in jobs:
         jid = int(job['id'])
         url = f'https://api.github.com/repos/{repo}/actions/jobs/{jid}/logs'
-        with urllib.request.urlopen(urllib.request.Request(url, headers=headers), timeout=30) as response:
-            chunks.append(response.read(1500000).decode('utf-8', 'replace'))
-    return '\n'.join(chunks)
+        with opener.open(urllib.request.Request(url, headers=headers), timeout=30) as response:
+            chunk = response.read(4000001)
+            if len(chunk) > 4000000:
+                raise ValueError('Job log exceeds inspection limit')
+            chunks.append(chunk.decode('utf-8', 'replace'))
+    logs = '\n'.join(chunks)
+    if not logs.strip():
+        raise ValueError('Empty job logs')
+    return logs
 
 
 def evaluate(run):
@@ -108,11 +127,14 @@ def main():
         try:
             warnings = coverage_warnings(fetch_job_logs(run))
             if warnings:
+                ok = False
                 message = 'NETRATTLER | TIP COVERAGE WARNING\n' + '\n'.join(warnings) + '\n' + (run.get('html_url') or '')
                 print(message, flush=True)
                 notify(message)
         except (urllib.error.URLError, ValueError, KeyError, TimeoutError) as exc:
-            print('Coverage log inspection unavailable: ' + type(exc).__name__, flush=True)
+            ok = False
+            message = 'NETRATTLER | Coverage log inspection unavailable: ' + type(exc).__name__
+            print(message, flush=True)
     # Send failures; successful runs are recorded in Actions without Telegram spam.
     if not ok:
         notify(message)

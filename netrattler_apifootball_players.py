@@ -3,6 +3,7 @@
 import os
 import datetime as dt
 import requests
+from netrattler_apif_response import checked_response
 
 B = "https://v3.football.api-sports.io"
 KEYS = [k.strip() for k in (os.getenv("API_FOOTBALL_KEYS") or "").replace("\n", ",").split(",") if k.strip()]
@@ -60,24 +61,25 @@ def _sb(h=None):
 
 def run():
     if not (KEYS and SB and SK):
-        print("missing secrets")
-        return 0
+        raise RuntimeError("API-Football player import configuration missing")
     H = {"x-apisports-key": KEYS[0]}
     d = (dt.date.today() - dt.timedelta(days=1)).isoformat()
-    j = requests.get(B + "/fixtures", headers=H, params={"date": d}, timeout=30).json()
-    resp = j.get("response") or []
+    resp = checked_response(requests.get(B + "/fixtures", headers=H, params={"date": d}, timeout=30))
     ids = [str(x["fixture"]["id"]) for x in resp]
     k = requests.get(f"{SB}/rest/v1/apif_player_match?select=fixture_id&fixture_id=in.({','.join(ids)})",
                      headers=_sb(), timeout=20) if ids else None
-    known = {x["fixture_id"] for x in k.json()} if k is not None and k.ok else set()
+    if k is not None:
+        k.raise_for_status()
+    known = {x["fixture_id"] for x in k.json()} if k is not None else set()
     saved = 0
     for fx in pick_fixtures(resp, known, MAX_REQ - 1):
         r = requests.get(B + "/fixtures/players", headers=H, params={"fixture": fx["fixture"]["id"]}, timeout=30)
-        rows = parse_players(r.json().get("response"), fx) if r.ok else []
+        rows = parse_players(checked_response(r), fx)
         if rows:
             p = requests.post(f"{SB}/rest/v1/apif_player_match", json=rows, timeout=30,
                               headers=_sb({"Prefer": "resolution=ignore-duplicates"}))
-            saved += len(rows) if p.ok else 0
+            p.raise_for_status()
+            saved += len(rows)
     print("rows", saved)
     return saved
 

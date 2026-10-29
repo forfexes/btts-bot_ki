@@ -43,8 +43,8 @@ jobs:
           python test_netrattler_result_enrichment.py
           python test_netrattler_settlement_runner.py
           python test_settlement_lenient_match.py
-      - name: Pending tips result backfill (FotMob days + HT)
-        continue-on-error: true
+          python -m unittest -v test_pending_result_backfill.py
+      - name: Pending tips result backfill (published singles and builder legs)
         timeout-minutes: 15
         env:
           API_FOOTBALL_KEYS: ${{ secrets.API_FOOTBALL_KEYS }}
