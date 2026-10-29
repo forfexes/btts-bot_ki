@@ -56,3 +56,21 @@ def test_lost_builder_with_open_legs_is_rechecked():
            "tip_payload": {"tip_id": "b1", "telegram_msg_id": "123"}}
     assert len(s.refreshable_closed_builders([row])) == 1
     assert s.refreshable_closed_builders([dict(row, legs_payload=[{"status": "loss"}])]) == []
+
+
+def test_changed_leg_results_do_not_inherit_old_edit_success():
+    base = {"settlement_id": "s1", "tip_id": "t1", "status": "loss", "telegram_msg_id": "1", "telegram_chat_id": "-1"}
+    old = dict(base, legs_payload=[{"status": "pending"}], raw={"telegram_edit_ok": True, "telegram_edit_attempts": 4})
+    new = dict(base, legs_payload=[{"status": "win"}])
+    assert s.preserve_telegram_edit_receipts([new], [old]) == 0
+    assert "raw" not in new
+
+
+def test_failed_new_edit_clears_previous_success(monkeypatch):
+    from unittest.mock import Mock
+    store = Mock(return_value=True)
+    monkeypatch.setattr(s, "sb_patch", store)
+    row = {"settlement_id": "s1", "raw": {"telegram_edit_ok": True}}
+    s._save_tip_edit_receipt(row, False)
+    assert row["raw"]["telegram_edit_ok"] is False
+    assert store.call_args.args[3]["raw"]["telegram_edit_ok"] is False

@@ -855,10 +855,11 @@ def _save_tip_edit_receipt(settlement: Dict[str, Any], edited: bool) -> None:
     raw = settlement.get("raw") if isinstance(settlement.get("raw"), dict) else {}
     raw = dict(raw)
     raw["telegram_edit_attempts"] = as_int(raw.get("telegram_edit_attempts"), 0) + 1
+    raw["telegram_edit_ok"] = bool(edited)
     if not edited and _LAST_EDIT_ERROR.get("last"):
         raw["telegram_edit_error"] = _LAST_EDIT_ERROR["last"]
     if edited:
-        raw["telegram_edit_ok"] = True
+        raw.pop("telegram_edit_error", None)
         raw["telegram_edited_at"] = datetime.now(timezone.utc).isoformat()
     if sb_patch("netrattler_settlements", "settlement_id", sid, {"raw": raw}):
         settlement["raw"] = raw
@@ -2303,6 +2304,9 @@ def preserve_telegram_edit_receipts(rows: Sequence[Dict[str, Any]],
         if not (row.get("telegram_msg_id") and row.get("telegram_chat_id")
                 and str(row["telegram_msg_id"]) == str(old.get("telegram_msg_id"))
                 and str(row["telegram_chat_id"]) == str(old.get("telegram_chat_id"))):
+            continue
+        # A receipt confirms one specific visible result, not every future update.
+        if any(row.get(key) != old.get(key) for key in ("legs_payload", "reason", "profit", "result_home", "result_away")):
             continue
         old_raw = old.get("raw")
         if not isinstance(old_raw, dict):
