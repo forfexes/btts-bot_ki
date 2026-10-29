@@ -169,7 +169,12 @@ def build_ladders(rows, match_date):
             if tb:
                 extra = [f"🔥 Variante 7 Beine (4× Fouls, 3× gezogen) bei 2+: {tb[0][1] * 100:.1f}% · faire Quote {1 / tb[0][1]:.1f}"]
                 extra += ["    " + ", ".join(sorted({r['player'] for r, *_ in big}))]
-        pk = _ladder_pick(match, spec, (2, 3, 4), "FOUL LEITER", "MODEL FOULS LADDER", "ml_", match_date, 2, extra)
+        pk = None
+        if len(profs) >= 3:  # Nate: bis 5 Beine (3x Fouls + 2x gezogen), sonst 4 Beine
+            spec5 = [(r, "fouls", "Fouls", "fouls") for r in top_f[:3]] + [(r, "fouls_won", "Fouls gezogen", "fouls_won") for r in top_w[:2]]
+            pk = _ladder_pick(match, spec5, (2, 3, 4), "FOUL LEITER", "MODEL FOULS LADDER", "ml_", match_date, 2, extra, min_base=0.12)
+        if pk is None:
+            pk = _ladder_pick(match, spec, (2, 3, 4), "FOUL LEITER", "MODEL FOULS LADDER", "ml_", match_date, 2, extra)
         if pk:
             out.append(pk)
     out.sort(key=lambda p: -p["joint"])
@@ -182,9 +187,14 @@ def build_shot_ladders(rows, match_date):
     for match, profs in _profiles_by_match(rows, "shots").items():
         if len(profs) < 2:
             continue
-        top = sorted(profs, key=lambda r: -_rate(r["shots"], 2))[:2]
-        pk = _ladder_pick(match, [(r, "shots", "Schüsse", "shots") for r in top], (2, 3, 4), "SCHUSS LEITER",
-                          "MODEL SHOT LADDER", "ms_", match_date, 2, min_base=0.25)
+        ranked = sorted(profs, key=lambda r: -_rate(r["shots"], 2))
+        pk = None
+        if len(ranked) >= 3:
+            pk = _ladder_pick(match, [(r, "shots", "Schüsse", "shots") for r in ranked[:3]], (2, 3, 4), "SCHUSS LEITER",
+                              "MODEL SHOT LADDER", "ms_", match_date, 2, min_base=0.2)
+        if pk is None:
+            pk = _ladder_pick(match, [(r, "shots", "Schüsse", "shots") for r in ranked[:2]], (2, 3, 4), "SCHUSS LEITER",
+                              "MODEL SHOT LADDER", "ms_", match_date, 2, min_base=0.25)
         if pk:
             out.append(pk)
     for match, profs in _profiles_by_match(rows, "sot").items():
