@@ -7,7 +7,11 @@ def checked_response(response):
     except ValueError:
         raise RuntimeError("API-Football invalid JSON") from None
     if not isinstance(body, dict) or body.get("errors"):
-        raise RuntimeError("API-Football provider error (account, quota or request); check provider dashboard")
+        errs = body["errors"]
+        keys = ",".join(sorted(str(k) for k in errs))[:60] if isinstance(errs, dict) else "list"
+        suspended = isinstance(errs, dict) and "suspended" in str(errs.get("access", "")).lower()
+        hint = "account suspended" if suspended else "account, quota or request"
+        raise RuntimeError(f"API-Football provider error ({hint}; fields: {keys}); check provider dashboard")
     rows = body.get("response")
     if not isinstance(rows, list):
         raise RuntimeError("API-Football response list missing")
