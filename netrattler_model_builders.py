@@ -2,6 +2,7 @@
 Die Quote ist die FAIRE Modellquote (1/p), keine Buchmacherquote -> klar gekennzeichnet, nie in der ROI-Zahl.
 Gesetzt wird nur, wenn der Buchmacher mindestens die faire Quote bietet."""
 import hashlib, html, json, os
+from datetime import datetime, timezone
 import requests
 
 MODEL_SOURCES = {"model_line_fouls"}
@@ -351,6 +352,25 @@ def dedupe_overlap(picks):
     return kept
 
 
+def _future_kickoff(value, now):
+    """Only accept unambiguous future ISO-8601 fixture times."""
+    if not isinstance(value, str) or not value.strip():
+        return False
+    try:
+        stamp = value.strip()
+        if stamp.endswith("Z"):
+            stamp = stamp[:-1] + "+00:00"
+        kickoff = datetime.fromisoformat(stamp)
+        return kickoff.tzinfo is not None and kickoff.utcoffset() is not None and kickoff.astimezone(timezone.utc) > now
+    except (ValueError, OverflowError, TypeError):
+        return False
+
+
+def _pick_not_started(pick, now):
+    legs = pick.get("legs") or []
+    return bool(legs) and all(_future_kickoff(leg.get("kickoff"), now) for leg in legs)
+
+
 def run(rows, match_date, send, url, key, logger=print):
     """Reserve each deterministic builder before sending; record actual Telegram receipt.
 
@@ -362,6 +382,9 @@ def run(rows, match_date, send, url, key, logger=print):
         return 0
     sent = 0
     for pick in dedupe_overlap(build_ladders(rows, match_date) + build_nate_mix(rows, match_date) + build_shot_ladders(rows, match_date) + build_cards(rows, match_date) + build_fouls(rows, match_date) + build(rows, match_date)):
+        if not _pick_not_started(pick, datetime.now(timezone.utc)):
+            logger("Modell-Builder ausgelassen: Anpfiff erfolgt oder Zeit nicht eindeutig")
+            continue
         msg = message(pick, match_date)
         hdr = {"apikey": key, "Authorization": f"Bearer {key}", "Content-Type": "application/json",
                "Prefer": "resolution=ignore-duplicates,return=representation"}
@@ -381,6 +404,9 @@ def run(rows, match_date, send, url, key, logger=print):
             logger(f"Modell-Builder DB-Reservierung fehlgeschlagen: {type(exc).__name__}; kein Telegram-Send")
             continue
 
+        if not _pick_not_started(pick, datetime.now(timezone.utc)):
+            logger("Modell-Builder nach Reservierung nicht versendet: Anpfiff erreicht")
+            continue
         try:
             receipt = send(msg)
         except Exception as exc:
