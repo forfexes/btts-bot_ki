@@ -5,6 +5,7 @@ Die Quote ist die faire Modellquote (1/p) und wird als solche markiert
 Tackles gibt es nur fuer Spieler mit FPL-/API-Football-Daten (Premier League u.a.); fehlende Werte werden ignoriert.
 """
 import os
+from datetime import date
 import requests
 
 MIN_GAMES = 8
@@ -41,7 +42,10 @@ def same_team(a, b):
 def player_rows(rows, team_norm, norm, team_raw=None):
     """rows: player_game_log-Zeilen (neueste zuerst) -> {player: [rows]} nur fuer dieses Team."""
     by = {}
+    today = date.today().isoformat()
     for r in rows or []:
+        if str(r.get("match_date") or "")[:10] > today:
+            continue
         if norm(r.get("team")) != team_norm and not same_team(r.get("team"), team_raw):
             continue
         by.setdefault(r.get("player_name") or r.get("player_key"), []).append(r)
@@ -49,6 +53,8 @@ def player_rows(rows, team_norm, norm, team_raw=None):
 
 
 def _played(g):
+    if str(g.get("match_date") or "")[:10] > date.today().isoformat():
+        return False
     # ESPN-Zeilen haben oft keine Minuten (None) -> nicht ausschliessen; nur echte 0 Minuten zaehlen nicht.
     if g.get("minutes") is not None:
         return g["minutes"] > 0
@@ -126,7 +132,8 @@ def fetch_team_rows(url, key, team):
     r = requests.get(
         f"{url}/rest/v1/player_game_log",
         headers={"apikey": key, "Authorization": f"Bearer {key}"},
-        params={"team": f"ilike.*{_sig(team)}*", "order": "match_date.desc", "limit": "1000",
+        params={"team": f"ilike.*{_sig(team)}*", "match_date": f"lte.{date.today().isoformat()}",
+                "order": "match_date.desc", "limit": "1000",
                 "select": "player_name,player_key,team,match_date,minutes,fouls_committed,fouls_won,tackles,shots,sot,passes,yellow_cards"},
         timeout=25,
     )
