@@ -205,7 +205,7 @@ def build_cards(rows, match_date):
     for r in rows:
         if r.get("source") == "foul_profile" and "yellow" in r:
             rate = _rate(r["yellow"], 1)
-            if rate >= 0.35:
+            if rate >= 0.55:
                 cands.append((rate, r))
     cands.sort(key=lambda x: -x[0])
     picks, used = [], set()

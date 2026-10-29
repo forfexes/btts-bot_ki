@@ -102,6 +102,22 @@ TEAM_CATEGORIES = {
 LEG_HISTORY: Dict[Tuple[str, str], List[float]] = {}
 
 
+def leg_hit_rate(leg: "PropLeg", n: int = 10) -> Optional[float]:
+    """Trefferquote der Linie in den letzten n Spielen; None ohne ausreichende Historie."""
+    series = (LEG_HISTORY.get((norm(leg.player), leg.category)) or [])[:n]
+    if len(series) < 5:
+        return None
+    ln = float(leg.line or 1)
+    need = int(ln) if ln == int(ln) else math.floor(ln) + 1
+    return sum(1 for v in series if v >= need) / len(series)
+
+
+def weak_leg(leg: "PropLeg") -> bool:
+    """Bein unter der Mindest-Trefferquote (Standard 70 %) -> der Builder wird verworfen."""
+    hr = leg_hit_rate(leg)
+    return hr is not None and hr < as_float(os.getenv("NETRATTLER_BUILDER_MIN_HIT", "0.70"), 0.70)
+
+
 def history_text(leg: "PropLeg", n: int = 10) -> str:
     """z. B. 'L10: 1,3,2,3,3,2,6,4,2,4 (2+ in 9/10)'; leer ohne echte Historie."""
     series = LEG_HISTORY.get((norm(leg.player), leg.category)) or []
@@ -1584,6 +1600,9 @@ def build_builder_picks(
         _ls = frozenset(x.key() for x in pick.legs)
         if _ls in seen_legsets:
             continue
+        if any(weak_leg(x) for x in pick.legs):
+            FUNNEL['weak_leg_dropped'] = FUNNEL.get('weak_leg_dropped', 0) + 1
+            continue
         seen.add(pick.builder_id)
         seen_legsets.add(_ls)
         unique.append(pick)
@@ -1603,6 +1622,7 @@ def build_builder_picks(
     match_counts: Dict[str, int] = {}
     selected_ids = set()
     selected_legsets: List[frozenset] = []
+    leg_use: Dict[Any, int] = {}
 
     def _try_add(pick: BuilderPick, force_style: bool = False) -> bool:
         if pick.builder_id in selected_ids:
@@ -1610,6 +1630,9 @@ def build_builder_picks(
         _pls = frozenset(x.key() for x in pick.legs)
         if any(legsets_overlap(_pls, _prev) for _prev in selected_legsets):
             return False  # Fast-Duplikat eines besser gerankten Builders
+        _maxuse = as_int(os.getenv("NETRATTLER_MAX_LEG_REUSE", "2"), 2)
+        if any(leg_use.get(k, 0) >= _maxuse for k in _pls):
+            return False  # dasselbe Bein nicht in 5 Buildern wiederholen
         match_key = pick.legs[0].match if len({x.match for x in pick.legs}) == 1 else "CROSS"
         if not force_style and style_counts.get(pick.style, 0) >= 8:
             return False
@@ -1618,6 +1641,8 @@ def build_builder_picks(
         diversified.append(pick)
         selected_ids.add(pick.builder_id)
         selected_legsets.append(_pls)
+        for k in _pls:
+            leg_use[k] = leg_use.get(k, 0) + 1
         style_counts[pick.style] = style_counts.get(pick.style, 0) + 1
         match_counts[match_key] = match_counts.get(match_key, 0) + 1
         return True

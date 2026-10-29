@@ -170,7 +170,7 @@ def test_shot_ladder_and_cards_and_seven_legs():
         for j in range(4):
             rows.append(_prof2(f"P{i}{j}", m, fouls=[2, 3, 2, 2, 3, 2, 2, 3, 2, 2], fouls_won=[2, 2, 3, 2, 2, 3, 2, 2, 2, 3],
                                shots=[2, 3, 2, 4, 2, 3, 2, 2, 3, 2], sot=[1, 1, 2, 1, 1, 1, 2, 1, 1, 1],
-                               yellow=[1, 0, 1, 0, 1, 0, 1, 0, 1, 0]))
+                               yellow=[1, 1, 1, 0, 1, 1, 1, 0, 1, 1]))
     lad = mb.build_ladders(rows, "2026-10-28")
     assert lad and lad[0]["size"] == 4 and lad[0]["extra_lines"] and "7 Beine" in lad[0]["extra_lines"][0]
     sh = mb.build_shot_ladders(rows, "2026-10-28")
@@ -178,3 +178,15 @@ def test_shot_ladder_and_cards_and_seven_legs():
     cd = mb.build_cards(rows, "2026-10-28")
     assert cd and cd[0]["size"] == 2 and cd[0]["legs"][0]["odds"] == 0
     assert "7 Beine" in mb.message(lad[0], "2026-10-28")
+
+
+def test_weak_leg_filter_and_leg_reuse():
+    import netrattler_builder_engine as be
+    from dataclasses import fields
+    assert hasattr(be, "weak_leg") and hasattr(be, "leg_hit_rate")
+    be.LEG_HISTORY[(be.norm("Test Spieler"), "shots")] = [0, 1, 0, 1, 2, 0, 1, 0, 1, 2]
+    leg = type("L", (), {"player": "Test Spieler", "category": "shots", "line": 1.0})()
+    assert be.leg_hit_rate(leg) == 0.6 and be.weak_leg(leg)
+    be.LEG_HISTORY[(be.norm("Test Spieler"), "shots")] = [2, 3, 2, 4, 2, 3, 2, 3, 2, 2]
+    assert not be.weak_leg(leg)
+    be.LEG_HISTORY.clear()
