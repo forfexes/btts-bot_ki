@@ -17,6 +17,7 @@ jobs:
       - run: python -m pip install --prefer-binary requests
       - env:
           API_FOOTBALL_KEYS: ${{ secrets.API_FOOTBALL_KEYS }}
+          APIF_MAX_REQ: "60"
           SUPABASE_URL: ${{ secrets.SUPABASE_URL }}
           SUPABASE_KEY: ${{ secrets.SUPABASE_KEY }}
           SUPABASE_SERVICE_ROLE_KEY: ${{ secrets.SUPABASE_SERVICE_ROLE_KEY }}

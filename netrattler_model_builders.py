@@ -299,7 +299,10 @@ def build_cards(rows, match_date):
 
 def message(pick, match_date):
     lines = [f"🧪 <b>{pick.get('title', 'MODELL-BUILDER')}</b> · <i>keine Buchmacherquote</i>",
-             f"⚽ {html.escape(pick['match'])}", ""]
+             f"⚽ {html.escape(pick['match'])}"]
+    if os.getenv("NETRATTLER_LINEUP_CONFIRMED") == "1":
+        lines.append("✅ <b>Startelf bestätigt</b>")
+    lines.append("")
     multi = len({l['match'] for l in pick["legs"]}) > 1
     for leg in pick["legs"]:
         s = leg["series"]

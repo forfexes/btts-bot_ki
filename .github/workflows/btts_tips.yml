@@ -263,6 +263,7 @@ jobs:
           NETRATTLER_BUILDER_MIN_ODDS: "2.5"
           NETRATTLER_BUILDER_MAX_LEGS: "9"
           NETRATTLER_MULTI_COMBO_MAX_LEGS: "4"
+          NETRATTLER_MODEL_BUILDERS: "off"  # Modell-Builder kommen jetzt erst mit bestaetigter Startelf (netrattler_lineup_builders.yml)
           NETRATTLER_PROP_BUILDER_MIN_EDGE: "0.02"
           ENABLE_DATA_FUSION_V15: "true"
           DATA_FUSION_V15_TIMEOUT: "4"
