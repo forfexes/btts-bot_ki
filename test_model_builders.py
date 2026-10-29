@@ -172,7 +172,7 @@ def test_shot_ladder_and_cards_and_seven_legs():
                                shots=[2, 3, 2, 4, 2, 3, 2, 2, 3, 2], sot=[1, 1, 2, 1, 1, 1, 2, 1, 1, 1],
                                yellow=[1, 1, 1, 0, 1, 1, 1, 0, 1, 1]))
     lad = mb.build_ladders(rows, "2026-10-28")
-    assert lad and lad[0]["size"] in (4, 5, 7)
+    assert lad and lad[0]["size"] == 4 and any(p.get("xl") and p["size"] == 7 for p in lad)
     sh = mb.build_shot_ladders(rows, "2026-10-28")
     assert any(p["style"] == "MODEL SHOT LADDER" for p in sh) and any(p["style"] == "MODEL SOT LADDER" for p in sh)
     cd = mb.build_cards(rows, "2026-10-28")

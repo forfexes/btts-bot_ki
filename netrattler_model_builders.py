@@ -153,34 +153,31 @@ def _ladder_pick(match, spec, lines, title, style, prefix, match_date, base_line
 
 
 def build_ladders(rows, match_date):
-    """Foul-Leiter wie bei Nate: EIN Builder im selben Spiel mit bis zu 7 Beinen (Fouls und Fouls gezogen gemischt,
-    derselbe Spieler darf in beiden vorkommen), alle Beine auf derselben Linie, angeboten als Leiter 2+/3+/4+.
-    Es wird die groesste Variante gewaehlt, die noch eine brauchbare Basis-Wahrscheinlichkeit hat (7, sonst 5, sonst 4 Beine)."""
-    out = []
+    """Foul-Leiter wie Bet Builder X (Nate): dieselben Spieler liefern BEIDE Staten.
+    Basis: 2 Spieler x (Fouls + Fouls gezogen) = 4 Beine, alle auf derselben Linie, Leiter 2+/3+/4+ (je eigener Builder/Quote).
+    XL: 3 Spieler x beide Staten + 1 weiterer Spieler Fouls = 7 Beine, Leiter 2+/3+."""
+    base, xl = [], []
     for match, profs in _profiles_by_match(rows, "fouls", "fouls_won").items():
         if len(profs) < 2:
             continue
-        top_f = sorted(profs, key=lambda r: -_rate(r["fouls"], 2))
-        top_w = sorted(profs, key=lambda r: -_rate(r["fouls_won"], 2))
-
-        def spec(nf, nw):
-            return [(r, "fouls", "Fouls", "fouls") for r in top_f[:nf]] + [(r, "fouls_won", "Fouls gezogen", "fouls_won") for r in top_w[:nw]]
-
-        pk = None
-        for nf, nw, min_base in ((4, 3, 0.04), (3, 2, 0.12), (2, 2, 0.20)):
-            if len(top_f) < nf or len(top_w) < nw:
-                continue
-            tiers = _tiers(spec(nf, nw), (2, 3, 4), floor=0.002)
-            if tiers and tiers[0][1] >= min_base:
-                pk = _ladder_pick(match, spec(nf, nw), (2, 3, 4), "FOUL LEITER", "MODEL FOULS LADDER", "ml_", match_date, 2,
-                                  min_base=min_base)
-                if pk:
-                    pk["tiers"] = tiers
-                    break
+        ranked = sorted(profs, key=lambda r: -(_rate(r["fouls"], 2) * _rate(r["fouls_won"], 2)))
+        p1, p2 = ranked[0], ranked[1]
+        spec = [(p1, "fouls", "Fouls", "fouls"), (p2, "fouls", "Fouls", "fouls"),
+                (p2, "fouls_won", "Fouls gezogen", "fouls_won"), (p1, "fouls_won", "Fouls gezogen", "fouls_won")]
+        pk = _ladder_pick(match, spec, (2, 3, 4), "FOUL LEITER", "MODEL FOULS LADDER", "ml_", match_date, 2, min_base=0.15)
         if pk:
-            out.append(pk)
-    out.sort(key=lambda p: -p["joint"])
-    return out[:3]
+            base.append(pk)
+        if len(ranked) >= 4:
+            p3, p4 = ranked[2], ranked[3]
+            spec7 = [(p, "fouls", "Fouls", "fouls") for p in (p1, p2, p3, p4)] + \
+                    [(p, "fouls_won", "Fouls gezogen", "fouls_won") for p in (p1, p2, p3)]
+            pk7 = _ladder_pick(match, spec7, (2, 3), "FOUL LEITER XL · 7 BEINE", "MODEL FOULS LADDER", "mx_", match_date, 2, min_base=0.03)
+            if pk7:
+                pk7["xl"] = True
+                xl.append(pk7)
+    base.sort(key=lambda p: -p["joint"])
+    xl.sort(key=lambda p: -p["joint"])
+    return base[:3] + xl[:2]
 
 
 def build_shot_ladders(rows, match_date):
@@ -285,8 +282,10 @@ def dedupe_overlap(picks):
     kept = []
     for p in picks:
         names = {l["player"] for l in p["legs"]}
+        # XL-Leiter (7 Beine) darf neben der 4-Beine-Leiter desselben Spiels stehen; sonst keine Dubletten
         if p["match"] != "Cross-Match" and any(
-                k["match"] == p["match"] and len(names & {l["player"] for l in k["legs"]}) >= 2 for k in kept):
+                k["match"] == p["match"] and (not p.get("xl") or k.get("xl"))
+                and len(names & {l["player"] for l in k["legs"]}) >= 2 for k in kept):
             continue
         kept.append(p)
     return kept
