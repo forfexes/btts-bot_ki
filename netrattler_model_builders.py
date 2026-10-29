@@ -307,7 +307,7 @@ def message(pick, match_date):
         lines.append(f"• <b>{html.escape(leg['market'])}</b>" + (f" <i>({html.escape(leg['match'])})</i>" if multi else ""))
         lines.append(f"    📈 <i>L{len(s)}: {','.join(str(v) for v in s)} ({int(leg['line'])}+ in {hits}/{len(s)})</i>")
     if pick.get("tiers"):
-        lines += ["", "🪜 <b>Leiter</b> (alle Beine auf derselben Linie):"]
+        lines += ["", "🪜 <b>Leiter</b> (jedes Bein eine Stufe höher):" if pick.get("tier_shift") else "🪜 <b>Leiter</b> (alle Beine auf derselben Linie):"]
         for t, jp in pick["tiers"]:
             lbl = ("Basis" if t == 0 else f"alle Linien +{t}") if pick.get("tier_shift") else f"{t}+ bei allen Beinen"
             lines.append(f"    {lbl} · {jp * 100:.1f}% · faire Quote {1 / jp:.1f}")
