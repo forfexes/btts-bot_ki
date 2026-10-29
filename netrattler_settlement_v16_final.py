@@ -2160,7 +2160,7 @@ def settle_tip(tip: Dict[str, Any], results: Sequence[Dict[str, Any]], player_st
         legs = legs_of(tip)
         if not legs:
             legs = [tip]
-        wins = losses = pending = 0
+        wins = losses = pending = voids = 0
         for leg in legs:
             merged = dict(tip)
             merged.update(leg)
@@ -2184,9 +2184,11 @@ def settle_tip(tip: Dict[str, Any], results: Sequence[Dict[str, Any]], player_st
             wins += status == "win"
             losses += status == "loss"
             pending += status == "pending"
+            voids += status == "void"
             leg_payload.append({"leg": leg, "status": status, "reason": reason})
-        status = "loss" if losses else "pending" if pending else "win"
-        reason = f"{wins}/{len(legs)} Legs gewonnen · {losses} verloren · {pending} offen"
+        # void-Beine (Spieler ohne Einsatz) zaehlen nicht; nur voids -> void statt faelschlich "win"
+        status = "loss" if losses else "pending" if pending else "void" if not wins else "win"
+        reason = f"{wins}/{len(legs)} Legs gewonnen · {losses} verloren · {pending} offen" + (f" · {voids} void" if voids else "")
     else:
         category = category_of(tip)
         if category and group in {"props", "corners"}:
@@ -2544,6 +2546,25 @@ def format_settlement(settlement: Dict[str, Any]) -> str:
         f"Profit: {as_float(profit):+.2f}U" if profit is not None
         else "Profit: n/a (keine echte Gesamtquote, nicht im ROI)"
     )
+    legs_payload = settlement.get("legs_payload") or []
+    if settlement.get("market_group") == "builder" and legs_payload:
+        icon = {"win": "✅", "loss": "❌", "void": "➖", "pending": "⏳"}
+        rows = []
+        for lp in legs_payload:
+            leg = lp.get("leg") or {}
+            name = str(leg.get("market") or leg.get("player") or "").strip()
+            pl = str(leg.get("player") or "").strip()
+            if pl and pl.lower() not in name.lower():
+                name = f"{pl} {name}"
+            detail = str(lp.get("reason") or "")
+            actual = detail.split(" · ")[1] if lp.get("status") in ("win", "loss") and detail.count(" · ") >= 2 else ""
+            rows.append(f"{icon.get(lp.get('status'), '⏳')} {name}" + (f" → {actual}" if actual else ""))
+        return (
+            f"{settlement['result_label']} <b>BUILDER RESULT</b> · {match_label(settlement)}\n"
+            + "\n".join(rows) + "\n"
+            f"{settlement.get('reason', '')}\n"
+            f"{profit_line}"
+        )
     return (
         f"{settlement['result_label']} <b>{settlement['market_group'].upper()}</b>\n"
         f"{match_label(settlement)}\n"
