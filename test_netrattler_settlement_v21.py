@@ -571,5 +571,41 @@ class SettlementV21Tests(unittest.TestCase):
             self.assertEqual(patched_write.call_count, 2)
         self.assertEqual(rows[0]["status"], "pending")
 
+
+    def test_missing_opponent_roster_must_not_void_player(self):
+        # Regression: 15 Fiorentina players but no Atalanta players were enough
+        # to mark an Atalanta leg VOID in the 2026-10-29 settlement.
+        day = "2026-10-29"
+        leg = {"match": "Fiorentina vs Atalanta", "match_date": day,
+               "player": "Gianluca Scamacca", "category": "fouls",
+               "market": "Gianluca Scamacca 1+ Fouls", "line": 1}
+        fixture_row = {"match_date": day, "home_team": "Fiorentina",
+                       "away_team": "Atalanta", "team": "Fiorentina",
+                       "player_name": "Unrelated Player"}
+        with patch.object(mod, "_TEAM_ROW_COUNTS",
+                          {day: {"Fiorentina": {f"home{i}" for i in range(15)}}}):
+            self.assertFalse(mod._match_covered_player_absent(leg, [fixture_row]))
+            status, reason = mod.settle_player_market(leg, [fixture_row], None)
+            self.assertEqual(status, "pending")
+            self.assertIn("fehlen", reason)
+
+    def test_absent_player_requires_exact_fixture_and_both_rosters(self):
+        day = "2026-10-29"
+        leg = {"match": "Benfica vs Gil Vicente", "match_date": day,
+               "player": "Leandro Barreiro", "category": "fouls",
+               "market": "Leandro Barreiro 1+ Fouls", "line": 1}
+        rosters = {day: {"Benfica": {f"benfica{i}" for i in range(15)},
+                         "Gil Vicente": {f"gil{i}" for i in range(15)}}}
+        correct = {"match_date": day, "home_team": "Benfica",
+                   "away_team": "Gil Vicente", "team": "Benfica",
+                   "player_name": "Other Player"}
+        unrelated = dict(correct, away_team="Porto")
+        with patch.object(mod, "_TEAM_ROW_COUNTS", rosters):
+            self.assertFalse(mod._match_covered_player_absent(leg, []))
+            self.assertFalse(mod._match_covered_player_absent(leg, [unrelated]))
+            self.assertTrue(mod._match_covered_player_absent(leg, [correct]))
+            rosters[day]["Gil Vicente"].add(mod.norm("Leandro Barreiro"))
+            self.assertFalse(mod._match_covered_player_absent(leg, [correct]))
+
 if __name__ == "__main__":
     unittest.main()
