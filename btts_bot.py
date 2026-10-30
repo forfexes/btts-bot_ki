@@ -24457,160 +24457,166 @@ def run_pinnacle_props_bot(win_start_utc=None, win_end_utc=None, ch_tz=None, top
             _cats = set(p.get("player_prop", "")[:30] for p in _wc_props if p.get("match") == _m)
             log(f"      🌍 {_m}: {len([p for p in _wc_props if p.get('match')==_m])} Props, Beispiele: {list(_cats)[:4]}")
 
-    # Props nach Spiel gruppieren
-    by_match = {}
-    for p in valid:
-        mn = p.get("match", "?")
-        by_match.setdefault(mn, []).append(p)
-
-    # 🏆 Matchwinner-Leg: echte Pinnacle 1X2-Quote pro Spiel als zusätzliche Leg-Option
-    for match_name in list(by_match.keys()):
-        try:
-            parts = match_name.split(" vs ")
-            if len(parts) != 2:
-                continue
-            home, away = parts[0].strip(), parts[1].strip()
-            mw_odds = get_pinnacle_match_odds(home, away)
-            if not mw_odds:
-                continue
-            # Favoriten-Seite mit solider Quote wählen (Heim oder Auswärts, nicht Remis)
-            hw = mw_odds.get("home_win")
-            aw = mw_odds.get("away_win")
-            for side_name, side_odds, side_label in [
-                (home, hw, f"Result: {home}"),
-                (away, aw, f"Result: {away}"),
-            ]:
-                if not side_odds:
-                    continue
-                try:
-                    side_odds = float(side_odds)
-                except Exception:
-                    continue
-                if not (1.15 <= side_odds <= 3.50):
-                    continue
-                _mw_prob = int(100 / side_odds * 0.95)
-                if _mw_prob < 55:
-                    continue
-                by_match[match_name].append({
-                    "selection": side_name,
-                    "player_prop": side_label,
-                    "odds": side_odds,
-                    "prob": _mw_prob,
-                    "match": match_name,
-                    "league": mw_odds.get("league", ""),
-                    "_cat": "result",
-                    "_fbref_confirmed": False,
-                })
-        except Exception:
-            continue
-
-    # Pro Spiel: beste 2-4 Legs auswählen (verschiedene Kategorien, Vielfalt erzwungen)
+    # The modern engine already received the observed player props above.
+    # Do not fetch match-winner quotes or construct discarded legacy builders.
     builders = []
-    _rejected_too_few_legs = 0
-    _rejected_low_odds = 0
-    for match_name, legs in by_match.items():
-        _is_wc_match = match_name in _wc_matches
+    if str(env("ENABLE_LEGACY_PINNACLE_BUILDER", "false")).lower() in {"1", "true", "yes", "on"}:
+        # Props nach Spiel gruppieren
+        by_match = {}
+        for p in valid:
+            mn = p.get("match", "?")
+            by_match.setdefault(mn, []).append(p)
 
-        # Innerhalb jeder Kategorie sortieren: Either-Or-Märkte zuerst (höhere Trefferquote),
-        # dann FBref-bestätigt, dann nach Wahrscheinlichkeit
-        legs.sort(key=lambda x: (not x.get("_is_either", False), not x.get("_fbref_confirmed", False), -x["prob"]))
-
-        # Legs nach Kategorie gruppieren
-        by_cat = {}
-        for leg in legs:
-            by_cat.setdefault(leg["_cat"], []).append(leg)
-
-        selected = []
-        used_players = set()
-
-        # 🆕 Round-Robin — max 6 Legs (Bet Builder = 2-6 Tipps)
-        cat_order = sorted(by_cat.keys(), key=lambda c: -len(by_cat[c]))
-        cat_pointers = {c: 0 for c in cat_order}
-        while len(selected) < 6:
-            progressed = False
-            for cat in cat_order:
-                if len(selected) >= 6:
-                    break
-                pointer = cat_pointers[cat]
-                cat_legs = by_cat[cat]
-                while pointer < len(cat_legs):
-                    leg = cat_legs[pointer]
-                    pointer += 1
-                    player = leg["selection"].lower()
-                    cat_count = sum(1 for s in selected if s["_cat"] == cat)
-                    if cat_count >= 2:
-                        break  # max 2 Legs pro Kategorie für Vielfalt
-                    if player in used_players and cat not in ["booked", "fouls", "tackles"]:
+        # 🏆 Matchwinner-Leg: echte Pinnacle 1X2-Quote pro Spiel als zusätzliche Leg-Option
+        for match_name in list(by_match.keys()):
+            try:
+                parts = match_name.split(" vs ")
+                if len(parts) != 2:
+                    continue
+                home, away = parts[0].strip(), parts[1].strip()
+                mw_odds = get_pinnacle_match_odds(home, away)
+                if not mw_odds:
+                    continue
+                # Favoriten-Seite mit solider Quote wählen (Heim oder Auswärts, nicht Remis)
+                hw = mw_odds.get("home_win")
+                aw = mw_odds.get("away_win")
+                for side_name, side_odds, side_label in [
+                    (home, hw, f"Result: {home}"),
+                    (away, aw, f"Result: {away}"),
+                ]:
+                    if not side_odds:
                         continue
-                    selected.append(leg)
-                    used_players.add(player)
-                    progressed = True
-                    break
-                cat_pointers[cat] = pointer
-            if not progressed:
-                break  # keine Kategorie hatte noch etwas zu bieten
-
-        if len(selected) < 2:
-            _rejected_too_few_legs += 1
-            if _is_wc_match:
-                log(f"   🌍 WM-Reject (zu wenig Legs): {match_name} → nur {len(selected)} Legs aus {len(legs)} Props")
-                _send_stat_insight_fallback(match_name, legs)
-            continue
-
-        combo_odds = _calc_combo_odds(selected)
-        # Nur Builders mit sinnvoller Quote senden
-        if combo_odds < 1.80:
-            _rejected_low_odds += 1
-            if _is_wc_match:
-                log(f"   🌍 WM-Reject (Quote zu tief): {match_name} → {combo_odds}")
-                # 🆕 Einzelne Props senden statt Kombi — Portugal vs Uzbekistan hat echte Player-Props
-                _prop_chat = TELEGRAM_GROUPS.get("advanced_props") or TELEGRAM_GROUPS.get("props")
-                _dedup_k = f"wmprop_{match_name}_{datetime.now(timezone.utc).date()}"
-                if _prop_chat and _dedup_k not in _STAT_INSIGHT_SENT_TODAY:
-                    _STAT_INSIGHT_SENT_TODAY.add(_dedup_k)
-                    for _leg in selected[:2]:  # Max 2 Props
-                        _leg_odds = float(_leg.get("price", _leg.get("odds", 0)) or 0)
-                        _leg_name = _leg.get("name", _leg.get("tip", ""))
-                        if not _leg_name or _leg_odds < 1.30:
-                            continue
-                        _msg = (
-                            f"🎯 <b>PLAYER PROP</b>  {_leg_odds}\n"
-                            f"━━━━━━━━━━━━━━━━━━\n"
-                            f"⚽ <b>{match_name}</b>\n"
-                            f"   ✅ {_leg_name}\n"
-                            f"━━━━━━━━━━━━━━━━━━\n"
-                            f"💰 @ {_leg_odds} · 0.5u"
-                        )
-                        send_telegram(_msg, chat_id=_prop_chat)
-                        log(f"   🎯 WM Single Prop: {_leg_name} @ {_leg_odds}")
-                else:
-                    _send_stat_insight_fallback(match_name, legs)
-            continue
-
-        # 🆕 Generiere alle Größen 2-6 für dieses Match
-        _bb_labels = {
-            2: "🏗️ BET BUILDER",
-            3: "🎯 BET BUILDER",
-            4: "🔥 BET BUILDER",
-            5: "💎 BET BUILDER",
-            6: "👑 BET BUILDER",
-        }
-        for _n in range(2, min(len(selected) + 1, 7)):
-            _legs_n = selected[:_n]
-            _odds_n = _calc_combo_odds(_legs_n)
-            if _odds_n < 1.80:
+                    try:
+                        side_odds = float(side_odds)
+                    except Exception:
+                        continue
+                    if not (1.15 <= side_odds <= 3.50):
+                        continue
+                    _mw_prob = int(100 / side_odds * 0.95)
+                    if _mw_prob < 55:
+                        continue
+                    by_match[match_name].append({
+                        "selection": side_name,
+                        "player_prop": side_label,
+                        "odds": side_odds,
+                        "prob": _mw_prob,
+                        "match": match_name,
+                        "league": mw_odds.get("league", ""),
+                        "_cat": "result",
+                        "_fbref_confirmed": False,
+                    })
+            except Exception:
                 continue
-            builders.append({
-                "match": match_name,
-                "legs": _legs_n,
-                "odds": _odds_n,
-                "label": _bb_labels.get(_n, f"🎯 BET BUILDER {_n}"),
-                "_ko": _legs_n[0].get("_ko"),
-                "_n": _n,
-            })
 
-    if _rejected_too_few_legs or _rejected_low_odds:
-        log(f"   🔑 Bet Builder Filter: {_rejected_too_few_legs} mit <2 Legs verworfen, {_rejected_low_odds} mit Quote<1.80 verworfen")
+        # Pro Spiel: beste 2-4 Legs auswählen (verschiedene Kategorien, Vielfalt erzwungen)
+        _rejected_too_few_legs = 0
+        _rejected_low_odds = 0
+        for match_name, legs in by_match.items():
+            _is_wc_match = match_name in _wc_matches
+
+            # Innerhalb jeder Kategorie sortieren: Either-Or-Märkte zuerst (höhere Trefferquote),
+            # dann FBref-bestätigt, dann nach Wahrscheinlichkeit
+            legs.sort(key=lambda x: (not x.get("_is_either", False), not x.get("_fbref_confirmed", False), -x["prob"]))
+
+            # Legs nach Kategorie gruppieren
+            by_cat = {}
+            for leg in legs:
+                by_cat.setdefault(leg["_cat"], []).append(leg)
+
+            selected = []
+            used_players = set()
+
+            # 🆕 Round-Robin — max 6 Legs (Bet Builder = 2-6 Tipps)
+            cat_order = sorted(by_cat.keys(), key=lambda c: -len(by_cat[c]))
+            cat_pointers = {c: 0 for c in cat_order}
+            while len(selected) < 6:
+                progressed = False
+                for cat in cat_order:
+                    if len(selected) >= 6:
+                        break
+                    pointer = cat_pointers[cat]
+                    cat_legs = by_cat[cat]
+                    while pointer < len(cat_legs):
+                        leg = cat_legs[pointer]
+                        pointer += 1
+                        player = leg["selection"].lower()
+                        cat_count = sum(1 for s in selected if s["_cat"] == cat)
+                        if cat_count >= 2:
+                            break  # max 2 Legs pro Kategorie für Vielfalt
+                        if player in used_players and cat not in ["booked", "fouls", "tackles"]:
+                            continue
+                        selected.append(leg)
+                        used_players.add(player)
+                        progressed = True
+                        break
+                    cat_pointers[cat] = pointer
+                if not progressed:
+                    break  # keine Kategorie hatte noch etwas zu bieten
+
+            if len(selected) < 2:
+                _rejected_too_few_legs += 1
+                if _is_wc_match:
+                    log(f"   🌍 WM-Reject (zu wenig Legs): {match_name} → nur {len(selected)} Legs aus {len(legs)} Props")
+                    _send_stat_insight_fallback(match_name, legs)
+                continue
+
+            combo_odds = _calc_combo_odds(selected)
+            # Nur Builders mit sinnvoller Quote senden
+            if combo_odds < 1.80:
+                _rejected_low_odds += 1
+                if _is_wc_match:
+                    log(f"   🌍 WM-Reject (Quote zu tief): {match_name} → {combo_odds}")
+                    # 🆕 Einzelne Props senden statt Kombi — Portugal vs Uzbekistan hat echte Player-Props
+                    _prop_chat = TELEGRAM_GROUPS.get("advanced_props") or TELEGRAM_GROUPS.get("props")
+                    _dedup_k = f"wmprop_{match_name}_{datetime.now(timezone.utc).date()}"
+                    if _prop_chat and _dedup_k not in _STAT_INSIGHT_SENT_TODAY:
+                        _STAT_INSIGHT_SENT_TODAY.add(_dedup_k)
+                        for _leg in selected[:2]:  # Max 2 Props
+                            _leg_odds = float(_leg.get("price", _leg.get("odds", 0)) or 0)
+                            _leg_name = _leg.get("name", _leg.get("tip", ""))
+                            if not _leg_name or _leg_odds < 1.30:
+                                continue
+                            _msg = (
+                                f"🎯 <b>PLAYER PROP</b>  {_leg_odds}\n"
+                                f"━━━━━━━━━━━━━━━━━━\n"
+                                f"⚽ <b>{match_name}</b>\n"
+                                f"   ✅ {_leg_name}\n"
+                                f"━━━━━━━━━━━━━━━━━━\n"
+                                f"💰 @ {_leg_odds} · 0.5u"
+                            )
+                            send_telegram(_msg, chat_id=_prop_chat)
+                            log(f"   🎯 WM Single Prop: {_leg_name} @ {_leg_odds}")
+                    else:
+                        _send_stat_insight_fallback(match_name, legs)
+                continue
+
+            # 🆕 Generiere alle Größen 2-6 für dieses Match
+            _bb_labels = {
+                2: "🏗️ BET BUILDER",
+                3: "🎯 BET BUILDER",
+                4: "🔥 BET BUILDER",
+                5: "💎 BET BUILDER",
+                6: "👑 BET BUILDER",
+            }
+            for _n in range(2, min(len(selected) + 1, 7)):
+                _legs_n = selected[:_n]
+                _odds_n = _calc_combo_odds(_legs_n)
+                if _odds_n < 1.80:
+                    continue
+                builders.append({
+                    "match": match_name,
+                    "legs": _legs_n,
+                    "odds": _odds_n,
+                    "label": _bb_labels.get(_n, f"🎯 BET BUILDER {_n}"),
+                    "_ko": _legs_n[0].get("_ko"),
+                    "_n": _n,
+                })
+
+        if _rejected_too_few_legs or _rejected_low_odds:
+            log(f"   🔑 Bet Builder Filter: {_rejected_too_few_legs} mit <2 Legs verworfen, {_rejected_low_odds} mit Quote<1.80 verworfen")
+
+    else:
+        log("⚡ Legacy Builder-Berechnung ausgelassen; echter Player-Prop-Pool bleibt erhalten")
 
     # 🆕 BTTS-Tipps als Bet Builder — optional.
     # V31: Standard AUS, damit der Prop-Kanal nicht mit Team-BTTS-Kombis zugemüllt wird.
