@@ -33,3 +33,11 @@ def test_corner_bot_works_without_api_ids_from_measured_history(monkeypatch):
     assert tip and tip['odds'] == 1.6 and tip['corner_history_home_games'] == 15
     monkeypatch.setattr(b, '_ntr_observed_corner_quotes', lambda *args: {})
     assert b.analyze_corners_tip({'home': 'Arsenal', 'away': 'Chelsea'}, 'Premier League') is None
+
+
+def test_target_date_matches_swiss_window_at_midnight_and_dst():
+    from datetime import datetime, timezone
+    import btts_bot as b
+    assert str(b._ntr_target_date(datetime(2026, 10, 29, 23, 30, tzinfo=timezone.utc))) == '2026-10-30'
+    assert str(b._ntr_target_date(datetime(2026, 7, 1, 22, 30, tzinfo=timezone.utc))) == '2026-07-02'
+    assert str(b._ntr_target_date(datetime(2026, 10, 29, 12, 0, tzinfo=timezone.utc))) == '2026-10-29'

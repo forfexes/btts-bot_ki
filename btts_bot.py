@@ -21154,7 +21154,12 @@ def run_corners_and_scorer_bots(target_date, active_leagues, odds_data_cache, fi
         _cs_budget = 240.0
     _cs_deadline = time.time() + _cs_budget if _cs_budget > 0 else None
     _kambi_state = {}
-    for league in active_leagues:
+    # Spend the finite corner budget on leagues with measured free history first.
+    # The stable order inside each tier is retained; other leagues remain available.
+    _league_order = sorted(active_leagues, key=lambda name: not any(
+        key in str(name).lower() for key in FD_CO_UK_LEAGUE_CODES
+    )) if group_corners else active_leagues
+    for league in _league_order:
         if _cs_deadline and time.time() > _cs_deadline:
             log(f"⏱️ Corners/Scorer Budget ({_cs_budget:.0f}s) erreicht — restliche Ligen übersprungen, Builder/Karten haben Vorrang.", "WARN")
             _sd["budget_hit"] = 1
@@ -21172,7 +21177,6 @@ def run_corners_and_scorer_bots(target_date, active_leagues, odds_data_cache, fi
             for fixture in fixtures:
                 if corner_checked >= corner_max_matches:
                     break
-                corner_checked += 1
                 try:
                     home_norm = normalize_team_name(fixture.get("home", ""))
                     away_norm = normalize_team_name(fixture.get("away", ""))
@@ -21188,7 +21192,10 @@ def run_corners_and_scorer_bots(target_date, active_leagues, odds_data_cache, fi
                         _ntr_log_duplicate(f"   ⏭️ Ecken Duplikat: {match_name}", key="corners")
                         continue
 
+                    _history_before = getattr(analyze_corners_tip, "diagnostics", {}).get("with_team_history", 0)
                     tip = analyze_corners_tip(fixture, league, target_date)
+                    # Missing history must not consume the scarce quoted-line budget.
+                    corner_checked += int(getattr(analyze_corners_tip, "diagnostics", {}).get("with_team_history", 0) > _history_before)
                     if tip:
                         _c_odds = tip.get("odds", tip.get("fair_odds", 0))
                         try:
@@ -26427,6 +26434,14 @@ def _ntr_persist_marks(reason):
         pass
 
 
+def _ntr_target_date(now_utc):
+    """Use the same Swiss calendar date as the selection window."""
+    from zoneinfo import ZoneInfo
+    if now_utc.tzinfo is None:
+        now_utc = now_utc.replace(tzinfo=timezone.utc)
+    return now_utc.astimezone(ZoneInfo("Europe/Zurich")).date()
+
+
 def _ntr_ht_prob_plausible(prob_pct, odds):
     """Calibration guard for HT specials: a model probability far above the market's
     implied probability is a miscalibrated model (fake edge), not a value bet."""
@@ -26488,7 +26503,7 @@ def main():
     check_rotation_schedule()
 
     now_utc = datetime.now(timezone.utc)
-    target_date = now_utc.date()
+    target_date = _ntr_target_date(now_utc)
     hour_utc = now_utc.hour
 
     log(f"⏰ {now_utc.strftime('%H:%M')} UTC | 📅 {target_date}")
@@ -27466,6 +27481,7 @@ def main():
             _t = _st[11:16] if _st and "T" in _st else "TBD"
             _fixtures_cache[_key].append({
                 "home": _h, "away": _a, "time": _t,
+                "kickoff": _st, "starts": _st,
                 "source": str(pm.get("source") or "pinnacle"),
             })
             if _key not in active_leagues:
