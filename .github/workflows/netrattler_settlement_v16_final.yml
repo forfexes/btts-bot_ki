@@ -2,12 +2,11 @@ name: NETRATTLER Settlement Final V25 MULTISOURCE
 
 on:
   workflow_dispatch:
-  # Changing the settlement workflow triggers one guarded production
-  # verification. Ordinary code commits do NOT spam live Telegram groups.
-  push:
-    branches: [main]
-    paths:
-      - '.github/workflows/netrattler_settlement_v16_final.yml'
+  # One requested follow-up after corner-history verification run 40978642707.
+  # Other tip runs are skipped; schedules and manual dispatch remain unchanged.
+  workflow_run:
+    workflows: ["NETRATTLER AI Tipp Bot"]
+    types: [completed]
   schedule:
     - cron: "20 13 * * *"
     - cron: "20 23 * * *"
@@ -18,6 +17,9 @@ concurrency:
 
 jobs:
   settlement:
+    if: >-
+      github.event_name != 'workflow_run' ||
+      (github.event.workflow_run.id == 40978642707 && github.event.workflow_run.conclusion == 'success')
     runs-on: ubuntu-latest
     timeout-minutes: 30
     steps:
