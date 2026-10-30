@@ -2037,15 +2037,33 @@ _TEAM_ROW_COUNTS: Dict[str, Dict[str, set]] = {}  # Tag -> Team -> Spielernamen 
 
 
 def _match_covered_player_absent(leg: Dict[str, Any], stats: Sequence[Dict[str, Any]]) -> bool:
-    """Spiel ist in den Spielerdaten vollstaendig vorhanden (>=14 Spielerzeilen beider Teams), der Spieler aber nicht
-    (auch kein aehnlicher Name im Team) -> er hat nicht gespielt; Buchmacher erstatten Einsatz => void."""
+    """Only infer a non-appearance from a verified, two-team fixture roster.
+
+    The day/team cache includes unrelated fixtures and incomplete single-team
+    ESPN/FPLCI rosters. Fourteen players from *one* team do not prove that an
+    opposing player was absent; missing coverage must remain pending.
+    """
     data = unpack(leg)
     wanted_player = str(anyv(data, ["player", "player_name", "selection"], ""))
     home, away, _ = match_parts(leg)
     day = row_date(leg)
     if not (wanted_player and home and away and day):
         return False
-    cover = 0
+
+    # Require an actual row tied to this exact home/away fixture. Date and
+    # similar team name alone are insufficient evidence of a complete lineup.
+    fixture_confirmed = False
+    for row in stats:
+        if row_date(row) != day:
+            continue
+        row_home, row_away, _ = match_parts(row)
+        if (row_home and row_away and _strict_team_match(home, row_home)
+                and _strict_team_match(away, row_away)):
+            fixture_confirmed = True
+            break
+    if not fixture_confirmed:
+        return False
+
     teams: Dict[str, set] = {}
     for team, names in _TEAM_ROW_COUNTS.get(day, {}).items():
         teams.setdefault(team, set()).update(names)
@@ -2054,13 +2072,21 @@ def _match_covered_player_absent(leg: Dict[str, Any], stats: Sequence[Dict[str, 
             team = str(unpack(row).get("team") or "")
             if team:
                 teams.setdefault(team, set()).add(norm(player_name(row)))
-    for team, names in teams.items():
-        if _strict_team_match(home, team) or _strict_team_match(away, team):
-            cover += len(names)
-            if any(similarity(wanted_player, n) >= 0.6 for n in names):
-                return False
-    return cover >= 14
 
+    home_names: set = set()
+    away_names: set = set()
+    for team, names in teams.items():
+        if _strict_team_match(home, team):
+            home_names.update(names)
+        elif _strict_team_match(away, team):
+            away_names.update(names)
+
+    # At least a plausible starting XI for EACH side is necessary before
+    # declaring a player absent. Otherwise a partial feed causes false VOID.
+    if len(home_names) < 11 or len(away_names) < 11:
+        return False
+    return not any(similarity(wanted_player, name) >= 0.6
+                   for name in home_names | away_names)
 
 def settle_player_market(leg: Dict[str, Any], stats: Sequence[Dict[str, Any]], result: Optional[Dict[str, Any]]) -> Tuple[str, str]:
     category = category_of(leg)
