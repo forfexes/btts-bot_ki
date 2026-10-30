@@ -2,11 +2,8 @@ name: NETRATTLER Settlement Final V25 MULTISOURCE
 
 on:
   workflow_dispatch:
-  # One requested follow-up after corner-history verification run 40978642707.
-  # Other tip runs are skipped; schedules and manual dispatch remain unchanged.
-  workflow_run:
-    workflows: ["NETRATTLER AI Tipp Bot"]
-    types: [completed]
+  # The requested one-off follow-up was started as run 40980383941.
+  # Continue with the regular manual and scheduled settlement triggers only.
   schedule:
     - cron: "20 13 * * *"
     - cron: "20 23 * * *"
@@ -17,9 +14,6 @@ concurrency:
 
 jobs:
   settlement:
-    if: >-
-      github.event_name != 'workflow_run' ||
-      (github.event.workflow_run.id == 40978642707 && github.event.workflow_run.conclusion == 'success')
     runs-on: ubuntu-latest
     timeout-minutes: 30
     steps:

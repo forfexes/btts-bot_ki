@@ -41,3 +41,28 @@ def test_target_date_matches_swiss_window_at_midnight_and_dst():
     assert str(b._ntr_target_date(datetime(2026, 10, 29, 23, 30, tzinfo=timezone.utc))) == '2026-10-30'
     assert str(b._ntr_target_date(datetime(2026, 7, 1, 22, 30, tzinfo=timezone.utc))) == '2026-07-02'
     assert str(b._ntr_target_date(datetime(2026, 10, 29, 12, 0, tzinfo=timezone.utc))) == '2026-10-29'
+
+
+def test_corner_criterion_rejects_team_and_combined_markets():
+    from netrattler_prop_sources import is_full_match_corner_criterion as valid
+    for text in ('Total Corners', 'Total Corners - Over/Under', 'Corner Kicks', 'Number of Corners'):
+        assert valid(text)
+    for text in ('Total Corners by Arsenal', 'Arsenal Total Corners', 'Total Corners & Goals',
+                 '1st Half Total Corners', 'Asian Total Corners', 'Corners - Handicap'):
+        assert not valid(text)
+
+
+def test_team_corner_quote_cannot_replace_full_match_quote(monkeypatch):
+    import netrattler_prop_sources as p
+    monkeypatch.setattr(p, '_KAMBI_LIST_CACHE', {})
+    monkeypatch.setattr(p, '_KAMBI_OFFER_CACHE', {})
+    monkeypatch.setattr(p, '_KAMBI_HOSTS', ['https://example.invalid'])
+    def fake(url, **kwargs):
+        if 'listView' in url:
+            return {'events': [{'event': {'id': 1, 'homeName': 'Arsenal', 'awayName': 'Chelsea'}}]}
+        def offer(label, odds):
+            return {'criterion': {'label': label}, 'outcomes': [{'label': 'Over 7.5', 'line': 7500, 'odds': odds}]}
+        return {'betOffers': [offer('Total Corners', 1700), offer('Total Corners by Arsenal', 3800)]}
+    monkeypatch.setattr(p, '_get_json', fake)
+    result = p.fetch_kambi_match_corners('Arsenal', 'Chelsea')
+    assert len(result) == 1 and result[0]['odds'] == 1.7

@@ -482,6 +482,21 @@ def fetch_1xbet_player_props(home: str, away: str) -> List[Dict[str, Any]]:
 
 
 
+def is_full_match_corner_criterion(label: str) -> bool:
+    """Positive whitelist: a team total or combined corner bet is not a match total."""
+    text = re.sub(r"\s+", " ", str(label or "").lower()).strip()
+    text = text.replace("over / under", "over/under")
+    allowed = {
+        "total corners", "total corner kicks", "number of corners", "number of corner kicks",
+        "corners", "corner kicks", "match corners", "match total corners", "full match total corners",
+    }
+    for suffix in (" - over/under", " over/under", " (over/under)"):
+        if text.endswith(suffix):
+            text = text[:-len(suffix)].strip()
+            break
+    return text in allowed
+
+
 def fetch_kambi_match_corners(home: str, away: str, brand: str = "ub") -> List[Dict[str, Any]]:
     """Observed Kambi match-total corner prices for Corner Sniper.
 
@@ -529,7 +544,7 @@ def fetch_kambi_match_corners(home: str, away: str, brand: str = "ub") -> List[D
         low = crit.lower()
         # Match-total corners only. Exclude team/player/handicap/1H markets because
         # Corner Sniper's probability model is for full-match total corners.
-        if "corner" not in low or any(tok in low for tok in ("team corner", "player corner", "1st half", "first half", "2nd half", "second half", "handicap", "3 way", "3-way", "odd/even", "exact", "range", "both teams", "most corners", "race", "asian")):
+        if not is_full_match_corner_criterion(crit):
             continue
         for oc in bo.get("outcomes") or []:
             lab = str(oc.get("label") or oc.get("type") or "")
