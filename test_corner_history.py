@@ -66,3 +66,21 @@ def test_team_corner_quote_cannot_replace_full_match_quote(monkeypatch):
     monkeypatch.setattr(p, '_get_json', fake)
     result = p.fetch_kambi_match_corners('Arsenal', 'Chelsea')
     assert len(result) == 1 and result[0]['odds'] == 1.7
+
+
+def test_only_observed_supported_half_lines():
+    from netrattler_corner_history import observed_corner_lines
+    assert observed_corner_lines({6.5: (), 12.5: (), 14.5: (), 7: (), 7.25: (),
+                                  15.5: (), float('nan'): (), 'bad': ()}) == [6.5, 12.5, 14.5]
+    assert observed_corner_lines({}) == []
+
+
+def test_observed_65_corner_line_is_not_silently_dropped(monkeypatch):
+    import btts_bot as b
+    monkeypatch.setenv('NETRATTLER_CORNER_REQUIRE_TEAM_STATS', 'true')
+    monkeypatch.setattr(b, '_fd_co_uk_load_csv', lambda league: rows())
+    monkeypatch.setattr(b, '_ntr_observed_corner_quotes', lambda *args: {6.5: (1.60, 'bookmaker')})
+    tip = b.analyze_corners_tip({'home': 'Arsenal', 'away': 'Chelsea'}, 'Premier League')
+    assert tip and tip['line'] == 6.5 and tip['odds'] == 1.6
+    monkeypatch.setattr(b, '_ntr_observed_corner_quotes', lambda *args: {6.5: (1.01, 'bookmaker')})
+    assert b.analyze_corners_tip({'home': 'Arsenal', 'away': 'Chelsea'}, 'Premier League') is None

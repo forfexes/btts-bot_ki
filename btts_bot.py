@@ -20352,7 +20352,8 @@ def analyze_corners_tip_simple(fixture, league, target_date=None):
 
     _corner_quotes = _ntr_observed_corner_quotes(fixture, target_date)
     candidates = []
-    for line in (7.5, 8.5, 9.5, 10.5, 11.5):
+    from netrattler_corner_history import observed_corner_lines
+    for line in observed_corner_lines(_corner_quotes):
         prob = poisson_over(line)
         _observed = _corner_quotes.get(round(line, 2))
         if prob < CORNER_MIN_PROB or not _observed:
@@ -20414,7 +20415,8 @@ def analyze_corners_tip(fixture, league, target_date=None):
     if not _corner_quotes:
         diag["missing_observed_quotes"] = diag.get("missing_observed_quotes", 0) + 1
     candidates = []
-    for line in (7.5, 8.5, 9.5, 10.5, 11.5):
+    from netrattler_corner_history import observed_corner_lines
+    for line in observed_corner_lines(_corner_quotes):
         cum = sum((math.exp(-expected_total) * expected_total**k) / math.factorial(k) for k in range(int(line) + 1))
         prob = round((1 - cum) * 100)
         _observed = _corner_quotes.get(round(line, 2))

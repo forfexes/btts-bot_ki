@@ -3,6 +3,20 @@ from datetime import date, datetime
 from netrattler_identity_hub import teams_match
 
 
+
+def observed_corner_lines(quotes):
+    """Observed half lines only; integer/quarter lines need different settlement."""
+    import math
+    lines = set()
+    for raw in quotes or {}:
+        try:
+            line = float(raw)
+        except (ValueError, TypeError):
+            continue
+        if math.isfinite(line) and 6.5 <= line <= 14.5 and line % 1 == 0.5:
+            lines.add(line)
+    return sorted(lines)
+
 def team_corner_profile(rows, team, target_date=None, window=15, min_games=5):
     cutoff = min(date.fromisoformat(str(target_date or date.today())[:10]), date.today())
     games = {}
