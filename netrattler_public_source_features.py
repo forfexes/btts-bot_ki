@@ -118,6 +118,8 @@ def probe_all():
         row={"source":name,"url":url,"mode":mode,"status":status,"ok":bool(html),"elapsed_s":round(time.monotonic()-started,2),"collected_at":datetime.now(timezone.utc).isoformat()}
         row.update(text_features(html) if html else {})
         row["labelled_tables"] = extract_labelled_tables(html) if html else []
+        from netrattler_structured_pages import parse_public_page
+        row["structured_context"] = parse_public_page(html, url) if html else {}
         rows.append(row); print(json.dumps(row,ensure_ascii=False),flush=True)
         time.sleep(1)
     return rows

@@ -4,6 +4,9 @@ on:
     branches: [main]
     paths:
       - 'netrattler_source_audit.py'
+      - 'netrattler_structured_pages.py'
+      - 'test_netrattler_structured_pages.py'
+      - 'flashscore_scraper.py'
       - 'test_netrattler_source_audit.py'
       - 'netrattler_aiscore_context.py'
       - 'netrattler_nuxt_data.py'
@@ -29,7 +32,7 @@ jobs:
           python -m playwright install --with-deps chromium
       - name: Source parser and market regressions
         run: |
-          python -m pytest -q test_netrattler_aiscore.py test_netrattler_aiscore_context.py test_netrattler_source_audit.py test_netrattler_keyless_odds.py test_netrattler_kambi_team_odds.py test_netrattler_kambi_scorer_market.py test_source_hub_v30.py test_betclone_deep_probe.py test_netrattler_betclone_probe.py test_netrattler_betclone_hardprobe.py test_netrattler_altenar_keyless_probe.py test_netrattler_altenar_schema_probe.py test_netrattler_inplaynet_schema_probe.py test_x1_snapshot_collector.py test_netrattler_1x_shadow_snapshots.py
+          python -m pytest -q test_netrattler_structured_pages.py test_netrattler_aiscore.py test_netrattler_aiscore_context.py test_netrattler_source_audit.py test_netrattler_keyless_odds.py test_netrattler_kambi_team_odds.py test_netrattler_kambi_scorer_market.py test_source_hub_v30.py test_betclone_deep_probe.py test_netrattler_betclone_probe.py test_netrattler_betclone_hardprobe.py test_netrattler_altenar_keyless_probe.py test_netrattler_altenar_schema_probe.py test_netrattler_inplaynet_schema_probe.py test_x1_snapshot_collector.py test_netrattler_1x_shadow_snapshots.py
       - name: Inventory every module and probe; test public feeds and pages
         env:
           PINNACLE_GUEST_KEY: ${{ secrets.PINNACLE_GUEST_KEY }}

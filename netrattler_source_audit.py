@@ -22,6 +22,9 @@ PUBLIC_PAGES={
  'flashscore':'https://www.flashscore.com/football/',
  'afootballreport':'https://afootballreport.com/',
  'datamb':'https://datamb.football/teams/',
+ 'flashscore_match':'https://www.flashscore.com/match/football/chelsea-4fGZN2oK/manchester-united-ppjDR086/',
+ 'todaymatchprediction_match':'https://www.todaymatchprediction.com/gameprediction/1611435/aso-chlef-vs-es-setif.html',
+ 'besoccer_match':'https://www.besoccer.com/match/chelsea-fc/manchester-united-fc/20267390',
 }
 
 
@@ -57,14 +60,18 @@ def inventory(root):
             'warning':'Static workflow/import references do not prove production use or successful parsing.'}
 
 
-def page_evidence(html):
+def page_evidence(html, url=""):
+    from netrattler_structured_pages import parse_public_page
     from bs4 import BeautifulSoup
     from netrattler_public_source_features import extract_labelled_tables
     s=BeautifulSoup(html or '', 'html.parser')
     return {'title':s.title.get_text(' ',strip=True)[:180] if s.title else '',
             'tables':len(s.select('table')),
             'sports_events':len(s.select('[itemtype$="SportsEvent"]')),
-            'labelled_tables':extract_labelled_tables(html)}
+            'labelled_tables':extract_labelled_tables(html),
+            'structured_context':parse_public_page(html,url),
+            'match_dom': {sel:[str(x)[:1200] for x in s.select(sel)[:2]] for sel in
+                          ['.match-info','.match-data','.team-name','.marker','time','[itemprop=homeTeam]','[itemprop=awayTeam]','[itemprop=startDate]'] } if '/match/' in url else {}}
 
 
 def http_page(item):
@@ -79,7 +86,7 @@ def http_page(item):
         r.close()
         out={'source':name,'status':r.status_code,'bytes':len(body),'reachable':r.status_code==200,
              'role':'candidate/context; never proof of usable bookmaker odds'}
-        if r.status_code==200:out.update(page_evidence(bytes(body).decode('utf-8',errors='replace')))
+        if r.status_code==200:out.update(page_evidence(bytes(body).decode('utf-8',errors='replace'),url))
         return out
     except requests.RequestException as e:return {'source':name,'error':type(e).__name__,'reachable':False}
 
@@ -96,7 +103,7 @@ def browser_pages():
                 r=page.goto(url,wait_until='domcontentloaded',timeout=18000)
                 page.wait_for_timeout(1200)
                 row={'source':name,'status':r.status if r else None,'mode':'chromium'}
-                if r and r.status==200:row.update(page_evidence(page.content()))
+                if r and r.status==200:row.update(page_evidence(page.content(),url))
                 out.append(row)
             except Exception as e:out.append({'source':name,'mode':'chromium','error':type(e).__name__})
             finally:page.close()
