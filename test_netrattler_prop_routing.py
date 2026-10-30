@@ -87,3 +87,18 @@ def test_runtime_and_team_quote_layers_reject_same_prefix_wrong_team(monkeypatch
     monkeypatch.setattr(p,'_get_json',lambda *a,**k:{'events':[{'event':{'id':1,'homeName':'Manchester City','awayName':'Chelsea'}}]})
     assert runtime.fetch_kambi_player_props_rich('Manchester United','Chelsea','ub')==[]
     assert team._offer_for_match('Manchester United','Chelsea','ub') is None
+
+
+def test_market_scope_and_anytime_proof_apply_to_rich_runtime(monkeypatch):
+    import netrattler_prop_sources as p
+    import netrattler_runtime_patch as runtime
+    h='https://example.invalid';eid=42
+    monkeypatch.setattr(p,'_KAMBI_HOSTS',[h])
+    monkeypatch.setattr(p,'_KAMBI_LIST_CACHE',{(h,'ub'):{'events':[{'event':{'id':eid,'homeName':'Arsenal','awayName':'Chelsea'}}]}})
+    def offer(label,typ):return {'criterion':{'label':label},'betOfferType':{'name':typ},'outcomes':[{'participant':'Bukayo Saka','label':'Bukayo Saka','odds':2300}]}
+    payload={'betOffers':[offer('Goalscorer','Goalscorer'),offer('Goalscorer','First Goalscorer'),offer('Goalscorer','Anytime Goalscorer'),offer('First Half Player Shots','Over/Under')]}
+    monkeypatch.setattr(p,'_KAMBI_OFFER_CACHE',{(h,'ub',str(eid)):payload})
+    rows=runtime.fetch_kambi_player_props_rich('Arsenal','Chelsea','ub')
+    assert len(rows)==1 and rows[0]['category']=='score' and 'Anytime' in rows[0]['market']
+    payload['events']=[{'id':eid,'state':'STARTED'}]
+    assert runtime.fetch_kambi_player_props_rich('Arsenal','Chelsea','ub')==[]

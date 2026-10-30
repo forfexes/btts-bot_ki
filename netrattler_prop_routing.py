@@ -32,12 +32,25 @@ SOURCE_ROLES={
 }
 
 
+
+def valid_market(category,market):
+    import re
+    text=str(market or '').lower()
+    if category not in ALLOWED_CATEGORIES:return False
+    if re.search(r'\b(first half|1st half|second half|2nd half|1h|2h|period|each half|both halves)\b',text):return False
+    if category=='score':
+        if re.search(r'\b(first|last|next|opening|second|third|assist)\b|2\+|3\+|hat.trick|own goal',text):return False
+        return bool(re.search(r'any\s*time|to score(?: a goal)?\b',text))
+    return True
+
+
 def validate_prop(row,home,away):
     """Validate normalized records before coverage or best-price selection."""
     from netrattler_identity_hub import normalize_team_name
     if not isinstance(row,dict):return None,'invalid_shape'
     cat=row.get('category')
     if cat not in ALLOWED_CATEGORIES:return None,'unknown_category'
+    if not valid_market(cat,row.get('market')):return None,'wrong_market_scope'
     player=str(row.get('player') or '').strip()
     if not player:return None,'missing_player'
     if row.get('_no_real_odds') or row.get('observed') is False:return None,'not_observed'

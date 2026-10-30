@@ -91,7 +91,7 @@ def fetch_kambi_player_props_rich(home: str, away: str, brand: str = "ub") -> Li
             home_name = event.get("homeName") or ""
             away_name = event.get("awayName") or ""
             combo = f"{home_name} {away_name}".strip() or str(name).replace(" - ", " ")
-            if prop_sources._event_pair_match(event, home, away):
+            if prop_sources._event_pair_match(event, home, away) and not prop_sources._kambi_event_live(event):
                 event_id = event.get("id")
                 host_used = host
                 break
@@ -108,6 +108,8 @@ def fetch_kambi_player_props_rich(home: str, away: str, brand: str = "ub") -> Li
             params={"lang": "en_GB", "market": "GB"},
         )
     offer = prop_sources._KAMBI_OFFER_CACHE.get(offer_key)
+    if isinstance(offer, dict) and prop_sources._kambi_event_live(offer):
+        return []
     if not offer:
         return []
 
@@ -115,7 +117,8 @@ def fetch_kambi_player_props_rich(home: str, away: str, brand: str = "ub") -> Li
     for bet_offer in offer.get("betOffers") or []:
         market_text = _market_text(bet_offer)
         category = prop_sources.map_category(market_text)
-        if category == "other":
+        from netrattler_prop_routing import valid_market
+        if not valid_market(category, market_text):
             continue
         for outcome in bet_offer.get("outcomes") or []:
             label = str(outcome.get("label") or "")
