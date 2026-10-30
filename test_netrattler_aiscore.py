@@ -121,3 +121,20 @@ def main():
 
 if __name__ == "__main__":
     main()
+
+
+def test_blocked_browser_page_never_counts_as_data(monkeypatch):
+    monkeypatch.setattr(aiscore, 'candidate_urls', lambda *a:['https://m.aiscore.com/test'])
+    monkeypatch.setattr(aiscore, '_requests_html', lambda *a:('',403))
+    monkeypatch.setattr(aiscore, '_browser_page', lambda *a:('<html>Head to Head Lineups '+('x'*1500)+'</html>',[],403))
+    row=aiscore.collect_match('Arsenal','Chelsea',use_browser=True)
+    assert row['pages'][0]['bytes']==0 and row['contexts']==[] and row['odds']==[]
+    assert row['features']['has_h2h'] is False
+
+
+def test_browser_403_cannot_replace_good_http_page(monkeypatch):
+    monkeypatch.setattr(aiscore, 'candidate_urls', lambda *a:['https://m.aiscore.com/test'])
+    monkeypatch.setattr(aiscore, '_requests_html', lambda *a:('<html>Head to Head</html>',200))
+    monkeypatch.setattr(aiscore, '_browser_page', lambda *a:('<html>'+('x'*2000)+'</html>',[],403))
+    row=aiscore.collect_match('Arsenal','Chelsea',use_browser=True)
+    assert row['pages'][0]['status']==200 and row['features']['has_h2h'] is True

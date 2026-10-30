@@ -399,9 +399,13 @@ def collect_match(home: str, away: str, use_browser: bool = True) -> Dict[str, A
         payloads = _json_scripts(html) if html else []
         if use_browser:
             browser_html, browser_payloads, browser_status = _browser_page(url)
-            if browser_html and (not html or len(browser_html) > len(html)):
+            if browser_html and browser_status is not None and 200 <= browser_status < 300 and (not html or len(browser_html) > len(html)):
                 html, mode, status = browser_html, "playwright", browser_status or status
             payloads.extend(browser_payloads)
+        # A rendered 403/challenge page is not football data. Do not count
+        # its size or navigation words as a successful H2H/lineup capture.
+        if status is None or not 200 <= status < 300:
+            html, payloads = "", []
         text = _page_text(html) if html else ""
         if text:
             feature_texts.append(text)
@@ -618,7 +622,7 @@ def main() -> int:
             row = collect_match(home, away, use_browser=use_browser)
             matches.append(row)
             pages = row.get("pages") or []
-            reachable = sum(1 for p in pages if p.get("bytes", 0) > 1000)
+            reachable = sum(1 for p in pages if 200 <= (p.get("status") or 0) < 300 and p.get("bytes", 0) > 1000)
             log(f"{idx}/{len(pairs)} {home} vs {away}: pages={reachable}/{len(pages)} odds={len(row.get('odds') or [])} h2h={bool((row.get('features') or {}).get('has_h2h'))}")
         except Exception as exc:
             log(f"{home} vs {away}: {str(exc)[:140]}", "WARN")
@@ -627,7 +631,7 @@ def main() -> int:
     log(f"finished {result}")
     try:
         from netrattler_health import record
-        pages_ok = sum(1 for m in matches for p in (m.get("pages") or []) if p.get("bytes", 0) > 1000)
+        pages_ok = sum(1 for m in matches for p in (m.get("pages") or []) if 200 <= (p.get("status") or 0) < 300 and p.get("bytes", 0) > 1000)
         pages_all = sum(len(m.get("pages") or []) for m in matches)
         from collections import Counter
         st = Counter(str(p.get("status")) for m in matches for p in (m.get("pages") or []))
