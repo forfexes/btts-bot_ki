@@ -128,11 +128,67 @@ def live_checks():
     return {'feeds':sources,'http_pages':pages}
 
 
+
+def audit_player_props():
+    """Measure actual normalized props, not just event-list reachability."""
+    import time
+    from collections import Counter
+    import netrattler_prop_sources as ps
+    import netrattler_runtime_patch as runtime_patch
+    runtime_patch.install_pre_guard()
+    from netrattler_prop_routing import SourceOrder,validate_prop,SOURCE_ROLES
+    source_order=SourceOrder();fixtures=[]
+    for host in ps._KAMBI_HOSTS:
+        data=ps._get_json(f"{host}/offering/v2018/ub/listView/football/all/all/all/matches.json",params={"lang":"en_GB","market":"GB"},timeout=8)
+        if not isinstance(data,dict):continue
+        ps._KAMBI_LIST_CACHE[(host,"ub")]=data
+        events=[x.get("event") or x for x in data.get("events",[]) if isinstance(x,dict)]
+        def priority(e):
+            path=str(e.get("path") or "").lower()
+            major=any(country in path and league in path for country,league in
+                      (("england","premier league"),("germany","bundesliga"),("spain","la liga"),("italy","serie a"),("france","ligue 1")))
+            youth=any(w in path for w in ("u21","u19","u23","women"))
+            return (not major, youth, -int(e.get("nonLiveBoCount") or 0))
+        events.sort(key=priority)
+        for e in events:
+            if e.get("homeName") and e.get("awayName") and not ps._kambi_event_live(e):
+                fixtures.append({"home":e["homeName"],"away":e["awayName"]})
+                if len(fixtures)>=2:break
+        if fixtures:break
+    started=time.monotonic();original=ps._snapshot_x1_player_markets
+    # The audit measures parsers only; it must not start raw snapshot harvesting.
+    ps._snapshot_x1_player_markets=lambda *a:None
+    try:
+        for fx in fixtures:
+            jobs=[(f"kambi_{b}",lambda b=b:ps.fetch_kambi_player_props(fx["home"],fx["away"],b)) for b in ps._KAMBI_BRANDS]
+            jobs += [("1xbet",lambda:ps.fetch_1xbet_player_props(fx["home"],fx["away"])),
+                     ("oddspedia",lambda:ps.fetch_oddspedia_player_props(fx["home"],fx["away"])),
+                     ("footymetrics",lambda:ps.fetch_footymetrics_player_props(fx["home"],fx["away"]))]
+            for name,fn in jobs:
+                if time.monotonic()-started>120:break
+                t=time.monotonic();error=""
+                try:rows=fn() or []
+                except Exception as e:rows=[];error=type(e).__name__
+                accepted=[];reject=Counter()
+                for row in rows if isinstance(rows,list) else []:
+                    valid,reason=validate_prop(row,fx["home"],fx["away"])
+                    if valid is not None:accepted.append(valid)
+                    else:reject[reason]+=1
+                source_order.record(name,accepted,len(rows),int((time.monotonic()-t)*1000),error,reject)
+    finally:ps._snapshot_x1_player_markets=original
+    report={"fixtures":fixtures,"ranking":source_order.report(),"source_roles":SOURCE_ROLES,
+            "note":"Acceptance and coverage are measured; no profitability or hit-rate score is inferred."}
+    print("PLAYER_PROP_SOURCE_RANKING "+json.dumps(report),flush=True)
+    return report
+
+
 def main():
     p=argparse.ArgumentParser();p.add_argument('--live',action='store_true');p.add_argument('--browser',action='store_true')
     p.add_argument('--output',default='netrattler_source_audit.json');args=p.parse_args()
     report={'captured_at':datetime.now(timezone.utc).isoformat(),'inventory':inventory(Path(__file__).parent)}
-    if args.live:report['live']=live_checks()
+    if args.live:
+        report['live']=live_checks()
+        report['player_props']=audit_player_props()
     if args.browser:
         report['browser']=browser_pages()
         for row in report['browser']:print('SOURCE_BROWSER '+json.dumps(row,ensure_ascii=False),flush=True)

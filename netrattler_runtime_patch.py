@@ -91,7 +91,7 @@ def fetch_kambi_player_props_rich(home: str, away: str, brand: str = "ub") -> Li
             home_name = event.get("homeName") or ""
             away_name = event.get("awayName") or ""
             combo = f"{home_name} {away_name}".strip() or str(name).replace(" - ", " ")
-            if prop_sources._teams_match(combo, home, away):
+            if prop_sources._event_pair_match(event, home, away):
                 event_id = event.get("id")
                 host_used = host
                 break

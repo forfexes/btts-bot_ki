@@ -216,14 +216,26 @@ def _norm(s: str) -> str:
     return re.sub(r"[^a-z0-9]", "", str(s or "").lower())
 
 
-def _teams_match(cand: str, home: str, away: str) -> bool:
-    c = _norm(cand)
-    h, a = _norm(home), _norm(away)
-    if not c or not h or not a:
-        return False
-    h_ok = h[:6] in c or c[:6] in h if len(h) >= 4 else h in c
-    a_ok = a[:6] in c or c[:6] in a if len(a) >= 4 else a in c
-    return bool(h_ok and a_ok)
+def _team_pair_match(candidate_home, candidate_away, home, away):
+    from netrattler_identity_hub import normalize_team_name
+    ch,ca,h,a = [normalize_team_name(x) for x in (candidate_home,candidate_away,home,away)]
+    return bool(ch and ca and h and a and ch==h and ca==a)
+
+
+
+def _teams_match(candidate, home, away):
+    """Compatibility for legacy callers: exact normalized ordered names only."""
+    from netrattler_identity_hub import normalize_team_name
+    return bool(candidate and home and away and normalize_team_name(candidate)==normalize_team_name(f"{home} {away}"))
+
+
+def _event_pair_match(event, home, away):
+    ch,ca=event.get("homeName"),event.get("awayName")
+    if not (ch and ca):
+        parts=re.split(r"\s+(?:-|vs\.?)\s+",str(event.get("name") or event.get("englishName") or ""),maxsplit=1,flags=re.I)
+        if len(parts)!=2:return False
+        ch,ca=parts
+    return _team_pair_match(ch,ca,home,away)
 
 
 # ==================================================================
@@ -279,7 +291,7 @@ def fetch_kambi_player_props(home: str, away: str, brand: str = "ub") -> List[Di
             home_n = e.get("homeName") or ""
             away_n = e.get("awayName") or ""
             combo = f"{home_n} {away_n}".strip() or name.replace(" - ", " ")
-            if _teams_match(combo, home, away):
+            if _event_pair_match(e, home, away):
                 event_id = e.get("id")
                 host_used = host
                 break
@@ -431,7 +443,7 @@ def fetch_1xbet_player_props(home: str, away: str) -> List[Dict[str, Any]]:
         for g in (data.get("Value") or []):
             o1 = g.get("O1") or g.get("HomeTeam") or ""
             o2 = g.get("O2") or g.get("AwayTeam") or ""
-            if _teams_match(f"{o1} {o2}", home, away):
+            if _team_pair_match(o1, o2, home, away):
                 event_id = g.get("I") or g.get("CI")
                 host_used = host
                 break
@@ -528,7 +540,7 @@ def fetch_kambi_match_corners(home: str, away: str, brand: str = "ub") -> List[D
             home_n = e.get("homeName") or ""
             away_n = e.get("awayName") or ""
             combo = f"{home_n} {away_n}".strip() or name.replace(" - ", " ")
-            if _teams_match(combo, home, away):
+            if _event_pair_match(e, home, away):
                 event_id = e.get("id")
                 host_used = host
                 break
@@ -721,7 +733,7 @@ def fetch_kambi_team_specials(home: str, away: str, brand: str = "ub") -> Dict[s
             home_n = e.get("homeName") or ""
             away_n = e.get("awayName") or ""
             combo = f"{home_n} {away_n}".strip() or name.replace(" - ", " ")
-            if _teams_match(combo, home, away):
+            if _event_pair_match(e, home, away):
                 event_id = e.get("id")
                 host_used = host
                 break
@@ -800,7 +812,7 @@ def fetch_oddspedia_player_props(home: str, away: str) -> List[Dict[str, Any]]:
             rows = rows.get("matches", [])
         for mt in rows or []:
             name = f"{mt.get('ht','')} {mt.get('at','')}" or mt.get("name", "")
-            if _teams_match(name, home, away):
+            if _team_pair_match(mt.get("ht"), mt.get("at"), home, away):
                 match_id = mt.get("id") or mt.get("matchId")
                 host_used = host
                 break
@@ -827,8 +839,11 @@ def fetch_oddspedia_player_props(home: str, away: str) -> List[Dict[str, Any]]:
             continue
         for oc in mk.get("outcomes") or mk.get("selections") or []:
             player = oc.get("player") or oc.get("participant") or oc.get("name") or ""
-            _ll = str(oc.get("handicap") or oc.get("line") or oc.get("label") or "")
-            if "under" in _ll.lower() or str(oc.get("name", "")).lower() == "no":
+            from netrattler_prop_routing import labelled_over_line
+            side = oc.get("side") or oc.get("selection") or oc.get("label") or oc.get("type") or ""
+            raw_line = oc.get("line") if oc.get("line") is not None else oc.get("handicap")
+            line = labelled_over_line(side, raw_line, cat, label)
+            if line is None:
                 continue
             try:
                 odds = float(oc.get("odds") or oc.get("price") or 0)
@@ -840,7 +855,7 @@ def fetch_oddspedia_player_props(home: str, away: str) -> List[Dict[str, Any]]:
                 continue
             props.append({
                 "player": str(player), "team": "", "match": match_name, "league": "",
-                "market": label, "category": cat, "line": _line_from(_ll, 0.5),
+                "market": label, "category": cat, "line": line, "side": "over",
                 "odds": odds, "source": "oddspedia",
             })
     return props
@@ -870,8 +885,10 @@ def fetch_footymetrics_player_props(home: str, away: str) -> List[Dict[str, Any]
             if cat == "other":
                 continue
             player = r.get("player") or r.get("name") or ""
-            side = str(r.get("side") or r.get("selection") or "over").lower()
-            if "under" in side or side == "no":
+            from netrattler_prop_routing import labelled_over_line
+            side = str(r.get("side") or r.get("selection") or "").lower()
+            line = labelled_over_line(side, r.get("line"), cat, label)
+            if line is None:
                 continue
             try:
                 odds = float(r.get("odds") or r.get("price") or 0)
@@ -884,7 +901,7 @@ def fetch_footymetrics_player_props(home: str, away: str) -> List[Dict[str, Any]
             props.append({
                 "player": str(player), "team": "", "match": match_name, "league": "",
                 "market": label, "category": cat,
-                "line": _line_from(str(r.get("line", "")), 0.5),
+                "line": line, "side": "over",
                 "odds": odds, "source": "footymetrics",
             })
         if props:
@@ -904,6 +921,8 @@ def collect_extra_player_props(
     they contribute additional categories. Everything is deduped by player+market+line.
     """
     from collections import Counter
+    from netrattler_prop_routing import SourceOrder, validate_prop
+    source_order = SourceOrder()
 
     def _log(m):
         if log:
@@ -933,16 +952,12 @@ def collect_extra_player_props(
             row["league"] = row.get("league") or league or ""
             row["match"] = row.get("match") or f"{home} vs {away}"
             cat = row.get("category") or map_category(row.get("market", ""))
-            if cat == "other":
-                continue
             row["category"] = cat
-            try:
-                odds = float(row.get("odds") or 0)
-                line = float(row.get("line") or 0.5)
-            except (TypeError, ValueError):
+            row, reason = validate_prop(row, home, away)
+            if row is None or not _valid_player_candidate(row.get("player", ""), home, away):
                 continue
-            if odds <= 1.20 or not _valid_player_candidate(row.get("player", ""), home, away):
-                continue
+            odds, line = row["odds"], row["line"]
+            row["source"] = source_name
             key = (_norm_name(row.get("player", "")), _norm_name(row.get("match", "")), cat, round(line, 2))
             prev = out_best.get(key)
             if prev is None or float(prev.get("odds") or 0) < odds:
@@ -955,6 +970,23 @@ def collect_extra_player_props(
         return added
 
     desired_depth = {"sot", "shots", "fouls", "fouls_won", "tackles_committed", "tackles_received", "yellow_cards", "score", "assist"}
+
+    def _fetch(source, fn, home, away):
+        import time
+        started=time.monotonic();error=""
+        try: raw=fn() or []
+        except Exception as exc:
+            error=type(exc).__name__;raw=[]
+        accepted=[];rejected=Counter()
+        for item in raw if isinstance(raw,list) else []:
+            if not isinstance(item,dict):
+                rejected["invalid_shape"]+=1;continue
+            item=dict(item);item["category"]=item.get("category") or map_category(item.get("market",""))
+            row,reason=validate_prop(item,home,away)
+            if row is not None and _valid_player_candidate(row.get("player",""),home,away):accepted.append(row)
+            else:rejected[reason or "invalid_player"]+=1
+        source_order.record(source,accepted,len(raw),int((time.monotonic()-started)*1000),error,rejected)
+        return accepted
 
     # Wall-clock budget: a busy Saturday (29+ fixtures) must never push the
     # whole tip run past the workflow timeout and lose every tip.
@@ -971,16 +1003,12 @@ def collect_extra_player_props(
         if not home or not away:
             return
 
-        before_cats = set(per_cat)
         local_cats = set()
         # Kambi market depth differs by brand. Merge brands but stop early once
         # a match already has broad coverage, keeping runtime bounded.
-        for brand in _KAMBI_BRANDS:
-            try:
-                rows = fetch_kambi_player_props(home, away, brand=brand) or []
-            except Exception as exc:
-                _log(f"   🔌 kambi_{brand} Fehler ({home} vs {away}): {str(exc)[:60]}")
-                rows = []
+        for brand in source_order.ordered(_KAMBI_BRANDS, prefix="kambi_"):
+            if _time_b.time() - _t0 > _budget: break
+            rows = _fetch(f"kambi_{brand}", lambda: fetch_kambi_player_props(home, away, brand=brand), home, away)
             _add(rows, home, away, league, f"kambi_{brand}")
             local_cats.update((r.get("category") or map_category(r.get("market", ""))) for r in rows if isinstance(r, dict))
             local_cats.discard("other")
@@ -993,25 +1021,16 @@ def collect_extra_player_props(
                 break
 
         # 1xbet is the best chance for tackles/fouls/shots depth, so try it next.
-        try:
-            rows = fetch_1xbet_player_props(home, away) or []
-        except Exception as exc:
-            _log(f"   🔌 1xbet Fehler ({home} vs {away}): {str(exc)[:60]}")
-            rows = []
+        rows = _fetch("1xbet", lambda: fetch_1xbet_player_props(home, away), home, away) if _time_b.time()-_t0 <= _budget else []
         _add(rows, home, away, league, "1xbet")
         local_cats.update((r.get("category") or map_category(r.get("market", ""))) for r in rows if isinstance(r, dict))
 
         # Aggregator fallbacks only if the match still lacks breadth.
-        if len(local_cats & desired_depth) < 5:
-            for name, fn in (
-                ("oddspedia", fetch_oddspedia_player_props),
-                ("footymetrics", fetch_footymetrics_player_props),
-            ):
-                try:
-                    rows = fn(home, away) or []
-                except Exception as exc:
-                    _log(f"   🔌 {name} Fehler ({home} vs {away}): {str(exc)[:60]}")
-                    rows = []
+        if desired_depth - local_cats:
+            fallbacks={"oddspedia":fetch_oddspedia_player_props,"footymetrics":fetch_footymetrics_player_props}
+            for name in source_order.ordered(list(fallbacks)):
+                if _time_b.time()-_t0 > _budget: break
+                rows = _fetch(name, lambda: fallbacks[name](home, away), home, away)
                 _add(rows, home, away, league, name)
                 local_cats.update((r.get("category") or map_category(r.get("market", ""))) for r in rows if isinstance(r, dict))
     _workers = max(1, int(_os_b.environ.get("NETRATTLER_PROP_WORKERS", "4") or 4))
@@ -1056,6 +1075,10 @@ def collect_extra_player_props(
         _log(f"   🌍 TM-NT: Fehler {str(_tm_exc)[:80]}")
 
     out = list(out_best.values())
+    per_source = Counter(str(r.get("source") or "unknown") for r in out if not r.get("_no_real_odds"))
+    per_cat = Counter(r.get("category") for r in out if not r.get("_no_real_odds"))
+    collect_extra_player_props.last_source_report = source_order.report()
+    _log("   🔎 Prop-Quellenbewertung: " + str(collect_extra_player_props.last_source_report))
     try:
         import os as _os
         import requests as _rq
@@ -1065,7 +1088,8 @@ def collect_extra_player_props(
             _rq.post(f"{_u}/rest/v1/netrattler_card_diag", timeout=8,
                      headers={"apikey": _k, "Authorization": f"Bearer {_k}", "Content-Type": "application/json"},
                      json={"info": {"probe": "prop_fetch_paths", "paths": FETCH_PATHS,
-                                    "per_source": per_source, "per_cat": dict(per_cat), "unique": len(out)}})
+                                    "per_source": dict(per_source), "per_cat": dict(per_cat), "unique": len(out),
+                                    "source_ranking": collect_extra_player_props.last_source_report}})
     except Exception:
         pass
     try:

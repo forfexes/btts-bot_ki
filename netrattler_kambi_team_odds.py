@@ -69,7 +69,7 @@ def _offer_for_match(home: str, away: str, brand: str) -> Optional[Dict[str, Any
             an = event.get("awayName") or ""
             name = event.get("name") or event.get("englishName") or ""
             candidate = f"{hn} {an}".strip() or str(name).replace(" - ", " ")
-            if ps._teams_match(candidate, home, away):
+            if ps._event_pair_match(event, home, away):
                 if str(event.get("state") or "").upper() in {"STARTED", "FINISHED", "LIVE"}:
                     return None
                 event_id = event.get("id")
