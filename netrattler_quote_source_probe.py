@@ -60,7 +60,7 @@ def probe_kambi(brand: str) -> Dict[str, Any]:
 def probe_1xbet(host: str) -> Dict[str, Any]:
     try:
         data = ps._get_json(
-            f"{host}/LineFeed/Get1x2_VZip",
+            f"{host}/service-api/LineFeed/Get1x2_VZip",
             params={"sports": 1, "count": 300, "lng": "en", "mode": 4, "country": 1}, timeout=TIMEOUT,
         )
         rows = data.get("Value") or [] if isinstance(data, dict) else []

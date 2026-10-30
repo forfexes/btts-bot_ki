@@ -64,6 +64,8 @@ class SourceAdapter:
 
 
 SOURCES: Tuple[SourceAdapter, ...] = (
+    SourceAdapter("aiscore_form", "aiscore.com", "team_form", "measured dated L15 team form fallback; no unlabelled odds", "ENABLE_AISCORE_FORM", True, "", "public page terms"),
+    SourceAdapter("public_page_context", "BeSoccer/OneMillionPredictions/BetMines/TodayMatchPrediction/Flashscore/AFootballReport", "context_research", "bounded labelled public tables; external predictions are not bookmaker odds or settlement data", "NETRATTLER_PUBLIC_SOURCE_BROWSER", False, "", "public page terms", True),
     SourceAdapter(
         "bigballs", "bigballsdata.com", "features",
         "authenticated football fixtures/lineups/match stats/player season stats; never synthetic odds",
@@ -110,10 +112,11 @@ def log(msg: str) -> None:
     print(msg, flush=True)
 
 
-def _headers() -> Dict[str, str]:
+def _headers(url: str = "") -> Dict[str, str]:
     headers = {"User-Agent": UA, "Accept": "application/json,text/plain,*/*"}
     token = os.getenv("GITHUB_TOKEN", "")
-    if token:
+    from urllib.parse import urlparse
+    if token and (urlparse(url).hostname or "").lower() in {"api.github.com", "raw.githubusercontent.com"}:
         headers["Authorization"] = f"Bearer {token}"
     return headers
 
@@ -135,7 +138,7 @@ def http_get(url: str, *, timeout: int = DEFAULT_TIMEOUT, kind: str = "json", ca
         except Exception:
             pass
     try:
-        r = requests.get(url, headers=_headers(), timeout=timeout)
+        r = requests.get(url, headers=_headers(url), timeout=timeout)
         if not r.ok:
             return None
         data = r.json() if kind == "json" else r.text

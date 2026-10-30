@@ -168,6 +168,21 @@ def _classify_market(
     s = _norm(selection_text)
     if not m or not s:
         return None
+    if any(t in m for t in ("second half", "2nd half", "both halves", "each half", "handicap", "odd even")):
+        return None
+    if " by " in f" {m} ":
+        return None
+    first_half = any(t in m for t in ("first half", "1st half", "half time", "halftime", "1h"))
+    if first_half and any(t in m for t in ("1x2", "match result", "corner")):
+        return None
+    player_tokens = ("player", "shots", "shot on target", "tackle", "foul", "card", "assist", "goalscorer", "to score")
+    if any(t in m for t in player_tokens) and not ("both teams" in m or "btts" in m):
+        observed_line = line if line is not None else _line_from_text(selection_text)
+        return f"player_prop:{m[:80]}", s[:120], observed_line
+    if "corner" in m:
+        from netrattler_prop_sources import is_full_match_corner_criterion
+        if not is_full_match_corner_criterion(market_text):
+            return None
 
     if any(token in m for token in ("1x2", "match result", "full time result", "match winner", "three way")):
         if s in {"1", "home", "home win"} or _same_team(selection_text, home):
@@ -291,6 +306,17 @@ def _json_scripts(html: str) -> List[Any]:
         soup = BeautifulSoup(html or "", "html.parser")
         for script in soup.find_all("script"):
             typ, sid = str(script.get("type") or "").lower(), str(script.get("id") or "")
+            text = script.string or script.get_text() or ""
+            if text.startswith("window.__NUXT__="):
+                try:
+                    from netrattler_nuxt_data import decode_nuxt
+                    data = decode_nuxt(text)
+                    state = data.get("state") or {}
+                    # Locale dictionaries contain market words, not event data.
+                    out.append({"state": {k:state[k] for k in ("seoH2h", "football/detail") if k in state}})
+                except (ValueError, TypeError, RecursionError):
+                    pass
+                continue
             if "json" not in typ and sid not in {"__NEXT_DATA__", "__NUXT_DATA__"}:
                 continue
             try:
@@ -366,6 +392,7 @@ def collect_match(home: str, away: str, use_browser: bool = True) -> Dict[str, A
     }
     all_odds: List[Dict[str, Any]] = []
     feature_texts: List[str] = []
+    contexts = []
     for url in candidate_urls(home, away):
         html, status = _requests_html(url)
         mode = "requests" if html else "failed"
@@ -379,12 +406,17 @@ def collect_match(home: str, away: str, use_browser: bool = True) -> Dict[str, A
         if text:
             feature_texts.append(text)
         for payload in payloads:
+            from netrattler_aiscore_context import extract_context
+            context = extract_context(payload, home, away)
+            if context["recent_results"] or context["match"]:
+                contexts.append(context)
             all_odds.extend(extract_observed_odds_from_json(payload, home, away, url))
         result["pages"].append({
             "url": url, "mode": mode, "status": status,
             "bytes": len((html or "").encode("utf-8", errors="ignore")),
             "json_payloads": len(payloads),
         })
+    result["contexts"] = contexts
     result["features"] = extract_h2h_features_from_text(" ".join(feature_texts), home, away)
     best: Dict[Tuple[str, str, Any, str], Dict[str, Any]] = {}
     for row in all_odds:

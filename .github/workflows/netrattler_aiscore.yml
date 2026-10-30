@@ -38,24 +38,24 @@ jobs:
 
       - name: Install keyless browser collector
         run: |
-          python -m pip install --prefer-binary requests beautifulsoup4 lxml playwright
+          python -m pip install --prefer-binary requests beautifulsoup4 lxml playwright pytest
           python -m playwright install --with-deps chromium
 
       - name: Compile + parser tests
         run: |
           python -m py_compile netrattler_aiscore.py test_netrattler_aiscore.py
-          python test_netrattler_aiscore.py
+          python -m pytest -q test_netrattler_aiscore.py test_netrattler_aiscore_context.py
 
       - name: Collect public AiScore H2H / lineups / explicit observed odds
         env:
           SUPABASE_URL: ${{ secrets.SUPABASE_URL }}
           SUPABASE_KEY: ${{ secrets.SUPABASE_KEY }}
           SUPABASE_SERVICE_ROLE_KEY: ${{ secrets.SUPABASE_SERVICE_ROLE_KEY }}
-          NETRATTLER_AISCORE_MAX_MATCHES: ${{ github.event.inputs.limit || '40' }}
+          NETRATTLER_AISCORE_MAX_MATCHES: ${{ github.event.inputs.limit || '3' }}
           NETRATTLER_AISCORE_TIMEOUT: "12"
           NETRATTLER_AISCORE_BROWSER_WAIT_MS: "1800"
           NETRATTLER_AISCORE_MATCH_SLEEP: "0.25"
-        run: python netrattler_aiscore.py --limit "${{ github.event.inputs.limit || '40' }}"
+        run: python netrattler_aiscore.py --limit "${{ github.event.inputs.limit || '3' }}"
 
       - uses: actions/upload-artifact@v4
         if: always()

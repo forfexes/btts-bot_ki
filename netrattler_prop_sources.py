@@ -361,10 +361,9 @@ _1X_HOSTS = ["https://22bet.com", "https://melbet.com", "https://betwinner.com",
 _1X_LIST_CACHE: Dict[str, Any] = {}
 _1X_GAME_CACHE: Dict[tuple, Any] = {}
 # 1xbet bet-group IDs fuer Player-Props (aus dem LineFeed-Schema):
-_1X_PLAYER_GROUPS = {
-    2059: "shots", 2060: "sot", 2061: "fouls", 2062: "tackles",
-    2101: "yellow_cards", 15: "score", 2201: "offsides", 2205: "passes",
-}
+# Old numeric mappings were never verified by an operator dictionary.
+# Decoded correlations in netrattler_1x_group_map remain shadow evidence.
+_1X_PLAYER_GROUPS = {}
 
 
 # Evidence collection for the unknown 1xBet group ids (fouls / tackles ...):
@@ -458,19 +457,27 @@ def fetch_1xbet_player_props(home: str, away: str) -> List[Dict[str, Any]]:
     # Player-Props liegen in GE (GroupEvents) / E (Events) mit Spielernamen im PN-Feld.
     for grp in (val.get("GE") or []):
         gid = grp.get("G")
-        cat = _1X_PLAYER_GROUPS.get(gid) or map_category(grp.get("GS", ""))
+        cat = map_category(grp.get("GS", ""))
         if cat == "other":
             continue
         for row in (grp.get("E") or []):
             for e in (row if isinstance(row, list) else [row]):
-                player = e.get("PN") or e.get("P") or ""
+                # A numeric T code cannot prove Over rather than Under.
+                outcome = str(e.get("label") or e.get("Name") or e.get("N") or "").strip().lower()
+                if not (outcome == "over" or outcome.startswith("over ") or outcome == "yes"):
+                    continue
+                player = e.get("PN") or ""
                 try:
                     odds = float(e.get("C", 0) or 0)
                 except (TypeError, ValueError):
                     continue
                 if not player or odds <= 1.20:
                     continue
-                line = e.get("P") if isinstance(e.get("P"), (int, float)) else _line_from(e.get("PN", ""), 0.5)
+                line = e.get("P")
+                if not isinstance(line, (int, float)) or isinstance(line, bool) or line < 0:
+                    continue
+                if cat in {"first_scorer", "last_scorer"}:
+                    continue
                 if not _valid_player_candidate(player, home, away):
                     continue
                 props.append({

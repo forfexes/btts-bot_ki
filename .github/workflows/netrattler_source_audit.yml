@@ -1,0 +1,50 @@
+name: NETRATTLER Complete Source Audit
+on:
+  push:
+    branches: [main]
+    paths:
+      - 'netrattler_source_audit.py'
+      - 'test_netrattler_source_audit.py'
+      - 'netrattler_aiscore_context.py'
+      - 'netrattler_nuxt_data.py'
+      - '.github/workflows/netrattler_source_audit.yml'
+  workflow_dispatch:
+permissions:
+  contents: read
+concurrency:
+  group: netrattler-source-audit-${{ github.ref }}
+  cancel-in-progress: true
+jobs:
+  audit:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+      - name: Install normal Chromium and parsers
+        run: |
+          python -m pip install requests pytest beautifulsoup4 cloudscraper python-dotenv pandas pyyaml playwright
+          python -m playwright install --with-deps chromium
+      - name: Source parser and market regressions
+        run: |
+          python -m pytest -q test_netrattler_aiscore.py test_netrattler_aiscore_context.py test_netrattler_source_audit.py test_netrattler_keyless_odds.py test_netrattler_kambi_team_odds.py test_netrattler_kambi_scorer_market.py test_source_hub_v30.py test_betclone_deep_probe.py test_netrattler_betclone_probe.py test_netrattler_betclone_hardprobe.py test_netrattler_altenar_keyless_probe.py test_netrattler_altenar_schema_probe.py test_netrattler_inplaynet_schema_probe.py test_x1_snapshot_collector.py test_netrattler_1x_shadow_snapshots.py
+      - name: Inventory every module and probe; test public feeds and pages
+        env:
+          PINNACLE_GUEST_KEY: ${{ secrets.PINNACLE_GUEST_KEY }}
+        run: python netrattler_source_audit.py --live --browser
+      - name: Verify measured AiScore form without DB or Telegram writes
+        run: |
+          python - <<'PY'
+          import json
+          from netrattler_aiscore_context import recent_form_for_match
+          home, away = recent_form_for_match('Arsenal','Chelsea')
+          print('AISCORE_MEASURED_FORM', json.dumps({'home':home,'away':away}))
+          PY
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: netrattler-complete-source-audit
+          path: netrattler_source_audit.json
+          if-no-files-found: warn

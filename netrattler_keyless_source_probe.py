@@ -36,7 +36,7 @@ def get(url, params=None, headers=None, timeout=15):
 
 
 def res(st, txt, n=None, **extra):
-    out = {"http": st, "kb": round(len(txt or "") / 1024), "blocked": bool(BLOCK.search((txt or "")[:5000]))}
+    out = {"http": st, "kb": round(len(txt or "") / 1024), "blocked": st in (401,403,429) or bool(BLOCK.search((txt or "")[:5000]))}
     if n is not None:
         out["n"] = n
     out.update(extra)
@@ -119,7 +119,9 @@ def espn_summary():
 
 
 def fotmob():
-    st, js, txt = get("https://www.fotmob.com/api/matches", {"date": D})
+    st, js, txt = get("https://www.fotmob.com/api/data/matches", {"date": D})
+    if st == 404:
+        st, js, txt = get("https://www.fotmob.com/api/matches", {"date": D})
     lg = (js or {}).get("leagues") or []
     return res(st, txt, sum(len(l.get("matches") or []) for l in lg))
 

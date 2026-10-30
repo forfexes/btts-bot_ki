@@ -26,6 +26,11 @@ SOURCES={
  "understat":"https://understat.com/",
  "forebet":"https://www.forebet.com/",
  "betmines":"https://betmines.com/",
+ "onemillionpredictions":"https://onemillionpredictions.com/",
+ "todaymatchprediction":"https://www.todaymatchprediction.com/",
+ "afootballreport":"https://afootballreport.com/",
+ "365scores":"https://www.365scores.com/football",
+ "onefootball":"https://onefootball.com/en/home",
  "oddsportal":"https://www.oddsportal.com/football/",
  "betexplorer":"https://www.betexplorer.com/football/",
  "flashscore":"https://www.flashscore.com/football/",
@@ -90,12 +95,29 @@ def text_features(html):
       "has_odds":("odds" in low or "quoten" in low),
     }
 
+
+def extract_labelled_tables(html):
+    """Keep public table evidence with labels; never turn percentages into odds."""
+    from bs4 import BeautifulSoup
+    soup=BeautifulSoup(html or "", "html.parser")
+    out=[]
+    for table in soup.select("table")[:12]:
+        rows=[]
+        for tr in table.select("tr")[:24]:
+            cells=[td.get_text(" ",strip=True)[:180] for td in tr.find_all(["th","td"],recursive=False)]
+            if cells:rows.append(cells[:6])
+        if rows:out.append({"label":str(table.get("aria-label") or "")[:160],"rows":rows,
+                            "role":"external_context_only","bookmaker_odds_verified":False})
+    return out
+
+
 def probe_all():
     rows=[]
     for name,url in SOURCES.items():
         started=time.monotonic(); html,mode,status=fetch_public(url)
         row={"source":name,"url":url,"mode":mode,"status":status,"ok":bool(html),"elapsed_s":round(time.monotonic()-started,2),"collected_at":datetime.now(timezone.utc).isoformat()}
         row.update(text_features(html) if html else {})
+        row["labelled_tables"] = extract_labelled_tables(html) if html else []
         rows.append(row); print(json.dumps(row,ensure_ascii=False),flush=True)
         time.sleep(1)
     return rows

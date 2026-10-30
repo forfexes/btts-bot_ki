@@ -26767,12 +26767,18 @@ def main():
                     try:
                         _fh = get_fd_co_uk_team_stats(home, league_name)
                         _fa = get_fd_co_uk_team_stats(away, league_name)
+                        if not (_fh and _fa):
+                            from netrattler_aiscore_context import recent_form_for_match
+                            _ah, _aa = recent_form_for_match(home, away, target_date)
+                            if _ah and _aa:
+                                _fh, _fa = _ah, _aa
+                                log(f"      📊 AiScore L15: {_fh['games']}/{_fa['games']} gemessene Spiele")
                         if _fh and _fa:
                             _mb = (_fh["btts_pct"] + _fa["btts_pct"]) / 2
                             _mo = (_fh["over25_pct"] + _fa["over25_pct"]) / 2
                             prob_b = int(0.6 * _mb + 0.4 * prob_b)
                             prob_o = int(0.6 * _mo + 0.4 * prob_o)
-                            log(f"      📊 FD-CoUk: {home} {_fh['btts_pct']}% / {away} {_fa['btts_pct']}% BTTS → {prob_b}% ({_fh['games']}/{_fa['games']} Spiele)")
+                            log(f"      📊 {_fh.get('source', 'Team-Historie')}: {home} {_fh['btts_pct']}% / {away} {_fa['btts_pct']}% BTTS → {prob_b}% ({_fh['games']}/{_fa['games']} Spiele)")
                     except Exception:
                         pass
 
