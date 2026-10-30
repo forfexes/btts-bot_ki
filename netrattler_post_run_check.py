@@ -26,15 +26,20 @@ def coverage_warnings(log_text):
         r'MASTER BUILDER duplicate skipped: ([a-zA-Z0-9_-]+)', log_text
     ))
     all_already_delivered = count_generated > 0 and len(duplicate_ids) >= count_generated
+    # Model builders are an explicitly supported style in the same group.
+    # Count only deliveries with a confirmed Telegram receipt, never attempts.
+    model_delivered = any(int(n) > 0 for n in re.findall(
+        r'Modell-Builder: (\d+) gesendet und mit Telegram-Receipt bestaetigt', log_text
+    ))
 
     for line in log_text.splitlines():
         if 'Coverage:' in line and 'no_candidates' in line:
             missing = re.findall(r'([a-z0-9_]+)=no_candidates', line)
-            if all_already_delivered:
+            if all_already_delivered or model_delivered:
                 missing = [item for item in missing if item != 'builder']
             if missing:
                 issues.append('No candidates: ' + ', '.join(missing))
-        if 'Builder Engine: 0 Builder' in line and not all_already_delivered:
+        if 'Builder Engine: 0 Builder' in line and not all_already_delivered and not model_delivered:
             issues.append('Builder Engine sent zero builders')
     return list(dict.fromkeys(issues))
 

@@ -61,6 +61,20 @@ class PostRunTests(unittest.TestCase):
         ])
         self.assertEqual(coverage_warnings(log), ['Builder Engine sent zero builders'])
 
+    def test_confirmed_model_builders_count_as_group_delivery(self):
+        log = '\n'.join([
+            'Builder Engine: 0 Builder aus 246 Props gesendet',
+            'Modell-Builder: 11 gesendet und mit Telegram-Receipt bestaetigt',
+            'Coverage: builder=no_candidates, corners=no_candidates',
+        ])
+        self.assertEqual(coverage_warnings(log), ['No candidates: corners'])
+
+    def test_unconfirmed_or_zero_model_sends_do_not_mask_empty_group(self):
+        for line in ('Modell-Builder: 0 gesendet und mit Telegram-Receipt bestaetigt',
+                     'Modell-Builder: 11 versendet, Receipt fehlt'):
+            self.assertEqual(coverage_warnings('Builder Engine: 0 Builder gesendet\n' + line),
+                             ['Builder Engine sent zero builders'])
+
     def test_incomplete(self):
         ok, _ = evaluate({"status": "in_progress"})
         self.assertFalse(ok)
