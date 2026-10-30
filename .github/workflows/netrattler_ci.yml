@@ -33,6 +33,8 @@ on:
       - "netrattler_builder_engine.py"
       - "test_netrattler_builder_delivery.py"
       - "btts_bot.py"
+      - "netrattler_corner_history.py"
+      - "test_corner_history.py"
       - "test_netrattler_combo_race_guard.py"
       - "netrattler_hardtest.py"
       - ".github/workflows/netrattler_ci.yml"
@@ -195,3 +197,6 @@ jobs:
         run: python -m pytest -q test_netrattler_operational_failures.py test_netrattler_post_run_check.py
       - name: Future-dated player stats guard regression
         run: python -m pytest -q test_netrattler_future_player_stats.py
+
+      - name: Measured corner history fallback
+        run: python -m pytest -q test_corner_history.py test_corner_guard.py

@@ -1,8 +1,12 @@
 name: NETRATTLER AI Tipp Bot
 
 on:
-  # push trigger removed 2026-10-17: every commit started a 15-30 min production run
-  # (74 runs in 20 days) and could double-send tips; saves Actions minutes.
+  # A measured corner-history change needs one production verification.
+  # Ordinary bot/config commits continue to use schedules/manual dispatch only.
+  push:
+    branches: [main]
+    paths:
+      - 'netrattler_corner_history.py'
   schedule:
     - cron: "17 8 * * *"  # 10:17 CH — Vormittag (GitHub verwirft :30-Slots oft, daher krumme Minute)
     - cron: "47 9 * * *"  # 11:47 CH — Frühspiele-Backup (Serie A 12:30, PL 13:30)

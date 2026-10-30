@@ -20386,21 +20386,33 @@ def analyze_corners_tip(fixture, league, target_date=None):
     away_id = fixture.get("away_id")
     league_id = API_FOOTBALL_LEAGUES.get(league)
     _need_stats = env("NETRATTLER_CORNER_REQUIRE_TEAM_STATS", "true").lower() in {"1", "true", "yes", "on"}
-    if not home_id or not away_id or not league_id:
-        # Ohne Team-Ecken-Statistik gaebe das Modell fuer jedes Spiel denselben Pauschalwert -> kein Tipp.
-        return None if _need_stats else analyze_corners_tip_simple(fixture, league, target_date)
-
+    # Reuse the already cached free CSV history, including measured HC/AC.
+    # API-Football fixture lists do not contain inline corner statistics and
+    # an account suspension must not disable independently measured history.
+    from netrattler_corner_history import team_corner_profile
+    history = _fd_co_uk_load_csv(league)
+    home_stats = team_corner_profile(history, fixture.get("home", ""), target_date)
+    away_stats = team_corner_profile(history, fixture.get("away", ""), target_date)
     now_utc = datetime.now(timezone.utc)
     season = now_utc.year if now_utc.month > 6 else now_utc.year - 1
-    home_stats = get_team_corner_stats(home_id, league_id, season)
-    away_stats = get_team_corner_stats(away_id, league_id, season)
+    if home_id and away_id and league_id:
+        home_stats = home_stats or get_team_corner_stats(home_id, league_id, season)
+        away_stats = away_stats or get_team_corner_stats(away_id, league_id, season)
     if _need_stats and not (home_stats and away_stats):
+        diag = getattr(analyze_corners_tip, "diagnostics", {})
+        diag["missing_team_history"] = diag.get("missing_team_history", 0) + 1
+        analyze_corners_tip.diagnostics = diag
         return None
     home_avg = (home_stats["avg_corners_for"] + home_stats["avg_corners_against"]) / 2 if home_stats else 4.8
     away_avg = (away_stats["avg_corners_for"] + away_stats["avg_corners_against"]) / 2 if away_stats else 4.5
     expected_total = max(0.5, home_avg + away_avg)
 
+    diag = getattr(analyze_corners_tip, "diagnostics", {})
+    diag["with_team_history"] = diag.get("with_team_history", 0) + 1
+    analyze_corners_tip.diagnostics = diag
     _corner_quotes = _ntr_observed_corner_quotes(fixture, target_date)
+    if not _corner_quotes:
+        diag["missing_observed_quotes"] = diag.get("missing_observed_quotes", 0) + 1
     candidates = []
     for line in (7.5, 8.5, 9.5, 10.5, 11.5):
         cum = sum((math.exp(-expected_total) * expected_total**k) / math.factorial(k) for k in range(int(line) + 1))
@@ -20413,6 +20425,7 @@ def analyze_corners_tip(fixture, league, target_date=None):
             edge = prob / 100.0 - 1.0 / quote
             candidates.append((edge, line, prob, quote, quote_source))
     if not candidates:
+        diag["no_qualified_line"] = diag.get("no_qualified_line", 0) + 1
         return None
     edge, line_used, prob, quote, quote_source = max(candidates, key=lambda item: (item[0], item[2]))
     return {
@@ -20423,6 +20436,8 @@ def analyze_corners_tip(fixture, league, target_date=None):
         "fair_odds": round(100 / prob, 2), "fairOdds": round(100 / prob, 2),
         "edge": round(edge, 4), "expected_corners": round(expected_total, 1),
         "home_avg_corners": round(home_avg, 2), "away_avg_corners": round(away_avg, 2),
+        "corner_history_home_games": (home_stats or {}).get("games", 0),
+        "corner_history_away_games": (away_stats or {}).get("games", 0),
         "market": "corners", "confidence": 3, "units": 1.0, "valueRating": "VALUE",
         "_no_real_odds": False, "_source": quote_source,
     }
@@ -21080,6 +21095,7 @@ def run_corners_and_scorer_bots(target_date, active_leagues, odds_data_cache, fi
     corners_tips = []
     scorer_tips = []
     corner_checked = 0
+    analyze_corners_tip.diagnostics = {}
     corner_max_matches = max(1, int(env("NETRATTLER_CORNER_EXTRA_MATCHES", "30")))
 
     seen_corner_matches = set()  # Duplikat-Check über ALLE Ligen
@@ -21359,6 +21375,7 @@ def run_corners_and_scorer_bots(target_date, active_leagues, odds_data_cache, fi
     run_corners_and_scorer_bots._last_scorer = scorer_count
     run_corners_and_scorer_bots._last_corner_tips = [dict(t) for t in corners_tips]
     run_corners_and_scorer_bots._last_scorer_tips = [dict(t) for t in scorer_tips]
+    log(f"   🩺 Corners-Funnel: {getattr(analyze_corners_tip, 'diagnostics', {})}")
     log(f"🔵⚽ Fertig: {corners_count} Ecken Tips, {scorer_count} Scorer Tips · Corners geprüft={corner_checked}/{corner_max_matches}")
 
 
@@ -25449,6 +25466,8 @@ def filter_tips_legacy_safe(tips: List[Dict], market: str = "btts",
             continue
         if not odds_band_policy_ok(market_key, prob_pct, quote):
             stats["policy_reject"] += 1
+            if stats["policy_reject"] <= 5:
+                _log("EDGE", f"[{market_key}] odds_band_reject: {tip.get('match', '')} p={prob_pct:.1f}% odds={quote:.3f}")
             continue
 
         row = dict(tip)
@@ -25470,7 +25489,7 @@ def filter_tips_legacy_safe(tips: List[Dict], market: str = "btts",
 
     _NTR_EDGE_FILTER_STATS[market] = dict(stats)
     _log("EDGE", f"[SAFE:{market}] {stats['kept']}/{stats['total']} kept "
-                 f"(no_quote={stats['no_quote']} below={stats['below_min']})")
+                 f"(no_quote={stats['no_quote']} below={stats['below_min']} odds_band_reject={stats['policy_reject']})")
     return out
 
 
@@ -27011,6 +27030,11 @@ def main():
                     # Keine synthetische Wahrscheinlichkeit (prob_b*0.62): ohne unabhaengiges
                     # Modell-Ergebnis entsteht nur ein Schein-Edge gegen hohe HT-Quoten.
                     btts_ht_prob = max(0.0, min(95.0, btts_ht_prob))
+                    _hd = globals().setdefault("_NTR_SPECIAL_DIAG", {})
+                    _hd["btts_ht_missing_model"] = _hd.get("btts_ht_missing_model", 0) + int(btts_ht_prob <= 0)
+                    _hd["btts_ht_max_prob"] = max(_hd.get("btts_ht_max_prob", 0), btts_ht_prob)
+                    _hd["btts_ht_below_probability"] = _hd.get("btts_ht_below_probability", 0) + int(0 < btts_ht_prob < BTTS_HT_MIN_PROB)
+                    _hd["btts_ht_value_pass"] = _hd.get("btts_ht_value_pass", 0) + int(btts_ht_prob >= BTTS_HT_MIN_PROB and _is_market_value_bet(btts_ht_odds, btts_ht_prob, BTTS_HT_MIN_ODDS, BTTS_HT_MIN_EDGE))
                     if btts_ht_prob > 0 and btts_ht_odds > 1 and _ntr_ht_prob_plausible(btts_ht_prob, btts_ht_odds) and btts_ht_prob >= BTTS_HT_MIN_PROB and _is_market_value_bet(btts_ht_odds, btts_ht_prob, BTTS_HT_MIN_ODDS, BTTS_HT_MIN_EDGE):
                         tip_btts_ht = {
                             "match": mn, "league": league_name or "Pinnacle",
@@ -27039,6 +27063,11 @@ def main():
                         o15_prob = 0.0
                     # Keine synthetische Wahrscheinlichkeit (prob_o*0.64), siehe BTTS-HT.
                     o15_prob = max(0.0, min(95.0, o15_prob))
+                    _hd = globals().setdefault("_NTR_SPECIAL_DIAG", {})
+                    _hd["over15_ht_missing_model"] = _hd.get("over15_ht_missing_model", 0) + int(o15_prob <= 0)
+                    _hd["over15_ht_max_prob"] = max(_hd.get("over15_ht_max_prob", 0), o15_prob)
+                    _hd["over15_ht_below_probability"] = _hd.get("over15_ht_below_probability", 0) + int(0 < o15_prob < OVER15_HT_MIN_PROB)
+                    _hd["over15_ht_value_pass"] = _hd.get("over15_ht_value_pass", 0) + int(o15_prob >= OVER15_HT_MIN_PROB and _is_market_value_bet(o15_odds, o15_prob, OVER15_HT_MIN_ODDS, OVER15_HT_MIN_EDGE))
                     if o15_prob > 0 and o15_odds > 1 and _ntr_ht_prob_plausible(o15_prob, o15_odds) and "over15_ht" in tips_by_market and o15_prob >= OVER15_HT_MIN_PROB and _is_market_value_bet(o15_odds, o15_prob, OVER15_HT_MIN_ODDS, OVER15_HT_MIN_EDGE):
                         tip_o15_ht = {
                             "match": mn, "league": league_name or "Pinnacle",
@@ -27115,6 +27144,9 @@ def main():
                             _gf["x2_best_edge_pp"] = round(max(_gf.get("x2_best_edge_pp", -99), _edge_1x2 * 100), 1)
                         except Exception:
                             pass
+                        _gf = globals().setdefault("_GROUP_FUNNEL", {})
+                        for _reason, _rejected in (("probability", sel_prob < ONE_X_TWO_MIN_PROB), ("odds", q < ONE_X_TWO_MIN_ODDS), ("edge", _edge_1x2 < ONE_X_TWO_MIN_EDGE)):
+                            _gf["x2_reject_" + _reason] = _gf.get("x2_reject_" + _reason, 0) + int(_rejected)
                         if (
                             sel_prob < ONE_X_TWO_MIN_PROB
                             or q < ONE_X_TWO_MIN_ODDS
@@ -27496,6 +27528,7 @@ def main():
     _ntr_mark("before_builder")
     # 🆕 NETRATTLER BUILDER ENGINE — self-learning, real-odds only
     _ntr_builder_sent = 0
+    _ntr_model_builder_sent = 0
     try:
         from netrattler_builder_engine import run_builder_engine, build_builder_picks
         _builder_prop_pool = []
@@ -27685,8 +27718,8 @@ def main():
                 try:  # Modell-Builder (Fouls/Tackles, ohne Buchmacherquote)
                     import netrattler_model_builders as _mbld
                     _mrows = list(globals().get("_NTR_MODEL_ROWS", []) or [])
-                    _mbld.run(_mrows, str(target_date), _send_builder, SUPABASE_URL, SUPABASE_KEY,
-                              logger=lambda m: log(f"   🧪 {m}"))
+                    _ntr_model_builder_sent = int(_mbld.run(_mrows, str(target_date), _send_builder, SUPABASE_URL, SUPABASE_KEY,
+                              logger=lambda m: log(f"   🧪 {m}")) or 0)
                 except Exception as _mb_exc:
                     log(f"   🧪 Modell-Builder übersprungen: {str(_mb_exc)[:80]}", "WARN")
     except ImportError:
@@ -27897,11 +27930,14 @@ def main():
                 "corners": getattr(run_corners_and_scorer_bots, "_last_corners", 0),
                 "scorer": getattr(run_corners_and_scorer_bots, "_last_scorer", 0),
                 "props": len(_NTR_BUILDER_PROP_POOL),
-                "builder": _ntr_builder_sent,
+                "builder": _ntr_builder_sent + _ntr_model_builder_sent,
                 "combo_multi": generated,
             },
             run_id=f"tips-{target_date}-{datetime.now(timezone.utc).strftime('%H%M%S')}",
             stage_diag={"scorer": dict(getattr(run_corners_and_scorer_bots, "_last_scorer_diag", {}) or {}),
+                        "corners": dict(getattr(analyze_corners_tip, "diagnostics", {}) or {}),
+                        "builder_bookmaker_sent": _ntr_builder_sent,
+                        "builder_model_sent": _ntr_model_builder_sent,
                         "marks": [{"stage": n, "t": t} for n, t in _NTR_STAGE_MARKS],
                         "cards": dict(getattr(sys.modules.get("netrattler_stats_match_cards"), "STATS", {}) or {})},
         )
