@@ -1,4 +1,8 @@
-"""Observed chronological match form for ML features; independent of bookmaker prices."""
+"""Observed chronological match form for ML features; independent of bookmaker prices.
+
+Unknown halftime scores are excluded from halftime rates. With no measured
+halftime games, retain the runtime neutral defaults and report ht_games=0.
+"""
 from datetime import date, datetime
 import math
 
