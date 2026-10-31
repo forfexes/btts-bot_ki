@@ -10935,8 +10935,12 @@ def get_ml_prediction(home_team, away_team, league_name):
     elo_h = elo_ratings.get(h_key, ELO_RATINGS_CACHE.get("_global", {}).get(h_key, 1500)) + 60
     elo_a = elo_ratings.get(a_key, ELO_RATINGS_CACHE.get("_global", {}).get(a_key, 1500))
 
-    fh = _ml_get_team_form(home_team)
-    fa = _ml_get_team_form(away_team)
+    # The legacy rolling-state updater is not called by this runtime path.
+    # Build the same form features from dated, completed CSV matches instead.
+    from netrattler_match_form import team_form as measured_team_form
+    _form_rows = _fd_co_uk_load_csv(league_name) if league_name else []
+    fh = measured_team_form(_form_rows, home_team, normalize_team_name) or _ml_get_team_form(home_team)
+    fa = measured_team_form(_form_rows, away_team, normalize_team_name) or _ml_get_team_form(away_team)
     # National-team data enriches form only after form dicts exist (old code used them before assignment).
     if elo_h == 1560 and elo_a == 1500:
         try:
