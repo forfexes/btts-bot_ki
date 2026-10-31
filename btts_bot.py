@@ -27740,7 +27740,7 @@ def main():
                     return send_telegram(msg, chat_id=_builder_chat)
 
                 def _send_builder_pick(pick, msg):
-                    if len({leg.match for leg in pick.legs}) == 1:
+                    if pick.legs:
                         try:
                             from netrattler_builder_cards import send_builder_card
                             mid = send_builder_card(TELEGRAM_TOKEN, _builder_chat, pick, log=log)
