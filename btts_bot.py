@@ -26789,6 +26789,7 @@ def main():
                 # Reuse this inference later for 1X2; the previous path ran the same
                 # expensive ML stack a second time for every match.
                 _ml = {}
+                _prob_informed = False  # True nur mit echter Datengrundlage (Team-Historie, ML oder Elo); sonst gelten nur Liga-Standardwerte
                 if _is_intl:
                     try:
                         _sh = get_national_team_btts_stats(home)
@@ -26797,6 +26798,7 @@ def main():
                             _mb = (_sh["btts_pct"] + _sa["btts_pct"]) / 2
                             _mo = (_sh["over25_pct"] + _sa["over25_pct"]) / 2
                             # Mit Liga-Basis mischen (60% Team-Daten, 40% Basis)
+                            _prob_informed = True
                             prob_b = int(0.6 * _mb + 0.4 * prob_b)
                             prob_o = int(0.6 * _mo + 0.4 * prob_o)
                             log(f"      🌍 martj42: {home} {_sh['btts_pct']}% / {away} {_sa['btts_pct']}% BTTS → {prob_b}%")
@@ -26816,6 +26818,7 @@ def main():
                         if _fh and _fa:
                             _mb = (_fh["btts_pct"] + _fa["btts_pct"]) / 2
                             _mo = (_fh["over25_pct"] + _fa["over25_pct"]) / 2
+                            _prob_informed = True
                             prob_b = int(0.6 * _mb + 0.4 * prob_b)
                             prob_o = int(0.6 * _mo + 0.4 * prob_o)
                             log(f"      📊 {_fh.get('source', 'Team-Historie')}: {home} {_fh['btts_pct']}% / {away} {_fa['btts_pct']}% BTTS → {prob_b}% ({_fh['games']}/{_fa['games']} Spiele)")
@@ -26833,6 +26836,7 @@ def main():
                         _ml = get_ml_prediction(home, away, league_name)
                         if _ml:
                             # 80% ML-Modell, 20% bisherige Schätzung (Absicherung bei Nischenteams)
+                            _prob_informed = True
                             prob_b = int(0.80 * _ml.get("btts_pct", prob_b) + 0.20 * prob_b)
                             prob_o = int(0.80 * _ml.get("over25_pct", prob_o) + 0.20 * prob_o)
                             log(f"      🤖 XGBoost: BTTS {_ml.get('btts_pct')}%, Over2.5 {_ml.get('over25_pct')}% "
@@ -26841,12 +26845,23 @@ def main():
                             # Fallback: Elo + Poisson Formel
                             _elo = get_elo_poisson_prediction(home, away, league_name)
                             if _elo:
+                                _prob_informed = True
                                 prob_b = int(0.70 * prob_b + 0.30 * _elo["btts_pct"])
                                 prob_o = int(0.70 * prob_o + 0.30 * _elo["over25_pct"])
                                 log(f"      🧠 Elo-Fallback: {home}({_elo['elo_home']:.0f}) vs {away}({_elo['elo_away']:.0f}) "
                                     f"BTTS {_elo['btts_pct']}% → final {prob_b}%")
                     except Exception:
                         pass
+
+                # Ohne echte Datengrundlage sind prob_b/prob_o nur feste Liga-Standardwerte (67-69 %):
+                # daraus entstehen keine Tipps (sonst "Value" gegen jede Quote ueber 1.70).
+                if not _prob_informed:
+                    try:
+                        _gf0 = globals().setdefault("_GROUP_FUNNEL", {})
+                        _gf0["no_data_skipped"] = _gf0.get("no_data_skipped", 0) + 1
+                    except Exception:
+                        pass
+                    prob_b = prob_o = 0
 
                 # Echte Pinnacle-Odds als Upgrade. WICHTIG: Die Modellwahrscheinlichkeit
                 # bleibt erhalten; eine Marktquote darf die Modellwahrscheinlichkeit nicht
