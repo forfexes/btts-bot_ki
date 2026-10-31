@@ -10,6 +10,8 @@ on:
       - 'netrattler_scorer_qualification.py'
       - 'netrattler_api_corner_store.py'
       - 'netrattler_match_form.py'
+      - 'netrattler_corner_cards.py'
+      - 'netrattler_builder_cards.py'
   schedule:
     - cron: "17 8 * * *"  # 10:17 CH — Vormittag (GitHub verwirft :30-Slots oft, daher krumme Minute)
     - cron: "47 9 * * *"  # 11:47 CH — Frühspiele-Backup (Serie A 12:30, PL 13:30)

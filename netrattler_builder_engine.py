@@ -1847,6 +1847,7 @@ def run_builder_engine(
     supabase_key: str = "",
     logger: Optional[Callable[[str], Any]] = None,
     chat_id: Any = None,
+    send_pick: Optional[Callable[[BuilderPick, str], Any]] = None,
 ) -> Tuple[int, List[BuilderPick]]:
     normalized = deduplicate_props(raw_props)
     picks = build_builder_picks(raw_props, match_contexts, match_date)
@@ -1897,7 +1898,7 @@ def run_builder_engine(
             continue
         try:
             message_text = format_builder_message(pick)
-            send_result = send_message(message_text)
+            send_result = send_pick(pick, message_text) if send_pick else send_message(message_text)
             if send_result is None or send_result is False or send_result == 0:
                 if logger:
                     logger(f"MASTER BUILDER send failed/no message_id: {pick.style} {pick.variant}")

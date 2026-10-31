@@ -491,6 +491,9 @@ def render_card(entries, target_date, result=None):
     from PIL import Image, ImageDraw, ImageFont
 
     rows = entries[:5]
+    if len(rows) == 1 and str(rows[0][0]) == "corners":
+        from netrattler_corner_cards import render_corner_card
+        return render_corner_card(rows[0][1], target_date, result)
     if len(rows) == 1 and str(rows[0][0]) == "scorer" and rows[0][1].get("player"):
         return render_scorer_card(rows[0][1], target_date, result)
     if os.getenv("NETRATTLER_CARD_LAYOUT", "bis").lower() == "bis":
@@ -558,6 +561,8 @@ def render_card(entries, target_date, result=None):
             shown_date = _dt.fromisoformat(ko).astimezone(_ZI("Europe/Zurich")).strftime("%Y-%m-%d")
     except Exception:
         pass
+    from netrattler_corner_cards import kickoff_label
+    shown_date, kickoff = kickoff_label(first, target_date)
     meta = "  ·  ".join(x for x in (kickoff, shown_date) if x)
     if result and result.get("ht"):
         meta = f"Halbzeit {result['ht']}  ·  {shown_date}"
@@ -1329,10 +1334,13 @@ def render_bis_card(entries, target_date, result=None):
     except Exception:
         pass
 
+    from netrattler_corner_cards import kickoff_label
+    shown_date, kickoff = kickoff_label(main, target_date)
+
     ctx = {}
     for _, t in rows:
         for k, v in t.items():
-            if v in (None, "", 0, 0.0, "0") or k in ctx:
+            if v in (None, "") or k in ctx:
                 continue
             ctx[k] = v
     ctx.setdefault("homeForm", ctx.get("home_form"))
@@ -1341,7 +1349,7 @@ def render_bis_card(entries, target_date, result=None):
     def num(*keys):
         for k in keys:
             n = _number(ctx.get(k))
-            if n:
+            if n is not None:
                 return n
         return None
 
@@ -1530,10 +1538,10 @@ def render_bis_card(entries, target_date, result=None):
 
     # h2h
     x0 = 612
-    h2b = ctx.get("h2h_btts") or ctx.get("h2h_btts_rate")
+    h2b = ctx.get("h2h_btts", ctx.get("h2h_btts_rate"))
     h2g = num("h2h_avg_goals")
     h2n = num("h2h_matches", "h2h_count")
-    verified = bool(h2b or h2g)
+    verified = bool(h2n and h2n > 0)
     draw.rounded_rectangle((x0 + 90, top + 38, x0 + 192, top + 62), radius=11, fill="#0d5a3a" if verified else "#3a2a5a",
                            outline="#33f0c8" if verified else "#8a7ab0", width=1)
     tc("VERIFIED" if verified else "KEINE DATEN", x0 + 141, top + 42, f(13), "#33f0c8" if verified else "#d0c8ff")
@@ -1541,8 +1549,8 @@ def render_bis_card(entries, target_date, result=None):
     hb = h2b
     if isinstance(hb, (int, float)):
         hb = f"{_pct(hb):.0f}%" if _pct(hb) is not None else "–"
-    cell((x0 + 12, top + 158, x0 + 270, top + 236), "H2H BTTS", str(hb or "–")[:14], 32, "#33f0c8")
-    cell((x0 + 12, top + 244, x0 + 270, top + 322), "AVG GOALS", f"{h2g:.1f}" if h2g else "–", 32)
+    cell((x0 + 12, top + 158, x0 + 270, top + 236), "H2H BTTS", str(hb if hb is not None else "–")[:14], 32, "#33f0c8")
+    cell((x0 + 12, top + 244, x0 + 270, top + 322), "AVG GOALS", f"{h2g:.1f}" if h2g is not None else "–", 32)
 
     # team stats
     x0 = 906
@@ -1658,7 +1666,7 @@ def _apifootball_logo(team, league=""):
     country = _country_of(league).lower()
     for key in keys[:3]:
         r = requests.get("https://v3.football.api-sports.io/teams", params={"search": q[:40]}, timeout=8,
-                         headers={"x-rapidapi-key": key, "x-rapidapi-host": "v3.football.api-sports.io"})
+                         headers={"x-apisports-key": key})
         if not r.ok:
             continue
         data = r.json() or {}
@@ -1942,7 +1950,7 @@ def _af_get(path, params, keys, state):
         state["calls"] += 1
         try:
             r = requests.get("https://v3.football.api-sports.io" + path, params=params, timeout=10,
-                             headers={"x-rapidapi-key": key, "x-rapidapi-host": "v3.football.api-sports.io"})
+                             headers={"x-apisports-key": key})
         except Exception:
             continue
         if not r.ok:
@@ -2006,7 +2014,15 @@ def attach_h2h_api(tips_by_market, log=print):
                 continue
             resp = _af_get("/fixtures/headtohead", {"h2h": f"{hid}-{aid}", "last": 10}, keys, state)
             games = []
+            from datetime import datetime, timezone
+            cutoff = datetime.now(timezone.utc).date().isoformat()
             for m in resp or []:
+                fx = m.get("fixture") or {}
+                if (fx.get("status") or {}).get("short") not in {"FT", "AET", "PEN"} or not fx.get("date") or fx["date"][:10] >= cutoff:
+                    continue
+                pair = m.get("teams") or {}
+                if {str((pair.get("home") or {}).get("id")),str((pair.get("away") or {}).get("id"))} != {str(hid),str(aid)}:
+                    continue
                 g = m.get("goals") or {}
                 if g.get("home") is None or g.get("away") is None:
                     continue

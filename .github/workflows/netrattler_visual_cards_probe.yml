@@ -1,0 +1,49 @@
+name: NETRATTLER Visual Cards Source Check
+on:
+  workflow_dispatch: {}
+  push:
+    branches: [main]
+    paths:
+      - '.github/workflows/netrattler_visual_cards_probe.yml'
+      - 'netrattler_corner_cards.py'
+      - 'netrattler_builder_cards.py'
+permissions:
+  contents: read
+jobs:
+  check:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+      - run: python -m pip install --prefer-binary requests pillow pytest
+      - run: python -m pytest -q test_netrattler_visual_cards.py
+      - name: Read-only H2H and club crest check
+        env:
+          API_FOOTBALL_KEYS: ${{ secrets.API_FOOTBALL_KEYS }}
+          CARD_H2H_MAX_CALLS: '8'
+        run: |
+          python - <<'PY'
+          import io,json,requests
+          from PIL import Image
+          import netrattler_stats_match_cards as cards
+          tip={'match':'Millwall vs Derby County','league':'England - Championship'}
+          cards.attach_h2h_api({'corners':[tip]})
+          logos={}
+          for team in ('Millwall','Derby County'):
+              url=cards._apifootball_logo(team,'England - Championship')
+              ok=False
+              if url:
+                  r=requests.get(url,timeout=12)
+                  if r.ok:
+                      Image.open(io.BytesIO(r.content)).verify()
+                      ok=True
+              logos[team]=ok
+          print(json.dumps({'probe':'visual_cards_sources','h2h_matches':tip.get('h2h_matches',0),
+                            'h2h_avg_goals':tip.get('h2h_avg_goals'), 'downloaded_crests':logos,
+                            'api_calls':cards.STATS.get('h2h_api_calls',0)}))
+          assert tip.get('h2h_matches',0)>0, 'Expected covered historical head-to-head fixtures missing'
+          assert all(logos.values()), 'Expected club crests unavailable'
+          PY

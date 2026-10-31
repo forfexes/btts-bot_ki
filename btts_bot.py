@@ -20436,15 +20436,19 @@ def analyze_corners_tip(fixture, league, target_date=None):
     edge, line_used, prob, quote, quote_source = max(candidates, key=lambda item: (item[0], item[2]))
     return {
         "match": f"{fixture['home']} vs {fixture['away']}", "league": league,
-        "time": fixture.get("time_local", "TBD"), "tip": f"Over {line_used} Ecken",
+        "time": fixture.get("time_local") or fixture.get("time") or "", "tip": f"Over {line_used} Ecken",
         "selection": f"Over {line_used} Ecken", "line": float(line_used),
         "probability": prob, "odds": round(quote, 3), "oddsYes": round(quote, 3),
         "fair_odds": round(100 / prob, 2), "fairOdds": round(100 / prob, 2),
         "edge": round(edge, 4), "expected_corners": round(expected_total, 1),
-        "home_avg_corners": round(home_avg, 2), "away_avg_corners": round(away_avg, 2),
         "corner_history_home_games": (home_stats or {}).get("games", 0),
         "corner_history_away_games": (away_stats or {}).get("games", 0),
-        "market": "corners", "confidence": 3, "units": 1.0, "valueRating": "VALUE",
+        "market": "corners", "confidence": 3, "units": 1.0,
+        "_kickoff": fixture.get("time_utc") or fixture.get("kickoff") or fixture.get("starts") or "",
+        "home_avg_corners": round(home_stats["avg_corners_for"], 2) if home_stats else None,
+        "away_avg_corners": round(away_stats["avg_corners_for"], 2) if away_stats else None,
+        "home_avg_corners_against": round(home_stats["avg_corners_against"], 2) if home_stats else None,
+        "away_avg_corners_against": round(away_stats["avg_corners_against"], 2) if away_stats else None, "valueRating": "VALUE",
         "_no_real_odds": False, "_source": quote_source,
     }
 
@@ -20849,9 +20853,11 @@ def format_corners_message(tip):
 
     _t = str(tip.get("time") or "").strip()
     if _t in ("", "TBD", "?", "N/A", "-"):
-        _t = _kickoff_from_pinnacle(tip.get("match", "")) or "TBD"
+        _t = _kickoff_from_pinnacle(tip.get("match", "")) or "Zeit nicht bestätigt"
         if _t != "TBD":
             tip["time"] = _t
+    from netrattler_corner_cards import kickoff_label
+    _, _t = kickoff_label(tip, tip.get("date") or "")
     msg = f"🔵 <b>CORNER SNIPER</b>\n"
     msg += f"📍 {tip.get('league','?')} · ⏰ {_t}{wstr}\n"
     msg += f"━━━━━━━━━━━━━━━━━━\n"
@@ -21300,10 +21306,15 @@ def run_corners_and_scorer_bots(target_date, active_leagues, odds_data_cache, fi
 
     # Header + Tipps senden
     if corners_tips and group_corners:
-        send_telegram(f"🔵 <b>CORNER SNIPER</b>\n<i>📅 {target_date}</i>", group_corners)
         for tip in corners_tips:
             _cmsg = format_corners_message(tip)
-            _cmid = send_telegram(_cmsg, group_corners)
+            try:
+                from netrattler_corner_cards import send_corner_card
+                _cmid = send_corner_card(TELEGRAM_TOKEN, group_corners, tip, target_date, log=log)
+            except Exception:
+                _cmid = None
+            if not _cmid:
+                _cmid = send_telegram(_cmsg, group_corners)
             if _cmid is None:
                 log(f"   ⚠️ Corner Telegram nicht zugestellt — nicht als gesendet markieren: {tip.get('match','?')}", "WARN")
                 continue
@@ -27728,9 +27739,21 @@ def main():
                 def _send_builder(msg):
                     return send_telegram(msg, chat_id=_builder_chat)
 
+                def _send_builder_pick(pick, msg):
+                    if len({leg.match for leg in pick.legs}) == 1:
+                        try:
+                            from netrattler_builder_cards import send_builder_card
+                            mid = send_builder_card(TELEGRAM_TOKEN, _builder_chat, pick, log=log)
+                            if mid:
+                                return mid
+                        except Exception:
+                            pass
+                    return _send_builder(msg)
+
                 _sent_n, _picks = run_builder_engine(
                     raw_props=_builder_prop_pool,
                     send_message=_send_builder,
+                    send_pick=_send_builder_pick,
                     match_date=str(target_date),
                     match_contexts=_builder_contexts,
                     supabase_url=SUPABASE_URL,
