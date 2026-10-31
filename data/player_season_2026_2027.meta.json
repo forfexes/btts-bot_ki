@@ -8,7 +8,7 @@
     "players_data-2026_2027.csv"
   ],
   "validation": "Selected columns agree row-for-row in both uploaded files; unique Player/Squad/Comp identity",
-  "sha256": "e66ee6629151efe8aae49ce5480fe00f7dbfb810ca75a393b6b4d4a1919ef0ce",
+  "sha256": "5b13c4dd348469c7bc553c7ae8354327d90e58842bb75898abe003ea1e030ed8",
   "database_writes": 0,
   "usage": "Display-only contextual profiles; excluded from game logs, L10/L15, predictive features and settlement"
 }
