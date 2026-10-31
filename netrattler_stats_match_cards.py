@@ -1678,7 +1678,9 @@ def _apifootball_logo(team, league=""):
             t = row.get("team") or {}
             if not _same_squad(team, t.get("name", "")):
                 continue
-            score = _name_score(team, t.get("name", "")) + (0.3 if country and str(t.get("country", "")).lower() == country else 0)
+            candidate_name = t.get("name", "")
+            identity_score = 1.0 if _norm(team) == "derbycounty" and _norm(candidate_name) == "derby" else _name_score(team, candidate_name)
+            score = identity_score + (0.3 if country and str(t.get("country", "")).lower() == country else 0)
             if t.get("logo") and score > sc:
                 best, sc = t["logo"], score
         if best and sc >= 0.5:
@@ -1974,7 +1976,7 @@ def _same_squad(requested, candidate):
     # Senior, youth, women's and reserve squads are different fixtures.
     def tags(name):
         text = _slug(name).replace("-", " ")
-        found = set(re.findall(r"\b(?:u\s*\d{1,2}|under\s*\d{1,2}|women|ladies|femenino|femenina|feminines|reserves|ii|iii)\b", text))
+        found = set(re.findall(r"\b(?:u\s*\d{1,2}|under\s*\d{1,2}|women|w|ladies|femenino|femenina|feminines|reserves|ii|iii)\b", text))
         if text.endswith(" b"):
             found.add("reserve_b")
         return {x.replace(" ", "") for x in found}
@@ -1997,7 +1999,9 @@ def _af_team_id(team, league, keys, state):
         t = row.get("team") or {}
         if not _same_squad(team, t.get("name", "")):
             continue
-        score = _name_score(team, t.get("name", "")) + (0.3 if country and str(t.get("country", "")).lower() == country else 0)
+        candidate_name = t.get("name", "")
+        identity_score = 1.0 if _norm(team) == "derbycounty" and _norm(candidate_name) == "derby" else _name_score(team, candidate_name)
+        score = identity_score + (0.3 if country and str(t.get("country", "")).lower() == country else 0)
         if t.get("id") and score > sc:
             best, sc = t["id"], score
     _AF_TEAM_ID[k] = best if sc >= 0.5 else None
