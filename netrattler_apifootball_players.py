@@ -1,5 +1,5 @@
 """API-Football free key: yesterday's finished matches -> player stats (fouls, fouls drawn, cards, shots).
-1 request for the fixture list + up to MAX_REQ-1 player requests per run (free limit 100/day)."""
+1 request for the fixture list + up to MAX_REQ-1 player requests per run (Pro-Plan: 7500/Tag)."""
 import os
 import datetime as dt
 import requests

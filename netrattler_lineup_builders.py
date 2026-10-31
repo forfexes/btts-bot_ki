@@ -26,7 +26,7 @@ MIN_BEFORE = int(os.getenv("LINEUP_MIN_BEFORE", "15"))
 MAX_BEFORE = int(os.getenv("LINEUP_MAX_BEFORE", "90"))
 MAX_REQ = int(os.getenv("APIF_LINEUP_MAX_REQ", "35"))
 MAX_TRIES = 3
-PER_RUN = 12
+PER_RUN = int(os.getenv("APIF_LINEUP_PER_RUN", "12"))
 PRIORITY = [39, 140, 78, 135, 61, 2, 3, 848, 88, 94, 203, 207, 218, 144, 79, 40, 141, 136, 62, 253, 71, 128]
 
 
