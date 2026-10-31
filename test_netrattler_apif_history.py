@@ -59,3 +59,28 @@ def test_same_corner_match_from_two_sources_is_one_game():
     result=team_corner_profile([dict(row,_source='api-football'),row], 'Home', '2026-10-21', min_games=1)
     assert result['games'] == 1
     assert result['avg_corners_for'] == 0
+
+
+def test_full_player_batch_budget_stops_player_calls_but_keeps_corners():
+    from copy import deepcopy
+    imp=Importer.__new__(Importer)
+    imp.calls=0; imp.max_calls=400; imp.initial_mb=425
+    history=[]
+    for fid in range(1,4):
+        fx=deepcopy(FX); fx['fixture']['id']=fid; history.append(fx)
+    upcoming=deepcopy(FX); upcoming['fixture']['status']['short']='NS'; upcoming['league']['season']=2026
+    def api(path, params):
+        imp.calls += 1
+        if path == '/fixtures':
+            return history if 'team' in params else [upcoming]
+        return []
+    imp.api=Mock(side_effect=api)
+    imp.rest=Mock(return_value=[])
+    imp.save=Mock(side_effect=lambda table,rows,conflict: len(rows))
+    imp.capacity=Mock(return_value=425)
+    with patch.dict('os.environ', {'APIF_HISTORY_MAX_PLAYER_ROWS':'31'}), \
+         patch('netrattler_apif_history.player_rows', return_value=[{} for _ in range(30)]):
+        result=imp.run()
+    assert result['player_calls'] == 2
+    assert result['corner_calls'] == 3
+    assert result['inserted_players'] == 30

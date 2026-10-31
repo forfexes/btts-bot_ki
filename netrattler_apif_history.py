@@ -132,11 +132,12 @@ class Importer:
                     history[fx['fixture']['id']] = fx
         # Prioritise complete team windows in target order, not random leagues.
         saved_players = saved_corners = player_calls = corner_calls = 0
+        player_budget_full = False
         max_rows = min(3000, int(os.getenv('APIF_HISTORY_MAX_PLAYER_ROWS', '2400')))
         for fid, fx in history.items():
             if self.calls + 2 > self.max_calls:
                 break
-            if saved_players < max_rows:
+            if not player_budget_full and saved_players < max_rows:
                 existing = self.rest('fplci_player_match', {'select':'player_id', 'match_id':'eq.apif:' + str(fid), 'limit':'1'})
                 if not existing:
                     rows = player_rows(self.api('/fixtures/players', {'fixture':fid}), fx)
@@ -147,6 +148,8 @@ class Importer:
                         from netrattler_game_log_sync import to_log_row
                         logs = [to_log_row(r) for r in rows]
                         self.save('player_game_log', [r for r in logs if r], 'player_key,event_id')
+                    elif rows:
+                        player_budget_full = True
             existing = self.rest('netrattler_api_corner_history', {'select':'fixture_id', 'fixture_id':'eq.' + str(fid)})
             if not existing:
                 row = corner_row(self.api('/fixtures/statistics', {'fixture':fid}), fx)
