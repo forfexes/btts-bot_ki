@@ -347,5 +347,13 @@ def collect_for_tips(tips: Sequence[Dict[str, Any]], match_parts, row_date, log=
             except Exception as e:
                 log(f"SofaScore detail enrichment {day}: {str(e)[:90]}")
 
+    try:
+        from netrattler_apif_settlement import collect as collect_apif
+        api_results, api_players = collect_apif(tips, match_parts, row_date, same, log)
+        results.extend(api_results)
+        players.extend(api_players)
+    except Exception as exc:
+        log("API settlement enrichment unavailable: " + type(exc).__name__)
+
     log(f"Target enrichment: results={len(results)} player_rows={len(players)} detail_calls={details}")
     return results, players
