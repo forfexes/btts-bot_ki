@@ -41,7 +41,7 @@ def test_corner_dispatch_and_settlement_render():
     with patch.object(cards,'_paste_badge'):
         image=Image.open(io.BytesIO(cards.render_card([('corners',tip)],'2026-10-31',{'marks':{'0':'win'}})))
     assert image.size==(1200,900)
-    assert image.getpixel((0,0))==(7,26,61)
+    assert image.getpixel((600,899))[2] < 70
 
 
 def pick():
@@ -85,3 +85,31 @@ def test_h2h_resolver_never_prefers_youth_squad_over_senior_alias():
     assert not cards._same_squad('Levante','Levante II')
     assert not cards._same_squad('Millwall','Millwall U21')
     assert cards._same_squad('Millwall U21','Millwall U21')
+
+
+def test_model_card_preserves_no_quote_and_original_receipt():
+    from types import SimpleNamespace
+    model={'title':'FOUL BUILDER','joint':.67,'fair':1.49,'legs':[{
+        'player':'Lamine Yamal','team':'Barcelona','match':'Barcelona vs Alaves','league':'La Liga',
+        'market':'1+ Fouls gezogen','category':'fouls_won','line':1,'odds':0,
+        'series':[3,6,1,1,1,2,3,1,1,0],'kickoff':'2099-01-01T15:00:00Z'}]}
+    with patch.dict('os.environ',{'TELEGRAM_TOKEN':'test','TELEGRAM_GROUP_BUILDER':'42'}), \
+         patch.object(builder_cards,'send_builder_card',return_value=123) as send:
+        receipt=builder_cards.send_model_builder_card(model,'2099-01-01','original')
+    adapted=send.call_args.args[2]
+    assert adapted.model_only and adapted.legs[0].odds==0
+    assert adapted.legs[0].series==model['legs'][0]['series']
+    assert receipt=={'message_id':123,'chat_id':'42','text':'original'}
+    with patch.object(cards,'_paste_badge'),patch.object(cards,'_player_photo',return_value=b''):
+        assert Image.open(io.BytesIO(builder_cards.render_builder_card(adapted))).size==(1200,690)
+
+
+def test_model_cross_ladder_renders_all_stages():
+    from types import SimpleNamespace
+    leg=lambda name,match:SimpleNamespace(player=name,team='Club',match=match,league='League',
+        market='2+ Fouls',category='fouls',line=2,odds=0,series=[2]*10,kickoff='')
+    pick=SimpleNamespace(legs=[leg('A','Club A vs Club B'),leg('B','Club C vs Club D')],
+        style='FOUL LEITER',match_date='2026-10-31',model_only=True,joint=.5,fair=2,
+        tiers=[(2,.5),(3,.2),(4,.05)],tier_shift=False)
+    with patch.object(cards,'_player_photo',return_value=b''):
+        assert Image.open(io.BytesIO(builder_cards.render_builder_card(pick))).size==(1200,970)

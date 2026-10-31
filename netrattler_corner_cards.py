@@ -23,7 +23,8 @@ def kickoff_label(tip, target_date):
 def render_corner_card(tip,target_date,result=None):
     from PIL import Image,ImageDraw,ImageFont
     import netrattler_stats_match_cards as cards
-    im=Image.new('RGB',(1200,900),'#071A3D'); draw=ImageDraw.Draw(im)
+    from netrattler_card_theme import midnight_arena
+    im=midnight_arena(1200,900); draw=ImageDraw.Draw(im)
     def font(n,bold=True):
         path='/usr/share/fonts/truetype/dejavu/DejaVuSansCondensed'+('-Bold' if bold else '')+'.ttf'
         try:return ImageFont.truetype(path,n)

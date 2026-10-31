@@ -389,34 +389,9 @@ def _paste_badge(im, draw, team, box, font):
 
 
 def _neon_bg(w, h):
-    """Bright stadium-style neon background (gradient, spotlights, sparkles)."""
-    from PIL import Image, ImageDraw, ImageFilter
-    import random
-    bg = Image.new("RGB", (w, h), "#03104f")
-    d = ImageDraw.Draw(bg)
-    for y in range(h):
-        t = y / max(h - 1, 1)
-        r = int(3 + 6 * (1 - t) ** 2); g = int(12 + 46 * (1 - t) ** 2); b = int(55 + 150 * (1 - t) ** 1.6)
-        d.line((0, y, w, y), fill=(r, g, min(255, b)))
-    glow = Image.new("RGB", (w, h), "black")
-    gd = ImageDraw.Draw(glow)
-    for cx, cy, rad, col in ((w * 0.1, 30, 210, (40, 110, 255)), (w * 0.9, 30, 210, (40, 110, 255)),
-                             (w * 0.5, -80, 300, (40, 90, 230)), (w * 0.5, h * 0.6, 420, (8, 30, 120))):
-        gd.ellipse((cx - rad, cy - rad, cx + rad, cy + rad), fill=col)
-    glow = glow.filter(ImageFilter.GaussianBlur(110))
-    from PIL import ImageChops
-    bg = ImageChops.screen(bg, glow)
-    rnd = random.Random(42)
-    sp = Image.new("RGB", (w, h), "black")
-    sd = ImageDraw.Draw(sp)
-    for _ in range(260):
-        x, y = rnd.randint(0, w), int(rnd.random() ** 2 * 360)
-        rr = rnd.choice((1, 1, 1, 2, 2, 3))
-        c = rnd.choice(((255, 255, 255), (180, 220, 255), (255, 200, 120)))
-        sd.ellipse((x - rr, y - rr, x + rr, y + rr), fill=c)
-    bg = ImageChops.screen(bg, sp.filter(ImageFilter.GaussianBlur(0.6)))
-    bg = ImageChops.screen(bg, sp.filter(ImageFilter.GaussianBlur(4)))
-    return bg
+    """Shared dark stadium background for every AI card layout."""
+    from netrattler_card_theme import midnight_arena
+    return midnight_arena(w, h)
 
 
 def _neon_glow(im, boxes, color=(60, 200, 255)):
@@ -499,7 +474,7 @@ def render_card(entries, target_date, result=None):
     if os.getenv("NETRATTLER_CARD_LAYOUT", "bis").lower() == "bis":
         return render_bis_card(entries, target_date, result)
     w, h = 1080, 1130
-    im = Image.new("RGB", (w, h), "#020a2a")
+    im = _neon_bg(w, h)
     draw = ImageDraw.Draw(im)
     font_path = "/usr/share/fonts/truetype/dejavu/DejaVuSans.ttf"
     bold_path = "/usr/share/fonts/truetype/dejavu/DejaVuSansCondensed-Bold.ttf"
@@ -1111,7 +1086,7 @@ def render_scorer_card(tip, target_date, result=None):
     from PIL import Image, ImageDraw, ImageFont, ImageOps
 
     w, h = 1080, 880
-    im = Image.new("RGB", (w, h), "#020a2a")
+    im = _neon_bg(w, h)
     draw = ImageDraw.Draw(im)
     fp = "/usr/share/fonts/truetype/dejavu/DejaVuSans.ttf"
     fb = "/usr/share/fonts/truetype/dejavu/DejaVuSansCondensed-Bold.ttf"

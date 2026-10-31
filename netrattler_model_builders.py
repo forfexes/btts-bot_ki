@@ -408,7 +408,14 @@ def run(rows, match_date, send, url, key, logger=print):
             logger("Modell-Builder nach Reservierung nicht versendet: Anpfiff erreicht")
             continue
         try:
-            receipt = send(msg)
+            receipt = None
+            try:
+                from netrattler_builder_cards import send_model_builder_card
+                receipt = send_model_builder_card(pick, match_date, msg, logger)
+            except Exception as image_exc:
+                logger(f"Modell-Builder Bild nicht verfügbar: {type(image_exc).__name__}")
+            if receipt is None:
+                receipt = send(msg)
         except Exception as exc:
             logger(f"Modell-Builder Telegram-Send fehlgeschlagen: {type(exc).__name__}")
             continue  # Reservierung bleibt bestehen, kein automatischer Zweitversuch.
