@@ -128,6 +128,11 @@ def photo_url(name):
     """Quellen der Reihe nach (FPL, ESPN, TheSportsDB, Wikipedia); die erste mit passendem Foto gewinnt."""
     if not ON or not name:
         return None
+    # A trailing initial (e.g. "Bruno G.") is not a verifiable surname.
+    # Name-only FPL/ESPN lookup can otherwise attach a different player photo.
+    tokens = _norm(name).split()
+    if not tokens or len(tokens[-1]) == 1:
+        return None
     if not _MEM:
         _load()
     key = _norm(name)

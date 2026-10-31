@@ -38,3 +38,17 @@ def test_chain_falls_through(monkeypatch):
     def boom(n): raise RuntimeError("x")
     monkeypatch.setattr(pp, "SOURCES", [boom, lambda n: None, lambda n: "http://ok/p.png"])
     assert pp.photo_url("Test Player") == "http://ok/p.png"
+
+
+def test_trailing_surname_initial_never_uses_unrelated_photo(monkeypatch):
+    """A short display name from another league must not borrow an FPL portrait."""
+    pp._MEM.clear()
+    monkeypatch.setattr(pp, "_load", lambda: None)
+    monkeypatch.setattr(pp, "_save", lambda: None)
+    called = []
+    monkeypatch.setattr(pp, "SOURCES", [lambda name: called.append(name) or "https://example.org/wrong.png"])
+    assert pp.photo_url("Bruno G.") is None
+    assert pp.anchor("Bruno G.") == ""
+    assert called == []
+    assert pp.photo_url("Bruno Guimaraes") == "https://example.org/wrong.png"
+    assert called == ["Bruno Guimaraes"]
