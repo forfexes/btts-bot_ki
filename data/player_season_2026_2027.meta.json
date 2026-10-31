@@ -1,0 +1,14 @@
+{
+  "season": "2026/27",
+  "snapshot_received": "2026-10-31",
+  "grain": "season_aggregate",
+  "rows": 2224,
+  "inputs": [
+    "players_data_light-2026_2027.csv",
+    "players_data-2026_2027.csv"
+  ],
+  "validation": "Selected columns agree row-for-row in both uploaded files; unique Player/Squad/Comp identity",
+  "sha256": "e66ee6629151efe8aae49ce5480fe00f7dbfb810ca75a393b6b4d4a1919ef0ce",
+  "database_writes": 0,
+  "usage": "Display-only contextual profiles; excluded from game logs, L10/L15, predictive features and settlement"
+}

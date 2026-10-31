@@ -58,6 +58,10 @@ def render_builder_card(pick):
         history=(f'L{len(series)}: '+','.join(str(v) for v in series)+f' ({sum(v>=leg.line for v in series)}/{len(series)})') if series else engine.history_text(leg)
         if multi: history=leg.match+' · '+history
         draw.text((185,y+91),fit(history or 'Historie nicht verfügbar',18,955),font=font(18),fill='#a6c4dc')
+        from netrattler_season_profiles import summary as season_summary
+        season_line=season_summary(leg.player,leg.team,leg.category,pick.match_date)
+        if season_line:
+            draw.text((185,y+119),fit(season_line,14,955),font=font(14),fill='#7899b5')
         if leg.odds and leg.odds>1: center('@ '+f'{leg.odds:.2f}',1050,y+20,31,'#2EE6C5')
     y=430+160*len(pick.legs)
     for level,prob in tiers:

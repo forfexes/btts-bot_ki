@@ -516,6 +516,20 @@ def _install_multi_combo_guard(bot) -> None:
             if not match or " vs " not in match or q <= 1 or p <= 0 or row.get("_no_real_odds") is True:
                 continue
             grp = _combo_group(row)
+            # The downstream generator has its own allow-list and quote/value gates.
+            # Apply those before group diversification so rejected legs cannot crowd out valid ones.
+            allowed_fn = getattr(bot, "_multi_combo_allowed_markets", None)
+            if callable(allowed_fn):
+                allowed = allowed_fn()
+                market = str(row.get("market") or "btts").lower()
+                if market not in allowed or q < 1.40 or p <= 1.0 / q:
+                    continue
+                caps = {"btts":4.0,"over25":4.5,"combo":8.0,"btts_ht":8.0,
+                        "over15_ht":6.0,"1x2":4.0,"corners":6.0,"scorer":30.0}
+                if q > caps.get(market, _as_float(os.getenv("NETRATTLER_MULTI_COMBO_MAX_LEG_ODDS", "12"),12)):
+                    continue
+                if market != "scorer" and (p*q-1)*100 > 200:
+                    continue
             # Abgerechnete Kombis: Halbzeit-Maerkte (ohne Modell) 6 % Treffer, 1x2-Legs mit Fantasiequoten 13 %.
             if grp in _combo_blocked_groups():
                 continue

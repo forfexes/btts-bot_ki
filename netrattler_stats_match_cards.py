@@ -1042,23 +1042,10 @@ def _player_photo(name, team=""):
     except Exception:
         STATS["player_tsdb_err"] = STATS.get("player_tsdb_err", 0) + 1
     try:
-        resp = requests.get(
-            "https://en.wikipedia.org/w/api.php",
-            params={"action": "query", "generator": "search",
-                    "gsrsearch": f'"{clean_name}" footballer',
-                    "gsrlimit": 1, "prop": "pageimages", "piprop": "thumbnail",
-                    "pithumbsize": 400, "format": "json"},
-            headers={"User-Agent": "NETRATTLER-cards/1.0 (soccer player portrait)"},
-            timeout=6)
-        for page in (((resp.json() or {}).get("query") or {}).get("pages") or {}).values():
-            title = str(page.get("title") or "")
-            if clean_name.split()[0].lower() not in title.lower():
-                continue
-            url = str((page.get("thumbnail") or {}).get("source") or "")
-            if url:
-                urls.append(url)
+        from netrattler_reference_images import player_urls
+        urls.extend(player_urls(clean_name, team))
     except Exception:
-        STATS["player_wiki_err"] = STATS.get("player_wiki_err", 0) + 1
+        STATS["player_reference_err"] = STATS.get("player_reference_err", 0) + 1
 
     payload = b""
     for url in dict.fromkeys(urls):
@@ -1154,6 +1141,11 @@ def render_scorer_card(tip, target_date, result=None):
         sub = (sub + "  ·  " if sub else "") + "Endstand " + str(result["ft"]).replace("-", " : ")
     if sub:
         text_c(sub[:60], w / 2, 536, font(22, True), "#9fc2ff")
+
+    from netrattler_season_profiles import summary as season_summary
+    season_line = season_summary(player, str(tip.get("team") or ""), "score", target_date)
+    if season_line:
+        text_c(season_line, w / 2, 563, font(15), "#a6c4dc")
 
     top = 584
     outline = "#2d6bff"

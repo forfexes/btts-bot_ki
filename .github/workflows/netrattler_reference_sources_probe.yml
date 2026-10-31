@@ -1,0 +1,43 @@
+name: NETRATTLER Reference Sources Check
+on:
+  workflow_dispatch:
+  push:
+    paths:
+      - 'netrattler_reference_images.py'
+      - 'netrattler_season_profiles.py'
+      - 'data/player_season_2026_2027.csv'
+      - '.github/workflows/netrattler_reference_sources_probe.yml'
+permissions:
+  contents: read
+jobs:
+  probe:
+    runs-on: ubuntu-latest
+    timeout-minutes: 4
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+      - run: python -m pip install --prefer-binary requests pillow pytest
+      - run: python -m pytest -q test_netrattler_reference_sources.py
+      - name: Read-only source and portrait check
+        run: |
+          python - <<'PY'
+          import io,json,requests
+          from PIL import Image
+          import netrattler_reference_images as images
+          import netrattler_season_profiles as season
+          urls=images.player_urls('Lamine Yamal','Barcelona')
+          verified=False
+          for url in urls:
+              r=requests.get(url,timeout=8)
+              if r.ok and len(r.content)<8000000:
+                  try:
+                      with Image.open(io.BytesIO(r.content)) as image:image.verify()
+                      verified=True
+                  except (OSError,ValueError):pass
+          print(json.dumps({'probe':'reference_sources','profiles':sum(len(v) for v in season.load_profiles().values()),
+                            'verified_soccerwiki_portrait':verified,'reference_calls':images._CALLS,
+                            'supabase_writes':0}))
+          assert verified,'Live reference portrait not available; retain existing fallbacks'
+          PY

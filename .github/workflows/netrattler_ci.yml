@@ -4,6 +4,10 @@ on:
   push:
     branches: [main]
     paths:
+      - "netrattler_reference_images.py"
+      - "netrattler_season_profiles.py"
+      - "test_netrattler_reference_sources.py"
+      - "data/player_season_2026_2027.csv"
       - "netrattler_runtime_patch.py"
       - "netrattler_odds_cache_guard.py"
       - "netrattler_kambi_team_odds.py"
@@ -101,6 +105,8 @@ jobs:
         run: python -m unittest -v test_netrattler_legacy_builder_speed.py
       - name: Navy visual cards, H2H authentication and photo delivery regression
         run: python -m pytest -q test_netrattler_visual_cards.py
+      - name: Uploaded season profiles and reference-image identity regression
+        run: python -m pytest -q test_netrattler_reference_sources.py
       - name: Compact API history and corner isolation regression
         run: python -m pytest -q test_netrattler_apif_history.py
       - name: Observed runtime match form regression

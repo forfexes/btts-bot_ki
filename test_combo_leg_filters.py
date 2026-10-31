@@ -52,3 +52,21 @@ def test_combo_leg_pool_rows_accepted():
             for m, mk in (("A vs B", "over25"), ("C vs D", "btts"), ("E vs F", "over25"))]
     bot, res = run(rows)
     assert res is not None and len(bot.seen) == 3
+
+
+def test_downstream_exclusions_cannot_crowd_out_four_valid_matches():
+    class ProductionLike(Bot):
+        def _multi_combo_allowed_markets(self):return {'btts','over25','corners','1x2'}
+        def generate_multi_combo_bets(self,tips,num_tips=3):
+            self.seen=list(tips)
+            valid=[r for r in tips if r['market'] in self._multi_combo_allowed_markets()]
+            return {'tips':valid} if len(valid)>=num_tips else None
+    bot=ProductionLike()
+    g._player_prop_combo_candidates=lambda bot:[]
+    g._install_multi_combo_guard(bot)
+    rows=[tip('A vs B','scorer',3,.9,player='Striker')]+[
+        tip(f'Home{i} vs Away{i}',market,1.8,.7)
+        for i,market in enumerate(['btts','over25','corners','1x2'])]
+    result=bot.generate_multi_combo_bets(rows,4)
+    assert result and len(result['tips'])==4
+    assert all(r['market']!='scorer' for r in bot.seen)
