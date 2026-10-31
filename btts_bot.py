@@ -20799,14 +20799,12 @@ def analyze_scorer_tips(fixture, league, scorers, observed_props=None, diag=None
         if quote <= 1:
             _d("an_drop_no_quote")
             continue
-        if prob < 35:
-            _d("an_drop_prob")
-            continue
-        if quote < MIN_ODDS_VALUE:
-            _d("an_drop_min_odds")
-            continue
-        if not _is_value_bet(quote, prob):
-            _d("an_drop_edge")
+        # Honour the configured scorer policy and reject bad quotes before
+        # the top-three cut, so discarded longshots cannot crowd out valid tips.
+        from netrattler_scorer_qualification import qualifies as scorer_qualifies
+        accepted, reason = scorer_qualifies(quote, prob, quote_source_by_player.get(quote_key))
+        if not accepted:
+            _d("an_drop_" + reason)
             continue
         _d("an_final")
         tips.append({
