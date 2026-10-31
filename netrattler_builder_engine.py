@@ -287,6 +287,12 @@ def quality_score(row: Dict[str, Any]) -> float:
 
 
 def is_bookmaker_source(source: str) -> bool:
+    raw = str(source or "").strip().lower()
+    # SportsGameOdds parser emits sgo_<actual byBookmaker key> only for
+    # available, numeric offered prices. Do not reject these observed quotes
+    # merely because the bookmaker (e.g. FanDuel) is absent from this list.
+    if re.fullmatch(r"sgo_[a-z0-9][a-z0-9_-]{1,60}", raw):
+        return True
     s = norm(source).replace(" ", "")
     tokens = (
         "pinnacle", "kambi", "bet365", "1xbet", "oddspedia",

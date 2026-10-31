@@ -24,3 +24,23 @@ def test_parse_event_best_book_and_line():
     r = rows[0]
     assert r["category"] == "sot" and r["line"] == 2.0 and r["odds"] == 2.7 and r["source"] == "sgo_fanduel"
     assert r["match"] == "Charlotte FC vs CF Montréal" and r["team"] == "CF Montréal"
+
+
+def test_sgo_observed_bookmaker_price_survives_real_odds_builder_guard():
+    import netrattler_builder_engine as engine
+    assert engine.is_bookmaker_source("sgo_fanduel")
+    assert engine.is_bookmaker_source("sgo_draftkings")
+    assert not engine.is_bookmaker_source("sgo_")
+    assert not engine.is_bookmaker_source("model_line_fouls")
+    row = {
+        "player": "Alexis Sanchez", "team": "CF Montréal",
+        "match": "Charlotte FC vs CF Montréal", "league": "MLS",
+        "category": "sot", "line": 2.0, "odds": 2.7,
+        "source": "sgo_fanduel", "market": "shots_onGoal Over 1.5",
+        "model_prob": 0.45,
+    }
+    leg = engine.normalize_prop(row)
+    assert leg is not None and leg.odds == 2.7 and leg.source == "sgo_fanduel"
+    assert engine.normalize_prop(dict(row, odds=0)) is None
+    assert engine.normalize_prop(dict(row, estimated_odds=True)) is None
+    assert engine.normalize_prop(dict(row, source="model_line_fouls")) is None
