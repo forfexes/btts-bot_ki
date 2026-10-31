@@ -10777,11 +10777,22 @@ def _ml_load_models():
         return
     try:
         import pickle, base64, io
-        r = requests.get(
-            f"{SUPABASE_URL}/rest/v1/ml_models",
-            headers={"apikey": SUPABASE_KEY, "Authorization": f"Bearer {SUPABASE_KEY}"},
-            params={"select": "model_name,model_data,meta"}, timeout=20,
-        )
+        r = None
+        for _attempt in range(3):  # ml_models ist gross (ca. 25 MB): langer Timeout + Wiederholung statt stillem Ausfall
+            try:
+                r = requests.get(
+                    f"{SUPABASE_URL}/rest/v1/ml_models",
+                    headers={"apikey": SUPABASE_KEY, "Authorization": f"Bearer {SUPABASE_KEY}"},
+                    params={"select": "model_name,model_data,meta", "model_name": "not.like.player_*"}, timeout=90,
+                )
+                if r.ok:
+                    break
+            except Exception as _e:
+                log(f"   🤖 ML-Models Versuch {_attempt + 1}/3 fehlgeschlagen: {str(_e)[:60]}", "WARN")
+                r = None
+        if r is None:
+            log("   🤖 ML-Models: nicht erreichbar — Fallback auf Elo/Poisson", "WARN")
+            return
         if not r.ok:
             log(f"   🤖 ML-Models: Supabase {r.status_code} — Fallback auf Elo/Poisson", "WARN")
             return
