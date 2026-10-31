@@ -9,7 +9,7 @@ RESP = [{"team": {"name": "Bayern"}, "players": [
 
 def test_parse():
     r = a.parse_players(RESP, FX)
-    assert len(r) == 1 and r[0]["fouls_drawn"] == 3 and r[0]["fouls_committed"] == 0 and r[0]["yellow"] == 1
+    assert len(r) == 1 and r[0]["fouls_drawn"] == 3 and r[0]["fouls_committed"] is None and r[0]["yellow"] == 1
     assert r[0]["tackles"] == 4 and r[0]["passes"] == 30
     assert r[0]["match_date"] == "2026-10-21"
 

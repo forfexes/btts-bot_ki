@@ -16,3 +16,12 @@ def checked_response(response):
     if not isinstance(rows, list):
         raise RuntimeError("API-Football response list missing")
     return rows
+
+def number(v):
+    if v is None or isinstance(v, bool):
+        return None
+    try:
+        n = float(v)
+        return int(n) if n >= 0 and n.is_integer() else None
+    except (ValueError, TypeError, OverflowError):
+        return None

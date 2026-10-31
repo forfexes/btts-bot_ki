@@ -32,6 +32,11 @@ def pick_fixtures(resp, known, limit):
     return ft[:limit]
 
 
+def _stat(v):
+    from netrattler_apif_response import number
+    return number(v)
+
+
 def parse_players(resp, fx):
     rows = []
     fid = fx["fixture"]["id"]
@@ -46,11 +51,11 @@ def parse_players(resp, fx):
                 "team": (t.get("team") or {}).get("name"), "league_id": (fx.get("league") or {}).get("id"),
                 "match_date": (fx["fixture"].get("date") or "")[:10] or None,
                 "minutes": _i(g.get("minutes")), "position": g.get("position"),
-                "shots": _i((s.get("shots") or {}).get("total")), "shots_on": _i((s.get("shots") or {}).get("on")),
-                "fouls_committed": _i((s.get("fouls") or {}).get("committed")),
-                "fouls_drawn": _i((s.get("fouls") or {}).get("drawn")),
-                "yellow": _i((s.get("cards") or {}).get("yellow")), "red": _i((s.get("cards") or {}).get("red")),
-                "tackles": _i((s.get("tackles") or {}).get("total")), "passes": _i((s.get("passes") or {}).get("total")),
+                "shots": _stat((s.get("shots") or {}).get("total")), "shots_on": _stat((s.get("shots") or {}).get("on")),
+                "fouls_committed": _stat((s.get("fouls") or {}).get("committed")),
+                "fouls_drawn": _stat((s.get("fouls") or {}).get("drawn")),
+                "yellow": _stat((s.get("cards") or {}).get("yellow")), "red": _stat((s.get("cards") or {}).get("red")),
+                "tackles": _stat((s.get("tackles") or {}).get("total")), "passes": _stat((s.get("passes") or {}).get("total")),
             })
     return rows
 

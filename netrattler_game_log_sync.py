@@ -104,13 +104,13 @@ def build_canonical(rows):
             if name_covers(toks, et) and team_sim(r.get("team"), e.get("team")):
                 cands.append(e)
         if len(cands) == 1:
-            name_of.setdefault((season_of(r["match_date"]), str(r.get("player_id"))), cands[0]["player_name"])
+            name_of.setdefault((r.get("source"), season_of(r["match_date"]), str(r.get("player_id"))), cands[0]["player_name"])
             short_to[key_of(r["player_name"])].add((cands[0]["player_name"], cands[0].get("team")))
     merged = {}
     for r in rows:
         rr = dict(r)
         if r.get("source") != "espn":
-            canon = name_of.get((season_of(r["match_date"]), str(r.get("player_id"))))
+            canon = name_of.get((r.get("source"), season_of(r["match_date"]), str(r.get("player_id"))))
             if not canon:  # Vorsaison: Kurzname eindeutig und gleicher Verein
                 opts = short_to.get(key_of(r["player_name"]), set())
                 names = {n for n, _ in opts}
@@ -133,7 +133,7 @@ def build_canonical(rows):
             for f, v in fpl_first.items():
                 if v is not None and (f in ("minutes", "tackles", "xg") or out.get(f) is None):
                     out[f] = v
-            out["source"] = "fpl+espn"
+            out["source"] = "apif+history" if "apif" in (row["source"], old["source"]) else "fpl+espn"
             merged[k] = out
     return list(merged.values())
 

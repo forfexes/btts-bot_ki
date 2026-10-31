@@ -47,10 +47,15 @@ def team_corner_profile(rows, team, target_date=None, window=15, min_games=5):
         except (ValueError, TypeError, KeyError):
             continue
         key = (day, str(home), str(away))
-        games[key] = (hc, ac) if is_home else (ac, hc)
+        duplicate = next((k for k in games if k[0] == day
+                          and teams_match(k[1], home) and teams_match(k[2], away)), None)
+        if duplicate is not None:
+            key = duplicate
+        pair = (hc, ac) if is_home else (ac, hc)
+        games[key] = (*pair, row.get('_source') or 'football-data.co.uk')
     selected = [v for _, v in sorted(games.items(), reverse=True)[:window]]
     if len(selected) < min_games:
         return None
     return {'avg_corners_for': sum(v[0] for v in selected)/len(selected),
             'avg_corners_against': sum(v[1] for v in selected)/len(selected),
-            'games': len(selected), 'source': 'football-data.co.uk', 'window': window}
+            'games': len(selected), 'source': '+'.join(sorted({v[2] for v in selected})), 'window': window}

@@ -1,0 +1,39 @@
+name: NETRATTLER API-Football Targeted History
+on:
+  workflow_dispatch: {}
+  push:
+    branches: [main]
+    paths:
+      - '.github/workflows/netrattler_apif_history.yml'
+      - 'netrattler_apif_history.py'
+  schedule:
+    - cron: '11 6 * * *'
+permissions:
+  contents: read
+concurrency:
+  group: netrattler-apif-history
+  cancel-in-progress: false
+jobs:
+  import:
+    runs-on: ubuntu-latest
+    timeout-minutes: 25
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+          cache: pip
+      - run: python -m pip install --prefer-binary requests pytest
+      - name: History parsers and capacity regression
+        run: python -m pytest -q test_netrattler_apif_history.py test_apifootball_players.py test_game_log_sync.py test_corner_history.py
+      - name: Import only measured histories for upcoming teams
+        env:
+          API_FOOTBALL_KEYS: ${{ secrets.API_FOOTBALL_KEYS }}
+          SUPABASE_URL: ${{ secrets.SUPABASE_URL }}
+          SUPABASE_KEY: ${{ secrets.SUPABASE_KEY }}
+          SUPABASE_SERVICE_ROLE_KEY: ${{ secrets.SUPABASE_SERVICE_ROLE_KEY }}
+          APIF_HISTORY_MAX_MB: '430'
+          APIF_HISTORY_MAX_CALLS: '400'
+          APIF_HISTORY_MAX_TEAMS: '16'
+          APIF_HISTORY_MAX_PLAYER_ROWS: '2400'
+        run: python netrattler_apif_history.py

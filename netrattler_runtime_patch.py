@@ -572,3 +572,5 @@ def install_bot(bot) -> None:
     _install_team_market_quote_guard(bot)
     _install_tip_source_attribution(bot)
     _install_coverage_aware_skip(bot)
+    from netrattler_api_corner_store import install as install_corner_store
+    install_corner_store(bot)
