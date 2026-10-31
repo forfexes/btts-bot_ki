@@ -1,4 +1,4 @@
-"""Spielerfotos fuer Builder- und Goalscorer-Tipps (kostenlos, TheSportsDB-Gratisschluessel).
+"""Spielerfotos fuer Builder- und Goalscorer-Tipps (kostenlos): FPL, ESPN, TheSportsDB, Wikipedia der Reihe nach.
 Das Foto wird als Link-Vorschau ueber dem Text angezeigt: unsichtbarer Link im Text + link_preview_options beim Senden.
 Fehlt ein Foto oder ist die Quelle nicht erreichbar, bleibt der Tipp unveraendert."""
 import json
@@ -56,7 +56,76 @@ def pick_photo(players, name):
     return None
 
 
+def _name_ok(want, got):
+    w, g = _norm(want).split(), _norm(got).split()
+    if not w or not g or w[-1] != g[-1]:
+        return False
+    return not (len(w) > 1 and len(g) > 1 and w[0][0] != g[0][0])
+
+
+def _get(url, **kw):
+    r = requests.get(url, timeout=8, **kw)
+    return r.json() if r.ok else None
+
+
+_FPL = {}
+
+
+def pick_fpl(bootstrap, name):
+    """Premier-League-Spielerfoto aus dem offiziellen FPL-Datensatz (elements[].photo = '<code>.jpg')."""
+    for e in (bootstrap or {}).get("elements", []):
+        full = f"{e.get('first_name', '')} {e.get('second_name', '')}"
+        if (_name_ok(name, full) or _name_ok(name, e.get("web_name", ""))) and e.get("photo"):
+            code = str(e["photo"]).split(".")[0]
+            return f"https://resources.premierleague.com/premierleague/photos/players/250x250/p{code}.png"
+    return None
+
+
+def pick_espn(data, name):
+    """ESPN-Suche: erster Fussballspieler mit passendem Namen; Bild-URL aus der Spieler-ID."""
+    for it in (data or {}).get("items", []):
+        if str(it.get("type", "player")).lower() != "player" or not _name_ok(name, it.get("displayName", "")):
+            continue
+        pid = re.search(r"a:(\d+)", str(it.get("uid") or "")) or re.fullmatch(r"(\d+)", str(it.get("id") or ""))
+        tag = (str(it.get("uid") or "") + " " + str(it.get("sport") or "")).lower()
+        if pid and ("s:600" in tag or "soccer" in tag or not tag.strip()):
+            return f"https://a.espncdn.com/i/headshots/soccer/players/full/{pid.group(1)}.png"
+    return None
+
+
+def pick_wiki(data, name):
+    for pg in ((data or {}).get("query") or {}).get("pages", {}).values():
+        if _name_ok(name, pg.get("title", "")) and (pg.get("thumbnail") or {}).get("source"):
+            return pg["thumbnail"]["source"]
+    return None
+
+
+def _src_fpl(name):
+    if "d" not in _FPL:
+        _FPL["d"] = _get("https://fantasy.premierleague.com/api/bootstrap-static/")
+    return pick_fpl(_FPL["d"], name)
+
+
+def _src_espn(name):
+    return pick_espn(_get("https://site.web.api.espn.com/apis/common/v3/search",
+                          params={"query": name, "limit": 5, "type": "player"}), name)
+
+
+def _src_tsdb(name):
+    return pick_photo((_get(API, params={"p": str(name)}) or {}).get("player"), name)
+
+
+def _src_wiki(name):
+    return pick_wiki(_get("https://en.wikipedia.org/w/api.php", params={
+        "action": "query", "format": "json", "prop": "pageimages", "piprop": "thumbnail", "pithumbsize": 400,
+        "generator": "search", "gsrsearch": f"{name} footballer", "gsrlimit": 3}), name)
+
+
+SOURCES = [_src_fpl, _src_espn, _src_tsdb, _src_wiki]
+
+
 def photo_url(name):
+    """Quellen der Reihe nach (FPL, ESPN, TheSportsDB, Wikipedia); die erste mit passendem Foto gewinnt."""
     if not ON or not name:
         return None
     if not _MEM:
@@ -64,16 +133,18 @@ def photo_url(name):
     key = _norm(name)
     if key in _MEM:
         return _MEM[key] or None
-    url = None
-    try:
-        r = requests.get(API, params={"p": str(name)}, timeout=8)
-        if r.ok:
-            url = pick_photo((r.json() or {}).get("player"), name)
-        _MEM[key] = url or ""
-        _save()
-    except Exception:
-        _MEM[key] = ""  # nur im Speicher: bei Netzfehler nicht nochmal im selben Lauf versuchen
-        return None
+    url, errors = None, 0
+    for src in SOURCES:
+        try:
+            url = src(name)
+        except Exception:
+            errors += 1
+            continue
+        if url:
+            break
+    _MEM[key] = url or ""
+    if url or errors < len(SOURCES):
+        _save()  # nur speichern, wenn mindestens eine Quelle erreichbar war
     return url
 
 
