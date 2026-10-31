@@ -20391,7 +20391,7 @@ def analyze_corners_tip(fixture, league, target_date=None):
     # API-Football fixture lists do not contain inline corner statistics and
     # an account suspension must not disable independently measured history.
     from netrattler_corner_history import team_corner_profile
-    history = _fd_co_uk_load_csv(league)
+    history = _ntr_corner_history(league) if "_ntr_corner_history" in globals() else _fd_co_uk_load_csv(league)
     home_stats = team_corner_profile(history, fixture.get("home", ""), target_date)
     away_stats = team_corner_profile(history, fixture.get("away", ""), target_date)
     now_utc = datetime.now(timezone.utc)

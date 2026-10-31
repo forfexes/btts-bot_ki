@@ -6,7 +6,7 @@ import requests
 
 def install(bot):
     original = getattr(bot, '_fd_co_uk_load_csv', None)
-    if not callable(original) or getattr(original, '_api_corner_store', False):
+    if not callable(original) or getattr(getattr(bot, '_ntr_corner_history', None), '_api_corner_store', False):
         return
     cache = {}
 
@@ -35,4 +35,4 @@ def install(bot):
         return cache[lid] + base
 
     load._api_corner_store = True
-    bot._fd_co_uk_load_csv = load
+    bot._ntr_corner_history = load

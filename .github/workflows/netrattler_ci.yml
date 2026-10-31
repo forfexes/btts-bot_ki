@@ -13,6 +13,8 @@ on:
       - "netrattler_prop_sources.py"
       - "test_netrattler_legacy_builder_speed.py"
       - "test_netrattler_scorer_qualification.py"
+      - "test_netrattler_apif_history.py"
+      - "netrattler_api_corner_store.py"
       - "test_netrattler_runtime_patch.py"
       - "test_netrattler_oddspapi_keys.py"
       - "test_netrattler_odds_cache_guard.py"
@@ -90,6 +92,8 @@ jobs:
         run: python -m unittest -v test_netrattler_combo_race_guard.py
       - name: Disabled legacy builder fast path regression
         run: python -m unittest -v test_netrattler_legacy_builder_speed.py
+      - name: Compact API history and corner isolation regression
+        run: python -m pytest -q test_netrattler_apif_history.py
       - name: Scorer configured policy and candidate ranking regression
         run: python -m pytest -q test_netrattler_scorer_qualification.py
       - name: Runtime fallback and skip tests
