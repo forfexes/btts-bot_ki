@@ -36,18 +36,31 @@ def main():
         if len(part) < 1000:
             break
         off += 1000
-    info = {"probe": "tg_cleanup", "selected": len(rows), "dry_run": DRY, "deleted": 0, "failed": 0, "voided": 0}
+    info = {"probe": "tg_cleanup", "selected": len(rows), "dry_run": DRY, "deleted": 0, "failed": 0, "voided": 0, "db_failed": 0}
     if not DRY:
         for t in rows:
             ok = False
             if TOKEN and t.get("telegram_chat_id") and t.get("telegram_msg_id"):
-                d = requests.post(f"https://api.telegram.org/bot{TOKEN}/deleteMessage", timeout=20,
-                                  json={"chat_id": t["telegram_chat_id"], "message_id": t["telegram_msg_id"]})
-                ok = d.ok
-            info["deleted" if ok else "failed"] += 1
-            u = requests.patch(f"{SB}/rest/v1/tips", headers=H, timeout=20, params={"id": f"eq.{t['id']}"},
-                               data=json.dumps({"status": "void", "result": "void"}))
-            info["voided"] += 1 if u.ok else 0
+                try:
+                    d = requests.post(f"https://api.telegram.org/bot{TOKEN}/deleteMessage", timeout=20,
+                                      json={"chat_id": t["telegram_chat_id"], "message_id": t["telegram_msg_id"]})
+                    ok = d.ok and d.json().get("ok") is True
+                except (requests.RequestException, ValueError):
+                    ok = False
+            if not ok:
+                # Keep the DB row pending if the published Telegram tip still exists.
+                info["failed"] += 1
+                continue
+            info["deleted"] += 1
+            try:
+                u = requests.patch(f"{SB}/rest/v1/tips", headers=H, timeout=20, params={"id": f"eq.{t['id']}"},
+                                   data=json.dumps({"status": "void", "result": "void"}))
+                if u.ok:
+                    info["voided"] += 1
+                else:
+                    info["db_failed"] += 1
+            except requests.RequestException:
+                info["db_failed"] += 1
     print(json.dumps(info))
     requests.post(f"{SB}/rest/v1/netrattler_card_diag", headers=H, timeout=20, data=json.dumps({"info": info}))
 
