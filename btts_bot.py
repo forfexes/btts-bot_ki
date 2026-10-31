@@ -6186,9 +6186,11 @@ def _ntr_get_group_perf(group):
                 year_s = now.strftime("%Y")
                 def agg(period, rows2):
                     bets=len(rows2); wins=sum(str(x.get("status")).lower() in ("win","won") for x in rows2); losses=bets-wins
-                    prof=sum(_ntr_float(x.get("profit"), 0) for x in rows2)
-                    stake=sum(max(0.0, _ntr_float(x.get("stake"), 1.0)) for x in rows2)
-                    return {"period": period, "bets": bets, "wins": wins, "losses": losses, "profit": round(prof,2), "stake": round(stake,2), "roi": round(100*prof/max(0.01,stake),2)} if bets else None
+                    # ROI nur ueber Tipps mit echter Quote/Profit (sonst 7 Tage vs Monat inkonsistent)
+                    priced_rows=[x for x in rows2 if x.get("profit") is not None]
+                    prof=sum(_ntr_float(x.get("profit"), 0) for x in priced_rows)
+                    stake=sum(max(0.0, _ntr_float(x.get("stake"), 1.0)) for x in priced_rows)
+                    return {"period": period, "bets": bets, "priced": len(priced_rows), "wins": wins, "losses": losses, "profit": round(prof,2), "stake": round(stake,2), "roi": round(100*prof/max(0.01,stake),2)} if bets else None
                 out["today"] = agg("today", [x for x in ss if str(x.get("tip_date", ""))[:10] == today_s])
                 out["week"] = agg("week", [x for x in ss if str(x.get("tip_date", ""))[:10] >= week_s])
                 out["month"] = agg("month", [x for x in ss if str(x.get("tip_date", ""))[:7] == month_s])
@@ -6204,8 +6206,12 @@ def _ntr_perf_line(row, label):
         return None
     bets=int(row.get("bets") or 0); wins=int(row.get("wins") or 0); losses=int(row.get("losses") or 0)
     roi=_ntr_float(row.get("roi"), 0); prof=_ntr_float(row.get("profit"), 0)
+    priced=int(row.get("priced", bets) or 0)
+    if priced < min(bets, 5):
+        return f"{label}: {wins}-{losses} / {bets} · ROI n/a (nur {priced} mit echter Quote)"
     em = "🟢" if prof >= 0 else "🔴"
-    return f"{label}: {wins}-{losses} / {bets} · ROI {roi:.1f}% · {prof:+.2f}U {em}"
+    basis = "" if priced == bets else f" (Basis {priced}/{bets})"
+    return f"{label}: {wins}-{losses} / {bets} · ROI {roi:.1f}% · {prof:+.2f}U {em}{basis}"
 
 
 def _ntr_strip_duplicate_group_footer(text):
