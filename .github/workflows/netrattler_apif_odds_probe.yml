@@ -1,0 +1,29 @@
+name: NETRATTLER API-Football Actual Odds Check
+on:
+  workflow_dispatch: {}
+  push:
+    branches: [main]
+    paths:
+      - 'netrattler_apif_odds_probe.py'
+      - '.github/workflows/netrattler_apif_odds_probe.yml'
+permissions:
+  contents: read
+jobs:
+  sample:
+    runs-on: ubuntu-latest
+    timeout-minutes: 7
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+      - run: python -m pip install --prefer-binary requests
+      - name: Read actual bookmaker offers across covered leagues
+        env:
+          API_FOOTBALL_KEYS: ${{ secrets.API_FOOTBALL_KEYS }}
+        run: python netrattler_apif_odds_probe.py
+      - uses: actions/upload-artifact@v4
+        with:
+          name: api-football-actual-odds
+          path: apif_odds_samples.json
+          retention-days: 1

@@ -6,6 +6,7 @@ on:
     paths:
       - '.github/workflows/netrattler_visual_cards_probe.yml'
       - 'netrattler_corner_cards.py'
+      - 'netrattler_stats_match_cards.py'
       - 'netrattler_builder_cards.py'
 permissions:
   contents: read
@@ -43,7 +44,7 @@ jobs:
               logos[team]=ok
           print(json.dumps({'probe':'visual_cards_sources','h2h_matches':tip.get('h2h_matches',0),
                             'h2h_avg_goals':tip.get('h2h_avg_goals'), 'downloaded_crests':logos,
-                            'api_calls':cards.STATS.get('h2h_api_calls',0)}))
+                            'team_ids':cards._AF_TEAM_ID, 'api_calls':cards.STATS.get('h2h_api_calls',0)}))
           assert tip.get('h2h_matches',0)>0, 'Expected covered historical head-to-head fixtures missing'
           assert all(logos.values()), 'Expected club crests unavailable'
           PY

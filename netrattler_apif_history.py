@@ -124,7 +124,7 @@ class Importer:
                 if tid not in teams:
                     targets.append((tid, fx['league']['id'], fx['league']['season']))
                     teams.add(tid)
-        targets = targets[:min(24, int(os.getenv('APIF_HISTORY_MAX_TEAMS', '16')))]
+        targets = targets[:min(32, int(os.getenv('APIF_HISTORY_MAX_TEAMS', '16')))]
         history = {}
         for tid, lid, season in targets:
             for fx in self.api('/fixtures', {'team': tid, 'league': lid, 'last': 15, 'status': 'FT'}):

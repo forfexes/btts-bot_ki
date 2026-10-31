@@ -33,7 +33,7 @@ jobs:
           SUPABASE_KEY: ${{ secrets.SUPABASE_KEY }}
           SUPABASE_SERVICE_ROLE_KEY: ${{ secrets.SUPABASE_SERVICE_ROLE_KEY }}
           APIF_HISTORY_MAX_MB: '430'
-          APIF_HISTORY_MAX_CALLS: '400'
-          APIF_HISTORY_MAX_TEAMS: '24'
+          APIF_HISTORY_MAX_CALLS: '500'
+          APIF_HISTORY_MAX_TEAMS: '32'
           APIF_HISTORY_MAX_PLAYER_ROWS: '2400'
         run: python netrattler_apif_history.py

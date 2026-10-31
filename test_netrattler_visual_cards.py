@@ -73,3 +73,15 @@ def test_builder_photo_callback_persists_original_message_id():
     send_text.assert_not_called()
     assert persist.call_args.kwargs['telegram_message_id']==456
     assert persist.call_args.kwargs['telegram_chat_id']==42
+
+
+def test_h2h_resolver_never_prefers_youth_squad_over_senior_alias():
+    response=[{'team':{'id':100,'name':'Derby County U21','country':'England'}},
+              {'team':{'id':69,'name':'Derby','country':'England'}}]
+    with patch.object(cards,'_AF_TEAM_ID',{}),patch.object(cards,'_af_get',return_value=response) as get, \
+         patch.object(cards,'_country_of',return_value='England'):
+        assert cards._af_team_id('Derby County','England - Championship',['test'],{'calls':0,'max':5})==69
+        assert get.call_args.args[1]['search']=='Derby'
+    assert not cards._same_squad('Levante','Levante II')
+    assert not cards._same_squad('Millwall','Millwall U21')
+    assert cards._same_squad('Millwall U21','Millwall U21')

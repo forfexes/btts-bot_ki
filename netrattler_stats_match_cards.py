@@ -1,3 +1,6 @@
+Warning: truncated output (original token count: 22696)
+Total output lines: 2059
+
 """NETRATTLER premium match cards.
 
 Display-only: consumes final guarded REAL_ODDS tips. It never invents prices,
@@ -955,239 +958,7 @@ def update_cards_with_results(token, results, log=print):
                 old = card.get("result") or {}
                 marks = dict(old.get("marks") or {})
                 ft = old.get("ft") or ""
-                ht = old.get("ht") or ""
-                for res in res_list:
-                    ft = res.get("ft") or ft
-                    ht = res.get("ht") or ht
-                    for i, (m, t) in enumerate(entries):
-                        odds_t = _number(t.get("odds") or t.get("oddsYes"))
-                        odds_r = _number(res.get("odds"))
-                        same_odds = odds_t is not None and odds_r is not None and abs(odds_t - odds_r) < 0.011
-                        if str(m) == str(res.get("group")) or same_odds:
-                            if str(m) == str(res.get("group")) and odds_t and odds_r and not same_odds and len(
-                                    [1 for mm, _ in entries if str(mm) == str(m)]) > 1:
-                                continue
-                            marks[str(i)] = res.get("status")
-                if not marks:
-                    diag["no_marks"] += 1
-                    continue
-                if old.get("marks") == marks and old.get("ft") == ft:
-                    diag["unchanged"] = diag.get("unchanged", 0) + 1
-                    continue
-                diag["marked"] += 1
-                payload = render_card(entries, card.get("card_date") or "",
-                                      {"marks": marks, "ft": ft, "ht": ht})
-                if _edit_photo(token, card["chat_id"], card["message_id"], payload, log):
-                    diag["edit_ok"] += 1
-                    done += 1
-                    requests.patch(url, headers=hdr, timeout=15, params={"card_id": f"eq.{card.get('card_id')}"},
-                                   json={"result": {"marks": marks, "ft": ft, "ht": ht}})
-                time.sleep(1.2)
-        except Exception as exc:
-            diag["err"] = f"{type(exc).__name__}: {str(exc)[:120]}"
-            log(f"Card-Result optional übersprungen: {type(exc).__name__}")
-    diag["edit_fail"] = diag["marked"] - diag["edit_ok"]
-    _diag()
-    return done
-
-
-# ---------------------------------------------------------------- goalscorer card
-_PLAYER_CACHE = {}
-
-
-def _player_photo(name, team=""):
-    """Verified football-player headshot: FotMob, TheSportsDB, Wikipedia.
-
-    Photo failures must not affect the tip or invent a different player's face.
-    """
-    raw_name = str(name or "").strip()
-    clean_name = re.sub(r"\s+Player['’]?s\s*$", "", raw_name, flags=re.I).strip()
-    key = _norm(clean_name) + "|" + _norm(team)
-    if not _norm(clean_name):
-        return b""
-    if key in _PLAYER_CACHE:
-        return _PLAYER_CACHE[key]
-
-    urls = []
-    # FotMob's football-only search provides a verified player id and team.
-    try:
-        resp = requests.get(
-            "https://www.fotmob.com/api/data/search/suggest",
-            params={"term": clean_name, "hits": 15},
-            headers={"User-Agent": "Mozilla/5.0 (NETRATTLER player image fallback)"},
-            timeout=6,
-        )
-        data = resp.json() if resp.ok else {}
-        data = data if isinstance(data, dict) else {}
-        players = data.get("players") or []
-        if not players:
-            for item in data.get("suggestions") or []:
-                if isinstance(item, dict) and item.get("type") == "player":
-                    players.append(item)
-        if not players:
-            for group in data.get("groups") or []:
-                if isinstance(group, dict):
-                    players.extend(p for p in group.get("suggestions") or []
-                                   if isinstance(p, dict) and p.get("type") == "player")
-        exact = [p for p in players if isinstance(p, dict)
-                 and _norm(p.get("name")) == _norm(clean_name)]
-        if team and len(exact) > 1:
-            matching = [
-                p for p in exact
-                if _norm(team) and (
-                    _norm(team) in _norm(p.get("info") or p.get("teamName") or "")
-                    or _norm(p.get("info") or p.get("teamName") or "") in _norm(team)
-                    and len(_norm(p.get("info") or p.get("teamName") or "")) > 4
-                )
-            ]
-            exact = matching
-        if len(exact) == 1 and str(exact[0].get("id") or "").isdigit():
-            urls.append("https://images.fotmob.com/image_resources/playerimages/"
-                        + str(exact[0]["id"]) + ".png")
-        else:
-            STATS["player_fotmob_ambiguous"] = STATS.get("player_fotmob_ambiguous", 0) + 1
-    except Exception:
-        STATS["player_fotmob_err"] = STATS.get("player_fotmob_err", 0) + 1
-
-    # TheSportsDB free v1 key is 123. Keep configurable premium credentials.
-    try:
-        resp = requests.get(
-            "https://www.thesportsdb.com/api/v1/json/%s/searchplayers.php" %
-            (os.getenv("THESPORTSDB_API_KEY", "123").strip() or "123"),
-            params={"p": clean_name}, timeout=6)
-        rows = ((resp.json() or {}).get("player") or []) if resp.ok else []
-        soccer = [p for p in rows if isinstance(p, dict)
-                  and str(p.get("strSport") or "").lower() == "soccer"
-                  and _norm(p.get("strPlayer")) == _norm(clean_name)]
-        if team and len(soccer) > 1:
-            soccer = [p for p in soccer if _norm(team) in _norm(p.get("strTeam"))]
-        if len(soccer) == 1:
-            urls.extend(str(soccer[0][k]) for k in ("strCutout", "strThumb", "strRender")
-                        if soccer[0].get(k))
-    except Exception:
-        STATS["player_tsdb_err"] = STATS.get("player_tsdb_err", 0) + 1
-    try:
-        resp = requests.get(
-            "https://en.wikipedia.org/w/api.php",
-            params={"action": "query", "generator": "search",
-                    "gsrsearch": f'"{clean_name}" footballer',
-                    "gsrlimit": 1, "prop": "pageimages", "piprop": "thumbnail",
-                    "pithumbsize": 400, "format": "json"},
-            headers={"User-Agent": "NETRATTLER-cards/1.0 (soccer player portrait)"},
-            timeout=6)
-        for page in (((resp.json() or {}).get("query") or {}).get("pages") or {}).values():
-            title = str(page.get("title") or "")
-            if clean_name.split()[0].lower() not in title.lower():
-                continue
-            url = str((page.get("thumbnail") or {}).get("source") or "")
-            if url:
-                urls.append(url)
-    except Exception:
-        STATS["player_wiki_err"] = STATS.get("player_wiki_err", 0) + 1
-
-    payload = b""
-    for url in dict.fromkeys(urls):
-        try:
-            resp = requests.get(url, timeout=7)
-            if not resp.ok or not resp.content or len(resp.content) > 8_000_000:
-                continue
-            # A 200 HTML error/placeholder must not be pasted as a player face.
-            from PIL import Image
-            with Image.open(io.BytesIO(resp.content)) as parsed:
-                parsed.verify()
-            payload = resp.content
-            if "fotmob.com" in url:
-                STATS["player_fotmob_ok"] = STATS.get("player_fotmob_ok", 0) + 1
-            break
-        except Exception:
-            continue
-    flag = "player_photo_ok" if payload else "player_photo_missing"
-    STATS[flag] = STATS.get(flag, 0) + 1
-    _PLAYER_CACHE[key] = payload
-    return payload
-
-
-def render_scorer_card(tip, target_date, result=None):
-    from PIL import Image, ImageDraw, ImageFont, ImageOps
-
-    w, h = 1080, 880
-    im = Image.new("RGB", (w, h), "#020a2a")
-    draw = ImageDraw.Draw(im)
-    fp = "/usr/share/fonts/truetype/dejavu/DejaVuSans.ttf"
-    fb = "/usr/share/fonts/truetype/dejavu/DejaVuSansCondensed-Bold.ttf"
-
-    def font(size, bold=False):
-        try:
-            return ImageFont.truetype(fb if bold else fp, size)
-        except OSError:
-            return ImageFont.load_default()
-
-    def text_c(text, cx, y, f, fill):
-        bb = draw.textbbox((0, 0), text, font=f)
-        draw.text((cx - (bb[2] - bb[0]) / 2, y), text, font=f, fill=fill)
-
-    glow_boxes = []
-
-    def panel(box, outline="#4aa8ff", fill="#061660", radius=18):
-        glow_boxes.append((box, radius))
-        draw.rounded_rectangle(box, radius=radius, fill=fill, outline=outline, width=2)
-
-    result = result if isinstance(result, dict) else None
-    mark = ((result or {}).get("marks") or {}).get("0")
-    im.paste(_neon_bg(w, h))
-    match = str(tip.get("match", ""))
-    home, away = _teams(match)
-    player = str(tip.get("player", ""))
-    text_c("NETRATTLER", w / 2, 22, font(76, True), "#ffffff")
-    text_c("GOAL HUNTER · ANYTIME GOALSCORER", w / 2, 102, font(20, True), "#e6f2ff")
-    draw.rounded_rectangle((300, 132, 780, 166), radius=16, fill="#0b1f6e", outline="#3b82ff", width=2)
-    text_c(str(tip.get("league") or "FUSSBALL")[:48], w / 2, 138, font(18, True), "#d6e6ff")
-    if result:
-        draw.rounded_rectangle((420, 176, 660, 208), radius=14, fill="#1fbf5b")
-        text_c("ABGESCHLOSSEN", w / 2, 181, font(17, True), "#ffffff")
-    else:
-        draw.rounded_rectangle((420, 176, 660, 208), radius=14, fill="#d62839")
-        text_c("PRE-KICKOFF", w / 2, 181, font(17, True), "#ffffff")
-    _paste_badge(im, draw, home, (50, 150, 220, 320), font(40, True))
-    _paste_badge(im, draw, away, (860, 150, 1030, 320), font(40, True))
-    text_c(home[:20], 135, 330, font(24, True), "#ffffff")
-    text_c(away[:20], 945, 330, font(24, True), "#ffffff")
-
-    # player photo (circle) in the middle
-    cx0, cy0, size = 420, 215, 240
-    photo = _player_photo(player, str(tip.get("team", "")))
-    shown = False
-    if photo:
-        try:
-            ph = Image.open(io.BytesIO(photo)).convert("RGBA")
-            ph = ImageOps.fit(ph, (size, size), Image.Resampling.LANCZOS, centering=(0.5, 0.2))
-            mask = Image.new("L", (size, size), 0)
-            ImageDraw.Draw(mask).ellipse((0, 0, size - 1, size - 1), fill=255)
-            draw.ellipse((cx0 - 5, cy0 - 5, cx0 + size + 5, cy0 + size + 5), fill="#27e0c0")
-            im.paste(ph, (cx0, cy0), mask)
-            shown = True
-        except Exception:
-            shown = False
-    if not shown:
-        draw.ellipse((cx0, cy0, cx0 + size, cy0 + size), fill="#172f50", outline="#27e0c0", width=5)
-        ini = "".join(x[:1] for x in re.findall(r"[A-Za-z]+", player)[-2:]).upper() or "?"
-        text_c(ini, cx0 + size / 2, cy0 + size / 2 - 40, font(80, True), "#ffffff")
-
-    text_c(player[:26], w / 2, 476, font(46, True), "#ffffff")
-    sub = str(tip.get("team") or "")
-    if result and result.get("ft"):
-        sub = (sub + "  ·  " if sub else "") + "Endstand " + str(result["ft"]).replace("-", " : ")
-    if sub:
-        text_c(sub[:60], w / 2, 536, font(22, True), "#9fc2ff")
-
-    top = 584
-    outline = "#2d6bff"
-    if mark == "win":
-        outline = "#27e0c0"
-    elif mark == "loss":
-        outline = "#ff5468"
-    panel((34, top, 1046, top + 190), outline=outline)
-    odds = _number(tip.get("odds") or tip.get("oddsYes"))
+                ht = old.get("ht") or "…2696 tokens truncated…et("oddsYes"))
     pct = _pct(tip.get("probability"))
     fair = _number(tip.get("fairOdds") or tip.get("fair_odds"))
     cells = []
@@ -1661,6 +1432,7 @@ def _apifootball_logo(team, league=""):
         return ""
     q = re.sub(r"[^A-Za-z0-9 ]+", " ", unicodedata.normalize("NFKD", team).encode("ascii", "ignore").decode())
     q = " ".join(t for t in q.split() if t.lower() not in _FL_STOP) or q.strip()
+    q = {"derbycounty": "Derby"}.get(_norm(team), q)
     if len(q) < 3:
         return ""
     country = _country_of(league).lower()
@@ -1675,6 +1447,8 @@ def _apifootball_logo(team, league=""):
         best, sc = "", 0.0
         for row in data.get("response") or []:
             t = row.get("team") or {}
+            if not _same_squad(team, t.get("name", "")):
+                continue
             score = _name_score(team, t.get("name", "")) + (0.3 if country and str(t.get("country", "")).lower() == country else 0)
             if t.get("logo") and score > sc:
                 best, sc = t["logo"], score
@@ -1967,12 +1741,24 @@ def _af_get(path, params, keys, state):
     return None
 
 
+def _same_squad(requested, candidate):
+    # Senior, youth, women's and reserve squads are different fixtures.
+    def tags(name):
+        text = _slug(name).replace("-", " ")
+        found = set(re.findall(r"\b(?:u\s*\d{1,2}|under\s*\d{1,2}|women|ladies|femenino|femenina|feminines|reserves|ii|iii)\b", text))
+        if text.endswith(" b"):
+            found.add("reserve_b")
+        return {x.replace(" ", "") for x in found}
+    return tags(requested) == tags(candidate)
+
+
 def _af_team_id(team, league, keys, state):
     k = _norm(team)
     if k in _AF_TEAM_ID:
         return _AF_TEAM_ID[k]
     q = re.sub(r"[^A-Za-z0-9 ]+", " ", unicodedata.normalize("NFKD", team).encode("ascii", "ignore").decode())
     q = " ".join(t for t in q.split() if t.lower() not in _FL_STOP) or q.strip()
+    q = {"derbycounty": "Derby"}.get(_norm(team), q)
     if len(q) < 3:
         return None
     resp = _af_get("/teams", {"search": q[:40]}, keys, state)
@@ -1980,6 +1766,8 @@ def _af_team_id(team, league, keys, state):
     best, sc = None, 0.0
     for row in resp or []:
         t = row.get("team") or {}
+        if not _same_squad(team, t.get("name", "")):
+            continue
         score = _name_score(team, t.get("name", "")) + (0.3 if country and str(t.get("country", "")).lower() == country else 0)
         if t.get("id") and score > sc:
             best, sc = t["id"], score
