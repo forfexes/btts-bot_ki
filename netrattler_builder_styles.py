@@ -666,7 +666,12 @@ def public_style(style):
 
 def format_builder_message(pick: builder.BuilderPick) -> str:
     same_match = len({x.match for x in pick.legs}) == 1 and len(pick.legs) > 1
-    lines = [f"🔥 <b>BET BUILDER</b> · {public_style(pick.style)}", f"<i>{pick.variant}</i>"]
+    try:
+        import netrattler_player_photos as _npp
+        _photo = _npp.anchor(_clean_player(pick.legs[0].player))
+    except Exception:
+        _photo = ""
+    lines = [f"{_photo}🔥 <b>BET BUILDER</b> · {public_style(pick.style)}", f"<i>{pick.variant}</i>"]
     if same_match:
         lines.append(f"⚽ <b>{pick.legs[0].match}</b>")
     lines.append("")

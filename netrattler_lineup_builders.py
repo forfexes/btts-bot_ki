@@ -149,8 +149,9 @@ def make_sender():
     def send(text):
         if not token or not chat:
             return None
+        import netrattler_player_photos as npp
         r = requests.post(f"https://api.telegram.org/bot{token}/sendMessage", timeout=20,
-                          json={"chat_id": chat, "text": text, "parse_mode": "HTML", "disable_web_page_preview": True})
+                          json=npp.apply_preview({"chat_id": chat, "text": text, "parse_mode": "HTML", "disable_web_page_preview": True}))
         if not r.ok:
             return None
         res = (r.json() or {}).get("result") or {}

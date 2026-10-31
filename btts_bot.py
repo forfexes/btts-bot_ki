@@ -6509,6 +6509,11 @@ def _ntr_send_telegram_impl(text, chat_id=None, reply_markup=None):
         "parse_mode": "HTML",
         "disable_web_page_preview": True,
     }
+    try:
+        import netrattler_player_photos as _npp
+        payload = _npp.apply_preview(payload)
+    except Exception:
+        pass
     if reply_markup:
         payload["reply_markup"] = json.dumps(reply_markup)
 
@@ -20880,7 +20885,12 @@ def format_corners_message(tip):
 def format_scorer_message(tip):
     """Formatiert Scorer-Tipp für Telegram"""
     nl = "\n"
-    msg = f"⚽ <b>SCORER TIP</b>{nl}"
+    try:
+        import netrattler_player_photos as _npp
+        _photo = _npp.anchor(tip.get("player"))
+    except Exception:
+        _photo = ""
+    msg = f"{_photo}⚽ <b>SCORER TIP</b>{nl}"
     msg += f"━━━━━━━━━━━━━━━━━━{nl}"
     msg += f"<b>{tip['match']}</b>{nl}"
     msg += f"📍 {tip['league']} | ⏰ {tip['time']}{nl}{nl}"

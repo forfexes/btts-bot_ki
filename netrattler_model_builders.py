@@ -299,7 +299,12 @@ def build_cards(rows, match_date):
 
 
 def message(pick, match_date):
-    lines = [f"🧪 <b>{pick.get('title', 'MODELL-BUILDER')}</b> · <i>keine Buchmacherquote</i>",
+    try:
+        import netrattler_player_photos as _npp
+        _photo = _npp.anchor(pick["legs"][0]["player"])
+    except Exception:
+        _photo = ""
+    lines = [f"{_photo}🧪 <b>{pick.get('title', 'MODELL-BUILDER')}</b> · <i>keine Buchmacherquote</i>",
              f"⚽ {html.escape(pick['match'])}"]
     if os.getenv("NETRATTLER_LINEUP_CONFIRMED") == "1":
         lines.append("✅ <b>Startelf bestätigt</b>")
