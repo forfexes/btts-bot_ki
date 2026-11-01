@@ -2479,7 +2479,8 @@ def period_start(period: str) -> str:
     if period == "week":
         return (TODAY - timedelta(days=6)).isoformat()
     if period == "month":
-        return TODAY.replace(day=1).isoformat()
+        # rollierend 30 Tage: Kalendermonat war am Monatsersten kleiner als die 7-Tage-Basis (ROI inkonsistent)
+        return (TODAY - timedelta(days=29)).isoformat()
     if period == "year":
         return TODAY.replace(month=1, day=1).isoformat()
     return "1900-01-01"
@@ -2648,7 +2649,7 @@ def roi_text(stats: Dict[str, Any]) -> str:
 
 
 def performance_lines(history: Sequence[Dict[str, Any]], group: str) -> List[str]:
-    labels = [("Heute", "today"), ("7 Tage", "week"), ("Monat", "month"), ("Jahr", "year"), ("All Time", "alltime")]
+    labels = [("Heute", "today"), ("7 Tage", "week"), ("30 Tage", "month"), ("Jahr", "year"), ("All Time", "alltime")]
     lines = []
     for label, period in labels:
         stats = summary(history, group, period)
