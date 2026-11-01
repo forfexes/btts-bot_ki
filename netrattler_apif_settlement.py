@@ -32,6 +32,15 @@ def collect(tips,match_parts,row_date,same,log=print):
             if not today-timedelta(days=lookback)<=date<=today:continue
             home,away,_=match_parts(row)
             if home and away:wanted.setdefault(d,set()).add((home,away))
+    # A bookmaker's local date can differ from the API's UTC calendar day.
+    # Keep actual provider dates; settlement's strict adjacent-day matcher decides eligibility.
+    adjacent=max(0,min(1,int(os.getenv('SETTLEMENT_APIF_ADJACENT_DAYS','1'))))
+    original_days=set(wanted)
+    for day,pairs in list(wanted.items()):
+        for offset in range(-adjacent,adjacent+1):
+            actual=datetime.fromisoformat(day).date()+timedelta(days=offset)
+            if today-timedelta(days=lookback)<=actual<=today:
+                wanted.setdefault(actual.isoformat(),set()).update(pairs)
     calls=0;results=[];players=[];seen=set()
     def api(path,params):
         nonlocal calls
@@ -44,7 +53,8 @@ def collect(tips,match_parts,row_date,same,log=print):
             # Never log request URLs or credentials from exception text.
             log('API settlement request unavailable: '+type(exc).__name__)
             return []
-    for day,pairs in sorted(wanted.items(),reverse=True):
+    for day in sorted(wanted,key=lambda d:(d in original_days,d),reverse=True):
+        pairs=wanted[day]
         if calls>=ceiling:break
         for fx in api('/fixtures',{'date':day}):
             fixture=fx.get('fixture') or {};teams=fx.get('teams') or {}

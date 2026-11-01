@@ -19,7 +19,7 @@ def run(day,fixtures,players=None,stats=None,max_calls='150'):
     tip={'match':'Cross-Match','match_date':day,'legs':[{'match':'Alpha vs Beta',
          'player':'Player A','category':'sot','line':.5,'match_date':day}]}
     payloads=[response(fixtures),response(players or []),response(stats or [])]
-    with patch.dict('os.environ',{'API_FOOTBALL_KEYS':'test','SETTLEMENT_APIF_MAX_CALLS':max_calls}), \
+    with patch.dict('os.environ',{'API_FOOTBALL_KEYS':'test','SETTLEMENT_APIF_MAX_CALLS':max_calls,'SETTLEMENT_APIF_ADJACENT_DAYS':'0'}), \
          patch.object(api.requests,'get',side_effect=payloads) as get:
         rows,people=api.collect([tip],settlement.match_parts,settlement.row_date,
                                lambda a,b:a==b,lambda s:None)
@@ -58,3 +58,19 @@ def test_provider_errors_do_not_create_evidence():
         rows,people=api.collect([{'match':'Alpha vs Beta','match_date':day}],settlement.match_parts,
             settlement.row_date,lambda a,b:a==b,lambda s:None)
     assert rows==people==[]
+
+
+def test_adjacent_utc_day_is_fetched_without_relabeling_or_duplicate_details():
+    day=(datetime.now(timezone.utc).date()-timedelta(days=2)).isoformat()
+    actual=(datetime.fromisoformat(day).date()+timedelta(days=1)).isoformat()
+    tip={'match':'Alpha vs Beta','match_date':day}
+    requests_seen=[]
+    def get(url,params,**kw):
+        requests_seen.append((url,params))
+        if url.endswith('/fixtures') and params['date']==actual:return response([fixture(actual)])
+        return response([])
+    with patch.dict('os.environ',{'API_FOOTBALL_KEYS':'test','SETTLEMENT_APIF_ADJACENT_DAYS':'1'}), \
+         patch.object(api.requests,'get',side_effect=get):
+        rows,_=api.collect([tip],settlement.match_parts,settlement.row_date,lambda a,b:a==b,lambda s:None)
+    assert len(rows)==1 and rows[0]['match_date']==actual
+    assert sum(url.endswith('/fixtures/players') for url,params in requests_seen)==1
