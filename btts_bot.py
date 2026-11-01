@@ -9765,7 +9765,7 @@ def _supabase_game_log_stats(names: list, per_player: int = 20) -> dict:
                         stats[st] = {"avg": round(sum(vals) / len(vals), 3),
                                      "hit_rate": round(100.0 * sum(1 for v in vals if v > 0) / len(vals), 1),
                                      "games": len(vals),
-                                     "series": [int(v) if float(v).is_integer() else round(v, 1) for v in vals[:10]]}
+                                     "series": [int(v) if float(v).is_integer() else round(v, 1) for v in vals[:15]]}
                 if "yellow_cards" in stats:
                     stats["cards"] = stats["yellow_cards"]
             _SUPABASE_PLAYER_STATS_CACHE[("gl", n)] = stats
@@ -20806,7 +20806,14 @@ def analyze_scorer_tips(fixture, league, scorers, observed_props=None, diag=None
         if not is_playing:
             continue
         _d("an_playing")
-        gpg = float(scorer.get("goals_per_game", 0) or 0)
+        # Selection must use observed recent scoring form, not season goals/game.
+        from netrattler_player_form import recent_form as _recent_player_form
+        _recent_stats = get_supabase_player_avg_stats(scorer_name) or {}
+        _goal_form = _recent_player_form(_recent_stats.get("goals") or _recent_stats.get("goal") or {})
+        if not _goal_form:
+            _d("an_drop_no_recent_form")
+            continue
+        gpg = _goal_form["avg"]
         if gpg < 0.3:
             _d("an_drop_gpg")
             continue
@@ -20843,6 +20850,8 @@ def analyze_scorer_tips(fixture, league, scorers, observed_props=None, diag=None
             "match": f"{fixture.get('home','')} vs {fixture.get('away','')}", "league": league,
             "time": fixture.get("time_local", "TBD"), "player": scorer_name,
             "team": scorer.get("team", ""), "goals_per_game": gpg,
+            "form_games": _goal_form["games"], "form_series": _goal_form["series"],
+            "form_source": _goal_form["source"], "goals_per_game_l15": _goal_form["l15_avg"],
             "goals_total": scorer.get("goals_total", 0), "probability": prob,
             "odds": round(quote, 3), "oddsYes": round(quote, 3),
             "fair_odds": round(100 / prob, 2), "fairOdds": round(100 / prob, 2),

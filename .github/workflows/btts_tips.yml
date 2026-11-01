@@ -10,6 +10,7 @@ on:
       - 'netrattler_scorer_qualification.py'
       - 'netrattler_api_corner_store.py'
       - 'netrattler_match_form.py'
+      - 'netrattler_player_form.py'
       - 'netrattler_corner_cards.py'
       - 'netrattler_builder_cards.py'
   schedule:

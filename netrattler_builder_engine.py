@@ -115,7 +115,10 @@ def leg_hit_rate(leg: "PropLeg", n: int = 10) -> Optional[float]:
 def weak_leg(leg: "PropLeg") -> bool:
     """Bein unter der Mindest-Trefferquote (Standard 70 %) -> der Builder wird verworfen."""
     hr = leg_hit_rate(leg)
-    return hr is not None and hr < as_float(os.getenv("NETRATTLER_BUILDER_MIN_HIT", "0.70"), 0.70)
+    if hr is None:
+        # A real bookmaker quote alone does not establish recent player form.
+        return leg.category in PLAYER_CATEGORIES - TEAM_CATEGORIES
+    return hr < as_float(os.getenv("NETRATTLER_BUILDER_MIN_HIT", "0.70"), 0.70)
 
 
 def history_text(leg: "PropLeg", n: int = 10) -> str:

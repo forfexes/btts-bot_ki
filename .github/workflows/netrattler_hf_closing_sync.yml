@@ -1,12 +1,43 @@
 name: NETRATTLER HF Closing Consensus Sync
 on:
   workflow_dispatch:
+  push:
+    branches: [main]
+    paths:
+      - 'netrattler_hf_reference.py'
+      - 'test_netrattler_hf_reference.py'
+      - 'netrattler_player_form.py'
+      - '.github/workflows/netrattler_hf_closing_sync.yml' 
   schedule:
     - cron: '35 6 * * 2,5'
 permissions:
   contents: read
 jobs:
+  reference-validation:
+    runs-on: ubuntu-latest
+    timeout-minutes: 8
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+      - run: pip install requests
+      - name: Regression tests
+        run: |
+          python test_netrattler_hf_reference.py
+          python test_netrattler_player_form.py
+          python test_netrattler_builder_styles.py
+          python test_netrattler_result_enrichment.py
+          python -m py_compile btts_bot.py netrattler_hf_reference.py netrattler_player_form.py
+      - name: Validate and benchmark attributed snapshots (no DB writes)
+        run: python netrattler_hf_reference.py
+      - uses: actions/upload-artifact@v4
+        with:
+          name: hf-reference-validation
+          path: hf_reference_report.json
+          retention-days: 14
   sync:
+    if: github.event_name != 'push'
     runs-on: ubuntu-latest
     timeout-minutes: 10
     steps:

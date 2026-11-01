@@ -165,8 +165,11 @@ def _compat_real_odds_fallback_body():
         for p in range(5):
             rows.append({"player": f"Sc{m}{p}", "match": match, "league": "X", "market": "Anytime Scorer",
                          "category": "score", "line": .5, "odds": 2.4 + .3 * p, "source": "kambi_ub"})
-    picks = builder.build_builder_picks(rows, match_date="2026-10-10", max_builders=18)
-    assert picks, "compat real-odds pool must yield builders"
+    from unittest.mock import patch
+    histories = {(builder.norm(row["player"]), row["category"]): [1] * 10 for row in rows}
+    with patch.dict(builder.LEG_HISTORY, histories):
+        picks = builder.build_builder_picks(rows, match_date="2026-10-10", max_builders=18)
+    assert picks, "real-odds pool with measured recent form must yield builders"
     assert all(not any(x.estimated for x in p.legs) for p in picks)
     assert all(x.odds > 1 and x.source.startswith("kambi") for p in picks for x in p.legs)
     msg = builder.format_builder_message(picks[0])
