@@ -646,7 +646,7 @@ def format_direct_summary(settlement: Dict[str, Any]) -> str:
     group = settlement.get("market_group", "default")
     title = _direct_summary_title(group)
     status = normalized_status(settlement.get("status"))
-    hit = "✅ Hit  <b>✅ V</b>" if status == "win" else "❌ Miss  <b>❌ X</b>"
+    hit = "✅ Hit  <b>✅ V</b>" if status == "win" else "↩️ <b>VOID · nicht gewertet</b>" if status == "void" else "❌ Miss  <b>❌ X</b>"
     raw_profit = settlement.get("profit")
     profit = as_float(raw_profit, 0.0)
     profit_icon = "🟢" if profit >= 0 else "🔴"
@@ -821,7 +821,7 @@ def edit_original_tip(settlement: Dict[str, Any]) -> bool:
     the message, the default is to keep settlement silent rather than create a duplicate post.
     Separate result messages are disabled, including emergency fallbacks.
     """
-    if normalized_status(settlement.get("status")) not in {"win", "loss"}:
+    if normalized_status(settlement.get("status")) not in {"win", "loss"} and not _confirmed_all_void(settlement):
         return False
     payload = settlement.get("tip_payload") or {}
     data = unpack(payload)
@@ -886,7 +886,7 @@ def retry_unedited_originals(existing: Sequence[Dict[str, Any]], newly_closed: S
     for row in candidates:
         if attempts >= limit:
             break
-        if normalized_status(row.get("status")) not in {"win", "loss"}:
+        if normalized_status(row.get("status")) not in {"win", "loss"} and not _confirmed_all_void(row):
             continue
         if str(row.get("tip_date") or "")[:10] < cutoff:
             continue
@@ -2365,9 +2365,20 @@ def existing_status_map(rows: Sequence[Dict[str, Any]]) -> Dict[str, str]:
     return output
 
 
+def _confirmed_all_void(settlement: Dict[str, Any]) -> bool:
+    """Only publish VOID backed by a non-appearance result on every leg."""
+    if normalized_status(settlement.get("status")) != "void":
+        return False
+    legs = settlement.get("legs_payload") or []
+    return bool(isinstance(legs, list) and legs and all(
+        isinstance(item, dict) and normalized_status(item.get("status")) == "void"
+        and str(item.get("reason") or "").startswith("void: Spieler ohne Einsatz")
+        for item in legs))
+
+
 def _writes_to_source(settlement: Dict[str, Any]) -> bool:
     """win/loss always; VOID only for the explicit stale-no-result case (never for legacy missing-data voids)."""
-    if settlement.get("status") in {"win", "loss"}:
+    if settlement.get("status") in {"win", "loss"} or _confirmed_all_void(settlement):
         return True
     return settlement.get("status") == "void" and str(settlement.get("reason") or "").startswith(("void: kein Ergebnis nach", "void: nicht bewertbar nach"))
 
@@ -2748,8 +2759,9 @@ def main() -> None:
         log(f"Stale-VOIDs in tips synchronisiert: {len(stale_voids)}")
     edited_count = 0
     old_rows = {str(row.get("tip_id")): row for row in existing}
-    edit_updates = [row for row in settled if row["status"] in {"win", "loss"} and (
-        previous.get(str(row["tip_id"])) not in {"win", "loss"}
+    edit_updates = [row for row in settled if (row["status"] in {"win", "loss"} or _confirmed_all_void(row)) and (
+        previous.get(str(row["tip_id"])) != row["status"]
+        or (_confirmed_all_void(row) and normalized_status((row.get("tip_payload") or {}).get("status")) == "pending")
         or row.get("legs_payload") != old_rows.get(str(row["tip_id"]), {}).get("legs_payload"))]
     for row in edit_updates:
         update_source_tip(row)

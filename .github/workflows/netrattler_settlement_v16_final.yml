@@ -43,7 +43,7 @@ jobs:
           python test_netrattler_result_enrichment.py
           python test_netrattler_settlement_runner.py
           python test_settlement_lenient_match.py
-          python -m pytest -q test_settle_prefers_observed.py test_netrattler_apif_settlement.py
+          python -m pytest -q test_settle_prefers_observed.py test_netrattler_apif_settlement.py test_netrattler_confirmed_void.py
           python -m unittest -v test_pending_result_backfill.py
       - name: Pending tips result backfill (published singles and builder legs)
         timeout-minutes: 15
@@ -66,7 +66,7 @@ jobs:
         env:
           API_FOOTBALL_KEYS: ${{ secrets.API_FOOTBALL_KEYS }}
           SETTLEMENT_APIF_LOOKBACK_DAYS: "14"
-          SETTLEMENT_APIF_MAX_CALLS: "150"
+          SETTLEMENT_APIF_MAX_CALLS: "250"
           SUPABASE_URL: ${{ secrets.SUPABASE_URL }}
           SUPABASE_KEY: ${{ secrets.SUPABASE_KEY }}
           SUPABASE_SERVICE_ROLE_KEY: ${{ secrets.SUPABASE_SERVICE_ROLE_KEY }}
