@@ -31,7 +31,8 @@ def trim_keep_days(mb: float) -> int:
 
 
 def alert(text: str) -> None:
-    tok, chat = os.getenv("TELEGRAM_BOT_TOKEN"), os.getenv("TELEGRAM_GROUP_ALERTS")
+    tok = os.getenv("TELEGRAM_BOT_TOKEN") or os.getenv("TELEGRAM_TOKEN")
+    chat = os.getenv("TELEGRAM_GROUP_ALERTS") or os.getenv("TELEGRAM_GROUP_STATS")
     if tok and chat:
         try:
             requests.post(f"https://api.telegram.org/bot{tok}/sendMessage", json={"chat_id": chat, "text": text}, timeout=15)
