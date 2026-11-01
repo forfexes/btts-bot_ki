@@ -49,3 +49,12 @@ def test_scorer_alias_duplicate_counts_once_in_statistics():
     rows=[{'market_group':'scorer','tip_payload':t,'tip_date':'2026-10-31','settled_at':'2026-11-01'} for t in (a,b)]
     # The explicit alias is Brighton Hove Albion; punctuation is normalized.
     assert len(identity.dedupe_history(rows))==1
+
+
+def test_initial_and_full_name_are_same_player():
+    from netrattler_scorer_identity import ReceiptDedupe, person
+    assert person("A. Gouiri") == person("Amine Gouiri")
+    assert person("Amine Gouiri") != person("Jonathan Gouiri2")
+    seen = ReceiptDedupe([{"match": "Marseille vs Toulouse", "market": "scorer", "player": "A. Gouiri", "telegram_msg_id": 1}])
+    assert seen.contains({"match": "Marseille vs Toulouse", "player": "Amine Gouiri"})
+    assert not seen.contains({"match": "Marseille vs Toulouse", "player": "Mason Greenwood"})

@@ -8,6 +8,16 @@ def norm(value):
     return re.sub(r'[^a-z0-9]','',s)
 
 
+def person(value):
+    """Spieler-Schluessel: Nachname + Anfangsbuchstabe des Vornamens ('A. Gouiri' == 'Amine Gouiri')."""
+    toks=unicodedata.normalize('NFKD',str(value or '')).encode('ascii','ignore').decode().lower().replace('.',' ').split()
+    toks=[re.sub(r'[^a-z0-9]','',t) for t in toks]
+    toks=[t for t in toks if t]
+    if not toks:return ''
+    if len(toks)==1:return toks[0]
+    return toks[-1]+'|'+toks[0][0]
+
+
 def club(value):
     s=re.sub(r'\b(fc|afc|cf)\b','',str(value or ''),flags=re.I)
     n=norm(s)
@@ -37,9 +47,9 @@ def recover(row):
 
 class ReceiptDedupe:
     def __init__(self,rows):
-        self.seen={(fixture(r.get('match')),norm(recover(r).get('player'))) for r in rows if r.get('telegram_msg_id')}
-    def contains(self,tip):return (fixture(tip.get('match')),norm(tip.get('player'))) in self.seen
-    def add(self,tip):self.seen.add((fixture(tip.get('match')),norm(tip.get('player'))))
+        self.seen={(fixture(r.get('match')),person(recover(r).get('player'))) for r in rows if r.get('telegram_msg_id')}
+    def contains(self,tip):return (fixture(tip.get('match')),person(tip.get('player'))) in self.seen
+    def add(self,tip):self.seen.add((fixture(tip.get('match')),person(tip.get('player'))))
 
 
 def dedupe_history(rows):
@@ -47,7 +57,7 @@ def dedupe_history(rows):
     for row in sorted(rows,key=lambda r:str(r.get('settled_at') or ''),reverse=True):
         if row.get('market_group')!='scorer':out.append(row);continue
         tip=recover(row.get('tip_payload') or {})
-        key=(str(row.get('tip_date') or tip.get('date') or '')[:10],fixture(tip.get('match')),norm(tip.get('player')))
+        key=(str(row.get('tip_date') or tip.get('date') or '')[:10],fixture(tip.get('match')),person(tip.get('player')))
         if not all(key):out.append(row);continue
         if key in seen:continue
         seen.add(key);out.append(row)
