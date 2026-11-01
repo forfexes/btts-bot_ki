@@ -22,7 +22,10 @@ def club(value):
     s=re.sub(r'\b(fc|afc|cf)\b','',str(value or ''),flags=re.I)
     n=norm(s)
     return {'swanseacity':'swansea','blackburnrovers':'blackburn',
-            'brightonhovealbion':'brighton','estactroyes':'troyes','parissaintgermain':'psg'}.get(n,n)
+            'brightonhovealbion':'brighton','estactroyes':'troyes','parissaintgermain':'psg',
+            # Exact aliases observed in duplicate scorer receipts (01.11.2026).
+            'academicodeviseu':'academicoviseu',
+            'olympiquedemarseille':'marseille'}.get(n,n)
 
 
 def fixture(value):

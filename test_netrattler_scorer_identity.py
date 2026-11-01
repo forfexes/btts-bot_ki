@@ -58,3 +58,20 @@ def test_initial_and_full_name_are_same_player():
     seen = ReceiptDedupe([{"match": "Marseille vs Toulouse", "market": "scorer", "player": "A. Gouiri", "telegram_msg_id": 1}])
     assert seen.contains({"match": "Marseille vs Toulouse", "player": "Amine Gouiri"})
     assert not seen.contains({"match": "Marseille vs Toulouse", "player": "Mason Greenwood"})
+
+
+def test_real_scorer_fixture_aliases_dedupe_without_merging_unrelated_clubs():
+    # Both alias pairs were published twice on 2026-11-01 before normalization.
+    from netrattler_scorer_identity import ReceiptDedupe, fixture
+    assert fixture("Académico de Viseu FC vs Rio Ave FC") == fixture("Academico Viseu vs Rio Ave")
+    assert fixture("Olympique de Marseille vs Toulouse FC") == fixture("Marseille vs Toulouse")
+    sent = ReceiptDedupe([
+        {"match": "Académico de Viseu FC vs Rio Ave FC", "market": "scorer",
+         "player_name": "André Clóvis", "telegram_msg_id": 111},
+        {"match": "Olympique de Marseille vs Toulouse FC", "market": "scorer",
+         "player_name": "A. Gouiri", "telegram_msg_id": 222},
+    ])
+    assert sent.contains({"match": "Academico Viseu vs Rio Ave", "player": "André Clóvis"})
+    assert sent.contains({"match": "Marseille vs Toulouse", "player": "Amine Gouiri"})
+    assert not sent.contains({"match": "Paris FC vs Toulouse", "player": "Amine Gouiri"})
+    assert not sent.contains({"match": "Marseille vs Toulouse", "player": "Mason Greenwood"})
