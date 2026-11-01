@@ -1,5 +1,9 @@
 name: NETRATTLER Lineup Builders
 on:
+  push:
+    branches: [main]
+    paths:
+      - ".github/workflows/netrattler_lineup_builders.yml"
   schedule:
     - cron: "*/20 8-22 * * *"
   workflow_dispatch: {}
@@ -17,7 +21,10 @@ jobs:
       - uses: actions/setup-python@v5
         with:
           python-version: "3.11"
-      - run: python -m pip install --prefer-binary requests
+      - name: Install lineup and image dependencies
+        run: python -m pip install --prefer-binary requests pillow pytest
+      - name: Verify builder image rendering before delivery
+        run: python -m pytest -q test_netrattler_visual_cards.py
       - env:
           API_FOOTBALL_KEYS: ${{ secrets.API_FOOTBALL_KEYS }}
           SUPABASE_URL: ${{ secrets.SUPABASE_URL }}
