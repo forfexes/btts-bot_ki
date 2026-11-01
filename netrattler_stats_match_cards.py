@@ -301,7 +301,11 @@ def _search_badge(query, api_key, key):
 
 
 def _logo_url(team):
+    original_key = _norm(team)
+    team = {"swanseacityafc":"Swansea", "blackburnroversfc":"Blackburn"}.get(original_key, team)
     key = _norm(team)
+    if original_key in _TEAM_LEAGUE:
+        _TEAM_LEAGUE.setdefault(key, _TEAM_LEAGUE[original_key])
     if not key:
         return ""
     if key in _LOGO_CACHE:
@@ -984,6 +988,13 @@ def _player_photo(name, team=""):
         return _PLAYER_CACHE[key]
 
     urls = []
+    try:
+        from netrattler_api_portraits import portrait
+        api_portrait = portrait(clean_name, team)
+        if api_portrait:
+            urls.append(api_portrait)
+    except Exception:
+        pass
     # FotMob's football-only search provides a verified player id and team.
     try:
         resp = requests.get(

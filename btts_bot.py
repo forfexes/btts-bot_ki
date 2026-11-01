@@ -6909,7 +6909,8 @@ def save_to_supabase(tip):
             "settled_at", "message_text",
             "group_key", "pick_type", "source",
             "builder_id", "builder_total_legs", "builder_legs", "builder_won_legs",
-            "profit_units", "actual_value",
+            "profit_units", "actual_value", "player_name", "player_team",
+            "prop_market", "prop_line", "prop_side",
         ]
         
         clean_tip = {k: v for k, v in tip.items()
@@ -16973,7 +16974,8 @@ def save_to_supabase(tip):
             "settled_at", "message_text",
             "group_key", "pick_type", "source",
             "builder_id", "builder_total_legs", "builder_legs", "builder_won_legs",
-            "profit_units", "actual_value",
+            "profit_units", "actual_value", "player_name", "player_team",
+            "prop_market", "prop_line", "prop_side",
         ]
         
         clean_tip = {k: v for k, v in tip.items()
@@ -21394,7 +21396,24 @@ def run_corners_and_scorer_bots(target_date, active_leagues, odds_data_cache, fi
         scorer_tips = _ok_tips
         scorer_count = len(scorer_tips)
     if scorer_tips and group_late:
+        from netrattler_scorer_identity import ReceiptDedupe
+        try:
+            _scorer_read = requests.get(f"{SUPABASE_URL}/rest/v1/tips",
+                headers={"apikey":SUPABASE_KEY,"Authorization":f"Bearer {SUPABASE_KEY}"},
+                params={"select":"tip_id,date,match,market,player_name,telegram_msg_id",
+                        "market":"eq.scorer","date":f"eq.{target_date}","limit":"1000"},timeout=15)
+            _scorer_read.raise_for_status()
+            _scorer_rows = _scorer_read.json()
+            if not isinstance(_scorer_rows,list) or len(_scorer_rows)>=1000:
+                raise RuntimeError("Incomplete scorer dedupe read")
+            _scorer_seen = ReceiptDedupe(_scorer_rows)
+        except Exception as _dedupe_exc:
+            log(f"Scorer-Dedupe nicht verfügbar: {type(_dedupe_exc).__name__}; kein Versand", "WARN")
+            scorer_tips = []
         for tip in scorer_tips:
+            if _scorer_seen.contains(tip):
+                log(f"Scorer-Duplikat übersprungen: {tip.get('player')} · {tip.get('match')}")
+                continue
             _smsg = format_scorer_message(tip)
             _smid = None
             try:
@@ -21407,6 +21426,7 @@ def run_corners_and_scorer_bots(target_date, active_leagues, odds_data_cache, fi
             if _smid is None:
                 log(f"   ⚠️ Scorer Telegram nicht zugestellt — nicht als gesendet markieren: {tip.get('match','?')}", "WARN")
                 continue
+            _scorer_seen.add(tip)
             mark_tip_sent(tip.get("match",""), "scorer", target_date)
             try:
                 save_to_supabase({
@@ -21414,6 +21434,8 @@ def run_corners_and_scorer_bots(target_date, active_leagues, odds_data_cache, fi
                     "tip_id": f"scorer_{tip.get('player','?')}_{tip.get('match','?')}_{target_date}".replace(" ","_"),
                     "date": str(target_date), "market": "scorer", "status": "pending",
                     "group_key": "scorer", "pick_type": "scorer",
+                    "player_name":tip.get("player"),"player_team":tip.get("team"),
+                    "prop_market":"score","prop_line":0.5,"prop_side":"over",
                     "telegram_chat_id": _telegram_actual_chat(group_late, _smid),
                     "telegram_msg_id": _smid if _smid is not True else None, "message_text": _smsg[:3500],
                 })

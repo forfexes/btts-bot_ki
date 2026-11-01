@@ -7,6 +7,7 @@ on:
     paths:
       - '.github/workflows/netrattler_settlement_v16_final.yml'
       - 'netrattler_apif_settlement.py'
+      - 'netrattler_scorer_identity.py'
 
   schedule:
     - cron: "20 13 * * *"
@@ -43,7 +44,7 @@ jobs:
           python test_netrattler_result_enrichment.py
           python test_netrattler_settlement_runner.py
           python test_settlement_lenient_match.py
-          python -m pytest -q test_settle_prefers_observed.py test_netrattler_apif_settlement.py test_netrattler_confirmed_void.py
+          python -m pytest -q test_settle_prefers_observed.py test_netrattler_apif_settlement.py test_netrattler_confirmed_void.py test_netrattler_scorer_identity.py
           python -m unittest -v test_pending_result_backfill.py
       - name: Pending tips result backfill (published singles and builder legs)
         timeout-minutes: 15

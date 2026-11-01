@@ -1,0 +1,51 @@
+from unittest.mock import Mock,patch
+import netrattler_scorer_identity as identity
+import netrattler_api_portraits as portraits
+import netrattler_settlement_v16_final as s
+
+
+def legacy():
+    return {'tip_id':'scorer_R._Cherki_Manchester_City_vs_Brighton_2026-10-31',
+            'market':'scorer','group_key':'scorer','match':'Manchester City vs Brighton',
+            'date':'2026-10-31','odds':'6.5','units':.75,'status':'pending'}
+
+
+def test_legacy_scorer_is_player_market_and_settles_from_real_goals():
+    tip=legacy()
+    assert s.unpack(tip)['player']=='R. Cherki' and s.category_of(tip)=='score'
+    stat={'player_name':'R. Cherki','team':'Manchester City','opponent':'Brighton',
+          'match_date':'2026-10-31','minutes':90,'goals':0}
+    result={'home_team':'Manchester City','away_team':'Brighton','match_date':'2026-10-31',
+            'home_score':0,'away_score':1}
+    settled=s.settle_tip(tip,[result],[stat])
+    assert settled['status']=='loss' and 'Markt nicht erkannt' not in settled['reason']
+    stat['goals']=1
+    assert s.settle_tip(tip,[{**result,'home_score':1}],[stat])['status']=='win'
+    stat['goals']=None
+    assert s.settle_tip(tip,[result],[stat])['status']=='pending'
+
+
+def test_abbreviated_club_names_dedupe_same_player_only():
+    row={'market':'scorer','tip_id':'scorer_O._Afolayan_Swansea_vs_Blackburn_2026-10-31',
+         'match':'Swansea vs Blackburn','date':'2026-10-31','telegram_msg_id':807}
+    dedupe=identity.ReceiptDedupe([row])
+    assert dedupe.contains({'match':'Swansea City AFC vs Blackburn Rovers FC','player':'O. Afolayan'})
+    assert not dedupe.contains({'match':'Swansea City AFC vs Blackburn Rovers FC','player':'Andri Gudjohnsen'})
+    assert not identity.recover({**row,'tip_id':'unrelated'}) .get('player')
+
+
+def test_api_portrait_requires_unique_id_and_own_club():
+    response=Mock(ok=True);response.json.return_value=[{'player_name':'Rayan Cherki','team':'Manchester City','player_id':123}]
+    with patch.dict('os.environ',{'SUPABASE_URL':'https://example.test','SUPABASE_KEY':'test'}), \
+         patch.object(portraits,'_CALLS',0),patch.object(portraits.requests,'get',return_value=response):
+        assert portraits.portrait('R. Cherki','Manchester City').endswith('/123.png')
+        assert not portraits.portrait('R. Cherki','Brighton')
+        response.json.return_value.append({'player_name':'Robert Cherki','team':'Manchester City','player_id':456})
+        assert not portraits.portrait('R. Cherki','Manchester City')
+
+
+def test_scorer_alias_duplicate_counts_once_in_statistics():
+    a=legacy();b={**a,'match':'Manchester City vs Brighton & Hove Albion','player_name':'R. Cherki'}
+    rows=[{'market_group':'scorer','tip_payload':t,'tip_date':'2026-10-31','settled_at':'2026-11-01'} for t in (a,b)]
+    # The explicit alias is Brighton Hove Albion; punctuation is normalized.
+    assert len(identity.dedupe_history(rows))==1

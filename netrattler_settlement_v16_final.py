@@ -183,7 +183,8 @@ def unpack(row: Dict[str, Any]) -> Dict[str, Any]:
         if isinstance(value, dict):
             output.update(value)
     output.update(row)
-    return output
+    from netrattler_scorer_identity import recover
+    return recover(output)
 
 
 def parse_dt(value: Any) -> Optional[datetime]:
@@ -2235,7 +2236,7 @@ def settle_tip(tip: Dict[str, Any], results: Sequence[Dict[str, Any]], player_st
         reason = f"{wins}/{len(legs)} Legs gewonnen · {losses} verloren · {pending} offen" + (f" · {voids} void" if voids else "")
     else:
         category = category_of(tip)
-        if category and group in {"props", "corners"}:
+        if category and group in {"props", "corners", "scorer"}:
             status, reason = settle_player_market(tip, player_stats, result)
         elif result:
             status, reason = settle_score_market(tip, result)
@@ -2433,7 +2434,8 @@ def dedup_history(rows: Iterable[Dict[str, Any]]) -> List[Dict[str, Any]]:
         row_ts = str(row.get("settled_at") or "")
         if current is None or row_ts >= current_ts:
             best[tid] = row
-    return _dedup_builder_legsets(list(best.values()))
+    from netrattler_scorer_identity import dedupe_history as dedupe_scorers
+    return _dedup_builder_legsets(dedupe_scorers(list(best.values())))
 
 
 def _builder_legset_key(row: Dict[str, Any]) -> Optional[tuple]:
