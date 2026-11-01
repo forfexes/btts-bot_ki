@@ -33,7 +33,9 @@ def test_no_synthetic_or_implausible_quotes():
 def analyze(scorers, props):
     tree=ast.parse(Path('btts_bot.py').read_text())
     fn=next(x for x in tree.body if isinstance(x,ast.FunctionDef) and x.name=='analyze_scorer_tips')
-    ctx={'normalize_team_name':lambda s: s.lower().replace(' ',''), 'requests':None,'os':os}
+    history={x['name']:{'goals':{'series':([1]*3+[0]*7 if x['goals_per_game']<.4 else [1]*6+[0]*4)}} for x in scorers}
+    ctx={'normalize_team_name':lambda s: s.lower().replace(' ',''), 'requests':None,'os':os,
+         'get_supabase_player_avg_stats':lambda name:history.get(name,{})}
     exec(compile(ast.Module(body=[fn],type_ignores=[]),'<scorer>','exec'),ctx)
     adjust=SimpleNamespace(load=lambda *a,**k:None,adjusted_prob_pct=lambda n,p:p)
     with patch.dict('sys.modules', {'netrattler_finishing_adjust':adjust}):
@@ -47,7 +49,7 @@ def test_real_analysis_allows_configured_26_percent_candidate():
             'home':'Home','away':'Away','source':'kambi_ub'}]
     tips=analyze(scorers,props)
     assert len(tips)==1
-    assert tips[0]['probability']==27
+    assert tips[0]['probability']==26
 
 
 def test_invalid_top_three_do_not_crowd_out_valid_scorer():

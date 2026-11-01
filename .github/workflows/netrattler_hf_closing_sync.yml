@@ -7,7 +7,7 @@ on:
       - 'netrattler_hf_reference.py'
       - 'test_netrattler_hf_reference.py'
       - 'netrattler_player_form.py'
-      - '.github/workflows/netrattler_hf_closing_sync.yml' 
+      - '.github/workflows/netrattler_hf_closing_sync.yml'
   schedule:
     - cron: '35 6 * * 2,5'
 permissions:
@@ -21,11 +21,12 @@ jobs:
       - uses: actions/setup-python@v5
         with:
           python-version: '3.11'
-      - run: pip install requests
+      - run: pip install requests pytest
       - name: Regression tests
         run: |
           python test_netrattler_hf_reference.py
           python test_netrattler_player_form.py
+          python -m pytest -q test_netrattler_scorer_qualification.py
           python test_netrattler_builder_styles.py
           python test_netrattler_result_enrichment.py
           python -m py_compile btts_bot.py netrattler_hf_reference.py netrattler_player_form.py
