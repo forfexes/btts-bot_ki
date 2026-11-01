@@ -60,6 +60,24 @@ def parse_players(resp, fx):
     return rows
 
 
+def post_with_retry(url, rows, headers, tries=4, pause=3.0):
+    """POST mit Wiederholung bei 5xx/Netzfehlern (Supabase 503 ist meist kurzzeitig)."""
+    import time
+    last = None
+    for i in range(tries):
+        try:
+            p = requests.post(url, json=rows, timeout=30, headers=headers)
+            if p.status_code < 500:
+                return p
+            last = p
+        except requests.RequestException as e:
+            last = e
+        time.sleep(pause * (i + 1))
+    if isinstance(last, requests.Response):
+        return last
+    raise last
+
+
 def _sb(h=None):
     return {"apikey": SK, "Authorization": f"Bearer {SK}", "Content-Type": "application/json", **(h or {})}
 
@@ -81,8 +99,8 @@ def run():
         r = requests.get(B + "/fixtures/players", headers=H, params={"fixture": fx["fixture"]["id"]}, timeout=30)
         rows = parse_players(checked_response(r), fx)
         if rows:
-            p = requests.post(f"{SB}/rest/v1/apif_player_match", json=rows, timeout=30,
-                              headers=_sb({"Prefer": "resolution=ignore-duplicates"}))
+            p = post_with_retry(f"{SB}/rest/v1/apif_player_match", rows,
+                                _sb({"Prefer": "resolution=ignore-duplicates"}))
             p.raise_for_status()
             saved += len(rows)
     print("rows", saved)

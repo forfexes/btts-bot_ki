@@ -25,3 +25,16 @@ def test_pick_known_fixture_ids_from_supabase_strings():
     fixtures = [{"fixture": {"id": 5, "status": {"short": "FT"}}, "league": {"id": 2}}]
     assert a.pick_fixtures(fixtures, {"5"}, 10) == []
     assert a.pick_fixtures(fixtures, {5}, 10) == []
+
+
+def test_post_with_retry_recovers_from_503(monkeypatch):
+    import netrattler_apifootball_players as m
+
+    class R:
+        def __init__(self, c): self.status_code = c
+
+    calls = []
+    seq = [503, 503, 201]
+    monkeypatch.setattr(m.requests, "post", lambda *a, **k: (calls.append(1), R(seq[len(calls) - 1]))[1])
+    import time; monkeypatch.setattr(time, "sleep", lambda s: None)
+    assert m.post_with_retry("u", [], {}).status_code == 201 and len(calls) == 3
