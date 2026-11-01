@@ -355,5 +355,10 @@ def collect_for_tips(tips: Sequence[Dict[str, Any]], match_parts, row_date, log=
     except Exception as exc:
         log("API settlement enrichment unavailable: " + type(exc).__name__)
 
+    from netrattler_reviewed_results import collect as collect_reviewed
+    reviewed = collect_reviewed(tips, match_parts, row_date, same)
+    results.extend(reviewed)
+    log(f"Reviewed corner evidence: fixtures={len(reviewed)} db_raw_writes=0")
+
     log(f"Target enrichment: results={len(results)} player_rows={len(players)} detail_calls={details}")
     return results, players
