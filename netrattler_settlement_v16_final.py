@@ -893,6 +893,8 @@ def retry_unedited_originals(existing: Sequence[Dict[str, Any]], newly_closed: S
             continue
         if str(row.get("settlement_id") or "") in excluded:
             continue
+        if row.get("market_group") == "builder" and not BUILDER_RESULT_IN_TIP:
+            continue
         raw = row.get("raw") if isinstance(row.get("raw"), dict) else {}
         if raw.get("telegram_edit_ok") or as_int(raw.get("telegram_edit_attempts"), 0) >= 4:
             continue
@@ -2669,9 +2671,151 @@ def learned_chat(group: str, rows: Sequence[Dict[str, Any]]) -> str:
     return cnt.most_common(1)[0][0] if cnt else (configured or GROUPS.get("default") or "")
 
 
+BUILDER_RESULT_PROBE = "builder_result_sent"
+# 1 = Builder-Ergebnis zusaetzlich/ausschliesslich im Original-Tipp editieren (alt); Standard: getrennte Auswertung.
+BUILDER_RESULT_IN_TIP = os.getenv("SETTLEMENT_BUILDER_IN_TIP", "0") == "1"
+
+
+def _sent_builder_results() -> set:
+    """Bereits als eigene Auswertung gesendete Builder (tip_id), dauerhaft in netrattler_card_diag."""
+    rows = sb_get_paged("netrattler_card_diag", {"select": "info", "info->>probe": f"eq.{BUILDER_RESULT_PROBE}"},
+                        max_rows=5000, quiet=True) or []
+    out = set()
+    for row in rows:
+        for tid in ((row.get("info") or {}).get("tip_ids") or []):
+            out.add(str(tid))
+    return out
+
+
+def _remember_builder_results(tip_ids: Sequence[str]) -> None:
+    if not tip_ids:
+        return
+    try:
+        requests.post(f"{SUPABASE_URL}/rest/v1/netrattler_card_diag", headers=headers("return=minimal"), timeout=20,
+                      data=json.dumps({"info": {"probe": BUILDER_RESULT_PROBE, "tip_ids": list(tip_ids)}}))
+    except Exception as exc:
+        log(f"Builder-Result-Marker nicht gespeichert: {type(exc).__name__}", "WARN")
+
+
+def telegram_send(chat_id: str, text: str) -> bool:
+    if not TG_TOKEN or not chat_id:
+        return False
+    for attempt in range(3):
+        try:
+            r = requests.post(f"https://api.telegram.org/bot{TG_TOKEN}/sendMessage", timeout=20,
+                              json={"chat_id": chat_id, "text": text[:3900], "parse_mode": "HTML",
+                                    "disable_web_page_preview": True})
+            if r.ok:
+                return True
+            if r.status_code == 429 and attempt < 2:
+                try:
+                    wait = int(((r.json() or {}).get("parameters") or {}).get("retry_after") or 3)
+                except Exception:
+                    wait = 3
+                time.sleep(min(65, max(1, wait + 1)))
+                continue
+            log(f"Telegram sendMessage {r.status_code}: {str(r.text)[:120]}", "WARN")
+            return False
+        except Exception as exc:
+            log(f"Telegram sendMessage Fehler: {type(exc).__name__}", "WARN")
+            return False
+    return False
+
+
+def format_builder_result(row: Dict[str, Any]) -> str:
+    """Eigene Auswertung eines Builders: Ergebnis je Bein, keine ROI-/Profitzeilen (Builder haben keine echte Gesamtquote)."""
+    import html
+    status = normalized_status(row.get("status"))
+    icon = {"win": "✅", "loss": "❌"}.get(status, "➖")
+    payload = row.get("tip_payload") or {}
+    data = unpack(payload)
+    try:
+        from netrattler_builder_styles import public_style
+        style = public_style(data.get("style") or "")
+    except Exception:
+        style = ""
+    legs = row.get("legs_payload") or []
+    leg_icon = {"win": "✅", "loss": "❌", "void": "➖", "pending": "⏳"}
+    won = sum(1 for lp in legs if lp.get("status") == "win")
+    counted = sum(1 for lp in legs if lp.get("status") in ("win", "loss"))
+    head = f"{icon} <b>{html.escape(match_label(row))}</b>" + (f" · {html.escape(style)}" if style else "")
+    lines = [head]
+    for lp in legs:
+        leg = lp.get("leg") or {}
+        name = str(leg.get("market") or leg.get("player") or "").strip()
+        pl = str(leg.get("player") or "").strip()
+        if pl and pl.lower() not in name.lower():
+            name = f"{pl} {name}"
+        detail = str(lp.get("reason") or "")
+        actual = detail.split(" · ")[1] if lp.get("status") in ("win", "loss") and detail.count(" · ") >= 2 else ""
+        lines.append(f"  {leg_icon.get(lp.get('status'), '⏳')} {html.escape(name)}" + (f" → {html.escape(actual)}" if actual else ""))
+    if counted:
+        lines.append(f"  <i>{won}/{counted} Beine getroffen</i>")
+    return "\n".join(lines)
+
+
+def send_builder_results(existing: Sequence[Dict[str, Any]], settled: Sequence[Dict[str, Any]]) -> int:
+    """Getrennte Auswertung fuer Builder in der Builder-Gruppe, genau einmal je Builder (Marker in netrattler_card_diag)."""
+    days = max(1, int(os.getenv("SETTLEMENT_BUILDER_RESULT_DAYS", "3")))
+    cutoff = (TODAY - timedelta(days=days)).isoformat()
+    limit = max(0, int(os.getenv("SETTLEMENT_BUILDER_RESULT_MAX", "80")))
+    by_id: Dict[str, Dict[str, Any]] = {}
+    for row in list(existing) + list(settled):  # spaetere Zeilen (frisch ausgewertet) ersetzen aeltere
+        by_id[str(row.get("tip_id") or "")] = row
+    try:
+        sent = _sent_builder_results()
+    except Exception as exc:
+        log(f"Builder-Result-Marker nicht lesbar ({type(exc).__name__}); keine Auswertung gesendet", "WARN")
+        return 0
+    todo = []
+    for tid, row in by_id.items():
+        if not tid or tid in sent or row.get("market_group") != "builder":
+            continue
+        if normalized_status(row.get("status")) not in {"win", "loss"}:
+            continue
+        if str(row.get("tip_date") or "")[:10] < cutoff:
+            continue
+        if not confirmed_builder_delivery(row.get("tip_payload") or row):
+            continue
+        todo.append(row)
+    todo.sort(key=lambda r: (str(r.get("tip_date") or ""), match_label(r)))
+    todo = todo[:limit]
+    if not todo:
+        return 0
+    chat = learned_chat("builder", list(existing) + list(settled))
+    if not chat:
+        log("Builder-Auswertung: kein Telegram-Chat gefunden", "WARN")
+        return 0
+    header = "✅❌ <b>RESULT SETTLEMENT · BUILDER</b>"
+    messages, block, size = [], [], len(header)
+    for row in todo:
+        text = format_builder_result(row)
+        if block and size + len(text) + 2 > 3500:
+            messages.append((block, header + "\n\n" + "\n\n".join(x[1] for x in block)))
+            block, size = [], len(header)
+        block.append((row, text))
+        size += len(text) + 2
+    if block:
+        messages.append((block, header + "\n\n" + "\n\n".join(x[1] for x in block)))
+    sent_ids = []
+    for blk, text in messages:
+        if telegram_send(chat, text):
+            sent_ids += [str(x[0].get("tip_id")) for x in blk]
+            time.sleep(1.2)
+    _remember_builder_results(sent_ids)
+    log(f"Builder-Auswertung gesendet: {len(sent_ids)}/{len(todo)} Builder in {len(messages)} Nachricht(en)")
+    return len(sent_ids)
+
+
 def send_group_reports(newly_closed, current, history):
-    """Settlement is shown exclusively inside the original tips."""
-    log("Separate Gruppen-Ergebnisberichte deaktiviert; Auswertung nur im Original-Tipp")
+    """Builder bekommen eine getrennte Auswertung; alle anderen Tipps werden im Original-Tipp bzw. in der Karte aktualisiert."""
+    try:
+        send_builder_results(EXISTING_FOR_REPORTS, current)
+    except Exception as exc:
+        log(f"Builder-Auswertung uebersprungen: {type(exc).__name__}: {str(exc)[:100]}", "WARN")
+
+
+EXISTING_FOR_REPORTS: List[Dict[str, Any]] = []
 
 
 def send_roi_report(history):
@@ -2768,6 +2912,8 @@ def main() -> None:
         or row.get("legs_payload") != old_rows.get(str(row["tip_id"]), {}).get("legs_payload"))]
     for row in edit_updates:
         update_source_tip(row)
+        if row.get("market_group") == "builder" and not BUILDER_RESULT_IN_TIP:
+            continue  # Builder: eigene Auswertung (send_builder_results), nicht im Tipp
         edited = edit_original_tip(row)
         edited_count += bool(edited)
         _save_tip_edit_receipt(row, edited)
@@ -2784,6 +2930,7 @@ def main() -> None:
     send_result_cards(_recent or newly_closed)
 
     history = dedup_history(existing + settled)
+    EXISTING_FOR_REPORTS[:] = list(existing)
     save_group_stats(history)
     save_dimension_stats(history)
     send_group_reports(newly_closed, settled, history)

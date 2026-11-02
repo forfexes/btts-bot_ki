@@ -35,6 +35,7 @@ on:
       - "test_model_builders.py"
       - "test_lineup_builders.py"
       - "test_player_photos.py"
+      - "test_builder_result_settlement.py"
       - "netrattler_player_photos.py"
       - "netrattler_lineup_builders.py"
       - "netrattler_storage_guard.py"
@@ -212,7 +213,7 @@ jobs:
       - run: python -m pytest -q test_sgo_props.py
       - run: python -m pytest -q test_foul_props.py
       - run: python -m pytest -q test_model_builders.py
-      - run: python -m pytest -q test_lineup_builders.py test_player_photos.py
+      - run: python -m pytest -q test_lineup_builders.py test_player_photos.py test_builder_result_settlement.py
       - run: python -m pytest -q test_corner_guard.py
       - run: python -m pytest -q test_calibration_report.py
       - run: python -m pytest -q test_game_log_lookup.py

@@ -286,7 +286,8 @@ class SettlementV21Tests(unittest.TestCase):
             "settled_at": mod.NOW.isoformat(), "profit": 0.5,
             "tip_payload": payload, "raw": {},
         }
-        with patch.object(mod, "edit_original_tip", return_value=True) as edit, \
+        with patch.object(mod, "BUILDER_RESULT_IN_TIP", True), \
+             patch.object(mod, "edit_original_tip", return_value=True) as edit, \
              patch.object(mod, "sb_patch", return_value=True):
             self.assertEqual(mod.retry_unedited_originals([old], []), (1, 1))
         edit.assert_called_once()
