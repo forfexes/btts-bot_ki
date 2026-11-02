@@ -16681,11 +16681,26 @@ def _fuzzy_sent_match(match, market, day):
         return False
     for h, a in _SENT_MATCHES.get((str(day), str(market)), []):
         try:
-            if teams_match(pair[0], h) and teams_match(pair[1], a):
+            if _dedupe_team_same(teams_match, pair[0], h) and _dedupe_team_same(teams_match, pair[1], a):
                 return True
         except Exception:
             continue
     return False
+
+
+_DEDUPE_CLUB_WORDS = {"fc", "cf", "ac", "sc", "sv", "afc", "as", "ss", "stade", "olympique", "club", "de", "da", "do", "ca", "cd", "ud", "sd"}
+
+
+def _dedupe_team_same(teams_match_fn, a, b):
+    """Nur fuer den Duplikat-Check (beide Teams eines Spiels muessen passen): 'Brest' == 'Stade Brest 29'.
+    Wie der strenge Abgleich, plus: gleiche Namens-Woerter nach Entfernen von Zahlen und Vereinszusaetzen (min. 4 Zeichen)."""
+    if teams_match_fn(a, b):
+        return True
+    ta = [t for t in normalize_team_name(a).split() if not t.isdigit() and t not in _DEDUPE_CLUB_WORDS]
+    tb = [t for t in normalize_team_name(b).split() if not t.isdigit() and t not in _DEDUPE_CLUB_WORDS]
+    if not ta or not tb:
+        return False
+    return set(ta) == set(tb) and len("".join(ta)) >= 4
 
 
 def _dup_cache_key(match, market, target_date):
