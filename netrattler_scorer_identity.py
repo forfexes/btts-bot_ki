@@ -48,11 +48,37 @@ def recover(row):
     return data
 
 
+def _club_same(a,b):
+    """Teamnamen unscharf: gleich oder einer enthaelt den anderen ('marseille' in 'olympiquedemarseille')."""
+    if a==b:return True
+    short,long_=(a,b) if len(a)<=len(b) else (b,a)
+    return len(short)>=4 and short in long_
+
+
+def same_fixture(f1,f2):
+    return bool(f1) and bool(f2) and _club_same(f1[0],f2[0]) and _club_same(f1[1],f2[1])
+
+
+def _strip_club(value):
+    """Entfernt Vereins-Zusaetze (Olympique de, Academico de, FC, AFC ...) fuer den Vergleich."""
+    s=unicodedata.normalize('NFKD',str(value or '')).encode('ascii','ignore').decode().lower()
+    s=re.sub(r'\b(fc|afc|cf|sc|ac|as|ss|olympique|academico|de|da|do|club)\b','',s)
+    return re.sub(r'[^a-z0-9]','',s)
+
+
+def fixture_loose(value):
+    pair=re.split(r'\s+vs\.?\s+',str(value or ''),flags=re.I)
+    return tuple(_strip_club(x) for x in pair) if len(pair)==2 else ()
+
+
 class ReceiptDedupe:
+    """Erkennt dasselbe Spieler/Spiel-Paar trotz anderer Schreibweise von Spieler- und Teamnamen."""
     def __init__(self,rows):
-        self.seen={(fixture(r.get('match')),person(recover(r).get('player'))) for r in rows if r.get('telegram_msg_id')}
-    def contains(self,tip):return (fixture(tip.get('match')),person(tip.get('player'))) in self.seen
-    def add(self,tip):self.seen.add((fixture(tip.get('match')),person(tip.get('player'))))
+        self.seen=[(fixture_loose(r.get('match')),person(recover(r).get('player'))) for r in rows if r.get('telegram_msg_id')]
+    def contains(self,tip):
+        f,p=fixture_loose(tip.get('match')),person(tip.get('player'))
+        return bool(p) and any(p==sp and same_fixture(f,sf) for sf,sp in self.seen)
+    def add(self,tip):self.seen.append((fixture_loose(tip.get('match')),person(tip.get('player'))))
 
 
 def dedupe_history(rows):

@@ -75,3 +75,14 @@ def test_real_scorer_fixture_aliases_dedupe_without_merging_unrelated_clubs():
     assert sent.contains({"match": "Marseille vs Toulouse", "player": "Amine Gouiri"})
     assert not sent.contains({"match": "Paris FC vs Toulouse", "player": "Amine Gouiri"})
     assert not sent.contains({"match": "Marseille vs Toulouse", "player": "Mason Greenwood"})
+
+
+def test_team_name_variants_are_same_fixture():
+    from netrattler_scorer_identity import ReceiptDedupe
+    seen = ReceiptDedupe([{"match": "Marseille vs Toulouse", "market": "scorer", "player": "A. Gouiri", "telegram_msg_id": 1}])
+    assert seen.contains({"match": "Olympique de Marseille vs Toulouse FC", "player": "Amine Gouiri"})
+    assert not seen.contains({"match": "Lyon vs Nice", "player": "A. Gouiri"})
+    s2 = ReceiptDedupe([{"match": "Academico Viseu vs Rio Ave", "market": "scorer", "player": "André Clóvis", "telegram_msg_id": 1}])
+    assert s2.contains({"match": "Académico de Viseu FC vs Rio Ave FC", "player": "Andre Clovis"})
+    s3 = ReceiptDedupe([{"match": "Swansea vs Blackburn", "market": "scorer", "player": "O. Afolayan", "telegram_msg_id": 1}])
+    assert s3.contains({"match": "Swansea City AFC vs Blackburn Rovers FC", "player": "O. Afolayan"})
