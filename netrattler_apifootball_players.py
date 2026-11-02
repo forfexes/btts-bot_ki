@@ -82,6 +82,20 @@ def _sb(h=None):
     return {"apikey": SK, "Authorization": f"Bearer {SK}", "Content-Type": "application/json", **(h or {})}
 
 
+def fetch_players(H, fixture_id, wait=65):
+    """Spielerdaten holen; bei rateLimit (Minutenkontingent) einmal warten und wiederholen."""
+    import time
+    for attempt in (0, 1):
+        r = requests.get(B + "/fixtures/players", headers=H, params={"fixture": fixture_id}, timeout=30)
+        try:
+            return checked_response(r)
+        except RuntimeError as e:
+            if attempt == 0 and "rateLimit" in str(e):
+                time.sleep(wait)
+                continue
+            raise
+
+
 def run():
     if not (KEYS and SB and SK):
         raise RuntimeError("API-Football player import configuration missing")
@@ -96,8 +110,14 @@ def run():
     known = {x["fixture_id"] for x in k.json()} if k is not None else set()
     saved = 0
     for fx in pick_fixtures(resp, known, MAX_REQ - 1):
-        r = requests.get(B + "/fixtures/players", headers=H, params={"fixture": fx["fixture"]["id"]}, timeout=30)
-        rows = parse_players(checked_response(r), fx)
+        try:
+            rows = parse_players(fetch_players(H, fx["fixture"]["id"]), fx)
+        except RuntimeError as e:
+            if "rateLimit" in str(e):
+                # Minutenlimit trotz Wartezeit: bereits gespeicherte Spiele bleiben, Rest folgt im naechsten Lauf.
+                print(f"rate limit, stop early with rows={saved}: {e}")
+                break
+            raise
         if rows:
             p = post_with_retry(f"{SB}/rest/v1/apif_player_match", rows,
                                 _sb({"Prefer": "resolution=ignore-duplicates"}))

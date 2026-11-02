@@ -45,3 +45,26 @@ def test_backfill_uses_explicit_date_and_cross_match_builder_legs():
     plan = backfill.plan(tips)
     assert ("A", "B", False) in plan["2026-10-24"]
     assert ("C", "D", True) in plan["2026-10-25"]
+
+
+def test_players_rate_limit_stops_gracefully(monkeypatch):
+    import netrattler_apifootball_players as pl
+    calls = []
+
+    def fake_fetch(H, fid, wait=65):
+        calls.append(fid)
+        raise RuntimeError("API-Football provider error (account, quota or request; fields: rateLimit); check")
+    monkeypatch.setattr(pl, "KEYS", ["k"]); monkeypatch.setattr(pl, "SB", "http://x"); monkeypatch.setattr(pl, "SK", "s")
+    monkeypatch.setattr(pl, "fetch_players", fake_fetch)
+    class R:
+        ok = True
+        def __init__(self, url): self.url = url
+        def json(self):
+            if "rest/v1" in self.url:
+                return []
+            return {"errors": [], "response": [{"fixture": {"id": 1}}, {"fixture": {"id": 2}}]}
+        def raise_for_status(self): pass
+    monkeypatch.setattr(pl.requests, "get", lambda url, *a, **k: R(url))
+    monkeypatch.setattr(pl, "pick_fixtures", lambda resp, known, n: resp)
+    assert pl.run() == 0
+    assert calls == [1]
