@@ -27860,6 +27860,8 @@ def main():
                     pass
                 try:  # Modell-Builder (Fouls/Tackles, ohne Buchmacherquote)
                     import netrattler_model_builders as _mbld
+                    if os.getenv("NETRATTLER_PRELINEUP_MODEL_BUILDERS", "0") != "1":
+                        raise RuntimeError("Modell-Builder nur mit bestaetigter Aufstellung (Lineup-Workflow)")
                     _mrows = list(globals().get("_NTR_MODEL_ROWS", []) or [])
                     _ntr_model_builder_sent = int(_mbld.run(_mrows, str(target_date), _send_builder, SUPABASE_URL, SUPABASE_KEY,
                               logger=lambda m: log(f"   🧪 {m}")) or 0)
