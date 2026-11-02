@@ -173,6 +173,7 @@ def run() -> Dict[str, int]:
             hits = hits + extra
         found_rows = [r for r, _ in hits]
         rest = unmatched(found_rows, rest)
+        stats.setdefault("unmatched", []).extend(f"{day} {h} vs {a}" for h, a, _ in rest[:6])
         if rest and rapid_budget > 0 and day >= (datetime.now(timezone.utc).date() - timedelta(days=3)).isoformat():  # older tips are voided anyway
             rapid_budget -= 1
             extra = select_rows(rapid.fetch_day(day), rest)

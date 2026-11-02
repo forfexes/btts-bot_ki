@@ -52,6 +52,7 @@ jobs:
         timeout-minutes: 15
         env:
           BACKFILL_APIF_LOOKBACK_DAYS: "14"
+          BACKFILL_APIF_MAX_DAYS: "30"
           API_FOOTBALL_KEYS: ${{ secrets.API_FOOTBALL_KEYS }}
           RAPIDAPI_KEY: ${{ secrets.RAPIDAPI_KEY }}
           SUPABASE_URL: ${{ secrets.SUPABASE_URL }}
