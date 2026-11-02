@@ -1,5 +1,3 @@
-import os
-os.environ["NETRATTLER_PLAYER_PHOTOS"] = "1"
 import netrattler_player_photos as pp
 
 

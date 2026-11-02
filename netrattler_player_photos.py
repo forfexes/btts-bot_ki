@@ -9,7 +9,7 @@ import urllib.parse
 
 import requests
 
-ON = os.getenv("NETRATTLER_PLAYER_PHOTOS", "0") == "1"
+ON = os.getenv("NETRATTLER_PLAYER_PHOTOS", "1") != "0"
 API = "https://www.thesportsdb.com/api/v1/json/" + (os.getenv("THESPORTSDB_KEY") or "3") + "/searchplayers.php"
 CACHE_FILE = os.getenv("NETRATTLER_PHOTO_CACHE", "player_photos_cache.json")
 _MEM = {}
