@@ -12,6 +12,7 @@ def test_settlement_routes():
     fake.TG_DEFAULT = "AI"
     fake.GROUPS = {"1x2": "LATE", "scorer": "LATE", "btts_ht": "HT", "over15_ht": "OTHER"}
     fake.send_roi_report = lambda _history: "old-global-report"
+    fake.send_group_reports = lambda *_args: "builder-results"
     fake.main = lambda: None
     old = sys.modules.get("netrattler_settlement_v16_final")
     sys.modules["netrattler_settlement_v16_final"] = fake
@@ -26,7 +27,7 @@ def test_settlement_routes():
         assert fake.GROUPS["scorer"] == "LATE"
         assert fake.GROUPS["over15_ht"] == "HT"
         assert fake.send_roi_report([]) is None
-        assert fake.send_group_reports([], [], []) is None
+        assert fake.send_group_reports([], [], []) == "builder-results"  # Builder-Auswertung bleibt aktiv
     finally:
         if old is None:
             sys.modules.pop("netrattler_settlement_v16_final", None)

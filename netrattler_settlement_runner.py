@@ -10,8 +10,8 @@ def install_routing() -> None:
     settlement.GROUPS["1x2"] = settlement.TG_DEFAULT
     # BTTS HT and O1.5 HT intentionally share the same Telegram group.
     settlement.GROUPS["over15_ht"] = settlement.GROUPS.get("btts_ht") or settlement.TG_DEFAULT
-    # All grading belongs inside the original tip, never in a separate report.
-    settlement.send_group_reports = lambda *_args: None
+    # Nur Builder bekommen eine getrennte Auswertung (send_group_reports sendet ausschliesslich diese);
+    # alle anderen Tipps werden im Original-Tipp bzw. in der Karte ausgewertet. Kein globaler ROI-Bericht.
     settlement.send_roi_report = lambda _history: None
 
 
