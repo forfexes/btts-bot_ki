@@ -2754,6 +2754,14 @@ def format_builder_result(row: Dict[str, Any]) -> str:
     return "\n".join(lines)
 
 
+def _builder_diag(info: Dict[str, Any]) -> None:
+    try:
+        requests.post(f"{SUPABASE_URL}/rest/v1/netrattler_card_diag", headers=headers("return=minimal"), timeout=20,
+                      data=json.dumps({"info": {"probe": "builder_result_run", **info}}))
+    except Exception:
+        pass
+
+
 def send_builder_results(existing: Sequence[Dict[str, Any]], settled: Sequence[Dict[str, Any]]) -> int:
     """Getrennte Auswertung fuer Builder in der Builder-Gruppe, genau einmal je Builder (Marker in netrattler_card_diag)."""
     days = max(1, int(os.getenv("SETTLEMENT_BUILDER_RESULT_DAYS", "3")))
@@ -2766,6 +2774,7 @@ def send_builder_results(existing: Sequence[Dict[str, Any]], settled: Sequence[D
         sent = _sent_builder_results()
     except Exception as exc:
         log(f"Builder-Result-Marker nicht lesbar ({type(exc).__name__}); keine Auswertung gesendet", "WARN")
+        _builder_diag({"error": f"marker_read:{type(exc).__name__}"})
         return 0
     todo = []
     for tid, row in by_id.items():
@@ -2779,10 +2788,17 @@ def send_builder_results(existing: Sequence[Dict[str, Any]], settled: Sequence[D
             continue
         todo.append(row)
     todo.sort(key=lambda r: (str(r.get("tip_date") or ""), match_label(r)))
+    _stats = Counter()
+    for _tid, _row in by_id.items():
+        if _row.get("market_group") == "builder":
+            _stats["builder_rows"] += 1
+            _stats[f"status_{normalized_status(_row.get('status'))}"] += 1
+            _stats["delivered"] += 1 if confirmed_builder_delivery(_row.get("tip_payload") or _row) else 0
     todo = todo[:limit]
+    chat = learned_chat("builder", list(existing) + list(settled)) if todo else ""
+    _builder_diag({"todo": len(todo), "already_sent": len(sent), "has_chat": bool(chat), "has_token": bool(TG_TOKEN), **dict(_stats)})
     if not todo:
         return 0
-    chat = learned_chat("builder", list(existing) + list(settled))
     if not chat:
         log("Builder-Auswertung: kein Telegram-Chat gefunden", "WARN")
         return 0
