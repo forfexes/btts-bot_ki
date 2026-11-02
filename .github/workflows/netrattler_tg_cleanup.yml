@@ -5,6 +5,9 @@ on:
       dry_run:
         description: "1 = nur zaehlen, 0 = loeschen"
         default: "1"
+      mode:
+        description: "leer = Markt-Analyse-Aufraeumen, scorer_dups = Goalscorer-Doppelte"
+        default: "scorer_dups"
 jobs:
   cleanup:
     runs-on: ubuntu-latest
@@ -21,6 +24,7 @@ jobs:
           SUPABASE_SERVICE_ROLE_KEY: ${{ secrets.SUPABASE_SERVICE_ROLE_KEY }}
           TELEGRAM_TOKEN: ${{ secrets.TELEGRAM_TOKEN }}
           DRY_RUN: ${{ github.event.inputs.dry_run }}
-          CLEAN_FROM: "2026-10-31T02:40:00+00:00"
-          CLEAN_TO: "2026-10-31T02:55:00+00:00"
+          CLEAN_MODE: ${{ github.event.inputs.mode }}
+          CLEAN_FROM: ${{ github.event.inputs.mode == 'scorer_dups' && '2026-10-20T00:00:00+00:00' || '2026-10-31T02:40:00+00:00' }}
+          CLEAN_TO: ${{ github.event.inputs.mode == 'scorer_dups' && '2026-11-03T00:00:00+00:00' || '2026-10-31T02:55:00+00:00' }}
         run: python netrattler_tg_cleanup.py
