@@ -49,7 +49,57 @@ def scorer_duplicates():
     return dups
 
 
+def match_duplicates():
+    """Doppelte Tipps (gleicher Markt, gleiche Auswahl, gleiches Spiel unter Vereinsalias): den ersten behalten."""
+    from netrattler_scorer_identity import fixture_loose, same_fixture
+    markets = os.getenv("CLEAN_MARKETS_DUPS", "btts,over25,btts_ht,over15_ht,1x2,corners,combo")
+    rows, off = [], 0
+    while True:
+        r = requests.get(f"{SB}/rest/v1/tips", headers={**H, "Range": f"{off}-{off + 999}"}, timeout=40, params=[
+            ("select", "id,date,match,market,tip,tip_id,telegram_chat_id,telegram_msg_id,status,created_at"),
+            ("market", f"in.({markets})"), ("date", f"gte.{FROM[:10]}"), ("date", f"lte.{TO[:10]}"), ("order", "created_at.asc")])
+        if not r.ok:
+            return []
+        part = r.json()
+        rows += part
+        if len(part) < 1000:
+            break
+        off += 1000
+    kept, dups = [], []
+    for t in rows:
+        key = (str(t.get("date"))[:10], t.get("market"), str(t.get("tip") or "").strip().lower(), fixture_loose(t.get("match")))
+        if not key[3]:
+            continue
+        if any(k[:3] == key[:3] and k[3] != key[3] and same_fixture(k[3], key[3]) for k in kept):
+            if t.get("status") == "pending":
+                dups.append(t)
+        elif not any(k == key for k in kept):
+            kept.append(key)
+    return dups
+
+
+def _run_dups(finder, mode):
+    rows = finder()
+    info = {"probe": "tg_cleanup", "mode": mode, "selected": len(rows), "dry_run": DRY,
+            "deleted": 0, "failed": 0, "voided": 0, "ids": [f"{t.get('market')}:{t.get('match')}" for t in rows][:30]}
+    if not DRY:
+        for t in rows:
+            ok = False
+            if TOKEN and t.get("telegram_chat_id") and t.get("telegram_msg_id"):
+                d = requests.post(f"https://api.telegram.org/bot{TOKEN}/deleteMessage", timeout=20,
+                                  json={"chat_id": t["telegram_chat_id"], "message_id": t["telegram_msg_id"]})
+                ok = d.ok
+            info["deleted" if ok else "failed"] += 1
+            u = requests.patch(f"{SB}/rest/v1/tips", headers=H, timeout=20, params={"id": f"eq.{t['id']}"},
+                               data=json.dumps({"status": "void", "result": "void"}))
+            info["voided"] += 1 if u.ok else 0
+    print(json.dumps(info))
+    requests.post(f"{SB}/rest/v1/netrattler_card_diag", headers=H, timeout=20, data=json.dumps({"info": info}))
+
+
 def main():
+    if os.getenv("CLEAN_MODE") == "match_dups":
+        return _run_dups(match_duplicates, "match_dups")
     if os.getenv("CLEAN_MODE") == "scorer_dups":
         rows = scorer_duplicates()
         info = {"probe": "tg_cleanup", "mode": "scorer_dups", "selected": len(rows), "dry_run": DRY,

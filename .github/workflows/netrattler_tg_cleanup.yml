@@ -6,7 +6,7 @@ on:
         description: "1 = nur zaehlen, 0 = loeschen"
         default: "1"
       mode:
-        description: "leer = Markt-Analyse-Aufraeumen, scorer_dups = Goalscorer-Doppelte"
+        description: "leer = Markt-Analyse-Aufraeumen, scorer_dups = Goalscorer-Doppelte, match_dups = andere Maerkte"
         default: "scorer_dups"
 jobs:
   cleanup:
@@ -25,6 +25,6 @@ jobs:
           TELEGRAM_TOKEN: ${{ secrets.TELEGRAM_TOKEN }}
           DRY_RUN: ${{ github.event.inputs.dry_run }}
           CLEAN_MODE: ${{ github.event.inputs.mode }}
-          CLEAN_FROM: ${{ github.event.inputs.mode == 'scorer_dups' && '2026-10-20T00:00:00+00:00' || '2026-10-31T02:40:00+00:00' }}
-          CLEAN_TO: ${{ github.event.inputs.mode == 'scorer_dups' && '2026-11-03T00:00:00+00:00' || '2026-10-31T02:55:00+00:00' }}
+          CLEAN_FROM: ${{ (github.event.inputs.mode == 'scorer_dups' || github.event.inputs.mode == 'match_dups') && '2026-11-02T00:00:00+00:00' || '2026-10-31T02:40:00+00:00' }}
+          CLEAN_TO: ${{ (github.event.inputs.mode == 'scorer_dups' || github.event.inputs.mode == 'match_dups') && '2026-11-03T00:00:00+00:00' || '2026-10-31T02:55:00+00:00' }}
         run: python netrattler_tg_cleanup.py
