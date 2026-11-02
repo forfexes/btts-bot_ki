@@ -101,6 +101,12 @@ player_categories = {
     "tackles_received", "yellow_cards", "score", "score_assist", "assist",
     "goalkeeper_saves", "offsides",
 }
+# Player legs now need measured recent form (>=5 games, hit-rate >= 70 %); supply
+# observed-style histories (newest first) instead of relying on missing history.
+import netrattler_builder_engine as _eng
+for _r in player_rows:
+    _eng.LEG_HISTORY[(_eng.norm(_r["player"]), _r["category"])] = [float(_r["line"]) + 1.0] * 9 + [0.0]
+
 player_picks = build_builder_picks(player_rows, match_date="2026-07-15", max_builders=50)
 assert player_picks, "Verified player props produced no builder"
 valid_player_picks = [p for p in player_picks if p.family == "player"]
@@ -146,6 +152,8 @@ two_leg_rows = [
     row("Player D", eng_arg, "1+ Shot", "shots", 1, 1.60, 75, team="England"),
     row("Player E", eng_arg, "1+ SOT", "sot", 1, 1.65, 72, team="Argentina"),
 ]
+for _r in two_leg_rows:
+    _eng.LEG_HISTORY[(_eng.norm(_r["player"]), _r["category"])] = [float(_r["line"]) + 1.0] * 9 + [0.0]
 two_leg_picks = build_builder_picks(two_leg_rows, match_date="2026-07-15", max_builders=50)
 assert two_leg_picks, "A legitimate 2-leg combo was not published"
 assert all(len(p.legs) >= 2 for p in two_leg_picks), \
