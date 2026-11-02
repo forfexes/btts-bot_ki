@@ -2673,7 +2673,7 @@ def learned_chat(group: str, rows: Sequence[Dict[str, Any]]) -> str:
 
 BUILDER_RESULT_PROBE = "builder_result_sent"
 # 1 = Builder-Ergebnis zusaetzlich/ausschliesslich im Original-Tipp editieren (alt); Standard: getrennte Auswertung.
-BUILDER_RESULT_IN_TIP = os.getenv("SETTLEMENT_BUILDER_IN_TIP", "0") == "1"
+BUILDER_RESULT_IN_TIP = os.getenv("SETTLEMENT_BUILDER_IN_TIP", "1") == "1"
 
 
 def _sent_builder_results() -> set:
@@ -2826,7 +2826,8 @@ def send_builder_results(existing: Sequence[Dict[str, Any]], settled: Sequence[D
 def send_group_reports(newly_closed, current, history):
     """Builder bekommen eine getrennte Auswertung; alle anderen Tipps werden im Original-Tipp bzw. in der Karte aktualisiert."""
     try:
-        send_builder_results(EXISTING_FOR_REPORTS, current)
+        if not BUILDER_RESULT_IN_TIP:
+            send_builder_results(EXISTING_FOR_REPORTS, current)
     except Exception as exc:
         log(f"Builder-Auswertung uebersprungen: {type(exc).__name__}: {str(exc)[:100]}", "WARN")
 
