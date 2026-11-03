@@ -526,7 +526,7 @@ def builder_signature(style: str, legs: Sequence[PropLeg], match_date: str) -> s
 
 
 def valid_builder(legs: Sequence[PropLeg], min_legs: int = 2, max_legs: int = 6) -> bool:
-    max_legs = max(max_legs, as_int(os.getenv("NETRATTLER_BUILDER_MAX_LEGS", "12"), 12))
+    max_legs = as_int(os.getenv("NETRATTLER_BUILDER_MAX_LEGS", "12"), 12)  # harte Obergrenze (Env gewinnt)
     if not (min_legs <= len(legs) <= max_legs):
         return False
     keys = [x.key() for x in legs]

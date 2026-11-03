@@ -30,7 +30,7 @@ def build(rows, match_date):
         by_match.setdefault(r["match"], []).append(r)
     picks = []
     for match, legs in by_match.items():
-        legs = sorted(legs, key=lambda x: (-x["probability"], -x["line"]))
+        legs = sorted([x for x in legs if form_ok(x["series"], x["line"])], key=lambda x: (-x["probability"], -x["line"]))
         used, made = set(), 0
         for size in (3, 2):
             chosen, players, cats = [], set(), {}
@@ -70,7 +70,7 @@ def build_fouls(rows, match_date):
         by_match.setdefault(r["match"], []).append(r)
     picks = []
     for match, legs in by_match.items():
-        legs = sorted(legs, key=lambda x: (-x["probability"], -x["line"]))
+        legs = sorted([x for x in legs if form_ok(x["series"], x["line"])], key=lambda x: (-x["probability"], -x["line"]))
         chosen, players = [], set()
         for leg in legs:
             if leg["player"] in players:
@@ -105,9 +105,28 @@ def build_fouls(rows, match_date):
     return picks
 
 
+FORM_DECAY = float(os.getenv("NETRATTLER_FORM_DECAY", "0.85"))  # je aelterem Spiel Gewicht * Decay
+
+
 def _rate(series, line):
+    """Formgewichtete Trefferquote (Serie = neuestes Spiel zuerst): 50 % exponentiell nach Aktualitaet,
+    25 % letzte 5, 25 % gesamte L10/L15; leicht geglaettet."""
     n = len(series)
-    return (sum(1 for v in series if v >= line) + 1.0) / (n + 2.0)  # geglaettet
+    if not n:
+        return 0.5
+    hits = [1.0 if v >= line else 0.0 for v in series]
+    w = [FORM_DECAY ** i for i in range(n)]
+    weighted = sum(h * x for h, x in zip(hits, w)) / sum(w)
+    last5 = sum(hits[:5]) / min(5, n)
+    overall = sum(hits) / n
+    blend = 0.5 * weighted + 0.25 * last5 + 0.25 * overall
+    return (blend * n + 1.0) / (n + 2.0)
+
+
+def form_ok(series, line, last=3, need=2):
+    """Mindestform: von den letzten Spielen muss die Linie mehrfach erreicht sein."""
+    recent = series[:last]
+    return len(recent) < last or sum(1 for v in recent if v >= line) >= need
 
 
 def _profiles_by_match(rows, *keys):
