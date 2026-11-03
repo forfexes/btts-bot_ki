@@ -1885,7 +1885,19 @@ def run_builder_engine(
 
     sent = 0
     _sent_legsets: List[frozenset] = []
+    def _form(pk):
+        v = [float(getattr(x, "hit_rate", 0) or 0) for x in pk.legs]
+        return sum(v) / len(v) if v else 0.0
+    picks = sorted(picks, key=_form, reverse=True)  # beste Form zuerst -> pro Spiel gewinnt der staerkste Builder
     for pick in picks:
+        try:
+            import netrattler_builder_limit as _bl
+            if _bl.at_limit(supabase_url, supabase_key, match_date, pick.legs):
+                if logger:
+                    logger(f"MASTER BUILDER Spiel-Limit erreicht: {pick.style} {pick.variant}")
+                continue
+        except Exception:
+            pass
         _mine = legset_from_legs([{"player": x.player, "match": x.match, "category": x.category, "line": x.line}
                                   for x in pick.legs])
         if any(legsets_overlap(_mine, _prev) for _prev in _sent_legsets):

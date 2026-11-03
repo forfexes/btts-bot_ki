@@ -409,6 +409,13 @@ def run(rows, match_date, send, url, key, logger=print):
         if not _pick_not_started(pick, datetime.now(timezone.utc)):
             logger("Modell-Builder ausgelassen: Anpfiff erfolgt oder Zeit nicht eindeutig")
             continue
+        try:
+            import netrattler_builder_limit as _bl
+            if _bl.at_limit(url, key, match_date, pick["legs"]):
+                logger("Modell-Builder ausgelassen: Spiel-Limit erreicht")
+                continue
+        except Exception:
+            pass
         msg = message(pick, match_date)
         hdr = {"apikey": key, "Authorization": f"Bearer {key}", "Content-Type": "application/json",
                "Prefer": "resolution=ignore-duplicates,return=representation"}
