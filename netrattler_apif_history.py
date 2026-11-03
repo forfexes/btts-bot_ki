@@ -87,7 +87,15 @@ class Importer:
         if self.calls >= self.max_calls:
             raise RuntimeError('History API budget reached')
         self.calls += 1
-        r = requests.get(BASE + path, headers={'x-apisports-key': self.api_key}, params=params, timeout=25)
+        r = None
+        for attempt in range(2):
+            try:
+                r = requests.get(BASE + path, headers={'x-apisports-key': self.api_key}, params=params, timeout=25)
+                break
+            except (requests.exceptions.Timeout, requests.exceptions.ConnectionError):
+                if attempt == 1:
+                    print('API timeout, skipping call:', path)
+                    return []
         return checked_response(r)
 
     def rest(self, table, params):
