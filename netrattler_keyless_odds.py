@@ -291,6 +291,39 @@ def _x1_ht_rows(g: Mapping[str, Any], sub: Mapping[str, Any], host: str) -> List
     return out
 
 
+def _x1_corner_rows(g: Mapping[str, Any], sub: Mapping[str, Any], host: str) -> List[Dict[str, Any]]:
+    """Corners-Unterspiel von 22bet/1xBet (Titel im LineFeed): G17 Total, T9 = Over, T10 = Under (P = Linie).
+    Nur Linien >= 6.5 (Gesamtspiel); Halbzeit-/Team-Totals haben kleinere Linien bzw. andere Gruppen. Echte Preise."""
+    out: List[Dict[str, Any]] = []
+    home, away = g.get("O1") or "", g.get("O2") or ""
+    if not _x1_has_real_teams(home, away):
+        return out
+    start = datetime.fromtimestamp(int(g.get("S") or 0), tz=timezone.utc).isoformat() if g.get("S") else None
+    league = g.get("L") or g.get("LE") or ""
+    bk = "1x_" + re.sub(r"^https?://(www\.)?|\.com.*$", "", host)
+    evs = []
+    for grp in sub.get("GE") or []:
+        if grp.get("G") not in (None, 17):
+            continue
+        for arr in grp.get("E") or []:
+            evs.extend(arr if isinstance(arr, list) else [arr])
+    for e in evs:
+        t = e.get("T")
+        if t not in (9, 10) or e.get("P") is None or e.get("G") not in (None, 17):
+            continue
+        line = float(e.get("P"))
+        if line < 6.5 or line != int(line) + 0.5:
+            continue
+        tag = _line_tag(line)
+        row = _row(source="1xbet_platform", bookmaker=bk, event_id=f"1x_{g.get('I')}", league=league,
+                   home=home, away=away, commence_time=start, market=f"corners_{tag}",
+                   selection=f"{'over' if t == 9 else 'under'}_{tag}", odds=e.get("C"), line=line,
+                   raw={"platform": "1xbet", "host": host, "stat": "corners"})
+        if row:
+            out.append(row)
+    return out
+
+
 def _x1_ht_worker(host: str, games: List[Mapping[str, Any]], deadline: float, stats: Dict[str, Any]) -> List[Dict[str, Any]]:
     rows: List[Dict[str, Any]] = []
     for g in games:
@@ -319,8 +352,11 @@ def _x1_ht_worker(host: str, games: List[Mapping[str, Any]], deadline: float, st
         sgs = val.get("SG") or []
         if not sgs:
             stats["no_sg"] = stats.get("no_sg", 0) + 1
+        did_half = did_corners = False
         for sg in sgs:
-            if str(sg.get("PN") or "").lower().startswith("1st") and sg.get("I"):
+            title = str(sg.get("PN") or sg.get("TG") or "").lower()
+            if title.startswith("1st") and sg.get("I") and not did_half:
+                did_half = True
                 stats["has_1h"] = stats.get("has_1h", 0) + 1
                 hj, _ = _get(f"{host}/service-api/LineFeed/GetGameZip",
                              {"id": str(sg["I"]), "lng": "en", "GroupEvents": "true",
@@ -329,7 +365,18 @@ def _x1_ht_worker(host: str, games: List[Mapping[str, Any]], deadline: float, st
                 if not new:
                     stats["rows0"] = stats.get("rows0", 0) + 1
                 rows.extend(new)
-                break
+            elif title == "corners" and (sg.get("I") or sg.get("CI")) and os.getenv("ONEX_CORNERS", "1") == "1":
+                # Mehrere "Corners"-Unterspiele (Spiel/Halbzeiten): nur Totals mit Linie >= 6.5 gelten fuer das ganze Spiel.
+                cj, _ = _get(f"{host}/service-api/LineFeed/GetGameZip",
+                             {"id": str(sg.get("I") or sg.get("CI")), "lng": "en", "GroupEvents": "true",
+                              "countevents": "250", "grMode": "2"})
+                new = _x1_corner_rows(g, (cj or {}).get("Value") or {}, host)
+                if new:
+                    did_corners = True
+                    stats["corner_rows"] = stats.get("corner_rows", 0) + len(new)
+                rows.extend(new)
+        if not did_corners:
+            stats["no_corners"] = stats.get("no_corners", 0) + 1
         time.sleep(0.15)
     return rows
 
