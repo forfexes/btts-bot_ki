@@ -147,7 +147,10 @@ def build_report(
         if key in EXPECTED_MARKETS:
             count = max(0, int(value or 0))
             before[key] = max(before.get(key, 0), count)
-            after[key] = max(after.get(key, 0), count)
+            # External counts are candidate-only unless the caller supplies
+            # independently measured post-filter lists. Never fabricate sent counts.
+            if after_filter is not None and key in after_filter:
+                after[key] = len(after_filter[key] or [])
     props = [dict(row) for row in (prop_rows or []) if isinstance(row, Mapping)]
     unknown = discover_unknown_markets(props)
     problems: Dict[str, str] = {}
