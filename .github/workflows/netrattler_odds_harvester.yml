@@ -40,6 +40,8 @@ jobs:
         run: python -m py_compile netrattler_odds_harvester.py netrattler_keyless_odds.py netrattler_html_odds_scraper.py
       - name: Test bookmaker odds parser and bounded detail fallback
         run: python -m unittest -v test_netrattler_betclone_market_audit.py
+      - name: Verify 22bet full-match corner isolation
+        run: python test_netrattler_22bet_corners.py
       - name: Collect Bet365 and every available bookmaker
         env:
           SUPABASE_URL: ${{ secrets.SUPABASE_URL }}

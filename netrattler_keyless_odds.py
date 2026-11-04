@@ -292,9 +292,14 @@ def _x1_ht_rows(g: Mapping[str, Any], sub: Mapping[str, Any], host: str) -> List
 
 
 def _x1_corner_rows(g: Mapping[str, Any], sub: Mapping[str, Any], host: str) -> List[Dict[str, Any]]:
-    """Corners-Unterspiel von 22bet/1xBet (Titel im LineFeed): G17 Total, T9 = Over, T10 = Under (P = Linie).
+    """Corners-Unterspiel von 22bet/1xBet (Titel im LineFeed): G4 Total, T9 = Over, T10 = Under (P = Linie).
     Nur Linien >= 6.5 (Gesamtspiel); Halbzeit-/Team-Totals haben kleinere Linien bzw. andere Gruppen. Echte Preise."""
     out: List[Dict[str, Any]] = []
+    # Verified GetGameZip response: full-match corners, not a team/half subgame.
+    if str(sub.get("TG") or "").strip().lower() != "corners" or str(sub.get("PN") or "").strip():
+        return out
+    if any(str(sub.get(k) or "").strip().lower() != str(g.get(k) or "").strip().lower() for k in ("O1", "O2")):
+        return out
     home, away = g.get("O1") or "", g.get("O2") or ""
     if not _x1_has_real_teams(home, away):
         return out
@@ -303,13 +308,13 @@ def _x1_corner_rows(g: Mapping[str, Any], sub: Mapping[str, Any], host: str) -> 
     bk = "1x_" + re.sub(r"^https?://(www\.)?|\.com.*$", "", host)
     evs = []
     for grp in sub.get("GE") or []:
-        if grp.get("G") not in (None, 17):
+        if grp.get("G") not in (4,):
             continue
         for arr in grp.get("E") or []:
             evs.extend(arr if isinstance(arr, list) else [arr])
     for e in evs:
         t = e.get("T")
-        if t not in (9, 10) or e.get("P") is None or e.get("G") not in (None, 17):
+        if t not in (9, 10) or e.get("P") is None or e.get("G") not in (4,):
             continue
         line = float(e.get("P"))
         if line < 6.5 or line != int(line) + 0.5:
