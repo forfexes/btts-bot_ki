@@ -355,7 +355,9 @@ def _x1_ht_worker(host: str, games: List[Mapping[str, Any]], deadline: float, st
         did_half = did_corners = False
         for sg in sgs:
             title = str(sg.get("PN") or sg.get("TG") or "").lower()
-            if title.startswith("1st") and sg.get("I") and not did_half:
+            tg = str(sg.get("TG") or "").strip().lower()
+            pn = str(sg.get("PN") or "").strip()
+            if title.startswith("1st") and sg.get("I") and not did_half and not (tg and tg != "1st half" and pn):
                 did_half = True
                 stats["has_1h"] = stats.get("has_1h", 0) + 1
                 hj, _ = _get(f"{host}/service-api/LineFeed/GetGameZip",
@@ -365,7 +367,7 @@ def _x1_ht_worker(host: str, games: List[Mapping[str, Any]], deadline: float, st
                 if not new:
                     stats["rows0"] = stats.get("rows0", 0) + 1
                 rows.extend(new)
-            elif title == "corners" and (sg.get("I") or sg.get("CI")) and os.getenv("ONEX_CORNERS", "1") == "1":
+            elif tg == "corners" and not pn and sg.get("I") and not did_corners and os.getenv("ONEX_CORNERS", "1") == "1":
                 # Mehrere "Corners"-Unterspiele (Spiel/Halbzeiten): nur Totals mit Linie >= 6.5 gelten fuer das ganze Spiel.
                 cj, _ = _get(f"{host}/service-api/LineFeed/GetGameZip",
                              {"id": str(sg.get("I") or sg.get("CI")), "lng": "en", "GroupEvents": "true",
