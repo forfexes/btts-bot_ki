@@ -67,7 +67,8 @@ def main():
                 continue
             sub = _get({"id": sg.get("CI"), "lng": "en", "cfview": 0, "grMode": 4, "country": 1, "marketType": 1})
             if sub and sub.get("Value"):
-                row["sub"].append({"title": title[:50], "groups": _profile(sub["Value"])[:6]})
+                row["sub"].append({"title": title[:50], "pn": str(sg.get("PN"))[:40], "tg": str(sg.get("TG"))[:40], "i": sg.get("I"), "ci": sg.get("CI"),
+                                   "keys": sorted(k for k in sg.keys() if k not in ("GE", "E"))[:20], "groups": _profile(sub["Value"])[:6]})
         out.append(row)
     print(json.dumps(out, ensure_ascii=False)[:6000])
     url = (os.getenv("SUPABASE_URL") or "").rstrip("/")
