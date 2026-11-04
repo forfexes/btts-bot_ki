@@ -65,6 +65,7 @@ def test_builder_photo_callback_persists_original_message_id():
     with patch.object(engine,'deduplicate_props',return_value=[]), \
          patch.object(engine,'build_builder_picks',return_value=[p]), \
          patch.object(engine,'builder_pick_exists',return_value=False), \
+         patch('netrattler_builder_limit.at_limit',return_value=False), \
          patch.object(engine,'persist_builder_pick',return_value=True) as persist:
         # Store the same original photo receipt used by settlement.
         sent,_=engine.run_builder_engine([],send_text,supabase_url='url',supabase_key='key',

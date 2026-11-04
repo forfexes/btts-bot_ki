@@ -73,7 +73,8 @@ jobs:
             numpy \
             scipy \
             scikit-learn \
-            playwright
+            playwright \
+            pytest
           python -m pip install --prefer-binary --no-deps "xgboost==3.2.0"
 
       - name: Install headless Chromium for Playwright
