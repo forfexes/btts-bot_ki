@@ -56,6 +56,7 @@ class _Response:
 
 
 def _one_pick(monkeypatch):
+    monkeypatch.setattr(mb.requests, "get", lambda *a, **kw: _Response(rows=[]))
     p = mb.build([leg("X", 95), leg("Y", 94)], "2026-10-28")[0]
     monkeypatch.setattr(mb, "build", lambda rows, day: [p])
     monkeypatch.setattr(mb, "build_fouls", lambda rows, day: [])

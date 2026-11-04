@@ -5,6 +5,8 @@ Die Quote ist die faire Modellquote (1/p) und wird als solche markiert
 Tackles gibt es nur fuer Spieler mit FPL-/API-Football-Daten (Premier League u.a.); fehlende Werte werden ignoriert.
 """
 import os
+import re
+import unicodedata
 from datetime import date
 import requests
 
@@ -27,16 +29,24 @@ _STOP = {"fc", "sc", "cf", "afc", "fk", "sk", "ac", "as", "cd", "ca", "club"}
 
 
 def same_team(a, b):
-    ta = {t for t in str(a or "").lower().replace(".", " ").split() if t not in _STOP}
-    tb = {t for t in str(b or "").lower().replace(".", " ").split() if t not in _STOP}
+    """Only club spelling differences; never another club sharing a long token."""
+    def tokens(value):
+        text = unicodedata.normalize("NFKD", str(value or "").lower())
+        text = "".join(c for c in text if not unicodedata.combining(c))
+        return {t for t in re.findall(r"[a-z0-9]+", text) if t not in _STOP | {"bc", "acf"}}
+    ta, tb = tokens(a), tokens(b)
     if not ta or not tb:
         return False
     if ta == tb:
         return True
-    small, big = (ta, tb) if len(ta) <= len(tb) else (tb, ta)
-    if small <= big:
-        return len(small) >= 2 or max(len(t) for t in small) >= 7
-    return False
+    # Registered club suffixes only. City names, youth teams and YF are identities.
+    suffixes = {"fr", "rj", "sp", "mg", "rs", "futebol", "clube"}
+    return ta <= tb and tb - ta <= suffixes or tb <= ta and ta - tb <= suffixes
+
+
+def senior_fixture(match, league):
+    text = str(match or "") + " " + str(league or "")
+    return not re.search(r"\b(women|womens|women's|femenina|feminine|frauen|dames|youth|reserves?|u[- ]?(?:17|18|19|20|21|23)|ii)\b", text, re.I)
 
 
 def player_rows(rows, team_norm, norm, team_raw=None):
@@ -46,7 +56,7 @@ def player_rows(rows, team_norm, norm, team_raw=None):
     for r in rows or []:
         if str(r.get("match_date") or "")[:10] > today:
             continue
-        if norm(r.get("team")) != team_norm and not same_team(r.get("team"), team_raw):
+        if not same_team(r.get("team"), team_raw or team_norm):
             continue
         by.setdefault(r.get("player_name") or r.get("player_key"), []).append(r)
     return by
@@ -151,6 +161,11 @@ def rows_for_matches(matches, url, key, norm):
     STATS_LAST.clear()
     STATS_LAST.update({"matches": len(matches), "teams": 0, "teams_with_rows": 0, "teams_with_players": 0, "legs": 0, "unmatched": []})
     for m in matches:
+        # The historical player pool is senior men's data; a same-name women's
+        # or reserve fixture cannot establish that a player belongs to its squad.
+        if not senior_fixture(m.get("match"), m.get("league")):
+            STATS_LAST["squad_mismatch"] = STATS_LAST.get("squad_mismatch", 0) + 1
+            continue
         parts = str(m.get("match", "")).split(" vs ")
         if len(parts) != 2:
             continue

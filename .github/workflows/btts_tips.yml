@@ -11,6 +11,8 @@ on:
       - 'netrattler_api_corner_store.py'
       - 'netrattler_match_form.py'
       - 'netrattler_player_form.py'
+      - 'netrattler_foul_props.py'
+      - 'netrattler_builder_limit.py'
       - 'netrattler_corner_cards.py'
       - 'netrattler_builder_cards.py'
   schedule:
@@ -104,6 +106,9 @@ jobs:
           for f in netrattler_identity_hub.py netrattler_ml_player.py netrattler_prop_sources.py netrattler_source_hub.py netrattler_stat_sources.py; do
             [ ! -f "$f" ] || python -m py_compile "$f"
           done
+
+      - name: Selection identity and duplicate safety
+        run: python -m pytest -q test_netrattler_selection_quality.py test_foul_props.py test_model_builders.py
 
       - name: Runtime odds/skip regression tests
         run: |

@@ -15612,19 +15612,10 @@ def validate_tips(tips, real_fixtures, real_odds):
         except Exception:
             continue
 
-    # 🆕 FIX: Wenn keine Fixtures/Odds → Tips trotzdem behalten!
-    # Passiert bei MLS, Brasilien, Asien wo Odds API oft keine Daten hat
+    # A generated match name is not fixture evidence.
     if not real_matches:
-        log("   ⚠️ Keine Fixture-Daten → Tips direkt übernehmen")
-        validated = []
-        for tip in tips:
-            match = tip.get("match", "")
-            if " vs " not in match:
-                continue
-            parts = match.split(" vs ", 1)
-            if len(parts) == 2 and len(parts[0]) > 2 and len(parts[1]) > 2:
-                validated.append(tip)
-        return validated
+        log("   Keine verifizierten Spiele: Tipps verworfen")
+        return []
 
     validated = []
 
