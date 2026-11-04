@@ -60,10 +60,54 @@ def load_player_logs(vu, vk, mu, mk, params):
         print("V2 player_game_log returned HTTP 404; reading MAIN player_game_log instead")
         return fetch(mu, mk, "player_game_log", params)
 
+NOLINE_GROUPS = ("117", "118", "1156", "1158", "3091", "3093", "3241", "3243")
+HYPS = {"goals>=1 (anytime)": lambda r: (r.get("goals") or 0) >= 1, "goals>=2": lambda r: (r.get("goals") or 0) >= 2,
+        "goals>=3": lambda r: (r.get("goals") or 0) >= 3, "assists>=1": lambda r: (r.get("assists") or 0) >= 1,
+        "goals+assists>=1": lambda r: (r.get("goals") or 0) + (r.get("assists") or 0) >= 1,
+        "sot>=1": lambda r: (r.get("sot") or 0) >= 1, "shots>=1": lambda r: (r.get("shots") or 0) >= 1}
+
+
+def decode_noline(snaps, idx):
+    """Gruppen ohne Linie (Torschuetze u. a.): Brier-Skill der Quote 1/odds gegen Hypothesen mit seltenen Ereignissen."""
+    agg = {}
+    for s in snaps:
+        cands = idx.get(norm(s["player"]))
+        if not cands:
+            continue
+        cap = s["captured_at"][:10]
+        mn = norm(s["match_name"])
+        row = next((c for c in cands if norm(c["home_team"])[:6] in mn and cap <= c["match_date"] <= (datetime.date.fromisoformat(cap) + datetime.timedelta(days=4)).isoformat()), None)
+        if not row:
+            continue
+        try:
+            p = 1 / float(s["odds"])
+        except Exception:
+            continue
+        for name, fn in HYPS.items():
+            y = 1.0 if fn(row) else 0.0
+            a = agg.setdefault(str(s["g"]), {}).setdefault(name, [0, 0.0, 0.0])
+            a[0] += 1; a[1] += (y - p) ** 2; a[2] += y
+    out = {}
+    for g, d in agg.items():
+        rk = []
+        for st, (n, b, sy) in d.items():
+            ybar = sy / n if n else 0
+            if n < 30 or ybar <= 0 or ybar >= 1:
+                continue
+            # Quote enthaelt Marge: Kalibrierung ueber Hit-Rate vs. mittlere implizite Wahrscheinlichkeit
+            rk.append({"hyp": st, "n": n, "hit": round(ybar, 3), "brier": round(b / n, 4), "skill": round(1 - (b / n) / (ybar * (1 - ybar)), 3)})
+        rk.sort(key=lambda x: -x["skill"])
+        out[g] = rk[:3]
+    return out
+
+
 def main():
     mu, mk = os.environ["MAIN_URL"], os.environ["MAIN_KEY"]
     vu, vk = os.environ["V2_URL"], os.environ["V2_KEY"]
     snaps = fetch(mu, mk, "x1_player_snapshots", {"select": "captured_at,match_name,g,t,line,odds,player,side", "line": "not.is.null"})
+    snaps_nl = []
+    for g in NOLINE_GROUPS:
+        snaps_nl += fetch(mu, mk, "x1_player_snapshots", {"select": "captured_at,match_name,g,t,line,odds,player,side", "g": f"eq.{g}", "line": "is.null"})
     logs = load_player_logs(vu, vk, mu, mk, {"select": "player_name,home_team,away_team,match_date," + ",".join(STATS), "match_date": "gte.2026-10-10"})
     idx = {}
     for l in logs:
@@ -86,6 +130,12 @@ def main():
             y = 1.0 if float(v) > line else 0.0
             a = agg.setdefault(str(s["g"]), {}).setdefault(st, [0, 0.0, 0.0])
             a[0] += 1; a[1] += (y - p) ** 2; a[2] += y
+    nl = decode_noline(snaps_nl, idx)
+    try:
+        requests.post(f"{mu.rstrip('/')}/rest/v1/netrattler_card_diag", headers={"apikey": mk, "Authorization": f"Bearer {mk}", "Content-Type": "application/json"},
+                      json={"info": {"probe": "1x_group_decode_noline", "snaps": len(snaps_nl), "ranking": nl}}, timeout=30)
+    except Exception:
+        pass
     res = rank_groups(agg)
     espn = [l for l in logs if l.get("fouls_committed") is not None]
     out = {"probe": "1x_group_decode", "rows_with_fouls": len(espn), "rows_total": len(logs), "snaps": len(snaps), "logs": len(logs), "matched": matched, "ranking": res, "winners": {g: clear_winner(rk) for g, rk in res.items() if clear_winner(rk)}}
