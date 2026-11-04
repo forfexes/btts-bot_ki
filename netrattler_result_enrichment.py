@@ -360,6 +360,12 @@ def collect_for_tips(tips: Sequence[Dict[str, Any]], match_parts, row_date, log=
     results.extend(reviewed)
     log(f"Reviewed corner evidence: fixtures={len(reviewed)} db_raw_writes=0")
 
+    from netrattler_reviewed_players import collect as collect_reviewed_players
+    reviewed_results, reviewed_players = collect_reviewed_players(tips, match_parts, row_date, same)
+    results.extend(reviewed_results)
+    players.extend(reviewed_players)
+    log(f"Reviewed player evidence: rows={len(reviewed_players)} db_raw_writes=0")
+
     from netrattler_hf_reference import collect as collect_hf_reference
     results.extend(collect_hf_reference(tips, match_parts, row_date, same, log))
 

@@ -2881,6 +2881,12 @@ def main() -> None:
     tips = load_tips()
     loaded_ids = {tip_id(tip) for tip in tips}
     tips.extend(tip for tip in refreshable_closed_builders(existing) if tip_id(tip) not in loaded_ids)
+    from netrattler_reviewed_players import recoverable as reviewed_player_recovery
+    known_ids = {tip_id(tip) for tip in tips}
+    recovered = reviewed_player_recovery(existing, unpack, confirmed_builder_delivery,
+                                         match_parts, row_date, _strict_team_match)
+    tips.extend(tip for tip in recovered if tip_id(tip) not in known_ids)
+    log(f"Reviewed player data: timeout-VOID candidates={len(recovered)}")
     dates = sorted({row_date(tip) for tip in tips})
     log(f"Dates: {dates}")
     results = load_results(dates)

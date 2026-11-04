@@ -9,6 +9,7 @@ on:
       - 'netrattler_apif_settlement.py'
       - 'netrattler_scorer_identity.py'
       - 'netrattler_reviewed_results.py'
+      - 'netrattler_reviewed_players.py'
 
   schedule:
     - cron: "20 13 * * *"
@@ -43,6 +44,7 @@ jobs:
         run: |
           python test_netrattler_settlement_v21.py
           python test_netrattler_reviewed_results.py
+          python test_netrattler_reviewed_players.py
           python test_netrattler_result_enrichment.py
           python test_netrattler_settlement_runner.py
           python test_settlement_lenient_match.py
