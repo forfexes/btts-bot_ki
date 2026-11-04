@@ -354,6 +354,21 @@ def _x1_ht_worker(host: str, games: List[Mapping[str, Any]], deadline: float, st
         if val.get("O1") and g.get("O1") and str(val.get("O1")).strip().lower() != str(g.get("O1")).strip().lower():
             stats["id_mismatch"] = stats.get("id_mismatch", 0) + 1
             continue
+        # Observe verified VAR prices from the already requested main match.
+        # No additional HTTP calls; not eligible for automated tips/settlement.
+        if all(val.get(k) == g.get(k) and g.get(k) for k in ("O1", "O2")) and _x1_has_real_teams(g.get("O1"), g.get("O2")):
+            from netrattler_var import decode_var_prices
+            if float(g.get("S") or 0) > time.time():
+                for offer in decode_var_prices(val):
+                    row = _row(source="1xbet_platform", bookmaker="1x_" + host.split("//")[-1].split(".")[0],
+                        event_id=f"1x_{g.get('I')}", league=g.get("L") or "",
+                        home=g["O1"], away=g["O2"],
+                        commence_time=datetime.fromtimestamp(int(g["S"]),tz=timezone.utc).isoformat(),
+                        market=offer["market"], selection=offer["selection"], odds=offer["odds"],
+                        raw={"platform":"1xbet", "host":host, **offer})
+                    if row:
+                        rows.append(row)
+                        stats["var_rows"] = stats.get("var_rows", 0) + 1
         sgs = val.get("SG") or []
         if not sgs:
             stats["no_sg"] = stats.get("no_sg", 0) + 1

@@ -15,6 +15,7 @@ on:
       - "netrattler_free_odds.py"
       - "netrattler_oddspapi.py"
       - "netrattler_prop_sources.py"
+      - "netrattler_var.py"
       - "netrattler_1x_verified_props.py"
       - "test_netrattler_legacy_builder_speed.py"
       - "test_netrattler_visual_cards.py"
@@ -115,7 +116,7 @@ jobs:
       - name: Compact API history and corner isolation regression
         run: python -m pytest -q test_netrattler_apif_history.py
       - name: Selection identity and duplicate safety
-        run: python -m pytest -q test_netrattler_1x_verified_props.py test_netrattler_selection_quality.py test_foul_props.py test_model_builders.py
+        run: python -m pytest -q test_netrattler_var.py test_netrattler_1x_verified_props.py test_netrattler_selection_quality.py test_foul_props.py test_model_builders.py
       - name: Observed runtime match form regression
         run: python -m pytest -q test_netrattler_match_form.py
       - name: Scorer configured policy and candidate ranking regression
