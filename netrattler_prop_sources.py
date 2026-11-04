@@ -189,6 +189,8 @@ def map_category(text: str) -> str:
     if "foul" in low:
         return "fouls"
     if "booking" in low or "booked" in low or "carded" in low or "card" in low:
+        if any(term in low for term in ("red", "points", "first", "last", "highest", "fastest", "including substitutions")):
+            return "other"
         return "yellow_cards"
     if "first goalscorer" in low or "first scorer" in low:
         return "first_scorer"
@@ -458,13 +460,39 @@ def fetch_1xbet_player_props(home: str, away: str) -> List[Dict[str, Any]]:
             f"{host_used}/service-api/LineFeed/GetGameZip",
             # isSubGames=true: without it the response has no SG list, so the
             # "Players' stats" sub-game (fouls/tackles/shots per player) was never seen.
-            params={"id": event_id, "lng": "en", "cfview": 0, "grMode": 4, "country": 1, "isSubGames": "true"},
+            params={"id": event_id, "lng": "en", "cfview": 0, "grMode": 4, "country": 1, "isSubGames": "true", "GroupEvents": "true"},
         )
     game = _1X_GAME_CACHE.get(_gk)
     if not game:
         return []
     val = game.get("Value") or {}
     match_name = f"{home} vs {away}"
+    # Fetch exactly one full-match player sub-game, using its event I (not CI).
+    from netrattler_1x_verified_props import decode_player_props
+    import time
+    try:
+        prematch = float(val.get("S") or 0) > time.time()
+    except (TypeError, ValueError):
+        prematch = False
+    if prematch:
+        for subgame in val.get("SG") or []:
+            if subgame.get("TG") != "Players' stats" or str(subgame.get("PN") or "").strip():
+                continue
+            sub_id = subgame.get("I")
+            if not sub_id:
+                continue
+            cache_key = (host_used, str(sub_id))
+            if cache_key not in _1X_GAME_CACHE:
+                _1X_GAME_CACHE[cache_key] = _get_json(
+                    f"{host_used}/service-api/LineFeed/GetGameZip",
+                    params={"id": sub_id, "lng": "en", "GroupEvents": "true", "grMode": 2},
+                )
+            sub = (_1X_GAME_CACHE.get(cache_key) or {}).get("Value") or {}
+            for prop in decode_player_props(val, sub):
+                if _valid_player_candidate(prop["player"], home, away):
+                    prop["match"] = match_name
+                    props.append(prop)
+            break
     _snapshot_x1_player_markets(host_used, val, match_name)
     # Player-Props liegen in GE (GroupEvents) / E (Events) mit Spielernamen im PN-Feld.
     for grp in (val.get("GE") or []):

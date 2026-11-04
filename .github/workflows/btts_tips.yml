@@ -15,6 +15,7 @@ on:
       - 'netrattler_builder_limit.py'
       - 'netrattler_corner_cards.py'
       - 'netrattler_builder_cards.py'
+      - "netrattler_1x_verified_props.py"
   schedule:
     - cron: "17 8 * * *"  # 10:17 CH — Vormittag (GitHub verwirft :30-Slots oft, daher krumme Minute)
     - cron: "47 9 * * *"  # 11:47 CH — Frühspiele-Backup (Serie A 12:30, PL 13:30)
@@ -109,7 +110,7 @@ jobs:
           done
 
       - name: Selection identity and duplicate safety
-        run: python -m pytest -q test_netrattler_selection_quality.py test_foul_props.py test_model_builders.py
+        run: python -m pytest -q test_netrattler_1x_verified_props.py test_netrattler_selection_quality.py test_foul_props.py test_model_builders.py
 
       - name: Runtime odds/skip regression tests
         run: |
