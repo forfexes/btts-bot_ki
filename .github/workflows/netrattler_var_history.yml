@@ -1,0 +1,34 @@
+name: NETRATTLER Historical VAR Evidence
+on:
+  workflow_dispatch: {}
+  push:
+    branches: [main]
+    paths:
+      - 'netrattler_var_history.py'
+      - '.github/workflows/netrattler_var_history.yml'
+permissions:
+  contents: read
+concurrency:
+  group: netrattler-var-history
+  cancel-in-progress: false
+jobs:
+  history:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+      - run: python -m pip install requests pytest
+      - run: python -m pytest -q test_netrattler_var.py test_netrattler_var_history.py
+      - name: Fetch at most 24 completed matches and 27 requests
+        env:
+          API_FOOTBALL_KEYS: ${{ secrets.API_FOOTBALL_KEYS }}
+        run: python netrattler_var_history.py
+      - uses: actions/upload-artifact@v4
+        with:
+          name: netrattler-var-history
+          path: netrattler_var_history.json
+          if-no-files-found: error
+          retention-days: 30
