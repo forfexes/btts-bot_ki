@@ -9,7 +9,7 @@ concepts that were still missing from the latest screenshot set:
 - Shot Bomb
 
 All legs must already be real bookmaker quotes with independent model edge.
-Same-game product odds remain internal only; the installed style formatter asks
+Production verification: new prop-ladder styles are exercised by the AI Tipp Bot push workflow.\nSame-game product odds remain internal only; the installed style formatter asks
 for the live bookmaker builder price.
 """
 from __future__ import annotations
