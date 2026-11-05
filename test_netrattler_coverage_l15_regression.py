@@ -37,9 +37,15 @@ def test_external_candidate_counts_do_not_fake_filtered_tips():
     report = build_report(extra_counts={"corners": 5, "scorer": 3})
     assert report["before_filter"]["corners"] == 5
     assert report["after_filter"]["corners"] == 0
+    assert report["problems"]["corners"] == "post_filter_unreported"
 
 
 def test_external_explicit_after_filter_preserved():
     report = build_report(extra_counts={"corners": 5}, after_filter={"corners": [{}, {}]})
     assert report["before_filter"]["corners"] == 5
     assert report["after_filter"]["corners"] == 2
+
+
+def test_explicit_empty_post_filter_is_filtered_out():
+    report = build_report(extra_counts={"corners": 5}, after_filter={"corners": []})
+    assert report["problems"]["corners"] == "filtered_out"
