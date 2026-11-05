@@ -647,6 +647,11 @@ def format_direct_summary(settlement: Dict[str, Any]) -> str:
     group = settlement.get("market_group", "default")
     title = _direct_summary_title(group)
     status = normalized_status(settlement.get("status"))
+    if _data_gap_notice(settlement):
+        return (f"⸻⸻ <b>{title}</b> ⸻⸻\n"
+                "⏳ <b>Auswertung nicht möglich – Daten fehlen</b>\n"
+                "Kein bestätigtes sportliches Ergebnis. Keine Aussage über eine Buchmacher-Rückerstattung.\n"
+                "Nicht in Trefferquote oder ROI gewertet.")
     hit = "✅ Hit  <b>✅ V</b>" if status == "win" else "↩️ <b>VOID · nicht gewertet</b>" if status == "void" else "❌ Miss  <b>❌ X</b>"
     raw_profit = settlement.get("profit")
     profit = as_float(raw_profit, 0.0)
@@ -822,7 +827,7 @@ def edit_original_tip(settlement: Dict[str, Any]) -> bool:
     the message, the default is to keep settlement silent rather than create a duplicate post.
     Separate result messages are disabled, including emergency fallbacks.
     """
-    if normalized_status(settlement.get("status")) not in {"win", "loss"} and not _confirmed_all_void(settlement):
+    if not _original_update_allowed(settlement):
         return False
     payload = settlement.get("tip_payload") or {}
     data = unpack(payload)
@@ -887,10 +892,12 @@ def retry_unedited_originals(existing: Sequence[Dict[str, Any]], newly_closed: S
     for row in candidates:
         if attempts >= limit:
             break
-        if normalized_status(row.get("status")) not in {"win", "loss"} and not _confirmed_all_void(row):
+        if not _original_update_allowed(row):
             continue
         if str(row.get("tip_date") or "")[:10] < cutoff:
-            continue
+            # Old tips newly closed for data gaps still need an original notice.
+            if not (_data_gap_notice(row) and str(row.get("settled_at") or "")[:10] >= cutoff):
+                continue
         if str(row.get("settlement_id") or "") in excluded:
             continue
         if row.get("market_group") == "builder" and not BUILDER_RESULT_IN_TIP:
@@ -2379,6 +2386,17 @@ def _confirmed_all_void(settlement: Dict[str, Any]) -> bool:
         for item in legs))
 
 
+def _data_gap_notice(settlement: Dict[str, Any]) -> bool:
+    """Administrative missing-data closure, never a bookmaker VOID verdict."""
+    return normalized_status(settlement.get("status")) == "void" and str(
+        settlement.get("reason") or "").startswith(("void: kein Ergebnis nach", "void: nicht bewertbar nach"))
+
+
+def _original_update_allowed(settlement: Dict[str, Any]) -> bool:
+    return (normalized_status(settlement.get("status")) in {"win", "loss"}
+            or _confirmed_all_void(settlement) or _data_gap_notice(settlement))
+
+
 def _writes_to_source(settlement: Dict[str, Any]) -> bool:
     """win/loss always; VOID only for the explicit stale-no-result case (never for legacy missing-data voids)."""
     if settlement.get("status") in {"win", "loss"} or _confirmed_all_void(settlement):
@@ -2929,7 +2947,7 @@ def main() -> None:
         log(f"Stale-VOIDs in tips synchronisiert: {len(stale_voids)}")
     edited_count = 0
     old_rows = {str(row.get("tip_id")): row for row in existing}
-    edit_updates = [row for row in settled if (row["status"] in {"win", "loss"} or _confirmed_all_void(row)) and (
+    edit_updates = [row for row in settled if _original_update_allowed(row) and (
         previous.get(str(row["tip_id"])) != row["status"]
         or (_confirmed_all_void(row) and normalized_status((row.get("tip_payload") or {}).get("status")) == "pending")
         or row.get("legs_payload") != old_rows.get(str(row["tip_id"]), {}).get("legs_payload"))]
