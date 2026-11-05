@@ -3,30 +3,51 @@ name: Cleanup runs
 on:
   schedule:
     - cron: '0 3 * * *'
+  workflow_dispatch:
+  workflow_run:
+    workflows:
+      - NETRATTLER Post-Run Check
+    types: [completed]
+
+permissions:
+  actions: write
+
+concurrency:
+  group: netrattler-cleanup
+  cancel-in-progress: false
 
 jobs:
   cleanup:
+    if: github.event_name != 'workflow_run' || github.event.workflow_run.conclusion == 'success'
     runs-on: ubuntu-latest
     timeout-minutes: 12
-
-    permissions:
-      actions: write
-
     steps:
-      - name: Delete old runs
+      - name: Remove reviewed successful runs older than 24 hours
         env:
-          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          GH_TOKEN: ${{ github.token }}
           GH_REPO: ${{ github.repository }}
+          CURRENT_RUN_ID: ${{ github.run_id }}
         run: |
           set -euo pipefail
-          # Never spend the entire Actions budget on thousands of old runs.
-          # Some protected runs return 403; log them but clean the rest.
-          # Preserve settlement evidence and offline hardtests for audit/monitoring.
-          # Select the same run positions as before, then exclude protected workflows.
-          gh run list --repo "$GH_REPO" --limit 300 --json databaseId,workflowName |
-            jq -r '.[49:129][] | select(.workflowName != "NETRATTLER Offline Sandbox Hardtest" and .workflowName != "NETRATTLER Settlement Final V25 MULTISOURCE") | .databaseId' |
-            while read -r id; do
+          # Safety: never delete failures, cancelled/in-progress runs, settlement,
+          # offline hardtests, post-run checks, or this cleanup's own audit trail.
+          # Give monitoring at least 24h to inspect logs before cleanup.
+          cutoff="$(date -u -d '24 hours ago' +%s)"
+          gh run list --repo "$GH_REPO" --limit 300 --json databaseId,workflowName,status,conclusion,updatedAt |
+            jq -r --argjson cutoff "$cutoff" --argjson current "$CURRENT_RUN_ID" '
+              .[]
+              | select(.databaseId != $current)
+              | select(.status == "completed" and .conclusion == "success")
+              | select(.workflowName != "Cleanup runs")
+              | select(.workflowName != "NETRATTLER Post-Run Check")
+              | select(.workflowName != "NETRATTLER Offline Sandbox Hardtest")
+              | select(.workflowName != "NETRATTLER Settlement Final V25 MULTISOURCE")
+              | select((.updatedAt | fromdateiso8601) < $cutoff)
+              | .databaseId
+            ' | while read -r id; do
               if ! gh run delete "$id" --repo "$GH_REPO"; then
-                echo "::warning::Run $id could not be removed (permissions/protection). Continuing cleanup."
+                echo "::warning::Run $id could not be removed; continuing."
+              else
+                echo "Deleted reviewed successful run $id"
               fi
             done
