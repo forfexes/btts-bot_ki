@@ -491,6 +491,7 @@ def fetch_1xbet_player_props(home: str, away: str) -> List[Dict[str, Any]]:
             for prop in decode_player_props(val, sub):
                 if _valid_player_candidate(prop["player"], home, away):
                     prop["match"] = match_name
+                    prop["bookmaker_host"] = host_used
                     props.append(prop)
             break
     _snapshot_x1_player_markets(host_used, val, match_name)
@@ -524,6 +525,7 @@ def fetch_1xbet_player_props(home: str, away: str) -> List[Dict[str, Any]]:
                     "player": str(player), "team": "", "match": match_name, "league": "",
                     "market": grp.get("GS", cat), "category": cat,
                     "line": float(line or 0.5), "odds": odds, "source": "1xbet",
+                    "bookmaker_host": host_used,
                 })
     return props
 
@@ -963,6 +965,7 @@ def collect_extra_player_props(
     per_source: Dict[str, int] = {}
     per_cat: Counter = Counter()
     matched_matches = set()
+    bookmaker_hosts: Counter = Counter()
 
     import threading as _th
     _lock = _th.Lock()
@@ -986,6 +989,8 @@ def collect_extra_player_props(
                 continue
             odds, line = row["odds"], row["line"]
             row["source"] = source_name
+            if source_name == "1xbet" and row.get("bookmaker_host"):
+                bookmaker_hosts[str(row["bookmaker_host"])] += 1
             key = (_norm_name(row.get("player", "")), _norm_name(row.get("match", "")), cat, round(line, 2))
             prev = out_best.get(key)
             if prev is None or float(prev.get("odds") or 0) < odds:
