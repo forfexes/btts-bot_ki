@@ -35,3 +35,5 @@ def at_limit(url, key, match_date, legs, limit=None):
         except Exception:
             return True
     return False
+
+# Production verification trigger: post-merge builder ladder deployment (2026-11-05).
