@@ -491,6 +491,7 @@ def fetch_1xbet_player_props(home: str, away: str) -> List[Dict[str, Any]]:
             for prop in decode_player_props(val, sub):
                 if _valid_player_candidate(prop["player"], home, away):
                     prop["match"] = match_name
+                    prop["bookmaker_host"] = host_used
                     props.append(prop)
             break
     _snapshot_x1_player_markets(host_used, val, match_name)
@@ -524,6 +525,7 @@ def fetch_1xbet_player_props(home: str, away: str) -> List[Dict[str, Any]]:
                     "player": str(player), "team": "", "match": match_name, "league": "",
                     "market": grp.get("GS", cat), "category": cat,
                     "line": float(line or 0.5), "odds": odds, "source": "1xbet",
+                    "bookmaker_host": host_used,
                 })
     return props
 
@@ -1104,6 +1106,9 @@ def collect_extra_player_props(
 
     out = list(out_best.values())
     per_source = Counter(str(r.get("source") or "unknown") for r in out if not r.get("_no_real_odds"))
+    mirror_counts = Counter(str(r["bookmaker_host"]) for r in out if r.get("source") == "1xbet" and r.get("bookmaker_host"))
+    if mirror_counts:
+        _log("   🔎 1xBet-Mirror-Herkunft (finale Props): " + ", ".join(f"{host}={count}" for host, count in sorted(mirror_counts.items())))
     per_cat = Counter(r.get("category") for r in out if not r.get("_no_real_odds"))
     collect_extra_player_props.last_source_report = source_order.report()
     _log("   🔎 Prop-Quellenbewertung: " + str(collect_extra_player_props.last_source_report))
