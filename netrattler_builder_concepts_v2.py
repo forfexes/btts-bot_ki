@@ -160,7 +160,7 @@ def _foul_ladder(rows: Sequence[builder.PropLeg], match_date: str) -> List[build
     for threshold, name in ((0.5, "LOW"), (1.5, "MID"), (2.5, "HIGH"), (3.5, "LONGSHOT")):
         candidates = []
         for choices in by_player.values():
-            eligible = [x for x in choices if x.line >= threshold]
+            eligible = [x for x in choices if abs(x.line - threshold) < 1e-9]
             if eligible:
                 candidates.append(min(eligible, key=lambda x: (x.line, -x.edge)))
         legs = _distinct(candidates, 4)
