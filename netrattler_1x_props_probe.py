@@ -64,7 +64,7 @@ def summarize_game(val: dict) -> dict:
         groups[gid] += n
         if grp.get("GS"):
             names[gid] = str(grp.get("GS"))[:40]
-    subgames = [{"id": sg.get("CI"), "title": str(sg.get("TG") or sg.get("PN") or "")[:50]}
+    subgames = [{"id": sg.get("I"), "title": str(sg.get("TG") or sg.get("PN") or "")[:50]}
                 for sg in (val.get("SG") or [])[:40]]
     return {"groups": groups.most_common(40), "group_names": names, "subgames": subgames}
 
@@ -88,7 +88,7 @@ def run() -> tuple[list, list]:
         for g in picked:
             gid = g.get("I")
             st2, game = _get(f"{host}/service-api/LineFeed/GetGameZip",
-                             {"id": gid, "lng": "en", "cfview": 0, "grMode": 4, "country": 1,
+                             {"id": gid, "lng": "en", "cfview": 0, "grMode": 2, "GroupEvents": "true", "country": 1,
                               "marketType": 1, "isSubGames": "true"})
             fx = {"match": f"{g.get('O1')} vs {g.get('O2')}"[:80], "league": str(g.get("L"))[:50], "http": st2}
             if game and game.get("Value"):
@@ -100,11 +100,15 @@ def run() -> tuple[list, list]:
                     title = str(sg.get("TG") or sg.get("PN") or "").lower()
                     if not any(k in title for k in ("players' stats", "foul", "tackle", "shots")):
                         continue
+                    if not sg.get("I"):
+                        continue
                     st3, sub = _get(f"{host}/service-api/LineFeed/GetGameZip",
-                                    {"id": sg.get("CI"), "lng": "en", "cfview": 0, "grMode": 4,
+                                    {"id": sg.get("I"), "lng": "en", "cfview": 0, "grMode": 2, "GroupEvents": "true",
                                      "country": 1, "marketType": 1})
                     if sub and sub.get("Value"):
                         sv = sub["Value"]
+                        if any(sv.get(k) != g.get(k) for k in ("O1", "O2")):
+                            continue
                         remaining = MAX_WRITE_ROWS - len(snapshots)
                         if remaining > 0:
                             snapshots.extend(extract_snapshots(
