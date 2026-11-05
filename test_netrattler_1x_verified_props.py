@@ -50,6 +50,7 @@ def test_collector_fetches_player_event_id_and_reuses_cache(monkeypatch):
     monkeypatch.setattr(sources,'_valid_player_candidate',lambda *a:True)
     assert sources.fetch_1xbet_player_props('Home','Away')[0]['category']=='yellow_cards'
     assert sources.fetch_1xbet_player_props('Home','Away')[0]['odds']==3.2
+    assert sources.fetch_1xbet_player_props('Home','Away')[0]['bookmaker_host'] == 'https://22bet.com'
     assert calls==[11]
 
 
