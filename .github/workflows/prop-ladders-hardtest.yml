@@ -21,4 +21,4 @@ jobs:
       - name: Compile modules
         run: python -m py_compile netrattler_builder_engine.py netrattler_builder_concepts_v2.py test_prop_ladders_cards_20261105.py
       - name: Run ladder regression tests
-        run: python -m pytest -q test_prop_ladders_cards_20261105.py
+        run: python -m pytest -q test_prop_ladders_cards_20261105.py test_netrattler_builder_styles.py test_netrattler_1x_verified_props.py
