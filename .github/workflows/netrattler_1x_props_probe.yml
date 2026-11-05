@@ -9,6 +9,7 @@ on:
       - 'netrattler_1x_shadow_snapshots.py'
       - 'test_netrattler_1x_shadow_snapshots.py'
       - 'netrattler_1x_props_probe.py'
+      - 'netrattler_1x_verified_props.py'
       - '.github/workflows/netrattler_1x_props_probe.yml'
 permissions:
   contents: read
@@ -25,7 +26,7 @@ jobs:
       - name: Verify player evidence semantics before network access
         run: |
           python -m py_compile netrattler_1x_shadow_snapshots.py netrattler_1x_props_probe.py test_netrattler_1x_shadow_snapshots.py
-          python -m pytest -q test_netrattler_1x_shadow_snapshots.py test_netrattler_1x_probe_ids.py
+          python -m pytest -q test_netrattler_1x_shadow_snapshots.py test_netrattler_1x_probe_ids.py test_netrattler_1x_verified_props.py
       - env:
           SUPABASE_URL: ${{ secrets.SUPABASE_URL }}
           SUPABASE_KEY: ${{ secrets.SUPABASE_KEY }}

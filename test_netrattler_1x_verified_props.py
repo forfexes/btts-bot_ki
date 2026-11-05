@@ -51,3 +51,17 @@ def test_collector_fetches_player_event_id_and_reuses_cache(monkeypatch):
     assert sources.fetch_1xbet_player_props('Home','Away')[0]['category']=='yellow_cards'
     assert sources.fetch_1xbet_player_props('Home','Away')[0]['odds']==3.2
     assert calls==[11]
+
+
+def test_observed_22bet_group_ids_use_exact_dictionary_types():
+    # Compact observations from the successful 2026-11-05 player probe.
+    observations = [(1175,4197,1.5,4.1,'fouls_won'),
+                    (1236,4365,.5,3.0,'yellow_cards'),
+                    (1250,4416,.5,1.95,'sot')]
+    for group,typ,line,price,category in observations:
+        row, = decode_player_props(*sample(group,typ,P=line,C=price))
+        assert (row['category'],row['line'],row['odds'])==(category,line,price)
+        assert not decode_player_props(*sample(group,typ+1,P=line,C=price))
+    # Observed scorer groups remain excluded: first/last are not anytime.
+    assert not decode_player_props(*sample(157,833,P=.5))
+    assert not decode_player_props(*sample(158,834,P=.5))

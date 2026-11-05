@@ -16,6 +16,16 @@ MARKETS = {
     (3305, 4544): ('fouls', 'Total Fouls Committed By [] Over ()', False),
 }
 
+# Observed 22bet GetGameZip group IDs (2026-11-05), paired with the exact
+# dictionary outcome types above. IdG in the dictionary is a presentation group,
+# not always the LineFeed G. Do not generalize unobserved group/type pairs.
+for observed, canonical in {
+    (1175, 4197): (3085, 4197),
+    (1236, 4365): (3201, 4365),
+    (1250, 4416): (3217, 4416),
+}.items():
+    MARKETS[observed] = MARKETS[canonical]
+
 
 def decode_player_props(parent, sub, source='1xbet'):
     """Decode full-match, single-player, explicitly verified Over/Yes offers."""
