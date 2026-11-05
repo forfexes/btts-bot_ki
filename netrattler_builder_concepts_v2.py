@@ -246,7 +246,7 @@ def install() -> None:
         combined: List[builder.BuilderPick] = []
         seen = set(reserved_ids)
         base_slots = max(0, cap - len(reserved))
-        for pick in base:
+        for pick in base[:base_slots]:
             if pick.builder_id in seen:
                 continue
             combined.append(pick)
