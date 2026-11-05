@@ -227,7 +227,9 @@ def install() -> None:
 
     def build(raw_props, match_contexts=None, match_date=None, max_builders=None):
         run_date = match_date or builder.date.today().isoformat()
-        cap = max_builders or builder.as_int(os.getenv("NETRATTLER_MAX_BUILDERS_PER_RUN", "30"), 30)
+        cap = max_builders if max_builders is not None else builder.as_int(os.getenv("NETRATTLER_MAX_BUILDERS_PER_RUN", "30"), 30)
+        if cap <= 0:
+            return []
         base = list(_ORIG_BUILD(raw_props, match_contexts, run_date, max_builders=cap))
         extras = _extra(raw_props, run_date)
 
