@@ -190,7 +190,7 @@ def _cross_shot_ladder(props: Sequence[builder.PropLeg], match_date: str) -> Lis
             for line, name in ((0.5, "LOW"), (1.5, "MID"), (2.5, "HIGH"), (3.5, "LONGSHOT")):
                 chosen = []
                 for choices in (first, second):
-                    eligible = [x for x in choices if x.line >= line]
+                    eligible = [x for x in choices if abs(x.line - line) < 1e-9]
                     if eligible:
                         chosen.append(min(eligible, key=lambda x: (x.line, -x.edge)))
                 if len(chosen) != 2:
