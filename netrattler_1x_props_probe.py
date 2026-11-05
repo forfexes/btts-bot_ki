@@ -98,7 +98,7 @@ def run() -> tuple[list, list]:
                 sub_details = []
                 for sg in (game["Value"].get("SG") or [])[:60]:
                     title = str(sg.get("TG") or sg.get("PN") or "").lower()
-                    if not any(k in title for k in ("players' stats", "foul", "tackle", "shots")):
+                    if title.strip() not in ("players' stats", "player stats") or str(sg.get("PN") or "").strip():
                         continue
                     if not sg.get("I"):
                         continue
@@ -109,6 +109,10 @@ def run() -> tuple[list, list]:
                         sv = sub["Value"]
                         if any(sv.get(k) != g.get(k) for k in ("O1", "O2")):
                             continue
+                        from netrattler_1x_verified_props import decode_player_props
+                        verified = decode_player_props(game["Value"], sv)
+                        fx["verified_props"] = len(verified)
+                        fx["verified_categories"] = dict(Counter(p["category"] for p in verified))
                         remaining = MAX_WRITE_ROWS - len(snapshots)
                         if remaining > 0:
                             snapshots.extend(extract_snapshots(
@@ -134,6 +138,10 @@ def run() -> tuple[list, list]:
 
 def main() -> int:
     rows, snapshots = run()
+    print("X1_PROBE_SUMMARY", json.dumps([
+        {"host": r["host"], "list_events": r.get("list_events", 0), "fixtures": [
+            {k: f.get(k) for k in ("match", "http", "verified_props", "verified_categories")}
+            for f in r.get("fixtures", [])]} for r in rows], ensure_ascii=False))
     print(json.dumps(rows, indent=2, ensure_ascii=False)[:8000])
     url = (os.getenv("SUPABASE_URL") or "").rstrip("/")
     key = os.getenv("SUPABASE_SERVICE_ROLE_KEY") or os.getenv("SUPABASE_KEY") or ""

@@ -31,7 +31,19 @@ def extract_snapshots(payload: Any, match_name: str, subgame_title: str,
     if " vs " not in str(match_name) or len(match_name) > 140:
         return []
     out, seen = [], set()
-    for event in (payload.get("E") or []):
+    def events():
+        for event in payload.get("E") or []:
+            yield event
+        for group in payload.get("GE") or []:
+            if not isinstance(group, dict):
+                continue
+            for row in group.get("E") or []:
+                for event in row if isinstance(row, list) else [row]:
+                    if isinstance(event, dict):
+                        if event.get("G") is not None and event.get("G") != group.get("G"):
+                            continue
+                        yield {"G": group.get("G"), **event}
+    for event in events():
         if len(out) >= max_rows:
             break
         if not isinstance(event, dict):

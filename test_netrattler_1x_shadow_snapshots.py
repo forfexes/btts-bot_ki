@@ -64,3 +64,9 @@ class ShadowPlayerTests(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+def test_grouped_events_and_flat_events_deduplicate():
+    event={'G':775,'T':1515,'C':3.2,'PL':{'N':'Real Player','I':42,'T':1}}
+    rows=x1.extract_snapshots({'E':[event],'GE':[{'G':775,'E':[[event]]}]},'Porto vs Napoli',"Players' stats")
+    assert len(rows)==1 and rows[0]['g']==775
