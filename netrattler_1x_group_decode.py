@@ -76,7 +76,7 @@ def decode_noline(snaps, idx):
             continue
         cap = s["captured_at"][:10]
         mn = norm(s["match_name"])
-        row = next((c for c in cands if norm(c["home_team"])[:6] in mn and cap <= c["match_date"] <= (datetime.date.fromisoformat(cap) + datetime.timedelta(days=4)).isoformat()), None)
+        row = next((c for c in cands if norm(c["home_team"]) in mn and norm(c["away_team"]) in mn and cap <= c["match_date"] <= (datetime.date.fromisoformat(cap) + datetime.timedelta(days=4)).isoformat()), None)
         if not row:
             continue
         try:
@@ -119,7 +119,7 @@ def main():
         if not cands: continue
         cap = s["captured_at"][:10]
         mn = norm(s["match_name"])
-        row = next((c for c in cands if norm(c["home_team"])[:6] in mn and cap <= c["match_date"] <= (datetime.date.fromisoformat(cap) + datetime.timedelta(days=4)).isoformat()), None)
+        row = next((c for c in cands if norm(c["home_team"]) in mn and norm(c["away_team"]) in mn and cap <= c["match_date"] <= (datetime.date.fromisoformat(cap) + datetime.timedelta(days=4)).isoformat()), None)
         if not row: continue
         matched += 1
         try: line, p = float(s["line"]), 1 / float(s["odds"])
