@@ -118,28 +118,11 @@ def _crest_from_index(team):
     rows = idx.get("rows") or []
     team = {"rennes": "Stade Rennais", "bayern": "Bayern Munich", "psg": "Paris Saint-Germain"}.get(
         str(team or "").strip().lower(), team)
-    toks = _tokens(team)
-    if not toks or not rows:
+    from netrattler_crest_identity import same_club
+    matches = {rel for name, rel, *_ in rows if same_club(team, name)}
+    if len(matches) != 1:
         return ""
-    core = {t for t in toks if t not in _CREST_STOP} or set(toks)
-    key = _norm(team)
-    best, best_score = None, 0.0
-    for name, rel, ntoks, ncore, nkey in rows:
-        if nkey == key:
-            score = 10.0
-        elif core and ncore and (core <= ncore or ncore <= core):
-            score = 2.0 + len(core & ncore) / max(len(core | ncore), 1)
-        elif len(core) == 1 and len(next(iter(core))) >= 5 and any(
-            t.startswith(next(iter(core))[:5]) or next(iter(core)).startswith(t[:5])
-            for t in ncore if len(t) >= 5
-        ):
-            score = 1.0
-        else:
-            continue
-        if score > best_score:
-            best, best_score = rel, score
-    if not best:
-        return ""
+    best = matches.pop()
     from urllib.parse import quote
     return f"https://raw.githubusercontent.com/{idx.get('repo')}/{idx.get('sha')}/logos/{quote(best)}"
 
@@ -167,28 +150,7 @@ def _query_variants(team):
 
 
 def _wiki_badge(team):
-    """Fallback crest from the club's Wikipedia infobox image."""
-    try:
-        r = requests.get(
-            "https://en.wikipedia.org/w/api.php",
-            params={
-                "action": "query", "generator": "search", "gsrsearch": f"{team} football club",
-                "gsrlimit": 1, "prop": "pageimages", "piprop": "thumbnail", "pithumbsize": 300,
-                "format": "json",
-            },
-            headers={"User-Agent": "NETRATTLER-cards/1.0 (match card crests)"},
-            timeout=6,
-        )
-        pages = ((r.json() or {}).get("query") or {}).get("pages") or {}
-        for page in pages.values():
-            url = str((page.get("thumbnail") or {}).get("source") or "")
-            if url:
-                STATS["wiki_ok"] += 1
-                return url
-        STATS["wiki_empty"] += 1
-    except Exception as exc:
-        STATS["wiki_err"] += 1
-        STATS["err_sample"] = f"wiki:{type(exc).__name__}"
+    # A search thumbnail may be a stadium/person rather than the club crest.
     return ""
 
 
@@ -234,7 +196,8 @@ def _fl_logo(team, league):
     if not country:
         return ""
     full = _slug(team)
-    core = "-".join(t for t in full.split("-") if t not in _FL_STOP) or full
+    from netrattler_crest_identity import identity
+    core = identity(team).replace(" ", "-") or full
     cands = []
     for c in (full, core):
         if c and c not in cands:
@@ -249,7 +212,7 @@ def _fl_logo(team, league):
         score = inter / max(len(toks | want), 1)
         if inter and score > best_score:
             best, best_score = sl, score
-    if best and best_score >= 0.5 and best not in cands:
+    if best and best_score >= 1.0 and best not in cands:
         cands.insert(0 if best_score >= 0.99 else 1, best)
     for sl in cands[:3]:
         html = _fl_get(f"https://football-logos.cc/{country}/{sl}/")
@@ -292,7 +255,11 @@ def _search_badge(query, api_key, key):
         if not rows:
             STATS["tsdb_empty"] += 1
             return "", False
-        exact = next((x for x in rows if _norm(x.get("strTeam")) == key), rows[0])
+        exact_rows = [x for x in rows if str(x.get("strSport") or "").lower() == "soccer"
+                      and (_norm(x.get("strTeam")) == key)]
+        if len(exact_rows) != 1:
+            return "", False
+        exact = exact_rows[0]
         found = str(exact.get("strBadge") or exact.get("strLogo") or "").strip()
         if found:
             STATS["tsdb_ok"] += 1
@@ -1226,12 +1193,12 @@ def _crest_cache_load():
         if not url:
             return
         base = url.replace("netrattler_match_cards", "netrattler_crest_cache")
-        r = requests.get(base, headers=hdr, params={"select": "team_key,url", "limit": "5000"}, timeout=15)
+        r = requests.get(base, headers=hdr, params={"select": "team_key,url", "team_key": "like.v2:*", "limit": "5000"}, timeout=15)
         if r.ok:
             n = 0
             for row in r.json():
-                if row.get("team_key") and row.get("url") and row["team_key"] not in _LOGO_CACHE:
-                    _LOGO_CACHE[row["team_key"]] = row["url"]
+                if row.get("team_key") and row.get("url") and row["team_key"][3:] not in _LOGO_CACHE:
+                    _LOGO_CACHE[row["team_key"][3:]] = row["url"]
                     n += 1
             STATS["crest_cache_loaded"] = n
     except Exception:
@@ -1249,7 +1216,7 @@ def _crest_cache_save(teams):
             k = _norm(t)
             u = _LOGO_CACHE.get(k)
             if u and _BADGE_CACHE.get(k):
-                rows.append({"team_key": k, "team": t[:80], "url": u})
+                rows.append({"team_key": "v2:" + k, "team": t[:80], "url": u})
         if rows:
             h = dict(hdr)
             h["Prefer"] = "resolution=merge-duplicates,return=minimal"
@@ -1585,11 +1552,8 @@ def _stat(name):
 
 
 def _name_score(a, b):
-    ta = set(t for t in _slug(a).split("-") if t and t not in _FL_STOP)
-    tb = set(t for t in _slug(b).split("-") if t and t not in _FL_STOP)
-    if not ta or not tb:
-        return 0.0
-    return len(ta & tb) / len(ta | tb)
+    from netrattler_crest_identity import same_club
+    return 1.0 if same_club(a, b) else 0.0
 
 
 def _budget(src, default):
@@ -1612,7 +1576,8 @@ def _wikidata_logo(team, league=""):
         "action": "wbsearchentities", "search": team, "language": "en", "type": "item",
         "limit": 6, "format": "json"})
     hits = (r.json() or {}).get("search") or []
-    ids = [h["id"] for h in hits if any(w in str(h.get("description", "")).lower()
+    from netrattler_crest_identity import same_club
+    ids = [h["id"] for h in hits if same_club(team, h.get("label", "")) and any(w in str(h.get("description", "")).lower()
                                         for w in ("football", "soccer", "futbol", "fútbol", "club"))][:4]
     if not ids:
         _stat("wikidata_empty")
@@ -1622,7 +1587,7 @@ def _wikidata_logo(team, league=""):
     ents = (r.json() or {}).get("entities") or {}
     for i in ids:
         claims = (ents.get(i) or {}).get("claims") or {}
-        for prop in ("P154", "P94"):  # logo image, coat of arms image
+        for prop in ("P154",):  # logo image, coat of arms image
             for c in claims.get(prop) or []:
                 fn = (((c.get("mainsnak") or {}).get("datavalue") or {}).get("value"))
                 if fn:
