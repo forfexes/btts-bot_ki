@@ -18,7 +18,8 @@ concurrency:
 
 jobs:
   cleanup:
-    if: github.event_name != 'workflow_run' || github.event.workflow_run.conclusion == 'success'
+    # A coverage-warning exit code is not a cleanup failure. Only eligible
+    # successful runs older than 24h are deleted; failed runs are preserved.
     runs-on: ubuntu-latest
     timeout-minutes: 12
     steps:
