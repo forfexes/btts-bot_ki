@@ -1865,6 +1865,32 @@ def run_builder_engine(
     send_pick: Optional[Callable[[BuilderPick, str], Any]] = None,
 ) -> Tuple[int, List[BuilderPick]]:
     normalized = deduplicate_props(raw_props)
+    if logger and raw_props and not normalized:
+        # Report schema/provenance issues without dumping player names or full quote payloads.
+        from collections import Counter
+        reasons = Counter()
+        for row in raw_props:
+            if not isinstance(row, dict):
+                reasons["non_dict"] += 1
+                continue
+            if not (row.get("player") or row.get("selection")):
+                reasons["missing_player"] += 1
+            if not (row.get("match") or row.get("fixture")):
+                reasons["missing_match"] += 1
+            if not (row.get("market") or row.get("type")):
+                reasons["missing_market"] += 1
+            if not row.get("category"):
+                reasons["missing_category"] += 1
+            if not (row.get("odds") or row.get("pinnacle_odds") or row.get("bookmaker_odds") or row.get("decimal_odds") or row.get("oddsYes") or row.get("odd") or row.get("price")):
+                reasons["missing_quote"] += 1
+            src = row.get("source") or row.get("_source") or row.get("bookmaker") or row.get("odds_source")
+            if not is_bookmaker_source(str(src or "")):
+                reasons["unrecognized_bookmaker"] += 1
+            if row.get("estimated") or row.get("estimated_odds"):
+                reasons["estimated_quote"] += 1
+            if normalize_prop(row) is None:
+                reasons["normalize_rejected"] += 1
+        logger("MASTER BUILDER reject diagnostics: " + ", ".join(f"{k}={v}" for k, v in sorted(reasons.items())))
     picks = build_builder_picks(raw_props, match_contexts, match_date)
     if logger:
         _strict = str(os.getenv("NETRATTLER_BUILDER_STRICT_EDGE", "false")).lower() in {"1", "true", "yes", "on"}
