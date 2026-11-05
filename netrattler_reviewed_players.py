@@ -7,6 +7,11 @@ import json
 from datetime import date
 
 EVIDENCE = [
+ dict(day='2026-11-04', home='Porto', away='Napoli', score=(4,1),
+      team='Napoli', player='Amir Rrahmani', minutes=90,
+      stats={'shots':0,'sot':0}, checked_at='2026-11-05',
+      url='https://footballnation.eu/football-player/amir-rrahmani/',
+      result_url='https://www.uefa.com/uefachampionsleague/match/2049617--porto-vs-napoli/'),
  dict(day='2026-10-29', home='Benfica', away='Gil Vicente', score=(4,1),
       team='Benfica', player='Gianluca Prestianni', minutes=18,
       stats={'sot':0,'fouls_won':0}, url='https://footydatalab.com/players/eoqiVrQN'),
@@ -49,7 +54,7 @@ def collect(tips,match_parts,row_date,same):
                             evidence_url=item['url'],**item['stats']))
         results.append(dict(identity,_result_table='reviewed_player_evidence',
                             home_score=item['score'][0],away_score=item['score'][1],
-                            raw={'evidence_url':item['url'],'checked_at':'2026-11-04'}))
+                            raw={'evidence_url':item.get('result_url',item['url']),'checked_at':item.get('checked_at','2026-11-04')}))
     return results,players
 
 

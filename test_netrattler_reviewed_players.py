@@ -23,4 +23,14 @@ class ReviewedPlayers(unittest.TestCase):
         self.assertEqual(settle_player_market(tip,p,None)[0],'win')
         self.assertEqual(p[0]['fouls_won'],3)
 
+def test_rrahmani_measured_zero_keeps_other_stats_unknown():
+    tip=dict(match_date='2026-11-04',match='FC Porto vs SSC Napoli',
+             player='Amir Rrahmani',team='Napoli',category='shots',line=1)
+    r,p=collect([tip],match_parts,row_date,_strict_team_match)
+    assert len(p)==1 and p[0]['minutes']==90 and p[0]['shots']==0
+    assert settle_player_market(tip,p,None)[0]=='loss'
+    assert settle_player_market(dict(tip,category='sot'),p,None)[0]=='loss'
+    assert settle_player_market(dict(tip,category='fouls'),p,None)[0]=='pending'
+    assert collect([dict(tip,match='Porto vs Benfica')],match_parts,row_date,_strict_team_match)==([],[])
+
 if __name__=='__main__':unittest.main()

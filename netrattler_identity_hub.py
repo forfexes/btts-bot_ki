@@ -61,6 +61,7 @@ NATIONAL_TEAMS = {
 }
 
 CLUB_ALIASES: Dict[str, str] = {
+    "ssc napoli": "napoli",
     "new england revolution ii": "new england revolution 2",
     "new england rev ii": "new england revolution 2",
     "new england ii": "new england revolution 2",
