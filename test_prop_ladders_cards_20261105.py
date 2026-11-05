@@ -32,3 +32,19 @@ def test_cross_match_shots_do_not_synthesize_lines(monkeypatch):
     picks = concepts._cross_shot_ladder(rows, "2026-11-05")
     assert {p[1] for p in picks} == {"LOW 2L", "MID 2L"}
     assert all(p[2][0].match != p[2][1].match for p in picks)
+
+
+def test_missing_lower_ladder_line_is_not_relabelled(monkeypatch):
+    monkeypatch.setattr(engine, "_make_builder", lambda style, variant, legs, date, stake: (style, variant, legs))
+    rows = [leg(f"Player {i}", "A vs B", "fouls", 2.5) for i in range(4)]
+    picks = concepts._foul_ladder(rows, "2026-11-05")
+    assert {p[1] for p in picks} == {"HIGH 2L", "HIGH 3L", "HIGH 4L"}
+
+
+def test_verified_22bet_source_is_accepted():
+    assert engine.is_bookmaker_source("22bet")
+    assert engine.normalize_prop({
+        "player": "Test Player", "match": "A vs B", "market": "Over 1.5",
+        "category": "fouls", "line": 1.5, "odds": 2.5,
+        "source": "22bet", "model_prob": .65, "games": 15,
+    }) is not None
