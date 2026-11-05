@@ -298,7 +298,7 @@ def is_bookmaker_source(source: str) -> bool:
         return True
     s = norm(source).replace(" ", "")
     tokens = (
-        "pinnacle", "kambi", "bet365", "1xbet", "oddspedia",
+        "pinnacle", "kambi", "bet365", "1xbet", "22bet", "oddspedia",
         "oddsapi", "oddspapi", "betfair", "unibet", "betsson",
         "nordicbet", "888", "sportsbook", "bookmaker", "observed",
     )
