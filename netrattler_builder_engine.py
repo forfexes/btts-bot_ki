@@ -1676,11 +1676,17 @@ def build_builder_picks(
 
 
 def format_builder_message(pick: BuilderPick) -> str:
+    # Remove external tipster names only from the Telegram presentation.
+    # Keep original style/variant in database, logs and builder IDs.
+    def neutral_label(value: str) -> str:
+        label = re.sub(r"\b(?:AYSTAR|NATE|GODTIPSTER|TIPS[ _-]*BIBLE)\b", "", str(value or ""), flags=re.IGNORECASE)
+        return re.sub(r"\s+", " ", label).strip(" -_·:|") or "BUILDER"
+
     sep = "━" * 18
     estimate = " · Modell/Fair" if pick.estimated_odds else ""
     lines = [
-        f"🏗️ <b>NETRATTLER {pick.style}</b>",
-        f"<b>{pick.variant}</b>",
+        f"🏗️ <b>NETRATTLER {neutral_label(pick.style)}</b>",
+        f"<b>{neutral_label(pick.variant)}</b>",
         sep,
     ]
     MARKET_LABELS = {
