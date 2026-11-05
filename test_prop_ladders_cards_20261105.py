@@ -48,3 +48,23 @@ def test_verified_22bet_source_is_accepted():
         "category": "fouls", "line": 1.5, "odds": 2.5,
         "source": "22bet", "model_prob": .65, "games": 15,
     }) is not None
+
+
+def test_reserved_styles_never_exceed_max_builders(monkeypatch):
+    from types import SimpleNamespace
+    import uuid
+    base = [SimpleNamespace(builder_id="base", style="BASE")]
+    extras = [SimpleNamespace(builder_id=f"extra-{i}", style=style)
+              for i, style in enumerate(concepts.EXTRA_STYLES)]
+    monkeypatch.setattr(engine, "build_builder_picks", lambda *args, **kwargs: base)
+    monkeypatch.setattr(concepts, "_extra", lambda *args: extras)
+    monkeypatch.setattr(concepts, "_INSTALLED", False)
+    concepts.install()
+    try:
+        result = engine.build_builder_picks([], match_date="2026-11-05", max_builders=1)
+        assert len(result) == 1
+        assert result[0].style == concepts.EXTRA_STYLES[0]
+        assert engine.build_builder_picks([], match_date="2026-11-05", max_builders=0) == []
+    finally:
+        engine.build_builder_picks = concepts._ORIG_BUILD
+        concepts._INSTALLED = False
