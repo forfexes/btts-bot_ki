@@ -22,7 +22,7 @@ jobs:
           python-version: '3.11'
       - run: python -m pip install requests pytest
       - run: python -m pytest -q test_netrattler_var.py test_netrattler_var_history.py
-      - name: Fetch at most 24 completed matches and 27 requests
+      - name: Fetch nine competitions; at most 36 matches and 54 requests
         env:
           API_FOOTBALL_KEYS: ${{ secrets.API_FOOTBALL_KEYS }}
         run: python netrattler_var_history.py
