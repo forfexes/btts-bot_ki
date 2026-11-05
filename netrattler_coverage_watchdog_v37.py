@@ -164,7 +164,7 @@ def build_report(
             elif int(stat.get("below_min", 0) or 0) > 0:
                 problems[market] = "edge_or_probability_filter"
             else:
-                problems[market] = "filtered_out"
+                problems[market] = "post_filter_unreported" if after_filter is None or market not in after_filter else "filtered_out"
     return {
         "version": "V37",
         "run_id": run_id or _hash(_utc())[:24],
