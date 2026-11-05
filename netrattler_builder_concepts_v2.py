@@ -24,7 +24,7 @@ _ORIG_BUILD = None
 
 CONTACT = {"fouls", "fouls_won", "tackles", "tackles_committed", "tackles_received"}
 ATTACK = {"shots", "sot", "score_assist", "score", "assist"}
-EXTRA_STYLES = ("CONTACT MIX", "ATTACK CONTACT MIX", "HIGH LINE MIX", "SHOT BOMB")
+EXTRA_STYLES = ("CONTACT MIX", "ATTACK CONTACT MIX", "HIGH LINE MIX", "SHOT BOMB", "CARD BUILDER", "FOUL LADDER", "CROSS SHOT LADDER")
 
 
 def _f(value, default=0.0):
@@ -135,6 +135,73 @@ def _shot_bomb(rows: Sequence[builder.PropLeg], match_date: str) -> List[builder
     return out
 
 
+
+def _cards(rows: Sequence[builder.PropLeg], match_date: str) -> List[builder.BuilderPick]:
+    """Real-price same-game booked-player builders, never synthetic SGP odds."""
+    cards = _distinct([x for x in rows if x.category == "yellow_cards" and x.line == 0.5 and _modelled(x)], 4)
+    out = []
+    for size in (2, 3, 4):
+        if len(cards) < size:
+            continue
+        pick = builder._make_builder("CARD BUILDER", f"BOOKED {size}L", cards[:size], match_date, 0.10)
+        if pick:
+            out.append(pick)
+    return out
+
+
+def _foul_ladder(rows: Sequence[builder.PropLeg], match_date: str) -> List[builder.BuilderPick]:
+    """Same players, progressively higher *observed* fouls lines."""
+    categories = {"fouls", "fouls_won"}
+    by_player: Dict[Tuple[str, str], List[builder.PropLeg]] = {}
+    for leg in rows:
+        if leg.category in categories and _modelled(leg):
+            by_player.setdefault((builder.norm(leg.player), leg.category), []).append(leg)
+    out = []
+    for threshold, name in ((0.5, "LOW"), (1.5, "MID"), (2.5, "HIGH"), (3.5, "LONGSHOT")):
+        candidates = []
+        for choices in by_player.values():
+            eligible = [x for x in choices if abs(x.line - threshold) < 1e-9]
+            if eligible:
+                candidates.append(min(eligible, key=lambda x: (x.line, -x.edge)))
+        legs = _distinct(candidates, 4)
+        if len(legs) < 2:
+            continue
+        for size in (2, 3, 4):
+            if len(legs) < size:
+                continue
+            pick = builder._make_builder("FOUL LADDER", f"{name} {size}L", legs[:size], match_date, 0.10)
+            if pick:
+                out.append(pick)
+    return out
+
+
+def _cross_shot_ladder(props: Sequence[builder.PropLeg], match_date: str) -> List[builder.BuilderPick]:
+    """Two different matches, alternative observed player shot lines."""
+    shots = [x for x in props if x.category == "shots" and _modelled(x)]
+    by_player: Dict[Tuple[str, str], List[builder.PropLeg]] = {}
+    for leg in shots:
+        by_player.setdefault((builder.norm(leg.match), builder.norm(leg.player)), []).append(leg)
+    players = sorted(by_player.values(), key=lambda choices: max(x.edge for x in choices), reverse=True)
+    out = []
+    for i, first in enumerate(players):
+        for second in players[i + 1:]:
+            if builder.norm(first[0].match) == builder.norm(second[0].match):
+                continue
+            for line, name in ((0.5, "LOW"), (1.5, "MID"), (2.5, "HIGH"), (3.5, "LONGSHOT")):
+                chosen = []
+                for choices in (first, second):
+                    eligible = [x for x in choices if x.line >= line]
+                    if eligible:
+                        chosen.append(min(eligible, key=lambda x: (x.line, -x.edge)))
+                if len(chosen) != 2:
+                    continue
+                pick = builder._make_builder("CROSS SHOT LADDER", f"{name} 2L", chosen, match_date, 0.10)
+                if pick:
+                    out.append(pick)
+            if out:
+                return out
+    return out
+
 def _extra(raw_props, match_date: str) -> List[builder.BuilderPick]:
     props = [p for p in builder.deduplicate_props(raw_props) if _modelled(p)]
     by_match: Dict[str, List[builder.PropLeg]] = {}
@@ -146,6 +213,9 @@ def _extra(raw_props, match_date: str) -> List[builder.BuilderPick]:
         out += _attack_contact_mix(rows, match_date)
         out += _high_line(rows, match_date)
         out += _shot_bomb(rows, match_date)
+        out += _cards(rows, match_date)
+        out += _foul_ladder(rows, match_date)
+    out += _cross_shot_ladder(props, match_date)
     return out
 
 
@@ -157,7 +227,9 @@ def install() -> None:
 
     def build(raw_props, match_contexts=None, match_date=None, max_builders=None):
         run_date = match_date or builder.date.today().isoformat()
-        cap = max_builders or builder.as_int(os.getenv("NETRATTLER_MAX_BUILDERS_PER_RUN", "30"), 30)
+        cap = max_builders if max_builders is not None else builder.as_int(os.getenv("NETRATTLER_MAX_BUILDERS_PER_RUN", "30"), 30)
+        if cap <= 0:
+            return []
         base = list(_ORIG_BUILD(raw_props, match_contexts, run_date, max_builders=cap))
         extras = _extra(raw_props, run_date)
 
@@ -174,7 +246,7 @@ def install() -> None:
         combined: List[builder.BuilderPick] = []
         seen = set(reserved_ids)
         base_slots = max(0, cap - len(reserved))
-        for pick in base:
+        for pick in base[:base_slots]:
             if pick.builder_id in seen:
                 continue
             combined.append(pick)
