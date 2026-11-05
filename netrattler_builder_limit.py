@@ -1,8 +1,12 @@
-"""Begrenzt Builder pro Spiel ueber alle Engines und Laeufe (Tabelle netrattler_builder_picks)."""
+"""Begrenzt Builder pro Spiel ueber alle Engines und Laeufe (Tabelle netrattler_builder_picks).
+
+Default aligns with the engine daily per-match cap (6). Exact duplicates and
+leg-set overlaps are independently checked by the sender.
+"""
 import json, os
 import requests
 
-PER_MATCH = int(os.getenv("NETRATTLER_BUILDER_PER_MATCH_TOTAL", "1"))
+PER_MATCH = int(os.getenv("NETRATTLER_BUILDER_PER_MATCH_TOTAL", "6"))
 
 
 def matches_of(legs):
