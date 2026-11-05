@@ -135,7 +135,9 @@ jobs:
       - name: Player name fuzzy lookup tests
         run: python test_player_name_fuzzy.py
       - name: Empirical probability blend tests
-        run: python test_empirical_blend.py
+        run: |
+          python test_empirical_blend.py
+          python -m pytest -q test_netrattler_tackle_semantics.py
       - name: Table router test
         run: python -m pytest -q test_netrattler_table_router.py
       - name: Kambi strict market classifier test
