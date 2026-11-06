@@ -3,6 +3,36 @@ import io
 from PIL import Image,ImageDraw,ImageFont
 
 
+def builder_leg_label(leg):
+    """Readable, unambiguous market and threshold from the normalized leg."""
+    import math
+    category = str(getattr(leg, 'category', '') or '').lower().strip()
+    line = getattr(leg, 'line', None)
+    names = {
+        'shots': 'Shots (Schüsse gesamt)',
+        'sot': 'Shots on Target (Schüsse aufs Tor)',
+        'fouls': 'Fouls (Fouls begangen)',
+        'fouls_won': 'Fouls Won (Fouls erhalten)',
+        'tackles': 'Tackles',
+        'yellow_cards': 'Gelbe Karten',
+        'score': 'Tore',
+        'assist': 'Assists',
+    }
+    if category not in names:
+        return str(getattr(leg, 'market', '') or category)
+    try:
+        value = float(line)
+        if not math.isfinite(value) or value < 0:
+            raise ValueError('invalid line')
+        # Integer line represents an inclusive N+ selection in builder engine.
+        threshold = int(value) if value.is_integer() else math.floor(value) + 1
+        if threshold < 1:
+            raise ValueError('invalid threshold')
+    except (TypeError, ValueError, OverflowError):
+        return names[category] + ' · Linie prüfen'
+    return f'{threshold}+ {names[category]}'
+
+
 def render_builder_card(pick):
     import netrattler_stats_match_cards as cards
     import netrattler_builder_engine as engine
@@ -53,7 +83,7 @@ def render_builder_card(pick):
             draw.ellipse((50,y+22,150,y+122),fill='#173858')
             center(''.join(w[0] for w in leg.player.split()[:2]).upper(),100,y+47,33)
         draw.text((185,y+12),fit(leg.player,28,750),font=font(28),fill='#ffffff')
-        draw.text((185,y+52),fit(leg.market,23,760),font=font(23),fill='#d4ecff')
+        draw.text((185,y+52),fit(builder_leg_label(leg),23,760),font=font(23),fill='#d4ecff')
         series=getattr(leg,'series',None)
         history=(f'L{len(series)}: '+','.join(str(v) for v in series)+f' ({sum(v>=leg.line for v in series)}/{len(series)})') if series else engine.history_text(leg)
         if multi: history=leg.match+' · '+history
