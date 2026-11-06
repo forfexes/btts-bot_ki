@@ -37,7 +37,25 @@ def main():
             samples.append(row)
         if samples: break
     out["samples"]=samples
-    out["pair_test"]=None
+    variants={}
+    h="https://22bet.com"
+    for name,prm in {"count2000":{"sports":1,"count":2000,"lng":"en","mode":4,"country":1},
+                     "nomode":{"sports":1,"count":2000,"lng":"en","country":1},
+                     "mode1":{"sports":1,"count":2000,"lng":"en","mode":1,"country":1},
+                     "gr":{"sports":1,"count":2000,"lng":"en","mode":4,"country":1,"getEmpty":"true","partner":1}}.items():
+        d=ps._get_json(f"{h}/service-api/LineFeed/Get1x2_VZip",params=prm)
+        variants[name]=len((d or {}).get("Value") or [])
+    ch=ps._get_json(f"{h}/service-api/LineFeed/GetChampsZip",params={"sport":1,"lng":"en","country":1,"virtualSports":"true","groupChamps":"true"})
+    cv=(ch or {}).get("Value") or []
+    variants["champs"]=len(cv)
+    if cv:
+        c0=cv[0]; variants["champ_keys"]=list(c0.keys())[:12]
+        cid=c0.get("LI") or c0.get("I")
+        d=ps._get_json(f"{h}/service-api/LineFeed/Get1x2_VZip",params={"sports":1,"champs":cid,"count":200,"lng":"en","mode":4,"country":1})
+        variants["by_champ_n"]=len((d or {}).get("Value") or [])
+    out["variants"]=variants
+    from netrattler_identity_hub import normalize_team_name as nt
+    out["norm"]={x:nt(x) for x in ["Borussia Dortmund","Dortmund","RasenBallsport Leipzig","RB Leipzig","1. FSV Mainz 05","Mainz","Bayern Munich","Bayern München","Elversberg","SV Elversberg","Leeds United","Leeds"]}
     post(out); print(json.dumps(out)[:1500])
 
 if __name__=="__main__": main()
