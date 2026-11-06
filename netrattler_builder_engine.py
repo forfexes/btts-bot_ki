@@ -1888,8 +1888,34 @@ def run_builder_engine(
                 reasons["unrecognized_bookmaker"] += 1
             if row.get("estimated") or row.get("estimated_odds"):
                 reasons["estimated_quote"] += 1
+            # Attribute every rejected leg to its earliest failing validation gate.
+            # Do not log personal names, raw bookmaker payloads, or tokens.
             if normalize_prop(row) is None:
                 reasons["normalize_rejected"] += 1
+                category = str(row.get("category") or "").strip().lower()
+                aliases = {"booked":"yellow_cards","cards":"yellow_cards","fouls_committed":"fouls","fouls_drawn":"fouls_won","tackles_made":"tackles_committed","tackles_won":"tackles_committed","tackled":"tackles_received","saves":"goalkeeper_saves","keeper_saves":"goalkeeper_saves","goalkeeper_save":"goalkeeper_saves","cards_total":"match_cards","total_cards":"match_cards"}
+                category = aliases.get(category, category)
+                market = str(row.get("market") or row.get("type") or "").strip()
+                player = str(row.get("player") or row.get("selection") or "").strip()
+                match = str(row.get("match") or row.get("fixture") or "").strip()
+                odds = as_float(row.get("odds") or row.get("pinnacle_odds") or row.get("bookmaker_odds") or row.get("decimal_odds") or row.get("oddsYes") or row.get("odd") or row.get("price"))
+                src = str(row.get("source") or row.get("_source") or row.get("bookmaker") or row.get("odds_source") or "")
+                if not player or not match or not market or not category:
+                    gate = "required_fields"
+                elif category not in PLAYER_CATEGORIES | TEAM_CATEGORIES:
+                    gate = "unsupported_category"
+                elif odds <= 1:
+                    gate = "invalid_or_missing_odds"
+                elif odds > max_sane_leg_odds(category):
+                    gate = "odds_above_category_cap"
+                elif not is_bookmaker_source(src):
+                    gate = "unrecognized_source"
+                elif row.get("estimated") or row.get("estimated_odds"):
+                    gate = "estimated_odds"
+                else:
+                    gate = "other_validation"
+                reasons["gate_" + gate] += 1
+                reasons["gate_category_" + category[:24] + "_" + gate] += 1
         logger("MASTER BUILDER reject diagnostics: " + ", ".join(f"{k}={v}" for k, v in sorted(reasons.items())))
         category_rejections = Counter()
         for row in raw_props:
