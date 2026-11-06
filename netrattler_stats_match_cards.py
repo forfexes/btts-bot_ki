@@ -380,11 +380,29 @@ def _neon_glow(im, boxes, color=(60, 200, 255)):
     return out
 
 
+def _card_model_consistent(market, tip):
+    """Do not advertise unsupported or contradictory Over 2.5 model confidence."""
+    if market != "over25":
+        return True
+    p = _pct(tip.get("probability"))
+    if p is None:
+        return False
+    home = _number(tip.get("exp_goals_home"))
+    away = _number(tip.get("exp_goals_away"))
+    if home is None or away is None or home < 0 or away < 0:
+        return False
+    # This check detects gross disagreement, not small differences between models.
+    import math
+    lam = home + away
+    poisson_over = 100 * (1 - math.exp(-lam) * (1 + lam + lam * lam / 2))
+    return abs(p - poisson_over) <= 20
+
+
 def select_cards(tips_by_market, max_cards=0):
     matches = defaultdict(list)
     for market, tips in (tips_by_market or {}).items():
         for tip in tips or []:
-            if not _valid(tip):
+            if not _valid(tip) or not _card_model_consistent(market, tip):
                 continue
             match = str(tip["match"]).strip()
             matches[match.casefold()].append((market, tip))
