@@ -53,6 +53,15 @@ def main():
         cid=c0.get("LI") or c0.get("I")
         d=ps._get_json(f"{h}/service-api/LineFeed/Get1x2_VZip",params={"sports":1,"champs":cid,"count":200,"lng":"en","mode":4,"country":1})
         variants["by_champ_n"]=len((d or {}).get("Value") or [])
+    per=[]
+    for c in cv[:200]:
+        cid=c.get("LI") or c.get("I")
+        for md in (4,1):
+            d=ps._get_json(f"{h}/service-api/LineFeed/Get1x2_VZip",params={"sports":1,"champs":cid,"count":200,"lng":"en","mode":md,"country":1})
+            n=len((d or {}).get("Value") or [])
+            if n: per.append([cid,c.get("L") if "L" in c else None,md,n]);break
+        if len(per)>=25:break
+    variants["per_champ"]=per
     out["variants"]=variants
     from netrattler_identity_hub import normalize_team_name as nt
     out["norm"]={x:nt(x) for x in ["Borussia Dortmund","Dortmund","RasenBallsport Leipzig","RB Leipzig","1. FSV Mainz 05","Mainz","Bayern Munich","Bayern München","Elversberg","SV Elversberg","Leeds United","Leeds"]}
