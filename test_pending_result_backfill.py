@@ -6,6 +6,12 @@ class T(unittest.TestCase):
         self.assertEqual(m.tip_pair(row), ("Burapha United", "Customs United"))
         self.assertEqual(m.tip_day(row), "2026-10-10")
 
+    def test_bookmaker_builder_fixture_variants(self):
+        for match in ("Arsenal v Leeds United", "Arsenal vs. Leeds United", "Arsenal - Leeds United", "Arsenal – Leeds United"):
+            with self.subTest(match=match):
+                self.assertEqual(m.tip_pair({"fixture": match}), ("Arsenal", "Leeds United"))
+        self.assertIsNone(m.tip_pair({"match": "Paris-Saint Germain"}))
+
     def test_team_match(self):
         self.assertTrue(m.team_match("Arsenal", "Arsenal FC"))
         self.assertTrue(m.team_match("Sao Luiz", "São Luiz"))
