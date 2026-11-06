@@ -221,7 +221,33 @@ def _norm(s: str) -> str:
 def _team_pair_match(candidate_home, candidate_away, home, away):
     from netrattler_identity_hub import normalize_team_name
     ch,ca,h,a = [normalize_team_name(x) for x in (candidate_home,candidate_away,home,away)]
-    return bool(ch and ca and h and a and ch==h and ca==a)
+    if not (ch and ca and h and a):
+        return False
+    if ch == h and ca == a:
+        return True
+    return _loose_side(ch, h) and _loose_side(ca, a)
+
+
+_LOOSE_BLOCK = re.compile(r"^(u|u\d+|w|women|womens|ii|iii|b|reserves?|youth|academy|juniors?|primavera)$")
+
+
+def _loose_side(x: str, y: str) -> bool:
+    """Same club under different bookmaker spellings ('Dortmund' vs 'Borussia Dortmund').
+    Token-subset only; extras must not mark a different squad (U21, women, II, B ...).
+    Both sides of the fixture must pass, and Man City/Man United never match."""
+    if x == y:
+        return True
+    fix = lambda t: {"rasenballsport": "rb", "munchen": "munich", "munich": "munich"}.get(t, t)
+    tx, ty = [fix(t) for t in x.split()], [fix(t) for t in y.split()]
+    if not tx or not ty:
+        return False
+    short, long_ = (tx, ty) if len(tx) <= len(ty) else (ty, tx)
+    if not set(short) <= set(long_):
+        return False
+    extra = [t for t in long_ if t not in short]
+    if any(_LOOSE_BLOCK.match(t) for t in extra):
+        return False
+    return len(" ".join(short)) >= 4
 
 
 
@@ -428,6 +454,45 @@ def _snapshot_x1_player_markets(host: str, val: Dict[str, Any], match_name: str)
         return
 
 
+_X1_FULL_CACHE: Dict[str, list] = {}
+
+
+def _x1_all_events(host: str, base: dict) -> list:
+    """Get1x2_VZip returns only ~50 events. Add per-championship lists once per run
+    (GetChampsZip -> champs=LI) so lower leagues and most fixtures are findable."""
+    if host in _X1_FULL_CACHE:
+        return _X1_FULL_CACHE[host]
+    events = list(base.get("Value") or [])
+    seen = {str(g.get("I") or g.get("CI")) for g in events}
+    try:
+        import os as _o, time as _t
+        from concurrent.futures import ThreadPoolExecutor
+        budget = float(_o.environ.get("NETRATTLER_1X_INDEX_SEC", "75") or 75)
+        t0 = _t.time()
+        ch = _get_json(f"{host}/service-api/LineFeed/GetChampsZip",
+                       params={"sport": 1, "lng": "en", "country": 1, "virtualSports": "true", "groupChamps": "true"})
+        ids = [c.get("LI") or c.get("I") for c in ((ch or {}).get("Value") or [])]
+        ids = [i for i in ids if i][:220]
+
+        def one(cid):
+            if _t.time() - t0 > budget:
+                return []
+            d = _get_json(f"{host}/service-api/LineFeed/Get1x2_VZip",
+                          params={"sports": 1, "champs": cid, "count": 200, "lng": "en", "mode": 4, "country": 1})
+            return (d or {}).get("Value") or []
+        with ThreadPoolExecutor(max_workers=6) as ex:
+            for rows in ex.map(one, ids):
+                for g in rows:
+                    k = str(g.get("I") or g.get("CI"))
+                    if k not in seen:
+                        seen.add(k)
+                        events.append(g)
+    except Exception:
+        pass
+    _X1_FULL_CACHE[host] = events
+    return events
+
+
 def fetch_1xbet_player_props(home: str, away: str) -> List[Dict[str, Any]]:
     """Best-effort Player-Props aus dem 1xbet LineFeed (JSON)."""
     props: List[Dict[str, Any]] = []
@@ -442,7 +507,7 @@ def fetch_1xbet_player_props(home: str, away: str) -> List[Dict[str, Any]]:
         data = _1X_LIST_CACHE.get(host)
         if not data:
             continue
-        for g in (data.get("Value") or []):
+        for g in _x1_all_events(host, data):
             o1 = g.get("O1") or g.get("HomeTeam") or ""
             o2 = g.get("O2") or g.get("AwayTeam") or ""
             if _team_pair_match(o1, o2, home, away):
