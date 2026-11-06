@@ -1865,7 +1865,7 @@ def run_builder_engine(
     send_pick: Optional[Callable[[BuilderPick, str], Any]] = None,
 ) -> Tuple[int, List[BuilderPick]]:
     normalized = deduplicate_props(raw_props)
-    if logger and raw_props and not normalized:
+    if logger and raw_props and len(normalized) < len(raw_props) * 0.5:
         # Report schema/provenance issues without dumping player names or full quote payloads.
         from collections import Counter
         reasons = Counter()
