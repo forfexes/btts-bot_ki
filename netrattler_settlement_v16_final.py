@@ -561,7 +561,9 @@ _LAST_EDIT_ERROR: Dict[str, str] = {}
 
 def telegram_edit(chat_id: str, message_id: Any, text: str) -> bool:
     """Edit the same Telegram tip, respecting rate limits and retry_after."""
+    _LAST_EDIT_ERROR.pop("last", None)
     if not TG_TOKEN or not chat_id or not message_id:
+        _LAST_EDIT_ERROR["last"] = "missing Telegram token/chat/message id"
         return False
     chat_key = str(chat_id)
     for attempt in range(3):
@@ -612,6 +614,10 @@ def telegram_edit(chat_id: str, message_id: Any, text: str) -> bool:
                 log(f"TG edit 429: warte {wait}s vor Retry {attempt + 2}/3", "WARN")
                 time.sleep(wait)
                 continue
+            if response.status_code == 400 and "message to edit not found" in detail.lower():
+                log("TG edit: original message not found in this chat; checking alternate chat if available", "WARN")
+                _LAST_EDIT_ERROR["last"] = f"{chat_key} 400 message to edit not found"
+                return False
             log(f"TG edit {response.status_code}: {detail[:180]}", "WARN")
             _LAST_EDIT_ERROR["last"] = f"{chat_key} {response.status_code} {detail[:160]}"
             return False
@@ -827,6 +833,7 @@ def edit_original_tip(settlement: Dict[str, Any]) -> bool:
     the message, the default is to keep settlement silent rather than create a duplicate post.
     Separate result messages are disabled, including emergency fallbacks.
     """
+    _LAST_EDIT_ERROR.pop("last", None)
     if not _original_update_allowed(settlement):
         return False
     payload = settlement.get("tip_payload") or {}
