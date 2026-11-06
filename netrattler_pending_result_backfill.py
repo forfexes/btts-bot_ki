@@ -54,11 +54,12 @@ def team_match(a: Any, b: Any) -> bool:
 
 
 def tip_pair(row: Dict[str, Any]) -> Optional[Tuple[str, str]]:
-    match = str(row.get("match") or "")
-    if " vs " in match:
-        home, away = match.split(" vs ", 1)
-        if home.strip() and away.strip():
-            return home.strip(), away.strip()
+    match = str(row.get("match") or row.get("fixture") or "")
+    # Real bookmaker and builder legs use several explicit fixture separators.
+    # Never split on bare hyphens: they occur inside club names.
+    parts = re.split(r"\s+(?:vs\.?|v\.?|[-–—])\s+", match, maxsplit=1, flags=re.I)
+    if len(parts) == 2 and all(part.strip() for part in parts):
+        return parts[0].strip(), parts[1].strip()
     m = _PAIR.search(str(row.get("message_text") or ""))
     if m:
         return m.group(1).strip(), m.group(2).strip()
