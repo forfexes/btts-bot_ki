@@ -1891,6 +1891,13 @@ def run_builder_engine(
             if normalize_prop(row) is None:
                 reasons["normalize_rejected"] += 1
         logger("MASTER BUILDER reject diagnostics: " + ", ".join(f"{k}={v}" for k, v in sorted(reasons.items())))
+        category_rejections = Counter()
+        for row in raw_props:
+            if isinstance(row, dict) and normalize_prop(row) is None:
+                category_rejections[str(row.get("category") or "missing")[:40].lower()] += 1
+        logger("MASTER BUILDER rejected by category: " + ", ".join(
+            f"{k}={v}" for k, v in sorted(category_rejections.items())
+        ))
     picks = build_builder_picks(raw_props, match_contexts, match_date)
     if logger:
         _strict = str(os.getenv("NETRATTLER_BUILDER_STRICT_EDGE", "false")).lower() in {"1", "true", "yes", "on"}
