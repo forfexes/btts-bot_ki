@@ -156,7 +156,7 @@ def _tips_bible(props: Sequence[builder.PropLeg], match_date: str) -> List[build
 def _nate_category(props: Sequence[builder.PropLeg], match_date: str) -> List[builder.BuilderPick]:
     out: List[builder.BuilderPick] = []
     labels = {
-        "shots": "SHOTS", "sot": "SOT", "fouls": "FOULS", "fouls_won": "FOULS WON",
+        "shots": "SHOTS", "sot": "SOT", "fouls": "FOULS", "fouls_won": "FOULS WON", "yellow_cards": "YELLOW CARDS",
         "tackles": "TACKLES", "tackles_committed": "TACKLES", "tackles_received": "TACKLES RECEIVED",
         "goalkeeper_saves": "KEEPER SAVES",
     }
@@ -166,7 +166,8 @@ def _nate_category(props: Sequence[builder.PropLeg], match_date: str) -> List[bu
             groups.setdefault((leg.match, leg.category), []).append(leg)
     for (_, category), rows in groups.items():
         ranked = _pick_distinct(rows, 6)
-        for size, tier, cap in ((3, "SAFE", 18.0), (4, "VALUE", 22.0), (5, "VALUE", 35.0), (6, "HIGH", 65.0)):
+        # Nate style: ONE builder per category and match, as long as the legs allow (6 -> 5 -> 4 -> 3).
+        for size, tier, cap in ((6, "HIGH", 65.0), (5, "VALUE", 35.0), (4, "VALUE", 22.0), (3, "SAFE", 18.0)):
             if len(ranked) < size:
                 continue
             if tier == "SAFE" and any(x.probability < 0.60 for x in ranked[:size]):
@@ -174,6 +175,7 @@ def _nate_category(props: Sequence[builder.PropLeg], match_date: str) -> List[bu
             pick = builder._make_builder("NATE CATEGORY", f"{labels[category]} {tier} {size}L", ranked[:size], match_date, 0.5)
             if pick and pick.total_odds <= cap:
                 out.append(pick)
+                break
     return out
 
 

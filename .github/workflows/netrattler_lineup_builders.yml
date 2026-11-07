@@ -26,7 +26,8 @@ jobs:
       - name: Verify builder image rendering before delivery
         run: python -m pytest -q test_netrattler_visual_cards.py
       - env:
-          NETRATTLER_BUILDER_MAX_LEGS: "3"
+          NETRATTLER_BUILDER_MAX_LEGS: "6"
+          NETRATTLER_BUILDER_PER_MATCH_TOTAL: "4"
           API_FOOTBALL_KEYS: ${{ secrets.API_FOOTBALL_KEYS }}
           SUPABASE_URL: ${{ secrets.SUPABASE_URL }}
           SUPABASE_KEY: ${{ secrets.SUPABASE_KEY }}
