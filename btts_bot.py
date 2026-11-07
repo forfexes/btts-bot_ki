@@ -27846,7 +27846,7 @@ def main():
                     import netrattler_builder_engine as _be_mod
                     requests.post(f"{SUPABASE_URL}/rest/v1/netrattler_card_diag", timeout=15,
                                   headers={"apikey": SUPABASE_KEY, "Authorization": f"Bearer {SUPABASE_KEY}", "Content-Type": "application/json"},
-                                  json={"info": {"probe": "builder_funnel", "sent": int(_sent_n or 0), **dict(_be_mod.FUNNEL)}})
+                                  json={"info": {"probe": "builder_funnel", "sent": int(_sent_n or 0), "reject": dict(getattr(_be_mod, "REJECT", {}) or {}), **dict(_be_mod.FUNNEL)}})
                 except Exception:
                     pass
                 try:  # Modell-Builder (Fouls/Tackles, ohne Buchmacherquote)

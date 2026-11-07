@@ -1525,6 +1525,7 @@ def _booking_series_builders(props: Sequence[PropLeg], match_date: str) -> List[
 
 
 FUNNEL: Dict[str, Any] = {}
+REJECT: Dict[str, int] = {}
 
 
 def _cat_counts(props) -> Dict[str, int]:
@@ -1917,6 +1918,8 @@ def run_builder_engine(
                 reasons["gate_" + gate] += 1
                 reasons["gate_category_" + category[:24] + "_" + gate] += 1
         logger("MASTER BUILDER reject diagnostics: " + ", ".join(f"{k}={v}" for k, v in sorted(reasons.items())))
+        REJECT.clear()
+        REJECT.update(dict(reasons.most_common(60)))
         category_rejections = Counter()
         for row in raw_props:
             if isinstance(row, dict) and normalize_prop(row) is None:
