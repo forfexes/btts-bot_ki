@@ -140,10 +140,22 @@ def run() -> Dict[str, int]:
             rows = list(ps.X1_SNAPSHOT)[:MAX_ROWS_PER_MATCH]
             break
         if rows:
-            p = requests.post(f"{SB}/rest/v1/x1_player_snapshots", headers={**H, "Prefer": "return=minimal"},
-                              json=rows, timeout=60)
-            p.raise_for_status()
-            stats["matches_saved"] += 1; stats["rows"] += len(rows)
+            ok = False
+            for attempt in range(3):  # transient 503/timeouts from Supabase must not kill the whole run
+                try:
+                    p = requests.post(f"{SB}/rest/v1/x1_player_snapshots", headers={**H, "Prefer": "return=minimal"},
+                                      json=rows, timeout=60)
+                    if p.status_code < 400:
+                        ok = True
+                        break
+                    stats["last_http"] = p.status_code
+                except requests.RequestException as e:
+                    stats["last_err"] = type(e).__name__
+                time.sleep(3 * (attempt + 1))
+            if ok:
+                stats["matches_saved"] += 1; stats["rows"] += len(rows)
+            else:
+                stats["save_failed"] = stats.get("save_failed", 0) + 1
         time.sleep(0.4)
     prune()
     print(f"x1 snapshot collector: {stats}")
