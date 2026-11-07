@@ -193,8 +193,10 @@ _orig_normalize_prop = builder.normalize_prop
 def normalize_prop_safe(row: Dict[str, Any]):
     safe_row = _sanitize_row(row)
     if safe_row is None:
+        builder._LAST_REJECT[0] = 'g_sanitize'
         return None
 
+    builder._LAST_REJECT[0] = ''
     leg = _orig_normalize_prop(safe_row)
     if leg is None:
         return None
@@ -215,21 +217,25 @@ def normalize_prop_safe(row: Dict[str, Any]):
     if has_independent and leg.odds > 1:
         implied = 1.0 / leg.odds
         if implied <= 0:
+            builder._LAST_REJECT[0] = 'g_implied'
             return None
         edge_pp = (leg.probability - implied) * 100.0
 
         min_edge_raw = _as_float(os.getenv("NETRATTLER_PROP_BUILDER_MIN_EDGE", "0.02"), 0.02)
         min_edge_pp = min_edge_raw * 100.0 if 0 < min_edge_raw <= 1 else min_edge_raw
         if edge_pp < min_edge_pp:
+            builder._LAST_REJECT[0] = 'g_min_edge'
             return None
 
         max_edge_pp = _edge_pp_limit()
         if max_edge_pp > 0 and abs(edge_pp) > max_edge_pp:
+            builder._LAST_REJECT[0] = 'g_max_edge'
             return None
 
         ratio_limit = _model_market_ratio_limit()
         model_market_ratio = leg.probability / implied
         if ratio_limit > 0 and model_market_ratio > ratio_limit:
+            builder._LAST_REJECT[0] = 'g_model_ratio'
             return None
 
         fair = 1.0 / leg.probability if leg.probability > 0 else 0.0
@@ -238,6 +244,7 @@ def normalize_prop_safe(row: Dict[str, Any]):
         # Spieler-Legs ohne unabhaengige Historien-/Modellwahrscheinlichkeit sind geraten -> nie in Builder.
         if (leg.category in builder.PLAYER_CATEGORIES
                 and os.getenv("NETRATTLER_BUILDER_ALLOW_UNMODELLED", "0") != "1"):
+            builder._LAST_REJECT[0] = 'g_unmodelled'
             return None
         leg = replace(leg, edge=0.0)
 
