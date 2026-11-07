@@ -1,21 +1,25 @@
+import datetime as _dt
 from unittest.mock import Mock,patch
 import netrattler_scorer_identity as identity
 import netrattler_api_portraits as portraits
 import netrattler_settlement_v16_final as s
 
 
+D=(_dt.date.today()-_dt.timedelta(days=1)).isoformat()  # frisch, sonst greift Stale-Void (>7 Tage)
+
+
 def legacy():
-    return {'tip_id':'scorer_R._Cherki_Manchester_City_vs_Brighton_2026-10-31',
+    return {'tip_id':'scorer_R._Cherki_Manchester_City_vs_Brighton_'+D+'',
             'market':'scorer','group_key':'scorer','match':'Manchester City vs Brighton',
-            'date':'2026-10-31','odds':'6.5','units':.75,'status':'pending'}
+            'date':D,'odds':'6.5','units':.75,'status':'pending'}
 
 
 def test_legacy_scorer_is_player_market_and_settles_from_real_goals():
     tip=legacy()
     assert s.unpack(tip)['player']=='R. Cherki' and s.category_of(tip)=='score'
     stat={'player_name':'R. Cherki','team':'Manchester City','opponent':'Brighton',
-          'match_date':'2026-10-31','minutes':90,'goals':0}
-    result={'home_team':'Manchester City','away_team':'Brighton','match_date':'2026-10-31',
+          'match_date':D,'minutes':90,'goals':0}
+    result={'home_team':'Manchester City','away_team':'Brighton','match_date':D,
             'home_score':0,'away_score':1}
     settled=s.settle_tip(tip,[result],[stat])
     assert settled['status']=='loss' and 'Markt nicht erkannt' not in settled['reason']
