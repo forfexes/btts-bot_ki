@@ -223,6 +223,9 @@ def normalize_prop_safe(row: Dict[str, Any]):
 
         min_edge_raw = _as_float(os.getenv("NETRATTLER_PROP_BUILDER_MIN_EDGE", "0.02"), 0.02)
         min_edge_pp = min_edge_raw * 100.0 if 0 < min_edge_raw <= 1 else min_edge_raw
+        if leg.category in {"yellow_cards", "fouls", "fouls_won"}:
+            # Weak/noisy models (cards AUC ~0.59): allow near-fair legs so card/foul builders exist.
+            min_edge_pp = _as_float(os.getenv("NETRATTLER_PROP_BUILDER_MIN_EDGE_CONTACT", "-3.0"), -3.0)
         if edge_pp < min_edge_pp:
             builder._LAST_REJECT[0] = 'g_min_edge'
             return None
