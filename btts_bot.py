@@ -22303,12 +22303,13 @@ def _ntr_enrich_prop_pool_with_player_ml(rows: list) -> dict:
         seen.add(key)
         candidates.append(row)
 
+    # Plausible legs first (quote near 2.0), not longshots; cap is generous because
+    # without an independent probability a leg can never enter a builder.
     candidates.sort(
         key=lambda r: (
-            int(float(r.get("games") or 0)),
-            -float(r.get("odds") or 0),
+            -int(float(r.get("games") or 0)),
+            abs(float(r.get("odds") or 0) - 2.0),
         ),
-        reverse=True,
     )
     candidates = candidates[:cap]
     stats["eligible"] = len(candidates)
@@ -24273,7 +24274,8 @@ def run_pinnacle_props_bot(win_start_utc=None, win_end_utc=None, ch_tz=None, top
                 return None
             return {
                 "selection": f"Over {_line:g}",
-                "player_prop": f"{_player} {_market} Over {_line:g}",
+                "player_prop": (f"{_market} Over {_line:g}" if _market.lower().startswith(_player.lower()) else f"{_player} {_market} Over {_line:g}"),
+                "_player_name": _player,
                 "match": _match,
                 "league": str(_xp.get("league") or ""),
                 "odds": _od,
@@ -24488,7 +24490,7 @@ def run_pinnacle_props_bot(win_start_utc=None, win_end_utc=None, ch_tz=None, top
         }.get(p["_cat"], p["_cat"])
         _player = (
             _desc.rstrip("?") if p.get("is_team_market")
-            else _ntr_extract_player(_desc, p.get("selection", ""))
+            else (p.get("_player_name") or _ntr_extract_player(_desc, p.get("selection", "")))
         )
         _before_pool = len(_NTR_BUILDER_PROP_POOL)
         _ntr_collect_prop(
