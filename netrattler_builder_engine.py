@@ -352,6 +352,9 @@ def max_sane_builder_odds(style: str, variant: str) -> float:
     return max(25.0, as_float(os.getenv("NETRATTLER_BUILDER_FALLBACK_MAX_ODDS", "250"), 250.0))
 
 
+_LAST_REJECT = ['']
+
+
 def normalize_prop(row: Dict[str, Any]) -> Optional[PropLeg]:
     player = str(row.get("player") or row.get("selection") or "").strip()
     match = str(row.get("match") or row.get("fixture") or "").strip()
@@ -376,20 +379,25 @@ def normalize_prop(row: Dict[str, Any]) -> Optional[PropLeg]:
         "btts_ht": "btts_ht",
     }.get(category, category)
     if not player or not match or not market or not category:
+        _LAST_REJECT[0] = 'r1'
         return None
     if category not in PLAYER_CATEGORIES | TEAM_CATEGORIES:
+        _LAST_REJECT[0] = 'r2'
         return None
     line = as_float(row.get("line"), market_line(market, 1.0))
     # Builder bets require a real offered bookmaker price. Never turn fair/model odds into a quote.
     odds = as_float(row.get("odds") or row.get("pinnacle_odds") or row.get("bookmaker_odds") or row.get("decimal_odds") or row.get("oddsYes") or row.get("odd") or row.get("price"))
     probability = probability_from_row(row)
     if odds <= 1 or odds > max_sane_leg_odds(category):
+        _LAST_REJECT[0] = 'r3'
         return None
     quote_source = str(row.get("source") or row.get("_source") or row.get("bookmaker") or row.get("odds_source") or "")
     if not is_bookmaker_source(quote_source):
+        _LAST_REJECT[0] = 'r4'
         return None
     estimated = bool(row.get("estimated") or row.get("estimated_odds"))
     if estimated:
+        _LAST_REJECT[0] = 'r5'
         return None
     fair_odds = as_float(row.get("fair_odds")) or (1.0 / probability if probability > 0 else 0.0)
 
@@ -425,6 +433,7 @@ def normalize_prop(row: Dict[str, Any]) -> Optional[PropLeg]:
         min_edge = as_float(os.getenv("NETRATTLER_BUILDER_MIN_LEG_EDGE", "2.0"), 2.0)
         max_edge = as_float(os.getenv("NETRATTLER_BUILDER_MAX_LEG_EDGE", "35.0"), 35.0)
         if edge < min_edge or edge > max_edge:
+            _LAST_REJECT[0] = 'r6'
             return None
     return PropLeg(
         player=player[:100],
@@ -1914,7 +1923,7 @@ def run_builder_engine(
                 elif row.get("estimated") or row.get("estimated_odds"):
                     gate = "estimated_odds"
                 else:
-                    gate = "other_validation"
+                    gate = "other_validation_" + str(_LAST_REJECT[0])
                 reasons["gate_" + gate] += 1
                 reasons["gate_category_" + category[:24] + "_" + gate] += 1
         logger("MASTER BUILDER reject diagnostics: " + ", ".join(f"{k}={v}" for k, v in sorted(reasons.items())))
