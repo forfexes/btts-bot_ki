@@ -27798,6 +27798,9 @@ def main():
                           json={"info": {"probe": "builder_pool", "pool": len(_builder_prop_pool),
                                          "real_player": len(_real_player_pool), "categories": _pool_categories,
                                          "matches": len(_pool_matches),
+                                         "quoted": {"n": sum(1 for _x in _builder_prop_pool if float((_x or {}).get("odds") or 0) > 1),
+                                                    "by_src": {_k: sum(1 for _x in _builder_prop_pool if float((_x or {}).get("odds") or 0) > 1 and str((_x or {}).get("source")) == _k) for _k in sorted({str((_x or {}).get("source")) for _x in _builder_prop_pool})[:14]},
+                                                    "sample": [{k: str(_x.get(k))[:40] for k in ("player", "market", "match", "category", "line", "odds", "source")} for _x in [_y for _y in _builder_prop_pool if float((_y or {}).get("odds") or 0) > 1][::max(1, len(_builder_prop_pool) // 400)][:8]]},
                                          "ge2": sum(1 for v in _pool_matches.values() if v >= 2),
                                          "ge3": sum(1 for v in _pool_matches.values() if v >= 3),
                                          "player_ml": {k: _pml.get(k) for k in ("eligible", "enriched", "empirical", "models_loaded", "missing_stats", "required_models", "load_error", "unmatched_sample", "gl_debug")}}})
