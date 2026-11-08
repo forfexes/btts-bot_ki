@@ -114,9 +114,25 @@ def fetch_players(H, fixture_id, wait=65):
             raise
 
 
+BULK_PAUSE_MB = 440.0  # identisch mit DB-Trigger netrattler_bulk_capacity_guard
+
+
+def db_paused():
+    """True, wenn die DB-Reserve erreicht ist (Trigger weist Bulk-Inserts sonst mit 503 ab)."""
+    try:
+        r = requests.post(f"{SB}/rest/v1/rpc/db_size_mb", headers=_sb(), json={}, timeout=30)
+        r.raise_for_status()
+        return float(r.json()["mb"]) >= BULK_PAUSE_MB
+    except Exception:
+        return False
+
+
 def run():
     if not (KEYS and SB and SK):
         raise RuntimeError("API-Football player import configuration missing")
+    if db_paused():
+        print(f"PAUSED: DB >= {BULK_PAUSE_MB:.0f} MB, Spieler-Import ausgesetzt (Reserve fuer Tipps/Settlement)")
+        return 0
     H = {"x-apisports-key": KEYS[0]}
     d = (dt.date.today() - dt.timedelta(days=1)).isoformat()
     resp = checked_response(requests.get(B + "/fixtures", headers=H, params={"date": d}, timeout=30))
