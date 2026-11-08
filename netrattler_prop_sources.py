@@ -455,11 +455,18 @@ def _snapshot_x1_player_markets(host: str, val: Dict[str, Any], match_name: str)
 
 
 _X1_FULL_CACHE: Dict[str, list] = {}
+import threading as _x1_threading
+_X1_LOCK = _x1_threading.Lock()  # one index build per run; parallel fixture workers must not each rebuild it
 
 
 def _x1_all_events(host: str, base: dict) -> list:
     """Get1x2_VZip returns only ~50 events. Add per-championship lists once per run
     (GetChampsZip -> champs=LI) so lower leagues and most fixtures are findable."""
+    with _X1_LOCK:
+        return _x1_all_events_locked(host, base)
+
+
+def _x1_all_events_locked(host: str, base: dict) -> list:
     if host in _X1_FULL_CACHE:
         return _X1_FULL_CACHE[host]
     events = list(base.get("Value") or [])
