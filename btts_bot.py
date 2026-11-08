@@ -25428,7 +25428,8 @@ def filter_tips_by_edge(tips: List[Dict], market: str = "btts",
                 # Keep learning as a small calibration only; do not let the old
                 # generic 55% policy make HT markets impossible.
                 raw_core_p = raw_p / 100.0 if raw_p > 1 else raw_p
-                adjusted_p = max(raw_core_p - 0.08, min(raw_core_p + 0.08, adjusted_p))
+                _down = 0.16 if _tmk in ("over25", "1x2", "over15_ht") else 0.08  # overconfident markets: allow stronger downward calibration
+                adjusted_p = max(raw_core_p - _down, min(raw_core_p + 0.08, adjusted_p))
                 adjusted_p = min(adjusted_p, _empirical_blend(adjusted_p, _tmk))  # never above observed reality
                 _min_p, _min_o = _core_thresholds[_tmk]
                 policy_ok = adjusted_p >= _min_p and float(market_quote) >= _min_o
