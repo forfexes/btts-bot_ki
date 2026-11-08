@@ -24332,6 +24332,11 @@ def run_pinnacle_props_bot(win_start_utc=None, win_end_utc=None, ch_tz=None, top
             not in _covered_prop_matches
         ]
         _supp_cap = max(0, int(env("NETRATTLER_PROP_SUPPLEMENT_MAX_MATCHES", "40")))
+        try:
+            from netrattler_prop_sources import x1_known_match as _x1k
+            _missing_fx.sort(key=lambda r: 0 if _x1k(r.get("home", ""), r.get("away", "")) else 1)  # stable: 22bet-covered fixtures first
+        except Exception:
+            pass
         _probe_fx = _missing_fx[:_supp_cap]
         _extra = list(
             collect_extra_player_props(_probe_fx, log=log, max_matches=len(_probe_fx))

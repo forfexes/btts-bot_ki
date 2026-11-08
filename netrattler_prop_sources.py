@@ -500,6 +500,26 @@ def _x1_all_events_locked(host: str, base: dict) -> list:
     return events
 
 
+def x1_known_match(home: str, away: str) -> bool:
+    """True if the 22bet/1xBet event index contains this fixture (so a player-prop fetch can succeed)."""
+    try:
+        for host in _1X_HOSTS:
+            if host not in _1X_LIST_CACHE:
+                _1X_LIST_CACHE[host] = _get_json(
+                    f"{host}/service-api/LineFeed/Get1x2_VZip",
+                    params={"sports": 1, "count": 500, "lng": "en", "mode": 4, "country": 1})
+            data = _1X_LIST_CACHE.get(host)
+            if not data:
+                continue
+            for g in _x1_all_events(host, data):
+                if _team_pair_match(g.get("O1") or "", g.get("O2") or "", home, away):
+                    return True
+            return False
+    except Exception:
+        pass
+    return False
+
+
 def fetch_1xbet_player_props(home: str, away: str) -> List[Dict[str, Any]]:
     """Best-effort Player-Props aus dem 1xbet LineFeed (JSON)."""
     props: List[Dict[str, Any]] = []
