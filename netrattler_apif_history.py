@@ -172,5 +172,16 @@ class Importer:
         return report
 
 
+class CapacityPaused(RuntimeError):
+    pass
+
+
 if __name__ == '__main__':
-    Importer().run()
+    try:
+        Importer().run()
+    except RuntimeError as e:
+        # Geplante Pause wegen DB-Reserve ist kein Fehler (Lauf sauber beenden).
+        if 'capacity reserve' in str(e):
+            print('PAUSED:', e)
+        else:
+            raise

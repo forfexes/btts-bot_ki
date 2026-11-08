@@ -78,6 +78,24 @@ def post_with_retry(url, rows, headers, tries=4, pause=3.0):
     raise last
 
 
+def get_with_retry(url, headers, tries=4, pause=3.0):
+    """GET mit Wiederholung bei 5xx/Netzfehlern (Supabase 503 ist meist kurzzeitig)."""
+    import time
+    last = None
+    for i in range(tries):
+        try:
+            g = requests.get(url, timeout=20, headers=headers)
+            if g.status_code < 500:
+                return g
+            last = g
+        except requests.RequestException as e:
+            last = e
+        time.sleep(pause * (i + 1))
+    if isinstance(last, requests.Response):
+        return last
+    raise last
+
+
 def _sb(h=None):
     return {"apikey": SK, "Authorization": f"Bearer {SK}", "Content-Type": "application/json", **(h or {})}
 
@@ -103,8 +121,8 @@ def run():
     d = (dt.date.today() - dt.timedelta(days=1)).isoformat()
     resp = checked_response(requests.get(B + "/fixtures", headers=H, params={"date": d}, timeout=30))
     ids = [str(x["fixture"]["id"]) for x in resp]
-    k = requests.get(f"{SB}/rest/v1/apif_player_match?select=fixture_id&fixture_id=in.({','.join(ids)})",
-                     headers=_sb(), timeout=20) if ids else None
+    k = get_with_retry(f"{SB}/rest/v1/apif_player_match?select=fixture_id&fixture_id=in.({','.join(ids)})",
+                       _sb()) if ids else None
     if k is not None:
         k.raise_for_status()
     known = {x["fixture_id"] for x in k.json()} if k is not None else set()
