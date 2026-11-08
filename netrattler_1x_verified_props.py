@@ -14,6 +14,14 @@ MARKETS = {
     (3217, 4416): ('sot', '[] Total Shots On Target Over ()', False),
     (3085, 4197): ('fouls_won', 'Total Fouls Committed On [] Over ()', False),
     (3305, 4544): ('fouls', 'Total Fouls Committed By [] Over ()', False),
+    # Added 2026-11-08 from operator dictionary names resolved via observed (G,T) pairs.
+    (4734, 14733): ('saves', '[] Total Saves Over ()', False),
+    (2907, 9290): ('tackles_committed', '[], Tackles Over ()', False),
+    (5564, 16699): ('tackles_committed', '[] Total Tackles Including Substitutions Over ()', False),
+    (5562, 16695): ('fouls_won', 'Total Fouls Committed On [] Including Substitutions Over ()', False),
+    (5563, 16697): ('fouls', '[] Total Fouls Committed Including Substitutions Over ()', False),
+    (5267, 15988): ('sot', '[] Total Shots On Target Including Substitutions Over ()', False),
+    (1368, 4720): ('offsides', '[] Total Offsides Over ()', False),
 }
 
 # Observed 22bet GetGameZip group IDs (2026-11-05), paired with the exact
