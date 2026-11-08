@@ -58,6 +58,7 @@ def test_players_rate_limit_stops_gracefully(monkeypatch):
     monkeypatch.setattr(pl, "fetch_players", fake_fetch)
     class R:
         ok = True
+        status_code = 200
         def __init__(self, url): self.url = url
         def json(self):
             if "rest/v1" in self.url:
