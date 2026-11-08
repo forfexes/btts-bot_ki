@@ -68,6 +68,19 @@ def already_snapshotted() -> set:
     return {x["match_name"] for x in r.json()} if r.ok and isinstance(r.json(), list) else set()
 
 
+STOP_MB = float(os.getenv("X1_SNAP_STOP_MB", "420"))
+
+
+def db_too_full() -> bool:
+    """Backpressure: ab STOP_MB (Limit 500) keine neuen Snapshots schreiben (regenerierbare Schattendaten)."""
+    try:
+        r = requests.post(f"{SB}/rest/v1/rpc/db_size_mb", headers=H, json={}, timeout=20)
+        d = r.json() if r.ok else {}
+        return isinstance(d, dict) and d.get("mb") is not None and float(d["mb"]) >= STOP_MB
+    except Exception:
+        return False
+
+
 def prune() -> None:
     cut = (datetime.now(timezone.utc) - timedelta(days=KEEP_DAYS)).isoformat()
     r = requests.delete(f"{SB}/rest/v1/x1_player_snapshots", headers=H, timeout=60, params={"captured_at": f"lt.{cut}"})
@@ -119,6 +132,9 @@ def run() -> Dict[str, int]:
             picked.append((host, gid, name))
         if len(picked) >= MAX_NEW:
             break
+    if db_too_full():
+        picked = []
+        stats["skipped_db_full"] = 1
     stats["picked"] = len(picked)
     stats["with_player_subgames"] = 0
     for host, gid, name in picked:
