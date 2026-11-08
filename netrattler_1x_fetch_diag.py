@@ -72,6 +72,19 @@ def main():
         except Exception as e:
             rows=[];real.append([hm,aw,"ERR",type(e).__name__]);continue
         real.append([hm,aw,len(rows),dict(Counter(r.get("category") for r in rows)),sorted({(r.get("category"),r.get("line")) for r in rows})[:40]])
+    try:
+        base=ps._get_json(f"{h}/service-api/LineFeed/Get1x2_VZip",params={"sports":1,"count":500,"lng":"en","mode":4,"country":1})
+        evs=ps._x1_all_events(h,base or {})
+        pre=[g for g in evs if float(g.get("S") or 0)>time.time()]
+        out["index"]={"events":len(evs),"prematch":len(pre)}
+        live=[]
+        for g in pre[:60:6]:
+            try: rows=ps.fetch_1xbet_player_props(g.get("O1"),g.get("O2"))
+            except Exception as e: rows=[]; live.append([g.get("O1"),"ERR",type(e).__name__]); continue
+            live.append([g.get("O1"),g.get("O2"),len(rows),dict(Counter(r.get("category") for r in rows))])
+        out["index_fetch"]=live
+    except Exception as e:
+        out["index_err"]=repr(e)[:200]
     out["real_fetch"]=real
     post(out); print(json.dumps(out)[:1500])
 
