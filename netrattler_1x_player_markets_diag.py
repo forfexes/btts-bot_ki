@@ -44,6 +44,10 @@ def main():
     try:
         txt=requests.get("https://v2l.traincdn.com/genfiles/cms/betstemplates/betsNames_full_en.js",timeout=30).text
         out["dict_len"]=len(txt); snip={}
+        names={}
+        for m in re.finditer(r'"(\d+)":\{"IdG":"(\d+)","N":"([^"]*)"',txt):
+            names[int(m.group(1))]=(m.group(2),m.group(3))
+        out["names"]=[[k[0],k[1],names.get(k[1],("?","?"))[0],names.get(k[1],("?","?"))[1][:70],v["n"],v["c"][:2],sorted(v["p"])[:4]] for k,v in sorted(obs.items(),key=lambda kv:-kv[1]["n"])[:70]]
         for k in KEYS:
             snip[k]=[txt[max(0,m.start()-120):m.end()+80].replace("\n"," ") for m in list(re.finditer(re.escape(k),txt))[:5]]
         out["dict"]=snip
