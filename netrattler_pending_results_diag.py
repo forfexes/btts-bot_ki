@@ -31,7 +31,8 @@ res=[]
 for d,ps in pairs.items():
     for h,a in sorted(ps):
         f=[x for x in fx_by_day.get(d,[]) if hit(h,x["teams"]["home"]["name"]) and hit(a,x["teams"]["away"]["name"])]
-        res.append([d,h,a,[(x["fixture"]["status"]["short"],x["teams"]["home"]["name"],x["teams"]["away"]["name"],x["goals"]["home"],x["goals"]["away"]) for x in f[:1]]])
+        alt=[] if f else [(x["fixture"]["status"]["short"],x["teams"]["home"]["name"],x["teams"]["away"]["name"],x["league"]["name"]) for x in fx_by_day.get(d,[]) if (toks(h)&toks(x["teams"]["home"]["name"])) or (toks(a)&toks(x["teams"]["away"]["name"])) or (toks(h)&toks(x["teams"]["away"]["name"])) or (toks(a)&toks(x["teams"]["home"]["name"]))][:3]
+        res.append([d,h,a,alt if not f else [(x["fixture"]["status"]["short"],x["teams"]["home"]["name"],x["teams"]["away"]["name"],x["goals"]["home"],x["goals"]["away"]) for x in f[:1]]])
 out["matches"]=res
 out["found"]=sum(1 for r in res if r[3]); out["total"]=len(res)
 requests.post(f"{U}/rest/v1/netrattler_card_diag",headers=H,json={"info":out},timeout=20)
