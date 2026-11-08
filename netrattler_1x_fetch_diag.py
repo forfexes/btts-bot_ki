@@ -66,12 +66,12 @@ def main():
     from netrattler_identity_hub import normalize_team_name as nt
     out["norm"]={x:nt(x) for x in ["Borussia Dortmund","Dortmund","RasenBallsport Leipzig","RB Leipzig","1. FSV Mainz 05","Mainz","Bayern Munich","Bayern München","Elversberg","SV Elversberg","Leeds United","Leeds"]}
     real=[]
-    for hm,aw in [("Borussia Dortmund","SV Elversberg"),("RB Leipzig","FC Augsburg"),("Mainz","Bayern Munich"),("Arsenal","Hull City"),("Leeds","Tottenham")]:
+    for hm,aw in [("FC Koln","Bayer Leverkusen"),("1. FC Köln","Bayer 04 Leverkusen"),("Hoffenheim","Schalke"),("TSG 1899 Hoffenheim","FC Schalke 04")]:
         try:
             rows=ps.fetch_1xbet_player_props(hm,aw)
         except Exception as e:
             rows=[];real.append([hm,aw,"ERR",type(e).__name__]);continue
-        real.append([hm,aw,len(rows),dict(Counter(r.get("category") for r in rows))])
+        real.append([hm,aw,len(rows),dict(Counter(r.get("category") for r in rows)),sorted({(r.get("category"),r.get("line")) for r in rows})[:40]])
     out["real_fetch"]=real
     post(out); print(json.dumps(out)[:1500])
 
