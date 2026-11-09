@@ -28,7 +28,7 @@ import os
 import re
 import unicodedata
 from dataclasses import dataclass, asdict
-from datetime import date
+from datetime import date, timedelta
 from itertools import combinations
 from typing import Any, Callable, Dict, Iterable, List, Optional, Sequence, Tuple
 
@@ -1599,6 +1599,46 @@ def _ext(candidates, name, fn, *args):
     candidates.extend(got)
 
 
+_STYLE_HEALTH_CACHE: Dict[str, Any] = {}
+
+
+def _style_health() -> Dict[str, Dict[str, float]]:
+    """Selbstkorrektur: Trefferquote je Stil aus abgerechneten Buildern (rollierend, 45 Tage).
+
+    Stil wird gedrosselt (nur 1 Pick pro Lauf als Datensammler), wenn er klar unter Erwartung liegt."""
+    if "v" in _STYLE_HEALTH_CACHE:
+        return _STYLE_HEALTH_CACHE["v"]
+    out: Dict[str, Dict[str, float]] = {}
+    url = (os.getenv("SUPABASE_URL") or "").rstrip("/")
+    key = os.getenv("SUPABASE_SERVICE_ROLE_KEY") or os.getenv("SUPABASE_KEY") or ""
+    if url and key and str(os.getenv("NETRATTLER_STYLE_TUNING", "1")).lower() in {"1", "true", "yes", "on"}:
+        try:
+            since = (date.today() - timedelta(days=45)).isoformat()
+            r = requests.get(
+                f"{url}/rest/v1/netrattler_builder_picks",
+                headers=_supabase_headers(key, "return=representation"),
+                params={"select": "style,status,joint_probability", "status": "in.(win,won,loss,lost)",
+                        "match_date": f"gte.{since}", "limit": "5000"}, timeout=15)
+            if r.ok:
+                acc: Dict[str, List[Tuple[int, float]]] = {}
+                for row in r.json():
+                    jp = row.get("joint_probability")
+                    acc.setdefault(str(row.get("style") or ""), []).append(
+                        (1 if str(row.get("status")) in {"win", "won"} else 0, float(jp) if jp not in (None, "") else -1.0))
+                for st, rows in acc.items():
+                    n = len(rows)
+                    hit = sum(w for w, _ in rows) / n
+                    preds = [q for _, q in rows if 0 < q <= 1]
+                    pred = sum(preds) / len(preds) if len(preds) >= max(10, n // 2) else None
+                    muted = (n >= 15 and hit <= 0.05) or (n >= 30 and hit < 0.15) or \
+                            (pred is not None and n >= 30 and hit < 0.6 * pred)
+                    out[st] = {"n": n, "hit": round(hit, 3), "pred": round(pred, 3) if pred else -1.0, "muted": 1.0 if muted else 0.0}
+        except Exception:
+            pass
+    _STYLE_HEALTH_CACHE["v"] = out
+    return out
+
+
 def build_builder_picks(
     raw_props: Sequence[Dict[str, Any]],
     match_contexts: Optional[Sequence[Dict[str, Any]]] = None,
@@ -1679,6 +1719,21 @@ def build_builder_picks(
         return (avg_quality - odds_penalty, avg_prob, -pick.total_odds)
 
     unique.sort(key=rank, reverse=True)
+    # Selbstkorrektur: schlechte Stile hoechstens 1x pro Lauf (Datensammler), Rest raus.
+    _health = _style_health()
+    _muted = {st for st, h in _health.items() if h.get("muted")}
+    if _muted:
+        _kept_once: set = set()
+        _filtered: List[BuilderPick] = []
+        for _p in unique:
+            if _p.style in _muted:
+                if _p.style in _kept_once:
+                    FUNNEL['style_muted_dropped'] = FUNNEL.get('style_muted_dropped', 0) + 1
+                    continue
+                _kept_once.add(_p.style)
+            _filtered.append(_p)
+        unique = _filtered
+        FUNNEL['styles_muted'] = sorted(_muted)[:20]
     FUNNEL['unique'] = len(unique)
 
     diversified: List[BuilderPick] = []
