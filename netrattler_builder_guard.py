@@ -221,6 +221,8 @@ def normalize_prop_safe(row: Dict[str, Any]):
             return None
         # Settled builders 2026-11-04..08: model joint 48% vs market 35% vs actual 31% (2 legs) ->
         # raw model probabilities are overconfident. Shrink toward the market-implied probability.
+        _raw_edge_pp = (leg.probability - implied) * 100.0
+        _raw_ratio = leg.probability / implied
         if leg.category in builder.PLAYER_CATEGORIES:
             k = min(1.0, max(0.0, _as_float(os.getenv("NETRATTLER_PROP_PROB_SHRINK", "0.4"), 0.4)))
             shrunk = implied + k * (leg.probability - implied)
@@ -237,12 +239,12 @@ def normalize_prop_safe(row: Dict[str, Any]):
             return None
 
         max_edge_pp = _edge_pp_limit()
-        if max_edge_pp > 0 and abs(edge_pp) > max_edge_pp:
+        if max_edge_pp > 0 and max(abs(edge_pp), abs(_raw_edge_pp)) > max_edge_pp:
             builder._LAST_REJECT[0] = 'g_max_edge'
             return None
 
         ratio_limit = _model_market_ratio_limit()
-        model_market_ratio = leg.probability / implied
+        model_market_ratio = max(leg.probability / implied, _raw_ratio)
         if ratio_limit > 0 and model_market_ratio > ratio_limit:
             builder._LAST_REJECT[0] = 'g_model_ratio'
             return None

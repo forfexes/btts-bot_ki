@@ -1,6 +1,8 @@
 #!/usr/bin/env python3
 """Deterministic offline regression checks for NETRATTLER builder/quote guard."""
 from __future__ import annotations
+import os
+os.environ.setdefault("NETRATTLER_PROP_PROB_SHRINK", "1")  # tests cover other guard logic; shrink has its own test
 
 import os
 from types import SimpleNamespace
@@ -298,3 +300,18 @@ def test_pinnacle_participant_prices_and_real_combo():
     odds = fake.fetch_pinnacle_match_odds(55) or {}
     assert abs(odds.get("btts_yes", 0) - 1.7353) < 1e-3, odds
     assert abs(odds.get("btts_over25_yes", 0) - 2.5) < 1e-9, odds   # observed "Yes & Over 2.5", never multiplied
+
+
+def test_probability_shrinks_toward_market():
+    old = os.environ.get("NETRATTLER_PROP_PROB_SHRINK")
+    try:
+        os.environ["NETRATTLER_PROP_PROB_SHRINK"] = "0.4"
+        os.environ["NETRATTLER_PROP_BUILDER_MIN_EDGE"] = "0.0"
+        leg = guard.normalize_prop_safe(_row(odds=2.0, model_prob=0.65))
+        assert leg is not None
+        assert abs(leg.probability - (0.5 + 0.4 * 0.15)) < 0.01
+    finally:
+        if old is None:
+            os.environ.pop("NETRATTLER_PROP_PROB_SHRINK", None)
+        else:
+            os.environ["NETRATTLER_PROP_PROB_SHRINK"] = old

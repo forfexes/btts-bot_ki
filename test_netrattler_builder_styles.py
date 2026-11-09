@@ -1,5 +1,7 @@
 #!/usr/bin/env python3
 from __future__ import annotations
+import os
+os.environ.setdefault("NETRATTLER_PROP_PROB_SHRINK", "1")  # tests cover other guard logic; shrink has its own test
 
 import os
 
