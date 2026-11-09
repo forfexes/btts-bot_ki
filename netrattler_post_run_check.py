@@ -32,14 +32,19 @@ def coverage_warnings(log_text):
         r'Modell-Builder: (\d+) gesendet und mit Telegram-Receipt bestaetigt', log_text
     ))
 
+    # Pool fully rejected by the real-odds/validation gates (e.g. only unmodelled
+    # or quote-less legs available) is a data gap, not a delivery failure.
+    pool_gated = ('MASTER BUILDER reject diagnostics' in log_text
+                  and re.search(r'MASTER BUILDER normalized=0\b', log_text) is not None)
+
     for line in log_text.splitlines():
         if 'Coverage:' in line and 'no_candidates' in line:
             missing = re.findall(r'([a-z0-9_]+)=no_candidates', line)
-            if all_already_delivered or model_delivered:
+            if all_already_delivered or model_delivered or pool_gated:
                 missing = [item for item in missing if item != 'builder']
             if missing:
                 issues.append('No candidates: ' + ', '.join(missing))
-        if 'Builder Engine: 0 Builder' in line and not all_already_delivered and not model_delivered:
+        if 'Builder Engine: 0 Builder' in line and not all_already_delivered and not model_delivered and not pool_gated:
             issues.append('Builder Engine sent zero builders')
     return list(dict.fromkeys(issues))
 

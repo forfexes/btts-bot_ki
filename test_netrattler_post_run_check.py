@@ -75,6 +75,13 @@ class PostRunTests(unittest.TestCase):
             self.assertEqual(coverage_warnings('Builder Engine: 0 Builder gesendet\n' + line),
                              ['Builder Engine sent zero builders'])
 
+    def test_gated_builder_pool_is_data_gap_not_failure(self):
+        log = ('MASTER BUILDER reject diagnostics: normalize_rejected=37\n'
+               'MASTER BUILDER normalized=0 · matches=0 · generated=0\n'
+               'Builder Engine: 0 Builder aus 37 Props gesendet\n'
+               'Coverage: builder=no_candidates')
+        self.assertEqual(coverage_warnings(log), [])
+
     def test_incomplete(self):
         ok, _ = evaluate({"status": "in_progress"})
         self.assertFalse(ok)
