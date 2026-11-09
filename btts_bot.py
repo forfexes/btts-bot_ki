@@ -25456,10 +25456,15 @@ def filter_tips_by_edge(tips: List[Dict], market: str = "btts",
             stats["below_min"] += 1
             continue
         try:
-            from netrattler_market_gate import is_blocked as _gate_blocked
-            if policy_ok and _gate_blocked(SUPABASE_URL, SUPABASE_KEY, _tmk, float(market_quote)):
+            from netrattler_market_gate import is_blocked as _gate_blocked, adjust_probability as _gate_adj
+            if _gate_blocked(SUPABASE_URL, SUPABASE_KEY, _tmk, float(market_quote)):
                 policy_ok = False
                 stats["gate_blocked"] = stats.get("gate_blocked", 0) + 1
+            else:
+                _gp = _gate_adj(SUPABASE_URL, SUPABASE_KEY, _tmk, float(market_quote), adjusted_p)
+                if _gp < adjusted_p:
+                    adjusted_p = _gp
+                    stats["gate_shrunk"] = stats.get("gate_shrunk", 0) + 1
         except Exception:
             pass
         fair_odds = 1.0 / adjusted_p
