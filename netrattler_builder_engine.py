@@ -1544,6 +1544,50 @@ def _cat_counts(props) -> Dict[str, int]:
     return out
 
 
+_SINGLE_LABELS = {
+    "yellow_cards": "KARTEN", "fouls": "FOULS BEGANGEN", "fouls_won": "FOULS GEZOGEN",
+    "tackles_committed": "TACKLES", "tackles": "TACKLES", "offsides": "ABSEITS",
+    "goalkeeper_saves": "PARADEN", "sot": "SCHUSS AUFS TOR",
+}
+
+
+def _single_prop_tips(props: Sequence[PropLeg], match_date: str) -> List[BuilderPick]:
+    """Einzelwetten (1 Leg) fuer Karten, Fouls, Tackles, Paraden, Abseits, Schuss aufs Tor.
+
+    Nur echte Buchmacherquoten mit unabhaengiger (zum Markt hin geschrumpfter) Wahrscheinlichkeit
+    und positivem Edge; pro Kategorie die besten, max. 2 pro Spiel."""
+    cats = {c.strip() for c in os.getenv("NETRATTLER_SINGLE_PROP_CATEGORIES", ",".join(_SINGLE_LABELS)).split(",") if c.strip()}
+    min_edge = as_float(os.getenv("NETRATTLER_SINGLE_PROP_MIN_EDGE", "1.0"), 1.0)
+    min_prob = as_float(os.getenv("NETRATTLER_SINGLE_PROP_MIN_PROB", "0.50"), 0.50)
+    per_cat = as_int(os.getenv("NETRATTLER_SINGLE_PROP_PER_CATEGORY", "5"), 5)
+    per_match = as_int(os.getenv("NETRATTLER_SINGLE_PROP_PER_MATCH", "2"), 2)
+    by_cat: Dict[str, List[PropLeg]] = {}
+    for leg in props:
+        if (leg.category not in cats or leg.estimated or not norm(leg.player)
+                or leg.edge < min_edge or leg.probability < min_prob
+                or not 1.50 <= leg.odds <= 3.20):
+            continue
+        by_cat.setdefault(leg.category, []).append(leg)
+    out: List[BuilderPick] = []
+    for cat, legs in by_cat.items():
+        legs.sort(key=lambda x: (x.edge * max(0.1, x.quality), x.probability), reverse=True)
+        used_players, match_n, n = set(), {}, 0
+        for leg in legs:
+            if norm(leg.player) in used_players or match_n.get(norm(leg.match), 0) >= per_match:
+                continue
+            used_players.add(norm(leg.player))
+            match_n[norm(leg.match)] = match_n.get(norm(leg.match), 0) + 1
+            style = "EINZELWETTE " + _SINGLE_LABELS.get(cat, cat.upper())
+            out.append(BuilderPick(
+                builder_id=builder_signature(style, [leg], match_date), style=style, variant="1 LEG",
+                legs=[leg], total_odds=round(leg.odds, 2), stake=0.5, estimated_odds=False,
+                match_date=match_date))
+            n += 1
+            if n >= per_cat:
+                break
+    return out
+
+
 def _ext(candidates, name, fn, *args):
     """Generator-Aufruf mit Zaehler fuer die Diagnose (builder_funnel)."""
     try:
@@ -1608,6 +1652,7 @@ def build_builder_picks(
     _ext(candidates, '_jk_multi_shot_builder', _jk_multi_shot_builder, props, run_date)        # 3-5 Spieler Shots = 100/1+
     _ext(candidates, '_outside_box_sot_builder', _outside_box_sot_builder, props, run_date)      # SOT Outside Box = 21/1
     _ext(candidates, '_full_profile_builder', _full_profile_builder, props, run_date)         # Messi+Bellingham+Tackles+Corners
+    _ext(candidates, '_single_prop_tips', _single_prop_tips, props, run_date)  # Einzelwetten Karten/Fouls/Tackles
 
     # Stable dedup, then rank safe/high-quality builders first.
     seen = set()

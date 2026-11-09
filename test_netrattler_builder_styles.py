@@ -203,3 +203,18 @@ def test_ladder_tiers_added_to_builder_message():
     msg = st.format_builder_message(pick)
     assert "Leiter" in msg and "3+ bei allen Beinen" in msg
     builder.LEG_HISTORY.clear()
+
+
+def test_single_prop_tips_cards_fouls_tackles():
+    import netrattler_builder_engine as eng
+    def leg(player, cat, match, odds=2.0, prob=0.58, edge=8.0):
+        return eng.PropLeg(player=player, team="T", match=match, league="L", market=f"{player} {cat}", category=cat,
+                           line=1.5, odds=odds, probability=prob, source="1xbet", kickoff="", hit_rate=0.0,
+                           games=5, quality=0.6, estimated=False, edge=edge, fair_odds=1/prob)
+    props = [leg("A One", "yellow_cards", "X vs Y"), leg("B Two", "fouls", "X vs Y"),
+             leg("C Three", "tackles_committed", "X vs Y"), leg("D Four", "fouls", "X vs Y", edge=-5.0),
+             leg("E Five", "tackles_committed", "X vs Y")]
+    picks = eng._single_prop_tips(props, "2026-11-10")
+    cats = sorted(p.legs[0].category for p in picks)
+    assert cats == ["fouls", "tackles_committed", "tackles_committed", "yellow_cards"]  # negative-edge fouls leg dropped
+    assert all(p.leg_count == 1 and p.style.startswith("EINZELWETTE") for p in picks)
