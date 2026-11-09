@@ -25465,6 +25465,14 @@ def filter_tips_by_edge(tips: List[Dict], market: str = "btts",
                 if _gp < adjusted_p:
                     adjusted_p = _gp
                     stats["gate_shrunk"] = stats.get("gate_shrunk", 0) + 1
+            try:
+                from netrattler_autolearn_v36 import predict_probability as _al_pred
+                _mlp = _al_pred({"market": _tmk, "league": league, "source": source, "probability": adjusted_p, "odds": float(market_quote)})
+                if _mlp is not None and 0.02 < _mlp < 0.98 and _mlp < adjusted_p:
+                    adjusted_p = 0.5 * adjusted_p + 0.5 * _mlp  # AutoML darf nur dämpfen
+                    stats["automl_shrunk"] = stats.get("automl_shrunk", 0) + 1
+            except Exception:
+                pass
         except Exception:
             pass
         fair_odds = 1.0 / adjusted_p

@@ -138,6 +138,14 @@ jobs:
           SUPABASE_SERVICE_ROLE_KEY: ${{ secrets.SUPABASE_SERVICE_ROLE_KEY }}
           NETRATTLER_LEARNING_MODE: "learning"
         run: python netrattler_learning_engine.py
+      - name: Retrain AutoML champions after settlement
+        if: success()
+        continue-on-error: true
+        env:
+          SUPABASE_URL: ${{ secrets.SUPABASE_URL }}
+          SUPABASE_KEY: ${{ secrets.SUPABASE_KEY }}
+          SUPABASE_SERVICE_ROLE_KEY: ${{ secrets.SUPABASE_SERVICE_ROLE_KEY }}
+        run: python netrattler_autolearn_v36.py --train
 
 # Route player tables to the archive project (V2); see netrattler_table_router.py
 env:
