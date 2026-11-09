@@ -219,6 +219,12 @@ def normalize_prop_safe(row: Dict[str, Any]):
         if implied <= 0:
             builder._LAST_REJECT[0] = 'g_implied'
             return None
+        # Settled builders 2026-11-04..08: model joint 48% vs market 35% vs actual 31% (2 legs) ->
+        # raw model probabilities are overconfident. Shrink toward the market-implied probability.
+        if leg.category in builder.PLAYER_CATEGORIES:
+            k = min(1.0, max(0.0, _as_float(os.getenv("NETRATTLER_PROP_PROB_SHRINK", "0.4"), 0.4)))
+            shrunk = implied + k * (leg.probability - implied)
+            leg = replace(leg, probability=round(max(0.03, min(0.95, shrunk)), 6))
         edge_pp = (leg.probability - implied) * 100.0
 
         min_edge_raw = _as_float(os.getenv("NETRATTLER_PROP_BUILDER_MIN_EDGE", "0.02"), 0.02)
