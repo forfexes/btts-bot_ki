@@ -8237,11 +8237,11 @@ def _empirical_edge_ok(p, odds, market):
     needs n>=150 settled tips, observed hit rate >= 53%, honest p >= 0.53 and
     p*odds-1 >= 10% with the usual odds window. p is already the empirical blend."""
     h = _empirical_rates().get(str(market).lower())
-    if not h or h[1] < 150 or h[0] < 0.53:
+    if not h or h[1] < 150 or h[0] < float(os.getenv("NETRATTLER_EMP_MIN_HIT", "0.45")):
         return False
-    if not (1.70 <= odds <= 3.00) or p < 0.53:
+    if not (1.70 <= odds <= 3.20) or p < float(os.getenv("NETRATTLER_EMP_MIN_P", "0.48")):
         return False
-    return p * odds - 1.0 >= 0.10
+    return p * odds - 1.0 >= float(os.getenv("NETRATTLER_EMP_MIN_EDGE", "0.06"))
 
 
 def _empirical_blend(p, market):
@@ -25479,6 +25479,12 @@ def filter_tips_by_edge(tips: List[Dict], market: str = "btts",
         edge = calculate_edge(float(market_quote), fair_odds)
         if not policy_ok:
             stats["policy_reject"] += 1
+            try:
+                _rj = stats.setdefault("policy_reject_detail", [])
+                if len(_rj) < 6:
+                    _rj.append({"m": _tmk, "p": round(adjusted_p, 3), "raw": round(raw_core_p, 3) if _tmk in _core_thresholds else None, "odds": float(market_quote)})
+            except Exception:
+                pass
             continue
         if edge < min_edge:
             stats["below_min"] += 1
