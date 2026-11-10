@@ -28,6 +28,12 @@ on:
     - cron: "13 12 * * *"  # 14:13 CH
     - cron: "43 14 * * *"  # 16:43 CH
     - cron: "23 17 * * *"  # 19:23 CH
+    # Prop-Fenster: Spielerquoten erscheinen erst 1-3 h vor Anpfiff -> extra Laeufe davor
+    - cron: "37 15 * * *"  # 16:37 CH (fuer 18:30-Spiele)
+    - cron: "7 17 * * *"   # 18:07 CH (fuer 20:00/20:45/21:00-Spiele)
+    - cron: "37 18 * * *"  # 19:37 CH (Spaetspiele/CL 21:00)
+    - cron: "53 12 * * 6,0" # 13:53 CH Sa/So (fuer 15:30)
+    - cron: "37 16 * * 6,0" # 17:37 CH Sa/So (fuer 18:30/20:45)
   workflow_dispatch:
     inputs:
       mode:
