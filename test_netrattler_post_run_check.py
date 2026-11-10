@@ -82,6 +82,13 @@ class PostRunTests(unittest.TestCase):
                'Coverage: builder=no_candidates')
         self.assertEqual(coverage_warnings(log), [])
 
+    def test_single_leg_after_gates_is_data_gap_not_failure(self):
+        log = ('MASTER BUILDER reject diagnostics: normalize_rejected=129\n'
+               'MASTER BUILDER normalized=1 \u00b7 matches=1 \u00b7 same-match\u22652=0 \u00b7 generated=0\n'
+               'Builder Engine: 0 Builder aus 130 Props gesendet\n'
+               'Coverage: builder=no_candidates')
+        self.assertEqual(coverage_warnings(log), [])
+
     def test_incomplete(self):
         ok, _ = evaluate({"status": "in_progress"})
         self.assertFalse(ok)

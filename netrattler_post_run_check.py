@@ -34,8 +34,12 @@ def coverage_warnings(log_text):
 
     # Pool fully rejected by the real-odds/validation gates (e.g. only unmodelled
     # or quote-less legs available) is a data gap, not a delivery failure.
+    # Also covers the case where the gates leave a single leg (no same-match
+    # pair possible), so nothing can be combined: normalized=1 ... generated=0.
     pool_gated = ('MASTER BUILDER reject diagnostics' in log_text
-                  and re.search(r'MASTER BUILDER normalized=0\b', log_text) is not None)
+                  and (re.search(r'MASTER BUILDER normalized=0\b', log_text) is not None
+                       or re.search(r'MASTER BUILDER normalized=1\b[^\n]*same-match.2=0[^\n]*generated=0\b',
+                                    log_text) is not None))
 
     for line in log_text.splitlines():
         if 'Coverage:' in line and 'no_candidates' in line:
