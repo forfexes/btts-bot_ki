@@ -23,8 +23,8 @@ def install(bot):
                 try:
                     r = requests.get(sb + '/rest/v1/netrattler_api_corner_history',
                         headers={'apikey':key, 'Authorization':'Bearer ' + key},
-                        params={'league_id':'eq.' + str(lid), 'order':'match_date.desc', 'limit':'1000',
-                                'match_date':'gte.' + (date.today()-timedelta(days=180)).isoformat()}, timeout=12)
+                        params={'league_id':'eq.' + str(lid), 'order':'match_date.desc', 'limit':'3000',
+                                'match_date':'gte.' + (date.today()-timedelta(days=540)).isoformat()}, timeout=12)
                     r.raise_for_status()
                     cache[lid] = [dict(Date=x['match_date'], HomeTeam=x['home_team'], AwayTeam=x['away_team'],
                         HC=x['home_corners'], AC=x['away_corners'], FTHG=x['home_goals'], FTAG=x['away_goals'],
