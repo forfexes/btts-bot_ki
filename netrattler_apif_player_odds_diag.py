@@ -6,7 +6,7 @@ U=(os.getenv("SUPABASE_URL") or "").rstrip("/"); K=os.getenv("SUPABASE_SERVICE_R
 H={"apikey":K,"Authorization":f"Bearer {K}","Content-Type":"application/json"}
 AK=next((k.strip() for k in (os.getenv("API_FOOTBALL_KEYS") or "").replace("\n",",").split(",") if k.strip()),"")
 AH={"x-apisports-key":AK}
-WORDS=("player","card","foul","tackle","shot","booked","assist","scorer","save","offside")
+WORDS=("player","card","foul","tackle","shot","booked","assist","scorer","save","offside","corner")
 def get(path,params):
     r=requests.get("https://v3.football.api-sports.io"+path,params=params,headers=AH,timeout=30); return r.json()
 out={"probe":"apif_player_odds","key":bool(AK)}
@@ -15,9 +15,11 @@ out["catalogue"]=[ [b.get("id"),b.get("name")] for b in cat if any(w in str(b.ge
 fx=[]
 for i in (0,1):
     fx+= (get("/fixtures",{"date":str(date.today()+timedelta(days=i))}).get("response") or [])
-fx=[f for f in fx if f["fixture"]["status"]["short"]=="NS"][:400]
+from netrattler_apifootball_players import PRIORITY
+fx=[f for f in fx if f["fixture"]["status"]["short"]=="NS"]
+fx=[f for f in fx if (f.get("league") or {}).get("id") in PRIORITY]+[f for f in fx if (f.get("league") or {}).get("id") not in PRIORITY][:10]
 seen={}; checked=0
-for f in fx[:60]:
+for f in fx[:70]:
     js=get("/odds",{"fixture":f["fixture"]["id"]}); checked+=1
     for it in js.get("response") or []:
         for bk in it.get("bookmakers") or []:
