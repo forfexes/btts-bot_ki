@@ -6,6 +6,7 @@ ALIASES = {
     'psg':'paris saint germain', 'bayern':'bayern munich', 'bayern munchen':'bayern munich',
     'rennes':'stade rennais', 'swansea':'swansea city', 'blackburn':'blackburn rovers',
     'derby':'derby county', 'inter':'inter milan', 'internazionale':'inter milan',
+    'mechelen':'kv mechelen', 'sint truidense':'sint truidense vv', 'twente 65':'twente enschede',
     'atletico madrid':'atletico de madrid', 'athletic bilbao':'athletic club',
 }
 STOP = {'fc','cf','afc','sc','fk','football','club','futbol','futebol','clube'}
