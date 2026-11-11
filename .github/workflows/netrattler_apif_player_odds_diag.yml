@@ -1,6 +1,9 @@
 name: NETRATTLER API-Football Player Odds Diag
 on:
   workflow_dispatch: {}
+  schedule:
+    - cron: "17 10 * * 5,6"  # Fr/Sa: Spieltage mit Top-Ligen
+    - cron: "43 16 * * 5,6"
 permissions:
   contents: read
 jobs:
