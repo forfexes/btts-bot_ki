@@ -25456,8 +25456,13 @@ def filter_tips_by_edge(tips: List[Dict], market: str = "btts",
         if adjusted_p <= 0:
             stats["below_min"] += 1
             continue
+        if tip.get("_floor"):
+            adjusted_p = raw_p / 100.0 if raw_p > 1 else raw_p
+            policy_ok = True
         try:
             from netrattler_market_gate import is_blocked as _gate_blocked, adjust_probability as _gate_adj
+            if tip.get("_floor"):
+                raise RuntimeError("floor")
             if _gate_blocked(SUPABASE_URL, SUPABASE_KEY, _tmk, float(market_quote)):
                 policy_ok = False
                 stats["gate_blocked"] = stats.get("gate_blocked", 0) + 1
@@ -25467,6 +25472,8 @@ def filter_tips_by_edge(tips: List[Dict], market: str = "btts",
                     adjusted_p = _gp
                     stats["gate_shrunk"] = stats.get("gate_shrunk", 0) + 1
             try:
+                if tip.get("_floor"):
+                    raise RuntimeError("floor")
                 from netrattler_autolearn_v36 import predict_probability as _al_pred
                 _mlp = _al_pred({"market": _tmk, "league": league, "source": source, "probability": adjusted_p, "odds": float(market_quote)})
                 if _mlp is not None and 0.02 < _mlp < 0.98 and _mlp < adjusted_p:
@@ -25489,7 +25496,7 @@ def filter_tips_by_edge(tips: List[Dict], market: str = "btts",
             except Exception:
                 pass
             continue
-        if edge < min_edge:
+        if edge < min_edge and not tip.get("_floor"):
             stats["below_min"] += 1
             if edge >= 0.02 and float(market_quote) >= 1.45:
                 _near_miss.append((edge, tip, float(market_quote), source, adjusted_p, raw_p))
@@ -27119,6 +27126,20 @@ def main():
                     _gf["btts_max_prob"] = max(_gf.get("btts_max_prob", 0), float(prob_b or 0))
                 except Exception:
                     pass
+                try:
+                    if btts_yes and float(btts_yes) >= 1.5 and prob_b >= 45:
+                        _bp = prob_b / 100.0 - 0.08
+                        if _bp * float(btts_yes) - 1.0 >= 0.02:
+                            globals().setdefault("_FLOOR_POOL", {}).setdefault("btts", []).append((_bp * float(btts_yes) - 1.0, {
+                                "match": mn, "league": league_name or "Pinnacle", "time": tstr, "tip": "YES",
+                                "probability": round(_bp * 100, 1), "confidence": 2,
+                                "oddsYes": btts_yes, "fairOdds": round(1.0 / _bp, 2),
+                                "valueRating": "FLOOR", "units": 0.5, "market": "btts",
+                                "reasoning": f"BTTS Floor (kalibriert) | {league_name}",
+                                "_no_real_odds": not bool(ro), "_source": "pinnacle", "_kickoff": _ko_sort, "_floor": True,
+                            }))
+                except Exception:
+                    pass
                 if prob_b >= BTTS_MIN_PROB and "btts" in tips_by_market and _is_market_value_bet(btts_yes, prob_b, BTTS_MIN_ODDS, BTTS_MIN_EDGE):
                     tip_btts = {
                         "match": mn, "league": league_name or "Pinnacle",
@@ -27349,6 +27370,20 @@ def main():
                         except Exception:
                             pass
                         _gf = globals().setdefault("_GROUP_FUNNEL", {})
+                        try:
+                            _cal_p = max(0.05, sel_prob / 100.0 - 0.16)
+                            if q >= 1.5 and _cal_p * q - 1.0 >= 0.02:
+                                globals().setdefault("_FLOOR_POOL", {}).setdefault("1x2", []).append((_cal_p * q - 1.0, {
+                                    "match": mn, "league": league_name or "Pinnacle", "time": tstr,
+                                    "tip": sel, "selection": sel, "probability": round(_cal_p * 100, 1), "confidence": 2,
+                                    "oddsYes": q, "odds": q, "fairOdds": round(1.0 / _cal_p, 2),
+                                    "valueRating": "FLOOR", "units": 0.5, "market": "1x2",
+                                    "reasoning": f"1X2 Floor (kalibriert) | {league_name}",
+                                    "_no_real_odds": False, "_source": "pinnacle", "_kickoff": _ko_sort, "_floor": True,
+                                    "p_home": round(_norm_1x2[0], 1), "p_draw": round(_norm_1x2[1], 1), "p_away": round(_norm_1x2[2], 1),
+                                }))
+                        except Exception:
+                            pass
                         for _reason, _rejected in (("probability", sel_prob < ONE_X_TWO_MIN_PROB), ("odds", q < ONE_X_TWO_MIN_ODDS), ("edge", _edge_1x2 < ONE_X_TWO_MIN_EDGE)):
                             _gf["x2_reject_" + _reason] = _gf.get("x2_reject_" + _reason, 0) + int(_rejected)
                         if (
@@ -27383,6 +27418,16 @@ def main():
                     _gfe["last_match_error"] = (type(pe).__name__ + ": " + str(pe))[:120] + " @" + str(_tb.extract_tb(pe.__traceback__)[-1].lineno)
                 except Exception:
                     pass
+        try:
+            for _fm, _fl in (globals().get("_FLOOR_POOL") or {}).items():
+                if _fl and _fm in tips_by_market and not tips_by_market[_fm] and env("NETRATTLER_FLOOR_PICKS", "1") == "1":
+                    _best = max(_fl, key=lambda r: r[0])[1]
+                    enrich_pinnacle_tip(_best, *[x.strip() for x in str(_best["match"]).split(" vs ", 1)], _best.get("league"))
+                    tips_by_market[_fm].append(_best)
+                    pinnacle_tips_count += 1
+                    log(f"      🟠 FLOOR {_fm}: {_best['match']} @ {_best['oddsYes']}")
+        except Exception as _fe:
+            log(f"      ⚠️ Floor-Pool Fehler: {str(_fe)[:80]}", "WARN")
         _ntr_mark("pinnacle_done")
         log(f"🎰 Pinnacle fertig: {pinnacle_tips_count} Tipps generiert")
         try:
