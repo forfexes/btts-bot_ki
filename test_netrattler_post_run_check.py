@@ -53,6 +53,14 @@ class PostRunTests(unittest.TestCase):
         ])
         self.assertEqual(coverage_warnings(log), ['No candidates: scorer'])
 
+    def test_match_limit_exhausted_is_not_failure(self):
+        log = '\n'.join(
+            ['MASTER BUILDER normalized=370 · matches=6 · same-match≥2=6 · generated=3']
+            + ['MASTER BUILDER Spiel-Limit erreicht: X'] * 3
+            + ['Builder Engine: 0 Builder aus 1747 Props gesendet',
+               'Coverage: builder=no_candidates'])
+        self.assertEqual(coverage_warnings(log), [])
+
     def test_partial_deduplication_still_warns(self):
         log = '\\n'.join([
             'MASTER BUILDER normalized=476 · generated=3',

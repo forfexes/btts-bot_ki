@@ -25,7 +25,12 @@ def coverage_warnings(log_text):
     duplicate_ids = set(re.findall(
         r'MASTER BUILDER duplicate skipped: ([a-zA-Z0-9_-]+)', log_text
     ))
-    all_already_delivered = count_generated > 0 and len(duplicate_ids) >= count_generated
+    # Per-match limit: every generated builder hit the daily "Spiel-Limit" because
+    # earlier runs already delivered builders for those matches -> legitimate cap,
+    # not a missing delivery.
+    limit_hits = len(re.findall(r'MASTER BUILDER Spiel-Limit erreicht', log_text))
+    limit_exhausted = count_generated > 0 and limit_hits >= count_generated
+    all_already_delivered = (count_generated > 0 and len(duplicate_ids) >= count_generated) or limit_exhausted
     # Model builders are an explicitly supported style in the same group.
     # Count only deliveries with a confirmed Telegram receipt, never attempts.
     model_delivered = any(int(n) > 0 for n in re.findall(
