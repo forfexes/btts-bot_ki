@@ -21468,6 +21468,13 @@ def run_corners_and_scorer_bots(target_date, active_leagues, odds_data_cache, fi
     run_corners_and_scorer_bots._last_corner_tips = [dict(t) for t in corners_tips]
     run_corners_and_scorer_bots._last_scorer_tips = [dict(t) for t in scorer_tips]
     log(f"   🩺 Corners-Funnel: {getattr(analyze_corners_tip, 'diagnostics', {})}")
+    try:
+        requests.post(f"{SUPABASE_URL}/rest/v1/netrattler_card_diag", timeout=8,
+                      headers={"apikey": SUPABASE_KEY, "Authorization": f"Bearer {SUPABASE_KEY}", "Content-Type": "application/json"},
+                      json={"info": {"probe": "corner_funnel", "diag": dict(getattr(analyze_corners_tip, "diagnostics", {}) or {}),
+                                     "tips": corners_count, "checked": corner_checked, "max": corner_max_matches}})
+    except Exception:
+        pass
     log(f"🔵⚽ Fertig: {corners_count} Ecken Tips, {scorer_count} Scorer Tips · Corners geprüft={corner_checked}/{corner_max_matches}")
 
 
