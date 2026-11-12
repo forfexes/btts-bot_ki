@@ -141,22 +141,21 @@ def main():
         event = json.load(handle)
     run = event.get("workflow_run") or {}
     ok, message = evaluate(run)
-    print(message, flush=True)
     if ok and run.get('conclusion') == 'success' and run.get('name') == 'NETRATTLER AI Tipp Bot':
         try:
             warnings = coverage_warnings(fetch_job_logs(run))
             if warnings:
                 ok = False
                 message = 'NETRATTLER | TIP COVERAGE WARNING\n' + '\n'.join(warnings) + '\n' + (run.get('html_url') or '')
-                print(message, flush=True)
-                notify(message)
         except (urllib.error.URLError, ValueError, KeyError, TimeoutError) as exc:
             ok = False
             message = 'NETRATTLER | Coverage log inspection unavailable: ' + type(exc).__name__
             print(message, flush=True)
-    # Send failures; successful runs are recorded in Actions without Telegram spam.
+    # Print once; Telegram only on failure (no duplicate sends/prints).
     if not ok:
         notify(message)
+    else:
+        print(message, flush=True)
     return 0 if ok else 1
 
 
