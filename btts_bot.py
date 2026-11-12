@@ -20346,6 +20346,12 @@ def _ntr_observed_corner_quotes(fixture, target_date=None):
         pass
     if not out:
         try:
+            from netrattler_apif_corner_quotes import fetch_apif_corner_quotes
+            out.update(fetch_apif_corner_quotes(home, away, target_date or date.today().isoformat()))
+        except Exception:
+            pass
+    if not out:
+        try:
             out.update(_ntr_odds_history_corner_quotes(home, away))
         except Exception:
             pass
