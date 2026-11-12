@@ -8,6 +8,9 @@ on:
       - 'netrattler_apif_history.py'
   schedule:
     - cron: '11 6 * * *'
+    - cron: '37 11 * * *'
+    - cron: '19 16 * * *'
+    - cron: '43 21 * * *'
 permissions:
   contents: read
 concurrency:
