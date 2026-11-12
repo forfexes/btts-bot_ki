@@ -25373,6 +25373,7 @@ def filter_tips_by_edge(tips: List[Dict], market: str = "btts",
         return tips
 
     filtered = []
+    _near_miss = []
     stats = {"total": len(tips), "no_quote": 0, "below_min": 0, "above_max": 0, "policy_reject": 0, "kept": 0}
 
     for tip in tips:
@@ -25479,6 +25480,8 @@ def filter_tips_by_edge(tips: List[Dict], market: str = "btts",
         edge = calculate_edge(float(market_quote), fair_odds)
         if not policy_ok:
             stats["policy_reject"] += 1
+            if 0.02 <= edge <= max_edge and float(market_quote) >= 1.45:
+                _near_miss.append((edge, tip, float(market_quote), source, adjusted_p, raw_p))
             try:
                 _rj = stats.setdefault("policy_reject_detail", [])
                 if len(_rj) < 6:
@@ -25488,6 +25491,8 @@ def filter_tips_by_edge(tips: List[Dict], market: str = "btts",
             continue
         if edge < min_edge:
             stats["below_min"] += 1
+            if edge >= 0.02 and float(market_quote) >= 1.45:
+                _near_miss.append((edge, tip, float(market_quote), source, adjusted_p, raw_p))
             continue
         if edge > max_edge:
             stats["above_max"] += 1
@@ -25514,11 +25519,55 @@ def filter_tips_by_edge(tips: List[Dict], market: str = "btts",
         filtered.append(tip)
         stats["kept"] += 1
 
+    # Tages-Floor: jede Markt-Gruppe soll sichtbar sein. Wenn heute noch kein Tipp dieses
+    # Marktes existiert und nichts durchkam, wird der beste ehrliche Kandidat (positive Edge,
+    # echte Quote) als reduzierter 'FLOOR'-Tipp mit halber Einheit gesetzt.
+    if not filtered and _near_miss and env("NETRATTLER_FLOOR_PICKS", "1") == "1":
+        try:
+            if not _floor_market_has_tip_today(market):
+                _e, _t, _q, _src, _ap, _rp = max(_near_miss, key=lambda r: r[0])
+                _t["raw_probability"] = _rp / 100.0 if _rp > 1 else _rp
+                _t["calibrated_probability"] = round(_ap, 6)
+                _t["probability"] = round(_ap * 100, 1)
+                _t["fairOdds"] = round(1.0 / _ap, 2)
+                _t["oddsYes"] = _t["odds"] = _t["bet365_quote"] = round(_q, 3)
+                _t["_no_real_odds"] = False
+                _t["_source"] = _t["edge_source"] = _src
+                _t["edge"] = round(_e, 4)
+                _t["edge_pct"] = round(_e * 100, 1)
+                _t["quote_rechecked_at"] = datetime.now(timezone.utc).isoformat()
+                _t["kelly_units"] = calculate_kelly_stake(_e, _q)
+                _t["units"] = 0.5
+                _t["floor_pick"] = True
+                _t["value_rating"] = "🟠 FLOOR"
+                filtered.append(_t)
+                stats["kept"] += 1
+                stats["floor_pick"] = 1
+        except Exception:
+            pass
+
     _NTR_EDGE_FILTER_STATS[market] = dict(stats)
     _log("EDGE", f"[{market}]: {stats['kept']}/{stats['total']} kept "
                   f"(no_quote={stats['no_quote']} below={stats['below_min']} policy={stats['policy_reject']})")
     return filtered
 
+
+
+def _floor_market_has_tip_today(market):
+    """True, wenn heute fuer diesen Markt schon ein Tipp in Supabase liegt (oder DB nicht lesbar)."""
+    if not SUPABASE_URL or not SUPABASE_KEY:
+        return True
+    try:
+        r = requests.get(
+            f"{SUPABASE_URL}/rest/v1/tips",
+            headers={"apikey": SUPABASE_KEY, "Authorization": f"Bearer {SUPABASE_KEY}"},
+            params={"select": "id", "market": f"eq.{str(market).lower()}",
+                    "date": f"eq.{date.today().isoformat()}", "limit": "1"},
+            timeout=15,
+        )
+        return (not r.ok) or bool(r.json())
+    except Exception:
+        return True
 
 
 def filter_tips_legacy_safe(tips: List[Dict], market: str = "btts",
