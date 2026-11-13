@@ -7214,18 +7214,24 @@ def generate_multi_combo_bets(all_tips, num_tips=3):
 
     total_odds = 1.0
     combined_probability = 1.0
+    _leg_shrink = float(env("NETRATTLER_COMBO_LEG_SHRINK_PP", "8")) / 100.0
     for tip in selected:
         total_odds *= float(tip.get("odds", 1.0) or 1.0)
         p = float(tip.get("probability", 0) or 0)
         p = p / 100.0 if p > 1 else p
-        combined_probability *= max(0.0, min(1.0, p))
+        # Ehrliche Bein-Wahrscheinlichkeit: Modell war in 45 Tagen ~8-20 Punkte zu optimistisch.
+        p = max(0.05, min(0.95, p - _leg_shrink))
+        combined_probability *= p
 
     try:
-        _raw_combo_cap = env("NETRATTLER_MULTI_COMBO_MAX_TOTAL_ODDS", "") or env("NETRATTLER_MULTI_COMBO_MAX_ODDS", "500")
+        _raw_combo_cap = env("NETRATTLER_MULTI_COMBO_MAX_TOTAL_ODDS", "") or env("NETRATTLER_MULTI_COMBO_MAX_ODDS", "40")
         max_total_odds = max(10.0, float(_raw_combo_cap))
     except Exception:
-        max_total_odds = 500.0
+        max_total_odds = 40.0
     if total_odds > max_total_odds:
+        return None
+    # Nur Kombis mit positivem Erwartungswert nach ehrlicher Wahrscheinlichkeit.
+    if combined_probability * total_odds < float(env("NETRATTLER_COMBO_MIN_EV", "1.08")):
         return None
 
     avg_confidence = sum(t.get("confidence", 0) for t in selected) / len(selected)
@@ -7241,7 +7247,7 @@ def generate_multi_combo_bets(all_tips, num_tips=3):
         11: ("👑 COMBO 11", "Maximal-Kombi"),
     }
     label, desc = labels.get(num_tips, (f"🎲 COMBO {num_tips}", "Multi-Kombi"))
-    stakes = {3: 5, 4: 4, 5: 3, 6: 2, 7: 2, 8: 1, 9: 0.75, 10: 0.5, 11: 0.5}
+    stakes = {3: 1.0, 4: 0.75, 5: 0.5, 6: 0.5, 7: 0.25, 8: 0.25, 9: 0.25, 10: 0.25, 11: 0.25}
     stake = stakes.get(num_tips, 1)
 
     return {
@@ -17271,18 +17277,24 @@ def generate_multi_combo_bets(all_tips, num_tips=3):
 
     total_odds = 1.0
     combined_probability = 1.0
+    _leg_shrink = float(env("NETRATTLER_COMBO_LEG_SHRINK_PP", "8")) / 100.0
     for tip in selected:
         total_odds *= float(tip.get("odds", 1.0) or 1.0)
         p = float(tip.get("probability", 0) or 0)
         p = p / 100.0 if p > 1 else p
-        combined_probability *= max(0.0, min(1.0, p))
+        # Ehrliche Bein-Wahrscheinlichkeit: Modell war in 45 Tagen ~8-20 Punkte zu optimistisch.
+        p = max(0.05, min(0.95, p - _leg_shrink))
+        combined_probability *= p
 
     try:
-        _raw_combo_cap = env("NETRATTLER_MULTI_COMBO_MAX_TOTAL_ODDS", "") or env("NETRATTLER_MULTI_COMBO_MAX_ODDS", "500")
+        _raw_combo_cap = env("NETRATTLER_MULTI_COMBO_MAX_TOTAL_ODDS", "") or env("NETRATTLER_MULTI_COMBO_MAX_ODDS", "40")
         max_total_odds = max(10.0, float(_raw_combo_cap))
     except Exception:
-        max_total_odds = 500.0
+        max_total_odds = 40.0
     if total_odds > max_total_odds:
+        return None
+    # Nur Kombis mit positivem Erwartungswert nach ehrlicher Wahrscheinlichkeit.
+    if combined_probability * total_odds < float(env("NETRATTLER_COMBO_MIN_EV", "1.08")):
         return None
 
     avg_confidence = sum(t.get("confidence", 0) for t in selected) / len(selected)
@@ -17298,7 +17310,7 @@ def generate_multi_combo_bets(all_tips, num_tips=3):
         11: ("👑 COMBO 11", "Maximal-Kombi"),
     }
     label, desc = labels.get(num_tips, (f"🎲 COMBO {num_tips}", "Multi-Kombi"))
-    stakes = {3: 5, 4: 4, 5: 3, 6: 2, 7: 2, 8: 1, 9: 0.75, 10: 0.5, 11: 0.5}
+    stakes = {3: 1.0, 4: 0.75, 5: 0.5, 6: 0.5, 7: 0.25, 8: 0.25, 9: 0.25, 10: 0.25, 11: 0.25}
     stake = stakes.get(num_tips, 1)
 
     return {
@@ -28040,9 +28052,9 @@ def main():
     if len(all_tips_flat) >= 3:
         log("")
         try:
-            _multi_max_legs = max(3, min(11, int(env("NETRATTLER_MULTI_COMBO_MAX_LEGS", "11"))))
+            _multi_max_legs = max(3, min(11, int(env("NETRATTLER_MULTI_COMBO_MAX_LEGS", "5"))))
         except Exception:
-            _multi_max_legs = 11
+            _multi_max_legs = 5
         _combo_sizes = list(range(3, _multi_max_legs + 1))
         log(f"🎰 Generiere Multi-Combos ({','.join(str(x) for x in _combo_sizes)} Tipps)...")
         combo_chat = TELEGRAM_GROUPS.get("combos", TELEGRAM_CHAT_ID)  # Multi-Combos
@@ -28066,6 +28078,9 @@ def main():
                     continue
 
                 log(f"   {combo['label']}: Quote {combo['total_odds']}")
+                _used_keys = {(t.get("match"), str(t.get("market")), str(t.get("tip", t.get("selection", "")))) for t in combo.get("tips", [])}
+                all_tips_flat[:] = [r for r in all_tips_flat
+                                    if (r.get("match"), str(r.get("market")), str(r.get("tip", r.get("selection", "")))) not in _used_keys]
                 msg = format_combo_telegram_message(combo)
                 if msg:
                     if not _combo_header_sent:
