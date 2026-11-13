@@ -219,6 +219,15 @@ def normalize_prop_safe(row: Dict[str, Any]):
         if implied <= 0:
             builder._LAST_REJECT[0] = 'g_implied'
             return None
+        # Karten ohne belegbare Spieler-Historie ("Historie nicht verfuegbar") sind nur ML-Raten.
+        try:
+            _min_games = int(os.getenv("NETRATTLER_BUILDER_MIN_GAMES", "4"))
+        except Exception:
+            _min_games = 4
+        if (leg.category in builder.PLAYER_CATEGORIES and _min_games > 0
+                and int(getattr(leg, "games", 0) or 0) < _min_games):
+            builder._LAST_REJECT[0] = 'g_no_history'
+            return None
         # Settled builders 2026-11-04..08: model joint 48% vs market 35% vs actual 31% (2 legs) ->
         # raw model probabilities are overconfident. Shrink toward the market-implied probability.
         _raw_edge_pp = (leg.probability - implied) * 100.0

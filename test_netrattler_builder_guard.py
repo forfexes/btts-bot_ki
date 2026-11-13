@@ -2,7 +2,8 @@
 """Deterministic offline regression checks for NETRATTLER builder/quote guard."""
 from __future__ import annotations
 import os
-os.environ.setdefault("NETRATTLER_PROP_PROB_SHRINK", "1")  # tests cover other guard logic; shrink has its own test
+os.environ.setdefault("NETRATTLER_PROP_PROB_SHRINK", "1")
+os.environ.setdefault("NETRATTLER_BUILDER_MIN_GAMES", "0")  # tests cover other guard logic; shrink has its own test
 
 import os
 from types import SimpleNamespace

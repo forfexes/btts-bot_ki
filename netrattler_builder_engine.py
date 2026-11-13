@@ -1902,11 +1902,14 @@ def legsets_overlap(a: frozenset, b: frozenset, threshold: float = None) -> bool
         threshold = float(os.getenv("NETRATTLER_BUILDER_MAX_OVERLAP", "0")) if threshold is None else threshold
     except Exception:
         threshold = 0.0
-    if threshold <= 0:
-        return False
     only_a, only_b = a - b, b - a
     if bool(only_a) != bool(only_b):
+        return os.getenv("NETRATTLER_BUILDER_BLOCK_EXTENSIONS", "1") == "1"
+    if threshold <= 0:
         return False
+    if bool(only_a) != bool(only_b):
+        # Reine Erweiterung (4L -> 5L mit denselben Beinen) = fuer den Leser dasselbe Bild zweimal.
+        return os.getenv("NETRATTLER_BUILDER_BLOCK_EXTENSIONS", "1") == "1"
     if {tuple(x[:3]) for x in only_a} == {tuple(x[:3]) for x in only_b}:
         return False
     return len(a & b) / float(min(len(a), len(b))) >= threshold
