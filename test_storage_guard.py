@@ -8,7 +8,8 @@ def test_decide():
 
 
 def test_trim_keep_days_tiers():
-    assert g.trim_keep_days(430) == g.TRIM_KEEP_DAYS == 2
+    assert g.trim_keep_days(418) == g.TRIM_KEEP_DAYS == 2
+    assert g.trim_keep_days(430) == 1
     assert g.trim_keep_days(480) == 1
     assert g.trim_keep_days(495) == 1
 

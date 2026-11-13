@@ -1891,7 +1891,7 @@ def builder_pick_exists(pick: BuilderPick, supabase_url: str, supabase_key: str)
 def legsets_overlap(a: frozenset, b: frozenset, threshold: float = None) -> bool:
     """Duplikat = exakt gleiche Beine (Spieler, Spiel, Markt, Linie).
 
-    Erlaubt bleiben: Erweiterungen (3L -> 4L), Leitern (gleicher Spieler, andere Linie)
+    Reine Erweiterungen (3L -> 4L mit denselben Beinen) gelten als Duplikat (abschaltbar per NETRATTLER_BUILDER_BLOCK_EXTENSIONS=0). Erlaubt bleiben: Leitern (gleicher Spieler, andere Linie)
     und Varianten, in denen ein anderer Spieler ein Bein ersetzt. Optional strenger ueber
     NETRATTLER_BUILDER_MAX_OVERLAP (Anteil gemeinsamer Beine, z. B. 0.66)."""
     if not a or not b:
@@ -1907,9 +1907,6 @@ def legsets_overlap(a: frozenset, b: frozenset, threshold: float = None) -> bool
         return os.getenv("NETRATTLER_BUILDER_BLOCK_EXTENSIONS", "1") == "1"
     if threshold <= 0:
         return False
-    if bool(only_a) != bool(only_b):
-        # Reine Erweiterung (4L -> 5L mit denselben Beinen) = fuer den Leser dasselbe Bild zweimal.
-        return os.getenv("NETRATTLER_BUILDER_BLOCK_EXTENSIONS", "1") == "1"
     if {tuple(x[:3]) for x in only_a} == {tuple(x[:3]) for x in only_b}:
         return False
     return len(a & b) / float(min(len(a), len(b))) >= threshold

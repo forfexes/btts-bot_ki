@@ -25,7 +25,7 @@ def decide(mb: float) -> str:
 
 def trim_keep_days(mb: float) -> int:
     """Gestaffelt: je voller die DB, desto kuerzer bleiben die (regenerierbaren) x1-Snapshots erhalten."""
-    if mb >= TRIM_MB + 30:  # 460+ MiB: only retain one day
+    if mb >= TRIM_MB + 10:  # 425+ MiB: only retain one day (430 MB reached with 2 days kept)
         return 1
     return TRIM_KEEP_DAYS
 
