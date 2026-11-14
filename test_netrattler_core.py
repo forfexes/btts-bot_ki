@@ -121,7 +121,18 @@ for pick in valid_player_picks:
     assert all(leg.probability > (1.0 / leg.odds) for leg in pick.legs)
 
 # Mixed pool must preserve valid player builders and unlock explicit MIXED builders.
-mixed_picks = build_builder_picks(team_rows + player_rows, match_date="2026-07-15", max_builders=80)
+# Pure extensions (MATCH 2L -> MIXED 4L with the same legs) are blocked as duplicates by
+# design; lift that block here so the MIXED generator itself stays covered.
+import os as _os
+_prev_ext = _os.environ.get("NETRATTLER_BUILDER_BLOCK_EXTENSIONS")
+_os.environ["NETRATTLER_BUILDER_BLOCK_EXTENSIONS"] = "0"
+try:
+    mixed_picks = build_builder_picks(team_rows + player_rows, match_date="2026-07-15", max_builders=80)
+finally:
+    if _prev_ext is None:
+        _os.environ.pop("NETRATTLER_BUILDER_BLOCK_EXTENSIONS", None)
+    else:
+        _os.environ["NETRATTLER_BUILDER_BLOCK_EXTENSIONS"] = _prev_ext
 assert mixed_picks, "Mixed pool produced no builders"
 assert any(p.family == "player" for p in mixed_picks), "Mixed pool lost player builders"
 assert any(p.family == "match" for p in mixed_picks), "Mixed pool lost match builders"
