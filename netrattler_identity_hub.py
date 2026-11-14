@@ -143,6 +143,12 @@ def _ratio(a: str, b: str) -> float:
         return 0.0
     if fuzz is not None:
         try:
+            ta, tb = set(a.split()), set(b.split())
+            if ta != tb and (ta < tb or tb < ta):
+                # token_set_ratio scores a strict token subset as 100 ("Inter" vs
+                # "Inter Miami"); different clubs must not merge, so fall back to
+                # the plain sequence ratio (same behaviour as without rapidfuzz).
+                return SequenceMatcher(None, a, b).ratio()
             return float(fuzz.token_set_ratio(a, b)) / 100.0
         except Exception:
             pass
