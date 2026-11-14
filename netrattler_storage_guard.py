@@ -11,7 +11,7 @@ SB = (os.getenv("SUPABASE_URL") or "").rstrip("/")
 KEY = os.getenv("SUPABASE_SERVICE_ROLE_KEY") or os.getenv("SUPABASE_KEY") or ""
 H = {"apikey": KEY, "Authorization": f"Bearer {KEY}", "Content-Type": "application/json"}
 WARN_MB = float(os.getenv("STORAGE_WARN_MB", "400"))
-TRIM_MB = float(os.getenv("STORAGE_TRIM_MB", "450"))
+TRIM_MB = float(os.getenv("STORAGE_TRIM_MB", "415"))
 TRIM_KEEP_DAYS = int(os.getenv("STORAGE_TRIM_KEEP_DAYS", "2"))
 
 
