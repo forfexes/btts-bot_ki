@@ -1046,6 +1046,13 @@ def _player_photo(name, team=""):
     except Exception:
         STATS["player_tsdb_err"] = STATS.get("player_tsdb_err", 0) + 1
     try:
+        from netrattler_apif_profile_photo import profile_photo
+        _pp = profile_photo(clean_name)
+        if _pp:
+            urls.append(_pp)
+    except Exception:
+        STATS["player_profile_err"] = STATS.get("player_profile_err", 0) + 1
+    try:
         from netrattler_reference_images import player_urls
         urls.extend(player_urls(clean_name, team))
     except Exception:
