@@ -221,7 +221,7 @@ def normalize_prop_safe(row: Dict[str, Any]):
             return None
         # Karten ohne belegbare Spieler-Historie ("Historie nicht verfuegbar") sind nur ML-Raten.
         try:
-            _min_games = int(os.getenv("NETRATTLER_BUILDER_MIN_GAMES", "4"))
+            _min_games = int(os.getenv("NETRATTLER_BUILDER_MIN_GAMES", "3"))
         except Exception:
             _min_games = 4
         if (leg.category in builder.PLAYER_CATEGORIES and _min_games > 0
