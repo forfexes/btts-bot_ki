@@ -7703,6 +7703,8 @@ def _send_market_daily_cards_to_own_groups(tips_by_market, target_date, stats=No
 
 
 def _send_global_daily_stats_only_to_stats_group(stats_header):
+    if "Total: 0 Top-Tipps" in str(stats_header):
+        return  # keine Leer-Uebersicht senden
     """
     Gesamtbericht nur in TELEGRAM_GROUP_STATS senden, falls diese Gruppe explizit
     gesetzt und nicht identisch mit einer Tipp-Gruppe ist.

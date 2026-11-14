@@ -214,7 +214,7 @@ def check_clv() -> str:
 
 def send(text: str) -> None:
     print(text)
-    if TG_TOKEN and TG_CHAT:
+    if TG_TOKEN and TG_CHAT and os.getenv("NETRATTLER_HEALTH_TELEGRAM","0")=="1":
         try:
             requests.post(f"https://api.telegram.org/bot{TG_TOKEN}/sendMessage",
                           json={"chat_id": TG_CHAT, "text": text[:3900], "parse_mode": "HTML"}, timeout=15)

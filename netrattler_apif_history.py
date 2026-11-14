@@ -72,7 +72,7 @@ class Importer:
             raise RuntimeError('API-Football configuration missing')
         self.calls = 0
         self.max_calls = min(600, int(os.getenv('APIF_HISTORY_MAX_CALLS', '550')))
-        self.ceiling = min(430, float(os.getenv('APIF_HISTORY_MAX_MB', '430')))
+        self.ceiling = min(465, float(os.getenv('APIF_HISTORY_MAX_MB', '465')))
         self.initial_mb = self.capacity()
 
     def capacity(self):

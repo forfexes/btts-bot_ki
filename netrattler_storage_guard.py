@@ -11,7 +11,7 @@ SB = (os.getenv("SUPABASE_URL") or "").rstrip("/")
 KEY = os.getenv("SUPABASE_SERVICE_ROLE_KEY") or os.getenv("SUPABASE_KEY") or ""
 H = {"apikey": KEY, "Authorization": f"Bearer {KEY}", "Content-Type": "application/json"}
 WARN_MB = float(os.getenv("STORAGE_WARN_MB", "400"))
-TRIM_MB = float(os.getenv("STORAGE_TRIM_MB", "415"))
+TRIM_MB = float(os.getenv("STORAGE_TRIM_MB", "450"))
 TRIM_KEEP_DAYS = int(os.getenv("STORAGE_TRIM_KEEP_DAYS", "2"))
 
 
@@ -33,7 +33,7 @@ def trim_keep_days(mb: float) -> int:
 def alert(text: str) -> None:
     tok = os.getenv("TELEGRAM_BOT_TOKEN") or os.getenv("TELEGRAM_TOKEN")
     chat = os.getenv("TELEGRAM_GROUP_ALERTS") or os.getenv("TELEGRAM_GROUP_STATS")
-    if tok and chat:
+    if tok and chat and os.getenv("NETRATTLER_STORAGE_TELEGRAM","0")=="1":
         try:
             requests.post(f"https://api.telegram.org/bot{tok}/sendMessage", json={"chat_id": chat, "text": text}, timeout=15)
         except Exception:
