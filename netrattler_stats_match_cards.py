@@ -277,6 +277,14 @@ def _logo_url(team):
         return ""
     if key in _LOGO_CACHE:
         return _LOGO_CACHE[key]
+    try:
+        from netrattler_flags import flag_url
+        url = flag_url(team)
+    except Exception:
+        url = ""
+    if url:
+        _LOGO_CACHE[key] = url
+        return url
     url = _crest_from_index(team)
     if url:
         STATS["index_ok"] = STATS.get("index_ok", 0) + 1
