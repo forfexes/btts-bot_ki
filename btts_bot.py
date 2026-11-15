@@ -25395,6 +25395,11 @@ def filter_tips_by_edge(tips: List[Dict], market: str = "btts",
     if max_edge is None:
         max_edge = EDGE_FILTER_MAX_EDGE
     require_bet365 = EDGE_FILTER_REQUIRE_BET365 if require_bet365 is None else require_bet365
+    # Frauen-/Jugend-Ligen haben keine verlaesslichen Resultatquellen -> nicht tippen
+    def _no_result_source(t):
+        txt = (str(t.get("league") or "") + " " + str(t.get("match") or "")).lower()
+        return "women" in txt or "(w)" in txt or "frauen" in txt or " femin" in txt
+    tips = [t for t in (tips or []) if not (isinstance(t, dict) and _no_result_source(t))]
     if not tips:
         _NTR_EDGE_FILTER_STATS[market] = {"total": 0, "no_quote": 0, "below_min": 0, "above_max": 0, "policy_reject": 0, "kept": 0}
         return tips
