@@ -20871,6 +20871,10 @@ def analyze_scorer_tips(fixture, league, scorers, observed_props=None, diag=None
         if not accepted:
             _d("an_drop_" + reason)
             continue
+        # Naive Poisson form (no opponent/minutes/penalties) overstates longshots: show/rank with p pulled toward the market price.
+        _shr = float(os.getenv("NETRATTLER_SCORER_MARKET_SHRINK", "0.5"))
+        _mkt_p = min(0.95, 0.93 / quote) * 100.0
+        prob = max(1, round((1 - _shr) * prob + _shr * _mkt_p))
         _d("an_final")
         tips.append({
             "match": f"{fixture.get('home','')} vs {fixture.get('away','')}", "league": league,
