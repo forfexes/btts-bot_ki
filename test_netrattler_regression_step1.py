@@ -31,10 +31,10 @@ def test_core_safe_filter(bot):
 
     cases = [
         ("1x2", 60.0, 3.00, "1"),       # would previously hit above_max
-        ("btts", 61.0, 1.90, "YES"),
-        ("over25", 61.0, 1.90, "YES"),
-        ("btts_ht", 40.0, 2.90, "BTTS HT"),
-        ("over15_ht", 44.0, 2.70, "Over 1.5 HT"),
+        ("btts", bot.BTTS_MIN_PROB + 1.0, 1.90, "YES"),
+        ("over25", 66.0, 2.30, "YES"),
+        ("btts_ht", bot.BTTS_HT_MIN_PROB + 2.0, 2.90, "BTTS HT"),
+        ("over15_ht", bot.OVER15_HT_MIN_PROB + 2.0, 2.70, "Over 1.5 HT"),
     ]
     for market, probability, odds, tip_text in cases:
         row = {

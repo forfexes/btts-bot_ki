@@ -32,9 +32,9 @@ def test_combo_uses_dedicated_model_gate(bot):
 
 
 def test_special_lookup_uses_ht_models(bot):
-    assert bot._ntr_special_lookup_eligible(50, 50, {"btts_ht_pct": 40}) is True
-    assert bot._ntr_special_lookup_eligible(50, 50, {"over15_ht_pct": 43}) is True
-    assert bot._ntr_special_lookup_eligible(50, 50, {"btts_over25_combo_pct": 53}) is True
+    assert bot._ntr_special_lookup_eligible(50, 50, {"btts_ht_pct": bot.BTTS_HT_MIN_PROB}) is True
+    assert bot._ntr_special_lookup_eligible(50, 50, {"over15_ht_pct": bot.OVER15_HT_MIN_PROB}) is True
+    assert bot._ntr_special_lookup_eligible(50, 50, {"btts_over25_combo_pct": bot.COMBO_MIN_PROB}) is True
     assert bot._ntr_special_lookup_eligible(40, 40, {}) is False
 
 
