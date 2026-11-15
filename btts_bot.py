@@ -7824,6 +7824,7 @@ def send_top_tips(tips_by_market, target_date):
 
     # Auto-void alte Pending Tipps (älter als 3 Tage)
     _auto_void_old_pending()
+    _targeted_void_terminal_pending()
 
     # Wenn keine Tipps → Auswertung in ALLE Gruppen senden
     if total_tips == 0:
@@ -17430,6 +17431,69 @@ def _auto_void_old_pending():
 
 
 
+def _targeted_void_terminal_pending():
+    """Gezieltes Void NUR fuer nie-gradebare Tipps (Prop-Hunter-Muster).
+
+    Anders als _auto_void_old_pending (pauschal ALLE alten Pending -> deaktiviert,
+    weil es auch noch gradebare Tipps verwerfen wuerde) voidet dies nur Tipps,
+    deren Match der 8-Quellen-ResultResolver nach einer langen Karenz in KEINER
+    Quelle findet. Terminal = Match existiert in keiner Quelle (falscher Teamname,
+    abgesagtes/verschobenes Spiel). Gradebare Tipps bleiben unberuehrt. P/L-neutral.
+
+    Opt-in via NETRATTLER_TARGETED_VOID=true. Karenz NETRATTLER_VOID_SOFT_DAYS
+    (Default 10), Obergrenze pro Lauf NETRATTLER_VOID_MAX (Default 40).
+    """
+    if str(os.getenv("NETRATTLER_TARGETED_VOID", "false")).lower() not in {"1", "true", "yes", "on"}:
+        return
+    if not SUPABASE_URL or not SUPABASE_KEY:
+        return
+    try:
+        from datetime import date, timedelta
+        grace = int(os.getenv("NETRATTLER_VOID_SOFT_DAYS", "10"))
+        max_void = int(os.getenv("NETRATTLER_VOID_MAX", "40"))
+        cutoff = str(date.today() - timedelta(days=grace))
+        hdr = {"apikey": SUPABASE_KEY, "Authorization": f"Bearer {SUPABASE_KEY}"}
+        r = requests.get(
+            f"{SUPABASE_URL}/rest/v1/tips",
+            headers=hdr,
+            params={"status": "eq.pending", "date": f"lt.{cutoff}",
+                    "select": "id,match,league,date,status", "limit": "200"},
+            timeout=15,
+        )
+        if not r.ok:
+            return
+        rows = r.json() or []
+        voided = 0
+        for tip in rows:
+            if voided >= max_void:
+                break
+            try:
+                res = get_match_result_from_sources(tip)
+            except Exception:
+                res = None
+            if res:
+                continue
+            try:
+                pr = requests.patch(
+                    f"{SUPABASE_URL}/rest/v1/tips",
+                    headers={**hdr, "Content-Type": "application/json", "Prefer": "return=minimal"},
+                    params={"id": f"eq.{tip.get('id')}"},
+                    json={"status": "void"},
+                    timeout=10,
+                )
+                if pr.ok:
+                    voided += 1
+            except Exception:
+                continue
+        if voided:
+            log(f"✅ Gezieltes Void: {voided} nie-gradebare Tipps bereinigt (P/L-neutral)")
+        else:
+            log("Gezieltes Void: keine terminalen Tipps ueber Karenz")
+    except Exception as e:
+        log(f"Targeted-void Error: {str(e)[:60]}", "WARN")
+
+
+
 def _get_market_stats_from_supabase(market_id):
     """Holt Won/Lost/ROI + Monat + Top-3-Ligen für einen Markt aus Supabase."""
     if not SUPABASE_URL or not SUPABASE_KEY:
@@ -17710,6 +17774,7 @@ def send_top_tips(tips_by_market, target_date):
 
     # Auto-void alte Pending Tipps (älter als 3 Tage)
     _auto_void_old_pending()
+    _targeted_void_terminal_pending()
 
     # Wenn keine Tipps → Auswertung in ALLE Gruppen senden
     if total_tips == 0:
@@ -23564,6 +23629,7 @@ def send_daily_report():
             msg += "❌ <b>Analyse nötig!</b>\n→ Flop Ligen deaktivieren\n"
 
         _auto_void_old_pending()
+        _targeted_void_terminal_pending()
 
         stats_chat = TELEGRAM_GROUPS.get("stats", TELEGRAM_CHAT_ID)
         if stats_chat:
