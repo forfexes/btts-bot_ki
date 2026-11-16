@@ -25591,6 +25591,14 @@ def filter_tips_by_edge(tips: List[Dict], market: str = "btts",
         except Exception:
             pass
 
+    if str(market) == "over25" and filtered:
+        # Over 2.5 trifft nur ~31-36% bei Quote 2.2-2.8 (21 Tage: -27u): nur die besten, keine Randligen.
+        _odd = re.compile(r"nations|friend|qualif|women|iraq|ethiop|oman|ghana|u2[0-3]|u19", re.I)
+        _best = [t for t in filtered if not _odd.search(str(t.get("league") or ""))]
+        _best.sort(key=lambda t: float(t.get("edge") or 0), reverse=True)
+        _cap = int(env("NETRATTLER_OVER25_MAX", "3"))
+        stats["kept"] = len(_best[:_cap]); stats["over25_capped"] = len(filtered) - stats["kept"]
+        filtered = _best[:_cap]
     _NTR_EDGE_FILTER_STATS[market] = dict(stats)
     _log("EDGE", f"[{market}]: {stats['kept']}/{stats['total']} kept "
                   f"(no_quote={stats['no_quote']} below={stats['below_min']} policy={stats['policy_reject']})")
