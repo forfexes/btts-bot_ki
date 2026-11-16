@@ -17591,6 +17591,8 @@ def _send_daily_auswertung_to_all_groups(stats=None):
                     medal = medals[i] if i < len(medals) else "•"
                     msg += f"{medal} {lg}: {w}/{tot} ({pct_lg}%) · {roi_s_lg}U{nl}"
         else:
+            if str(env("SEND_EMPTY_PERFORMANCE_CARDS", "false")).lower() not in ("1", "true", "yes", "on"):
+                continue
             msg += f"📊 Daten werden gesammelt...{nl}"
             msg += f"<i>Mindestens 3 ausgewertete Tipps nötig.</i>{nl}"
 
