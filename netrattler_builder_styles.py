@@ -185,15 +185,17 @@ def _nate_foul_duel(props: Sequence[builder.PropLeg], match_date: str, contexts=
     out: List[builder.BuilderPick] = []
     by_match: Dict[str, List[builder.PropLeg]] = {}
     for leg in props:
-        if leg.category in ("fouls", "fouls_won") and _modelled(leg):
+        if leg.category in ("fouls", "fouls_won", "sot", "shots", "tackles", "tackles_committed") and _modelled(leg):
             by_match.setdefault(leg.match, []).append(leg)
+    fav_cats = ("fouls_won", "sot", "shots")
+    dog_cats = ("fouls", "tackles", "tackles_committed")
     caps = {6: 80.0, 5: 55.0, 4: 40.0, 3: 25.0, 2: 12.0}
     for match, rows in by_match.items():
         dog = builder.underdog_team(match, contexts or [])
         if dog:
-            side_a = [x for x in rows if x.category == "fouls_won" and x.team and not builder.team_matches(x.team, dog)]
-            side_b = [x for x in rows if x.category == "fouls" and x.team and builder.team_matches(x.team, dog)]
-            tag = "FAV WON + DOG COMMITTED"
+            side_a = [x for x in rows if x.category in fav_cats and x.team and not builder.team_matches(x.team, dog)]
+            side_b = [x for x in rows if x.category in dog_cats and x.team and builder.team_matches(x.team, dog)]
+            tag = "FAV ATTACK + DOG DUELS"
         else:
             ctx = builder._context_for_match(match, contexts or []) or {}
             ho = builder.as_float(ctx.get("home_odds") or ctx.get("odds_home") or ctx.get("home_win_odds") or ctx.get("homeOdds"))
@@ -202,13 +204,13 @@ def _nate_foul_duel(props: Sequence[builder.PropLeg], match_date: str, contexts=
                 continue
             teams: Dict[str, List[builder.PropLeg]] = {}
             for x in rows:
-                if x.category == "fouls" and x.team and x.probability >= 0.65:
+                if x.category in ("fouls", "sot", "tackles", "tackles_committed") and x.team and x.probability >= 0.65:
                     teams.setdefault(builder.norm(x.team), []).append(x)
             if len(teams) < 2:
                 continue
             side_a, side_b = list(teams.values())[:2]
-            tag = "BALANCED FOULS"
-        side_a, side_b = _pick_distinct(side_a, 3), _pick_distinct(side_b, 3)
+            tag = "BALANCED MIX"
+        side_a, side_b = _pick_distinct(sorted(side_a, key=_strength, reverse=True), 3), _pick_distinct(sorted(side_b, key=_strength, reverse=True), 3)
         if not side_a or not side_b:
             continue
         pool = []  # abwechselnd, staerkste zuerst

@@ -249,3 +249,20 @@ def test_nate_foul_duel_two_strong_teams():
     picks = styles.build_builder_picks(rows, ctx, "2026-11-21")
     duel = [p for p in picks if getattr(p, "style", "") == "NATE FOUL DUEL"]
     assert duel and {l.team for l in duel[0].legs} == {"Bayern", "Dortmund"}
+
+
+def test_nate_foul_duel_mix_with_sot_and_tackles():
+    m = "Arsenal vs Sunderland"
+    def r(p, cat, team, odds, prob, mk):
+        d = row(p, mk, cat, .5, odds, prob, match=m); d["team"] = team; return d
+    rows = [
+        r("Saka", "fouls_won", "Arsenal", 1.70, .72, "1+ Fouls Won"),
+        r("Havertz", "sot", "Arsenal", 1.60, .73, "1+ Shots on Target"),
+        r("Xhaka", "tackles", "Sunderland", 1.62, .71, "1+ Tackles"),
+        r("Le Fee", "fouls", "Sunderland", 1.66, .70, "1+ Fouls Committed"),
+    ]
+    ctx = [{"match": m, "home_odds": 1.40, "away_odds": 7.0}]
+    duel = [p for p in styles.build_builder_picks(rows, ctx, "2026-11-21") if getattr(p, "style", "") == "NATE FOUL DUEL"]
+    assert duel
+    cats = {l.category for l in duel[0].legs}
+    assert "sot" in cats and "tackles" in cats
