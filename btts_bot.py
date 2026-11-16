@@ -28080,6 +28080,17 @@ def main():
 
         # V37: 3 bis NETRATTLER_MULTI_COMBO_MAX_LEGS (max. 11), nur Real-Odds-Tipps.
         _combo_run_ts = datetime.now(timezone.utc).strftime("%H%M%S")
+        # Tageslimit: jeder zusaetzliche Lauf erzeugte sonst weitere Verlust-Combos (6/151 Treffer in 14 Tagen)
+        _combo_daily_max = int(env("NETRATTLER_MULTI_COMBO_DAILY_MAX", "2"))
+        try:
+            _cr = requests.get(f"{SUPABASE_URL}/rest/v1/tips", headers={"apikey": SUPABASE_KEY, "Authorization": f"Bearer {SUPABASE_KEY}"},
+                               params={"select": "id", "market": "eq.combo_multi", "date": f"eq.{target_date}", "limit": "50"}, timeout=15)
+            _combo_today = len(_cr.json()) if _cr.ok else 0
+        except Exception:
+            _combo_today = 0
+        if _combo_today >= _combo_daily_max:
+            log(f"   🎰 Multi-Combo Tageslimit erreicht ({_combo_today}/{_combo_daily_max})")
+            _combo_sizes = []
         for n in _combo_sizes:
             combo = generate_multi_combo_bets(all_tips_flat, num_tips=n)
             if combo:
