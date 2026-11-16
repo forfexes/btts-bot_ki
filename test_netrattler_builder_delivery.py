@@ -60,7 +60,7 @@ class BuilderDeliveryTests(unittest.TestCase):
         self.assertEqual(stored["telegram_msg_id"], "12345")
         self.assertEqual(stored["telegram_chat_id"], "-10042")
         self.assertIn("Player A", stored["message_text"])
-        self.assertTrue(any(label in stored["message_text"] for label in ("Builder-Quote", "Gesamt-Quote")))
+        self.assertTrue(any(label in stored["message_text"] for label in ("Builder-Quote", "Gesamt-Quote", "Einzelquoten multipliziert")))
 
     def test_explicit_caller_chat_is_persisted_without_env(self):
         with patch.dict(engine.os.environ, {}, clear=True):
