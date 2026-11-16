@@ -25549,6 +25549,15 @@ def filter_tips_by_edge(tips: List[Dict], market: str = "btts",
                     stats["automl_shrunk"] = stats.get("automl_shrunk", 0) + 1
             except Exception:
                 pass
+            try:
+                if not tip.get("_floor") and str(env("NETRATTLER_MATCHUP","1")) == "1":
+                    from netrattler_matchup import matchup_factor as _mf
+                    _f = _mf(SUPABASE_URL, SUPABASE_KEY, str(market), tip.get("match") or tip.get("match_name") or "")
+                    if _f < 1.0:  # Gegner-Signal daempft nur
+                        adjusted_p = max(0.02, adjusted_p * _f)
+                        stats["matchup_shrunk"] = stats.get("matchup_shrunk", 0) + 1
+            except Exception:
+                pass
         except Exception:
             pass
         fair_odds = 1.0 / adjusted_p
