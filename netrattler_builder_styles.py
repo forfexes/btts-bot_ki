@@ -179,6 +179,32 @@ def _nate_category(props: Sequence[builder.PropLeg], match_date: str) -> List[bu
     return out
 
 
+def _nate_foul_duel(props: Sequence[builder.PropLeg], match_date: str, contexts=None) -> List[builder.BuilderPick]:
+    """Nate-Duell: Favorit-Spieler 'gefoult werden' + Aussenseiter-Spieler 'Fouls begangen' im selben Spiel."""
+    out: List[builder.BuilderPick] = []
+    by_match: Dict[str, List[builder.PropLeg]] = {}
+    for leg in props:
+        if leg.category in ("fouls", "fouls_won") and _modelled(leg):
+            by_match.setdefault(leg.match, []).append(leg)
+    for match, rows in by_match.items():
+        dog = builder.underdog_team(match, contexts or [])
+        if not dog:
+            continue
+        won = [x for x in rows if x.category == "fouls_won" and x.team and not builder.team_matches(x.team, dog)]
+        com = [x for x in rows if x.category == "fouls" and x.team and builder.team_matches(x.team, dog)]
+        won = _pick_distinct(won, 2)
+        com = _pick_distinct(com, 2)
+        for size, variant, cap in ((4, "FAV WON + DOG COMMITTED 4L", 40.0), (3, "FAV WON + DOG COMMITTED 3L", 25.0), (2, "FAV WON + DOG COMMITTED 2L", 12.0)):
+            legs = (won[:2] + com[:2])[:size] if size == 4 else (won[:1] + com[:size - 1] if len(com) >= size - 1 else won[:size - 1] + com[:1])
+            if len(legs) < size or not won or not com:
+                continue
+            pick = builder._make_builder("NATE FOUL DUEL", variant, legs, match_date, 0.30)
+            if pick and pick.total_odds <= cap:
+                out.append(pick)
+                break
+    return out
+
+
 def _godtipster_profiles(props: Sequence[builder.PropLeg], match_date: str) -> List[builder.BuilderPick]:
     out: List[builder.BuilderPick] = []
     groups: Dict[Tuple[str, str], List[builder.PropLeg]] = {}
@@ -449,6 +475,7 @@ def _pick_rank(pick: builder.BuilderPick) -> Tuple[float, float, float, float]:
         "TIPS BIBLE": 0.30,
         "GODTIPSTER PROFILE": 0.28,
         "NATE CATEGORY": 0.24,
+        "NATE FOUL DUEL": 0.22,
         "NATE ALT-LINE": 0.20,
         "AYSTAR BOOKING": 0.16,
         "AYSTAR MIX": 0.15,
@@ -508,6 +535,7 @@ def _build_modelled(raw_props, match_contexts=None, match_date=None, max_builder
     premium: List[builder.BuilderPick] = []
     premium += _tips_bible(props, run_date)
     premium += _nate_category(props, run_date)
+    premium += _nate_foul_duel(props, run_date, match_contexts)
     premium += _godtipster_profiles(props, run_date)
     premium += _nate_alt_lines(props, run_date)
     premium += _aystar_booking(props, run_date)
@@ -536,7 +564,7 @@ def _build_modelled(raw_props, match_contexts=None, match_date=None, max_builder
     unique.sort(key=_pick_rank, reverse=True)
 
     limits = {
-        "TIPS BIBLE": 4, "GODTIPSTER PROFILE": 4, "NATE CATEGORY": 4,
+        "TIPS BIBLE": 4, "GODTIPSTER PROFILE": 4, "NATE CATEGORY": 4, "NATE FOUL DUEL": 3,
         "NATE ALT-LINE": 4, "AYSTAR BOOKING": 3, "AYSTAR MIX": 2,
         "KEEPER SAVES": 2, "SAME PLAYER": 2, "PLAYER DUEL": 1,
         "CROSS MATCH PROP ACCA": 2,
@@ -548,7 +576,7 @@ def _build_modelled(raw_props, match_contexts=None, match_date=None, max_builder
     match_count: Dict[str, int] = {}
     max_per_match = builder.as_int(os.getenv("NETRATTLER_MAX_BUILDERS_PER_MATCH", "8"), 8)
 
-    for style in ("TIPS BIBLE", "GODTIPSTER PROFILE", "NATE CATEGORY", "NATE ALT-LINE", "AYSTAR BOOKING", "AYSTAR MIX", "LIBRARY SAME GAME", "LIBRARY CROSS MATCH"):
+    for style in ("TIPS BIBLE", "GODTIPSTER PROFILE", "NATE CATEGORY", "NATE FOUL DUEL", "NATE ALT-LINE", "AYSTAR BOOKING", "AYSTAR MIX", "LIBRARY SAME GAME", "LIBRARY CROSS MATCH"):
         for pick in unique:
             if pick.style != style:
                 continue
@@ -655,7 +683,7 @@ def ladder_tiers(pick, steps=3, floor=0.03):
 
 
 PUBLIC_STYLE = {
-    "NATE ALT-LINE": "Alt-Line", "NATE CATEGORY": "Kategorie", "GODTIPSTER PROFILE": "Profil",
+    "NATE ALT-LINE": "Alt-Line", "NATE FOUL DUEL": "Foul-Duell", "NATE CATEGORY": "Kategorie", "GODTIPSTER PROFILE": "Profil",
     "TIPS BIBLE": "Standard", "AYSTAR BOOKING": "Karten", "AYSTAR MIX": "Mix",
     "LIBRARY SAME GAME": "Same Game", "LIBRARY CROSS MATCH": "Cross Match",
 }

@@ -219,3 +219,21 @@ def test_single_prop_tips_cards_fouls_tackles():
     cats = sorted(p.legs[0].category for p in picks)
     assert cats == ["fouls", "tackles_committed", "tackles_committed", "yellow_cards"]  # negative-edge fouls leg dropped
     assert all(p.leg_count == 1 and p.style.startswith("EINZELWETTE") for p in picks)
+
+
+def test_nate_foul_duel_favorite_won_vs_underdog_committed():
+    m = "Arsenal vs Sunderland"
+    def r(p, cat, team, odds, prob, mk):
+        d = row(p, mk, cat, .5, odds, prob, match=m); d["team"] = team; return d
+    rows = [
+        r("Bukayo Saka", "fouls_won", "Arsenal", 1.70, .72, "1+ Fouls Won"),
+        r("Martin Odegaard", "fouls_won", "Arsenal", 1.60, .70, "1+ Fouls Won"),
+        r("Granit Xhaka", "fouls", "Sunderland", 1.65, .70, "1+ Fouls Committed"),
+        r("Enzo Le Fee", "fouls", "Sunderland", 1.60, .72, "1+ Fouls Committed"),
+    ]
+    ctx = [{"match": m, "home_odds": 1.40, "away_odds": 7.0}]
+    picks = styles.build_builder_picks(rows, ctx, "2026-11-21")
+    duel = [p for p in picks if p.source_style == "NATE FOUL DUEL"] if hasattr(picks[0], "source_style") else [p for p in picks if getattr(p, "style", "") == "NATE FOUL DUEL"]
+    assert duel, [getattr(p, "style", None) for p in picks]
+    teams = {l.team for l in duel[0].legs}
+    assert teams == {"Arsenal", "Sunderland"}
