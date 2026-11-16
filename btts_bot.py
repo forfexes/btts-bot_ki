@@ -25692,9 +25692,13 @@ def filter_tips_legacy_safe(tips: List[Dict], market: str = "btts",
     stats = {"total": len(tips or []), "no_quote": 0, "below_min": 0,
              "above_max": 0, "policy_reject": 0, "kept": 0}
     out = []
+    _wom = re.compile(r"women|\(w\)|frauen|femin", re.I)  # fuer Frauen-/Randspiele gibt es keine Ergebnisquelle
     for tip in tips or []:
         if tip.get("estimated") is True or tip.get("estimated_odds") is True:
             stats["no_quote"] += 1
+            continue
+        if _wom.search(str(tip.get("league") or "") + " " + str(tip.get("match") or "")):
+            stats["below_min"] += 1
             continue
 
         tip_market = str(tip.get("market") or market_key)
@@ -25720,6 +25724,15 @@ def filter_tips_legacy_safe(tips: List[Dict], market: str = "btts",
         except Exception:
             raw_prob = 0.0
         prob01 = raw_prob / 100.0 if raw_prob > 1 else raw_prob
+        try:  # Gegner-Signal: daempft Over2.5/BTTS nur nach unten
+            if not tip.get("_floor") and str(env("NETRATTLER_MATCHUP", "1")) == "1":
+                from netrattler_matchup import matchup_factor as _mf
+                _f = _mf(SUPABASE_URL, SUPABASE_KEY, market_key, tip.get("match") or "")
+                if _f < 1.0:
+                    prob01 = max(0.02, prob01 * _f)
+                    stats["matchup_shrunk"] = stats.get("matchup_shrunk", 0) + 1
+        except Exception:
+            pass
         prob_pct = prob01 * 100.0
         if prob01 <= 0 or prob_pct < float(min_prob) or quote < float(min_odds):
             stats["below_min"] += 1
@@ -25754,6 +25767,15 @@ def filter_tips_legacy_safe(tips: List[Dict], market: str = "btts",
         out.append(row)
         stats["kept"] += 1
 
+    if market_key == "over25" and out:
+        # Over 2.5 trifft nur ~31-36% bei Quote 2.2-2.8 (21 Tage: -27u): nur die besten, keine Randligen.
+        _odd = re.compile(r"nations|friend|qualif|women|iraq|ethiop|oman|ghana|u2[0-3]|u19", re.I)
+        _best = [t for t in out if not _odd.search(str(t.get("league") or ""))]
+        _best.sort(key=lambda t: float(t.get("edge") or 0), reverse=True)
+        _cap = int(env("NETRATTLER_OVER25_MAX", "3"))
+        stats["over25_capped"] = len(out) - len(_best[:_cap])
+        out = _best[:_cap]
+        stats["kept"] = len(out)
     _NTR_EDGE_FILTER_STATS[market] = dict(stats)
     _log("EDGE", f"[SAFE:{market}] {stats['kept']}/{stats['total']} kept "
                  f"(no_quote={stats['no_quote']} below={stats['below_min']} odds_band_reject={stats['policy_reject']})")
