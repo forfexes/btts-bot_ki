@@ -48,7 +48,7 @@ def test_tips_bible_and_nate():
     assert all(p.style not in noisy for p in picks)
     same = next(p for p in picks if p.style == "TIPS BIBLE")
     msg = builder.format_builder_message(same)
-    assert "Builder-Quote" in msg and "Keine synthetische Produktquote" in msg
+    assert "Einzelquoten multipliziert" in msg
     assert "Gesamt-Quote" not in msg
     db = same.to_row()
     assert db["total_odds"] == 0.0 and db["stake"] == 0.0 and db["estimated_odds"] is True

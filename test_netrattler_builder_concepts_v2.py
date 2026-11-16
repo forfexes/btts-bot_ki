@@ -54,8 +54,7 @@ def test_extra_concepts_real_odds_only():
             assert all(not leg.estimated and leg.odds > 1 and leg.edge >= 2 for leg in pick.legs)
             if len({leg.match for leg in pick.legs}) == 1:
                 msg = builder.format_builder_message(pick)
-                assert "live beim Bookmaker prüfen" in msg
-                assert "synthetische Produktquote" in msg
+                assert "Einzelquoten multipliziert" in msg
 
 
 def test_estimated_or_unmodelled_never_enters_new_concepts():

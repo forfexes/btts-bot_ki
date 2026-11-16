@@ -660,7 +660,12 @@ def _clean_market(leg):
     text = re.sub(r"\(.*?\)", "", text)
     text = text.split("|")[0]
     text = re.sub(r"player'?s?\s+(occurrence\s+line\s+)?", "", text, flags=re.I)
-    return " ".join(text.split()) or str(leg.market or "")
+    text = " ".join(text.split())
+    pl = " ".join(str(getattr(leg, "player", "") or "").split())
+    while pl and text.lower().startswith(pl.lower()):  # Spielername steht schon in der Zeile davor
+        text = text[len(pl):].strip()
+    text = re.sub(r"\b((?:over|under)\s+[\d.]+)\s+\1\b", r"\1", text, flags=re.I)
+    return text or str(leg.market or "")
 
 
 def _nate_market(leg):
@@ -748,7 +753,10 @@ def format_builder_message(pick: builder.BuilderPick) -> str:
         lines.append("    <i>faire Modellquote, Buchmacherquote der Stufe prüfen</i>")
     lines.append("")
     if same_match:
-        lines.append("💰 Builder-Quote: <b>live beim Bookmaker prüfen</b> · Keine synthetische Produktquote für Same-Game-Builder")
+        _prod = 1.0
+        for _l in pick.legs:
+            _prod *= float(_l.odds)
+        lines.append(f"💰 Quote (Einzelquoten multipliziert): <b>{_prod:.2f}</b> · Buchmacher-Builder-Preis liegt meist tiefer, live prüfen")
     else:
         lines.append(f"💰 Rechnerische Kombi-Quote: <b>{pick.total_odds:.2f}</b> · Kein bestätigtes Kombi-Angebot, beim Buchmacher prüfen")
         lines.append(f"🔥 Einsatz: <b>{pick.stake:.2f} Units</b> (nur bei bestätigter Quote)")
