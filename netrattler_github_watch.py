@@ -199,6 +199,8 @@ def relevance(commit_message: str, files: Iterable[Dict[str, Any]]) -> Tuple[int
 
 
 def telegram_send(message: str) -> bool:
+    if os.getenv("NETRATTLER_WATCH_TELEGRAM", "0") != "1":
+        return False  # Watcher nur in die DB, keine Telegram-Meldungen
     if not TELEGRAM_TOKEN or not TELEGRAM_CHAT_ID:
         return False
     try:
@@ -346,6 +348,9 @@ def hf_seen() -> Dict[str, str]:
     return out
 
 
+_FREE_LICENSES = {"mit", "apache-2.0", "cc0-1.0", "cc-by-4.0", "cc-by-sa-4.0", "cc-by-3.0", "odc-by", "odbl", "pddl", "unlicense", "bsd-3-clause", "bsd-2-clause", "gpl-3.0", "agpl-3.0", "lgpl-3.0"}
+
+
 def inspect_huggingface() -> Dict[str, Any]:
     seen = hf_seen()
     first_run = not seen
@@ -379,7 +384,12 @@ def inspect_huggingface() -> Dict[str, Any]:
                     reasons.append(label)
             if re.search(r"football|soccer", text, re.I):
                 score += 2
-            found[did] = {"id": did, "last_modified": mod, "age_days": age, "downloads": it.get("downloads"),
+            tags_l = [str(t).lower() for t in (it.get("tags") or [])]
+            lic = next((t.split(":", 1)[1] for t in tags_l if t.startswith("license:")), "")
+            free = lic in _FREE_LICENSES
+            if not free:
+                continue  # nur wirklich freie Lizenzen (keine 'other'/kommerziell/ohne Lizenz)
+            found[did] = {"id": did, "license": lic, "last_modified": mod, "age_days": age, "downloads": it.get("downloads"),
                           "likes": it.get("likes"), "gated": bool(it.get("gated")), "score": score, "reasons": reasons,
                           "url": f"https://huggingface.co/datasets/{did}"}
     new_or_updated = []
@@ -399,7 +409,7 @@ def inspect_huggingface() -> Dict[str, Any]:
     if relevant:
         lines = ["🤗 NETRATTLER Hugging Face Watch" + (" (Erstlauf)" if first_run else "")]
         for d in relevant[:8]:
-            lines.append(f"• {d['id']} · {d['state']} · Relevanz {d['score']} · {', '.join(d['reasons'][:3]) or 'football'}\n  {d['url']}")
+            lines.append(f"• {d['id']} · {d['state']} · Relevanz {d['score']} · {d['license']} · {', '.join(d['reasons'][:3]) or 'football'}\n  {d['url']}")
         if len(relevant) > 8:
             lines.append(f"+{len(relevant) - 8} weitere")
         telegram_send("\n".join(lines))
