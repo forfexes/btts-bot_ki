@@ -22485,6 +22485,18 @@ def _ntr_enrich_prop_pool_with_player_ml(rows: list) -> dict:
         row["probability"] = round(probability, 6)
         row["probability_source"] = source
         row["player_context"] = context
+        try:  # Anzahl Spiele der Historie an den Builder-Guard weitergeben (sonst "no_history")
+            _gk = {"shots": "shots", "sot": "sot", "sot_outside_box": "sot", "score": "goals",
+                   "assist": "assists", "passes": "passes", "tackles": "tackles",
+                   "tackles_committed": "tackles", "fouls": "fouls_committed",
+                   "fouls_committed": "fouls_committed", "fouls_won": "fouls_won",
+                   "yellow_cards": "yellow_cards", "cards": "yellow_cards",
+                   "saves": "saves", "offsides": "offsides"}.get(category)
+            _gn = int(((avg_stats.get(_gk) or {}).get("games")) or 0) if _gk else 0
+            if _gn > int(row.get("games") or 0):
+                row["games"] = _gn
+        except Exception:
+            pass
         stats["enriched"] += 1
         try:  # Spielverlauf (neueste zuerst) fuer die Telegram-Anzeige
             import netrattler_builder_engine as _be
