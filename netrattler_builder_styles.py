@@ -180,48 +180,48 @@ def _nate_category(props: Sequence[builder.PropLeg], match_date: str) -> List[bu
 
 
 def _nate_foul_duel(props: Sequence[builder.PropLeg], match_date: str, contexts=None) -> List[builder.BuilderPick]:
-    """Nate-Duell: Favorit-Spieler 'gefoult werden' + Aussenseiter-Spieler 'Fouls begangen' im selben Spiel."""
+    """Nate-Duell: Favorit 'gefoult werden' + Aussenseiter 'Fouls begangen'; oder zwei gleich starke Teams.
+    Mehr Beine (bis 6) nur, wenn jedes Bein hohe Wahrscheinlichkeit hat."""
     out: List[builder.BuilderPick] = []
     by_match: Dict[str, List[builder.PropLeg]] = {}
     for leg in props:
         if leg.category in ("fouls", "fouls_won") and _modelled(leg):
             by_match.setdefault(leg.match, []).append(leg)
+    caps = {6: 80.0, 5: 55.0, 4: 40.0, 3: 25.0, 2: 12.0}
     for match, rows in by_match.items():
         dog = builder.underdog_team(match, contexts or [])
-        if not dog:
-            # Zwei aehnlich starke Teams (kein klarer Aussenseiter): intensives Spiel -> Fouls beider Seiten, nur hohe Wahrscheinlichkeit
+        if dog:
+            side_a = [x for x in rows if x.category == "fouls_won" and x.team and not builder.team_matches(x.team, dog)]
+            side_b = [x for x in rows if x.category == "fouls" and x.team and builder.team_matches(x.team, dog)]
+            tag = "FAV WON + DOG COMMITTED"
+        else:
             ctx = builder._context_for_match(match, contexts or []) or {}
             ho = builder.as_float(ctx.get("home_odds") or ctx.get("odds_home") or ctx.get("home_win_odds") or ctx.get("homeOdds"))
             ao = builder.as_float(ctx.get("away_odds") or ctx.get("odds_away") or ctx.get("away_win_odds") or ctx.get("awayOdds"))
             if not (1.0 < ho <= 3.2 and 1.0 < ao <= 3.2 and abs(ho - ao) < 0.25):
                 continue
-            teams = {}
+            teams: Dict[str, List[builder.PropLeg]] = {}
             for x in rows:
                 if x.category == "fouls" and x.team and x.probability >= 0.65:
                     teams.setdefault(builder.norm(x.team), []).append(x)
             if len(teams) < 2:
                 continue
-            a, b = list(teams.values())[:2]
-            legs = _pick_distinct(a, 2) + _pick_distinct(b, 2)
-            for size, cap in ((4, 25.0), (3, 15.0), (2, 8.0)):
-                chosen = legs[:size] if size != 3 else legs[:1] + legs[2:4][:2] if len(legs) >= 4 else legs[:3]
-                if len(chosen) < size or len({builder.norm(x.team) for x in chosen}) < 2:
-                    continue
-                pick = builder._make_builder("NATE FOUL DUEL", f"BALANCED FOULS {size}L", chosen[:size], match_date, 0.25)
-                if pick and pick.total_odds <= cap:
-                    out.append(pick)
-                    break
+            side_a, side_b = list(teams.values())[:2]
+            tag = "BALANCED FOULS"
+        side_a, side_b = _pick_distinct(side_a, 3), _pick_distinct(side_b, 3)
+        if not side_a or not side_b:
             continue
-        won = [x for x in rows if x.category == "fouls_won" and x.team and not builder.team_matches(x.team, dog)]
-        com = [x for x in rows if x.category == "fouls" and x.team and builder.team_matches(x.team, dog)]
-        won = _pick_distinct(won, 2)
-        com = _pick_distinct(com, 2)
-        for size, variant, cap in ((4, "FAV WON + DOG COMMITTED 4L", 40.0), (3, "FAV WON + DOG COMMITTED 3L", 25.0), (2, "FAV WON + DOG COMMITTED 2L", 12.0)):
-            legs = (won[:2] + com[:2])[:size] if size == 4 else (won[:1] + com[:size - 1] if len(com) >= size - 1 else won[:size - 1] + com[:1])
-            if len(legs) < size or not won or not com:
+        pool = []  # abwechselnd, staerkste zuerst
+        for i in range(3):
+            pool += [x for x in (side_a[i:i + 1] + side_b[i:i + 1])]
+        for size in (6, 5, 4, 3, 2):
+            chosen = pool[:size]
+            if len(chosen) < size or len({builder.norm(x.team) for x in chosen}) < 2:
                 continue
-            pick = builder._make_builder("NATE FOUL DUEL", variant, legs, match_date, 0.30)
-            if pick and pick.total_odds <= cap:
+            if size > 4 and any(x.probability < 0.65 for x in chosen):
+                continue  # mehr Beine nur mit hoher Wahrscheinlichkeit
+            pick = builder._make_builder("NATE FOUL DUEL", f"{tag} {size}L", chosen, match_date, 0.25 if size > 3 else 0.30)
+            if pick and pick.total_odds <= caps[size]:
                 out.append(pick)
                 break
     return out
