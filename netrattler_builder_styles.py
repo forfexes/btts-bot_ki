@@ -189,6 +189,28 @@ def _nate_foul_duel(props: Sequence[builder.PropLeg], match_date: str, contexts=
     for match, rows in by_match.items():
         dog = builder.underdog_team(match, contexts or [])
         if not dog:
+            # Zwei aehnlich starke Teams (kein klarer Aussenseiter): intensives Spiel -> Fouls beider Seiten, nur hohe Wahrscheinlichkeit
+            ctx = builder._context_for_match(match, contexts or []) or {}
+            ho = builder.as_float(ctx.get("home_odds") or ctx.get("odds_home") or ctx.get("home_win_odds") or ctx.get("homeOdds"))
+            ao = builder.as_float(ctx.get("away_odds") or ctx.get("odds_away") or ctx.get("away_win_odds") or ctx.get("awayOdds"))
+            if not (1.0 < ho <= 3.2 and 1.0 < ao <= 3.2 and abs(ho - ao) < 0.25):
+                continue
+            teams = {}
+            for x in rows:
+                if x.category == "fouls" and x.team and x.probability >= 0.65:
+                    teams.setdefault(builder.norm(x.team), []).append(x)
+            if len(teams) < 2:
+                continue
+            a, b = list(teams.values())[:2]
+            legs = _pick_distinct(a, 2) + _pick_distinct(b, 2)
+            for size, cap in ((4, 25.0), (3, 15.0), (2, 8.0)):
+                chosen = legs[:size] if size != 3 else legs[:1] + legs[2:4][:2] if len(legs) >= 4 else legs[:3]
+                if len(chosen) < size or len({builder.norm(x.team) for x in chosen}) < 2:
+                    continue
+                pick = builder._make_builder("NATE FOUL DUEL", f"BALANCED FOULS {size}L", chosen[:size], match_date, 0.25)
+                if pick and pick.total_odds <= cap:
+                    out.append(pick)
+                    break
             continue
         won = [x for x in rows if x.category == "fouls_won" and x.team and not builder.team_matches(x.team, dog)]
         com = [x for x in rows if x.category == "fouls" and x.team and builder.team_matches(x.team, dog)]

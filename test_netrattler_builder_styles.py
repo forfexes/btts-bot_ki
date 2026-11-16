@@ -237,3 +237,15 @@ def test_nate_foul_duel_favorite_won_vs_underdog_committed():
     assert duel, [getattr(p, "style", None) for p in picks]
     teams = {l.team for l in duel[0].legs}
     assert teams == {"Arsenal", "Sunderland"}
+
+
+def test_nate_foul_duel_two_strong_teams():
+    m = "Bayern vs Dortmund"
+    def r(p, team, odds, prob):
+        d = row(p, "1+ Fouls Committed", "fouls", .5, odds, prob, match=m); d["team"] = team; return d
+    rows = [r("A Kimmich", "Bayern", 1.65, .72), r("B Goretzka", "Bayern", 1.60, .70),
+            r("C Can", "Dortmund", 1.62, .71), r("D Sabitzer", "Dortmund", 1.66, .69)]
+    ctx = [{"match": m, "home_odds": 2.0, "away_odds": 2.2}]
+    picks = styles.build_builder_picks(rows, ctx, "2026-11-21")
+    duel = [p for p in picks if getattr(p, "style", "") == "NATE FOUL DUEL"]
+    assert duel and {l.team for l in duel[0].legs} == {"Bayern", "Dortmund"}
