@@ -100,6 +100,12 @@ def _sb(h=None):
     return {"apikey": SK, "Authorization": f"Bearer {SK}", "Content-Type": "application/json", **(h or {})}
 
 
+def is_rate_limited(e):
+    """Minutenlimit: Provider-Fehler 'rateLimit' oder nackter HTTP 429."""
+    m = str(e)
+    return "rateLimit" in m or "HTTP 429" in m
+
+
 def fetch_players(H, fixture_id, wait=65):
     """Spielerdaten holen; bei rateLimit (Minutenkontingent) einmal warten und wiederholen."""
     import time
@@ -108,7 +114,7 @@ def fetch_players(H, fixture_id, wait=65):
         try:
             return checked_response(r)
         except RuntimeError as e:
-            if attempt == 0 and "rateLimit" in str(e):
+            if attempt == 0 and is_rate_limited(e):
                 time.sleep(wait)
                 continue
             raise
@@ -147,7 +153,7 @@ def run():
         try:
             rows = parse_players(fetch_players(H, fx["fixture"]["id"]), fx)
         except RuntimeError as e:
-            if "rateLimit" in str(e):
+            if is_rate_limited(e):
                 # Minutenlimit trotz Wartezeit: bereits gespeicherte Spiele bleiben, Rest folgt im naechsten Lauf.
                 print(f"rate limit, stop early with rows={saved}: {e}")
                 break

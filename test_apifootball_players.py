@@ -38,3 +38,10 @@ def test_post_with_retry_recovers_from_503(monkeypatch):
     monkeypatch.setattr(m.requests, "post", lambda *a, **k: (calls.append(1), R(seq[len(calls) - 1]))[1])
     import time; monkeypatch.setattr(time, "sleep", lambda s: None)
     assert m.post_with_retry("u", [], {}).status_code == 201 and len(calls) == 3
+
+
+def test_http_429_counts_as_rate_limit():
+    import netrattler_apifootball_players as m
+    assert m.is_rate_limited(RuntimeError("API-Football HTTP 429"))
+    assert m.is_rate_limited(RuntimeError("provider error (fields: rateLimit)"))
+    assert not m.is_rate_limited(RuntimeError("API-Football HTTP 500"))
