@@ -13948,6 +13948,30 @@ def check_rotation_schedule():
 
 
 
+_INJURED_DAY_CACHE = {}
+
+
+def _injured_names_for_day(day):
+    """Alle am Tag als verletzt/gesperrt gemeldeten Spieler (normalisiert) - ein API-Football-Aufruf pro Tag."""
+    day = str(day or date.today().isoformat())[:10]
+    if day in _INJURED_DAY_CACHE:
+        return _INJURED_DAY_CACHE[day]
+    names = set()
+    try:
+        import unicodedata as _u2
+        resp = _af_request("/injuries", {"date": day}, timeout=20) or []
+        for e in resp:
+            nm = ((e.get("player") or {}).get("name") or "")
+            nm = _u2.normalize("NFKD", nm.lower())
+            nm = re.sub(r"[^a-z0-9]+", "", "".join(c for c in nm if not _u2.combining(c)))
+            if nm:
+                names.add(nm)
+    except Exception:
+        names = set()
+    _INJURED_DAY_CACHE[day] = names
+    return names
+
+
 def _af_request(endpoint, params, timeout=12):
     """
     Helper für API-Football Requests mit Quota-Schutz und Round-Robin über mehrere Keys.
@@ -20854,6 +20878,12 @@ def analyze_scorer_tips(fixture, league, scorers, observed_props=None, diag=None
         except Exception:
             pass  # finishing-radar adjustment is best-effort; naive prob stands if unavailable
         scorer_key = _pn(scorer_name)
+        try:
+            if env("NETRATTLER_SCORER_SKIP_INJURED", "1") == "1" and scorer_key in _injured_names_for_day(fixture.get("date") or fixture.get("day")):
+                _d("an_drop_injured")
+                continue
+        except Exception:
+            pass
         quote_key = scorer_key if scorer_key in quote_by_player else ""
         if not quote_key:
             scorer_parts = [x for x in _re.split(r"[^A-Za-zÀ-ÿ0-9]+", str(scorer_name).lower()) if x]
