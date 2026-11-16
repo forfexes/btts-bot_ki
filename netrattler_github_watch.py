@@ -198,9 +198,9 @@ def relevance(commit_message: str, files: Iterable[Dict[str, Any]]) -> Tuple[int
     return score, sorted(set(reasons))
 
 
-def telegram_send(message: str) -> bool:
-    if os.getenv("NETRATTLER_WATCH_TELEGRAM", "0") != "1":
-        return False  # Watcher nur in die DB, keine Telegram-Meldungen
+def telegram_send(message: str, force: bool = False) -> bool:
+    if not force and os.getenv("NETRATTLER_WATCH_TELEGRAM", "0") != "1":
+        return False  # nur die Hugging-Face-Meldung geht raus, Repo-Watch nur in die DB
     if not TELEGRAM_TOKEN or not TELEGRAM_CHAT_ID:
         return False
     try:
@@ -412,7 +412,7 @@ def inspect_huggingface() -> Dict[str, Any]:
             lines.append(f"• {d['id']} · {d['state']} · Relevanz {d['score']} · {d['license']} · {', '.join(d['reasons'][:3]) or 'football'}\n  {d['url']}")
         if len(relevant) > 8:
             lines.append(f"+{len(relevant) - 8} weitere")
-        telegram_send("\n".join(lines))
+        telegram_send("\n".join(lines), force=True)
     return {"found": len(found), "new_or_updated": len(new_or_updated), "relevant": [d["id"] for d in relevant[:20]]}
 
 
