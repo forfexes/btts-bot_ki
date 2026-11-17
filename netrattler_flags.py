@@ -3,7 +3,7 @@ import re
 
 _ISO = {
  "albania":"al","algeria":"dz","andorra":"ad","angola":"ao","argentina":"ar","armenia":"am","australia":"au","austria":"at",
- "azerbaijan":"az","belarus":"by","belgium":"be","benin":"bj","bolivia":"bo","bosnia and herzegovina":"ba","bosnia":"ba",
+ "azerbaijan":"az","belarus":"by","belgium":"be","benin":"bj","bolivia":"bo","bosnia and herzegovina":"ba","bosnia & herzegovina":"ba","bosnia herzegovina":"ba","bosnia":"ba",
  "botswana":"bw","brazil":"br","bulgaria":"bg","burkina faso":"bf","burundi":"bi","cameroon":"cm","canada":"ca",
  "central african republic":"cf","chad":"td","chile":"cl","china":"cn","colombia":"co","comoros":"km","congo":"cg",
  "congo republic":"cg","dr congo":"cd","costa rica":"cr","croatia":"hr","cuba":"cu","curacao":"cw","cyprus":"cy",
