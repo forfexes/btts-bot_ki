@@ -1070,7 +1070,7 @@ def _player_photo(name, team=""):
     for url in dict.fromkeys(urls):
         try:
             resp = requests.get(url, timeout=7, headers={"User-Agent": "Mozilla/5.0 (NETRATTLER image fetch)"})
-            if "espncdn" in url and not resp.ok:
+            if "api-sports" in url and not resp.ok:
                 STATS["espn_photo_http_" + str(resp.status_code)] = STATS.get("espn_photo_http_" + str(resp.status_code), 0) + 1
             if not resp.ok or not resp.content or len(resp.content) > 8_000_000:
                 continue

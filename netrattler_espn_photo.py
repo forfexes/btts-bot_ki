@@ -1,10 +1,10 @@
-"""Spielerfoto ueber die ESPN-Spieler-ID aus player_game_log (keine API-Kontingente, auch Nationalspieler)."""
+"""Spielerfoto ueber die API-Football-Spieler-ID aus player_game_log (keine API-Kontingente, auch Nationalspieler)."""
 import os
 import urllib.parse
 import requests
 
 _CACHE = {}
-_URL = "https://a.espncdn.com/i/headshots/soccer/players/full/{}.png"
+_URL = "https://media.api-sports.io/football/players/{}.png"  # player_game_log.player_id = API-Football-ID
 
 
 def unique_id(rows):
