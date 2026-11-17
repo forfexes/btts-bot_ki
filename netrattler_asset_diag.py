@@ -6,6 +6,11 @@ U=(os.getenv("SUPABASE_URL") or "").rstrip("/"); K=os.getenv("SUPABASE_SERVICE_R
 H={"apikey":K,"Authorization":f"Bearer {K}","Content-Type":"application/json"}
 since=(date.today()-timedelta(days=2)).isoformat()
 rows=requests.get(f"{U}/rest/v1/tips",headers=H,params={"select":"match,market,player_name,player_team","date":f"gte.{since}","limit":300},timeout=30).json()
+try:
+    for bp in requests.get(f"{U}/rest/v1/netrattler_builder_picks",headers=H,params={"select":"legs","match_date":f"gte.{since}","limit":60},timeout=30).json():
+        for lg in bp.get("legs") or []:
+            if lg.get("player"): players.add((lg["player"],lg.get("team") or ""))
+except Exception: pass
 import netrattler_stats_match_cards as c
 teams=set(); players=set()
 for r in rows:
@@ -17,9 +22,10 @@ for t in sorted(teams):
     try: ok=bool(c._badge_bytes(t))
     except Exception: ok=False
     if not ok: out["no_crest"].append(t)
-for n,t in sorted(players)[:40]:
+for n,t in sorted(players)[:90]:
     try: ok=bool(c._player_photo(n,t))
     except Exception: ok=False
     if not ok: out["no_photo"].append([n,t])
+out["checked_players"]=min(len(players),90); out["photo_stats"]=dict(c.STATS)
 print(json.dumps(out)[:3000])
 requests.post(f"{U}/rest/v1/netrattler_card_diag",headers=H,json={"info":out},timeout=20)
