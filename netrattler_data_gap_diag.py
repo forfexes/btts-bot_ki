@@ -44,7 +44,7 @@ for t in sorted(teams):
     except Exception:
         no_crest.append(t)
 no_photo = []
-for n, t in sorted(players.items())[:400]:
+for n, t in sorted(players.items())[:250]:
     try:
         if not c._player_photo(n, t):
             no_photo.append(n)
