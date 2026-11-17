@@ -41,6 +41,20 @@ class BuilderDeliveryTests(unittest.TestCase):
                                                 supabase_key="test", chat_id=chat_id)
         return sent
 
+    def test_match_cap_counts_only_confirmed_telegram_delivery(self):
+        import netrattler_builder_limit as limit
+        observed = []
+
+        def fake_get(*args, **kwargs):
+            observed.append(dict(kwargs["params"]))
+            return _Get([])
+
+        with patch.object(limit.requests, "get", side_effect=fake_get):
+            self.assertFalse(limit.at_limit("https://supabase.invalid", "test",
+                                           "2026-10-16", self.pick.legs, limit=4))
+        self.assertEqual(observed[0]["telegram_sent"], "eq.true")
+        self.assertEqual(observed[0]["status"], "neq.void")
+
     def test_numeric_message_id_is_recorded(self):
         self.assertEqual(self._run(12345), 1)
         self.assertEqual(len(self.rows), 1)
