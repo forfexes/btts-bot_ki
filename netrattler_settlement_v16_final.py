@@ -735,11 +735,13 @@ def send_result_cards(newly_closed: Sequence[Dict[str, Any]]) -> int:
         if not res and row.get("result_home") not in (None, ""):
             res = {"home_score": row.get("result_home"), "away_score": row.get("result_away")}
         st = normalized_status(row.get("status"))
-        if not (home and away and isinstance(res, dict)) or st not in {"win", "loss"}:
+        if not (home and away and isinstance(res, dict)) or st not in {"win", "loss", "void"}:
             continue
         hs, as_ = res.get("home_score"), res.get("away_score")
-        if hs in (None, "") or as_ in (None, ""):
+        if (hs in (None, "") or as_ in (None, "")) and st != "void":
             continue
+        hs = "" if hs in (None, "") else hs
+        as_ = "" if as_ in (None, "") else as_
         raw = res.get("raw") if isinstance(res.get("raw"), dict) else {}
         hth = anyv(raw, ["home_score_ht", "ht_home", "home_ht", "HTHG", "intHomeScoreHT"], None)
         hta = anyv(raw, ["away_score_ht", "ht_away", "away_ht", "HTAG", "intAwayScoreHT"], None)
@@ -748,7 +750,7 @@ def send_result_cards(newly_closed: Sequence[Dict[str, Any]]) -> int:
         data = unpack(row.get("tip_payload") or {})
         results.append({
             "match": f"{home} vs {away}", "status": st, "group": group,
-            "odds": anyv(data, ["odds", "oddsYes"], 0), "ft": f"{hs}-{as_}",
+            "odds": anyv(data, ["odds", "oddsYes"], 0), "ft": f"{hs}-{as_}" if hs != "" and as_ != "" else "",
             "ht": f"{hth}-{hta}" if hth not in (None, "") and hta not in (None, "") else "",
         })
     n = update_cards_with_results(TG_TOKEN, results, log=log)
@@ -2971,7 +2973,7 @@ def main() -> None:
     try:
         _today = datetime.now(timezone.utc).date()
         _recent = [r for r in (list(existing) + list(settled))
-                   if r.get("status") in {"win", "loss"}
+                   if r.get("status") in {"win", "loss", "void"}
                    and str(r.get("tip_date") or "")[:10] >= str(_today - timedelta(days=2))]
     except Exception:
         _recent = list(newly_closed)

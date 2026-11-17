@@ -612,6 +612,8 @@ def render_card(entries, target_date, result=None):
             rowfill = "#0b4a3a"
         elif mk == "loss":
             rowfill = "#5a1426"
+        elif mk == "void":
+            rowfill = "#3a3f4a"
         draw.rounded_rectangle((48, y, 1032, y + 50), radius=10, fill=rowfill)
         draw.text((66, y + 12), _label(market, tip)[:40], font=font(22, True), fill="#eef7ff")
         draw.text((762, y + 11), f"{_price(tip):.2f}", font=font(26, True), fill="#ffd166")
@@ -621,6 +623,8 @@ def render_card(entries, target_date, result=None):
         if mk in ("win", "loss"):
             draw.text((972, y + 8), "✔" if mk == "win" else "✖", font=font(30, True),
                       fill="#27e0c0" if mk == "win" else "#ff5468")
+        elif mk == "void":
+            draw.text((930, y + 12), "VOID", font=font(24, True), fill="#ffd166")
 
     # Context stats: drawn only for values that really exist on the tips.
     ctx = {}
@@ -1174,6 +1178,8 @@ def render_scorer_card(tip, target_date, result=None):
         outline = "#27e0c0"
     elif mark == "loss":
         outline = "#ff5468"
+    elif mark == "void":
+        outline = "#ffd166"
     panel((34, top, 1046, top + 190), outline=outline)
     odds = _number(tip.get("odds") or tip.get("oddsYes"))
     pct = _pct(tip.get("probability"))
@@ -1197,6 +1203,9 @@ def render_scorer_card(tip, target_date, result=None):
     if mark in ("win", "loss"):
         text_c("✔ TORSCHÜTZE – TREFFER" if mark == "win" else "✖ KEIN TOR – KEIN TREFFER", w / 2, top + 128,
                font(32, True), "#27e0c0" if mark == "win" else "#ff5468")
+    elif mark == "void":
+        text_c("↩ VOID · SPIELER NICHT EINGESETZT – CASHBACK", w / 2, top + 128,
+               font(28, True), "#ffd166")
     else:
         text_c("ANYTIME GOALSCORER · Spieler trifft jederzeit", w / 2, top + 134, font(20, True), "#d6e6ff")
     fy = top + 214
@@ -1441,11 +1450,11 @@ def render_bis_card(entries, target_date, result=None):
         if i < len(rows):
             m, t = rows[i]
             mk = marks.get(str(i))
-            oc = "#33f0c8" if mk == "win" else ("#ff4f63" if mk == "loss" else ("#ffd84a" if i == 0 else "#33f0c8"))
+            oc = "#33f0c8" if mk == "win" else ("#ff4f63" if mk == "loss" else ("#aab4c4" if mk == "void" else ("#ffd84a" if i == 0 else "#33f0c8")))
             draw.rounded_rectangle((x0, 518, x0 + 172, 580), radius=10, fill="#062a5c", outline=oc, width=3)
             tc(_label(m, t).split("  ·  ")[0][:18], x0 + 86, 522, f(13), "#ffffff")
             pv = _pct(t.get("probability"))
-            tc((f"{pv:.0f}%" if pv is not None else "–") + ("  ✔" if mk == "win" else "  ✖" if mk == "loss" else ""),
+            tc((f"{pv:.0f}%" if pv is not None else "–") + ("  ✔" if mk == "win" else "  ✖" if mk == "loss" else "  VOID" if mk == "void" else ""),
                x0 + 86, 538, f(26), oc)
             tc(f"@ {_price(t):.2f}", x0 + 86, 564, f(12), "#ffd84a")
         else:
