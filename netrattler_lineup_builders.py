@@ -207,7 +207,9 @@ def run():
         finally:
             os.environ.pop("NETRATTLER_LINEUP_CONFIRMED", None)
         for fid in confirmed_ids:
-            _diag({"probe": "lineup_state", "day": day, "fixture_id": fid, "done": True, "tries": state.get(str(fid), {}).get("tries", 0) + 1})
+            # A confirmed lineup is not proof of delivery. Keep zero-send fixtures
+            # eligible for a later attempt while the existing retry cap applies.
+            _diag({"probe": "lineup_state", "day": day, "fixture_id": fid, "done": bool(sent), "tries": state.get(str(fid), {}).get("tries", 0) + 1})
     _diag({"probe": "lineup_run", "day": day, "fixtures": len(fixtures), "checked": len(todo), "confirmed": len(matches), "sent": sent})
     print(f"fixtures={len(fixtures)} checked={len(todo)} confirmed={len(matches)} sent={sent}")
     return sent
