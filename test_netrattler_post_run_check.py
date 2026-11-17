@@ -61,6 +61,23 @@ class PostRunTests(unittest.TestCase):
                'Coverage: builder=no_candidates'])
         self.assertEqual(coverage_warnings(log), [])
 
+    def test_mixed_limit_and_duplicates_is_not_failure(self):
+        log = '\n'.join(
+            ['MASTER BUILDER normalized=175 · matches=6 · same-match≥2=3 · generated=5']
+            + ['MASTER BUILDER Spiel-Limit erreicht: X'] * 3
+            + ['MASTER BUILDER duplicate skipped: nb_1', 'MASTER BUILDER duplicate skipped: nb_2',
+               'Builder Engine: 0 Builder aus 614 Props gesendet',
+               'Coverage: builder=no_candidates'])
+        self.assertEqual(coverage_warnings(log), [])
+
+    def test_mixed_partial_still_warns(self):
+        log = '\n'.join(
+            ['MASTER BUILDER normalized=175 · generated=5']
+            + ['MASTER BUILDER Spiel-Limit erreicht: X'] * 2
+            + ['MASTER BUILDER duplicate skipped: nb_1',
+               'Builder Engine: 0 Builder aus 614 Props gesendet'])
+        self.assertEqual(coverage_warnings(log), ['Builder Engine sent zero builders'])
+
     def test_partial_deduplication_still_warns(self):
         log = '\\n'.join([
             'MASTER BUILDER normalized=476 · generated=3',

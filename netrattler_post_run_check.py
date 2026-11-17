@@ -30,7 +30,10 @@ def coverage_warnings(log_text):
     # not a missing delivery.
     limit_hits = len(re.findall(r'MASTER BUILDER Spiel-Limit erreicht', log_text))
     limit_exhausted = count_generated > 0 and limit_hits >= count_generated
-    all_already_delivered = (count_generated > 0 and len(duplicate_ids) >= count_generated) or limit_exhausted
+    # Mixed case: every generated builder was either a duplicate of an earlier delivery or hit
+    # the per-match limit -> nothing new may be sent, which is legitimate.
+    mixed_exhausted = count_generated > 0 and (limit_hits + len(duplicate_ids)) >= count_generated
+    all_already_delivered = (count_generated > 0 and len(duplicate_ids) >= count_generated) or limit_exhausted or mixed_exhausted
     # Model builders are an explicitly supported style in the same group.
     # Count only deliveries with a confirmed Telegram receipt, never attempts.
     model_delivered = any(int(n) > 0 for n in re.findall(
