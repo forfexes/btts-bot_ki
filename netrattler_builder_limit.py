@@ -19,7 +19,7 @@ def matches_of(legs):
 
 
 def at_limit(url, key, match_date, legs, limit=None):
-    """True, wenn fuer eines der Spiele bereits `limit` Builder (nicht void) existieren. Bei DB-Fehler sperren, damit die Tagesgrenze erhalten bleibt."""
+    """True, wenn fuer eines der Spiele bereits `limit` bestaetigt versendete Builder (nicht void) existieren. Bei DB-Fehler sperren, damit die Tagesgrenze erhalten bleibt."""
     limit = PER_MATCH if limit is None else limit
     if limit <= 0:
         return False
@@ -30,7 +30,8 @@ def at_limit(url, key, match_date, legs, limit=None):
         try:
             r = requests.get(f"{url.rstrip('/')}/rest/v1/netrattler_builder_picks", headers=hdr, timeout=15, params=[
                 ("select", "builder_id"), ("match_date", f"eq.{str(match_date)[:10]}"),
-                ("status", "neq.void"), ("legs", "cs." + json.dumps([{"match": match}])), ("limit", str(limit))])
+                ("status", "neq.void"), ("telegram_sent", "eq.true"),
+                ("legs", "cs." + json.dumps([{"match": match}])), ("limit", str(limit))])
             if not r.ok:
                 return True
             rows = r.json()
