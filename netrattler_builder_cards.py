@@ -75,7 +75,7 @@ def render_builder_card(pick):
         draw.rounded_rectangle((30,y,1170,y+145),radius=15,fill='#0A1B32',outline='#42cfe8',width=2)
         key=(leg.player,leg.team)
         if key not in photos:
-            photos[key]=cards._player_photo(leg.player,leg.team) if len(photos)<6 else b''
+            photos[key]=cards._player_photo(leg.player,leg.team) if len(photos)<12 else b''
         placed=False
         if photos[key]:
             try:

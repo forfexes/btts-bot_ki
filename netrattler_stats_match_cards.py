@@ -982,6 +982,13 @@ def _player_photo(name, team=""):
 
     urls = []
     try:
+        from netrattler_espn_photo import espn_photo
+        _ep = espn_photo(clean_name)
+        if _ep:
+            urls.append(_ep)
+    except Exception:
+        STATS["player_espn_err"] = STATS.get("player_espn_err", 0) + 1
+    try:
         from netrattler_api_portraits import portrait
         api_portrait = portrait(clean_name, team)
         if api_portrait:
