@@ -984,6 +984,7 @@ def _player_photo(name, team=""):
     try:
         from netrattler_espn_photo import espn_photo
         _ep = espn_photo(clean_name)
+        STATS["espn_id_found" if _ep else "espn_id_missing"] = STATS.get("espn_id_found" if _ep else "espn_id_missing", 0) + 1
         if _ep:
             urls.append(_ep)
     except Exception:
@@ -1068,7 +1069,9 @@ def _player_photo(name, team=""):
     payload = b""
     for url in dict.fromkeys(urls):
         try:
-            resp = requests.get(url, timeout=7)
+            resp = requests.get(url, timeout=7, headers={"User-Agent": "Mozilla/5.0 (NETRATTLER image fetch)"})
+            if "espncdn" in url and not resp.ok:
+                STATS["espn_photo_http_" + str(resp.status_code)] = STATS.get("espn_photo_http_" + str(resp.status_code), 0) + 1
             if not resp.ok or not resp.content or len(resp.content) > 8_000_000:
                 continue
             # A 200 HTML error/placeholder must not be pasted as a player face.
