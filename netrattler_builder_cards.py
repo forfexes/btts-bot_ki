@@ -105,7 +105,10 @@ def render_builder_card(pick):
         center('MODELL · keine bestätigte Buchmacherquote',600,y,24,'#ffd84a')
         center(f'Modell: {pick.joint*100:.0f}% · faire Modellquote: {pick.fair:.2f}',600,y+40,22)
     else:
-        center('Gesamtquote beim Buchmacher prüfen',600,y,25,'#ffd84a')
+        _prod=1.0
+        for _l in pick.legs:
+            _prod*=float(_l.odds or 1.0)
+        center(f'Quote (Einzelquoten multipliziert): {_prod:.2f}',600,y,25,'#ffd84a')
         center(str(pick.variant)+' · '+f'{pick.stake:g} Units',600,y+40,22)
     out=io.BytesIO();im.save(out,format='PNG',optimize=True);return out.getvalue()
 
