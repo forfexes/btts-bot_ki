@@ -5,7 +5,7 @@ from datetime import date, timedelta
 U = (os.getenv("SUPABASE_URL") or "").rstrip("/")
 K = os.getenv("SUPABASE_SERVICE_ROLE_KEY") or os.getenv("SUPABASE_KEY") or ""
 H = {"apikey": K, "Authorization": f"Bearer {K}", "Content-Type": "application/json"}
-since = (date.today() - timedelta(days=2)).isoformat()
+since = (date.today() - timedelta(days=int(os.getenv("DIAG_DAYS","14")))).isoformat()
 
 
 def get(table, **params):
@@ -16,7 +16,7 @@ def get(table, **params):
 
 teams, players, err = set(), {}, []
 try:
-    for b in get("netrattler_builder_picks", select="legs", match_date=f"gte.{since}", limit="200"):
+    for b in get("netrattler_builder_picks", select="legs", match_date=f"gte.{since}", limit="600"):
         for lg in b.get("legs") or []:
             m = lg.get("match") or ""
             if " vs " in m:
@@ -26,7 +26,7 @@ try:
 except Exception as e:
     err.append("builder:" + str(e)[:120])
 try:
-    for t in get("tips", select="match,market,player_name", date=f"gte.{since}", limit="400"):
+    for t in get("tips", select="match,market,player_name", date=f"gte.{since}", limit="1500"):
         m = t.get("match") or ""
         if " vs " in m and " / " not in m:
             a, c = m.split(" vs ", 1); teams |= {a.strip(), c.strip()}
@@ -44,7 +44,7 @@ for t in sorted(teams):
     except Exception:
         no_crest.append(t)
 no_photo = []
-for n, t in sorted(players.items())[:200]:
+for n, t in sorted(players.items())[:400]:
     try:
         if not c._player_photo(n, t):
             no_photo.append(n)
