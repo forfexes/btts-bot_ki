@@ -103,3 +103,22 @@ def test_six_leg_original_base_is_immutable_between_different_players():
     assert hashlib.sha256(_base(str(BUILDER_IMAGE)).tobytes()).hexdigest()==digest
     assert review_png(a,"builder",legs=6).passed
     assert review_png(b,"builder",legs=6).passed
+
+
+def test_regular_match_card_sender_rejects_incomplete_goal_hunter():
+    """Both Telegram paths must reject a missing photo, not only send_scorer_card."""
+    entry=("scorer",{"match":"Demo United vs Test FC",
+                     "player":"Unverified Scorer","team":"Demo United",
+                     "odds":3.3,"probability":35,"_source":"test_only"})
+    with patch.object(cards,"select_cards",return_value=[[entry]]), \
+         patch.object(cards,"_existing_card_signatures",return_value=set()), \
+         patch.object(cards,"_crest_cache_load",return_value=None), \
+         patch.object(cards,"_crest_cache_save",return_value=None), \
+         patch.object(cards,"_badge_bytes",return_value=b"fake"), \
+         patch.object(cards,"_player_photo",return_value=b""), \
+         patch.object(cards.time,"sleep",return_value=None), \
+         patch.object(cards,"_send_photo",return_value=999) as send, \
+         patch("netrattler_visual_gate.enrich_scorer",return_value=entry[1]):
+        assert cards.send_cards({"scorer":[entry[1]]},"2026-11-21",
+                                "FAKE_TOKEN","FAKE_CHAT") == 0
+    send.assert_not_called()
