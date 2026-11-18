@@ -7,6 +7,17 @@ import netrattler_builder_cards as builder_cards
 import netrattler_builder_engine as engine
 
 
+
+def _fake_reference_photo():
+    """Valid synthetic raster solely for offline unit tests; never Telegram."""
+    from PIL import Image
+    import io
+    im=Image.new("RGB",(140,140),"#20668A")
+    out=io.BytesIO()
+    im.save(out,"PNG")
+    return out.getvalue()
+
+
 def test_kickoff_uses_swiss_time_and_never_tbd():
     assert corner.kickoff_label({'time':'TBD','_kickoff':'2026-10-31T15:00:00Z'},'2026-10-31')==('2026-10-31','16:00')
     assert corner.kickoff_label({'time':'TBD'},'2026-10-31')[1]=='Zeit nicht bestätigt'
@@ -38,7 +49,7 @@ def test_h2h_excludes_future_live_and_wrong_pair_but_keeps_zero():
 def test_corner_dispatch_and_settlement_render():
     tip={'match':'Home vs Away','tip':'Over 8.5 Ecken','odds':1.9,'probability':61,'_source':'kambi',
          'expected_corners':9.8,'home_avg_corners':0,'away_avg_corners':5,'time':'TBD'}
-    with patch.object(cards,'_paste_badge'):
+    with patch.object(cards,'_badge_bytes',return_value=_fake_reference_photo()), patch.object(cards,'_paste_badge'):
         image=Image.open(io.BytesIO(cards.render_card([('corners',tip)],'2026-10-31',{'marks':{'0':'win'}})))
     assert image.size==(1200,900)
     assert image.getpixel((600,899))[2] < 70
@@ -51,10 +62,10 @@ def pick():
 
 def test_builder_keeps_verified_player_identity_and_receipt():
     p=pick()
-    with patch.object(cards,'_paste_badge'),patch.object(cards,'_player_photo',return_value=b'') as photo:
+    with patch.object(cards,'_badge_bytes',return_value=_fake_reference_photo()), patch.object(cards,'_paste_badge'),patch.object(cards,'_player_photo',return_value=_fake_reference_photo()) as photo:
         payload=builder_cards.render_builder_card(p)
     photo.assert_called_once_with('Player A','Levante')
-    assert Image.open(io.BytesIO(payload)).size==(1200,810)
+    assert Image.open(io.BytesIO(payload)).size==(1122,994)
     with patch.object(builder_cards,'render_builder_card',return_value=payload), \
          patch("netrattler_visual_gate.strict_enabled",return_value=False), \
          patch("netrattler_visual_review.review_png",return_value=Mock(passed=True,problems=[])), \
@@ -103,8 +114,8 @@ def test_model_card_preserves_no_quote_and_original_receipt():
     assert adapted.model_only and adapted.legs[0].odds==0
     assert adapted.legs[0].series==model['legs'][0]['series']
     assert receipt=={'message_id':123,'chat_id':'42','text':'original'}
-    with patch.object(cards,'_paste_badge'),patch.object(cards,'_player_photo',return_value=b''):
-        assert Image.open(io.BytesIO(builder_cards.render_builder_card(adapted))).size==(1200,810)
+    with patch.object(cards,'_badge_bytes',return_value=_fake_reference_photo()), patch.object(cards,'_paste_badge'),patch.object(cards,'_player_photo',return_value=_fake_reference_photo()):
+        assert Image.open(io.BytesIO(builder_cards.render_builder_card(adapted))).size==(1122,994)
 
 
 def test_model_cross_ladder_renders_all_stages():
@@ -114,18 +125,18 @@ def test_model_cross_ladder_renders_all_stages():
     pick=SimpleNamespace(legs=[leg('A','Club A vs Club B'),leg('B','Club C vs Club D')],
         style='FOUL LEITER',match_date='2026-10-31',model_only=True,joint=.5,fair=2,
         tiers=[(2,.5),(3,.2),(4,.05)],tier_shift=False)
-    with patch.object(cards,'_player_photo',return_value=b''):
-        assert Image.open(io.BytesIO(builder_cards.render_builder_card(pick))).size==(1200,1090)
+    with patch.object(cards,'_player_photo',return_value=_fake_reference_photo()):
+        assert Image.open(io.BytesIO(builder_cards.render_builder_card(pick))).size==(1122,1194)
 
 
 def test_new_goal_hunter_has_reference_proportions_and_no_made_up_data():
     tip={'match':'Team A vs Team B','player':'Player X','team':'Team A',
          'league':'Test','odds':2.0,'probability':50}
-    with patch.object(cards,'_paste_badge'), patch.object(cards,'_player_photo',return_value=b''):
+    with patch.object(cards,'_badge_bytes',return_value=_fake_reference_photo()), patch.object(cards,'_paste_badge'), patch.object(cards,'_player_photo',return_value=_fake_reference_photo()):
         raw=cards.render_scorer_card(tip,'2026-11-18')
-        assert Image.open(io.BytesIO(raw)).size==(1080,1340)
+        assert Image.open(io.BytesIO(raw)).size==(1122,1402)
         updated=cards.render_scorer_card(tip,'2026-11-18',{'marks':{'0':'win'}})
-        assert Image.open(io.BytesIO(updated)).size==(1080,1340)
+        assert Image.open(io.BytesIO(updated)).size==(1122,1402)
 
 
 def test_new_builder_six_legs_and_l10_l15_not_invented():
@@ -138,9 +149,9 @@ def test_new_builder_six_legs_and_l10_l15_not_invented():
             'Test','Shots 1+','shots',1,1.9,.7,'kambi') for i in range(6)]
     p=S(legs=legs,style='Six',match_date='2026-11-18',stake=.2,
         variant='6 LEG',status='pending')
-    with patch.object(cards,'_paste_badge'),patch.object(cards,'_player_photo',return_value=b''):
+    with patch.object(cards,'_badge_bytes',return_value=_fake_reference_photo()), patch.object(cards,'_paste_badge'),patch.object(cards,'_player_photo',return_value=_fake_reference_photo()):
         payload=builder_cards.render_builder_card(p)
-    assert Image.open(io.BytesIO(payload)).size==(1200,1610)
+    assert Image.open(io.BytesIO(payload)).size==(1122,1402)
 
 
 def test_missing_history_and_quote_not_fabricated():
@@ -231,7 +242,7 @@ def test_strict_guard_rejects_scorer_without_photos():
     from netrattler_visual_gate import validate_scorer
     tip={"match":"Home vs Away","player":"Some Player","team":"Home",
          "odds":5,"probability":40,"_source":"book","goals_per_game":0.5}
-    with patch.object(cards,"_player_photo",return_value=b""), \
+    with patch.object(cards,"_player_photo",return_value=_fake_reference_photo()), \
          patch.object(cards,"_badge_bytes",return_value=b""):
         reasons=validate_scorer(tip,"2026-11-18")
     assert "missing_scorer_photo" in reasons
