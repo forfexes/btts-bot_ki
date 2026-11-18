@@ -50,7 +50,7 @@ def fixtures_from_fotmob(payload):
             clock=str(live_time.get("short") or "")
             m=re.search(r"(\d{1,3})",clock)
             minute=int(m.group(1)) if m else -1
-            if not common.MIN_MINUTE <= minute <= 90:
+            if not common.MIN_MINUTE <= minute <= common.MAX_MINUTE:
                 continue
             score=_score(match)
             if score is None:
@@ -127,9 +127,12 @@ def run():
         print("LMG_FOTMOB_UNAVAILABLE",str(exc)[:140],flush=True)
         return common.main()  # only if primary free feed unavailable
     fixtures=fixtures_from_fotmob(feed)
+    if not fixtures:
+        print("LMG_FOTMOB_NO_LATE_MATCHES_ESPN_BACKUP",flush=True)
+        return common.main()
     fixtures.sort(key=lambda x:(x["minute"],x["fixture_id"]))
     report={"source":"fotmob","live_candidates":len(fixtures),"stats_checked":0,
-            "missing_stats":0,"qualified":0,"sent":0,"odds_calls":0,
+            "missing_stats":0,"tier_rejected":0,"qualified":0,"sent":0,"odds_calls":0,
             "send_enabled":send_enabled}
     for fx in fixtures[:MAX_EVENTS]:
         try:
@@ -153,6 +156,11 @@ def run():
         if not metrics:
             report["missing_stats"]+=1
             continue
+        tier=common.select_goal_tier(fx,metrics)
+        if tier is None:
+            report["tier_rejected"]+=1
+            continue
+        metrics["tier"]=tier
         report["qualified"]+=1
         print("LMG_FOTMOB_SIGNAL",json.dumps({
             "fixture":fx["fixture_id"],"minute":fx["minute"],
