@@ -85,5 +85,34 @@ class FotmobTest(unittest.TestCase):
         send.assert_not_called()
 
 
+    def test_80_standard_81_to_85_premium_only_and_86_blocked(self):
+        for minute in (80, 81, 85):
+            fixture=bot.fixtures_from_fotmob(daily(str(minute)+"’"))[0]
+            observed=bot.metrics_from_fotmob(detail(),fixture)
+            tier=bot.common.select_goal_tier(fixture,observed)
+            self.assertEqual(tier,"PREMIUM")
+            weaker=dict(observed,shots=12,sot=6)
+            self.assertEqual(bot.common.select_goal_tier(fixture,weaker),
+                             "STANDARD" if minute==80 else None)
+        self.assertEqual(bot.fixtures_from_fotmob(daily("86’")),[])
+        self.assertEqual(bot.fixtures_from_fotmob(daily("90’")),[])
+
+    def test_late_tips_need_real_corners_when_provided(self):
+        fixture=bot.fixtures_from_fotmob(daily("83’"))[0]
+        m=dict(bot.metrics_from_fotmob(detail(),fixture),shots=22,sot=9,corners=3)
+        self.assertIsNone(bot.common.select_goal_tier(fixture,m))
+        m["corners"]=None
+        self.assertEqual(bot.common.select_goal_tier(fixture,m),"PREMIUM")
+
+    def test_espn_backup_when_no_fotmob_late_match(self):
+        with patch.dict("os.environ",{"LMG_SEND":"false"}), \
+             patch.object(bot,"fetch_fotmob",return_value=daily("60’")), \
+             patch.object(bot.common,"main",return_value={"sent":0,"qualified":0}) as backup:
+            r=bot.run()
+        self.assertEqual(r["sent"],0)
+        backup.assert_called_once()
+
+
+
 if __name__=="__main__":
     unittest.main()
