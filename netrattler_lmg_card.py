@@ -68,32 +68,36 @@ def crest(team_id):
         return None
 
 
-def _stats(d, metrics):
+def _stats(d, metrics, *, next_team=False):
     teams = (metrics or {}).get("teams") or {}
     home, away = teams.get("home") or {}, teams.get("away") or {}
     if home and away:
-        center(d, "TEAMSTATISTIK", 567, 842, 40, WHITE, max_width=590)
+        center(d, "TEAMSTATISTIK", 567, 879 if next_team else 842,
+               37 if next_team else 40, WHITE, max_width=590)
         rows = [("SCHÜSSE", "shots"), ("AUFS TOR", "sot"), ("ECKEN", "corners")]
         if home.get("xg") is not None and away.get("xg") is not None:
             rows.append(("xG", "xg"))
         for i, (label, key) in enumerate(rows):
-            y = 913 + i * 60
+            y = (930 + i * 51) if next_team else (913 + i * 60)
             left = home.get(key)
             right = away.get(key)
             def val(n):
                 return "–" if n is None else (f"{n:.2f}" if key == "xg" else str(n))
-            center(d, val(left), 231, y, 42, WHITE, max_width=154)
-            center(d, label, 556, y, 34, GOLD, max_width=310)
-            center(d, val(right), 872, y, 42, WHITE, max_width=155)
+            center(d, val(left), 231, y, 37 if next_team else 42,
+                   WHITE, max_width=154)
+            center(d, label, 556, y, 30 if next_team else 34,
+                   GOLD, max_width=310)
+            center(d, val(right), 872, y, 37 if next_team else 42,
+                   WHITE, max_width=155)
             if i < len(rows)-1:
                 d.line((346, y+28, 780, y+28), fill=(169, 117, 25), width=2)
     else:
-        center(d, "GESAMTSTATISTIK", 560, 826, 37, WHITE)
+        center(d, "GESAMTSTATISTIK", 560, 882 if next_team else 826, 37, WHITE)
         for i, (label, key) in enumerate((("SCHÜSSE", "shots"), ("AUFS TOR", "sot"), ("ECKEN", "corners"))):
             val = (metrics or {}).get(key)
             if val is not None:
-                center(d, label, 421, 914 + i*66, 34, GOLD)
-                center(d, str(val), 742, 914 + i*66, 43, WHITE)
+                center(d, label, 421, (944+i*54) if next_team else (914+i*66), 34, GOLD)
+                center(d, str(val), 742, (944+i*54) if next_team else (914+i*66), 43, WHITE)
 
 
 def make_card(fixture, metrics=None, *, final_score=None, won=None,
@@ -131,19 +135,19 @@ def make_card(fixture, metrics=None, *, final_score=None, won=None,
     # The live bet line is a fixed market; only the tier is dynamic.
     center(d, (metrics or {}).get("tier") or "STANDARD", 853, 734, 32, GOLD, max_width=240)
     if final_score is None:
-        _stats(d, metrics)
+        _stats(d, metrics, next_team=bool(next_goal_side))
         if next_goal_side:
             next_name = home if next_goal_side == "home" else away
-            center(d, "NÄCHSTES TOR: " + next_name, 565, 789, 32, GOLD,
-                   max_width=900)
+            center(d, "NÄCHSTES TOR: " + next_name, 565, 833, 29, GOLD,
+                   max_width=855)
         center(d, "AUSWERTUNG: OFFEN", 602, 1204, 47, GOLD, max_width=815)
     else:
         # Remove *all* open-statistics and their labels; keep the original glowing cyan border.
         d.rounded_rectangle((100, 814, 1001, 1111), radius=18, fill=(4, 13, 20))
-        center(d, "TIPP-ZEITPUNKT", 564, 901, 45, GOLD)
-        center(d, f"{fixture['minute']}. MINUTE", 564, 971, 68, WHITE)
+        center(d, "TIPP-ZEITPUNKT", 564, 875, 45, GOLD)
+        center(d, f"{fixture['minute']}. MINUTE", 564, 943, 68, WHITE)
         center(d, f"SPIELSTAND BEIM TIPP: {fixture['hg']}:{fixture['ag']}",
-               564, 1055, 34, WHITE, max_width=820)
+               564, 1017, 34, WHITE, max_width=820)
         if next_goal_side:
             next_name = home if next_goal_side == "home" else away
             wording = {"won": "RICHTIG", "lost": "FALSCH",
@@ -153,7 +157,7 @@ def make_card(fixture, metrics=None, *, final_score=None, won=None,
                 raise ValueError("Invalid next-goal result")
             tint = GREEN if next_goal_result == "won" else (RED if next_goal_result == "lost" else WHITE)
             center(d, f"NÄCHSTES TOR: {next_name} · {wording}",
-                   564, 1104, 28, tint, max_width=850)
+                   564, 1076, 27, tint, max_width=850)
         if won is not True and won is not False:
             raise ValueError("Final result requires a verified win/loss")
         color = GREEN if won else RED
