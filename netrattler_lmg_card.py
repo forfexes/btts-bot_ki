@@ -72,8 +72,9 @@ def make_card(fixture,metrics=None,*,final_score=None,won=None):
         if badge:
             im.paste(badge,(x-badge.width//2,382),badge)
         else:
-            d.ellipse((x-76,395,x+76,547),outline=CYAN,width=5)
-            d.text((x,470),"FC",font=font(42),fill=WHITE,anchor="mm")
+            # Never invent a team crest or show a misleading generic FC emblem.
+            d.rounded_rectangle((x-78,407,x+78,547),radius=22,outline=CYAN,width=3)
+            d.text((x,477),"Wappen",font=font(22),fill=WHITE,anchor="mm")
         f=font(29)
         while d.textbbox((0,0),name,font=f)[2]>385 and f.size>20:
             f=font(f.size-2)
