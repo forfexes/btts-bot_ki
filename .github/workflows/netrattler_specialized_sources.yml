@@ -6,7 +6,9 @@ on:
     branches: [main]
     paths:
       - netrattler_specialized_sources.py
+      - netrattler_source_hub.py
       - test_netrattler_specialized_sources.py
+      - test_netrattler_open_source_registry.py
       - .github/workflows/netrattler_specialized_sources.yml
 
 permissions:
@@ -25,28 +27,10 @@ jobs:
       - name: Offline safety and schema tests
         run: |
           python -m py_compile netrattler_specialized_sources.py test_netrattler_specialized_sources.py
-          python -m unittest -v test_netrattler_specialized_sources.py
+          python -m unittest -v test_netrattler_specialized_sources.py test_netrattler_open_source_registry.py
       - name: Official FootyStats sample coverage - shadow, no picks or Telegram
         run: |
           python netrattler_specialized_sources.py --demo --out specialized-source-report.json
-      - name: Inspect official sample response shape without exposing credentials
-        run: |
-          python - <<'PY'
-          import requests
-          r = requests.get("https://api.football-data-api.com/league-matches",
-              params={"key": "example", "season_id": 1625, "page": 1, "max_per_page": 2}, timeout=12)
-          try:
-              obj = r.json()
-              rows = obj.get("data") if isinstance(obj, dict) else None
-              print("SAMPLE_DIAG", {"http": r.status_code,
-                     "success": obj.get("success") if isinstance(obj, dict) else None,
-                     "message": str(obj.get("message", ""))[:120] if isinstance(obj, dict) else "",
-                     "data_type": type(rows).__name__, "rows": len(rows) if isinstance(rows, list) else None,
-                     "sample": {k: rows[0].get(k) for k in ("id","status","homeID","awayID","homeGoalCount","awayGoalCount")}
-                         if isinstance(rows, list) and rows and isinstance(rows[0], dict) else {}})
-          except Exception as e:
-              print("SAMPLE_DIAG_ERROR", type(e).__name__)
-          PY
       - uses: actions/upload-artifact@v4
         if: always()
         with:
