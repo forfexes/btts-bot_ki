@@ -86,3 +86,23 @@ def test_do_not_change_old_match_with_same_pairing_on_another_day():
     source=inspect.getsource(cards.update_cards_with_results)
     assert 'card.get("card_date")' in source
     assert 'result_day' in source
+
+
+def test_edit_message_media_preserves_caption_and_original_message_id():
+    import json
+    reply = SimpleNamespace(status_code=200,ok=True,text="ok")
+    with patch.object(cards.requests, "post", return_value=reply) as send:
+        assert cards._edit_photo("token","chat",918,b"png",lambda x:None,
+                                 caption="❌ Auswertung: verloren")
+    arguments = send.call_args.kwargs
+    assert arguments["data"]["message_id"] == 918
+    assert json.loads(arguments["data"]["media"])["caption"] == "❌ Auswertung: verloren"
+    assert "files" in arguments and "card" in arguments["files"]
+
+
+def test_no_synthetic_void_on_unverified_goal_hunter_result():
+    import inspect
+    source=inspect.getsource(settlement.send_result_cards)
+    assert 'image_status = "pending"' in source
+    assert '_confirmed_scorer_no_appearance(row)' in source
+    assert '"caption": caption' in source

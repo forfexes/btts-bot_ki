@@ -871,13 +871,17 @@ def save_card(chat, message_id, entries, target_date, log=print):
         return False
 
 
-def _edit_photo(token, chat, message_id, payload, log):
+def _edit_photo(token, chat, message_id, payload, log, caption=None):
     import json as _json
     try:
+        media = {"type": "photo", "media": "attach://card"}
+        if caption is not None:
+            # editMessageMedia otherwise erases the original settlement caption.
+            media["caption"] = str(caption)[:1024]
         r = requests.post(
             f"https://api.telegram.org/bot{token}/editMessageMedia",
             data={"chat_id": chat, "message_id": int(message_id),
-                  "media": _json.dumps({"type": "photo", "media": "attach://card"})},
+                  "media": _json.dumps(media)},
             files={"card": ("netrattler_result.png", payload, "image/png")}, timeout=25,
         )
         if r.status_code == 429:
@@ -960,13 +964,16 @@ def update_cards_with_results(token, results, log=print):
                 ft = old.get("ft") or ""
                 ht = old.get("ht") or ""
                 matched = False
+                caption = None
                 for res in res_list:
                     result_day = str(res.get("tip_date") or res.get("date") or "")[:10]
                     if result_day and str(card.get("card_date") or "")[:10] != result_day:
                         continue  # Repeated same pairing on another date.
+                    matched_this_result = False
                     for i, (m, t) in enumerate(entries):
                         if not _result_matches_card_entry(m, t, res, entries):
                             continue
+                        matched_this_result = True
                         matched = True
                         status = str(res.get("status") or "").lower()
                         if status in ("win", "loss", "void"):
@@ -974,9 +981,11 @@ def update_cards_with_results(token, results, log=print):
                         elif status == "pending" and str(m) == "scorer":
                             # Undo previous incorrectly shared scorer marks.
                             marks.pop(str(i), None)
-                    if matched:
+                    if matched_this_result:
                         ft = res.get("ft") or ft
                         ht = res.get("ht") or ht
+                        if "caption" in res:
+                            caption = res.get("caption")
                 if not matched:
                     diag["no_marks"] += 1
                     continue
@@ -986,7 +995,7 @@ def update_cards_with_results(token, results, log=print):
                 diag["marked"] += 1
                 payload = render_card(entries, card.get("card_date") or "",
                                       {"marks": marks, "ft": ft, "ht": ht})
-                if _edit_photo(token, card["chat_id"], card["message_id"], payload, log):
+                if _edit_photo(token, card["chat_id"], card["message_id"], payload, log, caption=caption):
                     diag["edit_ok"] += 1
                     done += 1
                     requests.patch(url, headers=hdr, timeout=15, params={"card_id": f"eq.{card.get('card_id')}"},

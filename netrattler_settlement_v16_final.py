@@ -751,8 +751,22 @@ def send_result_cards(newly_closed: Sequence[Dict[str, Any]]) -> int:
         if hth in (None, "") and row.get("ht_home") not in (None, ""):
             hth, hta = row.get("ht_home"), row.get("ht_away")
         data = unpack(row.get("tip_payload") or {})
+        image_status = st
+        caption = None
+        if group == "scorer":
+            if st == "void" and not _confirmed_scorer_no_appearance(row):
+                image_status = "pending"  # Data gap is not a proven sporting VOID.
+            original = str(anyv(data, ["message_text", "text", "tip_text", "message", "caption"], "") or "")
+            if original:
+                prefix = _strip_old_direct_summary(original)
+                if _original_update_allowed(row):
+                    original = prefix + "\n\n" + format_direct_summary(row)
+                else:
+                    original = prefix
+                caption = _photo_caption_from_settled_text(original)
         results.append({
-            "match": f"{home} vs {away}", "status": st, "group": group,
+            "match": f"{home} vs {away}", "status": image_status, "group": group,
+            "caption": caption if group == "scorer" else None,
             "odds": anyv(data, ["odds", "oddsYes"], 0),
             "player": anyv(data, ["player", "player_name", "scorer_name"], ""),
             "team": anyv(data, ["team", "player_team"], ""),
