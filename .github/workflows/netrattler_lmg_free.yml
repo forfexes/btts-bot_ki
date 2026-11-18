@@ -42,6 +42,44 @@ jobs:
           python -m py_compile netrattler_last_minute_goal.py netrattler_lmg_free.py netrattler_lmg_fotmob.py netrattler_lmg_card.py netrattler_lmg_settle.py test_netrattler_lmg_free.py test_netrattler_lmg_fotmob.py test_netrattler_lmg_card.py
           python -m unittest -v test_netrattler_lmg_free.py test_netrattler_lmg_fotmob.py test_netrattler_lmg_card.py
 
+  visual-preview:
+    needs: verify
+    if: github.event_name == 'push'
+    runs-on: ubuntu-latest
+    timeout-minutes: 6
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+      - run: python -m pip install --prefer-binary requests Pillow
+      - name: Render example cards without live data or Telegram posting
+        run: |
+          mkdir -p visual-preview
+          python - <<'PY'
+          import os
+          from unittest.mock import patch
+          from netrattler_lmg_card import make_card
+          fixture={"home":"Tampines Rovers FC","away":"Ratchaburi FC",
+                   "hg":1,"ag":2,"minute":68,"league":"ASEAN Club Championship",
+                   "home_logo_id":None,"away_logo_id":None}
+          metrics={"tier":"STANDARD","teams":{"home":{"shots":10,"sot":4,"corners":3,"xg":1.62},
+                                                   "away":{"shots":5,"sot":2,"corners":2,"xg":0.87}}}
+          with patch("netrattler_lmg_card.crest",return_value=None):
+              for name,opts in (("open",{"metrics":metrics}),
+                                ("won",{"final_score":"3:2","won":True}),
+                                ("lost",{"final_score":"1:2","won":False})):
+                  data=make_card(fixture,**opts)
+                  with open(f"visual-preview/{name}.jpg","wb") as out:
+                      out.write(data)
+                  print("LMG_VISUAL_PREVIEW",name,len(data))
+          PY
+      - uses: actions/upload-artifact@v4
+        with:
+          name: goal-hunter-visual-preview
+          path: visual-preview/*.jpg
+          retention-days: 3
+
   smoke:
     needs: verify
     if: github.event_name == 'push'
