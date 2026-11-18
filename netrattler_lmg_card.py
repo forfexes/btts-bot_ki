@@ -54,6 +54,29 @@ def make_card(fixture,metrics=None,*,final_score=None,won=None):
             horizon=max(0,1-abs(y-430)/350)
             px[x,y]=(int(3+7*horizon),int(12+21*horizon+8*glow),int(25+35*horizon))
     d=ImageDraw.Draw(im)
+    # Floodlit stadium and luminous grandstand backdrop.
+    import random
+    rng=random.Random(20261118)
+    for side in (0,1):
+        for j in range(10):
+            x=(20+j*23) if side==0 else (W-20-j*23)
+            y=40+j*10
+            for radius,color in ((28,(7,88,135)),(14,(45,190,242)),(6,(240,255,255))):
+                d.ellipse((x-radius,y-radius,x+radius,y+radius),fill=color)
+    for row in range(8):
+        y=245+row*47
+        d.line((0,y,W,y),fill=(8,61+row*3,99+row*3),width=3)
+        for j in range(34):
+            x=rng.randrange(0,W)
+            d.ellipse((x,y-3,x+3,y),fill=(20,110+rng.randrange(90),155+rng.randrange(90)))
+    for y in range(1120,H,14):
+        d.line((0,y,W,y),fill=(5,55+(y%35),27),width=3)
+    def glow_box(coords,color,fill):
+        for spread in (16,10,5):
+            d.rounded_rectangle((coords[0]-spread,coords[1]-spread,
+                                 coords[2]+spread,coords[3]+spread),
+                                radius=24,outline=tuple(int(v*.24) for v in color),width=3)
+        d.rounded_rectangle(coords,radius=21,fill=fill,outline=color,width=5)
     # Stadium lightbanks and pitch bands, keeping the original cyan/gold styling.
     for side in (0,1):
         for j in range(8):
@@ -62,7 +85,7 @@ def make_card(fixture,metrics=None,*,final_score=None,won=None):
     for y in range(1180,H,24):
         d.line((0,y,W,y),fill=(9,45,30),width=3)
     centered(d,"♛  NETRATTLER  ♛",35,76,GOLD)
-    panel(d,(190,146,890,225),GOLD,(35,29,4),5)
+    glow_box((190,146,890,225),GOLD,(35,29,4))
     centered(d,"GOAL HUNTER",155,60,GOLD)
     centered(d,"LAST MINUTE GOAL",239,37,WHITE)
     centered(d,str(fixture.get("league") or "Fussball"),310,31,WHITE)
@@ -79,12 +102,12 @@ def make_card(fixture,metrics=None,*,final_score=None,won=None):
         while d.textbbox((0,0),name,font=f)[2]>385 and f.size>20:
             f=font(f.size-2)
         d.text((x,577),name,font=f,fill=WHITE,anchor="mm")
-    panel(d,(387,415,693,552),GOLD,(9,12,23),5)
+    glow_box((387,415,693,552),GOLD,(9,12,23))
     score=final_score if final_score is not None else f"{fixture['hg']}:{fixture['ag']}"
     centered(d,"ENDRESULTAT" if final_score is not None else f"{fixture['minute']}'",423,30,GOLD)
     centered(d,str(score),458,77,WHITE)
     if final_score is None:
-        panel(d,(68,641,1012,990),CYAN,(7,25,41))
+        glow_box((68,641,1012,990),CYAN,(7,25,41))
         centered(d,"TEAMSTATISTIK",652,39,GOLD)
         teams=(metrics or {}).get("teams") or {}
         rows=[("SCHÜSSE","shots"),("AUFS TOR","sot"),("ECKEN","corners")]
@@ -108,16 +131,16 @@ def make_card(fixture,metrics=None,*,final_score=None,won=None):
             centered(d,f"Aufs Tor: {(metrics or {}).get('sot','–')}",849,38,WHITE)
             if (metrics or {}).get("corners") is not None:
                 centered(d,f"Ecken: {metrics['corners']}",909,38,WHITE)
-        panel(d,(68,1017,1012,1142),GOLD,(20,24,14))
+        glow_box((68,1017,1012,1142),GOLD,(20,24,14))
         centered(d,"OVER 0.5 RESTSPIELZEIT",1027,44,GOLD)
         centered(d,str((metrics or {}).get("tier") or "STANDARD"),1092,30,WHITE)
-        panel(d,(68,1160,1012,1252),CYAN,(6,26,31))
+        glow_box((68,1160,1012,1252),CYAN,(6,26,31))
         centered(d,"AUSWERTUNG: OFFEN",1181,39,WHITE)
     else:
-        panel(d,(68,655,1012,820),GOLD,(20,24,14))
+        glow_box((68,655,1012,820),GOLD,(20,24,14))
         centered(d,"OVER 0.5 RESTSPIELZEIT",685,45,GOLD)
         centered(d,f"TIPP: {fixture['minute']}' · {fixture['hg']}:{fixture['ag']}",755,32,WHITE)
-        panel(d,(68,910,1012,1065),(42,244,109) if won else (255,88,92),(7,31,17) if won else (39,9,16),6)
+        glow_box((68,910,1012,1065),(42,244,109) if won else (255,88,92),(7,31,17) if won else (39,9,16))
         centered(d,"AUSWERTUNG",926,40,WHITE)
         centered(d,"GEWONNEN" if won else "VERLOREN",988,62,(45,250,104) if won else (255,85,90))
     centered(d,"@prophunter",1275,36,WHITE)
