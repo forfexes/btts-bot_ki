@@ -242,3 +242,53 @@ def test_team_normalization_is_strict_but_accepts_club_suffix():
     assert club_same("Remo FC","Remo")
     assert not club_same("Remo","Flamengo")
     assert not club_same("FC","FC")
+
+
+def test_strict_builder_complete_metadata_can_be_sent_without_placeholders():
+    from types import SimpleNamespace as S
+    from netrattler_visual_gate import validate_builder
+    from PIL import Image
+    import io
+    pixels=io.BytesIO()
+    Image.new("RGB",(120,120),"#245377").save(pixels,format="PNG")
+    raw=pixels.getvalue()
+    legs=[S(player="Player One",team="Home",match="Home vs Away",
+            league="Some League",market="Shots",category="shots",
+            line=1,odds=1.8,probability=.7,quality=.82,
+            source="kambi",estimated=False,kickoff="2099-01-01T18:30:00Z"),
+          S(player="Player Two",team="Away",match="Home vs Away",
+            league="Some League",market="Shots",category="shots",
+            line=1,odds=1.9,probability=.68,quality=.75,
+            source="kambi",estimated=False,kickoff="2099-01-01T18:30:00Z")]
+    pick=S(legs=legs,match_date="2099-01-01",estimated_odds=False,
+           combined_quote_verified=True,combined_bookmaker_quote=3.10)
+    with patch("netrattler_neon_design._stat_series",return_value=[1]*15), \
+         patch.object(cards,"_player_photo",return_value=raw), \
+         patch.object(cards,"_badge_bytes",return_value=raw):
+        ready,reasons=validate_builder(pick)
+    assert not reasons
+    assert len(ready.legs)==2
+    assert abs(ready.joint_probability - (.7 * .68))<1e-9
+    assert ready.confidence=="HOCH"
+    assert all(str(x.kickoff).endswith("+00:00") for x in ready.legs)
+
+
+def test_exact_observed_club_returned_for_short_fixture_alias():
+    from types import SimpleNamespace as S
+    import netrattler_visual_gate as gate
+    gate.club_for_player.cache_clear()
+    row={"player_name":"Giovanni Augusto","team":"Chapecoense","match_date":"2026-11-14"}
+    response=S(ok=True,json=lambda:[row])
+    with patch.dict("os.environ",{"SUPABASE_URL":"https://example.supabase.co",
+                                   "SUPABASE_SERVICE_ROLE_KEY":"fake"}), \
+         patch.object(gate.requests,"get",return_value=response):
+        club=gate.club_for_player("Giovanni Augusto","Remo vs Chapecoense-sc","2026-11-18")
+    assert club=="Chapecoense"
+    gate.club_for_player.cache_clear()
+
+
+def test_safely_alias_atletico_paranaense_without_confusing_mg():
+    from netrattler_visual_gate import club_same
+    assert club_same("Athletico-PR","Atletico Paranaense")
+    assert club_same("Atletico Paranaense","Athletico Paranaense")
+    assert not club_same("Atlético-MG","Atletico Paranaense")
