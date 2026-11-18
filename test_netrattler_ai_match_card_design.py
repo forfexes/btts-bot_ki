@@ -79,3 +79,28 @@ def test_ai_match_card_dispatch_remains_separate_from_specialist_templates(monke
         monkeypatch.setattr("netrattler_corner_cards.render_corner_card",
                             lambda *args: b"corner_card")
         assert cards.render_card([("corners",{"match":"A vs B"})],"2026-11-21")==b"corner_card"
+
+
+def test_ai_group_accepts_qualified_real_odds_without_optional_xg(monkeypatch):
+    tip={"match":"Real FC vs Test United","league":"Example",
+         "oddsYes":2.45,"probability":54,"_source":"observed_bookmaker",
+         "_no_real_odds":False}
+    assert len(cards.select_cards({"over25":[tip]}))==1
+    # No imaginary xG/Poisson, and missing statistics remain a dash.
+    with patch.object(cards, "_paste_badge", return_value=None):
+        image=cards.render_bis_card([("over25",tip)], "2026-11-18")
+    with Image.open(io.BytesIO(image)) as img:
+        assert img.size == (1200, 1120)
+    assert "exp_goals_home" not in tip
+    assert "exp_goals_away" not in tip
+
+
+def test_ai_group_retains_exact_odds_and_rejects_fake_sources():
+    ok={"match":"Real FC vs Test United","oddsYes":2.45,
+        "probability":54,"_source":"observed_bookmaker"}
+    assert len(cards.select_cards({"over25":[ok]}))==1
+    for field,value in (("_no_real_odds",True),("synthetic",True),
+                        ("estimated_odds",True)):
+        row=dict(ok,**{field:value})
+        assert cards.select_cards({"over25":[row]})==[]
+    assert cards.select_cards({"over25":[{**ok,"_source":""}]})==[]

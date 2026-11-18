@@ -22,4 +22,8 @@ def test_over25_research_card_requires_consistent_goal_context():
     tip["probability"] = 0.19
     assert len(c.select_cards({"over25": [tip]})) == 1
     tip.pop("exp_goals_home")
+    # Missing extra xG context must not suppress a real-priced pick. The
+    # renderer shows "–" for data that cannot be verified.
+    assert len(c.select_cards({"over25": [tip]})) == 1
+    tip["exp_goals_home"] = -1
     assert c.select_cards({"over25": [tip]}) == []

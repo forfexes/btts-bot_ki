@@ -20,6 +20,7 @@ on:
       - 'btts_bot.py'
       - 'netrattler_neon_design.py'
       - 'netrattler_original_template_renderer.py'
+      - 'netrattler_stats_match_cards.py'
       - 'assets/netrattler_template_builder_original.webp'
       - 'assets/netrattler_template_goal_original.webp'
       - 'netrattler_visual_review.py'

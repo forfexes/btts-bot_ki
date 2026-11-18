@@ -397,8 +397,14 @@ def _card_model_consistent(market, tip):
         return False
     home = _number(tip.get("exp_goals_home"))
     away = _number(tip.get("exp_goals_away"))
-    if home is None or away is None or home < 0 or away < 0:
+    if (home is not None and home < 0) or (away is not None and away < 0):
         return False
+    # A qualified, real-odds tip can still have no separate xG context in
+    # smaller leagues. The card leaves Poisson, score and H2H figures blank
+    # instead of making up statistics. Do not suppress the whole pick.
+    # When BOTH xG values exist, continue checking disagreement strictly.
+    if home is None or away is None:
+        return True
     # This check detects gross disagreement, not small differences between models.
     import math
     lam = home + away
