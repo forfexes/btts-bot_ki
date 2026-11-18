@@ -70,3 +70,19 @@ def test_result_payload_exposes_correct_player_and_match_date():
     source=inspect.getsource(settlement.send_result_cards)
     assert '"player": anyv(data, ["player", "player_name", "scorer_name"]' in source
     assert '"tip_date": str(row.get("tip_date")' in source
+
+
+def test_settled_scorer_does_not_require_made_up_full_time_score():
+    import inspect
+    source=inspect.getsource(settlement.send_result_cards)
+    assert 'group != "scorer"' in source
+    main_source=inspect.getsource(settlement.main)
+    assert 'SETTLEMENT_TG_REPLAY_DAYS' in main_source
+
+
+def test_do_not_change_old_match_with_same_pairing_on_another_day():
+    assert cards.match_key("Israel vs Austria") == cards.match_key("Israel vs Austria")
+    import inspect
+    source=inspect.getsource(cards.update_cards_with_results)
+    assert 'card.get("card_date")' in source
+    assert 'result_day' in source

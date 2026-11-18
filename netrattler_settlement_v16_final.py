@@ -739,7 +739,9 @@ def send_result_cards(newly_closed: Sequence[Dict[str, Any]]) -> int:
                 st not in {"win", "loss", "void"} and not (group == "scorer" and st == "pending")):
             continue
         hs, as_ = res.get("home_score"), res.get("away_score")
-        if (hs in (None, "") or as_ in (None, "")) and st not in {"void", "pending"}:
+        # A scorer can have a verified player-level result without a supported
+        # final match score; omit FT instead of hiding the settled player outcome.
+        if (hs in (None, "") or as_ in (None, "")) and st not in {"void", "pending"} and group != "scorer":
             continue
         hs = "" if hs in (None, "") else hs
         as_ = "" if as_ in (None, "") else as_
@@ -2997,7 +2999,8 @@ def main() -> None:
         for r in list(existing) + list(settled):
             if (r.get("status") in {"win", "loss", "void"} or
                     (r.get("market_group") == "scorer" and r.get("status") == "pending")) and (
-                    str(r.get("tip_date") or "")[:10] >= str(_today - timedelta(days=2))):
+                    str(r.get("tip_date") or "")[:10] >= str(
+                        _today - timedelta(days=max(2, min(7, int(os.getenv("SETTLEMENT_TG_REPLAY_DAYS", "7"))))))):
                 _recent_by_tip[str(r.get("tip_id") or r.get("settlement_id"))] = r
         _recent = list(_recent_by_tip.values())
     except Exception:

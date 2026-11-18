@@ -946,7 +946,7 @@ def update_cards_with_results(token, results, log=print):
     for mk, res_list in by_key.items():
         try:
             r = requests.get(url, headers=hdr, timeout=20,
-                             params={"match_key": f"eq.{mk}", "select": "*", "order": "created_at.desc", "limit": "10"})
+                             params={"match_key": f"eq.{mk}", "select": "*", "order": "created_at.desc", "limit": "50"})
             cards = r.json() if r.ok else []
             if not r.ok:
                 diag["err"] = f"get {r.status_code}"
