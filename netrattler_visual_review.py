@@ -59,6 +59,23 @@ def _texture(im, box):
     return sum(stat.stddev)
 
 
+def _looks_like_grey_placeholder(im, box):
+    """Detect the common flat monochrome anonymous-player silhouette.
+
+    Conservative: only reject when nearly every sampled pixel is achromatic
+    AND the image has very few distinct brightness levels.  Not a face-ID
+    validator; verified photo provenance remains a separate requirement.
+    """
+    patch = im.crop(tuple(int(x) for x in box)).convert("RGB")
+    patch.thumbnail((96, 96))
+    pixels = list(patch.getdata())
+    if not pixels:
+        return True
+    grey = sum(1 for r, g, b in pixels if max(r, g, b) - min(r, g, b) <= 6)
+    luminances = {int((r + g + b) / 3) // 8 for r, g, b in pixels}
+    return grey / len(pixels) > 0.96 and len(luminances) <= 12
+
+
 def _review_user_master(im, kind, legs):
     """Check original user artwork and all freshly rendered dynamic regions."""
     from PIL import ImageChops
@@ -103,6 +120,8 @@ def _review_user_master(im, kind, legs):
         edited((343,843,781,858),"scorer_kickoff_displayed")
         edited((395,376,703,582),"scorer_photo_replaced")
         check(_texture(im,(395,376,703,582))>22,"scorer_photo_texture")
+        check(not _looks_like_grey_placeholder(im,(395,376,703,582)),
+              "scorer_placeholder_silhouette")
         check(_texture(im,(105,447,261,593))>12,"home_badge")
         check(_texture(im,(835,447,997,593))>12,"away_badge")
         count((252,759,850,828),_light,"scorer_name")
