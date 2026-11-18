@@ -292,3 +292,15 @@ def test_safely_alias_atletico_paranaense_without_confusing_mg():
     assert club_same("Athletico-PR","Atletico Paranaense")
     assert club_same("Atletico Paranaense","Athletico Paranaense")
     assert not club_same("Atlético-MG","Atletico Paranaense")
+
+
+def test_goal_hunter_observed_goals_per_game_not_invented():
+    from netrattler_visual_gate import enrich_scorer
+    tip={"match":"Home vs Away","team":"Home","player":"Real Player"}
+    with patch("netrattler_neon_design._observed_game_log",return_value=tuple([1,0,0,1,0,0,0,0,0,0])):
+        out=enrich_scorer(tip,"2026-11-18")
+    assert out["goals_per_game"]==0.20
+    assert out["goals_per_game_sample"]==10
+    assert "goals_per_game" not in tip
+    with patch("netrattler_neon_design._observed_game_log",return_value=tuple([1]*4)):
+        assert "goals_per_game" not in enrich_scorer(tip,"2026-11-18")

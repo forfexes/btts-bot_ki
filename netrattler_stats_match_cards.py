@@ -1267,7 +1267,8 @@ def send_scorer_card(token, chat, tip, target_date, log=print, return_id=False):
     for t in _teams(tip.get("match", "")):
         if _norm(t) and tip.get("league"):
             _TEAM_LEAGUE.setdefault(_norm(t), str(tip.get("league")))
-    from netrattler_visual_gate import validate_scorer
+    from netrattler_visual_gate import enrich_scorer, validate_scorer
+    tip = enrich_scorer(tip, target_date)
     missing = validate_scorer(tip, target_date)
     if missing:
         log("Goal-Hunter-Karte Qualitätsstopp: " + ",".join(missing))

@@ -253,6 +253,25 @@ def validate_builder(pick):
     return prepared, []
 
 
+def enrich_scorer(tip, day):
+    """Display-only scorer context from observed games; no fabricated averages."""
+    from netrattler_neon_design import _observed_game_log, _number
+    row = dict(tip)
+    player = str(row.get("player") or "").strip()
+    team = str(row.get("team") or "").strip()
+    if not team:
+        team = club_for_player(player, str(row.get("match") or ""), str(day or "")[:10])
+        if team:
+            row["team"] = team
+    gpg = _number(row.get("goals_per_game"))
+    if team and (gpg is None or gpg < 0):
+        measured = _observed_game_log(player, team, "score", str(day or "")[:10])
+        if len(measured) >= 10:
+            row["goals_per_game"] = round(sum(measured) / len(measured), 2)
+            row["goals_per_game_sample"] = len(measured)
+    return row
+
+
 def validate_scorer(tip, day):
     if not strict_enabled():
         return []
