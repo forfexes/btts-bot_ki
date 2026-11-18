@@ -67,3 +67,22 @@ def test_only_exact_scorer_nonappearance_is_eligible_for_void_edit():
     assert not s._confirmed_scorer_no_appearance({
         "status":"pending","market_group":"scorer",
         "reason":"void: Spieler ohne Einsatz (Spiel in Spielerdaten, Spieler nicht gelistet)"})
+
+
+def test_confirmed_scorer_void_edit_receipt_survives_next_settlement():
+    row = dict(status="void", market_group="scorer",
+               reason="void: Spieler ohne Einsatz (Spiel in Spielerdaten, Spieler nicht gelistet)",
+               settlement_id="s-void", tip_id="t-void", telegram_chat_id="chat",
+               telegram_msg_id=123, legs_payload=[], profit=0, reason_code="no_play",
+               result_home=1, result_away=0, raw={})
+    older = dict(row, raw={"telegram_edit_ok":True,
+                           "telegram_edit_attempts":1,
+                           "telegram_edited_at":"2026-11-18T10:00:00+00:00"})
+    assert s.preserve_telegram_edit_receipts([row],[older]) == 1
+    assert row["raw"]["telegram_edit_ok"] is True
+
+
+def test_pending_scorer_image_can_revert_bad_old_result():
+    import inspect
+    code=inspect.getsource(s.send_result_cards)
+    assert 'st not in {"void", "pending"}' in code

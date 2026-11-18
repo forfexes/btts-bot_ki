@@ -739,7 +739,7 @@ def send_result_cards(newly_closed: Sequence[Dict[str, Any]]) -> int:
                 st not in {"win", "loss", "void"} and not (group == "scorer" and st == "pending")):
             continue
         hs, as_ = res.get("home_score"), res.get("away_score")
-        if (hs in (None, "") or as_ in (None, "")) and st != "void":
+        if (hs in (None, "") or as_ in (None, "")) and st not in {"void", "pending"}:
             continue
         hs = "" if hs in (None, "") else hs
         as_ = "" if as_ in (None, "") else as_
@@ -2347,7 +2347,7 @@ def preserve_telegram_edit_receipts(rows: Sequence[Dict[str, Any]],
             "telegram_edit_error", "telegram_edited_at")
     for row in rows:
         old = previous.get(str(row.get("settlement_id") or ""))
-        if not old or row.get("status") not in {"win", "loss"}:
+        if not old or not _original_update_allowed(row):
             continue
         if old.get("status") != row.get("status") or old.get("tip_id") != row.get("tip_id"):
             continue
