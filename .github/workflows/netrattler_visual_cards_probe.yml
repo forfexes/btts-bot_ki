@@ -6,6 +6,9 @@ on:
     paths:
       - '.github/workflows/netrattler_visual_cards_probe.yml'
       - 'netrattler_corner_cards.py'
+      - 'netrattler_corner_template.py'
+      - 'assets/netrattler_template_corner_original.webp'
+      - 'test_netrattler_corner_original.py'
       - 'netrattler_stats_match_cards.py'
       - 'netrattler_builder_cards.py'
       - 'netrattler_neon_design.py'
@@ -39,6 +42,8 @@ jobs:
         run: python -m pytest -q test_netrattler_visual_review.py
       - name: Original template and mocked Telegram transport integration
         run: python -m pytest -q test_netrattler_original_templates.py
+      - name: NETRATTLER AI Corner Sniper original and Telegram transport
+        run: python -m pytest -q test_netrattler_corner_original.py
       - name: Render 2/4/6-leg Builder and Goal Hunter PNG previews
         run: python netrattler_card_visual_preview.py --outdir visual_review_previews
       - name: Publish image previews and visual QA report

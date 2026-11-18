@@ -48,11 +48,17 @@ def test_h2h_excludes_future_live_and_wrong_pair_but_keeps_zero():
 
 def test_corner_dispatch_and_settlement_render():
     tip={'match':'Home vs Away','tip':'Over 8.5 Ecken','odds':1.9,'probability':61,'_source':'kambi',
-         'expected_corners':9.8,'home_avg_corners':0,'away_avg_corners':5,'time':'TBD'}
-    with patch.object(cards,'_badge_bytes',return_value=_fake_reference_photo()), patch.object(cards,'_paste_badge'):
-        image=Image.open(io.BytesIO(cards.render_card([('corners',tip)],'2026-10-31',{'marks':{'0':'win'}})))
-    assert image.size==(1200,900)
-    assert image.getpixel((600,899))[2] < 70
+         'expected_corners':9.8,'home_avg_corners':0,'away_avg_corners':5,
+         '_kickoff':'2026-10-31T15:00:00+00:00','h2h_matches':3,'h2h_avg_corners':9.4,
+         'home_corners_l10':5.5,'home_corners_l15':5.7,
+         'away_corners_l10':4.2,'away_corners_l15':4.5,
+         'corner_hits_l10':'7/10','corner_hits_l15':'10/15','confidence':'HIGH'}
+    from netrattler_corner_template import review_corner_png
+    with patch.object(cards,'_badge_bytes',return_value=_fake_reference_photo()):
+        raw=cards.render_card([('corners',tip)],'2026-10-31',{'marks':{'0':'win'}})
+    image=Image.open(io.BytesIO(raw))
+    assert image.size==(1122,1402)
+    assert review_corner_png(raw)==[]
 
 
 def pick():

@@ -806,6 +806,18 @@ def send_cards(tips_by_market, target_date, token, stats_chat, log=print):
                 if not inspection.passed:
                     log("Goal-Hunter-PNG VISUAL FAIL: " + ",".join(inspection.problems))
                     continue
+            elif len(entries) == 1 and str(entries[0][0]) == "corners":
+                from netrattler_corner_template import validate_corner, review_corner_png
+                candidate=entries[0][1]
+                reasons=validate_corner(candidate,target_date,__import__(__name__))
+                if reasons:
+                    log("Corner-Sniper Qualitätsstopp: " + ",".join(reasons))
+                    continue
+                payload=render_card(entries,target_date)
+                issues=review_corner_png(payload)
+                if issues:
+                    log("Corner-Sniper Pixelcheck fehlgeschlagen: " + ",".join(issues))
+                    continue
             else:
                 payload = render_card(entries, target_date)
             seen_sig.add(sig)
