@@ -376,6 +376,9 @@ def _builder_quote_display(pick, legs):
 
 
 def render_builder_card(pick):
+    from netrattler_original_template_renderer import render_builder
+    return render_builder(pick)
+
     import netrattler_stats_match_cards as cards
     import netrattler_builder_engine as engine
     from netrattler_corner_cards import kickoff_label
@@ -472,6 +475,9 @@ def render_builder_card(pick):
 
 
 def render_scorer_card(tip, target_date, result=None):
+    from netrattler_original_template_renderer import render_goal
+    return render_goal(tip, target_date, result)
+
     import netrattler_stats_match_cards as cards
     w, h = 1080, 1340
     im = _background(w, h)
