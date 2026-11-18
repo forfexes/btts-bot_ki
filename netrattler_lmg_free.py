@@ -1,74 +1,85 @@
 #!/usr/bin/env python3
-"""Free ESPN live-score and match-stats scan; optional observed PulseScore live quotes.
-This does NOT call API-Football or invent goal percentages, xG, odds or events.
-No Telegram/Supabase side-effects unless LMG_SEND=true and a real price exists.
+"""NETRATTLER Goal Hunter: ESPN live data, only a further 0.5 goal from minute 65.
+
+No API-Football, bookmaker odds, fabricated percentages or second goal lines.
+One Telegram alert per verified fixture. Fail closed on missing statistics.
 """
 from __future__ import annotations
+
 import datetime as dt
 import json
 import os
 import re
 import sys
-import unicodedata
+
 import requests
 
-from netrattler_last_minute_goal import match_metrics, market_targets, reserve, send, delivered
+from netrattler_last_minute_goal import match_metrics
 
 ESPN = "https://site.api.espn.com/apis/site/v2/sports/soccer"
-PULSE = "https://api.pulsescore.net/api/v3/bet365/live-events"
+MIN_MINUTE = 65
+MAX_FIXTURES_PER_RUN = 16
 
 
-def _get(url, *, params=None, headers=None):
-    response = requests.get(url, params=params, headers=headers or {"Accept": "application/json"}, timeout=18)
+def _get(url, *, params=None):
+    response = requests.get(url, params=params, headers={"Accept": "application/json"}, timeout=18)
     response.raise_for_status()
     return response.json()
 
 
-def _int(v):
-    if isinstance(v, bool) or not re.fullmatch(r"\d+(?:\.0+)?", str(v or "")):
+def _int(value):
+    if value is None or isinstance(value, bool):
+        return None
+    string = str(value).strip()
+    if not re.fullmatch(r"\d+(?:\.0+)?", string):
         return None
     try:
-        return int(float(v))
+        return int(float(string))
     except (ValueError, OverflowError):
         return None
 
 
-def _date(s):
+def _date(value):
     try:
-        d = dt.datetime.fromisoformat(str(s).replace("Z", "+00:00"))
-        return d.astimezone(dt.timezone.utc) if d.tzinfo else None
-    except (ValueError, TypeError):
+        date = dt.datetime.fromisoformat(str(value).replace("Z", "+00:00"))
+        return date.astimezone(dt.timezone.utc) if date.tzinfo else None
+    except (TypeError, ValueError):
         return None
 
 
 def fixtures_from_espn(payload):
     out = []
-    for e in (payload or {}).get("events") or []:
+    for event in (payload or {}).get("events") or []:
         try:
-            st = e.get("status") or {}
-            if (st.get("type") or {}).get("state") != "in" or _int(st.get("period")) != 2:
+            status = event.get("status") or {}
+            kind = status.get("type") or {}
+            if kind.get("state") != "in" or _int(status.get("period")) != 2:
                 continue
-            mt = re.match(r"^(\d{1,2})(?::\d{2})?", str(st.get("displayClock") or ""))
-            minute = int(mt.group(1)) if mt else -1
-            if not 55 <= minute <= 88:
+            clock = str(status.get("displayClock") or "").strip()
+            matched = re.match(r"^(\d{1,3})(?:[:+']|$)", clock)
+            minute = int(matched.group(1)) if matched else -1
+            if minute < MIN_MINUTE or minute > 90:
                 continue
-            comp = (e.get("competitions") or [])[0]
-            sides = {x.get("homeAway"): x for x in comp.get("competitors") or []}
-            h, a = sides["home"], sides["away"]
-            hg, ag = _int(h.get("score")), _int(a.get("score"))
-            ht, at = h.get("team") or {}, a.get("team") or {}
-            kickoff, event_id = _date(e.get("date")), _int(e.get("id"))
-            if (hg is None or ag is None or hg + ag > 5 or not ht.get("id") or not at.get("id")
-                    or not ht.get("displayName") or not at.get("displayName") or not kickoff
-                    or event_id is None):
+            competition = (event.get("competitions") or [])[0]
+            participants = {x.get("homeAway"): x for x in competition.get("competitors") or []}
+            home_row, away_row = participants["home"], participants["away"]
+            home_goals, away_goals = _int(home_row.get("score")), _int(away_row.get("score"))
+            home, away = home_row.get("team") or {}, away_row.get("team") or {}
+            kickoff, event_id = _date(event.get("date")), _int(event.get("id"))
+            if (home_goals is None or away_goals is None or kickoff is None or event_id is None
+                    or not home.get("id") or not away.get("id")
+                    or not home.get("displayName") or not away.get("displayName")):
                 continue
-            lg = e.get("league") or comp.get("league") or {}
-            all_lg = payload.get("leagues") or []
-            league = lg.get("name") or (all_lg[0].get("name") if len(all_lg) == 1 else "")
-            out.append({"fixture_id": event_id, "minute": minute, "home": ht["displayName"],
-                        "away": at["displayName"], "home_id": str(ht["id"]), "away_id": str(at["id"]),
-                        "hg": hg, "ag": ag, "kickoff": kickoff, "league": league,
-                        "slug": lg.get("slug") or "all"})
+            league = event.get("league") or competition.get("league") or {}
+            leagues = payload.get("leagues") or []
+            league_name = league.get("name") or (leagues[0].get("name") if len(leagues) == 1 else "")
+            # Use the provider's competition code when present, not the display name.
+            slug = league.get("slug") or league.get("abbreviation") or "all"
+            out.append({"fixture_id": event_id, "minute": minute, "clock": clock,
+                        "home": home["displayName"], "away": away["displayName"],
+                        "home_id": str(home["id"]), "away_id": str(away["id"]),
+                        "hg": home_goals, "ag": away_goals, "kickoff": kickoff,
+                        "league": league_name, "slug": slug})
         except (KeyError, IndexError, TypeError, ValueError, AttributeError):
             continue
     return out
@@ -80,120 +91,132 @@ def metrics_from_espn(summary, fixture):
                "Total Shots": ("totalshots", "shots"),
                "Corner Kicks": ("cornerkicks", "corners"),
                "Red Cards": ("redcards", "redcard")}
-    for row in ((summary or {}).get("boxscore") or {}).get("teams") or []:
-        team = row.get("team") or {}
-        tid = str(team.get("id") or "")
-        if tid not in {fixture["home_id"], fixture["away_id"]}:
+    for entry in ((summary or {}).get("boxscore") or {}).get("teams") or []:
+        team_id = str((entry.get("team") or {}).get("id") or "")
+        if team_id not in (fixture["home_id"], fixture["away_id"]):
             continue
-        fields = {}
-        for stat in row.get("statistics") or []:
-            name = str(stat.get("name") or "").strip().lower()
+        values = {}
+        for stat in entry.get("statistics") or []:
+            key = re.sub(r"[^a-z0-9]", "", str(stat.get("name") or "").lower())
             value = _int(stat.get("value"))
             if value is None:
                 value = _int(stat.get("displayValue"))
             if value is not None:
-                fields[name] = value
-        parsed = []
+                values[key] = value
+        prepared = []
         for label, keys in aliases.items():
             for key in keys:
-                if key in fields:
-                    parsed.append({"type": label, "value": fields[key]})
+                if key in values:
+                    prepared.append({"type": label, "value": values[key]})
                     break
-        rows.append({"team": {"id": tid}, "statistics": parsed})
+        rows.append({"team": {"id": team_id}, "statistics": prepared})
     return match_metrics(rows, fixture)
 
 
-def _norm(name):
-    normalized = unicodedata.normalize("NFKD", str(name or "").casefold())
-    return re.sub(r"[^a-z0-9]+", "", "".join(c for c in normalized if not unicodedata.combining(c)))
+def format_tip(fixture, metrics):
+    corners = metrics.get("corners")
+    return (f"⚽ NETRATTLER · LAST MINUTE GOAL\n"
+            f"🎯 OVER 0.5 RESTSPIELZEIT · {metrics['tier']}\n\n"
+            f"🏆 {fixture['league'] or 'Fussball'}\n"
+            f"🏟 {fixture['home']} – {fixture['away']}\n"
+            f"⏱ {fixture.get('clock') or str(fixture['minute']) + chr(39)} · {fixture['hg']}:{fixture['ag']}\n"
+            f"✅ Prognose: Noch mindestens 1 Tor ab jetzt\n"
+            f"📊 Schüsse {metrics['shots']} · aufs Tor {metrics['sot']}"
+            + (f" · Ecken {corners}" if corners is not None else "") + "\n"
+            f"🏁 Auswertung: ⏳ offen")
 
 
-def pulse_prices(events, fixture, now=None):
-    """Only accept one exact, contemporaneous live match and full-time overs."""
-    now = now or dt.datetime.now(dt.timezone.utc)
-    matches = []
-    for e in events if isinstance(events, list) else []:
-        kickoff = _date(e.get("startTime"))
-        if (e.get("live") is True and _norm(e.get("home")) == _norm(fixture["home"])
-                and _norm(e.get("away")) == _norm(fixture["away"]) and kickoff
-                and abs((kickoff-fixture["kickoff"]).total_seconds()) <= 1200
-                and 0 <= (now-kickoff).total_seconds() <= 130*60):
-            matches.append(e)
-    if len(matches) != 1:
-        return {}
-    primary, secondary = market_targets(fixture)
-    prices = {}
-    for line in (primary, secondary):
-        values = []
-        for m in matches[0].get("markets") or []:
-            try:
-                market_line = float(m.get("line"))
-            except (TypeError, ValueError):
-                continue
-            if m.get("canonicalMarket") != "total_goals" or m.get("period") != "fulltime" or market_line != line:
-                continue
-            for sel in m.get("selections") or []:
-                if str(sel.get("name") or "").casefold().strip() != f"over {line:.1f}":
-                    continue
-                try:
-                    odd = float(sel.get("decimal"))
-                except (TypeError, ValueError):
-                    continue
-                if 1.30 <= odd <= 30.0:
-                    values.append(round(odd, 3))
-        if len(values) == 1:
-            prices[line] = values[0]
-    return prices
+def _db():
+    url = (os.getenv("SUPABASE_URL") or "").rstrip("/")
+    secret = os.getenv("SUPABASE_SERVICE_ROLE_KEY") or ""
+    if not url or not secret:
+        raise RuntimeError("Supabase service role required for Telegram deduplication")
+    return url + "/rest/v1/netrattler_lmg_alerts", {
+        "apikey": secret, "Authorization": "Bearer " + secret,
+        "Content-Type": "application/json"}
+
+
+def reserve_alert(fixture):
+    """Single original alert per fixture; atomic unique constraint prevents duplicates."""
+    url, headers = _db()
+    key = str(fixture["fixture_id"])
+    resp = requests.post(
+        url, params={"on_conflict": "alert_key"},
+        headers={**headers, "Prefer": "resolution=ignore-duplicates,return=representation"},
+        json={"alert_key": key, "fixture_id": fixture["fixture_id"],
+              "home": fixture["home"], "away": fixture["away"],
+              "minute": fixture["minute"],
+              "score": f"{fixture['hg']}:{fixture['ag']}",
+              "selection": "Over 0.5 rest of match", "observed_odds": None},
+        timeout=15)
+    resp.raise_for_status()
+    rows = resp.json()
+    return key if isinstance(rows, list) and len(rows) == 1 else None
+
+
+def send_alert(fixture, metrics):
+    token = os.getenv("TELEGRAM_TOKEN") or os.getenv("TELEGRAM_BOT_TOKEN")
+    chat = os.getenv("TELEGRAM_GROUP_LATE_GOALS")
+    if not token or not chat:
+        raise RuntimeError("Telegram Goal Hunter group/bot secret missing")
+    resp = requests.post(
+        f"https://api.telegram.org/bot{token}/sendMessage",
+        json={"chat_id": chat, "text": format_tip(fixture, metrics),
+              "disable_web_page_preview": True}, timeout=20)
+    resp.raise_for_status()
+    payload = resp.json()
+    message_id = (payload.get("result") or {}).get("message_id")
+    if not payload.get("ok") or message_id is None:
+        raise RuntimeError("Telegram delivery not confirmed")
+    return message_id
+
+
+def mark_sent(key, message_id):
+    url, headers = _db()
+    resp = requests.patch(
+        url, params={"alert_key": "eq." + key},
+        headers={**headers, "Prefer": "return=minimal"},
+        json={"status": "sent", "telegram_message_id": message_id,
+              "sent_at": dt.datetime.now(dt.timezone.utc).isoformat()}, timeout=15)
+    resp.raise_for_status()
 
 
 def main():
-    send_enabled = os.getenv("LMG_SEND", "false").casefold() in {"1", "true", "yes"}
-    day = dt.datetime.now(dt.timezone.utc).strftime("%Y%m%d")
-    board = _get(f"{ESPN}/all/scoreboard", params={"dates": day, "limit": "1000"})
+    send_enabled = (os.getenv("LMG_SEND") or "false").lower() in {"true", "yes", "1"}
+    board = _get(f"{ESPN}/all/scoreboard",
+                 params={"dates": dt.datetime.now(dt.timezone.utc).strftime("%Y%m%d"), "limit": "1000"})
     fixtures = fixtures_from_espn(board)
-    fixtures.sort(key=lambda f: (abs(f["minute"]-65), f["fixture_id"]))
-    result = {"live_candidates": len(fixtures), "stats_checked": 0, "odds_calls": 0,
-              "qualified": 0, "sent": 0, "send_enabled": send_enabled}
-    key = os.getenv("PULSESCORE_API_KEY", "").strip()
-    feed = None
-    for fx in fixtures[:4]:
+    fixtures.sort(key=lambda f: (f["minute"], f["fixture_id"]))
+    report = {"live_candidates": len(fixtures), "stats_checked": 0,
+              "qualified": 0, "sent": 0, "odds_calls": 0, "send_enabled": send_enabled}
+    for fixture in fixtures[:MAX_FIXTURES_PER_RUN]:
         try:
-            summary = _get(f"{ESPN}/{fx['slug']}/summary", params={"event": str(fx["fixture_id"])})
+            summary = _get(f"{ESPN}/{fixture['slug']}/summary",
+                           params={"event": str(fixture["fixture_id"])})
         except requests.HTTPError as exc:
-            # Respect denied or unavailable data instead of evading access controls.
-            print("LMG_SUMMARY_UNAVAILABLE", str(exc).splitlines()[0][:160])
+            print("LMG_STATS_UNAVAILABLE", fixture["fixture_id"], str(exc)[:110])
             continue
-        result["stats_checked"] += 1
-        metrics = metrics_from_espn(summary, fx)
+        report["stats_checked"] += 1
+        metrics = metrics_from_espn(summary, fixture)
         if not metrics:
             continue
-        if not key:
-            print("LMG_PRESSURE_ONLY", json.dumps({"fixture": fx["fixture_id"], "stats": metrics}))
-            continue
-        if feed is None:  # One REST call at most per run (free plan: 500/month).
-            feed = _get(PULSE, params={"sport": "soccer"},
-                        headers={"X-Secret": key, "Accept": "application/json"})
-            result["odds_calls"] += 1
-        prices = pulse_prices(feed, fx)
-        primary = market_targets(fx)[0]
-        if primary not in prices:
-            continue
-        result["qualified"] += 1
-        print("LMG_REAL_ODDS", json.dumps({"fixture": fx["fixture_id"], "line": primary,
-                                           "price": prices[primary], "stats": metrics}))
+        report["qualified"] += 1
+        print("LMG_SIGNAL", json.dumps({"fixture": fixture["fixture_id"],
+                                       "minute": fixture["minute"], "score": [fixture["hg"], fixture["ag"]],
+                                       "target": "one_more_goal", "metrics": metrics}))
         if send_enabled:
-            alert = reserve(fx, prices[primary])
-            if alert:
-                message_id = send(fx, metrics, prices)
-                delivered(alert, message_id)
-                result["sent"] += 1
-    print("LMG_FREE_SUMMARY", json.dumps(result))
-    return result
+            key = reserve_alert(fixture)
+            if key:
+                msg_id = send_alert(fixture, metrics)
+                mark_sent(key, msg_id)
+                report["sent"] += 1
+    print("LMG_FREE_SUMMARY", json.dumps(report))
+    return report
 
 
 if __name__ == "__main__":
     try:
         main()
-    except (ValueError, RuntimeError, requests.RequestException) as e:
-        print("LMG_FREE_FAIL_CLOSED", str(e).splitlines()[0], file=sys.stderr)
+    except (ValueError, RuntimeError, requests.RequestException) as exc:
+        print("LMG_FAIL_CLOSED", str(exc).splitlines()[0][:180], file=sys.stderr)
         raise SystemExit(1)
