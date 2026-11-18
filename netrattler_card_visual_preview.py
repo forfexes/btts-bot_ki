@@ -92,7 +92,8 @@ def generate(directory):
                             "problems":result.problems}
         tip = {"match":"Beispiel FC vs Test United", "player":"Spieler Alpha",
                "team":"Beispiel FC", "league":"Demo League", "odds":4.5,
-               "probability":27, "fairOdds":3.7, "goals_per_game":0.33}
+               "probability":27, "fairOdds":3.7, "goals_per_game":0.33,
+               "_kickoff": "2099-05-21T17:30:00+00:00"}
         raw = neon.render_scorer_card(tip, "2099-05-21")
         result = review_png(raw, "scorer")
         filename = "TEST_ONLY_goal_hunter.png"

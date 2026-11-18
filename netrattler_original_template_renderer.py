@@ -245,6 +245,15 @@ def render_goal(tip,target_date,result=None):
     draw.arc((316,309,780,738),0,360,fill="#FFDA45",width=8)
     _erase(draw,(204,761,901,837),fill="#06131B",radius=12)
     _label(draw,player.upper(),555,772,665,size=54,min_size=27)
+    # Compact confirmed Swiss kickoff beneath the player's name. Preserve the
+    # user's original stadium, crown, header, panels and player photo.
+    kickoff_value = tip.get("_kickoff") or tip.get("kickoff")
+    if kickoff_value:
+        kickoff_label = "ANSTOSS " + _kickoff(kickoff_value).replace(" / ", " · ")
+        draw.rounded_rectangle((335,828,789,860),radius=14,
+                               fill="#061723",outline=CYAN,width=2)
+        _label(draw,kickoff_label,562,832,440,size=21,min_size=16,
+               fill=WHITE,italic=False)
     odds=cards._price(tip)
     probability=cards._pct(tip.get("probability"))
     fair=nd._number(tip.get("fairOdds") if tip.get("fairOdds") is not None else tip.get("fair_odds"))

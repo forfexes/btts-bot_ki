@@ -100,6 +100,7 @@ def _review_user_master(im, kind, legs):
               "builder_settlement")
         check(1270+dy<im.height-20,"builder_footer_clipped")
     else:
+        edited((343,830,781,859),"scorer_kickoff_displayed")
         edited((395,376,703,582),"scorer_photo_replaced")
         check(_texture(im,(395,376,703,582))>22,"scorer_photo_texture")
         check(_texture(im,(105,447,261,593))>12,"home_badge")

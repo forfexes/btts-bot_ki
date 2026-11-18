@@ -275,6 +275,21 @@ def enrich_scorer(tip, day):
         if len(measured) >= 10:
             row["goals_per_game"] = round(sum(measured) / len(measured), 2)
             row["goals_per_game_sample"] = len(measured)
+    # Only an offset-aware, verified fixture timestamp may appear on the card.
+    # Prefer original source metadata; use a uniquely matched fixture as fallback.
+    match_day = str(day or "")[:10]
+    kickoff = ""
+    for field in ("_kickoff", "kickoff", "kickoff_utc", "fixture_kickoff",
+                  "start_time", "commence_time"):
+        kickoff = _iso_future(row.get(field), match_day)
+        if kickoff:
+            break
+    if not kickoff:
+        kickoff = kickoff_for_match(str(row.get("match") or ""), match_day)
+    if kickoff:
+        row["_kickoff"] = kickoff  # Also persisted by save_card for result edits.
+    else:
+        row.pop("_kickoff", None)  # Never reuse an unverified time.
     return row
 
 
@@ -285,6 +300,8 @@ def validate_scorer(tip, day):
     name, team = str(tip.get("player") or ""), str(tip.get("team") or "")
     home, away = _match_teams(tip.get("match", ""))
     reasons = []
+    if not _iso_future(tip.get("_kickoff"), str(day or "")[:10]):
+        reasons.append("missing_confirmed_kickoff")
     if not name or not team or not (club_same(team, home) or club_same(team, away)):
         reasons.append("unverified_scorer_team")
     if not (_picture_ok(cards._player_photo(name, team))):

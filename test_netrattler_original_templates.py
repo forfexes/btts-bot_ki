@@ -57,7 +57,8 @@ def test_goal_hunter_master_and_dry_run_send():
     photo=_test_photo()
     tip={"match":"Demo United vs Test FC","player":"Beispiel Stürmer",
          "team":"Demo United","league":"Demo League","odds":9.5,
-         "probability":26,"fairOdds":3.85,"goals_per_game":.3,"_source":"test_only"}
+         "probability":26,"fairOdds":3.85,"goals_per_game":.3,
+         "_kickoff":"2026-11-21T17:30:00+00:00","_source":"test_only"}
     with patch.object(cards,"_player_photo",return_value=photo), \
          patch.object(cards,"_badge_bytes",return_value=photo):
         raw=cards.render_scorer_card(tip,"2026-11-21")
@@ -122,3 +123,48 @@ def test_regular_match_card_sender_rejects_incomplete_goal_hunter():
         assert cards.send_cards({"scorer":[entry[1]]},"2026-11-21",
                                 "FAKE_TOKEN","FAKE_CHAT") == 0
     send.assert_not_called()
+
+
+def test_goal_hunter_kickoff_is_swiss_local_and_visible_in_original_artwork():
+    from netrattler_original_template_renderer import _kickoff
+    assert _kickoff("2026-11-21T17:30:00+00:00") == "21.11.2026 / 18:30 Uhr"
+    assert _kickoff("2026-07-21T17:30:00+00:00") == "21.07.2026 / 19:30 Uhr"
+    photo=_test_photo()
+    tip={"match":"Demo United vs Test FC","player":"Beispiel Stürmer",
+         "team":"Demo United","odds":9.50,"probability":26,"fairOdds":3.85,
+         "goals_per_game":.30,"_kickoff":"2026-11-21T17:30:00+00:00"}
+    with patch.object(cards,"_player_photo",return_value=photo), \
+         patch.object(cards,"_badge_bytes",return_value=photo):
+        with_time=cards.render_scorer_card(tip,"2026-11-21")
+        without_time=cards.render_scorer_card({k:v for k,v in tip.items()
+                                                if k!="_kickoff"},"2026-11-21")
+    from netrattler_visual_review import review_png
+    assert review_png(with_time,"scorer").passed
+    report=review_png(without_time,"scorer")
+    assert not report.passed and "scorer_kickoff_displayed" in report.problems
+    with Image.open(io.BytesIO(with_time)) as first, Image.open(io.BytesIO(without_time)) as second:
+        assert ImageChops.difference(first.crop((343,830,781,859)),
+                                     second.crop((343,830,781,859))).getbbox()
+
+
+def test_scorer_kickoff_enrichment_requires_verified_offset_and_accurate_fixture():
+    from netrattler_visual_gate import enrich_scorer, validate_scorer
+    record={"match":"Demo United vs Test FC","player":"Beispiel Stürmer",
+            "team":"Demo United","goals_per_game":.3,
+            "kickoff":"2026-11-21T17:30:00Z"}
+    with patch("netrattler_visual_gate.kickoff_for_match") as lookup:
+        out=enrich_scorer(record,"2026-11-21")
+        lookup.assert_not_called()
+    assert out["_kickoff"]=="2026-11-21T17:30:00+00:00"
+    no_time={**record,"kickoff":"18:30"}
+    with patch("netrattler_visual_gate.kickoff_for_match",return_value=""):
+        unknown=enrich_scorer(no_time,"2026-11-21")
+    assert "_kickoff" not in unknown
+    with patch.object(cards,"_player_photo",return_value=_test_photo()), \
+         patch.object(cards,"_badge_bytes",return_value=_test_photo()):
+        assert "missing_confirmed_kickoff" in validate_scorer({
+            **unknown,"odds":4.5,"probability":30},"2026-11-21")
+    with patch("netrattler_visual_gate.kickoff_for_match",
+               return_value="2026-11-21T17:30:00+00:00"):
+        found=enrich_scorer(no_time,"2026-11-21")
+    assert found["_kickoff"]=="2026-11-21T17:30:00+00:00"
