@@ -34,6 +34,23 @@ class GoalHunterCards(unittest.TestCase):
         self.assertEqual(Image.open(io.BytesIO(b)).size,(1080,1350))
         self.assertNotEqual(a,b)
 
+    def test_visual_layout_and_telegram_photo_limits(self):
+        import io
+        from PIL import Image,ImageStat
+        with patch.object(card,"crest",return_value=None):
+            for label,options in (("open",{"metrics":self.metrics}),
+                                  ("won",{"final_score":"3:2","won":True}),
+                                  ("lost",{"final_score":"1:2","won":False})):
+                raw=card.make_card(self.fx,**options)
+                img=Image.open(io.BytesIO(raw))
+                self.assertEqual(img.size,(1080,1350),label)
+                self.assertEqual(img.format,"JPEG",label)
+                self.assertLess(len(raw),10_000_000,label)
+                # Detect blank/broken image, missing headline, and invisible footer.
+                self.assertGreater(ImageStat.Stat(img.crop((0,0,1080,300))).stddev[0],12,label)
+                self.assertGreater(ImageStat.Stat(img.crop((0,1200,1080,1350))).stddev[0],5,label)
+                self.assertGreater(ImageStat.Stat(img.crop((50,600,1030,1150))).stddev[0],15,label)
+
     def test_finished_only_and_identity_guard(self):
         feed={"leagues":[{"name":"ASEAN","matches":[{
             "id":1000014437,"home":{"name":"Tampines Rovers FC","score":2},
