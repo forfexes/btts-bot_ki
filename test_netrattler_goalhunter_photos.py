@@ -54,6 +54,26 @@ class GoalHunterPhotoTests(unittest.TestCase):
         self.assertEqual(sum("/999.png" in x for x in seen), 1)
         self.assertFalse(any("/120.png" in x for x in seen))
 
+    def test_official_fpl_headshot_requires_matching_team(self):
+        pixels = _png_bytes()
+        cards._FPL_BOOTSTRAP["loaded"] = False
+        cards._FPL_BOOTSTRAP["data"] = {}
+        def get(url, **kwargs):
+            if "bootstrap-static" in url:
+                return FakeResponse({"teams": [{"id": 1, "name": "Arsenal"}],
+                                     "elements": [{"first_name": "Bukayo", "second_name": "Saka",
+                                                   "team": 1, "photo": "12345.jpg"}]})
+            if "p12345.png" in url:
+                return FakeResponse(body=pixels)
+            return FakeResponse(status=404)
+        try:
+            with patch.object(cards.requests, "get", side_effect=get):
+                self.assertEqual(cards._player_photo("Bukayo Saka", "Arsenal"), pixels)
+                self.assertEqual(cards._player_photo("Bukayo Saka", "Chelsea"), b"")
+        finally:
+            cards._FPL_BOOTSTRAP["loaded"] = False
+            cards._FPL_BOOTSTRAP["data"] = {}
+
     def test_unverified_wrong_player_is_not_pasted(self):
         def get(url, **kwargs):
             if "search/suggest" in url:
