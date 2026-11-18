@@ -40,9 +40,27 @@ def preflight(get=requests.get):
     return "rest_http_"+str(resp.status_code)
 
 
-def main():
+def main(argv=None):
+    """CLI stays fail-closed. The workflow-check mode reports quota blocks
+    as *skipped scans* without treating a known billing restriction as a code
+    failure. Missing/bad credentials and unknown errors still fail.
+    """
+    argv = sys.argv[1:] if argv is None else argv
+    if argv not in ([], ["--workflow-check"]):
+        raise SystemExit("usage: netrattler_lmg_db_preflight.py [--workflow-check]")
     status=preflight()
     print("LMG_STORAGE_PREFLIGHT",status,flush=True)
+    if argv == ["--workflow-check"]:
+        output=os.getenv("GITHUB_OUTPUT")
+        if not output:
+            raise RuntimeError("GitHub step output path required")
+        with open(output, "a", encoding="utf-8") as stream:
+            stream.write("ready=" + ("true" if status=="ready" else "false") + "\n")
+            stream.write("quota_blocked=" +
+                         ("true" if status.startswith("blocked_") else "false") + "\n")
+        if status.startswith("blocked_"):
+            print("LMG_SCAN_SKIPPED_QUOTA",status,flush=True)
+            return
     if status != "ready":
         raise SystemExit(2)
 
