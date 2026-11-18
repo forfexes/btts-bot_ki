@@ -201,7 +201,8 @@ def reserve_alert(fixture, metrics=None):
               "score": f"{fixture['hg']}:{fixture['ag']}",
               "selection": "Over 0.5 rest of match", "observed_odds": None,
               "message_kind": "photo",
-              "next_goal_side": (metrics or {}).get("next_goal_side")},
+              "next_goal_side": (metrics or {}).get("next_goal_side"),
+              "signal_tier": (metrics or {}).get("tier")},
         timeout=15)
     resp.raise_for_status()
     rows = resp.json()
