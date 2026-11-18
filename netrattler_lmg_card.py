@@ -156,6 +156,8 @@ def make_card(fixture, metrics=None, *, final_score=None, won=None,
         # Only evaluate a next-goal pick when that side was on the ORIGINAL
         # Telegram tip. This row is separate from the main Over 0.5 result.
         if next_goal_side is not None:
+            if next_goal_result is None:
+                raise ValueError("Original next-goal pick requires a separate verified grade")
             next_name = home if next_goal_side == "home" else away
             wording = {"won": "✓ RICHTIG", "lost": "✕ FALSCH",
                        "void": "KEIN WEITERES TOR",
