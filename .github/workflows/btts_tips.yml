@@ -46,11 +46,11 @@ on:
           - settlement
           - both
 
-# A parser/test commit should not launch multiple overlapping 30-minute
-# production bots. Retain scheduled runs; replace obsolete push verification.
+# Scheduled, manual and push runs must share one production queue.
+# Do not interrupt an existing Telegram/Supabase delivery midway through a run.
 concurrency:
-  group: netrattler-ai-tips-${{ github.event_name }}-${{ github.ref }}
-  cancel-in-progress: ${{ github.event_name == 'push' }}
+  group: netrattler-ai-tips-${{ github.ref }}
+  cancel-in-progress: false
 
 jobs:
   run-bot:
