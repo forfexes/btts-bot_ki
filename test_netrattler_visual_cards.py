@@ -62,10 +62,11 @@ def pick():
 
 def test_builder_keeps_verified_player_identity_and_receipt():
     p=pick()
-    with patch.object(cards,'_badge_bytes',return_value=_fake_reference_photo()), patch.object(cards,'_paste_badge'),patch.object(cards,'_player_photo',return_value=_fake_reference_photo()) as photo:
-        payload=builder_cards.render_builder_card(p)
-    photo.assert_called_once_with('Player A','Levante')
-    assert Image.open(io.BytesIO(payload)).size==(1122,994)
+    import pytest
+    # A single leg is not a complete Builder and must not masquerade as one.
+    with pytest.raises(ValueError, match="2–6 Legs"):
+        builder_cards.render_builder_card(p)
+    payload=b"PNG_TEST_ONLY"
     with patch.object(builder_cards,'render_builder_card',return_value=payload), \
          patch("netrattler_visual_gate.strict_enabled",return_value=False), \
          patch("netrattler_visual_review.review_png",return_value=Mock(passed=True,problems=[])), \
@@ -114,8 +115,10 @@ def test_model_card_preserves_no_quote_and_original_receipt():
     assert adapted.model_only and adapted.legs[0].odds==0
     assert adapted.legs[0].series==model['legs'][0]['series']
     assert receipt=={'message_id':123,'chat_id':'42','text':'original'}
-    with patch.object(cards,'_badge_bytes',return_value=_fake_reference_photo()), patch.object(cards,'_paste_badge'),patch.object(cards,'_player_photo',return_value=_fake_reference_photo()):
-        assert Image.open(io.BytesIO(builder_cards.render_builder_card(adapted))).size==(1122,994)
+    import pytest
+    # Model-only ladders have no bookmaker combined price: never display one.
+    with pytest.raises(ValueError, match="2–6 Legs"):
+        builder_cards.render_builder_card(adapted)
 
 
 def test_model_cross_ladder_renders_all_stages():
@@ -125,13 +128,15 @@ def test_model_cross_ladder_renders_all_stages():
     pick=SimpleNamespace(legs=[leg('A','Club A vs Club B'),leg('B','Club C vs Club D')],
         style='FOUL LEITER',match_date='2026-10-31',model_only=True,joint=.5,fair=2,
         tiers=[(2,.5),(3,.2),(4,.05)],tier_shift=False)
-    with patch.object(cards,'_player_photo',return_value=_fake_reference_photo()):
-        assert Image.open(io.BytesIO(builder_cards.render_builder_card(pick))).size==(1122,1194)
+    import pytest
+    # The exact template has a two-team header and must not mislabel cross-match legs.
+    with pytest.raises(ValueError, match="eindeutiges Spiel"):
+        builder_cards.render_builder_card(pick)
 
 
 def test_new_goal_hunter_has_reference_proportions_and_no_made_up_data():
     tip={'match':'Team A vs Team B','player':'Player X','team':'Team A',
-         'league':'Test','odds':2.0,'probability':50}
+         'league':'Test','odds':2.0,'probability':50,'goals_per_game':0.5}
     with patch.object(cards,'_badge_bytes',return_value=_fake_reference_photo()), patch.object(cards,'_paste_badge'), patch.object(cards,'_player_photo',return_value=_fake_reference_photo()):
         raw=cards.render_scorer_card(tip,'2026-11-18')
         assert Image.open(io.BytesIO(raw)).size==(1122,1402)
@@ -147,9 +152,14 @@ def test_new_builder_six_legs_and_l10_l15_not_invented():
     assert _form_label([1]*15,1,15)=='15/15 (100%)'
     legs=[engine.PropLeg(f'Player {i}','Team A','Team A vs Team B',
             'Test','Shots 1+','shots',1,1.9,.7,'kambi') for i in range(6)]
+    from dataclasses import replace
+    legs=[replace(leg,kickoff='2026-11-18T18:30:00Z') for leg in legs]
     p=S(legs=legs,style='Six',match_date='2026-11-18',stake=.2,
-        variant='6 LEG',status='pending')
-    with patch.object(cards,'_badge_bytes',return_value=_fake_reference_photo()), patch.object(cards,'_paste_badge'),patch.object(cards,'_player_photo',return_value=_fake_reference_photo()):
+        variant='6 LEG',status='pending',confidence='HOCH',joint_probability=.25,
+        combined_quote_verified=True,combined_bookmaker_quote=10.0)
+    with patch.object(cards,'_badge_bytes',return_value=_fake_reference_photo()), \
+         patch.object(cards,'_player_photo',return_value=_fake_reference_photo()), \
+         patch('netrattler_neon_design._stat_series',return_value=[1]*15):
         payload=builder_cards.render_builder_card(p)
     assert Image.open(io.BytesIO(payload)).size==(1122,1402)
 
@@ -242,7 +252,7 @@ def test_strict_guard_rejects_scorer_without_photos():
     from netrattler_visual_gate import validate_scorer
     tip={"match":"Home vs Away","player":"Some Player","team":"Home",
          "odds":5,"probability":40,"_source":"book","goals_per_game":0.5}
-    with patch.object(cards,"_player_photo",return_value=_fake_reference_photo()), \
+    with patch.object(cards,"_player_photo",return_value=b""), \
          patch.object(cards,"_badge_bytes",return_value=b""):
         reasons=validate_scorer(tip,"2026-11-18")
     assert "missing_scorer_photo" in reasons
