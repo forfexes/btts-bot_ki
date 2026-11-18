@@ -12,11 +12,12 @@ import requests
 
 import netrattler_lmg_free as common
 import netrattler_lmg_fotmob as fotmob
+from netrattler_lmg_next_goal import evaluate_next_goal
 
 def pending():
     url,headers=common._db()
     resp=requests.get(url,headers=headers,params={
-        "select":"alert_key,fixture_id,home,away,minute,score,status,telegram_message_id,sent_at,message_kind",
+        "select":"alert_key,fixture_id,home,away,minute,score,status,telegram_message_id,sent_at,message_kind,next_goal_side",
         "status":"eq.sent","telegram_message_id":"not.is.null",
         "order":"sent_at.asc","limit":"80"},timeout=15)
     resp.raise_for_status()
@@ -57,12 +58,21 @@ def edit_original(row,final,won):
              f"⏱ Tipp {row['minute']}' · {row['score']}\n"
              f"🏁 Endresultat {final_text} · {'✅ GEWONNEN' if won else '❌ VERLOREN'}\n"
              "@prophunter")
+    if row.get("next_goal_side") in ("home","away"):
+        predicted = home if row["next_goal_side"] == "home" else away
+        grade = {"won":"✅ RICHTIG","lost":"❌ FALSCH",
+                 "void":"KEIN WEITERES TOR","unverified":"NICHT VERIFIZIERT"}.get(
+                     row.get("next_goal_result"),"OFFEN")
+        caption = caption.replace("@prophunter",
+                                  f"🎯 Nächstes Tor: {predicted} · {grade}\\n@prophunter")
     # Old messages are text. Only new photo cards support editing the image in place.
     # Photo cards can be identified via a versioned prefix in the alert row, if persisted.
     is_photo=row.get("message_kind")=="photo"
     if is_photo:
         from netrattler_lmg_card import make_card
-        photo=make_card(fixture,final_score=final_text,won=won)
+        photo=make_card(fixture,final_score=final_text,won=won,
+                        next_goal_side=row.get("next_goal_side"),
+                        next_goal_result=row.get("next_goal_result"))
         media=json.dumps({"type":"photo","media":"attach://result_photo","caption":caption})
         resp=requests.post(f"https://api.telegram.org/bot{token}/editMessageMedia",
                            data={"chat_id":chat,"message_id":row["telegram_message_id"],
@@ -84,7 +94,8 @@ def mark_settled(row,score,won):
         params={"alert_key":"eq."+row["alert_key"],"status":"eq.sent"},
         json={"status":"won" if won else "lost",
               "final_score":f"{score[0]}:{score[1]}",
-              "settled_at":dt.datetime.now(dt.timezone.utc).isoformat()},
+              "settled_at":dt.datetime.now(dt.timezone.utc).isoformat(),
+              "next_goal_result":row.get("next_goal_result")},
         timeout=15)
     response.raise_for_status()
 
@@ -122,6 +133,8 @@ def main():
             report["finished"]+=1
             print("LMG_VERIFIED_FINAL",row["alert_key"],final["score"],flush=True)
             won=sum(final["score"])>sum(initial)
+            row["next_goal_result"]=evaluate_next_goal(
+                row.get("next_goal_side"),tuple(initial),final["score"])
             edit_original(row,final,won)
             mark_settled(row,final["score"],won)
             report["settled"]+=1
