@@ -269,7 +269,7 @@ def _search_badge(query, api_key, key):
 
 def _logo_url(team):
     original_key = _norm(team)
-    team = {"swanseacityafc":"Swansea", "blackburnroversfc":"Blackburn", "stuttgart":"VfB Stuttgart", "unliondesantafe":"Union Santa Fe", "uniondesantafe":"Union Santa Fe", "colondesantafe":"Colon Santa Fe", "inunsanjuan":"San Juan"}.get(original_key, team)
+    team = {"swanseacityafc":"Swansea", "blackburnroversfc":"Blackburn", "stuttgart":"VfB Stuttgart", "unliondesantafe":"Union Santa Fe", "uniondesantafe":"Union Santa Fe", "colondesantafe":"Colon Santa Fe", "inunsanjuan":"San Juan", "athleticopr":"Athletico Paranaense", "atleticopr":"Athletico Paranaense", "atleticoparanaense":"Athletico Paranaense"}.get(original_key, team)
     key = _norm(team)
     if original_key in _TEAM_LEAGUE:
         _TEAM_LEAGUE.setdefault(key, _TEAM_LEAGUE[original_key])
