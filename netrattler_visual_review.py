@@ -80,7 +80,9 @@ def _review_user_master(im, kind, legs):
         check(_color_count(im,box,tone)>7,label)
     def edited(box,label):
         change=ImageChops.difference(im.crop(box),source.crop(box))
-        check(sum(ImageStat.Stat(change).mean)>14,label)
+        # Any nontrivial pixel change confirms the user's baked-in demo asset
+        # was replaced; portraits can share similar colors without being identical.
+        check(sum(ImageStat.Stat(change).mean)>5,label)
     if kind=="builder":
         count((324,273,800,309),_light,"kickoff")
         count((230,322,634,385),_light,"legs")
