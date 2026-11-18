@@ -66,9 +66,11 @@ jobs:
           fixture={"home":"Tampines Rovers FC","away":"Ratchaburi FC",
                    "hg":1,"ag":2,"minute":68,"league":"ASEAN Club Championship",
                    "home_logo_id":67386,"away_logo_id":421346}
-          metrics={"tier":"STANDARD","teams":{"home":{"shots":10,"sot":4,"corners":3,"xg":1.62},
-                                                   "away":{"shots":5,"sot":2,"corners":2,"xg":0.87}}}
-          metrics["next_goal_side"]="home"
+          from netrattler_lmg_next_goal import select_next_goal
+          metrics={"tier":"STANDARD","teams":{"home":{"shots":17,"sot":8,"corners":5,"xg":1.75},
+                                                   "away":{"shots":9,"sot":3,"corners":3,"xg":0.60}}}
+          metrics["next_goal_side"]=select_next_goal(metrics)
+          assert metrics["next_goal_side"]=="home", "Demo team side must pass production rules"
           for name,opts in (("open",{"metrics":metrics}),
                             ("won",{"final_score":"3:2","won":True,"next_goal_side":"home","next_goal_result":"won"}),
                             ("lost",{"final_score":"1:2","won":False,"next_goal_side":"home","next_goal_result":"void"})):
