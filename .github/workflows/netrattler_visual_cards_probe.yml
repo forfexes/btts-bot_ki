@@ -15,6 +15,7 @@ on:
       - 'netrattler_visual_review.py'
       - 'netrattler_card_visual_preview.py'
       - 'test_netrattler_original_templates.py'
+      - 'test_netrattler_visual_cards.py'
       - 'test_netrattler_visual_review.py'
       - 'netrattler_visual_gate.py'
       - 'netrattler_commons_inventory.py'
