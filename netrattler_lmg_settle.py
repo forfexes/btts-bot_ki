@@ -64,7 +64,7 @@ def edit_original(row,final,won):
                  "void":"KEIN WEITERES TOR","unverified":"NICHT VERIFIZIERT"}.get(
                      row.get("next_goal_result"),"OFFEN")
         caption = caption.replace("@prophunter",
-                                  f"🎯 Nächstes Tor: {predicted} · {grade}\\n@prophunter")
+                                  f"🎯 Nächstes Tor: {predicted} · {grade}\n@prophunter")
     # Old messages are text. Only new photo cards support editing the image in place.
     # Photo cards can be identified via a versioned prefix in the alert row, if persisted.
     is_photo=row.get("message_kind")=="photo"
