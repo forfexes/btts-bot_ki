@@ -48,6 +48,7 @@ jobs:
       - name: Goal Hunter live scan and in-place settlement
         env:
           LMG_SEND: "true"
+          LMG_SHADOW_ENABLED: "true"
           TELEGRAM_TOKEN: ${{ secrets.TELEGRAM_TOKEN }}
           TELEGRAM_GROUP_LATE_GOALS: ${{ secrets.TELEGRAM_GROUP_LATE_GOALS }}
           SUPABASE_URL: ${{ secrets.SUPABASE_URL }}
@@ -56,3 +57,4 @@ jobs:
         run: |
           python netrattler_lmg_fotmob.py
           python netrattler_lmg_settle.py
+          python netrattler_lmg_shadow.py settle
