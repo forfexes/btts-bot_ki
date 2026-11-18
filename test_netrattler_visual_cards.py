@@ -374,3 +374,16 @@ def test_scorer_rejects_probability_fair_quote_mismatch():
         reasons=validate_scorer(tip,"2099-01-01")
     assert "inconsistent_scorer_fair_odds" in reasons
     assert "inconsistent_scorer_goals_per_game" not in reasons
+
+
+def test_goal_hunter_silhouette_detection_blocks_monochrome_placeholder():
+    from netrattler_visual_review import _looks_like_grey_placeholder
+    from PIL import Image, ImageDraw
+    silhouette = Image.new("RGB",(160,160),(210,211,212))
+    draw=ImageDraw.Draw(silhouette)
+    draw.ellipse((53,27,107,84),fill=(138,139,140))
+    draw.rounded_rectangle((31,77,129,156),radius=30,fill=(138,139,140))
+    assert _looks_like_grey_placeholder(silhouette,(0,0,160,160))
+    portrait=Image.new("RGB",(160,160),(43,94,150))
+    ImageDraw.Draw(portrait).ellipse((53,27,107,84),fill=(194,135,99))
+    assert not _looks_like_grey_placeholder(portrait,(0,0,160,160))
