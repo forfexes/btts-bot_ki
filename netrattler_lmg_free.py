@@ -88,6 +88,7 @@ def fixtures_from_espn(payload):
 
 def metrics_from_espn(summary, fixture):
     rows = []
+    by_team = {}
     aliases = {"Shots on Goal": ("shotsontarget", "shotsongoal"),
                "Total Shots": ("totalshots", "shots"),
                "Corner Kicks": ("cornerkicks", "corners"),
@@ -111,7 +112,22 @@ def metrics_from_espn(summary, fixture):
                     prepared.append({"type": label, "value": values[key]})
                     break
         rows.append({"team": {"id": team_id}, "statistics": prepared})
-    return match_metrics(rows, fixture)
+        by_team[team_id] = {entry["type"]: entry["value"] for entry in prepared}
+    metrics = match_metrics(rows, fixture)
+    if metrics is None:
+        return None
+    # ESPN is only used for a team when the provider's real team ID is verified.
+    home_stats = by_team.get(str(fixture["home_id"])) or {}
+    away_stats = by_team.get(str(fixture["away_id"])) or {}
+    metrics["teams"] = {
+        "home": {out: home_stats[title] for out, title in
+                 (("shots", "Total Shots"), ("sot", "Shots on Goal"), ("corners", "Corner Kicks"))
+                 if title in home_stats},
+        "away": {out: away_stats[title] for out, title in
+                 (("shots", "Total Shots"), ("sot", "Shots on Goal"), ("corners", "Corner Kicks"))
+                 if title in away_stats},
+    }
+    return metrics
 
 
 def select_goal_tier(fixture, metrics):
