@@ -17,6 +17,15 @@ def test_name_matching_initial_and_surname():
     assert not lb.name_matches("Moises Caicedo", "M. Palmer")
 
 
+def test_name_matching_rejects_prefix_and_different_first_names():
+    # A player's first name must not match a different player's whole name.
+    assert not lb.name_matches("Joao", "Joao Pedro")
+    assert not lb.name_matches("Alex", "Alexander Arnold")
+    assert not lb.name_matches("Mateo Silva", "Marco Silva")
+    assert lb.name_matches("Caicedo", "Moises Caicedo")
+    assert lb.name_matches("M. Caicedo", "Moises Caicedo")
+
+
 def test_filter_to_starters_keeps_only_confirmed_matches_and_players():
     rows = [{"match": "A vs B", "player": "Moises Caicedo"}, {"match": "A vs B", "player": "Bank Spieler"},
             {"match": "C vs D", "player": "Moises Caicedo"}]
@@ -70,3 +79,31 @@ def test_run_still_raises_other_provider_errors(monkeypatch):
     monkeypatch.setattr(lb, "load_fixtures", boom)
     with pytest.raises(RuntimeError):
         lb.run()
+
+
+def test_multifixture_confirmation_does_not_mark_every_fixture_delivered(monkeypatch):
+    # An aggregate "1 sent" could belong to either fixture. We must not
+    # mark the other fixture done and lose its chance to receive a builder.
+    diags = []
+    monkeypatch.setattr(lb, "KEYS", ["k"])
+    monkeypatch.setattr(lb, "SB", "u")
+    monkeypatch.setattr(lb, "SK", "k")
+    now = dt.datetime.now(dt.timezone.utc)
+    fixtures = [{"id": i, "ko": (now + dt.timedelta(minutes=45)).isoformat(),
+                 "league_id": 39, "league": "L", "home": f"H{i}", "away": f"A{i}"}
+                for i in (11, 12)]
+    monkeypatch.setattr(lb, "_diag_rows", lambda probe, day: [])
+    monkeypatch.setattr(lb, "_diag", lambda info: diags.append(info))
+    monkeypatch.setattr(lb, "load_fixtures", lambda day, now: (fixtures, 0))
+    monkeypatch.setattr(lb, "_api", lambda path, params: object())
+    monkeypatch.setattr(lb, "checked_response", lambda response: [
+        {"startXI": [{"player": {"name": "Alice Smith"}}]},
+        {"startXI": [{"player": {"name": "Bob Jones"}}]},
+    ])
+    monkeypatch.setattr(lb.fp, "rows_for_matches", lambda *args: [])
+    monkeypatch.setattr(lb.mb, "run", lambda *args: 1)
+    assert lb.run() == 1
+    states = [r for r in diags if r["probe"] == "lineup_state"]
+    final_states = states[-2:]
+    assert {r["fixture_id"] for r in final_states} == {11, 12}
+    assert all(r["done"] is False for r in final_states)

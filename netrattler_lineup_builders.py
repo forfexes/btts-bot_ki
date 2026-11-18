@@ -40,12 +40,20 @@ def name_matches(ours, starter):
     a, b = norm(ours), norm(starter)
     if not a or not b:
         return False
-    if a == b or a in b or b in a:
+    if a == b:
         return True
     ta, tb = a.split(), b.split()
+    # Substring matching can equate different players (e.g. Joao / Joao Pedro).
+    # Require the same surname; full first names must agree, except an
+    # explicitly abbreviated initial on either side.
     if ta[-1] != tb[-1]:
         return False
-    return len(ta) == 1 or len(tb) == 1 or ta[0][0] == tb[0][0]
+    if len(ta) == 1 or len(tb) == 1:
+        return True
+    first_a, first_b = ta[0], tb[0]
+    return (first_a == first_b
+            or (len(first_a) == 1 and first_a == first_b[0])
+            or (len(first_b) == 1 and first_b == first_a[0]))
 
 
 def filter_to_starters(rows, starters_by_match):
@@ -209,7 +217,12 @@ def run():
         for fid in confirmed_ids:
             # A confirmed lineup is not proof of delivery. Keep zero-send fixtures
             # eligible for a later attempt while the existing retry cap applies.
-            _diag({"probe": "lineup_state", "day": day, "fixture_id": fid, "done": bool(sent), "tries": state.get(str(fid), {}).get("tries", 0) + 1})
+            # run() returns an aggregate delivery count, not receipts per fixture.
+            # Never mark *all* checked fixtures done because one of them sent.
+            # On multi-fixture runs leave them retryable; the existing MAX_TRIES,
+            # daily budget and deterministic builder IDs still bound retries.
+            done = bool(sent) and len(confirmed_ids) == 1
+            _diag({"probe": "lineup_state", "day": day, "fixture_id": fid, "done": done, "tries": state.get(str(fid), {}).get("tries", 0) + 1})
     _diag({"probe": "lineup_run", "day": day, "fixtures": len(fixtures), "checked": len(todo), "confirmed": len(matches), "sent": sent})
     print(f"fixtures={len(fixtures)} checked={len(todo)} confirmed={len(matches)} sent={sent}")
     return sent
