@@ -119,8 +119,13 @@ def render_builder_card(pick):
 def send_builder_card(token,chat,pick,log=print):
     import netrattler_stats_match_cards as cards
     if not token or not chat:return None
+    from netrattler_visual_gate import validate_builder
+    checked, reasons = validate_builder(pick)
+    if reasons:
+        log("Builder-Karte Qualitätsstopp: " + ",".join(reasons))
+        return None
     try:
-        payload=render_builder_card(pick)
+        payload=render_builder_card(checked)
         mid=cards._send_photo(token,chat,'',payload,log)
         return mid if isinstance(mid,int) and not isinstance(mid,bool) and mid>0 else None
     except Exception as exc:

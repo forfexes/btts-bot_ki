@@ -23,6 +23,7 @@ on:
       - "netrattler_corner_cards.py"
       - "netrattler_builder_cards.py"
       - "netrattler_neon_design.py"
+      - "netrattler_visual_gate.py"
       - "test_netrattler_scorer_qualification.py"
       - "netrattler_scorer_identity.py"
       - "test_netrattler_scorer_identity.py"

@@ -56,6 +56,7 @@ def test_builder_keeps_verified_player_identity_and_receipt():
     photo.assert_called_once_with('Player A','Levante')
     assert Image.open(io.BytesIO(payload)).size==(1200,690)
     with patch.object(builder_cards,'render_builder_card',return_value=payload), \
+         patch("netrattler_visual_gate.strict_enabled",return_value=False), \
          patch.object(cards,'_send_photo',return_value=123):
         assert builder_cards.send_builder_card('token','chat',p)==123
 
@@ -201,3 +202,43 @@ def test_builder_shows_calculated_single_prices_but_not_fabricated_sgm_ev():
     assert _builder_quote_display(fake,legs) == ("BUCHMACHERQUOTE","—",None)
     assert _builder_quote_display(actual,[S(odds=2,estimated=True,source="x")]) == (
         "BUCHMACHERQUOTE","—",None)
+
+
+def test_strict_guard_rejects_placeholder_builder_without_sending():
+    from types import SimpleNamespace as S
+    from netrattler_visual_gate import validate_builder
+    p=S(legs=[S(player="Unknown One",team="",match="Home vs Away",
+                category="shots",line=1,source="book",odds=1.8,
+                estimated=False,kickoff=""),
+              S(player="Unknown Two",team="",match="Home vs Away",
+                category="shots",line=1,source="book",odds=1.8,
+                estimated=False,kickoff="")],
+        match_date="2026-11-18",estimated_odds=False)
+    with patch("netrattler_visual_gate.club_for_player",return_value=""), \
+         patch("netrattler_visual_gate.kickoff_for_match",return_value=""):
+        prepared, reasons=validate_builder(p)
+        assert prepared is None
+        assert "missing_verified_team" in reasons
+    with patch("netrattler_visual_gate.validate_builder",return_value=(None,["missing_verified_team"])), \
+         patch.object(cards,"_send_photo",return_value=99) as send:
+        assert builder_cards.send_builder_card("token","chat",p) is None
+        send.assert_not_called()
+
+
+def test_strict_guard_rejects_scorer_without_photos():
+    from netrattler_visual_gate import validate_scorer
+    tip={"match":"Home vs Away","player":"Some Player","team":"Home",
+         "odds":5,"probability":40,"_source":"book","goals_per_game":0.5}
+    with patch.object(cards,"_player_photo",return_value=b""), \
+         patch.object(cards,"_badge_bytes",return_value=b""):
+        reasons=validate_scorer(tip,"2026-11-18")
+    assert "missing_scorer_photo" in reasons
+    assert "missing_scorer_crest" in reasons
+
+
+def test_team_normalization_is_strict_but_accepts_club_suffix():
+    from netrattler_visual_gate import club_same
+    assert club_same("Chapecoense-sc","Chapecoense")
+    assert club_same("Remo FC","Remo")
+    assert not club_same("Remo","Flamengo")
+    assert not club_same("FC","FC")
