@@ -190,19 +190,26 @@ def reserve_alert(fixture):
 
 
 def send_alert(fixture, metrics):
+    """New alerts are Telegram photos, with a caption for search and accessibility."""
+    from netrattler_lmg_card import make_card
     token = os.getenv("TELEGRAM_TOKEN") or os.getenv("TELEGRAM_BOT_TOKEN")
     chat = os.getenv("TELEGRAM_GROUP_LATE_GOALS")
     if not token or not chat:
         raise RuntimeError("Telegram Goal Hunter group/bot secret missing")
-    resp = requests.post(
-        f"https://api.telegram.org/bot{token}/sendMessage",
-        json={"chat_id": chat, "text": format_tip(fixture, metrics),
-              "disable_web_page_preview": True}, timeout=20)
+    photo=make_card(fixture,metrics)
+    caption=(f"⚽ GOAL HUNTER · {fixture['home']} – {fixture['away']}\n"
+             f"⏱ {fixture['minute']}' · {fixture['hg']}:{fixture['ag']}\n"
+             f"🎯 Over 0.5 Restspielzeit · {metrics['tier']}\n"
+             f"🏁 Auswertung: ⏳ offen\n@prophunter")
+    resp=requests.post(
+        f"https://api.telegram.org/bot{token}/sendPhoto",
+        data={"chat_id":chat,"caption":caption},
+        files={"photo":("goal_hunter.jpg",photo,"image/jpeg")},timeout=30)
     resp.raise_for_status()
-    payload = resp.json()
-    message_id = (payload.get("result") or {}).get("message_id")
+    payload=resp.json()
+    message_id=(payload.get("result") or {}).get("message_id")
     if not payload.get("ok") or message_id is None:
-        raise RuntimeError("Telegram delivery not confirmed")
+        raise RuntimeError("Telegram photo delivery not confirmed")
     return message_id
 
 
