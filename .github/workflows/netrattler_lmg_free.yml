@@ -74,4 +74,5 @@ jobs:
           TELEGRAM_GROUP_LATE_GOALS: ${{ secrets.TELEGRAM_GROUP_LATE_GOALS }}
           SUPABASE_URL: ${{ secrets.SUPABASE_URL }}
           SUPABASE_SERVICE_ROLE_KEY: ${{ secrets.SUPABASE_SERVICE_ROLE_KEY }}
+          SUPABASE_KEY: ${{ secrets.SUPABASE_KEY }}
         run: python netrattler_lmg_fotmob.py
