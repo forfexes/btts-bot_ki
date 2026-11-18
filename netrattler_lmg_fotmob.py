@@ -176,6 +176,40 @@ def recover_espn_metrics(fx,board):
     return common.metrics_from_espn(summary,candidate)
 
 
+def coverage_diagnostics(feed):
+    """Count real live periods to distinguish no matches from missing data."""
+    total=0
+    live=0
+    early=0
+    in_window=0
+    late=0
+    unknown=0
+    for league in (feed or {}).get("leagues") or []:
+        for match in league.get("matches") or []:
+            total+=1
+            status=match.get("status") or {}
+            if status.get("ongoing") is not True:
+                continue
+            live+=1
+            raw=str((status.get("liveTime") or {}).get("short") or "")
+            found=re.search(r"(\\d{1,3})",raw)
+            if not found:
+                unknown+=1
+                continue
+            minute=int(found.group(1))
+            if minute < common.MIN_MINUTE:
+                early+=1
+            elif minute > common.MAX_MINUTE:
+                late+=1
+            else:
+                in_window+=1
+    result={"fixtures":total,"live":live,"before_65":early,
+            "minute_65_85":in_window,"after_85":late,
+            "no_clock":unknown}
+    print("LMG_FEED_COVERAGE",json.dumps(result),flush=True)
+    return result
+
+
 def fetch_fotmob(day):
     # Public feed only; respect 403/429, never bypass access restrictions.
     try:
@@ -194,6 +228,7 @@ def run():
     except requests.RequestException as exc:
         print("LMG_FOTMOB_UNAVAILABLE",str(exc)[:140],flush=True)
         return common.main()  # only if primary free feed unavailable
+    coverage_diagnostics(feed)
     fixtures=fixtures_from_fotmob(feed)
     if not fixtures:
         print("LMG_FOTMOB_NO_LATE_MATCHES_ESPN_BACKUP",flush=True)
