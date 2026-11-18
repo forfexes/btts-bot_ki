@@ -790,8 +790,25 @@ def send_cards(tips_by_market, target_date, token, stats_chat, log=print):
             if sig in seen_sig:
                 STATS["cards_dup_skipped"] = STATS.get("cards_dup_skipped", 0) + 1
                 continue
+            # Goal Hunter uses the same strict identity, image and raster QA
+            # as the dedicated scorer sender. Other market designs unchanged.
+            if len(entries) == 1 and str(entries[0][0]) == "scorer":
+                from netrattler_visual_gate import enrich_scorer, validate_scorer
+                from netrattler_visual_review import review_png
+                candidate = enrich_scorer(entries[0][1], target_date)
+                missing = validate_scorer(candidate, target_date)
+                if missing:
+                    log("Goal-Hunter-Karte Qualitätsstopp: " + ",".join(missing))
+                    continue
+                entries = [("scorer", candidate)]
+                payload = render_card(entries, target_date)
+                inspection = review_png(payload, "scorer")
+                if not inspection.passed:
+                    log("Goal-Hunter-PNG VISUAL FAIL: " + ",".join(inspection.problems))
+                    continue
+            else:
+                payload = render_card(entries, target_date)
             seen_sig.add(sig)
-            payload = render_card(entries, target_date)
             mid = _send_photo(token, stats_chat, "", payload, log)
             if mid:
                 sent += 1
