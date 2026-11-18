@@ -345,3 +345,32 @@ def test_brazilian_club_logo_uses_canonical_name_without_dummy_crest():
         result = cards._logo_url("Athletico-PR")
     assert result == "https://example.org/real-logo.png"
     assert seen and seen[-1] == "Athletico Paranaense"
+
+
+def test_scorer_rejects_coutinho_unverified_high_quote_and_fake_rate():
+    from netrattler_visual_gate import validate_scorer
+    tip={"match":"Coritiba vs Santos","player":"Philippe Coutinho","team":"Santos",
+         "odds":9.50,"probability":18,"fairOdds":5.56,
+         "_source":"test_only","goals_per_game":0.30,
+         "_kickoff":"2099-01-01T22:30:00+00:00"}
+    with patch.object(cards,"_player_photo",return_value=_fake_reference_photo()), \
+         patch.object(cards,"_badge_bytes",return_value=_fake_reference_photo()), \
+         patch("netrattler_neon_design._observed_game_log",return_value=(0,)*15):
+        reasons=validate_scorer(tip,"2099-01-01")
+    assert "unverified_scorer_quote_origin" in reasons
+    assert "scorer_quote_gate_below_probability" in reasons
+    assert "inconsistent_scorer_goals_per_game" in reasons
+
+
+def test_scorer_rejects_probability_fair_quote_mismatch():
+    from netrattler_visual_gate import validate_scorer
+    tip={"match":"Coritiba vs Santos","player":"Verified Player","team":"Santos",
+         "odds":2.50,"probability":45,"fairOdds":5.56,
+         "_source":"kambi","goals_per_game":0.20,
+         "_kickoff":"2099-01-01T22:30:00+00:00"}
+    with patch.object(cards,"_player_photo",return_value=_fake_reference_photo()), \
+         patch.object(cards,"_badge_bytes",return_value=_fake_reference_photo()), \
+         patch("netrattler_neon_design._observed_game_log",return_value=(1,0,0,1,0,0,0,0,0,0)):
+        reasons=validate_scorer(tip,"2099-01-01")
+    assert "inconsistent_scorer_fair_odds" in reasons
+    assert "inconsistent_scorer_goals_per_game" not in reasons
