@@ -116,7 +116,9 @@ def edit_original(row,final,won):
                         final_score=final_text,won=won,
                         next_goal_side=row.get("next_goal_side"),
                         next_goal_result=row.get("next_goal_result"))
-        media=json.dumps({"type":"photo","media":"attach://result_photo","caption":caption})
+        # The original and settled photo must have NO Telegram caption.
+        # Scoring details are rendered directly onto the image.
+        media=json.dumps({"type":"photo","media":"attach://result_photo"})
         resp=requests.post(f"https://api.telegram.org/bot{token}/editMessageMedia",
                            data={"chat_id":chat,"message_id":row["telegram_message_id"],
                                  "media":media},
