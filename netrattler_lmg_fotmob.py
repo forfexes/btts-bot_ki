@@ -11,6 +11,7 @@ import json
 import os
 import re
 import sys
+import unicodedata
 
 import requests
 
@@ -139,6 +140,42 @@ def metrics_from_fotmob(detail,fixture):
     return metrics
 
 
+def _club_name(name):
+    # Conservative comparison: do not pair matches based only on fuzzy team names.
+    ascii_name=unicodedata.normalize("NFKD",str(name)).encode("ascii","ignore").decode()
+    words=re.findall(r"[a-z0-9]+",ascii_name.casefold())
+    return " ".join(w for w in words if w not in ("fc","afc","cf","sc","fk"))
+
+
+def recover_espn_metrics(fx,board):
+    """Use ESPN stats ONLY for the exact live FotMob fixture, retaining its ID.
+
+    Guard against wrong opponents, stale scores, wrong date and ambiguous fixtures.
+    FotMob remains authoritative for fixture ID and post-match settlement.
+    """
+    matches=[]
+    for candidate in common.fixtures_from_espn(board):
+        if (_club_name(candidate["home"])!=_club_name(fx["home"])
+                or _club_name(candidate["away"])!=_club_name(fx["away"])):
+            continue
+        if abs((candidate["kickoff"]-fx["kickoff"]).total_seconds())>900:
+            continue
+        if (candidate["hg"],candidate["ag"])!=(fx["hg"],fx["ag"]):
+            continue
+        if abs(candidate["minute"]-fx["minute"])>5:
+            continue
+        matches.append(candidate)
+    if len(matches)!=1:
+        return None
+    candidate=matches[0]
+    try:
+        summary=common._get(f"{common.ESPN}/{candidate['slug']}/summary",
+                            params={"event":str(candidate["fixture_id"])})
+    except requests.RequestException:
+        return None
+    return common.metrics_from_espn(summary,candidate)
+
+
 def fetch_fotmob(day):
     # Public feed only; respect 403/429, never bypass access restrictions.
     try:
@@ -163,27 +200,38 @@ def run():
         return common.main()
     fixtures.sort(key=lambda x:(x["minute"],x["fixture_id"]))
     report={"source":"fotmob","live_candidates":len(fixtures),"stats_checked":0,
-            "missing_stats":0,"tier_rejected":0,"qualified":0,"sent":0,"odds_calls":0,
+            "missing_stats":0,"detail_errors":0,"espn_recovered":0,
+            "tier_rejected":0,"qualified":0,"sent":0,"odds_calls":0,
             "send_enabled":send_enabled}
+    espn_board=None
+    espn_board_loaded=False
     for fx in fixtures[:MAX_EVENTS]:
+        detail=None
         try:
             detail=common._get(DETAIL,params={"matchId":fx["fixture_id"]})
-        except requests.HTTPError as exc:
-            if getattr(exc.response,"status_code",0)==404:
-                try:
-                    detail=common._get("https://www.fotmob.com/api/matchDetails",
-                                       params={"matchId":fx["fixture_id"]})
-                except requests.RequestException:
-                    report["missing_stats"]+=1
-                    continue
-            else:
-                report["missing_stats"]+=1
-                continue
         except requests.RequestException:
-            report["missing_stats"]+=1
-            continue
-        report["stats_checked"]+=1
-        metrics=metrics_from_fotmob(detail,fx)
+            report["detail_errors"]+=1
+        metrics=None
+        if detail is not None:
+            report["stats_checked"]+=1
+            metrics=metrics_from_fotmob(detail,fx)
+        if not metrics:
+            # Prefer recovery of THIS SAME FotMob fixture, not an unrelated
+            # ESPN fixture whose final result could not be settled by FotMob.
+            if not espn_board_loaded:
+                espn_board_loaded=True
+                try:
+                    espn_board=common._get(f"{common.ESPN}/all/scoreboard",
+                        params={"dates":day,"limit":"1000"})
+                except requests.RequestException as exc:
+                    print("LMG_ESPN_STATS_BACKUP_UNAVAILABLE",
+                          str(exc).splitlines()[0][:120],flush=True)
+            if espn_board is not None:
+                metrics=recover_espn_metrics(fx,espn_board)
+                if metrics:
+                    report["espn_recovered"]+=1
+                    print("LMG_FOTMOB_ESPN_STATS_RECOVERED",
+                          fx["fixture_id"],fx["minute"],flush=True)
         if not metrics:
             report["missing_stats"]+=1
             continue
