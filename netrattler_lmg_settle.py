@@ -17,7 +17,7 @@ from netrattler_lmg_next_goal import evaluate_next_goal
 def pending():
     url,headers=common._db()
     resp=requests.get(url,headers=headers,params={
-        "select":"alert_key,fixture_id,home,away,minute,score,status,telegram_message_id,sent_at,message_kind,next_goal_side",
+        "select":"alert_key,fixture_id,home,away,minute,score,status,telegram_message_id,sent_at,message_kind,next_goal_side,signal_tier",
         "status":"eq.sent","telegram_message_id":"not.is.null",
         "order":"sent_at.asc","limit":"80"},timeout=15)
     resp.raise_for_status()
@@ -54,10 +54,16 @@ def edit_original(row,final,won):
              "home_logo_id":common._int(final["home"].get("id")),
              "away_logo_id":common._int(final["away"].get("id"))}
     final_text=f"{final['score'][0]}:{final['score'][1]}"
+    signal_tier=row.get("signal_tier")
+    if signal_tier not in (None,"STANDARD","PREMIUM"):
+        raise ValueError("Invalid stored Goal Hunter tier")
     caption=(f"⚽ GOAL HUNTER · {home} – {away}\n"
              f"⏱ Tipp {row['minute']}' · {row['score']}\n"
              f"🏁 Endresultat {final_text} · {'✅ GEWONNEN' if won else '❌ VERLOREN'}\n"
              "@prophunter")
+    if signal_tier:
+        caption = caption.replace("🏁 Endresultat",
+                                  f"🎯 Over 0.5 Restspielzeit · {signal_tier}\\n🏁 Endresultat")
     if row.get("next_goal_side") in ("home","away"):
         predicted = home if row["next_goal_side"] == "home" else away
         grade = {"won":"✅ RICHTIG","lost":"❌ FALSCH",
@@ -70,7 +76,8 @@ def edit_original(row,final,won):
     is_photo=row.get("message_kind")=="photo"
     if is_photo:
         from netrattler_lmg_card import make_card
-        photo=make_card(fixture,final_score=final_text,won=won,
+        photo=make_card(fixture,metrics={"tier":signal_tier or "STANDARD"},
+                        final_score=final_text,won=won,
                         next_goal_side=row.get("next_goal_side"),
                         next_goal_result=row.get("next_goal_result"))
         media=json.dumps({"type":"photo","media":"attach://result_photo","caption":caption})
