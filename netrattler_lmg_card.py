@@ -100,7 +100,13 @@ def make_card(fixture,metrics=None,*,final_score=None,won=None):
             d.text((W//2,yy),label,font=font(30),fill=GOLD,anchor="mm")
             d.text((865,yy),val(right),font=font(38),fill=WHITE,anchor="mm")
         if not teams.get("home") or not teams.get("away"):
-            raise ValueError("Both teams need verified statistics for a live image card")
+            # ESPN fallback has verified totals but may lack safe team attribution.
+            d.rectangle((82,708,998,960),fill=(7,25,41))
+            centered(d,"GESAMTSTATISTIK",724,35,GOLD)
+            centered(d,f"Schüsse: {(metrics or {}).get('shots','–')}",790,38,WHITE)
+            centered(d,f"Aufs Tor: {(metrics or {}).get('sot','–')}",849,38,WHITE)
+            if (metrics or {}).get("corners") is not None:
+                centered(d,f"Ecken: {metrics['corners']}",909,38,WHITE)
         panel(d,(68,1017,1012,1142),GOLD,(20,24,14))
         centered(d,"OVER 0.5 RESTSPIELZEIT",1027,44,GOLD)
         centered(d,str((metrics or {}).get("tier") or "STANDARD"),1092,30,WHITE)
