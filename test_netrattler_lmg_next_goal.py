@@ -58,7 +58,7 @@ class NextGoalTests(unittest.TestCase):
             wrong=card.make_card(self.fx,final_score="3:2",won=True,
                                  next_goal_side="away",next_goal_result="lost")
         for data in (old,open_image,done,wrong):
-            self.assertTrue(data.startswith(b"\\xff\\xd8"))
+            self.assertTrue(data.startswith(b"\xff\xd8"))
         self.assertNotEqual(open_image,old)
         self.assertNotEqual(done,wrong)
 
