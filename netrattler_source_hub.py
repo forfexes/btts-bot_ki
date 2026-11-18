@@ -64,6 +64,13 @@ class SourceAdapter:
 
 
 SOURCES: Tuple[SourceAdapter, ...] = (
+    # Specialized vendors: discovery only until access is licensed and verified.
+    # FootyStats is strictly historical; never route into live, odds or settlement.
+    SourceAdapter("footystats_licensed_history", "footystats.org", "historical_backtest", "official history adapter in netrattler_specialized_sources.py, no in-play stats", "ENABLE_FOOTYSTATS_HISTORY", False, "", "licensed key; historical only"),
+    SourceAdapter("sofascore_reference_only", "sofascore.com", "research_only", "no public data API; not activated", "ENABLE_SOFASCORE_OFFICIAL", False, "", "provider API unavailable"),
+    SourceAdapter("overlyzer_research_only", "overlyzer.com", "research_only", "live-pressure product; no verified public developer feed", "ENABLE_OVERLYZER_OFFICIAL", False, "", "approved feed needed"),
+    SourceAdapter("statisticsports_research_only", "statisticsports.com", "research_only", "commercial in-play and historical data; inquire about API contract", "ENABLE_STATISTICSPORTS_OFFICIAL", False, "", "commercial API contract needed"),
+    SourceAdapter("besoccer_research_only", "api.besoccer.com", "research_only", "official paid data API; no free account", "ENABLE_BESOCCER_OFFICIAL", False, "", "paid API contract needed"),
     SourceAdapter("aiscore_form", "aiscore.com", "team_form", "measured dated L15 team form fallback; no unlabelled odds", "ENABLE_AISCORE_FORM", True, "", "public page terms"),
     SourceAdapter("public_page_context", "BeSoccer/OneMillionPredictions/BetMines/TodayMatchPrediction/Flashscore/AFootballReport", "context_research", "bounded labelled public tables; external predictions are not bookmaker odds or settlement data", "NETRATTLER_PUBLIC_SOURCE_BROWSER", False, "", "public page terms", True),
     SourceAdapter(
