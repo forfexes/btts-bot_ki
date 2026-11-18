@@ -10,6 +10,8 @@ on:
       - 'netrattler_scorer_identity.py'
       - 'netrattler_reviewed_results.py'
       - 'netrattler_reviewed_players.py'
+      - 'netrattler_settlement_v16_final.py'
+      - 'test_netrattler_data_gap_notice.py'
 
   schedule:
     - cron: "20 13 * * *"

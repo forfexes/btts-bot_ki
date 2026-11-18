@@ -2401,14 +2401,30 @@ def _data_gap_notice(settlement: Dict[str, Any]) -> bool:
         settlement.get("reason") or "").startswith(("void: kein Ergebnis nach", "void: nicht bewertbar nach"))
 
 
+def _confirmed_scorer_no_appearance(settlement: Dict[str, Any]) -> bool:
+    """Scorer singles have no legs_payload; validate this explicit no-play case.
+
+    Other VOID reasons remain blocked from sporting-result publication.
+    """
+    return (normalized_status(settlement.get("status")) == "void"
+            and str(settlement.get("market_group") or "") == "scorer"
+            and not settlement.get("legs_payload")
+            and str(settlement.get("reason") or "").startswith(
+                "void: Spieler ohne Einsatz (Spiel in Spielerdaten, Spieler nicht gelistet)"))
+
+
 def _original_update_allowed(settlement: Dict[str, Any]) -> bool:
     return (normalized_status(settlement.get("status")) in {"win", "loss"}
-            or _confirmed_all_void(settlement) or _data_gap_notice(settlement))
+            or _confirmed_all_void(settlement)
+            or _confirmed_scorer_no_appearance(settlement)
+            or _data_gap_notice(settlement))
 
 
 def _writes_to_source(settlement: Dict[str, Any]) -> bool:
     """win/loss always; VOID only for the explicit stale-no-result case (never for legacy missing-data voids)."""
-    if settlement.get("status") in {"win", "loss"} or _confirmed_all_void(settlement):
+    if (settlement.get("status") in {"win", "loss"}
+            or _confirmed_all_void(settlement)
+            or _confirmed_scorer_no_appearance(settlement)):
         return True
     return settlement.get("status") == "void" and str(settlement.get("reason") or "").startswith(("void: kein Ergebnis nach", "void: nicht bewertbar nach"))
 
