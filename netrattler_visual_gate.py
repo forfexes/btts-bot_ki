@@ -181,6 +181,12 @@ def validate_builder(pick):
     day = str(getattr(pick, "match_date", "") or "")[:10]
     if not re.fullmatch(r"\d{4}-\d{2}-\d{2}", day):
         return None, ["missing_date"]
+    # No synthetic SGM/accumulator: reject before costly photo and fixture
+    # lookups when the bookmaker's complete combination is unverified.
+    combined = neon._number(getattr(pick, "combined_bookmaker_quote", None))
+    if not (getattr(pick, "combined_quote_verified", False) and
+            combined is not None and 1.01 < combined <= 100000):
+        return None, ["missing_verified_combo_quote"]
 
     reasons, fixed = set(), []
     for leg in legs:

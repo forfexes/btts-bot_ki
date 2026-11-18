@@ -213,7 +213,8 @@ def test_strict_guard_rejects_placeholder_builder_without_sending():
               S(player="Unknown Two",team="",match="Home vs Away",
                 category="shots",line=1,source="book",odds=1.8,
                 estimated=False,kickoff="")],
-        match_date="2026-11-18",estimated_odds=False)
+        match_date="2026-11-18",estimated_odds=False,
+        combined_quote_verified=True,combined_bookmaker_quote=3.0)
     with patch("netrattler_visual_gate.club_for_player",return_value=""), \
          patch("netrattler_visual_gate.kickoff_for_match",return_value=""):
         prepared, reasons=validate_builder(p)
