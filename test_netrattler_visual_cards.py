@@ -310,10 +310,10 @@ def test_goal_hunter_observed_goals_per_game_not_invented():
 def test_brazilian_club_logo_uses_canonical_name_without_dummy_crest():
     # Visual QA detected Athletico-PR as the only missing badge in the asset probe.
     seen = []
-    with patch.object(cards, "_crest_from_index", return_value="") as indexed, \\
-         patch.object(cards, "_fl_logo", return_value=""), \\
-         patch.object(cards, "_wikidata_logo", return_value=""), \\
-         patch.object(cards, "_apifootball_logo", side_effect=lambda name, league="": seen.append(name) or "https://example.org/real-logo.png"), \\
+    with patch.object(cards, "_crest_from_index", return_value="") as indexed, \
+         patch.object(cards, "_fl_logo", return_value=""), \
+         patch.object(cards, "_wikidata_logo", return_value=""), \
+         patch.object(cards, "_apifootball_logo", side_effect=lambda name, league="": seen.append(name) or "https://example.org/real-logo.png"), \
          patch.object(cards, "_LOGO_CACHE", {}):
         result = cards._logo_url("Athletico-PR")
     assert result == "https://example.org/real-logo.png"
