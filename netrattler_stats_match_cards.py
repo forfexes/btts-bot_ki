@@ -1026,6 +1026,16 @@ def _player_photo(name, team=""):
                                 + photo_code + ".png")
     except Exception:
         STATS["player_fpl_err"] = STATS.get("player_fpl_err", 0) + 1
+    # Commons is a final identity/license-checked fallback for ten known players.
+    # Only CC0/Public Domain files with the full name in the filename qualify.
+    try:
+        from netrattler_commons_photos import commons_photo
+        commons_url = commons_photo(clean_name)
+        if commons_url:
+            urls.append(commons_url)
+    except Exception:
+        STATS["player_commons_err"] = STATS.get("player_commons_err", 0) + 1
+
     # FotMob's football-only search provides a verified player id and team.
     try:
         resp = requests.get(
