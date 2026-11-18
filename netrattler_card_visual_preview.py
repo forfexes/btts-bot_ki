@@ -72,7 +72,12 @@ def generate(directory):
     directory.mkdir(parents=True, exist_ok=True)
     fake_photo = fake_headshot()
     report = {}
+    crest=Image.new("RGB",(110,110),"#14436A")
+    ImageDraw.Draw(crest).ellipse((9,9,101,101),fill="#C32536",outline="#F5DB62",width=6)
+    badge_buf=io.BytesIO()
+    crest.save(badge_buf,"PNG")
     with patch.object(cards, "_player_photo", return_value=fake_photo), \
+         patch.object(cards, "_badge_bytes",return_value=badge_buf.getvalue()), \
          patch.object(cards, "_paste_badge", side_effect=fake_badge):
         for count in (2, 4, 6):
             p = SimpleNamespace(legs=demo_legs(count), match_date="2099-05-21",
