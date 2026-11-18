@@ -63,7 +63,7 @@ def edit_original(row,final,won):
              "@prophunter")
     if signal_tier:
         caption = caption.replace("🏁 Endresultat",
-                                  f"🎯 Over 0.5 Restspielzeit · {signal_tier}\\n🏁 Endresultat")
+                                  f"🎯 Over 0.5 Restspielzeit · {signal_tier}\n🏁 Endresultat")
     if row.get("next_goal_side") in ("home","away"):
         predicted = home if row["next_goal_side"] == "home" else away
         grade = {"won":"✅ RICHTIG","lost":"❌ FALSCH",
