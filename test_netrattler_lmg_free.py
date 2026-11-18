@@ -41,10 +41,12 @@ def stats():
 
 
 class GoalHunterFreeTests(unittest.TestCase):
-    def test_minute_64_no_alert_65_and_90_allowed(self):
+    def test_minute_64_no_alert_65_to_85_allowed_and_86_plus_blocked(self):
         self.assertEqual(lmg.fixtures_from_espn(board(64)), [])
         self.assertEqual(lmg.fixtures_from_espn(board(65))[0]["minute"], 65)
-        self.assertEqual(lmg.fixtures_from_espn(board(90))[0]["minute"], 90)
+        self.assertEqual(lmg.fixtures_from_espn(board(85))[0]["minute"], 85)
+        self.assertEqual(lmg.fixtures_from_espn(board(86)), [])
+        self.assertEqual(lmg.fixtures_from_espn(board(90)), [])
         self.assertEqual(lmg.fixtures_from_espn(board(65, period=1)), [])
 
     def test_zero_zero_score_and_numeric_zero_are_valid(self):
