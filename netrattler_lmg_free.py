@@ -132,14 +132,32 @@ def select_goal_tier(fixture, metrics):
 
 def format_tip(fixture, metrics):
     corners = metrics.get("corners")
+    teams = metrics.get("teams") or {}
+    team_lines = []
+    if "home" in teams and "away" in teams:
+        for side, name in (("home",fixture["home"]),("away",fixture["away"])):
+            values=teams[side]
+            parts=[]
+            if values.get("shots") is not None:
+                parts.append(f"Schüsse {values['shots']}")
+            if values.get("sot") is not None:
+                parts.append(f"aufs Tor {values['sot']}")
+            if values.get("corners") is not None:
+                parts.append(f"Ecken {values['corners']}")
+            if values.get("xg") is not None:
+                parts.append(f"xG {values['xg']:.2f}")
+            if parts:
+                team_lines.append(f"• {name}: " + " · ".join(parts))
+    stats_line = ("📊 Teamstatistik\n" + "\n".join(team_lines) if len(team_lines)==2
+                  else f"📊 Schüsse {metrics['shots']} · aufs Tor {metrics['sot']}"
+                       + (f" · Ecken {corners}" if corners is not None else ""))
     return (f"⚽ NETRATTLER · LAST MINUTE GOAL\n"
             f"🎯 OVER 0.5 RESTSPIELZEIT · {metrics['tier']}\n\n"
             f"🏆 {fixture['league'] or 'Fussball'}\n"
             f"🏟 {fixture['home']} – {fixture['away']}\n"
             f"⏱ {fixture.get('clock') or str(fixture['minute']) + chr(39)} · {fixture['hg']}:{fixture['ag']}\n"
             f"✅ Prognose: Noch mindestens 1 Tor ab jetzt\n"
-            f"📊 Schüsse {metrics['shots']} · aufs Tor {metrics['sot']}"
-            + (f" · Ecken {corners}" if corners is not None else "") + "\n"
+            f"{stats_line}\n"
             f"🏁 Auswertung: ⏳ offen")
 
 
