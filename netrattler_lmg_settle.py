@@ -16,7 +16,7 @@ import netrattler_lmg_fotmob as fotmob
 def pending():
     url,headers=common._db()
     resp=requests.get(url,headers=headers,params={
-        "select":"alert_key,fixture_id,home,away,minute,score,status,telegram_message_id,sent_at",
+        "select":"alert_key,fixture_id,home,away,minute,score,status,telegram_message_id,sent_at,message_kind",
         "status":"eq.sent","telegram_message_id":"not.is.null",
         "order":"sent_at.asc","limit":"80"},timeout=15)
     resp.raise_for_status()
