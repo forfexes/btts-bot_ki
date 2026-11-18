@@ -21,16 +21,16 @@ class GoalHunterCards(unittest.TestCase):
         self.assertTrue(lost.startswith(b"\xff\xd8"))
         self.assertNotEqual(opening,final)
         self.assertNotEqual(final,lost)
-    def test_real_user_template_header_survives_render(self):
+    def test_approved_neon_frame_header_survives_render(self):
         import io
         from PIL import Image,ImageChops,ImageStat
         with patch.object(card,"crest",return_value=None):
             rendered=Image.open(io.BytesIO(card.make_card(self.fx,self.metrics))).convert("RGB")
-        source=Image.open(card.ORIGINAL_HEADER).convert("RGB").resize((1080,264))
-        diff=ImageChops.difference(source.crop((0,0,1080,245)),
-                                   rendered.crop((0,0,1080,245)))
+        source=Image.open(card.TEMPLATE).convert("RGB").resize((1080,1350))
+        diff=ImageChops.difference(source.crop((0,0,1080,230)),
+                                   rendered.crop((0,0,1080,230)))
         self.assertLess(sum(ImageStat.Stat(diff).mean)/3,12)
-        self.assertTrue(card.ORIGINAL_HEADER.is_file())
+        self.assertTrue(card.TEMPLATE.is_file())
 
     def test_missing_xg_and_espn_fallback_render(self):
         import io
