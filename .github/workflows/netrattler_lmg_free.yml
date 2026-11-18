@@ -9,6 +9,7 @@ on:
       - netrattler_lmg_fotmob.py
       - netrattler_lmg_card.py
       - assets/goal_hunter_original_header.webp
+      - assets/goal_hunter_neon_frame.webp
       - netrattler_lmg_settle.py
       - test_netrattler_lmg_card.py
       - test_netrattler_lmg_fotmob.py
