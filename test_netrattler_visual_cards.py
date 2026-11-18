@@ -54,7 +54,7 @@ def test_builder_keeps_verified_player_identity_and_receipt():
     with patch.object(cards,'_paste_badge'),patch.object(cards,'_player_photo',return_value=b'') as photo:
         payload=builder_cards.render_builder_card(p)
     photo.assert_called_once_with('Player A','Levante')
-    assert Image.open(io.BytesIO(payload)).size==(1200,690)
+    assert Image.open(io.BytesIO(payload)).size==(1200,810)
     with patch.object(builder_cards,'render_builder_card',return_value=payload), \
          patch("netrattler_visual_gate.strict_enabled",return_value=False), \
          patch.object(cards,'_send_photo',return_value=123):
@@ -103,7 +103,7 @@ def test_model_card_preserves_no_quote_and_original_receipt():
     assert adapted.legs[0].series==model['legs'][0]['series']
     assert receipt=={'message_id':123,'chat_id':'42','text':'original'}
     with patch.object(cards,'_paste_badge'),patch.object(cards,'_player_photo',return_value=b''):
-        assert Image.open(io.BytesIO(builder_cards.render_builder_card(adapted))).size==(1200,690)
+        assert Image.open(io.BytesIO(builder_cards.render_builder_card(adapted))).size==(1200,810)
 
 
 def test_model_cross_ladder_renders_all_stages():
@@ -114,7 +114,7 @@ def test_model_cross_ladder_renders_all_stages():
         style='FOUL LEITER',match_date='2026-10-31',model_only=True,joint=.5,fair=2,
         tiers=[(2,.5),(3,.2),(4,.05)],tier_shift=False)
     with patch.object(cards,'_player_photo',return_value=b''):
-        assert Image.open(io.BytesIO(builder_cards.render_builder_card(pick))).size==(1200,970)
+        assert Image.open(io.BytesIO(builder_cards.render_builder_card(pick))).size==(1200,1090)
 
 
 def test_new_goal_hunter_has_reference_proportions_and_no_made_up_data():
@@ -139,7 +139,7 @@ def test_new_builder_six_legs_and_l10_l15_not_invented():
         variant='6 LEG',status='pending')
     with patch.object(cards,'_paste_badge'),patch.object(cards,'_player_photo',return_value=b''):
         payload=builder_cards.render_builder_card(p)
-    assert Image.open(io.BytesIO(payload)).size==(1200,1490)
+    assert Image.open(io.BytesIO(payload)).size==(1200,1610)
 
 
 def test_missing_history_and_quote_not_fabricated():
