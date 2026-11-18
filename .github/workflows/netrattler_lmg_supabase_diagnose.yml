@@ -1,11 +1,8 @@
 name: NETRATTLER Goal Hunter Supabase 402 Diagnosis
 
+# Diagnostic runs manually only; no recurring GitHub Actions costs.
 on:
   workflow_dispatch:
-  push:
-    branches: [main]
-    paths:
-      - .github/workflows/netrattler_lmg_supabase_diagnose.yml
 
 permissions:
   contents: read
