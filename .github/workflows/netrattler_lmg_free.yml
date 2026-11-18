@@ -6,6 +6,7 @@ on:
     branches: [main]
     paths:
       - netrattler_lmg_free.py
+      - netrattler_lmg_probe.py
       - netrattler_last_minute_goal.py
       - test_netrattler_lmg_free.py
       - .github/workflows/netrattler_lmg_free.yml
@@ -50,7 +51,9 @@ jobs:
       - name: Public ESPN live HTTP smoke test - read only, no bookmaker key
         env:
           LMG_SEND: "false"
-        run: python netrattler_lmg_free.py
+        run: |
+          python netrattler_lmg_probe.py
+          python netrattler_lmg_free.py
 
   scan:
     needs: verify
