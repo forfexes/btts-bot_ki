@@ -142,30 +142,46 @@ def make_card(fixture, metrics=None, *, final_score=None, won=None,
                    max_width=855)
         center(d, "AUSWERTUNG: OFFEN", 602, 1204, 47, GOLD, max_width=815)
     else:
-        # Remove *all* open-statistics and their labels; keep the original glowing cyan border.
+        # Final image: a clean, two-column tip snapshot. The main green/red
+        # result below refers ONLY to Over 0.5 Restspielzeit.
         d.rounded_rectangle((100, 814, 1001, 1111), radius=18, fill=(4, 13, 20))
-        center(d, "TIPP-ZEITPUNKT", 564, 875, 45, GOLD)
-        center(d, f"{fixture['minute']}. MINUTE", 564, 943, 68, WHITE)
-        center(d, f"SPIELSTAND BEIM TIPP: {fixture['hg']}:{fixture['ag']}",
-               564, 1017, 34, WHITE, max_width=820)
-        if next_goal_side:
+        d.line((560, 847, 560, 986), fill=(39, 148, 180), width=3)
+        center(d, "TIPP-ZEITPUNKT", 322, 870, 33, GOLD, max_width=390)
+        center(d, f"{fixture['minute']}. MINUTE", 322, 943, 58, WHITE, max_width=405)
+        center(d, "SPIELSTAND BEIM TIPP", 782, 870, 29, GOLD,
+               max_width=394)
+        center(d, f"{fixture['hg']}:{fixture['ag']}", 782, 943, 70, WHITE,
+               max_width=280)
+
+        # Only evaluate a next-goal pick when that side was on the ORIGINAL
+        # Telegram tip. This row is separate from the main Over 0.5 result.
+        if next_goal_side is not None:
             next_name = home if next_goal_side == "home" else away
-            wording = {"won": "RICHTIG", "lost": "FALSCH",
-                       "void": "KEIN TOR", "unverified": "NICHT VERIFIZIERT",
-                       None: "OFFEN"}.get(next_goal_result)
+            wording = {"won": "✓ RICHTIG", "lost": "✕ FALSCH",
+                       "void": "KEIN WEITERES TOR",
+                       "unverified": "NICHT VERIFIZIERT",
+                       None: "NOCH OFFEN"}.get(next_goal_result)
             if wording is None:
                 raise ValueError("Invalid next-goal result")
-            tint = GREEN if next_goal_result == "won" else (RED if next_goal_result == "lost" else WHITE)
-            center(d, f"NÄCHSTES TOR: {next_name} · {wording}",
-                   564, 1076, 27, tint, max_width=850)
+            tint = (GREEN if next_goal_result == "won"
+                    else RED if next_goal_result == "lost" else WHITE)
+            d.rounded_rectangle((132, 993, 969, 1097), radius=17,
+                                fill=(6, 22, 28),
+                                outline=tint, width=3)
+            center(d, "NÄCHSTES TOR: " + next_name, 560, 1027, 29, WHITE,
+                   max_width=795)
+            center(d, wording, 560, 1070, 34, tint, max_width=760)
         if won is not True and won is not False:
             raise ValueError("Final result requires a verified win/loss")
         color = GREEN if won else RED
         if not won:
-            for expand in (0,5,10):
-                d.rounded_rectangle((50-expand, 1159-expand, 1061+expand, 1260+expand),
-                                    radius=25, outline=(220 if expand==0 else 96,38,36), width=5)
-        center(d, ("✓ GEWONNEN" if won else "✕ VERLOREN"), 603, 1204, 57, color, max_width=790)
+            for expand in (0, 5, 10):
+                d.rounded_rectangle((50-expand, 1159-expand, 1061+expand,
+                                     1260+expand), radius=25,
+                                    outline=(220 if expand == 0 else 96, 38, 36),
+                                    width=5)
+        center(d, ("✓ GEWONNEN" if won else "✕ VERLOREN"),
+               603, 1204, 57, color, max_width=790)
     out = io.BytesIO()
     im.resize((W, H), Image.Resampling.LANCZOS).save(out, format="JPEG", quality=91, optimize=True)
     return out.getvalue()
