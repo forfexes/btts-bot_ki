@@ -28,7 +28,44 @@ class DbPreflightTests(unittest.TestCase):
                              "blocked_egress_quota")
             with patch.object(gate,"preflight",return_value="blocked_egress_quota"):
                 with self.assertRaises(SystemExit):
-                    gate.main()
+                    gate.main([])
+
+    def test_workflow_quota_produces_skip_output_without_scanning(self):
+        import os
+        import tempfile
+        with tempfile.TemporaryDirectory() as directory:
+            output = os.path.join(directory, "output.txt")
+            with patch.dict("os.environ", {"GITHUB_OUTPUT": output}), \
+                 patch.object(gate,"preflight",return_value="blocked_egress_quota"):
+                gate.main(["--workflow-check"])
+            with open(output,encoding="utf-8") as stream:
+                recorded=stream.read()
+            self.assertIn("ready=false",recorded)
+            self.assertIn("quota_blocked=true",recorded)
+
+    def test_workflow_ready_reenables_normal_scanning(self):
+        import os
+        import tempfile
+        with tempfile.TemporaryDirectory() as directory:
+            output=os.path.join(directory,"output.txt")
+            with patch.dict("os.environ", {"GITHUB_OUTPUT": output}), \
+                 patch.object(gate,"preflight",return_value="ready"):
+                gate.main(["--workflow-check"])
+            with open(output,encoding="utf-8") as stream:
+                recorded=stream.read()
+            self.assertIn("ready=true",recorded)
+            self.assertIn("quota_blocked=false",recorded)
+
+    def test_bad_secret_still_fails_in_workflow_mode(self):
+        import os
+        import tempfile
+        with tempfile.TemporaryDirectory() as directory:
+            output=os.path.join(directory,"output.txt")
+            with patch.dict("os.environ",{"GITHUB_OUTPUT":output}), \
+                 patch.object(gate,"preflight",return_value="credentials_rejected"):
+                with self.assertRaises(SystemExit) as captured:
+                    gate.main(["--workflow-check"])
+            self.assertEqual(captured.exception.code,2)
 
     def test_other_quota_402(self):
         response=Mock(status_code=402)
