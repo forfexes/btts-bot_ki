@@ -36,6 +36,22 @@ jobs:
           python -m py_compile netrattler_last_minute_goal.py netrattler_lmg_free.py test_netrattler_lmg_free.py
           python -m unittest -v test_netrattler_lmg_free.py
 
+  smoke:
+    needs: verify
+    if: github.event_name == 'push'
+    runs-on: ubuntu-latest
+    timeout-minutes: 7
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+      - run: python -m pip install --prefer-binary requests
+      - name: Public ESPN live HTTP smoke test - read only, no bookmaker key
+        env:
+          LMG_SEND: "false"
+        run: python netrattler_lmg_free.py
+
   scan:
     needs: verify
     if: github.event_name != 'push'
