@@ -17,6 +17,9 @@ from typing import Any, Callable
 
 import requests
 
+from netrattler_specialized_merge_backtest import (merge_historical_sources,
+                                                    replay_late_goal_predictions)
+
 FOOTYSTATS_ENDPOINT = "https://api.football-data-api.com/league-matches"
 EXAMPLE_SEASON = 1625  # Official free sample: Premier League 2018/19
 MAX_PAGES = 2
@@ -197,6 +200,7 @@ def audit(*, demo: bool = False) -> dict[str, Any]:
         "telegram_messages": 0,
         "supabase_writes": 0,
         "live_signals_enabled": False,
+        "live_backtest": replay_late_goal_predictions([]),
         "source_catalog": {k: dict(v) for k, v in SOURCES.items()},
     }
     token = os.getenv("FOOTYSTATS_API_KEY", "").strip()
@@ -210,7 +214,14 @@ def audit(*, demo: bool = False) -> dict[str, Any]:
         return result
     try:
         rows = fetch_footystats_history(api_key=key, season_id=season_id)
+        merged = merge_historical_sources(rows)
         result["footystats_probe"] = {
+            "merge_integrity": {
+                "unique_matches": merged["unique_matches"],
+                "duplicates_removed": merged["duplicates_removed"],
+                "quarantined": len(merged["quarantined"]),
+                "cross_provider_matches_claimed": 0,
+            },
             "status": "sample_ok" if demo and rows else "historical_ok" if rows else "no_completed_matches",
             "season_id": season_id,
             **coverage_report(rows),
