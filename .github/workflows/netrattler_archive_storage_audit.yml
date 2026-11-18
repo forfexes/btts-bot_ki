@@ -1,4 +1,4 @@
-name: NETRATTLER V2 V3 V4 Storage Audit
+name: NETRATTLER All Projects Storage Audit
 on:
   push:
     branches: [main]
@@ -16,7 +16,7 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        target: [v2, v3, v4]
+        target: [main, v2, v3, v4]
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-python@v5
@@ -66,12 +66,37 @@ jobs:
           V2_DATABASE_URL: ${{ secrets.V2_DATABASE_URL }}
           V3_DATABASE_URL: ${{ secrets.V3_DATABASE_URL }}
           V4_DATABASE_URL: ${{ secrets.V4_DATABASE_URL }}
+          SUPABASE_URL: ${{ secrets.SUPABASE_URL }}
+          SUPABASE_SERVICE_ROLE_KEY: ${{ secrets.SUPABASE_SERVICE_ROLE_KEY }}
+          SUPABASE_KEY: ${{ secrets.SUPABASE_KEY }}
         run: |
           python - <<'PY'
           import os
           import netrattler_v2_migrate as archive
 
           target = os.environ["TARGET"]
+          if target == "main":
+              import requests
+              url = os.environ.get("SUPABASE_URL", "").rstrip("/")
+              key = os.environ.get("SUPABASE_SERVICE_ROLE_KEY") or os.environ.get("SUPABASE_KEY", "")
+              if not url or not key:
+                  raise SystemExit("MAIN STORAGE ERROR: missing credentials")
+              response = requests.post(url + "/rest/v1/rpc/db_size_mb", headers={
+                  "apikey": key, "Authorization": "Bearer " + key,
+                  "Content-Type": "application/json"}, json={}, timeout=30)
+              response.raise_for_status()
+              data = response.json()
+              if not isinstance(data, dict) or not isinstance(data.get("mb"), (int, float)):
+                  raise SystemExit("MAIN STORAGE ERROR: invalid size result")
+              main_mb = float(data["mb"])
+              if not 0 < main_mb < 100000:
+                  raise SystemExit("MAIN STORAGE ERROR: implausible size")
+              print(f"NETRATTLER MAIN: MiB={main_mb:.2f}, percent_of_500_MiB={main_mb/5:.1f}%")
+              for table, value in sorted((data.get("tables") or {}).items(), key=lambda x: -float(x[1]))[:12]:
+                  print(f"TABLE {table}: {float(value):.2f} MiB")
+              if main_mb >= 400:
+                  print(f"STORAGE WARNING MAIN: {main_mb:.2f} MiB, remaining={max(0, 500-main_mb):.2f} MiB")
+              raise SystemExit(0)
           if not archive.DST_DSN.startswith(("postgres://", "postgresql://")):
               raise SystemExit(f"{target}: archive database DSN is not configured")
           try:
@@ -149,8 +174,12 @@ jobs:
                       """)
                       for name, size in cursor.fetchall():
                           print(f"V3_ODDS_INDEX {name}: {size/1048576:.2f} MiB")
-                  if size_mib >= 450:
-                      print(f"WARNING: NETRATTLER {target.upper()} archive database >= 90% of 500 MiB")
+                  if size_mib >= 400:
+                      print(f"STORAGE WARNING: NETRATTLER {target.upper()} at {size_mib:.2f} MiB"
+                            f", remaining={max(0,500-size_mib):.2f} MiB"
+                            f", utilization={size_mib/5:.1f}%")
+                  if size_mib >= 500:
+                      raise SystemExit(f"NETRATTLER {target.upper()} at/over 500 MiB reference limit")
                   summary = os.environ.get("GITHUB_STEP_SUMMARY")
                   if summary:
                       with open(summary, "a", encoding="utf-8") as output:
