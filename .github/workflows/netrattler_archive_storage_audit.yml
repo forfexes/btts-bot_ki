@@ -104,6 +104,50 @@ jobs:
                   """)
                   for name, size in cursor.fetchall():
                       print(f"TABLE {name}: {size/1048576:.2f} MiB")
+                  if target == 'v3':
+                      cursor.execute("""
+                          SELECT relname, n_live_tup, n_dead_tup, last_autovacuum,
+                                 pg_relation_size(relid), pg_indexes_size(relid),
+                                 pg_total_relation_size(relid)
+                          FROM pg_stat_user_tables
+                          WHERE schemaname='public' AND relname IN
+                                ('odds_history', 'netrattler_data_lake_raw', 'netrattler_match_history')
+                          ORDER BY pg_total_relation_size(relid) DESC
+                      """)
+                      for name, live, dead, vacuum, heap, indexes, total in cursor.fetchall():
+                          print(f"V3_DETAIL {name}: live_est={live} dead_est={dead}"
+                                f" heap_mib={heap/1048576:.2f} indexes_mib={indexes/1048576:.2f}"
+                                f" total_mib={total/1048576:.2f} autovacuum={'yes' if vacuum else 'no'}")
+                      cursor.execute("""
+                          SELECT column_name FROM information_schema.columns
+                          WHERE table_schema='public' AND table_name='odds_history'
+                      """)
+                      names = {item[0] for item in cursor.fetchall()}
+                      if {'captured_date', 'source'}.issubset(names):
+                          cursor.execute("""
+                              SELECT date_trunc('month', captured_date)::date AS month,
+                                     count(*)
+                              FROM public.odds_history
+                              WHERE captured_date IS NOT NULL
+                              GROUP BY month ORDER BY month DESC LIMIT 24
+                          """)
+                          for month, count in cursor.fetchall():
+                              print(f"V3_ODDS_MONTH {month} rows={count}")
+                          cursor.execute("""
+                              SELECT source, count(*) AS rows, min(captured_date), max(captured_date)
+                              FROM public.odds_history
+                              GROUP BY source ORDER BY rows DESC LIMIT 16
+                          """)
+                          for source, count, first, last in cursor.fetchall():
+                              print(f"V3_ODDS_SOURCE {str(source)[:48]} rows={count} range={first}..{last}")
+                      cursor.execute("""
+                          SELECT indexrelname, pg_relation_size(indexrelid)
+                          FROM pg_stat_user_indexes
+                          WHERE schemaname='public' AND relname='odds_history'
+                          ORDER BY pg_relation_size(indexrelid) DESC LIMIT 10
+                      """)
+                      for name, size in cursor.fetchall():
+                          print(f"V3_ODDS_INDEX {name}: {size/1048576:.2f} MiB")
                   if size_mib >= 450:
                       print(f"WARNING: NETRATTLER {target.upper()} archive database >= 90% of 500 MiB")
                   summary = os.environ.get("GITHUB_STEP_SUMMARY")
