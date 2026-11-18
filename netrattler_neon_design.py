@@ -81,7 +81,7 @@ def _background(w, h):
                  fill=(8 + i * 2, 58 + i * 2, 76 + i * 3), width=3)
         draw.line((0, y + i * 3, w, y + i * 3), fill="#082B3B", width=1)
     rng = random.Random(170118)
-    for _ in range(2600):
+    for _ in range(5000):
         x = rng.randrange(w)
         y = rng.randrange(crowd_top, max(crowd_top + 1, pitch_top))
         if rng.randrange(5) > 1 and w * .19 < x < w * .81:
@@ -136,30 +136,44 @@ def _finish(im, glow):
     return im
 
 
+
 def _headline(draw, w, label):
-    # Silver metallic logo, illuminated gold crown and golden builder ribbon.
-    draw.text((int(w * .22), 25), "NETRATTLER", font=_font(82),
-              fill="#2B2415", stroke_width=5, stroke_fill="#06101B")
-    _center(draw, "NETRATTLER", w / 2, 16, 82, WHITE, w - 60)
-    draw.line((w * .18, 111, w * .82, 111), fill=GOLD, width=3)
+    """Metallic italic masthead and illuminated gold title ribbon."""
+    try:
+        logo_font = ImageFont.truetype(
+            "/usr/share/fonts/truetype/dejavu/DejaVuSansCondensed-BoldOblique.ttf", 94)
+        tag_font = ImageFont.truetype(
+            "/usr/share/fonts/truetype/dejavu/DejaVuSansCondensed-BoldOblique.ttf", 51)
+    except OSError:
+        logo_font, tag_font = _font(94), _font(51)
+    word = "NETRATTLER"
+    text_width = draw.textlength(word, font=logo_font)
+    x, y = int((w - text_width) / 2), 13
+    # Black depth, silver face and gold underlining rather than duplicate dark text.
+    draw.text((x + 4, y + 6), word, font=logo_font, fill="#0A0F15",
+              stroke_width=6, stroke_fill="#070C13")
+    draw.text((x, y), word, font=logo_font, fill="#F9FDFF",
+              stroke_width=3, stroke_fill="#40505D")
+    draw.line((x + 18, 110, x + text_width - 16, 110), fill="#EFC454", width=4)
     c = w // 2
-    draw.polygon(((c - 31, 13), (c - 22, -5), (c - 4, 8), (c + 12, -9),
-                  (c + 27, 8), (c + 41, -4), (c + 37, 24),
-                  (c - 31, 24)), fill=GOLD, outline="#A76C12")
+    draw.polygon(((c - 32, 12), (c - 27, -1), (c - 9, 13),
+                  (c + 4, -4), (c + 19, 11), (c + 33, -1),
+                  (c + 30, 24), (c - 31, 24)),
+                 fill="#FFE669", outline="#D3950A")
+    # Gold trapezoid band: luminous centre and slanted wings.
     x0, x1, y0, y1 = int(w * .15), int(w * .85), 120, 188
-    # Rich gold gradient close to the reference, not a black empty label.
-    draw.rounded_rectangle((x0 - 6, y0 - 5, x1 + 6, y1 + 5),
-                           radius=18, outline="#8F6005", width=4, fill="#1A170F")
-    for y in range(y0, y1):
-        p = (y - y0) / max(1, y1 - y0)
-        if p < .48:
-            v = p / .48
-            col = (255, int(224 + 27 * v), int(68 + 108 * v))
-        else:
-            v = (p - .48) / .52
-            col = (255, int(252 - 42 * v), int(178 - 134 * v))
-        draw.line((x0 + 7, y, x1 - 7, y), fill=col)
-    _center(draw, label, w / 2, 126, 50, "#0A0A0D", x1 - x0 - 28)
+    draw.polygon(((x0 + 26, y0 - 5), (x1 + 8, y0 - 5),
+                  (x1 - 14, y1 + 4), (x0 - 5, y1 + 4)),
+                 fill="#F1AB1C", outline="#9C5800")
+    for yy in range(y0, y1):
+        q = (yy - y0) / max(1, y1 - y0)
+        top = q < .43
+        draw.line((x0 + 28 - 18 * q, yy, x1 + 3 - 20 * q, yy),
+                  fill=(255, int(226 + 25 * q if top else 251 - 36 * (q - .43)),
+                        int(90 + 85 * q if top else 175 - 124 * (q - .43))), width=1)
+    tag_w = draw.textlength(label, font=tag_font)
+    draw.text(((w - tag_w) / 2, 124), label, font=tag_font, fill="#0D1015",
+              stroke_width=1, stroke_fill="#231A05")
 
 
 def _initials(name):
@@ -405,7 +419,11 @@ def render_builder_card(pick):
         y = 362 + i * 160
         box = (35, y, 1165, y + 142)
         _box(d, box, CYAN, "#071724", 17)
-        d.line((35, y + 16, 35, y + 122), fill=GOLD, width=5)
+        # Reference visual: left edge glows gold; right edge stays cyan.
+        d.arc((33, y - 2, 115, y + 144), 90, 270, fill=GOLD, width=7)
+        d.line((37, y + 16, 37, y + 126), fill=GOLD, width=6)
+        d.line((41, y + 2, 310, y + 2), fill=GOLD, width=3)
+        d.line((41, y + 140, 310, y + 140), fill=GOLD, width=3)
         glow.append((box, CYAN))
         # The photo provider caches by player/team; every row still has a portrait.
         _photo(im, d, cards, leg.player, leg.team, (49, y + 10, 159, y + 133))
@@ -414,10 +432,13 @@ def render_builder_card(pick):
         _center(d, _display_market(leg), 540, y + 68, 27, GOLD, 525)
         d.line((855, y + 19, 855, y + 121), fill=CYAN, width=2)
         series = _stat_series(leg, engine, getattr(pick, "match_date", ""))
+        for j, height in enumerate((18, 29, 40)):
+            d.rectangle((867 + j * 12, y + 105 - height, 875 + j * 12, y + 105),
+                        fill=(29, 182 + j * 23, 95 + j * 19))
         _center(d, "L10: " + _form_label(series, leg.line, 10),
-                1015, y + 29, 23, GREEN, 295)
+                1044, y + 29, 23, GREEN, 244)
         _center(d, "L15: " + _form_label(series, leg.line, 15),
-                1015, y + 75, 23, GREEN, 295)
+                1044, y + 75, 23, GREEN, 244)
 
     # Keep the result bar inside the PNG for both 1-leg and 6-leg layouts.
     y = 362 + len(legs) * 160
