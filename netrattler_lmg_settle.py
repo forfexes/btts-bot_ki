@@ -72,6 +72,8 @@ def edit_original(row,final,won):
         resp=requests.post(f"https://api.telegram.org/bot{token}/editMessageText",
                            json={"chat_id":chat,"message_id":row["telegram_message_id"],
                                  "text":caption},timeout=20)
+    if resp.status_code==400 and "message is not modified" in resp.text.lower():
+        return  # Previous identical edit succeeded; safe to persist settlement.
     resp.raise_for_status()
     if not resp.json().get("ok"):
         raise RuntimeError("Telegram edit not confirmed")
@@ -118,6 +120,7 @@ def main():
                 report["unknown"]+=1
                 continue
             report["finished"]+=1
+            print("LMG_VERIFIED_FINAL",row["alert_key"],final["score"],flush=True)
             won=sum(final["score"])>sum(initial)
             edit_original(row,final,won)
             mark_settled(row,final["score"],won)
