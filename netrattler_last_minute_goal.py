@@ -16,8 +16,8 @@ import requests
 
 BASE = "https://v3.football.api-sports.io"
 LIVE_STATUSES = {"2H"}
-MIN_MINUTE, MAX_MINUTE = 76, 88
-MAX_MATCHES = 2
+MIN_MINUTE, MAX_MINUTE = 55, 88
+MAX_MATCHES = 1
 ODDS_MAX_AGE_SECONDS = 150
 
 
@@ -67,13 +67,17 @@ def fixture_info(row):
             or not h.get("id") or not a.get("id")
             or not h.get("name") or not a.get("name")):
         return None
+    if hs + az > 5:
+        return None
+    league = row.get("league") or {}
     return {"fixture_id": fid, "minute": minute, "home_id": h["id"], "away_id": a["id"],
-            "home": str(h["name"]), "away": str(a["name"]), "hg": hs, "ag": az}
+            "home": str(h["name"]), "away": str(a["name"]), "hg": hs, "ag": az,
+            "league": str(league.get("name") or "")}
 
 
 def match_metrics(stats, fx):
-    """Do not treat missing live team statistics as zero."""
-    m = {}
+    """Cumulative real live stats; no fabricated xG, radar, or last-5 shots."""
+    metrics = {}
     mapping = {"Shots on Goal": "sot", "Total Shots": "shots",
                "Corner Kicks": "corners", "Red Cards": "reds"}
     for row in stats:
@@ -83,21 +87,37 @@ def match_metrics(stats, fx):
         side = "h" if str(tid) == str(fx["home_id"]) else "a"
         vals = {x.get("type"): x.get("value") for x in (row.get("statistics") or []) if isinstance(x, dict)}
         for source, target in mapping.items():
-            m[side + "_" + target] = _integer(vals.get(source))
-    if any(m.get(side + "_" + metric) is None
-           for side in ("h", "a") for metric in ("sot", "shots", "corners", "reds")):
+            metrics[side + "_" + target] = _integer(vals.get(source))
+    if any(metrics.get(side + "_" + metric) is None
+           for side in ("h", "a") for metric in ("sot", "shots")):
         return None
-    if m["h_reds"] or m["a_reds"]:
+    # Red cards are explicit vetoes when known, not falsely interpreted as absent.
+    if any(metrics.get(side + "_reds") is not None and metrics[side + "_reds"] > 0
+           for side in ("h", "a")):
         return None
-    sot = m["h_sot"] + m["a_sot"]
-    shots = m["h_shots"] + m["a_shots"]
-    corners = m["h_corners"] + m["a_corners"]
-    # Conservative observable pressure gate, NOT a learned goal probability.
-    if sot < 8 or shots < 19 or corners < 6 or abs(fx["hg"] - fx["ag"]) > 1:
+    sot = metrics["h_sot"] + metrics["a_sot"]
+    shots = metrics["h_shots"] + metrics["a_shots"]
+    corners = (metrics["h_corners"] + metrics["a_corners"]
+               if metrics.get("h_corners") is not None and metrics.get("a_corners") is not None
+               else None)
+    if metrics["h_sot"] > metrics["h_shots"] or metrics["a_sot"] > metrics["a_shots"]:
         return None
-    if m["h_sot"] > m["h_shots"] or m["a_sot"] > m["a_shots"]:
+    if sot < 5 or shots < 10:
         return None
-    return {"sot": sot, "shots": shots, "corners": corners}
+    if fx["minute"] > 80 and sot < 8:
+        return None
+    if fx["hg"] == fx["ag"] == 0 and fx["minute"] > 75:
+        return None
+    if abs(fx["hg"] - fx["ag"]) > 3:
+        return None
+    tier = "PREMIUM" if sot >= 8 and shots >= 16 and fx["minute"] <= 76 else "STANDARD"
+    return {"sot": sot, "shots": shots, "corners": corners, "tier": tier}
+
+
+def market_targets(fx):
+    """Return total-match half-goal lines; second target always takes TWO goals."""
+    goals = fx["hg"] + fx["ag"]
+    return goals + 0.5, goals + 1.5
 
 
 def _utc_time(value):
@@ -110,11 +130,16 @@ def _utc_time(value):
         return None
 
 
-def quote_for_next_goal(payload, fx, now=None):
-    """Exact current total + 0.5: one *additional* goal, no Asian push."""
+def live_quotes(payload, fx, now=None):
+    """Select genuinely observed fresh *full-match* goal overs, never implied odds.
+
+    Only explicit exact-line over bets, non-suspended and fixture-matched.
+    If multiple identical lines are supplied, prefer the single main=true value;
+    otherwise refuse ambiguity instead of selecting a convenient price.
+    """
     now = now or dt.datetime.now(dt.timezone.utc)
-    line = fx["hg"] + fx["ag"] + 0.5
-    found = []
+    primary, secondary = market_targets(fx)
+    buckets = {primary: [], secondary: []}
     for row in payload:
         if str((row.get("fixture") or {}).get("id")) != str(fx["fixture_id"]):
             continue
@@ -122,30 +147,38 @@ def quote_for_next_goal(payload, fx, now=None):
         if any(status.get(k) is not False for k in ("blocked", "stopped", "finished")):
             continue
         updated = _utc_time(row.get("update"))
-        if updated is None or abs((now - updated).total_seconds()) > ODDS_MAX_AGE_SECONDS:
+        if updated is None or not 0 <= (now - updated).total_seconds() <= ODDS_MAX_AGE_SECONDS:
             continue
         for bet in row.get("odds") or []:
-            title = str(bet.get("name") or "").casefold()
-            if not any(s in title for s in ("over/under", "goals over", "total goals")):
+            title = str(bet.get("name") or "").casefold().strip()
+            # Explicitly exclude first-half, second-half, team and Asian markets.
+            if title not in {"over/under line", "over/under", "total goals", "goals over/under"}:
                 continue
             for item in bet.get("values") or []:
-                if item.get("suspended") is not False or item.get("main") is False:
+                if item.get("suspended") is not False:
                     continue
-                value = str(item.get("value") or "").strip()
-                if not re.fullmatch(r"Over(?:\s+\d+(?:\.\d+)?)?", value, re.I):
+                val = str(item.get("value") or "").strip()
+                if not re.fullmatch(r"Over(?:\s+\d+(?:\.\d+)?)?", val, re.I):
                     continue
-                match = re.search(r"(\d+(?:\.\d+)?)", value)
-                handicap = item.get("handicap")
+                part = re.search(r"(\d+(?:\.\d+)?)", val)
                 try:
-                    actual_line = float(handicap) if handicap not in (None, "") else float(match.group(1)) if match else -1
+                    handicap = item.get("handicap")
+                    line = float(handicap) if handicap not in (None, "") else (
+                        float(part.group(1)) if part else -1)
                     odd = float(item.get("odd"))
                 except (ValueError, TypeError):
                     continue
-                if actual_line != line or not 1.6 <= odd <= 6.0:
+                if line not in buckets or not 1.30 <= odd <= 30.0:
                     continue
-                found.append(round(odd, 3))
-    # Refuse ambiguous or conflicting live prices within a fixture snapshot.
-    return found[0] if len(found) == 1 else None
+                buckets[line].append((bool(item.get("main")), round(odd, 3)))
+    result = {}
+    for line, values in buckets.items():
+        if len(values) == 1:
+            result[line] = values[0][1] if values[0][0] else None
+        else:
+            mains = [v for main, v in values if main]
+            result[line] = mains[0] if len(mains) == 1 else None
+    return result
 
 
 def _db():
@@ -161,7 +194,7 @@ def _db():
 def reserve(fx, odds):
     url, headers = _db()
     line = fx["hg"] + fx["ag"] + 0.5
-    key = f'{fx["fixture_id"]}:over:{line:.1f}'
+    key = str(fx["fixture_id"])  # one original Telegram card per fixture
     r = requests.post(url, params={"on_conflict": "alert_key"},
                       headers={**headers, "Prefer": "resolution=ignore-duplicates,return=representation"},
                       json={"alert_key": key, "fixture_id": fx["fixture_id"], "home": fx["home"],
@@ -183,20 +216,36 @@ def delivered(key, message_id):
     r.raise_for_status()
 
 
-def send(fx, metrics, odds):
+def format_tip(fx, metrics, quotes):
+    primary, secondary = market_targets(fx)
+    odd = quotes[primary]
+    if odd is None:
+        raise ValueError("primary odds unavailable")
+    base = ("OVER 0.5 VALUE" if fx["hg"] + fx["ag"] == 0 else
+            "MONEYBAG + 3 GOALS" if fx["hg"] + fx["ag"] >= 3 else "MONEYBAG")
+    corners = str(metrics["corners"]) if metrics["corners"] is not None else "k.A."
+    msg = (f"⚽ NETRATTLER · LAST MINUTE GOAL\n"
+           f"💥 {base} · {metrics['tier']}-TIER\n\n"
+           f"🏆 {fx['league'] or 'Liga k.A.'}\n"
+           f"🏟 {fx['home']} – {fx['away']}\n"
+           f"⏱ {fx['minute']}'  |  {fx['hg']}:{fx['ag']}\n"
+           f"🎯 Ziel 1: ÜBER {primary:.1f} @ {odd:.2f} (1 Tor)\n")
+    if quotes[secondary] is not None:
+        msg += f"🎯 Ziel 2: ÜBER {secondary:.1f} @ {quotes[secondary]:.2f} (2 Tore; nur Info)\n"
+    msg += (f"📊 Torschüsse {metrics['sot']}, Schüsse {metrics['shots']}, Ecken {corners}\n"
+            f"📍 Verifizierte Live-Quote, keine ungeprüfte Prozent-Prognose\n"
+            f"🏁 Auswertung: ⏳ offen")
+    return msg
+
+
+def send(fx, metrics, quotes):
     token = os.getenv("TELEGRAM_TOKEN") or os.getenv("TELEGRAM_BOT_TOKEN")
     chat = os.getenv("TELEGRAM_GROUP_LATE_GOALS")
     if not token or not chat:
         raise RuntimeError("Telegram Goal Hunter configuration missing")
-    line = fx["hg"] + fx["ag"] + 0.5
-    msg = (f"⚽ NETRATTLER · LAST MINUTE GOAL\n\n"
-           f"🏟 {fx['home']} – {fx['away']}\n"
-           f"⏱ {fx['minute']}'  |  {fx['hg']}:{fx['ag']}\n"
-           f"🎯 Noch 1 Tor: OVER {line:.1f} @ {odds:.2f}\n"
-           f"📊 Schüsse {metrics['shots']} · aufs Tor {metrics['sot']} · Ecken {metrics['corners']}\n"
-           f"🏁 Auswertung: ⏳ offen")
     r = requests.post(f"https://api.telegram.org/bot{token}/sendMessage",
-                      json={"chat_id": chat, "text": msg, "disable_web_page_preview": True},
+                      json={"chat_id": chat, "text": format_tip(fx, metrics, quotes),
+                            "disable_web_page_preview": True},
                       timeout=20)
     r.raise_for_status()
     data = r.json()
@@ -209,25 +258,26 @@ def run():
     send_enabled = os.getenv("LMG_SEND", "false").lower() in ("1", "yes", "true")
     rows = _api("/fixtures", {"live": "all"})
     matches = [x for row in rows if (x := fixture_info(row))]
-    matches.sort(key=lambda x: (abs(x["minute"] - 82), x["fixture_id"]))
+    matches.sort(key=lambda x: (abs(x["minute"] - 63), x["fixture_id"]))
     out = {"live_eligible": len(matches), "checked": 0, "signals": 0, "sent": 0,
            "mode": "live" if send_enabled else "dry-run"}
-    for fx in matches[:max(0, min(2, int(os.getenv("LMG_MAX_MATCHES", str(MAX_MATCHES)))))]:
+    for fx in matches[:max(0, min(1, int(os.getenv("LMG_MAX_MATCHES", str(MAX_MATCHES)))))]:
         out["checked"] += 1
         metrics = match_metrics(_api("/fixtures/statistics", {"fixture": fx["fixture_id"]}), fx)
         if not metrics:
             continue
-        odds = quote_for_next_goal(_api("/odds/live", {"fixture": fx["fixture_id"]}), fx)
-        if odds is None:
+        quotes = live_quotes(_api("/odds/live", {"fixture": fx["fixture_id"]}), fx)
+        primary, _ = market_targets(fx)
+        if quotes.get(primary) is None:
             continue
         out["signals"] += 1
         print(json.dumps({"fixture": fx["fixture_id"], "minute": fx["minute"],
-                          "line": fx["hg"] + fx["ag"] + 0.5, "observed_odds": odds,
-                          "stats": metrics, "send_enabled": send_enabled}))
+                          "primary_line": primary, "observed_odds": quotes[primary],
+                          "tier": metrics["tier"], "stats": metrics, "send_enabled": send_enabled}))
         if send_enabled:
-            key = reserve(fx, odds)
+            key = reserve(fx, quotes[primary])
             if key:
-                message_id = send(fx, metrics, odds)
+                message_id = send(fx, metrics, quotes)
                 delivered(key, message_id)
                 out["sent"] += 1
     return out
