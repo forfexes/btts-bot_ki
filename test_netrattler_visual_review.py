@@ -38,7 +38,7 @@ def test_actual_rendered_card_missing_text_is_rejected(tmp_path):
     files = _samples(tmp_path)
     raw=files["TEST_ONLY_builder_2leg.png"]
     im=Image.open(BytesIO(raw)).convert("RGB")
-    ImageDraw.Draw(im).rectangle((290,382,798,420),fill="#071724")
+    ImageDraw.Draw(im).rectangle((369,411,744,448),fill="#07131B")
     buf=BytesIO()
     im.save(buf, "PNG")
     report=review_png(buf.getvalue(), "builder", legs=2)
@@ -52,4 +52,4 @@ def test_footer_crop_is_rejected(tmp_path):
     im.crop((0,0,im.width,im.height-140)).save(out, "PNG")
     report=review_png(out.getvalue(),"builder",legs=6)
     assert not report.passed
-    assert "dimensions" in report.problems
+    assert "master_dimensions" in report.problems
