@@ -86,7 +86,10 @@ def make_card(fixture,metrics=None,*,final_score=None,won=None):
         panel(d,(68,641,1012,990),CYAN,(7,25,41))
         centered(d,"TEAMSTATISTIK",652,39,GOLD)
         teams=(metrics or {}).get("teams") or {}
-        for i,(label,key) in enumerate((("SCHÜSSE","shots"),("AUFS TOR","sot"),("ECKEN","corners"),("xG","xg"))):
+        rows=[("SCHÜSSE","shots"),("AUFS TOR","sot"),("ECKEN","corners")]
+        if all(teams.get(side,{}).get("xg") is not None for side in ("home","away")):
+            rows.append(("xG","xg"))
+        for i,(label,key) in enumerate(rows):
             yy=722+i*62
             left=teams.get("home",{}).get(key)
             right=teams.get("away",{}).get(key)
@@ -96,6 +99,8 @@ def make_card(fixture,metrics=None,*,final_score=None,won=None):
             d.text((215,yy),val(left),font=font(38),fill=WHITE,anchor="mm")
             d.text((W//2,yy),label,font=font(30),fill=GOLD,anchor="mm")
             d.text((865,yy),val(right),font=font(38),fill=WHITE,anchor="mm")
+        if not teams.get("home") or not teams.get("away"):
+            raise ValueError("Both teams need verified statistics for a live image card")
         panel(d,(68,1017,1012,1142),GOLD,(20,24,14))
         centered(d,"OVER 0.5 RESTSPIELZEIT",1027,44,GOLD)
         centered(d,str((metrics or {}).get("tier") or "STANDARD"),1092,30,WHITE)
