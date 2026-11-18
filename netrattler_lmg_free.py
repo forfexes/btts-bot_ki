@@ -224,7 +224,7 @@ def send_alert(fixture, metrics):
     if next_side in ("home","away"):
         team=fixture["home"] if next_side=="home" else fixture["away"]
         caption=caption.replace("🏁 Auswertung:",
-                                f"🎯 Nächstes Tor (Zusatz): {team}\\n🏁 Auswertung:")
+                                f"🎯 Nächstes Tor (Zusatz): {team}\n🏁 Auswertung:")
     resp=requests.post(
         f"https://api.telegram.org/bot{token}/sendPhoto",
         data={"chat_id":chat,"caption":caption},
