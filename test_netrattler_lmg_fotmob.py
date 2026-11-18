@@ -106,6 +106,60 @@ class FotmobTest(unittest.TestCase):
         send.assert_not_called()
 
 
+    def test_recover_stats_only_for_same_live_game_with_fotmob_id(self):
+        import netrattler_lmg_free as common
+        fx=bot.fixtures_from_fotmob(daily())[0]
+        scoreboard={"leagues":[{"name":"ASEAN Club Championship"}],"events":[{
+            "id":"99123","date":"2026-11-18T11:30:00Z",
+            "status":{"period":2,"displayClock":"68:00","type":{"state":"in"}},
+            "competitions":[{"competitors":[
+                {"homeAway":"home","score":"1",
+                 "team":{"id":"10","displayName":"Tampines Rovers FC"}},
+                {"homeAway":"away","score":"1",
+                 "team":{"id":"20","displayName":"Ratchaburi FC"}}]}]}]}
+        summary={"boxscore":{"teams":[
+            {"team":{"id":"10"},"statistics":[
+                {"name":"totalShots","value":11},{"name":"shotsOnTarget","value":5},
+                {"name":"cornerKicks","value":3}]},
+            {"team":{"id":"20"},"statistics":[
+                {"name":"totalShots","value":12},{"name":"shotsOnTarget","value":4},
+                {"name":"cornerKicks","value":5}]}]}}
+        with patch.object(common,"_get",return_value=summary):
+            metrics=bot.recover_espn_metrics(fx,scoreboard)
+        self.assertEqual(metrics["shots"],23)
+        self.assertEqual(metrics["sot"],9)
+        self.assertEqual(metrics["teams"]["home"]["shots"],11)
+        self.assertEqual(metrics["teams"]["away"]["corners"],5)
+        self.assertNotIn("xg",metrics["teams"]["home"])
+        self.assertEqual(fx["fixture_id"],1000014437)
+
+        wrong=__import__("copy").deepcopy(scoreboard)
+        wrong["events"][0]["competitions"][0]["competitors"][1]["team"]["displayName"]="Another Team"
+        with patch.object(common,"_get") as get:
+            self.assertIsNone(bot.recover_espn_metrics(fx,wrong))
+        get.assert_not_called()
+
+        wrong=__import__("copy").deepcopy(scoreboard)
+        wrong["events"][0]["status"]["displayClock"]="80:00"
+        with patch.object(common,"_get") as get:
+            self.assertIsNone(bot.recover_espn_metrics(fx,wrong))
+        get.assert_not_called()
+
+        with patch.dict("os.environ",{"LMG_SEND":"true"}), \
+             patch.object(bot,"fetch_fotmob",return_value=daily()), \
+             patch.object(common,"_get",side_effect=[
+                 {"content":{"stats":{"Periods":{"All":{"stats":[]}}}}},
+                 scoreboard,summary]), \
+             patch.object(common,"reserve_alert",return_value="1000014437"), \
+             patch.object(common,"send_alert",return_value=301) as send, \
+             patch.object(common,"mark_sent") as marked:
+            report=bot.run()
+        self.assertEqual(report["espn_recovered"],1)
+        self.assertEqual(report["qualified"],1)
+        self.assertEqual(report["sent"],1)
+        self.assertEqual(send.call_args.args[0]["fixture_id"],1000014437)
+        marked.assert_called_once_with("1000014437",301)
+
     def test_80_standard_81_to_85_premium_only_and_86_blocked(self):
         for minute in (80, 81, 85):
             fixture=bot.fixtures_from_fotmob(daily(str(minute)+"’"))[0]
