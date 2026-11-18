@@ -19,6 +19,7 @@ from netrattler_last_minute_goal import match_metrics
 ESPN = "https://site.api.espn.com/apis/site/v2/sports/soccer"
 MIN_MINUTE = 65
 MAX_FIXTURES_PER_RUN = 16
+MAX_MINUTE = 85
 
 
 def _get(url, *, params=None):
@@ -58,7 +59,7 @@ def fixtures_from_espn(payload):
             clock = str(status.get("displayClock") or "").strip()
             matched = re.match(r"^(\d{1,3})(?:[:+']|$)", clock)
             minute = int(matched.group(1)) if matched else -1
-            if minute < MIN_MINUTE or minute > 90:
+            if minute < MIN_MINUTE or minute > MAX_MINUTE:
                 continue
             competition = (event.get("competitions") or [])[0]
             participants = {x.get("homeAway"): x for x in competition.get("competitors") or []}
@@ -111,6 +112,22 @@ def metrics_from_espn(summary, fixture):
                     break
         rows.append({"team": {"id": team_id}, "statistics": prepared})
     return match_metrics(rows, fixture)
+
+
+def select_goal_tier(fixture, metrics):
+    """Use only verified cumulative shots and available corners, never invented momentum."""
+    minute = fixture["minute"]
+    if not MIN_MINUTE <= minute <= MAX_MINUTE or not metrics:
+        return None
+    shots, on_target, corners = metrics["shots"], metrics["sot"], metrics.get("corners")
+    if minute >= 81:
+        # Final five minutes need demonstrably stronger pressure.
+        if on_target < 9 or shots < 18 or (corners is not None and corners < 4):
+            return None
+        return "PREMIUM"
+    if on_target >= 8 and shots >= 16:
+        return "PREMIUM"
+    return "STANDARD"
 
 
 def format_tip(fixture, metrics):
@@ -198,8 +215,10 @@ def main():
             continue
         report["stats_checked"] += 1
         metrics = metrics_from_espn(summary, fixture)
-        if not metrics:
+        tier = select_goal_tier(fixture, metrics)
+        if tier is None:
             continue
+        metrics["tier"] = tier
         report["qualified"] += 1
         print("LMG_SIGNAL", json.dumps({"fixture": fixture["fixture_id"],
                                        "minute": fixture["minute"], "score": [fixture["hg"], fixture["ag"]],
