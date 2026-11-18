@@ -17,6 +17,7 @@ on:
       - 'netrattler_builder_concepts_v2.py'
       - 'netrattler_corner_cards.py'
       - 'netrattler_builder_cards.py'
+      - 'btts_bot.py'
       - 'netrattler_neon_design.py'
       - 'netrattler_original_template_renderer.py'
       - 'assets/netrattler_template_builder_original.webp'

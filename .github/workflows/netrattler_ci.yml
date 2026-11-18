@@ -65,6 +65,7 @@ on:
       - "test_netrattler_operational_failures.py"
       - "netrattler_builder_engine.py"
       - "test_netrattler_builder_delivery.py"
+      - "test_netrattler_live_league_priority.py"
       - "btts_bot.py"
       - "netrattler_corner_history.py"
       - "test_corner_history.py"
@@ -131,6 +132,8 @@ jobs:
         run: python -m pytest -q test_netrattler_apif_history.py
       - name: Selection identity and duplicate safety
         run: python -m pytest -q test_netrattler_var.py test_netrattler_1x_verified_props.py test_netrattler_selection_quality.py test_foul_props.py test_model_builders.py
+      - name: Live-fixture league prioritization regression
+        run: python -m pytest -q test_netrattler_live_league_priority.py
       - name: Reject plain-text Builder fallback
         run: python -m pytest -q test_netrattler_no_builder_text_fallback.py
       - name: Observed runtime match form regression

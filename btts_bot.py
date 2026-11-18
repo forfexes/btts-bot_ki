@@ -322,6 +322,59 @@ def _is_value_bet(odds, prob_pct):
 
 MARKETS_TO_RUN = ["btts", "over25", "combo", "btts_ht", "over15_ht", "1x2"]
 
+def _ntr_prioritize_live_leagues(leagues, matchups, window_start, window_end):
+    """Order league fallback by real upcoming fixture evidence, never estimates.
+
+    Every league is retained; the stable sort only changes which competitions
+    receive checks before the global source/runtime budget expires.
+    """
+    from collections import Counter
+    import unicodedata as _ud
+    import re as _re
+
+    def key(text):
+        value = _ud.normalize("NFKD", str(text or "").casefold())
+        value = "".join(ch for ch in value if not _ud.combining(ch))
+        value = _re.sub(r"[^a-z0-9]+", " ", value).strip()
+        aliases = {
+            "brazil serie a": "brasileirao serie a",
+            "brazilian serie a": "brasileirao serie a",
+            "brazil serie b": "brasileirao serie b",
+            "brazilian serie b": "brasileirao serie b",
+            "english premier league": "premier league",
+            "spain primera division": "la liga",
+            "italy serie a": "serie a",
+        }
+        return aliases.get(value, value)
+
+    counts = Counter()
+    for pm in (matchups or []):
+        if not isinstance(pm, dict) or not pm.get("home") or not pm.get("away"):
+            continue
+        league = key(pm.get("league_name") or pm.get("league"))
+        raw = str(pm.get("starts") or "")
+        if not league or not raw:
+            continue
+        try:
+            starts = datetime.fromisoformat(raw.replace("Z", "+00:00"))
+            if starts.tzinfo is None or not (window_start <= starts <= window_end):
+                continue
+        except (ValueError, TypeError, OverflowError):
+            continue
+        counts[league] += 1
+
+    leagues = list(leagues or [])
+    if not counts:
+        return leagues
+    result = sorted(leagues, key=lambda name: -counts.get(key(name), 0))
+    moved = sum(1 for idx, name in enumerate(result) if idx < len(leagues)
+                and leagues[idx] != name)
+    if moved:
+        log(f"🎯 Liga-Prioritaet: {len(counts)} Buchmacher-Ligen im Live-Fenster; "
+            f"{moved} Positionen verbessert (keine Liga entfernt)")
+    return result
+
+
 # ============================================================
 # AUTO LIGA SWITCH
 # ============================================================
@@ -27561,6 +27614,12 @@ def main():
         except Exception:
             pass
 
+    # Prioritize leagues that have verified future bookmaker fixtures in this
+    # run's actual Swiss-time betting window. The remaining leagues keep their
+    # original order and are not removed. This reduces wasted time on inactive
+    # competitions before the fixed specialist-pipeline deadline.
+    active_leagues = _ntr_prioritize_live_leagues(
+        active_leagues, _PINNACLE_MATCHUPS, _win_start_utc, _win_end_utc)
     if MAX_LEAGUES_PER_RUN > 0:
         active_leagues = active_leagues[:MAX_LEAGUES_PER_RUN]
         log(f"MAX_LEAGUES_PER_RUN aktiv: Es werden nur {len(active_leagues)} Ligen analysiert.")
