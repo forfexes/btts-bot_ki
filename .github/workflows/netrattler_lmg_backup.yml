@@ -6,6 +6,17 @@ on:
     branches: [main]
     paths:
       - .github/workflows/netrattler_lmg_backup.yml
+  # Also scan when other proven NETRATTLER workflows complete.
+  # This bypasses missed Goal Hunter cron slots without requiring new secrets.
+  workflow_run:
+    workflows:
+      - NETRATTLER Post-Run Check
+      - NETRATTLER AI Tipp Bot
+      - NETRATTLER Odds Harvester V34
+      - NETRATTLER API-Football Targeted History
+      - NETRATTLER FPLCI Spielerstats Import
+      - NETRATTLER Footballdata.io Daily
+    types: [completed]
   # Independent trigger for 5-minute scans; Supabase unique key prevents duplicates.
   schedule:
     - cron: "0,5,10,15,20,25,30,35,40,45,50,55 * * * *"
@@ -19,6 +30,12 @@ concurrency:
 
 jobs:
   scan:
+    # Post-run checks themselves run after approved upstream tasks; never self-trigger.
+    if: >-
+      github.event_name != 'workflow_run' ||
+      (github.event.workflow_run.conclusion == 'success' &&
+       (github.event.workflow_run.event == 'schedule' ||
+        github.event.workflow_run.name == 'NETRATTLER Post-Run Check'))
     runs-on: ubuntu-latest
     timeout-minutes: 7
     steps:
