@@ -30,7 +30,15 @@ def clean(value):
 
 
 def club_same(a, b):
+    aliases = {
+        "athleticopr": "athleticoparanaense",
+        "atleticopr": "athleticoparanaense",
+        "atleticoparanaense": "athleticoparanaense",
+        "athleticoparanaense": "athleticoparanaense",
+        "chapecoensesc": "chapecoense",
+    }
     a, b = clean(a), clean(b)
+    a, b = aliases.get(a, a), aliases.get(b, b)
     if not a or not b or len(a) < 4 or len(b) < 4:
         return False
     if a == b:
