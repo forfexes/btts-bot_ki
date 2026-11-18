@@ -244,7 +244,8 @@ def render_builder_card(pick):
         _center(d, "L15: " + _form_label(series, leg.line, 15),
                 1015, y + 75, 23, GREEN, 295)
 
-    y = 378 + len(legs) * 160
+    # Keep the result bar inside the PNG for both 1-leg and 6-leg layouts.
+    y = 362 + len(legs) * 160
     model_only = bool(getattr(pick, "model_only", False))
     p = _percent(getattr(pick, "joint", None) if model_only else
                  getattr(pick, "joint_probability", None))
