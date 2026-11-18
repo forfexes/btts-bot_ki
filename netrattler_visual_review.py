@@ -59,6 +59,62 @@ def _texture(im, box):
     return sum(stat.stddev)
 
 
+def _review_user_master(im, kind, legs):
+    """Check original user artwork and all freshly rendered dynamic regions."""
+    from PIL import ImageChops
+    from netrattler_original_template_renderer import _base, BUILDER_IMAGE, GOAL_IMAGE
+    problems=[]
+    checks=0
+    def check(ok,label):
+        nonlocal checks
+        checks+=1
+        if not ok: problems.append(label)
+    expected=(1122,{2:994,4:1194,6:1402}.get(legs,0)) if kind=="builder" else (1122,1402)
+    check(im.size==expected,"master_dimensions")
+    if im.size!=expected: return Review(kind,False,problems,checks)
+    source=_base(str(BUILDER_IMAGE if kind=="builder" else GOAL_IMAGE))
+    check(ImageChops.difference(im.crop((0,0,1122,170)),
+                               source.crop((0,0,1122,170))).getbbox() is None,
+          "user_original_header_was_redrawn")
+    def count(box,tone,label):
+        check(_color_count(im,box,tone)>7,label)
+    def edited(box,label):
+        change=ImageChops.difference(im.crop(box),source.crop(box))
+        check(sum(ImageStat.Stat(change).mean)>14,label)
+    if kind=="builder":
+        count((324,273,800,309),_light,"kickoff")
+        count((230,322,634,385),_light,"legs")
+        for i in range(legs):
+            y=409+i*100
+            edited((106,y+4,225,y+76),f"player_photo_replaced_{i+1}")
+            check(_texture(im,(106,y+4,225,y+76))>18,f"photo_texture_{i+1}")
+            check(_texture(im,(278,y+9,339,y+74))>12,f"crest_texture_{i+1}")
+            count((370,y+3,741,y+41),_light,f"player_name_{i+1}")
+            count((382,y+42,740,y+85),_gold,f"market_{i+1}")
+            count((805,y+5,1053,y+84),_green,f"l10_l15_{i+1}")
+        dy=0 if legs==6 else 405+100*legs-1013
+        count((839,1203+dy,1053,1267+dy),
+              lambda p:_green(p) or _gold(p) or (p[0]>185 and p[1]<135),
+              "builder_settlement")
+        check(1270+dy<im.height-20,"builder_footer_clipped")
+    else:
+        edited((395,376,703,582),"scorer_photo_replaced")
+        check(_texture(im,(395,376,703,582))>22,"scorer_photo_texture")
+        check(_texture(im,(105,447,261,593))>12,"home_badge")
+        check(_texture(im,(835,447,997,593))>12,"away_badge")
+        count((252,759,850,828),_light,"scorer_name")
+        for label,box,tone in [
+            ("scorer_odds",(53,943,269,1018),_gold),
+            ("scorer_model",(327,943,543,1018),_green),
+            ("scorer_fair",(588,943,797,1018),_gold),
+            ("goals_per_match",(853,943,1068,1018),_gold)]:
+            count(box,tone,label)
+        count((460,1215,643,1280),
+              lambda p:_green(p) or _gold(p) or (p[0]>185 and p[1]<130),
+              "scorer_settlement")
+    return Review(kind,not problems,problems,checks)
+
+
 def review_png(payload: bytes, kind: str, *, legs: int = 0) -> Review:
     problems, count = [], 0
 
@@ -78,6 +134,8 @@ def review_png(payload: bytes, kind: str, *, legs: int = 0) -> Review:
         return Review(kind, False, ["invalid_image"], 1)
 
     w, h = im.size
+    if w == 1122 and kind in ("builder", "scorer"):
+        return _review_user_master(im, kind, legs)
     if kind == "builder":
         if not 2 <= legs <= 6:
             return Review(kind, False, ["leg_count"], 1)
