@@ -1,8 +1,8 @@
 name: NETRATTLER AI Tipp Bot
 
 on:
-  # A measured corner-history change needs one production verification.
-  # Ordinary bot/config commits continue to use schedules/manual dispatch only.
+  # Verify production on measured selection changes and renderer deployments.
+  # Keep the existing non-interruptible send queue and dedupe guards.
   push:
     branches: [main]
     paths:
@@ -16,6 +16,8 @@ on:
       - 'netrattler_builder_concepts_v2.py'
       - 'netrattler_corner_cards.py'
       - 'netrattler_builder_cards.py'
+      - 'netrattler_neon_design.py'
+      - '.github/workflows/btts_tips.yml'
       - "netrattler_1x_verified_props.py"
   schedule:
     - cron: "17 8 * * *"  # 10:17 CH — Vormittag (GitHub verwirft :30-Slots oft, daher krumme Minute)
