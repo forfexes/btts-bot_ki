@@ -72,6 +72,18 @@ def _key(label):
     return re.sub(r"[^a-z0-9]","",str(label or "").lower())
 
 
+def _floatvalue(value):
+    if isinstance(value,dict):
+        value=value.get("value")
+    if value is None or isinstance(value,bool):
+        return None
+    raw=str(value).strip().replace(",",".")
+    if not re.fullmatch(r"\d+(?:\.\d+)?",raw):
+        return None
+    number=float(raw)
+    return number if 0<=number<=20 else None
+
+
 def _intvalue(value):
     if isinstance(value,dict):
         return common._int(value.get("value"))
@@ -85,6 +97,7 @@ def metrics_from_fotmob(detail,fixture):
     if not isinstance(periods,dict) or "All" not in periods:
         return None
     found={}
+    xg=None
     stack=[periods["All"]]
     aliases={"totalshots":"Total Shots", "shotsontarget":"Shots on Goal",
              "shotsongoal":"Shots on Goal", "corners":"Corner Kicks",
@@ -96,6 +109,13 @@ def metrics_from_fotmob(detail,fixture):
         elif isinstance(node,dict):
             label=aliases.get(_key(node.get("key"))) or aliases.get(_key(node.get("title")))
             values=node.get("stats")
+            if _key(node.get("key")) in ("expectedgoals","xg") or _key(node.get("title")) in ("expectedgoals","xg"):
+                if isinstance(values,list) and len(values)==2:
+                    pair=tuple(_floatvalue(v) for v in values)
+                    if all(v is not None for v in pair):
+                        if xg is not None and xg!=pair:
+                            return None
+                        xg=pair
             if label and isinstance(values,list) and len(values)==2:
                 pair=tuple(_intvalue(v) for v in values)
                 if all(v is not None for v in pair):
@@ -105,7 +125,16 @@ def metrics_from_fotmob(detail,fixture):
             stack.extend(node.values())
     rows=[{"team":{"id":side}, "statistics":[{"type":label,"value":pair[i]}
           for label,pair in found.items()]} for i,side in enumerate(("1","2"))]
-    return common.match_metrics(rows,fixture)
+    metrics=common.match_metrics(rows,fixture)
+    if metrics is None:
+        return None
+    metrics["teams"]={
+        "home":{**{key:found[label][0] for key,label in (("shots","Total Shots"),("sot","Shots on Goal"),("corners","Corner Kicks")) if label in found},
+                **({"xg":xg[0]} if xg is not None else {})},
+        "away":{**{key:found[label][1] for key,label in (("shots","Total Shots"),("sot","Shots on Goal"),("corners","Corner Kicks")) if label in found},
+                **({"xg":xg[1]} if xg is not None else {})},
+    }
+    return metrics
 
 
 def fetch_fotmob(day):
