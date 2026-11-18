@@ -62,6 +62,41 @@ class NextGoalTests(unittest.TestCase):
         self.assertNotEqual(open_image,old)
         self.assertNotEqual(done,wrong)
 
+    def test_final_card_only_grades_next_goal_when_it_was_on_original_tip(self):
+        # No optional bet: never show an invented next-goal winner.
+        with patch.object(card,"crest",return_value=None), \
+             patch.object(card,"center",wraps=card.center) as draw_text:
+            no_extra=card.make_card(self.fx,final_score="1:3",won=True)
+        texts=[str(call.args[1]) for call in draw_text.call_args_list]
+        self.assertFalse(any("NÄCHSTES TOR" in t for t in texts))
+        self.assertFalse(any("RICHTIG" in t or "FALSCH" in t for t in texts))
+        self.assertTrue(any("GEWONNEN" in t for t in texts))
+        self.assertTrue(no_extra.startswith(b"\xff\xd8"))
+
+        # Main Over 0.5 can win even if the optional side is wrong.
+        with patch.object(card,"crest",return_value=None), \
+             patch.object(card,"center",wraps=card.center) as draw_text:
+            card.make_card(self.fx,final_score="1:3",won=True,
+                           next_goal_side="home",next_goal_result="lost")
+        texts=[str(call.args[1]) for call in draw_text.call_args_list]
+        self.assertTrue(any("NÄCHSTES TOR" in t and self.fx["home"] in t for t in texts))
+        self.assertTrue(any("FALSCH" in t for t in texts))
+        self.assertTrue(any("GEWONNEN" in t for t in texts))
+
+        with patch.object(card,"crest",return_value=None), \
+             patch.object(card,"center",wraps=card.center) as draw_text:
+            card.make_card(self.fx,final_score="1:3",won=True,
+                           next_goal_side="away",next_goal_result="won")
+        texts=[str(call.args[1]) for call in draw_text.call_args_list]
+        self.assertTrue(any("RICHTIG" in t for t in texts))
+        self.assertTrue(any("GEWONNEN" in t for t in texts))
+
+        # Do not silently label the optional market right without a grade.
+        with patch.object(card,"crest",return_value=None):
+            with self.assertRaisesRegex(ValueError,"separate verified grade"):
+                card.make_card(self.fx,final_score="1:3",won=True,
+                               next_goal_side="away")
+
     def test_sending_one_image_without_caption_and_with_db_side(self):
         self.metrics["next_goal_side"]="home"
         response=Mock()
