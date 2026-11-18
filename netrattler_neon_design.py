@@ -56,24 +56,70 @@ def _box(draw, rect, outline=CYAN, fill="#071A30", radius=19, thick=3):
 
 
 def _background(w, h):
-    from netrattler_card_theme import midnight_arena
-    im = midnight_arena(w, h)
+    """Gold-and-cyan night stadium rather than the former flat midnight grid."""
+    import random
+    im = Image.new("RGB", (w, h), "#030D1C")
+    draw = ImageDraw.Draw(im)
+    crowd_top = int(h * 0.34)
+    pitch_top = int(h * 0.62)
+    for y in range(h):
+        t = y / max(h - 1, 1)
+        if y < crowd_top:
+            v = y / max(1, crowd_top)
+            color = (2, int(11 + 8 * v), int(28 + 17 * v))
+        elif y < pitch_top:
+            v = (y - crowd_top) / max(1, pitch_top - crowd_top)
+            color = (int(1 + 3 * v), int(20 + 12 * v), int(44 - 11 * v))
+        else:
+            v = (y - pitch_top) / max(1, h - pitch_top)
+            color = (int(4 + 4 * v), int(43 - 22 * v), int(22 - 12 * v))
+        draw.line((0, y, w, y), fill=color, width=1)
+    # Stadium bowl and tiers; small spectator highlights suggest real stands.
+    for i in range(7):
+        y = int(h * (.32 + .043 * i))
+        draw.arc((-w * .35, y - 75, w * 1.35, y + 165), 0, 180,
+                 fill=(8 + i * 2, 58 + i * 2, 76 + i * 3), width=3)
+        draw.line((0, y + i * 3, w, y + i * 3), fill="#082B3B", width=1)
+    rng = random.Random(170118)
+    for _ in range(2600):
+        x = rng.randrange(w)
+        y = rng.randrange(crowd_top, max(crowd_top + 1, pitch_top))
+        if rng.randrange(5) > 1 and w * .19 < x < w * .81:
+            continue
+        lum = rng.randrange(24, 112)
+        color = (lum // 2, int(lum * .80), lum)
+        draw.ellipse((x, y, x + 2, y + 2), fill=color)
+    # Ground perspective and white painted football lines.
+    draw.polygon(((0, h), (0, int(h * .84)), (w // 2, int(h * .71)),
+                  (w, int(h * .84)), (w, h)), fill="#082419")
+    for y in range(int(h * .76), h, 68):
+        draw.line((0, y, w, y), fill="#104632", width=2)
+    draw.line((0, int(h * .84), w // 2, int(h * .71), w, int(h * .84)),
+              fill="#227860", width=3)
+    # Floodlight beams behind content: glow plus visible 5x4 lamp arrays.
+    beam = Image.new("RGBA", im.size, (0, 0, 0, 0))
+    bd = ImageDraw.Draw(beam)
+    lamps = []
+    for side in (0, 1):
+        ox = 24 if side == 0 else w - 24
+        for j in range(4):
+            for k in range(5):
+                sx = ox + ((k * 22) if side == 0 else -(k * 22))
+                sy = 12 + j * 17 + int(k * 2)
+                lamps.append((sx, sy))
+        for bx in (.17, .41, .66, .88):
+            dest = int(w * bx)
+            bd.polygon(((ox, 29), (ox + (-18 if side else 18), 90),
+                        (dest, int(h * .54))), fill=(10, 112, 205, 12))
+    im = Image.alpha_composite(im.convert("RGBA"), beam).convert("RGB")
+    bloom = Image.new("RGB", im.size, "black")
+    glow = ImageDraw.Draw(bloom)
+    for x, y in lamps:
+        glow.ellipse((x - 10, y - 10, x + 10, y + 10), fill=(140, 230, 255))
+    im = ImageChops.screen(im, bloom.filter(ImageFilter.GaussianBlur(21)))
     d = ImageDraw.Draw(im)
-    # Theatre spotlights, stands and pitch; no third-party background or photos.
-    for x in (30, w - 30):
-        for j in range(5):
-            dx = j * 20 - 40
-            y = 22 + (j % 2) * 9
-            d.ellipse((x + dx - 13, y - 13, x + dx + 13, y + 13),
-                      fill="#DDF9FF", outline=CYAN, width=4)
-        for k in range(8):
-            xx = w // 2 + (x - w // 2) * (8 - k) // 8
-            yy = int(h * .22 + k * h * .04)
-            d.line((x, 60, xx, yy), fill=(8, 49 + k * 3, 67 + k * 3), width=2)
-    for y in (int(h * .61), int(h * .68), int(h * .76)):
-        d.arc((-w // 4, y - 150, w + w // 4, y + 90), 0, 180,
-              fill="#0C3A60", width=5)
-    d.line((0, h - 28, w, h - 28), fill="#146177", width=4)
+    for x, y in lamps:
+        d.ellipse((x - 7, y - 7, x + 7, y + 7), fill="#EAFBFF", outline=CYAN, width=2)
     return im
 
 
@@ -81,19 +127,39 @@ def _finish(im, glow):
     layer = Image.new("RGB", im.size, "black")
     g = ImageDraw.Draw(layer)
     for rect, color in glow:
-        g.rounded_rectangle(rect, radius=19, outline=color, width=7)
-    return ImageChops.screen(im, layer.filter(ImageFilter.GaussianBlur(9)))
+        g.rounded_rectangle(rect, radius=19, outline=color, width=8)
+    halo = layer.filter(ImageFilter.GaussianBlur(14))
+    im = ImageChops.screen(im, halo)
+    g2 = ImageDraw.Draw(im)
+    for rect, color in glow:
+        g2.rounded_rectangle(rect, radius=19, outline=color, width=3)
+    return im
 
 
 def _headline(draw, w, label):
-    # Logo and gold ribbon match the new reference design.
-    _center(draw, "NETRATTLER", w / 2, 16, 82, WHITE, w - 70)
-    draw.polygon([(w // 2 - 26, 10), (w // 2 - 13, 0),
-                  (w // 2, 11), (w // 2 + 15, 0),
-                  (w // 2 + 28, 10), (w // 2 + 20, 22),
-                  (w // 2 - 20, 22)], fill=GOLD)
-    _box(draw, (w * .16, 117, w * .84, 184), GOLD, "#0D1922", 17, 4)
-    _center(draw, label, w / 2, 122, 49, GOLD, w * .64)
+    # Silver metallic logo, illuminated gold crown and golden builder ribbon.
+    draw.text((int(w * .22), 25), "NETRATTLER", font=_font(82),
+              fill="#2B2415", stroke_width=5, stroke_fill="#06101B")
+    _center(draw, "NETRATTLER", w / 2, 16, 82, WHITE, w - 60)
+    draw.line((w * .18, 111, w * .82, 111), fill=GOLD, width=3)
+    c = w // 2
+    draw.polygon(((c - 31, 13), (c - 22, -5), (c - 4, 8), (c + 12, -9),
+                  (c + 27, 8), (c + 41, -4), (c + 37, 24),
+                  (c - 31, 24)), fill=GOLD, outline="#A76C12")
+    x0, x1, y0, y1 = int(w * .15), int(w * .85), 120, 188
+    # Rich gold gradient close to the reference, not a black empty label.
+    draw.rounded_rectangle((x0 - 6, y0 - 5, x1 + 6, y1 + 5),
+                           radius=18, outline="#8F6005", width=4, fill="#1A170F")
+    for y in range(y0, y1):
+        p = (y - y0) / max(1, y1 - y0)
+        if p < .48:
+            v = p / .48
+            col = (255, int(224 + 27 * v), int(68 + 108 * v))
+        else:
+            v = (p - .48) / .52
+            col = (255, int(252 - 42 * v), int(178 - 134 * v))
+        draw.line((x0 + 7, y, x1 - 7, y), fill=col)
+    _center(draw, label, w / 2, 126, 50, "#0A0A0D", x1 - x0 - 28)
 
 
 def _initials(name):
@@ -103,22 +169,25 @@ def _initials(name):
 
 def _photo(im, draw, cards, name, team, rect, ring=GOLD):
     x0, y0, x1, y1 = (int(x) for x in rect)
-    draw.ellipse((x0 - 6, y0 - 6, x1 + 6, y1 + 6), fill="#08253A",
-                 outline=ring, width=7)
+    draw.ellipse((x0 - 8, y0 - 8, x1 + 8, y1 + 8), fill="#08253A",
+                 outline="#C68505", width=9)
+    draw.ellipse((x0 - 3, y0 - 3, x1 + 3, y1 + 3), outline=ring, width=5)
     payload = cards._player_photo(name, team)
     if payload:
         try:
             pic = Image.open(io.BytesIO(payload)).convert("RGBA")
             pic = ImageOps.fit(pic, (x1 - x0, y1 - y0),
-                               Image.Resampling.LANCZOS, centering=(.5, .26))
+                               Image.Resampling.LANCZOS, centering=(.5, .22))
             mask = Image.new("L", pic.size, 0)
             ImageDraw.Draw(mask).ellipse((0, 0, pic.width - 1, pic.height - 1), fill=255)
             im.paste(pic, (x0, y0), mask)
             return
         except (OSError, ValueError):
             pass
-    _center(draw, _initials(name), (x0 + x1) / 2, (y0 + y1) / 2 - 39,
-            73 if (x1 - x0) > 200 else 31, WHITE, x1 - x0 - 8)
+    # Preview-only fallback: production strict preflight blocks missing real photos.
+    _center(draw, _initials(name), (x0 + x1) / 2,
+            (y0 + y1) / 2 - 39, 73 if x1 - x0 > 200 else 31,
+            MUTED, x1 - x0 - 8)
 
 
 def _badge(im, draw, cards, name, rect):
@@ -300,7 +369,7 @@ def render_builder_card(pick):
     legs = list(getattr(pick, "legs", []) or [])
     n = max(len(legs), 1)
     tiers = list(getattr(pick, "tiers", None) or [])
-    w, h = 1200, 530 + 160 * n + 40 * len(tiers)
+    w, h = 1200, 650 + 160 * n + 40 * len(tiers)
     im = _background(w, h)
     d = ImageDraw.Draw(im)
     glow = []
@@ -322,15 +391,21 @@ def render_builder_card(pick):
     if first:
         day, hour = kickoff_label({"_kickoff": getattr(first, "kickoff", "")},
                                   getattr(pick, "match_date", ""))
-        _center(d, str(day) + "   /   " + str(hour) + " Uhr", 600, 268, 23,
-                MUTED, 980)
-    _box(d, (28, 310, 1172, 351), CYAN, "#0B2332", 16)
-    _center(d, str(len(legs)) + "-LEG BUILDER", 600, 313, 32, WHITE)
+        time_label = str(day) + ("    /    " + str(hour) + " Uhr" if
+                 str(hour) not in ("", "Zeit nicht bestätigt", "TBD") else "")
+        _center(d, time_label, 600, 268, 24, WHITE, 980)
+    _box(d, (28, 310, 1172, 351), CYAN, "#081C2A", 16)
+    _center(d, str(len(legs)) + "-LEG BUILDER", 415, 313, 32, WHITE, 670)
+    head_label, head_value, _ = _builder_quote_display(pick, legs)
+    if head_value != "—":
+        _box(d, (760, 313, 1165, 347), GOLD, "#171A13", 12, 3)
+        _center(d, head_value, 962, 315, 27, GOLD, 380)
 
     for i, leg in enumerate(legs):
         y = 362 + i * 160
         box = (35, y, 1165, y + 142)
         _box(d, box, CYAN, "#071724", 17)
+        d.line((35, y + 16, 35, y + 122), fill=GOLD, width=5)
         glow.append((box, CYAN))
         # The photo provider caches by player/team; every row still has a portrait.
         _photo(im, d, cards, leg.player, leg.team, (49, y + 10, 159, y + 133))
@@ -358,14 +433,14 @@ def render_builder_card(pick):
              ("EV", f"{ev:+.1f}%" if ev is not None else "—", GREEN if ev is not None and ev >= 0 else GOLD))
     for i, (title, value, color) in enumerate(stats):
         x = 30 + i * 393
-        _metric(d, (x, y, x + 369, y + 103), title, value, color)
+        _metric(d, (x, y, x + 369, y + 113), title, value, color)
     confidence = getattr(pick, "confidence", None)
     conf = str(confidence).upper() if confidence not in (None, "") else "—"
     label, col = _result_text(getattr(pick, "status", None))
-    _box(d, (31, y + 114, 566, y + 162), GOLD, "#081C30")
-    _box(d, (588, y + 114, 1167, y + 162), CYAN, "#081C30")
-    _center(d, "KONFIDENZ: " + conf, 300, y + 124, 25, GOLD, 510)
-    _center(d, "AUSWERTUNG: " + label, 879, y + 124, 25, col, 555)
+    _box(d, (30, y + 128, 560, y + 203), GOLD, "#0D1421")
+    _box(d, (586, y + 128, 1170, y + 203), CYAN, "#071E2D")
+    _center(d, "KONFIDENZ: " + conf, 295, y + 142, 32, GOLD, 520)
+    _center(d, "AUSWERTUNG: " + label, 878, y + 142, 32, col, 575)
 
     # No same-game combination is advertised as a bookable bookmaker price
     # merely because its individual odds can be multiplied.
