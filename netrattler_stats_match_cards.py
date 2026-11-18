@@ -969,6 +969,7 @@ def update_cards_with_results(token, results, log=print):
 
 # ---------------------------------------------------------------- goalscorer card
 _PLAYER_CACHE = {}
+_FPL_BOOTSTRAP = {"loaded": False, "data": {}}
 
 
 def _player_photo(name, team=""):
@@ -1004,9 +1005,13 @@ def _player_photo(name, team=""):
     # and player-log identity matches are unavailable. Require an exact player
     # name AND an unambiguous club match to avoid inserting a wrong face.
     try:
-        resp = requests.get("https://fantasy.premierleague.com/api/bootstrap-static/", timeout=7)
-        if resp.ok:
-            payload_fpl = resp.json() or {}
+        if not _FPL_BOOTSTRAP["loaded"]:
+            resp = requests.get("https://fantasy.premierleague.com/api/bootstrap-static/", timeout=7)
+            if resp.ok:
+                _FPL_BOOTSTRAP["data"] = resp.json() or {}
+                _FPL_BOOTSTRAP["loaded"] = True
+        payload_fpl = _FPL_BOOTSTRAP["data"]
+        if payload_fpl:
             clubs = {t.get("id"): t.get("name", "") for t in payload_fpl.get("teams", [])}
             def fpl_name(e):
                 return str(e.get("first_name") or "").strip() + " " + str(e.get("second_name") or "").strip()
