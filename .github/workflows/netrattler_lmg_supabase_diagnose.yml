@@ -1,0 +1,60 @@
+name: NETRATTLER Goal Hunter Supabase 402 Diagnosis
+
+on:
+  workflow_dispatch:
+  push:
+    branches: [main]
+    paths:
+      - .github/workflows/netrattler_lmg_supabase_diagnose.yml
+
+permissions:
+  contents: read
+
+jobs:
+  read-only-probe:
+    runs-on: ubuntu-latest
+    timeout-minutes: 3
+    steps:
+      - name: Check whether configured Supabase REST is restricted
+        env:
+          SUPABASE_URL: ${{ secrets.SUPABASE_URL }}
+          SUPABASE_SERVICE_ROLE_KEY: ${{ secrets.SUPABASE_SERVICE_ROLE_KEY }}
+          SUPABASE_KEY: ${{ secrets.SUPABASE_KEY }}
+        run: |
+          python - <<'PY'
+          import json, os, re, urllib.request, urllib.parse, urllib.error
+          url=(os.getenv("SUPABASE_URL") or "").rstrip("/")
+          key=os.getenv("SUPABASE_SERVICE_ROLE_KEY") or os.getenv("SUPABASE_KEY") or ""
+          parsed=urllib.parse.urlparse(url)
+          expected="sugycqnjncgfheueqaee.supabase.co"
+          print("LMG_DB_ENV",json.dumps({
+              "url_configured":bool(url),
+              "host_matches_expected":parsed.hostname==expected,
+              "service_role_configured":bool(os.getenv("SUPABASE_SERVICE_ROLE_KEY")),
+              "fallback_key_configured":bool(os.getenv("SUPABASE_KEY")),
+              "https":parsed.scheme=="https"
+          }))
+          if not url or not key or parsed.scheme!="https":
+              print("LMG_DB_PROBE_SKIPPED incomplete_secrets_or_invalid_https")
+              raise SystemExit(0)
+          req=urllib.request.Request(url+"/rest/v1/netrattler_lmg_alerts?select=alert_key&limit=1",
+                                      headers={"apikey":key,"Authorization":"Bearer "+key})
+          try:
+              with urllib.request.urlopen(req,timeout=15) as response:
+                  status=response.status
+                  body=response.read(1600).decode("utf-8","replace")
+          except urllib.error.HTTPError as e:
+              status=e.code
+              body=e.read(1600).decode("utf-8","replace")
+          except Exception as e:
+              print("LMG_DB_PROBE_NETWORK",type(e).__name__)
+              raise SystemExit(0)
+          try: data=json.loads(body)
+          except Exception: data={}
+          code=str(data.get("code") or data.get("error") or "") if isinstance(data,dict) else ""
+          code=code if re.fullmatch("[A-Za-z0-9_ -]{0,90}",code) else "unclassified"
+          print("LMG_DB_PROBE",json.dumps({
+              "http_status":status,"safe_error_code":code,
+              "json_keys":sorted(data)[:12] if isinstance(data,dict) else []
+          }))
+          PY
