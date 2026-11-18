@@ -188,6 +188,8 @@ jobs:
           API_NINJAS_KEY:             ${{ secrets.API_NINJAS_KEY }}
           TELEGRAM_TOKEN:             ${{ secrets.TELEGRAM_TOKEN }}
           TELEGRAM_CHAT_ID:           ${{ secrets.TELEGRAM_CHAT_ID }}
+          # Separate NETRATTLER AI match-card image destination.
+          TELEGRAM_GROUP_MATCH_CARDS: ${{ secrets.TELEGRAM_GROUP_MATCH_CARDS }}
           TELEGRAM_GROUP_BTTS:        ${{ secrets.TELEGRAM_GROUP_BTTS }}
           TELEGRAM_GROUP_OVER25:      ${{ secrets.TELEGRAM_GROUP_OVER25 }}
           TELEGRAM_GROUP_COMBO:       ${{ secrets.TELEGRAM_GROUP_COMBO }}
