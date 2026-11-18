@@ -17,9 +17,10 @@ on:
       - netrattler_last_minute_goal.py
       - test_netrattler_lmg_free.py
       - .github/workflows/netrattler_lmg_free.yml
-  # 24h public-data scanning every 5m; non-hour-boundary minutes reduce cron congestion.
+  # 24h public-data scanning every 5m; shifted cron re-registers the schedule on default branch.
+  # GitHub schedule is best-effort; manual workflow_dispatch remains available.
   schedule:
-    - cron: "1,6,11,16,21,26,31,36,41,46,51,56 * * * *"
+    - cron: "3,8,13,18,23,28,33,38,43,48,53,58 * * * *"
 
 permissions:
   contents: read
