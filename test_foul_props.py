@@ -50,3 +50,50 @@ def test_foul_profiles_need_both_series():
     prof = fp.foul_profiles({"X": [g] * 10, "Y": [g] * 3}, "T", "T vs U", "L", "k")
     assert [p["player"] for p in prof] == ["X"] and prof[0]["source"] == "foul_profile"
     assert prof[0]["fouls"] == [2] * 10 and prof[0]["fouls_won"] == [1] * 10
+
+
+
+def test_repeated_exact_team_only_fetches_once_per_run(monkeypatch):
+    seen = []
+    def get_rows(url, key, team):
+        seen.append(team)
+        return []
+    monkeypatch.setattr(fp, "fetch_team_rows", get_rows)
+    matches = [
+        {"match": "Sevilla vs Osasuna", "league": "La Liga", "kickoff": "2026-11-19"},
+        {"match": "Sevilla vs Granada", "league": "La Liga", "kickoff": "2026-11-19"},
+    ]
+    rows = fp.rows_for_matches(matches, "https://db", "key", lambda s:s.casefold())
+    assert rows == []
+    assert seen == ["Sevilla", "Osasuna", "Granada"]
+    assert fp.STATS_LAST["teams"] == 4
+
+
+def test_quota_402_is_detected_without_retrying_every_team(monkeypatch):
+    class Response:
+        status_code = 402
+        ok = False
+    calls=[]
+    def blocked(*args,**kwargs):
+        calls.append(True)
+        return Response()
+    monkeypatch.setattr(fp.requests, "get", blocked)
+    import pytest
+    with pytest.raises(fp.HistoryQuotaBlocked):
+        fp.fetch_team_rows("https://db", "key", "Sevilla")
+    assert len(calls) == 1
+
+    matches = [{"match": "Sevilla vs Osasuna", "league": "La Liga",
+                "kickoff": "2026-11-19"} for _ in range(10)]
+    rows = fp.rows_for_matches(matches, "https://db", "key", lambda s:s.casefold())
+    assert rows == []  # No partial/history-derived picks with a broken source.
+    assert fp.STATS_LAST["quota_blocked"] is True
+    assert len(calls) == 2  # First explicit test and first request inside the run.
+
+
+def test_other_http_failure_keeps_safe_empty_data(monkeypatch):
+    class Response:
+        status_code = 503
+        ok = False
+    monkeypatch.setattr(fp.requests, "get", lambda *a,**k: Response())
+    assert fp.fetch_team_rows("https://db", "key", "Sevilla") == []
