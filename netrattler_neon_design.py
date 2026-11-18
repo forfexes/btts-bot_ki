@@ -222,7 +222,7 @@ def _observed_game_log(player, team, category, match_date):
             if len(result) >= 15:
                 break
         return tuple(result)
-    except (ValueError, TypeError, OSError, RuntimeError, Exception):
+    except Exception:
         return ()
 
 
@@ -265,6 +265,31 @@ def _form_label(series, line, count):
 def _display_market(leg):
     from netrattler_builder_cards import builder_leg_label
     return builder_leg_label(leg)
+
+
+def _builder_quote_display(pick, legs):
+    """Show calculated product, but never mislabel it a bookable SGM quote."""
+    model_only = bool(getattr(pick, "model_only", False))
+    if model_only:
+        return ("BUCHMACHERQUOTE", "—", None)
+    if bool(getattr(pick, "combined_quote_verified", False)):
+        quoted = _number(getattr(pick, "combined_bookmaker_quote", None))
+        if quoted is not None and 1.01 <= quoted <= 100000:
+            return ("BESTÄTIGTE KOMBIQUOTE", f"@ {quoted:.2f}", quoted)
+    if not legs or bool(getattr(pick, "estimated_odds", False)):
+        return ("BUCHMACHERQUOTE", "—", None)
+    values = []
+    for leg in legs:
+        q = _number(getattr(leg, "odds", None))
+        if (q is None or not 1.01 <= q <= 1000 or
+                bool(getattr(leg, "estimated", False)) or
+                not str(getattr(leg, "source", "") or "").strip()):
+            return ("BUCHMACHERQUOTE", "—", None)
+        values.append(q)
+    # A same-game parlay may have a different bookmaker price or be unavailable.
+    # This product is for reference, never used for displayed EV.
+    product = math.prod(values)
+    return ("EINZELQUOTEN ×", f"{product:.2f}", None)
 
 
 def render_builder_card(pick):
@@ -326,15 +351,9 @@ def render_builder_card(pick):
                  getattr(pick, "joint_probability", None))
     if p is None and not model_only:
         p = _percent(getattr(pick, "probability", None))
-    verified = bool(getattr(pick, "combined_quote_verified", False))
-    combined = _number(getattr(pick, "combined_bookmaker_quote", None)) if verified else None
-    if combined is None or combined <= 1:
-        combined = None
-    odds_label, odds_value = "KOMBIQUOTE", f"@ {combined:.2f}" if combined else "—"
-    if combined is None:
-        odds_label = "BUCHBARE KOMBIQUOTE"
+    odds_label, odds_value, combined = _builder_quote_display(pick, legs)
     ev = (p / 100 * combined - 1) * 100 if p is not None and combined else None
-    stats = (("BUCHBARE KOMBIQUOTE", odds_value, GOLD),
+    stats = ((odds_label, odds_value, GOLD),
              ("MODELL-PROB.", f"{p:.1f}%" if p is not None else "—", GREEN),
              ("EV", f"{ev:+.1f}%" if ev is not None else "—", GREEN if ev is not None and ev >= 0 else GOLD))
     for i, (title, value, color) in enumerate(stats):

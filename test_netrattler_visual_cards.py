@@ -185,3 +185,19 @@ def test_observed_history_missing_middle_game_not_zero_filled():
     assert nd._form_label(found,1,10)=="10/10 (100%)"
     assert nd._form_label(found,1,15)=="—"
     nd._observed_game_log.cache_clear()
+
+
+def test_builder_shows_calculated_single_prices_but_not_fabricated_sgm_ev():
+    from types import SimpleNamespace as S
+    from netrattler_neon_design import _builder_quote_display
+    legs = [S(odds=2.00,estimated=False,source="kambi"),
+            S(odds=1.50,estimated=False,source="pinnacle")]
+    actual = S(estimated_odds=False,model_only=False,combined_quote_verified=False)
+    assert _builder_quote_display(actual,legs) == ("EINZELQUOTEN ×","3.00",None)
+    verified = S(estimated_odds=False,model_only=False,combined_quote_verified=True,
+                 combined_bookmaker_quote=2.80)
+    assert _builder_quote_display(verified,legs) == ("BESTÄTIGTE KOMBIQUOTE","@ 2.80",2.80)
+    fake = S(estimated_odds=True,model_only=False,combined_quote_verified=False)
+    assert _builder_quote_display(fake,legs) == ("BUCHMACHERQUOTE","—",None)
+    assert _builder_quote_display(actual,[S(odds=2,estimated=True,source="x")]) == (
+        "BUCHMACHERQUOTE","—",None)
