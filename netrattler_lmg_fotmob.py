@@ -63,6 +63,8 @@ def fixtures_from_fotmob(payload):
             out.append({"source":"fotmob", "fixture_id":eid, "minute":minute,
                         "clock":str(minute)+"'", "home":str(home["name"]),
                         "away":str(away["name"]), "home_id":"1", "away_id":"2",
+                        "home_logo_id":common._int(home.get("id")),
+                        "away_logo_id":common._int(away.get("id")),
                         "hg":score[0], "ag":score[1], "kickoff":kickoff,
                         "league":str(league.get("name") or "")})
     return out
