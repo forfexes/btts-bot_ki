@@ -1,6 +1,10 @@
 name: NETRATTLER API-Football Asset Diag
 on:
   workflow_dispatch: {}
+  push:
+    branches: [main]
+    paths:
+      - 'netrattler_asset_diag.py'
 permissions:
   contents: read
 jobs:
