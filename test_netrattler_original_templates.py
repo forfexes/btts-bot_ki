@@ -84,3 +84,22 @@ def test_missing_original_template_fails_closed():
     import pytest
     with pytest.raises(FileNotFoundError):
         _base("/no-such-directory/netrattler_original_template.webp")
+
+
+def test_six_leg_original_base_is_immutable_between_different_players():
+    """Never copy a prior tip's portrait or details into the next Telegram PNG."""
+    import hashlib
+    original=_base(str(BUILDER_IMAGE))
+    digest=hashlib.sha256(original.tobytes()).hexdigest()
+    fake=_test_photo()
+    with patch.object(cards,"_player_photo",return_value=fake), \
+         patch.object(cards,"_badge_bytes",return_value=fake):
+        first=_fixture(6)
+        a=builder.render_builder_card(first)
+        second=_fixture(6)
+        second.legs[0].player="Zweiter Spieler"
+        b=builder.render_builder_card(second)
+    assert a!=b
+    assert hashlib.sha256(_base(str(BUILDER_IMAGE)).tobytes()).hexdigest()==digest
+    assert review_png(a,"builder",legs=6).passed
+    assert review_png(b,"builder",legs=6).passed
