@@ -74,12 +74,21 @@ def _count(value: Any) -> int | None:
     except (ValueError, TypeError, OverflowError):
         return None
 
+def _identifier(value: Any) -> int | None:
+    """Provider IDs are unbounded relative to counts like corners/shots."""
+    if value is None or isinstance(value, bool):
+        return None
+    string = str(value).strip()
+    if not re.fullmatch(r"[1-9]\\d{0,17}", string):
+        return None
+    return int(string)
+
 def normalize_footystats_match(item: Any, season_id: int) -> dict[str, Any] | None:
     if not isinstance(item, dict) or str(item.get("status", "")).lower() != "complete":
         return None
-    event_id = _count(item.get("id"))
-    home_id = _count(item.get("homeID"))
-    away_id = _count(item.get("awayID"))
+    event_id = _identifier(item.get("id"))
+    home_id = _identifier(item.get("homeID"))
+    away_id = _identifier(item.get("awayID"))
     hg, ag = _count(item.get("homeGoalCount")), _count(item.get("awayGoalCount"))
     if (not event_id or not home_id or not away_id or home_id == away_id
             or hg is None or ag is None):
