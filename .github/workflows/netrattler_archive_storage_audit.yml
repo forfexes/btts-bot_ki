@@ -23,6 +23,43 @@ jobs:
         with:
           python-version: '3.11'
       - run: python -m pip install --prefer-binary requests psycopg2-binary
+      - name: Check V3 project route without printing credentials
+        if: matrix.target == 'v3'
+        env:
+          V3_DATABASE_URL: ${{ secrets.V3_DATABASE_URL }}
+        run: |
+          python - <<'PY'
+          import os, re, socket
+          from urllib.parse import urlsplit, unquote
+          import requests
+          raw = os.environ.get("V3_DATABASE_URL", "")
+          if not raw.startswith(("postgres://", "postgresql://")):
+              raise SystemExit("V3 secret missing or not a PostgreSQL URI")
+          parts = urlsplit(raw)
+          user, host = unquote(parts.username or ""), parts.hostname or ""
+          direct_ref = host.split(".")[1] if host.startswith("db.") and host.endswith(".supabase.co") else ""
+          pooler_ref = user.removeprefix("postgres.") if user.startswith("postgres.") else ""
+          ref = direct_ref or pooler_ref
+          print("V3 secret is configured; route =", "pooler" if "pooler.supabase.com" in host else "direct_or_other")
+          print("V3 DSN has an identifiable project reference:", bool(ref))
+          if direct_ref and pooler_ref and direct_ref != pooler_ref:
+              print("CONFIG ERROR: project IDs differ between hostname and database user")
+          if not ref or not re.fullmatch("[a-z0-9]{20}", ref):
+              print("CONFIG ERROR: project reference missing/invalid")
+              raise SystemExit(2)
+          endpoint = ref + ".supabase.co"
+          try:
+              socket.getaddrinfo(endpoint, 443, type=socket.SOCK_STREAM)
+              print("Project HTTPS DNS: resolved")
+          except OSError:
+              print("Project HTTPS DNS: not resolved")
+          for path in ("/auth/v1/health",):
+              try:
+                  response = requests.get("https://" + endpoint + path, timeout=10)
+                  print("Supabase authentication health HTTP:", response.status_code)
+              except requests.RequestException as exc:
+                  print("Supabase authentication health: unreachable (" + type(exc).__name__ + ")")
+          PY
       - name: Read-only database sizes
         env:
           TARGET: ${{ matrix.target }}
@@ -36,7 +73,22 @@ jobs:
           target = os.environ["TARGET"]
           if not archive.DST_DSN.startswith(("postgres://", "postgresql://")):
               raise SystemExit(f"{target}: archive database DSN is not configured")
-          conn = archive.dst()
+          try:
+              conn = archive.dst()
+          except Exception as exc:
+              msg = str(exc).lower()
+              if "tenant/user" in msg and "not found" in msg:
+                  cause = "PROJECT_NOT_FOUND_BY_POOLER: check V3 project ref, pooler region and user"
+              elif "password authentication failed" in msg:
+                  cause = "AUTH_FAILURE: check V3_DATABASE_URL password"
+              elif "name or service not known" in msg or "could not translate host" in msg:
+                  cause = "DNS_FAILURE: check V3_DATABASE_URL hostname"
+              elif "timeout" in msg or "connection refused" in msg:
+                  cause = "NETWORK_FAILURE: check V3 project status/connection route"
+              else:
+                  cause = "CONNECTION_FAILURE: " + type(exc).__name__
+              print("NETRATTLER " + target.upper() + " STORAGE CHECK: " + cause)
+              raise SystemExit(2)
           try:
               with conn.cursor() as cursor:
                   cursor.execute("SELECT pg_database_size(current_database())")
