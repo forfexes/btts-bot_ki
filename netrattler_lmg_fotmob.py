@@ -240,6 +240,8 @@ def run():
             "send_enabled":send_enabled}
     espn_board=None
     espn_board_loaded=False
+    shadow_enabled=os.getenv("LMG_SHADOW_ENABLED","false").lower()=="true"
+    shadow_batch=[]
     for fx in fixtures[:MAX_EVENTS]:
         detail=None
         try:
@@ -247,9 +249,12 @@ def run():
         except requests.RequestException:
             report["detail_errors"]+=1
         metrics=None
+        data_provider=None
         if detail is not None:
             report["stats_checked"]+=1
             metrics=metrics_from_fotmob(detail,fx)
+            if metrics:
+                data_provider="fotmob"
         if not metrics:
             if detail is not None:
                 content=(detail or {}).get("content") or {}
@@ -280,9 +285,18 @@ def run():
             if espn_board is not None:
                 metrics=recover_espn_metrics(fx,espn_board)
                 if metrics:
+                    data_provider="espn"
                     report["espn_recovered"]+=1
                     print("LMG_FOTMOB_ESPN_STATS_RECOVERED",
                           fx["fixture_id"],fx["minute"],flush=True)
+        if shadow_enabled:
+            # Side-channel evidence only; no extra Telegram messages and no
+            # changes to selection/settlement when the shadow DB is unavailable.
+            from netrattler_lmg_shadow import build_snapshot
+            try:
+                shadow_batch.append(build_snapshot(fx,metrics,data_provider))
+            except (ValueError,TypeError) as exc:
+                print("LMG_SHADOW_BAD_SNAPSHOT",str(exc)[:100],flush=True)
         if not metrics:
             report["missing_stats"]+=1
             continue
@@ -303,6 +317,14 @@ def run():
                 message_id=common.send_alert(fx,metrics)
                 common.mark_sent(key,message_id)
                 report["sent"]+=1
+    if shadow_enabled:
+        from netrattler_lmg_shadow import write_snapshots
+        try:
+            shadow_report=write_snapshots(shadow_batch,enabled=True)
+            print("LMG_SHADOW_CAPTURE",json.dumps(shadow_report),flush=True)
+        except (requests.RequestException,RuntimeError,ValueError,TypeError) as exc:
+            print("LMG_SHADOW_CAPTURE_UNAVAILABLE",
+                  type(exc).__name__,str(exc)[:100],flush=True)
     print("LMG_FOTMOB_SUMMARY",json.dumps(report),flush=True)
     return report
 
