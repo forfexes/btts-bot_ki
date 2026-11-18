@@ -56,6 +56,27 @@ class FotmobTest(unittest.TestCase):
         wrong["content"]["stats"]["Periods"]={"FirstHalf":{"stats":[]}}
         self.assertIsNone(bot.metrics_from_fotmob(wrong,fixture))
 
+    def test_per_team_stats_and_optional_decimal_xg(self):
+        fixture=bot.fixtures_from_fotmob(daily())[0]
+        payload=detail()
+        payload["content"]["stats"]["Periods"]["All"]["stats"].append({
+            "key":"expected_goals","title":"Expected goals","stats":["1.25","0.87"]})
+        m=bot.metrics_from_fotmob(payload,fixture)
+        self.assertEqual(m["teams"]["home"],{"shots":12,"sot":5,"corners":2,"xg":1.25})
+        self.assertEqual(m["teams"]["away"],{"shots":10,"sot":4,"corners":5,"xg":0.87})
+        text=bot.common.format_tip(fixture,m)
+        self.assertIn("Tampines Rovers FC: Schüsse 12",text)
+        self.assertIn("Ratchaburi FC: Schüsse 10",text)
+        self.assertIn("xG 1.25",text)
+        self.assertIn("xG 0.87",text)
+        self.assertNotIn("Quote",text)
+
+    def test_missing_xg_is_omitted_not_invented(self):
+        fixture=bot.fixtures_from_fotmob(daily())[0]
+        m=bot.metrics_from_fotmob(detail(),fixture)
+        self.assertNotIn("xg",m["teams"]["home"])
+        self.assertNotIn("xG",bot.common.format_tip(fixture,m))
+
     def test_send_without_any_bookmaker_or_api_football(self):
         with patch.dict("os.environ",{"LMG_SEND":"true","API_FOOTBALL_KEYS":"",
                                      "PULSESCORE_API_KEY":""}), \
