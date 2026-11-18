@@ -8,6 +8,7 @@ on:
       - netrattler_lmg_free.py
       - netrattler_lmg_fotmob.py
       - netrattler_lmg_card.py
+      - assets/goal_hunter_original_header.webp
       - netrattler_lmg_settle.py
       - test_netrattler_lmg_card.py
       - test_netrattler_lmg_fotmob.py
@@ -57,22 +58,20 @@ jobs:
         run: |
           mkdir -p visual-preview
           python - <<'PY'
-          import os
-          from unittest.mock import patch
           from netrattler_lmg_card import make_card
           fixture={"home":"Tampines Rovers FC","away":"Ratchaburi FC",
                    "hg":1,"ag":2,"minute":68,"league":"ASEAN Club Championship",
-                   "home_logo_id":None,"away_logo_id":None}
+                   "home_logo_id":67386,"away_logo_id":421346}
           metrics={"tier":"STANDARD","teams":{"home":{"shots":10,"sot":4,"corners":3,"xg":1.62},
                                                    "away":{"shots":5,"sot":2,"corners":2,"xg":0.87}}}
-          with patch("netrattler_lmg_card.crest",return_value=None):
-              for name,opts in (("open",{"metrics":metrics}),
-                                ("won",{"final_score":"3:2","won":True}),
-                                ("lost",{"final_score":"1:2","won":False})):
-                  data=make_card(fixture,**opts)
-                  with open(f"visual-preview/{name}.jpg","wb") as out:
-                      out.write(data)
-                  print("LMG_VISUAL_PREVIEW",name,len(data))
+          for name,opts in (("open",{"metrics":metrics}),
+                            ("won",{"final_score":"3:2","won":True}),
+                            ("lost",{"final_score":"1:2","won":False})):
+              data=make_card(fixture,**opts)
+              with open(f"visual-preview/{name}.jpg","wb") as out:
+                  out.write(data)
+              print("LMG_VISUAL_PREVIEW",name,len(data))
+          print("LMG_VISUAL_NOTE demo statistics only; real matching club IDs used for crest loading")
           PY
       - uses: actions/upload-artifact@v4
         with:
