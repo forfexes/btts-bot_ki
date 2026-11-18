@@ -90,6 +90,31 @@ class NextGoalTests(unittest.TestCase):
         self.assertIn("@prophunter",caption)
         self.assertNotIn("%",caption)
 
+    def test_espn_source_can_only_settle_exact_regular_time_final(self):
+        feed={"leagues":[{"name":"International Friendlies"}],"events":[{
+            "id":"554433","status":{"type":{
+                "state":"post","completed":True,"name":"STATUS_FULL_TIME",
+                "description":"Full Time"}},
+            "competitions":[{"competitors":[
+                {"homeAway":"home","score":"2",
+                 "team":{"id":"31","displayName":"Lecce"}},
+                {"homeAway":"away","score":"3",
+                 "team":{"id":"44","displayName":"Roma"}}]}]}]}
+        result=settle.finished_espn_match(feed,554433)
+        self.assertEqual(result["score"],(2,3))
+        self.assertIsNone(result["home"]["id"])
+        self.assertIsNone(settle.finished_espn_match(feed,555555))
+        from copy import deepcopy
+        overtime=deepcopy(feed)
+        overtime["events"][0]["status"]["type"]["name"]="STATUS_FINAL_AET"
+        self.assertIsNone(settle.finished_espn_match(overtime,554433))
+        cancelled=deepcopy(feed)
+        cancelled["events"][0]["status"]["type"]["completed"]=False
+        self.assertIsNone(settle.finished_espn_match(cancelled,554433))
+        bad=deepcopy(feed)
+        bad["events"][0]["competitions"][0]["competitors"][0]["score"]=None
+        self.assertIsNone(settle.finished_espn_match(bad,554433))
+
     def test_original_photo_edited_and_results_persisted_separately(self):
         row={**self.fx,"score":"1:2","telegram_message_id":912,
              "message_kind":"photo","next_goal_side":"home",
