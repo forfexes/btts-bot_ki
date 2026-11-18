@@ -2,6 +2,7 @@
 """Read-only live-feed shape/availability diagnostics; no credentials, no sends."""
 import datetime as dt
 import json
+import re
 import requests
 
 DAY=dt.datetime.now(dt.timezone.utc).strftime("%Y%m%d")
@@ -32,9 +33,27 @@ def fetch(tag,url,params):
             leagues=body.get("leagues") or []
             matches=[m for l in leagues for m in l.get("matches") or []]
             live=[m for m in matches if (m.get("status") or {}).get("ongoing") is True]
+            def minute(match):
+                clock = str(((match.get("status") or {}).get("liveTime") or {}).get("short") or "")
+                found = re.search(r"\d+", clock)
+                return int(found.group()) if found else 0
+            live.sort(key=lambda m: abs(minute(m)-75))
+            shape={}
+            if live:
+                details=requests.get("https://www.fotmob.com/api/data/matchDetails",
+                                     params={"matchId":live[0].get("id")}, headers=HEADERS,timeout=13)
+                shape={"http":details.status_code}
+                if details.ok:
+                    payload=details.json()
+                    root=payload.get("content") or {}
+                    stats=root.get("stats") or {}
+                    shape.update({"content_keys":list(root)[:20],
+                                  "stats_keys":list(stats)[:12] if isinstance(stats,dict) else [],
+                                  "stats_sample":str(stats)[:2400]})
             return {"status":200,"leagues":len(leagues),"matches":len(matches),"live":len(live),
                     "sample":[{"status":m.get("status"),"home":(m.get("home") or {}).get("name"),
-                               "away":(m.get("away") or {}).get("name"),"id":m.get("id")} for m in live[:2]]}
+                               "away":(m.get("away") or {}).get("name"),"id":m.get("id")} for m in live[:2]],
+                    "detail":shape}
         if tag=="sofa":
             events=body.get("events") or []
             live=[e for e in events if (e.get("status") or {}).get("type")=="inprogress"]
