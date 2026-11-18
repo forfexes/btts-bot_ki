@@ -1,10 +1,7 @@
 name: GOAL HUNTER Remove Existing Photo Undertext
 
+# The existing photo caption was removed successfully; run only on explicit dispatch.
 on:
-  push:
-    branches: [main]
-    paths:
-      - .github/workflows/netrattler_lmg_remove_caption_once.yml
   workflow_dispatch:
 
 permissions:
