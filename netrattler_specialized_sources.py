@@ -79,7 +79,7 @@ def _identifier(value: Any) -> int | None:
     if value is None or isinstance(value, bool):
         return None
     string = str(value).strip()
-    if not re.fullmatch(r"[1-9]\\d{0,17}", string):
+    if not re.fullmatch(r"[1-9]\d{0,17}", string):
         return None
     return int(string)
 
