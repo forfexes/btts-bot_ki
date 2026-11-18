@@ -7,6 +7,9 @@ on:
     paths:
       - netrattler_lmg_free.py
       - netrattler_lmg_fotmob.py
+      - netrattler_lmg_card.py
+      - netrattler_lmg_settle.py
+      - test_netrattler_lmg_card.py
       - test_netrattler_lmg_fotmob.py
       - netrattler_lmg_probe.py
       - netrattler_last_minute_goal.py
@@ -33,11 +36,11 @@ jobs:
         with:
           python-version: "3.11"
       - name: Install dependencies
-        run: python -m pip install --prefer-binary requests
+        run: python -m pip install --prefer-binary requests Pillow
       - name: Syntax and offline regression tests
         run: |
-          python -m py_compile netrattler_last_minute_goal.py netrattler_lmg_free.py netrattler_lmg_fotmob.py test_netrattler_lmg_free.py test_netrattler_lmg_fotmob.py
-          python -m unittest -v test_netrattler_lmg_free.py test_netrattler_lmg_fotmob.py
+          python -m py_compile netrattler_last_minute_goal.py netrattler_lmg_free.py netrattler_lmg_fotmob.py netrattler_lmg_card.py netrattler_lmg_settle.py test_netrattler_lmg_free.py test_netrattler_lmg_fotmob.py test_netrattler_lmg_card.py
+          python -m unittest -v test_netrattler_lmg_free.py test_netrattler_lmg_fotmob.py test_netrattler_lmg_card.py
 
   smoke:
     needs: verify
@@ -49,7 +52,7 @@ jobs:
       - uses: actions/setup-python@v5
         with:
           python-version: "3.11"
-      - run: python -m pip install --prefer-binary requests
+      - run: python -m pip install --prefer-binary requests Pillow
       - name: FotMob/ESPN public live smoke test - read only, no bookmaker key
         env:
           LMG_SEND: "false"
@@ -66,7 +69,7 @@ jobs:
       - uses: actions/setup-python@v5
         with:
           python-version: "3.11"
-      - run: python -m pip install --prefer-binary requests
+      - run: python -m pip install --prefer-binary requests Pillow
       - name: Late-goal scanner - one more goal from minute 65, no odds
         env:
           LMG_SEND: "true"
@@ -75,4 +78,6 @@ jobs:
           SUPABASE_URL: ${{ secrets.SUPABASE_URL }}
           SUPABASE_SERVICE_ROLE_KEY: ${{ secrets.SUPABASE_SERVICE_ROLE_KEY }}
           SUPABASE_KEY: ${{ secrets.SUPABASE_KEY }}
-        run: python netrattler_lmg_fotmob.py
+        run: |
+          python netrattler_lmg_fotmob.py
+          python netrattler_lmg_settle.py
