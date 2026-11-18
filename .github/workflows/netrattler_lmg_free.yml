@@ -8,6 +8,8 @@ on:
       - netrattler_lmg_free.py
       - netrattler_lmg_fotmob.py
       - netrattler_lmg_card.py
+      - netrattler_lmg_next_goal.py
+      - test_netrattler_lmg_next_goal.py
       - assets/goal_hunter_original_header.webp
       - assets/goal_hunter_neon_frame.webp
       - netrattler_lmg_settle.py
@@ -42,8 +44,8 @@ jobs:
         run: python -m pip install --prefer-binary requests Pillow
       - name: Syntax and offline regression tests
         run: |
-          python -m py_compile netrattler_last_minute_goal.py netrattler_lmg_free.py netrattler_lmg_fotmob.py netrattler_lmg_card.py netrattler_lmg_settle.py test_netrattler_lmg_free.py test_netrattler_lmg_fotmob.py test_netrattler_lmg_card.py
-          python -m unittest -v test_netrattler_lmg_free.py test_netrattler_lmg_fotmob.py test_netrattler_lmg_card.py
+          python -m py_compile netrattler_last_minute_goal.py netrattler_lmg_free.py netrattler_lmg_fotmob.py netrattler_lmg_card.py netrattler_lmg_settle.py netrattler_lmg_next_goal.py test_netrattler_lmg_free.py test_netrattler_lmg_fotmob.py test_netrattler_lmg_card.py test_netrattler_lmg_next_goal.py
+          python -m unittest -v test_netrattler_lmg_free.py test_netrattler_lmg_fotmob.py test_netrattler_lmg_card.py test_netrattler_lmg_next_goal.py
 
   visual-preview:
     needs: verify
@@ -66,9 +68,10 @@ jobs:
                    "home_logo_id":67386,"away_logo_id":421346}
           metrics={"tier":"STANDARD","teams":{"home":{"shots":10,"sot":4,"corners":3,"xg":1.62},
                                                    "away":{"shots":5,"sot":2,"corners":2,"xg":0.87}}}
+          metrics["next_goal_side"]="home"
           for name,opts in (("open",{"metrics":metrics}),
-                            ("won",{"final_score":"3:2","won":True}),
-                            ("lost",{"final_score":"1:2","won":False})):
+                            ("won",{"final_score":"3:2","won":True,"next_goal_side":"home","next_goal_result":"won"}),
+                            ("lost",{"final_score":"1:2","won":False,"next_goal_side":"home","next_goal_result":"void"})):
               data=make_card(fixture,**opts)
               with open(f"visual-preview/{name}.jpg","wb") as out:
                   out.write(data)
