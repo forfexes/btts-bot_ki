@@ -73,6 +73,7 @@ class NextGoalTests(unittest.TestCase):
             key=common.reserve_alert(self.fx,self.metrics)
         self.assertEqual(key,"1000014437")
         self.assertEqual(post.call_args.kwargs["json"]["next_goal_side"],"home")
+        self.assertEqual(post.call_args.kwargs["json"]["signal_tier"],"PREMIUM")
 
         reply=Mock()
         reply.json.return_value={"ok":True,"result":{"message_id":912}}
@@ -92,6 +93,7 @@ class NextGoalTests(unittest.TestCase):
     def test_original_photo_edited_and_results_persisted_separately(self):
         row={**self.fx,"score":"1:2","telegram_message_id":912,
              "message_kind":"photo","next_goal_side":"home",
+             "signal_tier":"PREMIUM",
              "next_goal_result":"won"}
         final={"score":(3,2),"home":{"id":12},"away":{"id":14},"league":"ASEAN"}
         reply=Mock()
@@ -103,8 +105,10 @@ class NextGoalTests(unittest.TestCase):
             settle.edit_original(row,final,True)
         self.assertTrue(post.call_args.args[0].endswith("/editMessageMedia"))
         self.assertEqual(render.call_args.kwargs["next_goal_side"],"home")
+        self.assertEqual(render.call_args.kwargs["metrics"]["tier"],"PREMIUM")
         self.assertEqual(render.call_args.kwargs["next_goal_result"],"won")
         self.assertIn("RICHTIG",post.call_args.kwargs["data"]["media"])
+        self.assertIn("PREMIUM",post.call_args.kwargs["data"]["media"])
 
         response=Mock()
         with patch.dict("os.environ",{"SUPABASE_URL":"https://example.supabase.co",
