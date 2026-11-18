@@ -1,4 +1,4 @@
-name: NETRATTLER V2 V3 Storage Audit
+name: NETRATTLER V2 V3 V4 Storage Audit
 on:
   push:
     branches: [main]
@@ -6,7 +6,7 @@ on:
       - '.github/workflows/netrattler_archive_storage_audit.yml'
   workflow_dispatch: {}
   schedule:
-    - cron: '41 5 * * *'
+    - cron: '41 * * * *'
 permissions:
   contents: read
 jobs:
@@ -16,7 +16,7 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        target: [v2, v3]
+        target: [v2, v3, v4]
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-python@v5
@@ -65,6 +65,7 @@ jobs:
           TARGET: ${{ matrix.target }}
           V2_DATABASE_URL: ${{ secrets.V2_DATABASE_URL }}
           V3_DATABASE_URL: ${{ secrets.V3_DATABASE_URL }}
+          V4_DATABASE_URL: ${{ secrets.V4_DATABASE_URL }}
         run: |
           python - <<'PY'
           import os
