@@ -138,6 +138,10 @@ def build_rows(by_player, team, match, league, kickoff):
     return cands[:MAX_PER_TEAM]
 
 
+class HistoryQuotaBlocked(RuntimeError):
+    """The Supabase REST service has imposed a quota restriction."""
+
+
 def fetch_team_rows(url, key, team):
     r = requests.get(
         f"{url}/rest/v1/player_game_log",
@@ -147,7 +151,14 @@ def fetch_team_rows(url, key, team):
                 "select": "player_name,player_key,team,match_date,minutes,fouls_committed,fouls_won,tackles,shots,sot,passes,yellow_cards"},
         timeout=25,
     )
-    return r.json() if r.ok and isinstance(r.json(), list) else []
+    if r.status_code == 402:
+        # Do not repeat blocked calls for every player/team. Historical prop
+        # evidence is unavailable until the project quota is restored.
+        raise HistoryQuotaBlocked("player_game_log quota blocked")
+    if not r.ok:
+        return []
+    payload=r.json()
+    return payload if isinstance(payload, list) else []
 
 
 STATS_LAST = {}
@@ -158,6 +169,8 @@ def rows_for_matches(matches, url, key, norm):
     if os.getenv("NETRATTLER_FOUL_PROPS", "on").lower() == "off":
         return []
     out = []
+    # In-run cache only: never mix similarly named clubs or reuse yesterday's data.
+    history_cache = {}
     STATS_LAST.clear()
     STATS_LAST.update({"matches": len(matches), "teams": 0, "teams_with_rows": 0, "teams_with_players": 0, "legs": 0, "unmatched": []})
     for m in matches:
@@ -171,7 +184,17 @@ def rows_for_matches(matches, url, key, norm):
             continue
         for team in parts:
             STATS_LAST["teams"] += 1
-            rows = fetch_team_rows(url, key, team.strip())
+            exact_team = team.strip()
+            if exact_team not in history_cache:
+                try:
+                    history_cache[exact_team] = fetch_team_rows(url, key, exact_team)
+                except HistoryQuotaBlocked:
+                    STATS_LAST["quota_blocked"] = True
+                    STATS_LAST["failed_at_team"] = exact_team
+                    STATS_LAST["legs"] = 0
+                    STATS_LAST["profiles"] = 0
+                    return []  # No partial history-derived tips on blocked data.
+            rows = history_cache[exact_team]
             STATS_LAST["teams_with_rows"] += 1 if rows else 0
             by = player_rows(rows, norm(team), norm, team)
             STATS_LAST["teams_with_players"] += 1 if by else 0
