@@ -10,6 +10,7 @@ on:
       - 'assets/netrattler_template_corner_original.webp'
       - 'test_netrattler_corner_original.py'
       - 'netrattler_stats_match_cards.py'
+      - 'test_netrattler_ai_match_card_design.py'
       - 'netrattler_builder_cards.py'
       - 'netrattler_neon_design.py'
       - 'netrattler_original_template_renderer.py'
@@ -38,6 +39,8 @@ jobs:
           python-version: '3.11'
       - run: python -m pip install --prefer-binary requests pillow pytest
       - run: python -m pytest -q test_netrattler_visual_cards.py test_netrattler_commons_inventory.py test_netrattler_commons_photos.py
+      - name: Normal NETRATTLER AI match-card template regression
+        run: python -m pytest -q test_netrattler_ai_match_card_design.py
       - name: Pixel-level visual PNG regression tests
         run: python -m pytest -q test_netrattler_visual_review.py
       - name: Original template and mocked Telegram transport integration

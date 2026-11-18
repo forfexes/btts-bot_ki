@@ -27,6 +27,8 @@ on:
       - "assets/netrattler_template_builder_original.webp"
       - "assets/netrattler_template_goal_original.webp"
       - "netrattler_visual_review.py"
+      - "test_netrattler_ai_match_card_design.py"
+      - "netrattler_stats_match_cards.py"
       - "netrattler_card_visual_preview.py"
       - "test_netrattler_visual_review.py"
       - "netrattler_visual_gate.py"
@@ -121,6 +123,8 @@ jobs:
         run: python -m unittest -v test_netrattler_legacy_builder_speed.py
       - name: Navy visual cards, H2H authentication and photo delivery regression
         run: python -m pytest -q test_netrattler_crest_identity.py test_netrattler_visual_cards.py
+      - name: NETRATTLER AI group-only image regression
+        run: python -m pytest -q test_netrattler_ai_match_card_design.py
       - name: Uploaded season profiles and reference-image identity regression
         run: python -m pytest -q test_netrattler_reference_sources.py
       - name: Compact API history and corner isolation regression
