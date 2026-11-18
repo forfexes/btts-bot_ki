@@ -21,6 +21,9 @@ jobs:
         env:
           TOKEN: ${{ secrets.TELEGRAM_TOKEN }}
           BUILDER_CHAT: ${{ secrets.TELEGRAM_GROUP_BUILDER }}
+          PROPS_CHAT: ${{ secrets.TELEGRAM_GROUP_PLAYER_PROPS }}
+          STATS_CHAT: ${{ secrets.TELEGRAM_GROUP_STATS }}
+          DEFAULT_CHAT: ${{ secrets.TELEGRAM_CHAT_ID }}
           TEST_CHAT: ${{ secrets.TELEGRAM_TEMPLATE_TEST_CHAT_ID }}
         run: |
           python - <<'PY'
@@ -28,7 +31,9 @@ jobs:
           import requests
           from PIL import Image, ImageDraw, ImageFont
           token = os.environ.get("TOKEN","")
-          group = os.environ.get("BUILDER_CHAT","")
+          sources=("BUILDER_CHAT","PROPS_CHAT","STATS_CHAT","DEFAULT_CHAT")
+          route=next(((name,os.environ[name]) for name in sources if os.environ.get(name)),None)
+          group=route[1] if route else ""
           test = os.environ.get("TEST_CHAT","")
           assert token, "TELEGRAM_TOKEN is not configured"
           endpoint = f"https://api.telegram.org/bot{token}/"
@@ -38,7 +43,7 @@ jobs:
           if group:
               chat = requests.post(endpoint+"getChat", json={"chat_id":group},timeout=15).json()
               assert chat.get("ok"), "Configured Builder chat is inaccessible"
-              print("builder_destination=VERIFIED")
+              print("builder_destination=VERIFIED via "+route[0])
           else:
               print("builder_destination=NOT_CONFIGURED")
           for filename in (
