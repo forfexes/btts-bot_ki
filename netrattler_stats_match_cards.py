@@ -1000,6 +1000,27 @@ def _player_photo(name, team=""):
             urls.append(api_portrait)
     except Exception:
         pass
+    # Official Premier League player photos are a reliable fallback when API-Football
+    # and player-log identity matches are unavailable. Require an exact player
+    # name AND an unambiguous club match to avoid inserting a wrong face.
+    try:
+        resp = requests.get("https://fantasy.premierleague.com/api/bootstrap-static/", timeout=7)
+        if resp.ok:
+            payload_fpl = resp.json() or {}
+            clubs = {t.get("id"): t.get("name", "") for t in payload_fpl.get("teams", [])}
+            def fpl_name(e):
+                return str(e.get("first_name") or "").strip() + " " + str(e.get("second_name") or "").strip()
+            candidates = [e for e in payload_fpl.get("elements", [])
+                          if _norm(fpl_name(e)) == _norm(clean_name)
+                          and _norm(clubs.get(e.get("team"), "")) == _norm(team)
+                          and e.get("photo")]
+            if len(candidates) == 1:
+                photo_code = str(candidates[0]["photo"]).split(".")[0]
+                if photo_code.isdigit():
+                    urls.append("https://resources.premierleague.com/premierleague/photos/players/250x250/p"
+                                + photo_code + ".png")
+    except Exception:
+        STATS["player_fpl_err"] = STATS.get("player_fpl_err", 0) + 1
     # FotMob's football-only search provides a verified player id and team.
     try:
         resp = requests.get(
