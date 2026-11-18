@@ -251,6 +251,22 @@ def run():
             report["stats_checked"]+=1
             metrics=metrics_from_fotmob(detail,fx)
         if not metrics:
+            if detail is not None:
+                content=(detail or {}).get("content") or {}
+                stats=content.get("stats") or {}
+                periods=(stats.get("Periods") or {}) if isinstance(stats,dict) else {}
+                shotmap=content.get("shotmap")
+                sample=(shotmap[:2] if isinstance(shotmap,list)
+                        else (str(shotmap)[:500] if shotmap is not None else None))
+                print("LMG_DETAIL_MISSING_STATS",json.dumps({
+                    "fixture":fx["fixture_id"],"minute":fx["minute"],
+                    "home":fx["home"],"away":fx["away"],
+                    "detail_keys":list(content)[:15],
+                    "stats_periods":list(periods)[:8] if isinstance(periods,dict) else [],
+                    "shotmap_type":type(shotmap).__name__,
+                    "shotmap_sample":str(sample)[:600],
+                    "liveticker_type":type(content.get("liveticker")).__name__
+                },ensure_ascii=False),flush=True)
             # Prefer recovery of THIS SAME FotMob fixture, not an unrelated
             # ESPN fixture whose final result could not be settled by FotMob.
             if not espn_board_loaded:
