@@ -118,7 +118,15 @@ jobs:
         with:
           python-version: "3.11"
       - run: python -m pip install --prefer-binary requests Pillow
+      - name: Verify Supabase quota before any live scan
+        id: db
+        env:
+          SUPABASE_URL: ${{ secrets.SUPABASE_URL }}
+          SUPABASE_SERVICE_ROLE_KEY: ${{ secrets.SUPABASE_SERVICE_ROLE_KEY }}
+          SUPABASE_KEY: ${{ secrets.SUPABASE_KEY }}
+        run: python netrattler_lmg_db_preflight.py --workflow-check
       - name: Late-goal scanner - one more goal from minute 65, no odds
+        if: steps.db.outputs.ready == 'true'
         env:
           LMG_SEND: "true"
           LMG_SHADOW_ENABLED: "true"
@@ -128,7 +136,6 @@ jobs:
           SUPABASE_SERVICE_ROLE_KEY: ${{ secrets.SUPABASE_SERVICE_ROLE_KEY }}
           SUPABASE_KEY: ${{ secrets.SUPABASE_KEY }}
         run: |
-          python netrattler_lmg_db_preflight.py
           python netrattler_lmg_fotmob.py
           python netrattler_lmg_settle.py
           python netrattler_lmg_shadow.py settle
