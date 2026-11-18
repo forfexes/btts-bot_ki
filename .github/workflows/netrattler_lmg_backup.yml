@@ -1,0 +1,41 @@
+name: NETRATTLER Goal Hunter Live Backup
+
+on:
+  workflow_dispatch:
+  push:
+    branches: [main]
+    paths:
+      - .github/workflows/netrattler_lmg_backup.yml
+  # Independent trigger for 5-minute scans; Supabase unique key prevents duplicates.
+  schedule:
+    - cron: "0,5,10,15,20,25,30,35,40,45,50,55 * * * *"
+
+permissions:
+  contents: read
+
+concurrency:
+  group: netrattler-lmg-free
+  cancel-in-progress: false
+
+jobs:
+  scan:
+    runs-on: ubuntu-latest
+    timeout-minutes: 7
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+      - name: Install dependencies
+        run: python -m pip install --prefer-binary requests Pillow
+      - name: Goal Hunter live scan and in-place settlement
+        env:
+          LMG_SEND: "true"
+          TELEGRAM_TOKEN: ${{ secrets.TELEGRAM_TOKEN }}
+          TELEGRAM_GROUP_LATE_GOALS: ${{ secrets.TELEGRAM_GROUP_LATE_GOALS }}
+          SUPABASE_URL: ${{ secrets.SUPABASE_URL }}
+          SUPABASE_SERVICE_ROLE_KEY: ${{ secrets.SUPABASE_SERVICE_ROLE_KEY }}
+          SUPABASE_KEY: ${{ secrets.SUPABASE_KEY }}
+        run: |
+          python netrattler_lmg_fotmob.py
+          python netrattler_lmg_settle.py
