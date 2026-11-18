@@ -114,3 +114,35 @@ def test_model_cross_ladder_renders_all_stages():
         tiers=[(2,.5),(3,.2),(4,.05)],tier_shift=False)
     with patch.object(cards,'_player_photo',return_value=b''):
         assert Image.open(io.BytesIO(builder_cards.render_builder_card(pick))).size==(1200,970)
+
+
+def test_new_goal_hunter_has_reference_proportions_and_no_made_up_data():
+    tip={'match':'Team A vs Team B','player':'Player X','team':'Team A',
+         'league':'Test','odds':2.0,'probability':50}
+    with patch.object(cards,'_paste_badge'), patch.object(cards,'_player_photo',return_value=b''):
+        raw=cards.render_scorer_card(tip,'2026-11-18')
+        assert Image.open(io.BytesIO(raw)).size==(1080,1340)
+        updated=cards.render_scorer_card(tip,'2026-11-18',{'marks':{'0':'win'}})
+        assert Image.open(io.BytesIO(updated)).size==(1080,1340)
+
+
+def test_new_builder_six_legs_and_l10_l15_not_invented():
+    from types import SimpleNamespace as S
+    from netrattler_neon_design import _form_label
+    assert _form_label([1]*10,1,10)=='10/10 (100%)'
+    assert _form_label([1]*10,1,15)=='—'
+    assert _form_label([1]*15,1,15)=='15/15 (100%)'
+    legs=[engine.PropLeg(f'Player {i}','Team A','Team A vs Team B',
+            'Test','Shots 1+','shots',1,1.9,.7,'kambi') for i in range(6)]
+    p=S(legs=legs,style='Six',match_date='2026-11-18',stake=.2,
+        variant='6 LEG',status='pending')
+    with patch.object(cards,'_paste_badge'),patch.object(cards,'_player_photo',return_value=b''):
+        payload=builder_cards.render_builder_card(p)
+    assert Image.open(io.BytesIO(payload)).size==(1200,1490)
+
+
+def test_missing_history_and_quote_not_fabricated():
+    from netrattler_neon_design import _form_label, _percent
+    assert _form_label([],1,10)=='—'
+    assert _percent(None) is None
+    assert _percent(120) is None

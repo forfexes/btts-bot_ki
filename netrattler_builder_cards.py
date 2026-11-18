@@ -37,6 +37,9 @@ def builder_leg_label(leg):
 
 
 def render_builder_card(pick):
+    from netrattler_neon_design import render_builder_card as neon_render
+    return neon_render(pick)
+
     import netrattler_stats_match_cards as cards
     import netrattler_builder_engine as engine
     from netrattler_corner_cards import kickoff_label

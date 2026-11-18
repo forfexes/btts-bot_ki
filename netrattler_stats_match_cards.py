@@ -1131,6 +1131,9 @@ def _player_photo(name, team=""):
 
 
 def render_scorer_card(tip, target_date, result=None):
+    from netrattler_neon_design import render_scorer_card as neon_render
+    return neon_render(tip, target_date, result)
+
     from PIL import Image, ImageDraw, ImageFont, ImageOps
 
     w, h = 1080, 880
