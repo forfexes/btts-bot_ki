@@ -37,7 +37,7 @@ def club_same(a, b):
         return True
     # Suffix variants are common in source odds (e.g. "Chapecoense-sc").
     suffixes = ("fc", "sc", "afc", "cf", "pr")
-    variants = lambda s: {s} | {s[:-len(x)] for x in suffixes if s.endswith(x) and len(s) > len(x) + 4}
+    variants = lambda s: {s} | {s[:-len(x)] for x in suffixes if s.endswith(x) and len(s) >= len(x) + 4}
     return bool(variants(a) & variants(b))
 
 
