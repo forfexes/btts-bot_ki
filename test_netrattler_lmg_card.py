@@ -21,6 +21,19 @@ class GoalHunterCards(unittest.TestCase):
         self.assertTrue(lost.startswith(b"\xff\xd8"))
         self.assertNotEqual(opening,final)
         self.assertNotEqual(final,lost)
+    def test_missing_xg_and_espn_fallback_render(self):
+        import io
+        from PIL import Image
+        no_xg={"tier":"STANDARD","teams":{"home":{"shots":10,"sot":4,"corners":3},
+                                                 "away":{"shots":5,"sot":2,"corners":2}}}
+        totals={"tier":"STANDARD","shots":15,"sot":6,"corners":5}
+        with patch.object(card,"crest",return_value=None):
+            a=card.make_card(self.fx,no_xg)
+            b=card.make_card(self.fx,totals)
+        self.assertEqual(Image.open(io.BytesIO(a)).size,(1080,1350))
+        self.assertEqual(Image.open(io.BytesIO(b)).size,(1080,1350))
+        self.assertNotEqual(a,b)
+
     def test_finished_only_and_identity_guard(self):
         feed={"leagues":[{"name":"ASEAN","matches":[{
             "id":1000014437,"home":{"name":"Tampines Rovers FC","score":2},
