@@ -1,0 +1,74 @@
+name: NETRATTLER Commons Player Photo Inventory
+on:
+  workflow_dispatch:
+    inputs:
+      offset:
+        description: "Start player index (0 based)"
+        required: false
+        default: "0"
+      limit:
+        description: "Number of players in this batch (max 10000)"
+        required: false
+        default: "50"
+  push:
+    branches: [main]
+    paths:
+      - '.github/workflows/netrattler_commons_inventory.yml'
+  schedule:
+    - cron: "37 3 * * *"
+permissions:
+  contents: read
+concurrency:
+  group: commons-inventory-${{ github.ref }}
+  cancel-in-progress: false
+jobs:
+  inventory:
+    runs-on: ubuntu-latest
+    timeout-minutes: 50
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+      - name: Install and test metadata-only pipeline
+        run: |
+          python -m pip install --prefer-binary requests pytest
+          python -m pytest -q test_netrattler_commons_inventory.py test_netrattler_commons_photos.py
+      - name: Choose bounded source-roster batch
+        shell: bash
+        env:
+          INPUT_OFFSET: ${{ inputs.offset || '0' }}
+          INPUT_LIMIT: ${{ inputs.limit || '50' }}
+        run: |
+          if [ "$GITHUB_EVENT_NAME" = "schedule" ]; then
+            COUNT=$(python - <<'PY'
+          import csv
+          with open("data/player_season_2026_2027.csv", encoding="utf-8-sig") as f:
+              print(sum(1 for _ in csv.DictReader(f)))
+          PY
+          )
+            BATCHES=$(( (COUNT + 199) / 200 ))
+            OFFSET=$(( (($(date -u +%s) / 86400) % BATCHES) * 200 ))
+            LIMIT=200
+          else
+            OFFSET="$INPUT_OFFSET"
+            LIMIT="$INPUT_LIMIT"
+          fi
+          [[ "$OFFSET" =~ ^[0-9]+$ && "$LIMIT" =~ ^[0-9]+$ ]] || exit 1
+          echo "OFFSET=$OFFSET" >> "$GITHUB_ENV"
+          echo "LIMIT=$LIMIT" >> "$GITHUB_ENV"
+          echo "Commons batch start=$OFFSET size=$LIMIT"
+      - name: Build review-only Commons image attribution CSV
+        run: |
+          python netrattler_commons_inventory.py \
+            --source data/player_season_2026_2027.csv \
+            --output "commons_inventory_${OFFSET}.csv" \
+            --start "$OFFSET" --limit "$LIMIT" --pages 2 --pause 1
+      - name: Upload CSV (no unlicensed photos and no Supabase writes)
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: commons-inventory-${{ env.OFFSET }}-${{ github.run_id }}
+          path: commons_inventory_*.csv
+          retention-days: 90
+          if-no-files-found: warn
