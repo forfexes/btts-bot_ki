@@ -240,13 +240,14 @@ def run():
             report["tier_rejected"]+=1
             continue
         metrics["tier"]=tier
+        metrics["next_goal_side"]=common.select_next_goal(metrics)
         report["qualified"]+=1
         print("LMG_FOTMOB_SIGNAL",json.dumps({
             "fixture":fx["fixture_id"],"minute":fx["minute"],
             "score":[fx["hg"],fx["ag"]],"target":"one_more_goal",
             "stats":metrics},ensure_ascii=False),flush=True)
         if send_enabled:
-            key=common.reserve_alert(fx)
+            key=common.reserve_alert(fx,metrics)
             if key:
                 message_id=common.send_alert(fx,metrics)
                 common.mark_sent(key,message_id)
