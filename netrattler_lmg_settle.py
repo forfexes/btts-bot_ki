@@ -17,7 +17,7 @@ from netrattler_lmg_next_goal import evaluate_next_goal
 def pending():
     url,headers=common._db()
     resp=requests.get(url,headers=headers,params={
-        "select":"alert_key,fixture_id,home,away,minute,score,status,telegram_message_id,sent_at,message_kind,next_goal_side,signal_tier",
+        "select":"alert_key,fixture_id,home,away,minute,score,status,telegram_message_id,sent_at,message_kind,next_goal_side,signal_tier,source",
         "status":"eq.sent","telegram_message_id":"not.is.null",
         "order":"sent_at.asc","limit":"80"},timeout=15)
     resp.raise_for_status()
@@ -40,6 +40,42 @@ def finished_match(feed,fixture_id):
             return {"score":score,"home":home,"away":away,
                     "league":league.get("name") or ""}
     return None
+
+def finished_espn_match(feed,fixture_id):
+    """Only clear 90-minute final score of an exact ESPN fixture may settle."""
+    for event in (feed or {}).get("events") or []:
+        if common._int(event.get("id"))!=common._int(fixture_id):
+            continue
+        status=(event.get("status") or {}).get("type") or {}
+        status_name=str(status.get("name") or "").upper()
+        status_description=str(status.get("description") or "").casefold()
+        # AET and penalties must not settle a regulation-time goal line.
+        if (status.get("state")!="post" or status.get("completed") is not True
+                or not (status_name in ("STATUS_FINAL","STATUS_FULL_TIME")
+                        or (not status_name and status_description in ("final","full time")))):
+            return None
+        try:
+            competition=(event.get("competitions") or [])[0]
+            sides={x.get("homeAway"):x for x in (competition.get("competitors") or [])}
+            home,away=sides["home"],sides["away"]
+            score=(common._int(home.get("score")),common._int(away.get("score")))
+            if any(x is None for x in score):
+                return None
+            hteam=home.get("team") or {}
+            ateam=away.get("team") or {}
+            if not hteam.get("displayName") or not ateam.get("displayName"):
+                return None
+            league=event.get("league") or competition.get("league") or {}
+            leagues=(feed or {}).get("leagues") or []
+            league_name=league.get("name") or (leagues[0].get("name") if len(leagues)==1 else "")
+            return {"score":score,
+                    "home":{"name":str(hteam["displayName"]),"id":None},
+                    "away":{"name":str(ateam["displayName"]),"id":None},
+                    "league":str(league_name)}
+        except (KeyError,IndexError,TypeError,AttributeError):
+            return None
+    return None
+
 
 def edit_original(row,final,won):
     token=os.getenv("TELEGRAM_TOKEN") or os.getenv("TELEGRAM_BOT_TOKEN")
@@ -121,10 +157,22 @@ def main():
                   (sent-dt.timedelta(days=1)).strftime("%Y%m%d"),
                   (sent+dt.timedelta(days=1)).strftime("%Y%m%d")]
             final=None
+            source=row.get("source") or "fotmob"
+            if source not in ("espn","fotmob"):
+                report["unknown"]+=1
+                continue
             for day in days:
-                if day not in cache:
-                    cache[day]=fotmob.fetch_fotmob(day)
-                final=finished_match(cache[day],row["fixture_id"])
+                lookup_key=(source,day)
+                if lookup_key not in cache:
+                    if source=="fotmob":
+                        cache[lookup_key]=fotmob.fetch_fotmob(day)
+                    else:
+                        cache[lookup_key]=common._get(
+                            f"{common.ESPN}/all/scoreboard",
+                            params={"dates":day,"limit":"1000"})
+                final=(finished_match(cache[lookup_key],row["fixture_id"])
+                       if source=="fotmob" else
+                       finished_espn_match(cache[lookup_key],row["fixture_id"]))
                 if final:break
             if final is None:
                 report["unknown"]+=1
