@@ -50,6 +50,22 @@ class SpecializedSourceTests(unittest.TestCase):
         self.assertEqual(len(calls), 1)
         self.assertEqual(calls[0][1]["params"]["key"], "example")
         self.assertEqual(coverage_report(rows)["with_corners_both"], 0)
+    def test_large_provider_id_is_not_dropped(self):
+        match = {**MATCH, "id": 453873, "homeID": 139123, "awayID": 140564}
+        row = normalize_footystats_match(match, EXAMPLE_SEASON)
+        self.assertEqual(row["event_id"], "453873")
+        self.assertEqual(row["home_id"], "139123")
+        self.assertEqual(row["away_id"], "140564")
+    def test_live_rows_never_enter_coverage(self):
+        self.assertEqual(coverage_report([{"source": "footystats", "data_kind": "live",
+                                           "live_eligible": True}])["completed_matches"], 0)
+    def test_registered_sources_are_disabled(self):
+        from pathlib import Path
+        catalog = (Path(__file__).resolve().parent / "netrattler_source_hub.py").read_text("utf-8")
+        for name in ("footystats_licensed_history", "sofascore_reference_only",
+                     "overlyzer_research_only", "statisticsports_research_only",
+                     "besoccer_research_only"):
+            self.assertIn('SourceAdapter("' + name + '"', catalog)
     def test_refuse_bad_demo_id(self):
         with self.assertRaisesRegex(ValueError, "restricted"):
             fetch_footystats_history(api_key="example", season_id=1, get=lambda *a, **k: None)
