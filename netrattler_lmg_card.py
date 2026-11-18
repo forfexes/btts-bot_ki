@@ -96,7 +96,8 @@ def _stats(d, metrics):
                 center(d, str(val), 742, 914 + i*66, 43, WHITE)
 
 
-def make_card(fixture, metrics=None, *, final_score=None, won=None):
+def make_card(fixture, metrics=None, *, final_score=None, won=None,
+              next_goal_side=None, next_goal_result=None):
     """Open: verified team statistics; finished: only verified final score and outcome."""
     if not TEMPLATE.is_file():
         raise RuntimeError("Approved GOAL HUNTER neon template missing")
@@ -123,10 +124,18 @@ def make_card(fixture, metrics=None, *, final_score=None, won=None):
         center(d, "ENDRESULTAT", 565, 367, 35, GOLD, max_width=225)
         score = str(final_score)
     center(d, score, 564, 465, 100, WHITE, max_width=302, italic=True, outline=3)
+    if next_goal_side is None:
+        next_goal_side = (metrics or {}).get("next_goal_side")
+    if next_goal_side not in (None, "home", "away"):
+        raise ValueError("Unsupported next-goal team selection")
     # The live bet line is a fixed market; only the tier is dynamic.
     center(d, (metrics or {}).get("tier") or "STANDARD", 853, 734, 32, GOLD, max_width=240)
     if final_score is None:
         _stats(d, metrics)
+        if next_goal_side:
+            next_name = home if next_goal_side == "home" else away
+            center(d, "NÄCHSTES TOR: " + next_name, 565, 789, 32, GOLD,
+                   max_width=900)
         center(d, "AUSWERTUNG: OFFEN", 602, 1204, 47, GOLD, max_width=815)
     else:
         # Remove *all* open-statistics and their labels; keep the original glowing cyan border.
@@ -135,6 +144,16 @@ def make_card(fixture, metrics=None, *, final_score=None, won=None):
         center(d, f"{fixture['minute']}. MINUTE", 564, 971, 68, WHITE)
         center(d, f"SPIELSTAND BEIM TIPP: {fixture['hg']}:{fixture['ag']}",
                564, 1055, 34, WHITE, max_width=820)
+        if next_goal_side:
+            next_name = home if next_goal_side == "home" else away
+            wording = {"won": "RICHTIG", "lost": "FALSCH",
+                       "void": "KEIN TOR", "unverified": "NICHT VERIFIZIERT",
+                       None: "OFFEN"}.get(next_goal_result)
+            if wording is None:
+                raise ValueError("Invalid next-goal result")
+            tint = GREEN if next_goal_result == "won" else (RED if next_goal_result == "lost" else WHITE)
+            center(d, f"NÄCHSTES TOR: {next_name} · {wording}",
+                   564, 1104, 28, tint, max_width=850)
         if won is not True and won is not False:
             raise ValueError("Final result requires a verified win/loss")
         color = GREEN if won else RED
