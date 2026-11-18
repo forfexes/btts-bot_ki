@@ -891,6 +891,33 @@ def _edit_photo(token, chat, message_id, payload, log):
         return False
 
 
+def _result_matches_card_entry(market, tip, result, entries):
+    """Same match is not enough: scorer photo belongs to exactly one player."""
+    group = str(result.get("group") or "")
+    market = str(market)
+    if market == "scorer" or group == "scorer":
+        if market != "scorer" or group != "scorer":
+            return False
+        saved_name = _norm(tip.get("player") or tip.get("player_name") or "")
+        settled_name = _norm(result.get("player") or "")
+        if not saved_name or saved_name != settled_name:
+            return False  # Never apply another striker's result to this image.
+        saved_team = _norm(tip.get("team") or tip.get("player_team") or "")
+        settled_team = _norm(result.get("team") or "")
+        if saved_team and settled_team and saved_team != settled_team:
+            return False
+        return True
+    odds_t = _number(tip.get("odds") or tip.get("oddsYes"))
+    odds_r = _number(result.get("odds"))
+    same_odds = odds_t is not None and odds_r is not None and abs(odds_t - odds_r) < 0.011
+    if market != group and not same_odds:
+        return False
+    if market == group and odds_t and odds_r and not same_odds and (
+            sum(str(m) == market for m, _ in entries) > 1):
+        return False
+    return True
+
+
 def update_cards_with_results(token, results, log=print):
     """results: list of dicts {match, status('win'/'loss'), odds, group, ft, ht}.
     Re-renders the stored card of that match with a ✔/✖ per settled market and edits
@@ -932,19 +959,25 @@ def update_cards_with_results(token, results, log=print):
                 marks = dict(old.get("marks") or {})
                 ft = old.get("ft") or ""
                 ht = old.get("ht") or ""
+                matched = False
                 for res in res_list:
-                    ft = res.get("ft") or ft
-                    ht = res.get("ht") or ht
+                    result_day = str(res.get("tip_date") or res.get("date") or "")[:10]
+                    if result_day and str(card.get("card_date") or "")[:10] != result_day:
+                        continue  # Repeated same pairing on another date.
                     for i, (m, t) in enumerate(entries):
-                        odds_t = _number(t.get("odds") or t.get("oddsYes"))
-                        odds_r = _number(res.get("odds"))
-                        same_odds = odds_t is not None and odds_r is not None and abs(odds_t - odds_r) < 0.011
-                        if str(m) == str(res.get("group")) or same_odds:
-                            if str(m) == str(res.get("group")) and odds_t and odds_r and not same_odds and len(
-                                    [1 for mm, _ in entries if str(mm) == str(m)]) > 1:
-                                continue
-                            marks[str(i)] = res.get("status")
-                if not marks:
+                        if not _result_matches_card_entry(m, t, res, entries):
+                            continue
+                        matched = True
+                        status = str(res.get("status") or "").lower()
+                        if status in ("win", "loss", "void"):
+                            marks[str(i)] = status
+                        elif status == "pending" and str(m) == "scorer":
+                            # Undo previous incorrectly shared scorer marks.
+                            marks.pop(str(i), None)
+                    if matched:
+                        ft = res.get("ft") or ft
+                        ht = res.get("ht") or ht
+                if not matched:
                     diag["no_marks"] += 1
                     continue
                 if old.get("marks") == marks and old.get("ft") == ft:

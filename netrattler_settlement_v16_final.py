@@ -735,7 +735,8 @@ def send_result_cards(newly_closed: Sequence[Dict[str, Any]]) -> int:
         if not res and row.get("result_home") not in (None, ""):
             res = {"home_score": row.get("result_home"), "away_score": row.get("result_away")}
         st = normalized_status(row.get("status"))
-        if not (home and away and isinstance(res, dict)) or st not in {"win", "loss", "void"}:
+        if not (home and away and isinstance(res, dict)) or (
+                st not in {"win", "loss", "void"} and not (group == "scorer" and st == "pending")):
             continue
         hs, as_ = res.get("home_score"), res.get("away_score")
         if (hs in (None, "") or as_ in (None, "")) and st != "void":
@@ -750,7 +751,11 @@ def send_result_cards(newly_closed: Sequence[Dict[str, Any]]) -> int:
         data = unpack(row.get("tip_payload") or {})
         results.append({
             "match": f"{home} vs {away}", "status": st, "group": group,
-            "odds": anyv(data, ["odds", "oddsYes"], 0), "ft": f"{hs}-{as_}" if hs != "" and as_ != "" else "",
+            "odds": anyv(data, ["odds", "oddsYes"], 0),
+            "player": anyv(data, ["player", "player_name", "scorer_name"], ""),
+            "team": anyv(data, ["team", "player_team"], ""),
+            "tip_date": str(row.get("tip_date") or ""),
+            "ft": f"{hs}-{as_}" if hs != "" and as_ != "" else "",
             "ht": f"{hth}-{hta}" if hth not in (None, "") and hta not in (None, "") else "",
         })
     n = update_cards_with_results(TG_TOKEN, results, log=log)
@@ -2988,9 +2993,13 @@ def main() -> None:
     retry_unedited_originals(existing, edit_updates)
     try:
         _today = datetime.now(timezone.utc).date()
-        _recent = [r for r in (list(existing) + list(settled))
-                   if r.get("status") in {"win", "loss", "void"}
-                   and str(r.get("tip_date") or "")[:10] >= str(_today - timedelta(days=2))]
+        _recent_by_tip = {}
+        for r in list(existing) + list(settled):
+            if (r.get("status") in {"win", "loss", "void"} or
+                    (r.get("market_group") == "scorer" and r.get("status") == "pending")) and (
+                    str(r.get("tip_date") or "")[:10] >= str(_today - timedelta(days=2))):
+                _recent_by_tip[str(r.get("tip_id") or r.get("settlement_id"))] = r
+        _recent = list(_recent_by_tip.values())
     except Exception:
         _recent = list(newly_closed)
     send_result_cards(_recent or newly_closed)
