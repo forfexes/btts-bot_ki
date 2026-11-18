@@ -73,10 +73,10 @@ def club_for_player(name, match, day):
         rows = r.json()
         if not isinstance(rows, list):
             return ""
-        teams = {side for row in rows if isinstance(row, dict) and
-                 clean(row.get("player_name")) == clean(name)
-                 for side in (home, away) if club_same(row.get("team"), side)}
-        # Never choose between two clubs, nor trust another fixture's squad.
+        teams = {str(row.get("team") or "") for row in rows
+                 if isinstance(row, dict) and clean(row.get("player_name")) == clean(name)
+                 and any(club_same(row.get("team"), side) for side in (home, away))}
+        # Retain the exact stored team spelling for strict L15 photo/stat lookup.
         return next(iter(teams)) if len(teams) == 1 else ""
     except (requests.RequestException, ValueError, TypeError):
         return ""
@@ -204,6 +204,19 @@ def validate_builder(pick):
         fixed.append(updated)
     if len(fixed) != len(legs):
         reasons.add("incomplete_player_identity")
+    if len(fixed) == len(legs):
+        probabilities = [getattr(x, "probability", None) for x in fixed]
+        try:
+            import math
+            ps = [float(v) for v in probabilities]
+            if not all(0.01 <= v <= 0.99 for v in ps):
+                reasons.add("missing_valid_model_probability")
+            else:
+                # Independently modelled leg estimates; do not claim a verified
+                # correlation-adjusted number without an empirical pair model.
+                model_joint = math.prod(ps)
+        except (TypeError, ValueError, OverflowError):
+            reasons.add("missing_valid_model_probability")
     if len({str(x.match) for x in fixed}) == 1:
         # Same-game prices cannot be obtained by multiplying individual odds.
         q = neon._number(getattr(pick, "combined_bookmaker_quote", None))
@@ -218,6 +231,17 @@ def validate_builder(pick):
         return None, sorted(reasons)
     prepared = copy.copy(pick)
     prepared.legs = fixed
+    prepared.joint_probability = model_joint
+    # Only label high confidence from verified sample depth *and* all leg
+    # quality scores; do not promote an uncertain selection to HIGH.
+    q = [getattr(x, "quality", None) for x in fixed]
+    try:
+        qs = [float(v) for v in q]
+    except (TypeError, ValueError):
+        qs = []
+    prepared.confidence = ("HOCH" if len(qs) == len(fixed) and min(qs) >= 0.70
+                           else "MITTEL" if len(qs) == len(fixed) and min(qs) >= 0.55
+                           else "NIEDRIG")
     return prepared, []
 
 
