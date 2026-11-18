@@ -446,7 +446,8 @@ def run(rows, match_date, send, url, key, logger=print):
             except Exception as image_exc:
                 logger(f"Modell-Builder Bild nicht verfügbar: {type(image_exc).__name__}")
             if receipt is None:
-                receipt = send(msg)
+                logger("Modell-Builder nicht gesendet: Bildkarte nicht freigegeben; kein Text-Fallback")
+                continue
         except Exception as exc:
             logger(f"Modell-Builder Telegram-Send fehlgeschlagen: {type(exc).__name__}")
             continue  # Reservierung bleibt bestehen, kein automatischer Zweitversuch.

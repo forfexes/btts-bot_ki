@@ -28069,15 +28069,19 @@ def main():
                     return send_telegram(msg, chat_id=_builder_chat)
 
                 def _send_builder_pick(pick, msg):
+                    # Never replace a rejected image with a legacy plain-text
+                    # BET BUILDER. The image preflight must approve real
+                    # portraits, L15, kickoff and the quoted same-game price.
                     if pick.legs:
                         try:
                             from netrattler_builder_cards import send_builder_card
                             mid = send_builder_card(TELEGRAM_TOKEN, _builder_chat, pick, log=log)
                             if mid:
                                 return mid
-                        except Exception:
-                            pass
-                    return _send_builder(msg)
+                        except Exception as exc:
+                            log(f"   🏗️ Builder-Bildfehler: {type(exc).__name__}", "WARN")
+                    log("   🏗️ Builder nicht gesendet: Originalkarte unvollständig; kein Text-Fallback", "WARN")
+                    return None
 
                 _sent_n, _picks = run_builder_engine(
                     raw_props=_builder_prop_pool,

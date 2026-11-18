@@ -97,7 +97,9 @@ def test_model_builder_records_receipt_for_original_edit(monkeypatch):
         return _Response()
     monkeypatch.setattr(mb.requests, "post", post)
     monkeypatch.setattr(mb.requests, "patch", patch)
-    assert mb.run([], "2026-10-28", lambda msg: 12345, "https://db.invalid", "key") == 1
+    monkeypatch.setattr(__import__("netrattler_builder_cards"), "send_model_builder_card",
+                        lambda pick, day, msg, logger: {"message_id": 12345, "chat_id": "-100987", "text": msg})
+    assert mb.run([], "2026-10-28", lambda msg: (_ for _ in ()).throw(AssertionError("no text fallback")), "https://db.invalid", "key") == 1
     assert captured["reservation"]["telegram_sent"] is False
     assert "keine Buchmacherquote" in captured["reservation"]["message_text"]
     assert captured["patch"]["telegram_sent"] is True
@@ -126,7 +128,9 @@ def test_model_builder_actual_chat_receipt_overrides_config(monkeypatch):
     import json
     monkeypatch.setattr(mb.requests, "patch", patch)
     receipt = {"message_id": 987, "chat_id": "-100actual", "text": "actual text"}
-    assert mb.run([], "2026-10-28", lambda msg: receipt, "https://db.invalid", "key") == 1
+    monkeypatch.setattr(__import__("netrattler_builder_cards"), "send_model_builder_card",
+                        lambda pick, day, msg, logger: receipt)
+    assert mb.run([], "2026-10-28", lambda msg: (_ for _ in ()).throw(AssertionError("no text fallback")), "https://db.invalid", "key") == 1
     assert captured["telegram_chat_id"] == "-100actual"
     assert captured["message_text"] == "actual text"
 
@@ -227,3 +231,15 @@ def test_future_timezone_offset_and_exact_kickoff():
     now = mb.datetime(2026, 10, 29, 20, 0, tzinfo=mb.timezone.utc)
     assert mb._future_kickoff("2026-10-29T22:00:00+01:00", now)
     assert not mb._future_kickoff("2026-10-29T21:00:00+01:00", now)
+
+
+def test_unrenderable_model_builder_never_uses_plain_text_fallback(monkeypatch):
+    _one_pick(monkeypatch)
+    monkeypatch.setattr(mb.requests, "post", lambda *args, **kwargs: _Response())
+    monkeypatch.setattr(mb.requests, "patch",
+                        lambda *args, **kwargs: (_ for _ in ()).throw(AssertionError("no receipt")))
+    monkeypatch.setattr(__import__("netrattler_builder_cards"), "send_model_builder_card",
+                        lambda *args, **kwargs: None)
+    sent = []
+    assert mb.run([], "2026-10-28", sent.append, "https://db.invalid", "key") == 0
+    assert sent == []
