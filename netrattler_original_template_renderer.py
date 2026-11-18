@@ -135,7 +135,9 @@ def _builder_canvas(legs):
         raise ValueError("2–6 Legs nötig für Originalvorlage")
     original=_base(str(BUILDER_IMAGE))
     if n==6:
-        return original,0
+        # Cached reference is immutable; every tip needs its own pixel buffer.
+        # Mutating it leaks the previous player's photo into the next tip.
+        return original.copy(),0
     upper_y=405+100*n
     footer_y=1013
     im=Image.new("RGB",(1122,upper_y+1402-footer_y))
