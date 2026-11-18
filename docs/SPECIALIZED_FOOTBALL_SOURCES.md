@@ -15,6 +15,8 @@ The data access status is checked against official provider documentation.
 ## Implementation
 
 - `netrattler_specialized_sources.py`: documented FootyStats API fetch for completed historical matches, safe shape normalization, source audit.
+- `netrattler_specialized_merge_backtest.py`: exact provider-ID merge for completed fixtures; quarantine conflicts and contradictory duplicate records, retain missing values as missing; never join by similar club names. Live-only chronological replay rejects future information and requires real original model decisions.
+- `test_netrattler_specialized_merge_backtest.py`: offline checks for mismatched home/away IDs, kickoff times, double-counted games, contradictory statistics and statistical-leakage safeguards.
 - `netrattler_source_hub.py`: disabled registrations for these 5 research/vendor entries; not routed to production.
 - `test_netrattler_specialized_sources.py`: offline tests for IDs, bad data, missing stats, restricted demo key, no secrets in exceptions, no live/odds contamination.
 - `.github/workflows/netrattler_specialized_sources.yml`: manual and push-triggered read-only official-sample probe; JSON report stored as 3-day Actions artifact.
@@ -30,6 +32,12 @@ python netrattler_specialized_sources.py --demo --out specialized-source-report.
 The demo is **Premier League 2018–19 only** (FootyStats season 1625), so passing this does not establish coverage for other leagues or live performance.
 
 To audit a licensed season locally, set `FOOTYSTATS_API_KEY` and `FOOTYSTATS_SEASON_ID` as environment variables, then run `python netrattler_specialized_sources.py`. Keep credentials out of GitHub source. Production routing stays disabled until the licensed scope, lineup/team cross-provider identities and chronology-safe historical backtest are validated.
+
+## Validation result, 18 November 2026
+
+GitHub Actions specialist audit **33/33 tests passed** on the final source-merge build. Official FootyStats public 2018/19 sample: **200 unique historical matches**, no duplicates, no conflicting groups; full shots, shots-on-target and corners coverage 200/200.
+
+**Important:** There are **zero verified in-play snapshots and no paired baseline-vs-extra-source predictions** in this audit. The replay result is `not_backtestable_no_live_snapshots`, so **no Goal Hunter uplift or improved win rate is established**. The historical figures must not flow into live tips. Repeated matches are combined only when a verified provider-ID/team-ID/kickoff crosswalk exists; cross-source matches verified by this sample: **0**.
 
 ## Gates for adding a provider to production
 
