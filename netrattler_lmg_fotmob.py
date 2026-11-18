@@ -192,7 +192,7 @@ def coverage_diagnostics(feed):
                 continue
             live+=1
             raw=str((status.get("liveTime") or {}).get("short") or "")
-            found=re.search(r"(\\d{1,3})",raw)
+            found=re.search(r"(\d{1,3})",raw)
             if not found:
                 unknown+=1
                 continue
