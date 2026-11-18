@@ -57,6 +57,7 @@ def test_builder_keeps_verified_player_identity_and_receipt():
     assert Image.open(io.BytesIO(payload)).size==(1200,810)
     with patch.object(builder_cards,'render_builder_card',return_value=payload), \
          patch("netrattler_visual_gate.strict_enabled",return_value=False), \
+         patch("netrattler_visual_review.review_png",return_value=Mock(passed=True,problems=[])), \
          patch.object(cards,'_send_photo',return_value=123):
         assert builder_cards.send_builder_card('token','chat',p)==123
 

@@ -1275,6 +1275,11 @@ def send_scorer_card(token, chat, tip, target_date, log=print, return_id=False):
         return False
     try:
         payload = render_scorer_card(tip, target_date)
+        from netrattler_visual_review import review_png
+        inspection = review_png(payload, "scorer")
+        if not inspection.passed:
+            log("Goal-Hunter-PNG VISUAL FAIL: " + ",".join(inspection.problems))
+            return False
     except Exception as exc:
         log(f"Scorer-Card übersprungen: {type(exc).__name__}: {str(exc)[:80]}")
         return False

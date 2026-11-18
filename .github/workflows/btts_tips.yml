@@ -17,6 +17,7 @@ on:
       - 'netrattler_corner_cards.py'
       - 'netrattler_builder_cards.py'
       - 'netrattler_neon_design.py'
+      - 'netrattler_visual_review.py'
       - 'netrattler_visual_gate.py'
       - '.github/workflows/btts_tips.yml'
       - "netrattler_1x_verified_props.py"

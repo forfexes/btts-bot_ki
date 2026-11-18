@@ -126,6 +126,11 @@ def send_builder_card(token,chat,pick,log=print):
         return None
     try:
         payload=render_builder_card(checked)
+        from netrattler_visual_review import review_png
+        inspection = review_png(payload, "builder", legs=len(checked.legs))
+        if not inspection.passed:
+            log("Builder-PNG VISUAL FAIL: " + ",".join(inspection.problems))
+            return None
         mid=cards._send_photo(token,chat,'',payload,log)
         return mid if isinstance(mid,int) and not isinstance(mid,bool) and mid>0 else None
     except Exception as exc:

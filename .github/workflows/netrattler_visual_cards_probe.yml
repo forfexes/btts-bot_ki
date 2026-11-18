@@ -8,6 +8,11 @@ on:
       - 'netrattler_corner_cards.py'
       - 'netrattler_stats_match_cards.py'
       - 'netrattler_builder_cards.py'
+      - 'netrattler_neon_design.py'
+      - 'netrattler_visual_review.py'
+      - 'netrattler_card_visual_preview.py'
+      - 'test_netrattler_visual_review.py'
+      - 'netrattler_visual_gate.py'
       - 'netrattler_commons_inventory.py'
       - 'netrattler_commons_photos.py'
       - 'test_netrattler_commons_inventory.py'
@@ -25,6 +30,17 @@ jobs:
           python-version: '3.11'
       - run: python -m pip install --prefer-binary requests pillow pytest
       - run: python -m pytest -q test_netrattler_visual_cards.py test_netrattler_commons_inventory.py test_netrattler_commons_photos.py
+      - name: Pixel-level visual PNG regression tests
+        run: python -m pytest -q test_netrattler_visual_review.py
+      - name: Render 2/4/6-leg Builder and Goal Hunter PNG previews
+        run: python netrattler_card_visual_preview.py --outdir visual_review_previews
+      - name: Publish image previews and visual QA report
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: netrattler-visual-qa-previews
+          path: visual_review_previews/
+          retention-days: 7
       - name: Read-only H2H and club crest check
         env:
           API_FOOTBALL_KEYS: ${{ secrets.API_FOOTBALL_KEYS }}
