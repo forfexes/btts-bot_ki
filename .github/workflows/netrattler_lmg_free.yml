@@ -9,9 +9,9 @@ on:
       - netrattler_last_minute_goal.py
       - test_netrattler_lmg_free.py
       - .github/workflows/netrattler_lmg_free.yml
-  # At most 14 bookmaker REST calls/day = 434 in a 31-day month.
+  # Keyless ESPN live scanning, 24h at odd ten-minute slots.
   schedule:
-    - cron: "7,37 15-21 * * *"
+    - cron: "3,13,23,33,43,53 * * * *"
 
 permissions:
   contents: read
@@ -63,10 +63,9 @@ jobs:
         with:
           python-version: "3.11"
       - run: python -m pip install --prefer-binary requests
-      - name: Free live scanner - never calls API-Football
+      - name: Late-goal scanner - one more goal from minute 65, no odds
         env:
-          PULSESCORE_API_KEY: ${{ secrets.PULSESCORE_API_KEY }}
-          LMG_SEND: ${{ vars.LMG_SEND || 'false' }}
+          LMG_SEND: "true"
           TELEGRAM_TOKEN: ${{ secrets.TELEGRAM_TOKEN }}
           TELEGRAM_GROUP_LATE_GOALS: ${{ secrets.TELEGRAM_GROUP_LATE_GOALS }}
           SUPABASE_URL: ${{ secrets.SUPABASE_URL }}
