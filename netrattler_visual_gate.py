@@ -308,9 +308,35 @@ def validate_scorer(tip, day):
         reasons.append("missing_scorer_photo")
     if any(not _picture_ok(cards._badge_bytes(s)) for s in (home, away)):
         reasons.append("missing_scorer_crest")
-    if cards._price(tip) is None or cards._pct(tip.get("probability")) is None:
+    odds = cards._price(tip)
+    prob = cards._pct(tip.get("probability"))
+    source = str(tip.get("_source") or tip.get("source") or
+                 tip.get("bookmaker") or tip.get("odds_source") or "").strip()
+    if odds is None or prob is None:
         reasons.append("missing_scorer_odds_or_probability")
+    else:
+        from netrattler_scorer_qualification import qualifies
+        approved, why = qualifies(odds, prob, source)
+        if not approved:
+            reasons.append("scorer_quote_gate_" + why)
+        fair = cards._number(tip.get("fairOdds") if tip.get("fairOdds") is not None
+                             else tip.get("fair_odds"))
+        if fair is not None and (fair <= 0 or abs(fair - 100.0 / prob) > 0.10):
+            reasons.append("inconsistent_scorer_fair_odds")
+    if (tip.get("_synthetic") or tip.get("synthetic") or
+            tip.get("estimated_odds") or tip.get("_no_real_odds") or
+            source.lower() in ("test", "test_only", "demo", "synthetic")):
+        reasons.append("unverified_scorer_quote_origin")
     gpg = cards._number(tip.get("goals_per_game"))
     if gpg is None or gpg < 0:
         reasons.append("missing_scorer_goals_per_game")
+    elif name and team:
+        # A supplied rate must agree with actual pre-kickoff player logs when
+        # there are enough observations; never trust an unexplained 0.30/0.40.
+        from netrattler_neon_design import _observed_game_log
+        measured = _observed_game_log(name, team, "score", str(day or "")[:10])
+        if len(measured) >= 10:
+            actual = sum(measured) / len(measured)
+            if abs(actual - gpg) > 0.025:
+                reasons.append("inconsistent_scorer_goals_per_game")
     return reasons
