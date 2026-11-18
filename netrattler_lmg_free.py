@@ -15,6 +15,7 @@ import sys
 import requests
 
 from netrattler_last_minute_goal import match_metrics
+from netrattler_lmg_next_goal import select_next_goal
 
 ESPN = "https://site.api.espn.com/apis/site/v2/sports/soccer"
 MIN_MINUTE = 65
@@ -187,7 +188,7 @@ def _db():
         "Content-Type": "application/json"}
 
 
-def reserve_alert(fixture):
+def reserve_alert(fixture, metrics=None):
     """Single original alert per fixture; atomic unique constraint prevents duplicates."""
     url, headers = _db()
     key = str(fixture["fixture_id"])
@@ -199,7 +200,8 @@ def reserve_alert(fixture):
               "minute": fixture["minute"],
               "score": f"{fixture['hg']}:{fixture['ag']}",
               "selection": "Over 0.5 rest of match", "observed_odds": None,
-              "message_kind": "photo"},
+              "message_kind": "photo",
+              "next_goal_side": (metrics or {}).get("next_goal_side")},
         timeout=15)
     resp.raise_for_status()
     rows = resp.json()
@@ -218,6 +220,11 @@ def send_alert(fixture, metrics):
              f"⏱ {fixture['minute']}' · {fixture['hg']}:{fixture['ag']}\n"
              f"🎯 Over 0.5 Restspielzeit · {metrics['tier']}\n"
              f"🏁 Auswertung: ⏳ offen\n@prophunter")
+    next_side=metrics.get("next_goal_side")
+    if next_side in ("home","away"):
+        team=fixture["home"] if next_side=="home" else fixture["away"]
+        caption=caption.replace("🏁 Auswertung:",
+                                f"🎯 Nächstes Tor (Zusatz): {team}\\n🏁 Auswertung:")
     resp=requests.post(
         f"https://api.telegram.org/bot{token}/sendPhoto",
         data={"chat_id":chat,"caption":caption},
@@ -261,12 +268,13 @@ def main():
         if tier is None:
             continue
         metrics["tier"] = tier
+        metrics["next_goal_side"] = select_next_goal(metrics)
         report["qualified"] += 1
         print("LMG_SIGNAL", json.dumps({"fixture": fixture["fixture_id"],
                                        "minute": fixture["minute"], "score": [fixture["hg"], fixture["ag"]],
                                        "target": "one_more_goal", "metrics": metrics}))
         if send_enabled:
-            key = reserve_alert(fixture)
+            key = reserve_alert(fixture, metrics)
             if key:
                 msg_id = send_alert(fixture, metrics)
                 mark_sent(key, msg_id)
