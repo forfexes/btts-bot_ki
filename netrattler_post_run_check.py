@@ -32,7 +32,12 @@ def coverage_warnings(log_text):
     limit_exhausted = count_generated > 0 and limit_hits >= count_generated
     # Mixed case: every generated builder was either a duplicate of an earlier delivery or hit
     # the per-match limit -> nothing new may be sent, which is legitimate.
-    mixed_exhausted = count_generated > 0 and (limit_hits + len(duplicate_ids)) >= count_generated
+    # Builders deliberately withheld by the real-odds quality gate (no verified combo quote, no text
+    # fallback) are a data gap as well, not a delivery failure.
+    quality_stops = len(re.findall(r'Builder-Karte Qualit[a\u00e4]tsstopp: ', log_text))
+    send_failed = len(re.findall(r'MASTER BUILDER send failed/no message_id', log_text))
+    gated_failures = send_failed if (send_failed and quality_stops >= send_failed) else 0
+    mixed_exhausted = count_generated > 0 and (limit_hits + len(duplicate_ids) + gated_failures) >= count_generated
     all_already_delivered = (count_generated > 0 and len(duplicate_ids) >= count_generated) or limit_exhausted or mixed_exhausted
     # Model builders are an explicitly supported style in the same group.
     # Count only deliveries with a confirmed Telegram receipt, never attempts.

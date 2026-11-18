@@ -114,6 +114,25 @@ class PostRunTests(unittest.TestCase):
                'Coverage: builder=no_candidates')
         self.assertEqual(coverage_warnings(log), [])
 
+    def test_quality_stopped_builders_are_data_gap_not_failure(self):
+        log = ('MASTER BUILDER normalized=272 \u00b7 matches=12 \u00b7 same-match\u22652=11 \u00b7 generated=4\n'
+               'MASTER BUILDER Spiel-Limit erreicht: A\n'
+               'MASTER BUILDER Spiel-Limit erreicht: B\n'
+               'Builder-Karte Qualit\u00e4tsstopp: missing_verified_combo_quote\n'
+               'MASTER BUILDER send failed/no message_id: C\n'
+               'Builder-Karte Qualit\u00e4tsstopp: missing_verified_combo_quote\n'
+               'MASTER BUILDER send failed/no message_id: D\n'
+               'Builder Engine: 0 Builder aus 3531 Props gesendet\n'
+               'Coverage: builder=no_candidates')
+        self.assertEqual(coverage_warnings(log), [])
+
+    def test_unexplained_send_failure_still_warns(self):
+        log = ('MASTER BUILDER normalized=272 \u00b7 matches=12 \u00b7 same-match\u22652=11 \u00b7 generated=2\n'
+               'MASTER BUILDER send failed/no message_id: C\n'
+               'MASTER BUILDER send failed/no message_id: D\n'
+               'Builder Engine: 0 Builder aus 3531 Props gesendet')
+        self.assertEqual(coverage_warnings(log), ['Builder Engine sent zero builders'])
+
     def test_incomplete(self):
         ok, _ = evaluate({"status": "in_progress"})
         self.assertFalse(ok)

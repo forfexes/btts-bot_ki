@@ -63,6 +63,14 @@ def run() -> dict:
             info["trim_status"] = dr.status_code
             dr.raise_for_status()
         if action != "ok":
+            # Index-Bloat (odds_history_pkey) entfernen: reiner REINDEX, keine Daten-/Schemaaenderung.
+            try:
+                rr = requests.post(f"{SB}/rest/v1/rpc/maintenance_reindex", headers=H, json={}, timeout=120)
+                info["reindex_status"] = rr.status_code
+                if rr.ok and isinstance(rr.json(), dict) and rr.json().get("mb") is not None:
+                    info["mb_after_reindex"] = float(rr.json()["mb"])
+            except Exception as exc:
+                info["reindex_error"] = type(exc).__name__
             alert(f"⚠️ Supabase Hauptdatenbank {mb:.0f} MB (Limit 500). Aktion: {action}")
     if SB and KEY:
         requests.post(f"{SB}/rest/v1/netrattler_card_diag", headers=H, json={"info": info}, timeout=20)
