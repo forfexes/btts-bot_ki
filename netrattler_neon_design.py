@@ -8,6 +8,7 @@ from __future__ import annotations
 
 import io
 import math
+import os
 from datetime import datetime
 from functools import lru_cache
 
@@ -151,22 +152,101 @@ def _metric(draw, box, title, value, color=GOLD):
     _box(draw, box, CYAN, "#081C30")
     x0, y0, x1, y1 = box
     _center(draw, title, (x0 + x1) / 2, y0 + 14, 23, WHITE, x1 - x0 - 14)
-    _center(draw, value, (x0 + x1) / 2, y0 + 63, 47, color, x1 - x0 - 16)
+    line_y = y0 + (55 if (y1 - y0) < 130 else 76)
+    value_size = 34 if (y1 - y0) < 130 else 47
+    _center(draw, value, (x0 + x1) / 2, line_y, value_size, color, x1 - x0 - 16)
 
 
-def _stat_series(leg, engine):
+_HISTORY_COLUMN = {
+    "shots": "shots", "sot": "sot", "tackles": "tackles",
+    "tackles_committed": "tackles", "fouls": "fouls_committed",
+    "fouls_won": "fouls_won", "yellow_cards": "yellow_cards",
+    "score": "goals", "assist": "assists", "goalkeeper_saves": "saves",
+    "offsides": "offsides",
+}
+
+
+@lru_cache(maxsize=256)
+def _observed_game_log(player, team, category, match_date):
+    """Read-only, exact player+team L15; never widen to fuzzy/other-team rows.
+
+    Missing stats stop the usable series rather than silently counting older
+    matches as if the incomplete fixture did not happen. No database writes.
+    """
+    column = _HISTORY_COLUMN.get(category)
+    url = (os.getenv("SUPABASE_PLAYERS_URL") or os.getenv("SUPABASE_URL") or "").rstrip("/")
+    key = (os.getenv("SUPABASE_PLAYERS_SERVICE_KEY")
+           or os.getenv("SUPABASE_SERVICE_ROLE_KEY")
+           or os.getenv("SUPABASE_KEY") or "")
+    if not (column and player and team and match_date and url.startswith("https://") and key):
+        return ()
+    try:
+        import requests
+        response = requests.get(
+            url + "/rest/v1/player_game_log",
+            headers={"apikey": key, "Authorization": "Bearer " + key},
+            params={
+                "select": "player_name,team,match_date,event_id,minutes," + column,
+                "player_name": "eq." + player,
+                "team": "eq." + team,
+                "match_date": "lt." + str(match_date)[:10],
+                "order": "match_date.desc,event_id.desc",
+                "limit": "40",
+            },
+            timeout=5,
+        )
+        if not response.ok:
+            return ()
+        rows = response.json()
+        if not isinstance(rows, list):
+            return ()
+        result, seen = [], set()
+        for row in rows:
+            if not isinstance(row, dict):
+                return ()
+            day = str(row.get("match_date") or "")[:10]
+            if (row.get("player_name") != player or row.get("team") != team or
+                    not day or day >= str(match_date)[:10]):
+                return ()
+            event_key = (day, str(row.get("event_id") or ""))
+            if event_key in seen:
+                continue
+            seen.add(event_key)
+            minutes = _number(row.get("minutes"))
+            if minutes is not None and minutes <= 0:
+                continue  # Did not play: not one of the last games played.
+            n = _number(row.get(column))
+            if n is None or n < 0:
+                break  # Do not skip a played fixture with an unknown statistic.
+            result.append(n)
+            if len(result) >= 15:
+                break
+        return tuple(result)
+    except (ValueError, TypeError, OSError, RuntimeError, Exception):
+        return ()
+
+
+def _stat_series(leg, engine, match_date=""):
     raw = getattr(leg, "series", None)
     if raw is None:
         raw = engine.LEG_HISTORY.get((engine.norm(getattr(leg, "player", "")),
                                      getattr(leg, "category", "")))
-    if not isinstance(raw, (list, tuple)):
-        return []
     out = []
-    for value in raw[:15]:
-        n = _number(value)
-        if n is None or n < 0:
-            return []
-        out.append(n)
+    if isinstance(raw, (list, tuple)):
+        for value in raw[:15]:
+            n = _number(value)
+            if n is None or n < 0:
+                break
+            out.append(n)
+    if len(out) >= 15:
+        return out
+    db = list(_observed_game_log(str(getattr(leg, "player", "") or ""),
+                                 str(getattr(leg, "team", "") or ""),
+                                 str(getattr(leg, "category", "") or ""),
+                                 str(match_date or "")[:10]))
+    # Never combine two unrelated or conflicting player histories.
+    if db and (not out or db[:len(out)] == out):
+        return db
     return out
 
 
@@ -222,23 +302,18 @@ def render_builder_card(pick):
     _box(d, (28, 310, 1172, 351), CYAN, "#0B2332", 16)
     _center(d, str(len(legs)) + "-LEG BUILDER", 600, 313, 32, WHITE)
 
-    photos = set()
     for i, leg in enumerate(legs):
         y = 362 + i * 160
         box = (35, y, 1165, y + 142)
         _box(d, box, CYAN, "#071724", 17)
         glow.append((box, CYAN))
-        key = (str(leg.player), str(leg.team))
-        if key not in photos:
-            _photo(im, d, cards, leg.player, leg.team, (49, y + 10, 159, y + 133))
-            photos.add(key)
-        else:
-            _center(d, _initials(leg.player), 100, y + 43, 36, WHITE, 90)
+        # The photo provider caches by player/team; every row still has a portrait.
+        _photo(im, d, cards, leg.player, leg.team, (49, y + 10, 159, y + 133))
         _badge(im, d, cards, leg.team, (177, y + 29, 253, y + 110))
         _center(d, leg.player, 540, y + 15, 29, WHITE, 525)
         _center(d, _display_market(leg), 540, y + 68, 27, GOLD, 525)
         d.line((855, y + 19, 855, y + 121), fill=CYAN, width=2)
-        series = _stat_series(leg, engine)
+        series = _stat_series(leg, engine, getattr(pick, "match_date", ""))
         _center(d, "L10: " + _form_label(series, leg.line, 10),
                 1015, y + 29, 23, GREEN, 295)
         _center(d, "L15: " + _form_label(series, leg.line, 15),

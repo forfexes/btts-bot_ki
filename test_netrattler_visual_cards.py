@@ -146,3 +146,42 @@ def test_missing_history_and_quote_not_fabricated():
     assert _form_label([],1,10)=='—'
     assert _percent(None) is None
     assert _percent(120) is None
+
+
+def test_observed_l15_game_log_exact_and_no_fabricated_stats(monkeypatch):
+    import netrattler_neon_design as nd
+    from types import SimpleNamespace
+    nd._observed_game_log.cache_clear()
+    rows = [
+        {"player_name":"Verified Player","team":"Club X","match_date":f"2026-10-{30-i:02d}",
+         "event_id":str(i),"minutes":90,"shots":2} for i in range(15)
+    ]
+    response = SimpleNamespace(ok=True,json=lambda:rows)
+    with patch.dict("os.environ",{"SUPABASE_URL":"https://example.supabase.co",
+                                   "SUPABASE_SERVICE_ROLE_KEY":"fake"},clear=False):
+        with patch("requests.get",return_value=response) as req:
+            series = nd._observed_game_log("Verified Player","Club X","shots","2026-11-18")
+    assert len(series)==15 and series==tuple([2]*15)
+    assert req.call_args.kwargs["params"]["player_name"]=="eq.Verified Player"
+    assert req.call_args.kwargs["params"]["team"]=="eq.Club X"
+    assert req.call_args.kwargs["params"]["match_date"]=="lt.2026-11-18"
+    nd._observed_game_log.cache_clear()
+
+
+def test_observed_history_missing_middle_game_not_zero_filled():
+    import netrattler_neon_design as nd
+    from types import SimpleNamespace
+    nd._observed_game_log.cache_clear()
+    rows = [
+        {"player_name":"Known","team":"Club A","match_date":f"2026-10-{30-i:02d}",
+         "event_id":str(i),"minutes":90,"sot":None if i == 10 else 2}
+        for i in range(15)
+    ]
+    with patch.dict("os.environ",{"SUPABASE_URL":"https://example.supabase.co",
+                                   "SUPABASE_SERVICE_ROLE_KEY":"fake"},clear=False):
+        with patch("requests.get",return_value=SimpleNamespace(ok=True,json=lambda:rows)):
+            found = nd._observed_game_log("Known","Club A","sot","2026-11-18")
+    assert len(found)==10
+    assert nd._form_label(found,1,10)=="10/10 (100%)"
+    assert nd._form_label(found,1,15)=="—"
+    nd._observed_game_log.cache_clear()
