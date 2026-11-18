@@ -14,6 +14,21 @@ def test_uses_last_15_dated_measured_games_and_correct_side():
     assert a['avg_corners_for'] == 4 and a['avg_corners_against'] == 6
 
 
+def test_measured_api_rows_can_be_used_without_csv_transformation():
+    from datetime import date, timedelta
+    observed = [
+        {'match_date': (date.today()-timedelta(days=i+1)).isoformat(),
+         'home_team': 'Arsenal', 'away_team': 'Chelsea', 'home_corners': 5,
+         'away_corners': 3, 'home_goals': 1, 'away_goals': 1, 'source': 'api-football'}
+        for i in range(6)
+    ]
+    profile = team_corner_profile(observed, 'Arsenal')
+    assert profile and profile['games'] == 6
+    assert profile['avg_corners_for'] == 5
+    assert profile['source'] == 'api-football'
+    assert team_corner_profile([{**x, 'home_goals': None} for x in observed], 'Arsenal') is None
+
+
 def test_missing_zero_future_duplicates_and_unrelated_team():
     r = rows()[:5]
     assert team_corner_profile(r+[dict(r[0], HC='')], 'Arsenal')['games'] == 5
