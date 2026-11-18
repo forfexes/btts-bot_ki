@@ -145,9 +145,9 @@ def format_tip(fixture, metrics):
 
 def _db():
     url = (os.getenv("SUPABASE_URL") or "").rstrip("/")
-    secret = os.getenv("SUPABASE_SERVICE_ROLE_KEY") or ""
+    secret = os.getenv("SUPABASE_SERVICE_ROLE_KEY") or os.getenv("SUPABASE_KEY") or ""
     if not url or not secret:
-        raise RuntimeError("Supabase service role required for Telegram deduplication")
+        raise RuntimeError("Supabase database URL or service key missing: delivery disabled")
     return url + "/rest/v1/netrattler_lmg_alerts", {
         "apikey": secret, "Authorization": "Bearer " + secret,
         "Content-Type": "application/json"}
