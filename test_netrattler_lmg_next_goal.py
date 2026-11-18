@@ -62,7 +62,7 @@ class NextGoalTests(unittest.TestCase):
         self.assertNotEqual(open_image,old)
         self.assertNotEqual(done,wrong)
 
-    def test_sending_one_image_with_new_caption_and_db_side(self):
+    def test_sending_one_image_without_caption_and_with_db_side(self):
         self.metrics["next_goal_side"]="home"
         response=Mock()
         response.status_code=201
@@ -83,12 +83,9 @@ class NextGoalTests(unittest.TestCase):
              patch("requests.post",return_value=reply) as post:
             self.assertEqual(common.send_alert(self.fx,self.metrics),912)
         self.assertTrue(post.call_args.args[0].endswith("/sendPhoto"))
-        caption=post.call_args.kwargs["data"]["caption"]
-        self.assertIn("Nächstes Tor (Zusatz)",caption)
-        self.assertIn(self.fx["home"],caption)
-        self.assertIn("Over 0.5",caption)
-        self.assertIn("@prophunter",caption)
-        self.assertNotIn("%",caption)
+        self.assertEqual(post.call_args.kwargs["data"],{"chat_id":"-1"})
+        self.assertNotIn("caption",post.call_args.kwargs["data"])
+        self.assertIn("photo",post.call_args.kwargs["files"])
 
     def test_espn_source_can_only_settle_exact_regular_time_final(self):
         feed={"leagues":[{"name":"International Friendlies"}],"events":[{
@@ -132,8 +129,12 @@ class NextGoalTests(unittest.TestCase):
         self.assertEqual(render.call_args.kwargs["next_goal_side"],"home")
         self.assertEqual(render.call_args.kwargs["metrics"]["tier"],"PREMIUM")
         self.assertEqual(render.call_args.kwargs["next_goal_result"],"won")
-        self.assertIn("RICHTIG",post.call_args.kwargs["data"]["media"])
-        self.assertIn("PREMIUM",post.call_args.kwargs["data"]["media"])
+        media=post.call_args.kwargs["data"]["media"]
+        self.assertNotIn("caption",media)
+        self.assertNotIn("RICHTIG",media)
+        self.assertNotIn("PREMIUM",media)
+        self.assertEqual(__import__("json").loads(media),
+                         {"type":"photo","media":"attach://result_photo"})
 
         response=Mock()
         with patch.dict("os.environ",{"SUPABASE_URL":"https://example.supabase.co",
