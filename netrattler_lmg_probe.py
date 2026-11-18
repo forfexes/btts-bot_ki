@@ -69,4 +69,4 @@ def fetch(tag,url,params):
     except Exception as exc:
         return {"error":type(exc).__name__,"message":str(exc)[:90]}
 for name,(url,params) in SOURCES.items():
-    print("LMG_SOURCE_PROBE",name,json.dumps(fetch(name,url,params),ensure_ascii=False)[:1200],flush=True)
+    print("LMG_SOURCE_PROBE",name,json.dumps(fetch(name,url,params),ensure_ascii=False)[:6000],flush=True)
