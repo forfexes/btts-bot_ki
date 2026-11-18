@@ -4,6 +4,7 @@ from __future__ import annotations
 import io
 import math
 import os
+from pathlib import Path
 from PIL import Image, ImageDraw, ImageFont, ImageFilter
 import requests
 
@@ -11,6 +12,7 @@ W,H=1080,1350
 GOLD=(255,199,45)
 CYAN=(28,226,249)
 WHITE=(250,251,255)
+ORIGINAL_HEADER=Path(__file__).resolve().parent / 'assets' / 'goal_hunter_original_header.webp'
 
 def font(size,bold=True):
     paths=(
@@ -84,11 +86,22 @@ def make_card(fixture,metrics=None,*,final_score=None,won=None):
             d.ellipse((x-8,95+j*8,x+8,111+j*8),fill=(170,245,255))
     for y in range(1180,H,24):
         d.line((0,y,W,y),fill=(9,45,30),width=3)
-    centered(d,"♛  NETRATTLER  ♛",35,76,GOLD)
-    glow_box((190,146,890,225),GOLD,(35,29,4))
-    centered(d,"GOAL HUNTER",155,60,GOLD)
-    centered(d,"LAST MINUTE GOAL",239,37,WHITE)
-    centered(d,str(fixture.get("league") or "Fussball"),310,31,WHITE)
+    # Use the EXACT real photo-sourced NETRATTLER/GOLD GOAL HUNTER header,
+    # cropped from the user's approved card, not a drawn imitation.
+    if not ORIGINAL_HEADER.is_file():
+        raise RuntimeError("Original NETRATTLER image template missing")
+    with Image.open(ORIGINAL_HEADER) as original:
+        if original.size != (691,169):
+            raise RuntimeError("Original template proportions changed")
+        header=original.convert("RGB").resize((W,264),Image.Resampling.LANCZOS)
+    im.paste(header,(0,0))
+    # Only the tiny old subtitle remnants at the bottom of the source crop
+    # are covered; the original crown, lettering, floodlights and gold bar stay untouched.
+    d=ImageDraw.Draw(im)
+    d.rectangle((0,251,W,295),fill=(4,17,31))
+    d.line((115,258,965,258),fill=CYAN,width=3)
+    centered(d,"LAST MINUTE GOAL",269,38,WHITE)
+    centered(d,str(fixture.get("league") or "Fussball"),327,31,WHITE)
     home,away=str(fixture["home"]),str(fixture["away"])
     for name,x,team_id in ((home,195,fixture.get("home_logo_id")),(away,885,fixture.get("away_logo_id"))):
         badge=crest(team_id)
