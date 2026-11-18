@@ -53,7 +53,7 @@ class CommonsInventoryTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as d:
             source=Path(d)/"roster.csv"
             output=Path(d)/"result.csv"
-            source.write_text("Player,Squad,Pos\\nA Name,A Club,FW\\nB Name,B Club,DF\\nC Name,C Club,MF\\n",encoding="utf-8")
+            source.write_text("Player,Squad,Pos\nA Name,A Club,FW\nB Name,B Club,DF\nC Name,C Club,MF\n",encoding="utf-8")
             with patch.object(inv,"search_commons",return_value=[]) as search:
                 self.assertEqual(inv.build(source,output,limit=2,start=1,pause=0),0)
                 self.assertEqual(search.call_count,2)
