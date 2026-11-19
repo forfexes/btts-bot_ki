@@ -17,6 +17,8 @@ on:
       - "netrattler_prop_sources.py"
       - "netrattler_foul_props.py"
       - "test_foul_props.py"
+      - "netrattler_player_log.py"
+      - "test_netrattler_player_log_quota.py"
       - "netrattler_crest_identity.py"
       - "netrattler_var.py"
       - "netrattler_1x_verified_props.py"
@@ -132,6 +134,8 @@ jobs:
         run: python -m pytest -q test_netrattler_reference_sources.py
       - name: Compact API history and corner isolation regression
         run: python -m pytest -q test_netrattler_apif_history.py
+      - name: Bounded L20 history quota regression
+        run: python -m unittest -v test_netrattler_player_log_quota.py
       - name: Selection identity and duplicate safety
         run: python -m pytest -q test_netrattler_var.py test_netrattler_1x_verified_props.py test_netrattler_selection_quality.py test_foul_props.py test_model_builders.py
       - name: Live-fixture league prioritization regression
