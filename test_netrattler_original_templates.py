@@ -168,3 +168,18 @@ def test_scorer_kickoff_enrichment_requires_verified_offset_and_accurate_fixture
                return_value="2026-11-21T17:30:00+00:00"):
         found=enrich_scorer(no_time,"2026-11-21")
     assert found["_kickoff"]=="2026-11-21T17:30:00+00:00"
+
+
+def test_builder_shows_all_three_verified_form_windows():
+    """L5, L10 and L15 must all appear; never infer missing form."""
+    from netrattler_original_template_renderer import render_builder, _label
+    photo=_test_photo()
+    pick=_fixture(6)
+    with patch.object(cards,"_player_photo",return_value=photo), \
+         patch.object(cards,"_badge_bytes",return_value=photo), \
+         patch("netrattler_original_template_renderer._label", wraps=_label) as label:
+        raw=render_builder(pick)
+    labels=[str(call.args[1]) for call in label.call_args_list if len(call.args)>1]
+    for period in (5,10,15):
+        assert any(text.startswith(f"L{period}:") for text in labels), f"L{period} absent"
+    assert raw.startswith(bytes.fromhex("89504e470d0a1a0a"))
