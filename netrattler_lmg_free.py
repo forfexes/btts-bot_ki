@@ -178,36 +178,10 @@ def format_tip(fixture, metrics):
             f"🏁 Auswertung: ⏳ offen")
 
 
-def _db():
-    url = (os.getenv("SUPABASE_URL") or "").rstrip("/")
-    secret = os.getenv("SUPABASE_SERVICE_ROLE_KEY") or os.getenv("SUPABASE_KEY") or ""
-    if not url or not secret:
-        raise RuntimeError("Supabase database URL or service key missing: delivery disabled")
-    return url + "/rest/v1/netrattler_lmg_alerts", {
-        "apikey": secret, "Authorization": "Bearer " + secret,
-        "Content-Type": "application/json"}
-
-
 def reserve_alert(fixture, metrics=None):
-    """Single original alert per fixture; atomic unique constraint prevents duplicates."""
-    url, headers = _db()
-    key = str(fixture["fixture_id"])
-    resp = requests.post(
-        url, params={"on_conflict": "alert_key"},
-        headers={**headers, "Prefer": "resolution=ignore-duplicates,return=representation"},
-        json={"alert_key": key, "fixture_id": fixture["fixture_id"],
-              "home": fixture["home"], "away": fixture["away"],
-              "minute": fixture["minute"],
-              "score": f"{fixture['hg']}:{fixture['ag']}",
-              "selection": "Over 0.5 rest of match", "observed_odds": None,
-              "message_kind": "photo",
-              "next_goal_side": (metrics or {}).get("next_goal_side"),
-              "signal_tier": (metrics or {}).get("tier"),
-              "source": fixture.get("source") or "espn"},
-        timeout=15)
-    resp.raise_for_status()
-    rows = resp.json()
-    return key if isinstance(rows, list) and len(rows) == 1 else None
+    """Durably reserve a match in GitHub-backed SQLite BEFORE Telegram delivery."""
+    from netrattler_lmg_store import reserve_alert as sqlite_reserve
+    return sqlite_reserve(fixture, metrics)
 
 
 def send_alert(fixture, metrics):
@@ -235,13 +209,8 @@ def send_alert(fixture, metrics):
 
 
 def mark_sent(key, message_id):
-    url, headers = _db()
-    resp = requests.patch(
-        url, params={"alert_key": "eq." + key},
-        headers={**headers, "Prefer": "return=minimal"},
-        json={"status": "sent", "telegram_message_id": message_id,
-              "sent_at": dt.datetime.now(dt.timezone.utc).isoformat()}, timeout=15)
-    resp.raise_for_status()
+    from netrattler_lmg_store import mark_sent as sqlite_mark_sent
+    return sqlite_mark_sent(key, message_id)
 
 
 def main():
