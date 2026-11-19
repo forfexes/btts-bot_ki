@@ -50,6 +50,8 @@ on:
       - 'netrattler_premium_compact.py'
       - 'test_netrattler_premium_verified_cards.py'
       - 'test_netrattler_premium_dispatch_gate.py'
+      - 'netrattler_premium_telegram_adapter.py'
+      - 'netrattler_premium_sandbox_preview.py'
       - 'assets/premium_*_blank.svg'
       - 'test_netrattler_goalhunter_photos.py'
       - '.github/workflows/netrattler_sandbox_hardtest.yml'
@@ -102,6 +104,18 @@ jobs:
         run: |
           set -o pipefail
           python -m pytest -q -ra test_netrattler_premium_verified_cards.py test_netrattler_premium_dispatch_gate.py test_netrattler_ai_match_card_design.py 2>&1 | tee netrattler-premium-card-hardtest.log
+      - name: Render synthetic premium PNG previews for visual inspection
+        if: success()
+        run: |
+          python netrattler_premium_sandbox_preview.py
+      - name: Upload approved-format offline visual previews
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: netrattler-premium-offline-visual-qa
+          path: premium-sandbox-preview/*.png
+          if-no-files-found: warn
+          retention-days: 7
       - name: Upload diagnostics even when tests fail
         if: always()
         uses: actions/upload-artifact@v4
