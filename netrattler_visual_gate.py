@@ -36,6 +36,8 @@ def club_same(a, b):
         "atleticoparanaense": "athleticoparanaense",
         "athleticoparanaense": "athleticoparanaense",
         "chapecoensesc": "chapecoense",
+        "rbbragantino": "redbullbragantino",
+        "bragantino": "redbullbragantino",
     }
     a, b = clean(a), clean(b)
     a, b = aliases.get(a, a), aliases.get(b, b)
