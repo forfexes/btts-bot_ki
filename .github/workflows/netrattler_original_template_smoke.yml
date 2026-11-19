@@ -7,6 +7,7 @@ on:
       - '.github/workflows/netrattler_original_template_smoke.yml'
       - 'assets/premium_*_blank.svg'
       - 'netrattler_original_template_renderer.py'
+      - 'test_premium_blank_masters.py'
 permissions:
   contents: read
 jobs:
@@ -19,6 +20,8 @@ jobs:
         with:
           python-version: '3.11'
       - run: python -m pip install --quiet requests pillow cairosvg
+      - name: Validate empty premium masters and non-overlapping rows
+        run: python -m unittest -v test_premium_blank_masters
       - name: Authenticate bot, verify Builder group and optional private photo delivery
         env:
           TOKEN: ${{ secrets.TELEGRAM_TOKEN }}
