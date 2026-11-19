@@ -387,3 +387,28 @@ def test_goal_hunter_silhouette_detection_blocks_monochrome_placeholder():
     portrait=Image.new("RGB",(160,160),(43,94,150))
     ImageDraw.Draw(portrait).ellipse((53,27,107,84),fill=(194,135,99))
     assert not _looks_like_grey_placeholder(portrait,(0,0,160,160))
+
+
+def test_coutinho_santos_photo_fallback_uses_exact_fotmob_id():
+    from types import SimpleNamespace
+    import netrattler_stats_match_cards as cards
+    player="Philippe Coutinho"
+    raw=_fake_reference_photo()
+    requested=[]
+    def mock_get(url,*args,**kwargs):
+        requested.append(url)
+        if url=="https://images.fotmob.com/image_resources/playerimages/184536.png":
+            return SimpleNamespace(ok=True,content=raw,status_code=200)
+        return SimpleNamespace(ok=False,content=b"",status_code=404)
+    with patch.object(cards,"_PLAYER_CACHE",{}), \
+         patch.object(cards.requests,"get",side_effect=mock_get), \
+         patch("netrattler_espn_photo.espn_photo",return_value=""), \
+         patch("netrattler_api_portraits.portrait",return_value=""), \
+         patch("netrattler_commons_photos.commons_photo",return_value=""), \
+         patch("netrattler_apif_profile_photo.profile_photo",return_value=""), \
+         patch("netrattler_reference_images.player_urls",return_value=[]):
+        assert cards._player_photo(player,"Santos")==raw
+        assert requested[0]=="https://images.fotmob.com/image_resources/playerimages/184536.png"
+        requested.clear()
+        cards._player_photo(player,"Coritiba")
+        assert "https://images.fotmob.com/image_resources/playerimages/184536.png" not in requested
