@@ -58,6 +58,22 @@ def test_builder_two_four_six_leg_masters_and_dry_run_send():
                 assert send.call_args.args[3].startswith(b"\x89PNG\r\n\x1a\n")
 
 
+def test_builder_rejects_grey_provider_avatar_before_telegram():
+    grey=Image.new("RGB",(240,260),"#cccccc")
+    d=ImageDraw.Draw(grey)
+    d.ellipse((65,25,175,150),fill="#999999")
+    d.polygon(((20,260),(55,150),(190,150),(230,260)),fill="#aaaaaa")
+    out=io.BytesIO()
+    grey.save(out,"PNG")
+    with patch.object(cards,"_player_photo",return_value=out.getvalue()), \
+         patch.object(cards,"_badge_bytes",return_value=_test_photo()), \\
+         patch.object(cards,"_send_photo") as send:
+        import pytest
+        with pytest.raises(ValueError,match="Standard-Avatar"):
+            builder.render_builder_card(_fixture(2))
+        send.assert_not_called()
+
+
 def test_goal_hunter_master_and_dry_run_send():
     photo=_test_photo()
     tip={"match":"Demo United vs Test FC","player":"Beispiel Stürmer",
