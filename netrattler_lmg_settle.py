@@ -15,13 +15,9 @@ import netrattler_lmg_fotmob as fotmob
 from netrattler_lmg_next_goal import evaluate_next_goal
 
 def pending():
-    url,headers=common._db()
-    resp=requests.get(url,headers=headers,params={
-        "select":"alert_key,fixture_id,home,away,minute,score,status,telegram_message_id,sent_at,message_kind,next_goal_side,signal_tier,source",
-        "status":"eq.sent","telegram_message_id":"not.is.null",
-        "order":"sent_at.asc","limit":"80"},timeout=15)
-    resp.raise_for_status()
-    return resp.json()
+    from netrattler_lmg_store import pending as sqlite_pending
+    return sqlite_pending()
+
 
 def finished_match(feed,fixture_id):
     for league in (feed or {}).get("leagues") or []:
@@ -134,15 +130,9 @@ def edit_original(row,final,won):
         raise RuntimeError("Telegram edit not confirmed")
 
 def mark_settled(row,score,won):
-    url,headers=common._db()
-    response=requests.patch(url,headers={**headers,"Prefer":"return=minimal"},
-        params={"alert_key":"eq."+row["alert_key"],"status":"eq.sent"},
-        json={"status":"won" if won else "lost",
-              "final_score":f"{score[0]}:{score[1]}",
-              "settled_at":dt.datetime.now(dt.timezone.utc).isoformat(),
-              "next_goal_result":row.get("next_goal_result")},
-        timeout=15)
-    response.raise_for_status()
+    from netrattler_lmg_store import mark_settled as sqlite_mark_settled
+    return sqlite_mark_settled(row,score,won)
+
 
 def main():
     rows=pending()
