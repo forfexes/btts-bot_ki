@@ -80,7 +80,8 @@ def discover(feed: dict, *, league_filter: tuple[str, ...] = ()) -> list[dict]:
 
 
 def poll_once(candidates: list[dict], *, first_pass: bool, send: bool,
-              shadow: bool, fetch=fotmob.common._get) -> dict:
+              shadow: bool, observations: list[dict] | None = None,
+              fetch=fotmob.common._get) -> dict:
     report={"candidates":len(candidates),"detail_requests":0,"stats_verified":0,
             "missing_stats":0,"qualified":0,"sent":0,"already_alerted":0,
             "snapshots":0,"errors":0}
@@ -97,10 +98,21 @@ def poll_once(candidates: list[dict], *, first_pass: bool, send: bool,
             report["missing_stats"]+=1
         else:
             report["stats_verified"]+=1
+            if observations is not None:
+                teams=metrics.get("teams") or {}
+                home,away=teams.get("home") or {},teams.get("away") or {}
+                observations.append({
+                    "provider":"fotmob","fixture_id":fx["fixture_id"],
+                    "observed_at":dt.datetime.now(dt.timezone.utc).isoformat(),
+                    "discovery_minute":fx["minute"],
+                    "shots":metrics.get("shots"),"shots_on_target":metrics.get("sot"),
+                    "corners":metrics.get("corners"),
+                    "home_xg":home.get("xg"),"away_xg":away.get("xg"),
+                })
         # Historical evidence only: never post from a stale minute/score on
         # later polls without refreshing the discovery feed.
         eligible=common.MIN_MINUTE <= fx["minute"] <= common.MAX_MINUTE
-        if shadow and eligible:
+        if shadow and eligible and first_pass:
             try:
                 snapshots.append(build_snapshot(fx,metrics,
                                 "fotmob" if metrics else None))
@@ -142,6 +154,7 @@ def run(*, feed=None, cycles=None, sleep=time.sleep, fetch=fotmob.common._get) -
     if type(count) is not int or not 1 <= count <= POLL_CYCLES:
         raise ValueError("invalid_bounded_poll_cycles")
     reports=[]
+    observations=[]
     if not candidates:
         report={"discovered":0,"poll_cycles":0,"sent":0,"reason":"no_eligible_live_candidates"}
         print("LMG_TWO_STAGE_SUMMARY",json.dumps(report),flush=True)
@@ -150,14 +163,20 @@ def run(*, feed=None, cycles=None, sleep=time.sleep, fetch=fotmob.common._get) -
         if i:
             sleep(POLL_SECONDS)
         round_report=poll_once(candidates,first_pass=i==0,send=is_send,
-                               shadow=is_shadow,fetch=fetch)
+                               shadow=is_shadow,observations=observations if is_shadow else None,
+                               fetch=fetch)
         round_report["pass"]=i+1
         reports.append(round_report)
         print("LMG_DEEP_POLL",json.dumps(round_report),flush=True)
+    deep_saved={"inserted":0,"status":"disabled"}
+    if is_shadow and observations:
+        from netrattler_lmg_store import write_deep_observations
+        deep_saved=write_deep_observations(observations)
     result={"discovered":len(candidates),"poll_cycles":len(reports),
             "details":sum(x["detail_requests"] for x in reports),
             "sent":sum(x["sent"] for x in reports),
             "snapshots":sum(x["snapshots"] for x in reports),
+            "deep_observations_saved":deep_saved["inserted"],
             "reason":"sent" if any(x["sent"] for x in reports) else
               "no_verified_qualifying_signal",
             "backend":"sqlite_git"}
