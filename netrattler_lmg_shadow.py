@@ -1,6 +1,8 @@
 #!/usr/bin/env python3
 """Bounded, independent GOAL HUNTER in-play evidence collection (SHADOW ONLY).
 
+Storage: Git-versioned SQLite in the same repository, not Supabase.
+
 Capture true data *as retrieved* in the 65–85 minute window, not final-match
 data. Keep at most four observations per provider fixture (one per minute bin).
 No simulated xG, fabricated quotes, production tips or additional Telegram posts.
@@ -115,53 +117,11 @@ def build_snapshot(fixture: dict, metrics: dict | None,
     return row
 
 
-def _database() -> tuple[str, dict]:
-    endpoint, headers = common._db()
-    return endpoint.rsplit("/", 1)[0] + "/" + TABLE, headers
-
-
-def _count_rows(url: str, headers: dict) -> int:
-    r = requests.get(url, headers={**headers, "Prefer":"count=exact"},
-                     params={"select":"fixture_id", "limit":"1"}, timeout=15)
-    r.raise_for_status()
-    count = str(r.headers.get("Content-Range", "")).rsplit("/", 1)[-1]
-    if not count.isdecimal():
-        raise RuntimeError("shadow_row_count_unavailable")
-    return int(count)
-
-
 def write_snapshots(rows: list[dict], *, enabled: bool = False,
                     now: dt.datetime | None = None) -> dict:
-    """Fail closed on capacity or API errors. Idempotent on provider+event+bin."""
-    if not enabled:
-        return {"status":"disabled", "attempted":0}
-    if not rows:
-        return {"status":"empty", "attempted":0}
-    if len(rows) > MAX_BATCH:
-        raise ValueError("shadow_batch_exceeds_maximum")
-    by_key = {}
-    for row in rows:
-        key = (row["provider"], row["fixture_id"], row["slot"])
-        if key in by_key and by_key[key] != row:
-            raise ValueError("conflicting_same_batch_snapshot")
-        by_key[key] = row
-    url, headers = _database()
-    now = now or utcnow()
-    cutoff = (now-dt.timedelta(days=KEEP_DAYS)).astimezone(dt.timezone.utc).isoformat()
-    cleaned = requests.delete(url, headers={**headers, "Prefer":"return=minimal"},
-                              params={"collected_at":"lt."+cutoff}, timeout=15)
-    cleaned.raise_for_status()
-    count = _count_rows(url, headers)
-    if count + len(by_key) > MAX_ROWS:
-        print("LMG_SHADOW_CAPACITY_LIMIT", json.dumps({
-            "rows":count,"incoming":len(by_key),"max":MAX_ROWS}),flush=True)
-        return {"status":"capacity_limit","attempted":len(by_key),"rows":count}
-    response = requests.post(url, headers={**headers,
-                "Prefer":"resolution=ignore-duplicates,return=minimal"},
-                params={"on_conflict":"provider,fixture_id,slot"},
-                json=list(by_key.values()), timeout=20)
-    response.raise_for_status()
-    return {"status":"saved","attempted":len(by_key),"existing":count}
+    """Persist bounded, verified original observations to GitHub-backed SQLite."""
+    from netrattler_lmg_store import write_snapshots as sqlite_write
+    return sqlite_write(rows, enabled=enabled, now=now)
 
 
 def _finished(feed: dict, row: dict) -> tuple[int, int] | None:
@@ -189,43 +149,32 @@ def _finished(feed: dict, row: dict) -> tuple[int, int] | None:
 
 
 def settle_snapshots(*, enabled: bool = False, now: dt.datetime | None = None) -> dict:
-    """Attach final result to original snapshots; never change Telegram tips."""
+    """Use only the original exact FotMob fixture for finished live snapshots."""
     if not enabled:
         return {"status":"disabled"}
+    from netrattler_lmg_store import pending_snapshots, settle_snapshot
     from netrattler_lmg_fotmob import fetch_fotmob
-    now=now or utcnow()
-    url,headers=_database()
-    cutoff=(now-dt.timedelta(days=4)).isoformat()
-    response=requests.get(url,headers=headers,params={
-        "select":"provider,fixture_id,kickoff,home,away,home_goals,away_goals",
-        "final_verified_at":"is.null","collected_at":"gte."+cutoff,
-        "order":"collected_at.asc","limit":"120"},timeout=20)
-    response.raise_for_status()
-    rows=response.json()
-    unique={}
+    now = now or utcnow()
+    rows = pending_snapshots(now)
+    unique = {}
     for row in rows:
-        unique.setdefault((row["provider"],row["fixture_id"]),row)
-    cached={}
-    settled=0
-    for (provider,fixture_id),row in unique.items():
+        unique.setdefault((row["provider"], row["fixture_id"]), row)
+    cached = {}
+    settled = 0
+    for (provider, fixture_id), row in unique.items():
         if provider != "fotmob":
-            continue  # ESPN final results need a separate explicitly verified path.
-        day=common._date(row["kickoff"])
-        if day is None:
+            continue  # ESPN rows require a separate source-verifiable final.
+        kickoff = common._date(row.get("kickoff"))
+        if kickoff is None:
             continue
-        day=day.strftime("%Y%m%d")
+        day = kickoff.strftime("%Y%m%d")
         if day not in cached:
-            cached[day]=fetch_fotmob(day)
-        final=_finished(cached[day],row)
+            cached[day] = fetch_fotmob(day)
+        final = _finished(cached[day], row)
         if final is None:
             continue
-        patch=requests.patch(url,headers={**headers,"Prefer":"return=minimal"},
-            params={"provider":"eq.fotmob","fixture_id":"eq."+str(fixture_id),
-                    "final_verified_at":"is.null"},
-            json={"final_home_goals":final[0],"final_away_goals":final[1],
-                  "final_verified_at":now.isoformat()},timeout=15)
-        patch.raise_for_status()
-        settled+=1
+        if settle_snapshot(provider, fixture_id, final, now):
+            settled += 1
     return {"status":"ok","pending_fixtures":len(unique),
             "settled_fixtures":settled}
 
