@@ -10,7 +10,12 @@ import netrattler_stats_match_cards as cards
 
 def _png_bytes():
     out = io.BytesIO()
-    Image.new("RGB", (12, 12), "#4477bb").save(out, format="PNG")
+    # Production rejects images <80px and grey placeholders; use a coloured gradient.
+    im = Image.new("RGB", (120, 120), "#4477bb")
+    for x in range(120):
+        for y in range(120):
+            im.putpixel((x, y), (40 + x, 90 + y // 2, 180 - x // 2))
+    im.save(out, format="PNG")
     return out.getvalue()
 
 
