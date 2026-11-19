@@ -2,7 +2,7 @@
 import io
 import unittest
 
-from PIL import Image
+from PIL import Image, ImageChops
 
 from netrattler_premium_verified_cards import render_verified_png
 from netrattler_premium_telegram_adapter import render, MARKETS
@@ -34,6 +34,26 @@ class PremiumVerifiedCardsTests(unittest.TestCase):
                     self.assertEqual(im.format,"PNG")
                     self.assertEqual(im.size,(1122,1402))
                     self.assertGreater(im.convert("RGB").getextrema()[0][1],170)
+
+    def test_pixel_inspection_preserves_premium_master_header_and_real_crests(self):
+        source=render_verified_png("over",[{
+            "match":"Example United vs Sample Town",
+            "market":"OVER 2.5 YES",
+            "bookmaker_odds":1.75,
+            "bookmaker":"verified_bookmaker",
+        }])
+        target=render([("over25",tip())],"2026-11-19",
+                      crest_provider=lambda _:crest())
+        with Image.open(io.BytesIO(source)) as base, Image.open(io.BytesIO(target)) as result:
+            before=base.convert("RGB").crop((0,0,1122,225))
+            after=result.convert("RGB").crop((0,0,1122,225))
+            self.assertIsNone(ImageChops.difference(before,after).getbbox(),
+                              "Premium header artwork must remain pixel-identical")
+            # Our small real test crests have a measurable blue body in both slots.
+            home=result.convert("RGB").crop((220,243,340,355))
+            away=result.convert("RGB").crop((782,243,902,355))
+            self.assertEqual(home.getpixel((60,60)),(0,160,240))
+            self.assertEqual(away.getpixel((60,60)),(0,160,240))
 
     def test_result_is_drawn_on_same_premium_master(self):
         before=render([("over25",tip())],"2026-11-19",
