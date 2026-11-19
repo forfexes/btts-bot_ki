@@ -183,6 +183,26 @@ class FotmobTest(unittest.TestCase):
         self.assertEqual(send.call_args.args[0]["fixture_id"],1000014437)
         marked.assert_called_once_with("1000014437",301)
 
+    def test_optional_verified_api_football_recovery_uses_original_fotmob_fixture(self):
+        empty={"content":{"stats":{"Periods":{"All":{"stats":[]}}}}}
+        verified=bot.metrics_from_fotmob(detail(),bot.fixtures_from_fotmob(daily())[0])
+        with patch.dict("os.environ",{"LMG_SEND":"true","LMG_SHADOW_ENABLED":"false",
+                                     "API_FOOTBALL_KEYS":"offline-test","API_FOOTBALL_KEY":""}), \
+             patch.object(bot,"fetch_fotmob",return_value=daily()), \
+             patch.object(bot.common,"_get",side_effect=[empty,{"events":[]}]), \
+             patch("netrattler_lmg_api_fallback.recover",return_value=verified) as recovery, \
+             patch.object(bot.common,"reserve_alert",return_value="1000014437"), \
+             patch.object(bot.common,"send_alert",return_value=451) as send, \
+             patch.object(bot.common,"mark_sent") as marked:
+            report=bot.run()
+        self.assertEqual(report["espn_recovered"],0)
+        self.assertEqual(report["api_football_checked"],1)
+        self.assertEqual(report["api_football_recovered"],1)
+        self.assertEqual(report["sent"],1)
+        recovery.assert_called_once()
+        self.assertEqual(send.call_args.args[0]["fixture_id"],1000014437)
+        marked.assert_called_once_with("1000014437",451)
+
     def test_80_standard_81_to_85_premium_only_and_86_blocked(self):
         for minute in (80, 81, 85):
             fixture=bot.fixtures_from_fotmob(daily(str(minute)+"’"))[0]
