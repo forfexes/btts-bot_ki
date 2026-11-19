@@ -55,6 +55,16 @@ jobs:
           assert callable(adapter.render) and callable(render_verified_png)
           assert 'netrattler_original_template_renderer' in inspect.getsource(design.render_builder_card)
           assert 'netrattler_original_template_renderer' in inspect.getsource(design.render_scorer_card)
+          from netrattler_original_template_renderer import _builder_canvas
+          from netrattler_premium_compact import compact_master
+          from PIL import Image
+          import io
+          for n in (2, 3, 4, 5, 6):
+              canvas, shift = _builder_canvas([None] * n)
+              assert canvas.size == (1122, 1402 - 100 * (6 - n))
+              assert shift == -100 * (6 - n)
+              assert compact_master('builder', n)
+          print('PASS: old Builder entrypoint uses new premium SVG masters for 2–6 legs')
           print('PASS: ordinary single-market production cards route to premium adapter')
           print('NOTICE: Builder and Goal Hunter use separate original-template renderers; tested separately')
           PY
