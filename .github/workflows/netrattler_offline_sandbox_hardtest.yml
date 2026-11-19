@@ -68,6 +68,27 @@ jobs:
           print('PASS: ordinary single-market production cards route to premium adapter')
           print('NOTICE: Builder and Goal Hunter use separate original-template renderers; tested separately')
           PY
+      - name: Fail if compact Builder footer overlaps selection rows
+        run: |
+          python - <<'PY'
+          from xml.etree import ElementTree as ET
+          from netrattler_premium_compact import compact_master
+          from netrattler_original_template_renderer import render_builder
+          import inspect
+          source=inspect.getsource(render_builder)
+          assert 'footer_y = 1185 + shift' in source
+          assert 'y0=1034+f' not in source
+          ns='{http://www.w3.org/2000/svg}'
+          for n in range(2,7):
+              root=ET.fromstring(compact_master('builder',n))
+              rects=[x for x in root.findall(ns+'rect') if x.get('x')=='42' and x.get('width')=='1038']
+              rows=[x for x in rects if float(x.get('height'))<120]
+              footer=[x for x in rects if float(x.get('height'))>=120]
+              assert len(rows)==n and len(footer)==1
+              last=max(float(x.get('y'))+float(x.get('height')) for x in rows)
+              assert last<float(footer[0].get('y')), f'Builder {n}: footer overlaps rows'
+          print('PASS: 2–6 leg premium footer is below all selection rows')
+          PY
       - name: Create visual sandbox PNG artifact (never send to Telegram)
         if: always()
         run: |
