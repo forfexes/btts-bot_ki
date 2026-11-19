@@ -50,6 +50,19 @@ jobs:
               print("RESULT=INVALID_DSN")
               sys.exit(2)
 
+          # Compare libpq parsing to URL parsing without printing credentials.
+          try:
+              parsed = psycopg2.extensions.parse_dsn(dsn)
+              parsed_host = parsed.get("host", "")
+              parsed_port = parsed.get("port", "5432")
+              print("LIBPQ_HOST_MATCH=" + str(parsed_host == host).lower())
+              print("LIBPQ_PORT_MATCH=" + str(str(parsed_port) == str(port)).lower())
+              print("LIBPQ_USER_MATCH=" + str(parsed.get("user", "") == u.username).lower())
+              print("LIBPQ_PASSWORD_PRESENT=" + str(bool(parsed.get("password"))).lower())
+          except Exception:
+              print("RESULT=LIBPQ_PARSE_FAILED")
+              sys.exit(1)
+
           addresses = []
           try:
               addresses = socket.getaddrinfo(host, port, type=socket.SOCK_STREAM)
