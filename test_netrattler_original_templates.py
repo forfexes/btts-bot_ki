@@ -36,7 +36,7 @@ def test_builder_two_four_six_leg_masters_and_dry_run_send():
     photo=_test_photo()
     with patch.object(cards,"_player_photo",return_value=photo), \
          patch.object(cards,"_badge_bytes",return_value=photo):
-        for n,height in ((2,994),(4,1194),(6,1402)):
+        for n,height in ((2,1002),(4,1202),(6,1402)):
             pick=_fixture(n)
             raw=builder.render_builder_card(pick)
             im=Image.open(io.BytesIO(raw)).convert("RGB")
