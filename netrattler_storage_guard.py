@@ -1,6 +1,6 @@
 """Storage guard for the main Supabase project (limit 500 MB).
-Reads db_size_mb() RPC. >= WARN: diag + Telegram alert (group alerts only). >= TRIM: delete old
-x1_player_snapshots (regenerable shadow data) down to TRIM_KEEP_DAYS. Never touches tips/results/models."""
+Reads db_size_mb() RPC. Read-only diagnostics and optional alerting only.
+No automatic snapshot deletion, REINDEX, or other database maintenance."""
 import os
 import json
 from datetime import datetime, timedelta, timezone
@@ -56,21 +56,8 @@ def run() -> dict:
             raise RuntimeError("Storage measurement invalid")
         action = decide(mb)
         info.update(mb=mb, action=action, tables=d.get("tables"))
-        if action == "trim":
-            cut = (datetime.now(timezone.utc) - timedelta(days=trim_keep_days(mb))).isoformat()
-            dr = requests.delete(f"{SB}/rest/v1/x1_player_snapshots", headers={**H, "Prefer": "return=minimal"},
-                                 params={"captured_at": f"lt.{cut}"}, timeout=120)
-            info["trim_status"] = dr.status_code
-            dr.raise_for_status()
         if action != "ok":
-            # Index-Bloat (odds_history_pkey) entfernen: reiner REINDEX, keine Daten-/Schemaaenderung.
-            try:
-                rr = requests.post(f"{SB}/rest/v1/rpc/maintenance_reindex", headers=H, json={}, timeout=120)
-                info["reindex_status"] = rr.status_code
-                if rr.ok and isinstance(rr.json(), dict) and rr.json().get("mb") is not None:
-                    info["mb_after_reindex"] = float(rr.json()["mb"])
-            except Exception as exc:
-                info["reindex_error"] = type(exc).__name__
+            info["maintenance"] = "manual_review_required_no_destructive_operations"
             alert(f"⚠️ Supabase Hauptdatenbank {mb:.0f} MB (Limit 500). Aktion: {action}")
     if SB and KEY:
         requests.post(f"{SB}/rest/v1/netrattler_card_diag", headers=H, json={"info": info}, timeout=20)
