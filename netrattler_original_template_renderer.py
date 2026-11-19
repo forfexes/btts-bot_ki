@@ -168,7 +168,7 @@ def render_builder(pick):
         _erase(draw,rect,fill="#0B151F",radius=20)
         _crest(im,cards,name,(142 if name==home else 885,195,224 if name==home else 961,283))
         _erase(draw,txt_rect,fill="#07131B")
-        _label(draw,name.upper(),center,211,222,size=36,min_size=17)
+        _label(draw,name.upper(),center,229,222,size=32,min_size=17)
     _erase(draw,(304,279,851,308),fill="#061D28")
     _label(draw,_kickoff(legs[0].kickoff),562,278,450,size=23,min_size=17)
     _erase(draw,(220,325,636,385),fill="#08131D")
@@ -189,14 +189,14 @@ def render_builder(pick):
         y=409+100*i
         # Erase baked-in sample photo, club crest, label and statistics before
         # inserting *only* the actual corresponding player's verified data.
-        _erase(draw,(94,y-14,258,y+107),fill="#0A1117",radius=17)
-        _portrait(im,cards,leg.player,leg.team,(101,y-14,247,y+99))
+        _erase(draw,(52,y-1,258,y+85),fill="#08121A",radius=12)
+        _portrait(im,cards,leg.player,leg.team,(104,y+1,248,y+83))
         _erase(draw,(269,y+1,352,y+83),fill="#071720",radius=18)
         _crest(im,cards,leg.team,(276,y+8,343,y+77))
-        _erase(draw,(365,y+1,745,y+96),fill="#07131B",radius=4)
+        _erase(draw,(365,y+1,745,y+85),fill="#07131B",radius=4)
         _label(draw,leg.player.upper(),545,y+3,350,size=30,min_size=17)
         _label(draw,builder_leg_label(leg).upper(),550,y+42,342,size=25,min_size=15,fill=GOLD)
-        _erase(draw,(800,y+1,1057,y+94),fill="#07131A",radius=4)
+        _erase(draw,(800,y+1,1057,y+85),fill="#07131A",radius=4)
         series=_stat_series(leg,__import__("netrattler_builder_engine"),getattr(pick,"match_date",""))
         if len(series)<5:
             raise ValueError("Für den Spieler fehlt echte Spielhistorie (mind. L5)")
