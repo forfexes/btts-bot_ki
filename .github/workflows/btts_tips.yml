@@ -89,6 +89,7 @@ jobs:
             requests \
             pillow \
             cairosvg \
+            cairosvg \
             python-dotenv \
             beautifulsoup4 \
             lxml \
