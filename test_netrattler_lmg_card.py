@@ -1,5 +1,9 @@
 """Offline regression tests for photo-card and settlement safety."""
 import unittest
+from PIL import Image as _I, ImageDraw as _D
+def _fake_crest(_id=None):
+    im=_I.new("RGBA",(120,120),(0,0,0,0)); _D.Draw(im).ellipse((5,5,115,115),fill="#20B1CB",outline="#FFFFFF",width=6)
+    return im
 from unittest.mock import patch,Mock
 import netrattler_lmg_card as card
 import netrattler_lmg_settle as settle
@@ -12,7 +16,7 @@ class GoalHunterCards(unittest.TestCase):
         self.metrics={"tier":"STANDARD","teams":{"home":{"shots":10,"sot":4,"corners":3,"xg":1.62},
                                                    "away":{"shots":5,"sot":2,"corners":2,"xg":0.87}}}
     def test_open_and_final_render(self):
-        with patch.object(card,"crest",return_value=None):
+        with patch.object(card,"crest",side_effect=_fake_crest):
             opening=card.make_card(self.fx,self.metrics)
             final=card.make_card(self.fx,final_score="2:2",won=True)
             lost=card.make_card(self.fx,final_score="1:2",won=False)
@@ -21,16 +25,21 @@ class GoalHunterCards(unittest.TestCase):
         self.assertTrue(lost.startswith(b"\xff\xd8"))
         self.assertNotEqual(opening,final)
         self.assertNotEqual(final,lost)
-    def test_approved_neon_frame_header_survives_render(self):
-        import io
+    def test_premium_master_header_survives_render(self):
+        import io, cairosvg
         from PIL import Image,ImageChops,ImageStat
-        with patch.object(card,"crest",return_value=None):
+        from netrattler_premium_compact import ASSETS
+        with patch.object(card,"crest",side_effect=_fake_crest):
             rendered=Image.open(io.BytesIO(card.make_card(self.fx,self.metrics))).convert("RGB")
-        source=Image.open(card.TEMPLATE).convert("RGB").resize((1080,1350))
-        diff=ImageChops.difference(source.crop((0,0,1080,230)),
-                                   rendered.crop((0,0,1080,230)))
-        self.assertLess(sum(ImageStat.Stat(diff).mean)/3,12)
-        self.assertTrue(card.TEMPLATE.is_file())
+        master=Image.open(io.BytesIO(cairosvg.svg2png(url=str(ASSETS/"premium_last_minute_goal_blank.svg"),
+                                                      output_width=1122,output_height=1402))).convert("RGB")
+        diff=ImageChops.difference(master.crop((0,0,1122,230)),rendered.crop((0,0,1122,230)))
+        self.assertLess(sum(ImageStat.Stat(diff).mean)/3,3)
+
+    def test_missing_crest_fails_closed(self):
+        with patch.object(card,"crest",return_value=None):
+            with self.assertRaises(ValueError):
+                card.make_card(self.fx,self.metrics)
 
     def test_missing_xg_and_espn_fallback_render(self):
         import io
@@ -38,29 +47,29 @@ class GoalHunterCards(unittest.TestCase):
         no_xg={"tier":"STANDARD","teams":{"home":{"shots":10,"sot":4,"corners":3},
                                                  "away":{"shots":5,"sot":2,"corners":2}}}
         totals={"tier":"STANDARD","shots":15,"sot":6,"corners":5}
-        with patch.object(card,"crest",return_value=None):
+        with patch.object(card,"crest",side_effect=_fake_crest):
             a=card.make_card(self.fx,no_xg)
             b=card.make_card(self.fx,totals)
-        self.assertEqual(Image.open(io.BytesIO(a)).size,(1080,1350))
-        self.assertEqual(Image.open(io.BytesIO(b)).size,(1080,1350))
+        self.assertEqual(Image.open(io.BytesIO(a)).size,(1122,1402))
+        self.assertEqual(Image.open(io.BytesIO(b)).size,(1122,1402))
         self.assertNotEqual(a,b)
 
     def test_visual_layout_and_telegram_photo_limits(self):
         import io
         from PIL import Image,ImageStat
-        with patch.object(card,"crest",return_value=None):
+        with patch.object(card,"crest",side_effect=_fake_crest):
             for label,options in (("open",{"metrics":self.metrics}),
                                   ("won",{"final_score":"3:2","won":True}),
                                   ("lost",{"final_score":"1:2","won":False})):
                 raw=card.make_card(self.fx,**options)
                 img=Image.open(io.BytesIO(raw))
-                self.assertEqual(img.size,(1080,1350),label)
+                self.assertEqual(img.size,(1122,1402),label)
                 self.assertEqual(img.format,"JPEG",label)
                 self.assertLess(len(raw),10_000_000,label)
                 # Detect blank/broken image, missing headline, and invisible footer.
-                self.assertGreater(ImageStat.Stat(img.crop((0,0,1080,300))).stddev[0],12,label)
-                self.assertGreater(ImageStat.Stat(img.crop((0,1200,1080,1350))).stddev[0],5,label)
-                self.assertGreater(ImageStat.Stat(img.crop((50,600,1030,1150))).stddev[0],15,label)
+                self.assertGreater(ImageStat.Stat(img.crop((0,0,1122,300))).stddev[0],12,label)
+                self.assertGreater(ImageStat.Stat(img.crop((0,1200,1122,1402))).stddev[0],5,label)
+                self.assertGreater(ImageStat.Stat(img.crop((60,600,1060,1150))).stddev[0],15,label)
 
     def test_finished_only_and_identity_guard(self):
         feed={"leagues":[{"name":"ASEAN","matches":[{

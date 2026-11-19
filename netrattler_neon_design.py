@@ -522,7 +522,7 @@ def render_scorer_card(tip, target_date, result=None):
     label, color = _result_text(status)
     _box(d, (35, 1185, 735, 1264), GOLD, "#081926", 22, 4)
     _center(d, "AUSWERTUNG: " + label, 385, 1200, 35, color, 665)
-    _center(d, "@netrattler", 885, 1205, 29, WHITE, 280)
+    _center(d, "@prophunter", 885, 1205, 29, WHITE, 280)
     if isinstance(result, dict) and result.get("ft"):
         _center(d, "ENDSTAND: " + str(result["ft"]), 540, 1144, 22, MUTED, 900)
     output = io.BytesIO()

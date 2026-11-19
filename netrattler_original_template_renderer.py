@@ -92,6 +92,9 @@ def _picture(raw, min_size=60):
 def _portrait(im, cards, player, team, rect, *, circle=False):
     raw=cards._player_photo(player,team)
     pic=_picture(raw)
+    from netrattler_visual_review import _looks_like_grey_placeholder
+    if _looks_like_grey_placeholder(pic, (0, 0, pic.width, pic.height)):
+        raise ValueError("Grauer Standard-Avatar statt echtem Spielerfoto")
     x0,y0,x1,y1=map(int,rect)
     w,h=x1-x0,y1-y0
     pic=ImageOps.fit(pic,(w,h),Image.Resampling.LANCZOS,centering=(.5,.18))
@@ -168,32 +171,38 @@ def render_builder(pick):
         _erase(draw,rect,fill="#0B151F",radius=20)
         _crest(im,cards,name,(142 if name==home else 885,195,224 if name==home else 961,283))
         _erase(draw,txt_rect,fill="#07131B")
-        _label(draw,name.upper(),center,211,222,size=36,min_size=17)
+        _label(draw,name.upper(),center,229,222,size=32,min_size=17)
     _erase(draw,(304,279,851,308),fill="#061D28")
     _label(draw,_kickoff(legs[0].kickoff),562,278,450,size=23,min_size=17)
     _erase(draw,(220,325,636,385),fill="#08131D")
     _label(draw,f"{len(legs)}-LEG BUILDER",423,326,390,size=40,min_size=27)
     from netrattler_neon_design import _builder_quote_display,_stat_series,_form_label,_percent,_number
     title,value,book_quote=_builder_quote_display(pick,legs)
-    if book_quote is None:
-        raise ValueError("Keine bestätigte Buchmacher-Kombiquote")
+    product_only = book_quote is None
+    if product_only:
+        # Real single-leg quotes multiplied; never presented as a bookmaker
+        # combination price and never used for a displayed EV.
+        if str(title).startswith("EINZELQUOTEN"):
+            book_quote = math.prod(float(l.odds) for l in legs)
+        else:
+            raise ValueError("Keine echten Einzelquoten für die Kombiquote")
     _erase(draw,(710,333,1000,376),fill="#F6C92E",radius=10)
-    _label(draw,f"@ {book_quote:.2f}",857,333,260,size=35,min_size=22,fill="#11121B",shadow=False)
+    _label(draw,(f"× {book_quote:.2f}" if product_only else f"@ {book_quote:.2f}"),857,333,260,size=35,min_size=22,fill="#11121B",shadow=False)
     for i,leg in enumerate(legs):
         y=409+100*i
         # Erase baked-in sample photo, club crest, label and statistics before
         # inserting *only* the actual corresponding player's verified data.
-        _erase(draw,(94,y-14,258,y+107),fill="#0A1117",radius=17)
-        _portrait(im,cards,leg.player,leg.team,(101,y-14,247,y+99))
+        _erase(draw,(52,y-1,258,y+85),fill="#08121A",radius=12)
+        _portrait(im,cards,leg.player,leg.team,(104,y+1,248,y+83))
         _erase(draw,(269,y+1,352,y+83),fill="#071720",radius=18)
         _crest(im,cards,leg.team,(276,y+8,343,y+77))
-        _erase(draw,(365,y+1,745,y+96),fill="#07131B",radius=4)
+        _erase(draw,(365,y+1,745,y+85),fill="#07131B",radius=4)
         _label(draw,leg.player.upper(),545,y+3,350,size=30,min_size=17)
         _label(draw,builder_leg_label(leg).upper(),550,y+42,342,size=25,min_size=15,fill=GOLD)
-        _erase(draw,(800,y+1,1057,y+94),fill="#07131A",radius=4)
+        _erase(draw,(800,y+1,1057,y+85),fill="#07131A",radius=4)
         series=_stat_series(leg,__import__("netrattler_builder_engine"),getattr(pick,"match_date",""))
-        if len(series)<15:
-            raise ValueError("Für den Spieler fehlt echte L15-Spielhistorie")
+        if len(series)<5:
+            raise ValueError("Für den Spieler fehlt echte Spielhistorie (mind. L5)")
         for period,yy in ((5,y+5),(10,y+34),(15,y+63)):
             _label(draw,f"L{period}: {_form_label(series,leg.line,period)}",931,yy,246,size=20,min_size=14,fill=GREEN,italic=False)
     # Place live figures INSIDE the new SVG footer (the old WebP
@@ -204,14 +213,14 @@ def render_builder(pick):
         probability=_percent(getattr(pick,"probability",None))
     if probability is None:
         raise ValueError("Bestätigte Modellwahrscheinlichkeit fehlt")
-    ev=(probability/100*book_quote-1)*100
+    ev=None if product_only else (probability/100*book_quote-1)*100
     conf=str(getattr(pick,"confidence","") or "").upper()
     if not conf or conf=="—":
         raise ValueError("Konfidenz fehlt")
     status,col=nd._result_text(getattr(pick,"status",None))
     for cx,heading,value,color in (
-        (235,"QUOTE",f"{book_quote:.2f}",GOLD),
-        (561,"VALUE",f"{ev:+.1f}%",GREEN if ev>=0 else RED),
+        (235,"EINZELQUOTEN ×" if product_only else "QUOTE",f"{book_quote:.2f}",GOLD),
+        (561,"VALUE","—" if ev is None else f"{ev:+.1f}%",WHITE if ev is None else (GREEN if ev>=0 else RED)),
         (885,"MODELL",f"{probability:.1f}%",GOLD),
     ):
         _label(draw,heading,cx,footer_y+14,260,size=20,min_size=16,fill=CYAN,italic=False)

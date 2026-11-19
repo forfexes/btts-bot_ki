@@ -41,9 +41,14 @@ def test_builder_two_four_six_leg_masters_and_dry_run_send():
             raw=builder.render_builder_card(pick)
             im=Image.open(io.BytesIO(raw)).convert("RGB")
             assert im.size==(1122,height)
-            original=_base(str(BUILDER_IMAGE))
+            # The premium SVG header (logo + ribbon) must stay untouched; the compact
+            # master only removes unused rows below it.
+            from netrattler_premium_compact import compact_master
+            import cairosvg
+            master=Image.open(io.BytesIO(cairosvg.svg2png(bytestring=compact_master("builder",n)))).convert("RGB")
+            assert master.size==im.size
             assert ImageChops.difference(im.crop((0,0,1122,170)),
-                                          original.crop((0,0,1122,170))).getbbox() is None
+                                          master.crop((0,0,1122,170))).getbbox() is None
             quality=review_png(raw,"builder",legs=n)
             assert quality.passed,quality.describe()
             with patch("netrattler_visual_gate.validate_builder",return_value=(pick,[])), \
@@ -51,6 +56,22 @@ def test_builder_two_four_six_leg_masters_and_dry_run_send():
                 assert builder.send_builder_card("FAKE_TOKEN","FAKE_CHAT",pick)==3141
                 assert send.call_count == 1
                 assert send.call_args.args[3].startswith(b"\x89PNG\r\n\x1a\n")
+
+
+def test_builder_rejects_grey_provider_avatar_before_telegram():
+    grey=Image.new("RGB",(240,260),"#cccccc")
+    d=ImageDraw.Draw(grey)
+    d.ellipse((65,25,175,150),fill="#999999")
+    d.polygon(((20,260),(55,150),(190,150),(230,260)),fill="#aaaaaa")
+    out=io.BytesIO()
+    grey.save(out,"PNG")
+    with patch.object(cards,"_player_photo",return_value=out.getvalue()), \
+         patch.object(cards,"_badge_bytes",return_value=_test_photo()), \
+         patch.object(cards,"_send_photo") as send:
+        import pytest
+        with pytest.raises(ValueError,match="Standard-Avatar"):
+            builder.render_builder_card(_fixture(2))
+        send.assert_not_called()
 
 
 def test_goal_hunter_master_and_dry_run_send():
@@ -183,3 +204,22 @@ def test_builder_shows_all_three_verified_form_windows():
     for period in (5,10,15):
         assert any(text.startswith(f"L{period}:") for text in labels), f"L{period} absent"
     assert raw.startswith(bytes.fromhex("89504e470d0a1a0a"))
+
+
+def test_builder_without_verified_combo_quote_uses_single_leg_product():
+    """Real single quotes multiplied are allowed (labelled), no EV is claimed."""
+    import math
+    photo=_test_photo()
+    pick=_fixture(4)
+    pick.combined_quote_verified=False
+    pick.combined_bookmaker_quote=None
+    with patch.object(cards,"_player_photo",return_value=photo), \
+         patch.object(cards,"_badge_bytes",return_value=photo):
+        raw=builder.render_builder_card(pick)
+        assert review_png(raw,"builder",legs=4).passed
+        pick.estimated_odds=True
+        try:
+            builder.render_builder_card(pick)
+            raise AssertionError("estimated odds must not render")
+        except ValueError:
+            pass

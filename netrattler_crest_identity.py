@@ -3,7 +3,7 @@ import re
 import unicodedata
 
 ALIASES = {
-    'psg':'paris saint germain', 'bayern':'bayern munich', 'bayern munchen':'bayern munich',
+    'rb bragantino':'red bull bragantino', 'bragantino':'red bull bragantino', 'vitoria':'vitoria', 'psg':'paris saint germain', 'bayern':'bayern munich', 'bayern munchen':'bayern munich',
     'rennes':'stade rennais', 'swansea':'swansea city', 'blackburn':'blackburn rovers',
     'derby':'derby county', 'inter':'inter milan', 'internazionale':'inter milan',
     'mechelen':'kv mechelen', 'sint truidense':'sint truidense vv', 'twente 65':'twente enschede',

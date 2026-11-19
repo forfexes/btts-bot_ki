@@ -73,6 +73,11 @@ def _looks_like_grey_placeholder(im, box):
         return True
     grey = sum(1 for r, g, b in pixels if max(r, g, b) - min(r, g, b) <= 6)
     luminances = {int((r + g + b) / 3) // 8 for r, g, b in pixels}
+    # Provider default avatars are light-grey silhouettes WITH a gradient, so also
+    # reject images that are almost entirely near-neutral (real photos carry skin/kit colour).
+    near = sum(1 for r, g, b in pixels if max(r, g, b) - min(r, g, b) <= 14)
+    if near / len(pixels) >= 0.93:
+        return True
     return grey / len(pixels) > 0.96 and len(luminances) <= 12
 
 
@@ -86,10 +91,17 @@ def _review_user_master(im, kind, legs):
         nonlocal checks
         checks+=1
         if not ok: problems.append(label)
-    expected=(1122,{2:994,4:1194,6:1402}.get(legs,0)) if kind=="builder" else (1122,1402)
+    expected=(1122,1402-100*(6-legs) if 2<=legs<=6 else 0) if kind=="builder" else (1122,1402)
     check(im.size==expected,"master_dimensions")
     if im.size!=expected: return Review(kind,False,problems,checks)
-    source=_base(str(BUILDER_IMAGE if kind=="builder" else GOAL_IMAGE))
+    if kind=="builder":
+        # Compact premium masters are rasterised at their own height (the
+        # background gradient scales with it), so compare against that master.
+        import cairosvg
+        from netrattler_premium_compact import compact_master
+        source=Image.open(io.BytesIO(cairosvg.svg2png(bytestring=compact_master("builder",legs)))).convert("RGB")
+    else:
+        source=_base(str(GOAL_IMAGE))
     check(ImageChops.difference(im.crop((0,0,1122,170)),
                                source.crop((0,0,1122,170))).getbbox() is None,
           "user_original_header_was_redrawn")
@@ -107,11 +119,13 @@ def _review_user_master(im, kind, legs):
             y=409+i*100
             edited((106,y+4,225,y+76),f"player_photo_replaced_{i+1}")
             check(_texture(im,(106,y+4,225,y+76))>18,f"photo_texture_{i+1}")
+            check(not _looks_like_grey_placeholder(im,(106,y+4,225,y+76)),
+                  f"player_placeholder_silhouette_{i+1}")
             check(_texture(im,(278,y+9,339,y+74))>12,f"crest_texture_{i+1}")
             count((370,y+3,741,y+41),_light,f"player_name_{i+1}")
             count((382,y+42,740,y+85),_gold,f"market_{i+1}")
             count((805,y+5,1053,y+84),_green,f"l10_l15_{i+1}")
-        dy=0 if legs==6 else 405+100*legs-1013
+        dy=-100*(6-legs)
         count((839,1203+dy,1053,1267+dy),
               lambda p:_green(p) or _gold(p) or (p[0]>185 and p[1]<135),
               "builder_settlement")

@@ -34,7 +34,7 @@ def _fit(draw, value, max_width, size=27):
 
 def _crest(raw):
     if not isinstance(raw, (bytes, bytearray)) or not raw:
-        raise ValueError("Echtes Vereinswappen fehlt: keine Platzhalter erlaubt")
+        raise ValueError("Echtes Vereins-Wappen fehlt: keine Platzhalter erlaubt")
     with Image.open(BytesIO(raw)) as source:
         source.load()
         if min(source.size) < 24:

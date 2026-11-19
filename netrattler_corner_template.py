@@ -103,103 +103,14 @@ def _gold_bar(im, area):
 
 
 def render_corner_template(tip, target_date, result=None):
-    """Replace ALL static example values on the exact Corner Sniper master PNG."""
+    """Corner Sniper on the premium SVG master with verified live data only."""
     import netrattler_stats_match_cards as cards
     from netrattler_corner_cards import kickoff_label
-    if not MASTER.is_file():
-        raise FileNotFoundError('corner_master_missing')
-    im = Image.open(MASTER).convert('RGB')
-    if im.size != (W,H):
-        raise ValueError('corner_master_wrong_size')
-    draw=ImageDraw.Draw(im)
-    home,away = cards._teams(tip.get('match',''))
-    if not home or not away:
-        raise ValueError('corner_fixture_missing')
-    # Keep the approved stadium artwork, crown, gold title and cyan panel borders.
-    # Strip all placeholder team names/logos before placing verified identities.
-    _erase(draw,(91,204,495,321), '#081019')
-    _erase(draw,(637,204,1026,321), '#081019')
-    _erase(draw,(138,190,213,204),'#081019')
-    _erase(draw,(107,319,215,327),'#081019')
-    _badge(im, draw, cards, home, (106,214,210,300))
-    _erase(draw,(915,190,1009,204),'#081019')
-    _erase(draw,(917,319,1009,327),'#081019')
-    _badge(im, draw, cards, away, (911,214,1014,300))
-    _label(draw,home.upper(),355,242,270,36)
-    _label(draw,away.upper(),769,242,254,36)
-    day,clock=kickoff_label(tip,target_date)
+    from netrattler_premium_extra import render_corner
+    day, clock = kickoff_label(tip, target_date)
     if clock == 'Zeit nicht bestätigt' or not clock:
         raise ValueError('corner_unconfirmed_kickoff')
-    _erase(draw,(150,329,394,390),'#07131C')
-    _erase(draw,(489,329,741,386),'#07131C')
-    _erase(draw,(823,329,1007,388),'#07131C')
-    league=str(tip.get('league') or '').strip()
-    if league:
-        _label(draw,league,270,340,240,25)
-    _label(draw,day,610,344,255,27)
-    _label(draw,clock+' Uhr',921,344,173,27)
-    # The three inset statistic panels retain the original glowing outlines.
-    for box in ((63,431,380,624),(425,431,694,624),(728,431,1040,624)):
-        _erase(draw,box,'#020B12',15)
-    home_l10=first(tip,'home_corners_l10','home_l10_corners','home_avg_corners_l10','home_corners_l10_avg')
-    home_l15=first(tip,'home_corners_l15','home_l15_corners','home_avg_corners_l15','home_corners_l15_avg')
-    away_l10=first(tip,'away_corners_l10','away_l10_corners','away_avg_corners_l10','away_corners_l10_avg')
-    away_l15=first(tip,'away_corners_l15','away_l15_corners','away_avg_corners_l15','away_corners_l15_avg')
-    _label(draw,home.upper(),222,439,302,27)
-    _label(draw,away.upper(),886,439,301,27)
-    _label(draw,'ECKEN · Ø',222,477,300,24,GOLD)
-    _label(draw,'ECKEN · Ø',886,477,300,24,GOLD)
-    for cx,a,b in ((222,home_l10,home_l15),(886,away_l10,away_l15)):
-        _label(draw,'L10: '+fmt(a),cx,529,265,29,GREEN)
-        _label(draw,'L15: '+fmt(b),cx,582,265,29,GREEN)
-    _label(draw,'H2H · ECKEN',560,439,261,26)
-    n=first(tip,'h2h_matches')
-    havg=first(tip,'h2h_avg_corners')
-    _label(draw,('Spiele: '+fmt(n,0)) if n is not None else 'Spiele: —',560,510,245,26,WHITE)
-    _label(draw,'Ø Ecken: '+fmt(havg),560,563,244,25,GOLD)
-    # Central summary strip with real expectations and form only.
-    for box in ((218,658,478,812),(490,658,769,812),(777,658,1059,812)):
-        _erase(draw,box,'#05101A',9)
-    expected=first(tip,'expected_corners')
-    hv=first(tip,'home_avg_corners')
-    av=first(tip,'away_avg_corners')
-    _label(draw,'Ø GESAMT-ECKEN',345,683,241,24)
-    _label(draw,fmt(expected),345,738,245,47,GOLD)
-    _label(draw,'BEIDE TEAMS',624,683,259,24)
-    _label(draw,'Ø '+fmt(hv)+' / '+fmt(av),624,737,267,35,GOLD)
-    market=str(tip.get('tip') or tip.get('selection') or 'Ecken').strip()
-    _label(draw,'TREFFERQUOTE',910,683,252,24)
-    _label(draw,'L10: '+str(tip.get('corner_hits_l10') or '—'),912,724,250,24,GREEN)
-    _label(draw,'L15: '+str(tip.get('corner_hits_l15') or '—'),912,763,250,24,GREEN)
-    _gold_bar(im,(406,864,1043,944))
-    draw=ImageDraw.Draw(im)
-    _label(draw,market,727,884,592,45,'#080E13')
-    # Quote, probability and EV must be internally consistent. Never infer a quote.
-    quote=cards._price(tip)
-    prob=pct(tip.get('probability'))
-    ev=((quote*prob/100)-1)*100 if quote is not None and prob is not None else None
-    for box in ((80,993,345,1154),(377,993,740,1154),(762,993,1058,1154)):
-        _erase(draw,box,'#071520',12)
-    _label(draw,'QUOTE',211,1013,246,24)
-    _label(draw,fmt(quote,2),211,1060,231,60,GOLD)
-    _label(draw,'WAHRSCHEINLICHKEIT',554,1013,332,21)
-    _label(draw,fmt(prob,0)+'%' if prob is not None else '—',554,1064,314,58,GREEN)
-    _label(draw,'EV',903,1013,270,24)
-    _label(draw,(f'{ev:+.1f}%'.replace('.',',')) if ev is not None else '—',903,1064,277,51,GREEN if ev is not None and ev>=0 else RED)
-    conf=str(tip.get('confidence') or '').strip().upper()
-    if not conf:
-        conf='—'
-    _erase(draw,(119,1202,521,1280),'#09101B')
-    _label(draw,'KONFIDENZ: '+conf,330,1222,355,29,GOLD)
-    res=result if isinstance(result,dict) else {}
-    status=str((res.get('marks') or {}).get('0') or res.get('status') or 'pending').lower()
-    label,col={'win':('GEWONNEN',GREEN),'loss':('VERLOREN',RED),'void':('VOID',GOLD)}.get(status,('OFFEN',GOLD))
-    _erase(draw,(633,1202,1056,1280),'#091321')
-    _label(draw,'AUSWERTUNG: '+label,870,1222,349,30,col)
-    # User-approved NETRATTLER AI branding in the lower unused turf area.
-    _label(draw,'NETRATTLER AI',562,1321,625,33,WHITE)
-    _label(draw,'@netrattler',562,1366,625,20,CYAN)
-    out=io.BytesIO();im.save(out,'PNG',optimize=True);return out.getvalue()
+    return render_corner(tip, cards._badge_bytes, kickoff=f'{day} · {clock} Uhr', result=result)
 
 
 def validate_corner(tip, target_date, cards):
@@ -245,34 +156,26 @@ def validate_corner(tip, target_date, cards):
                 reasons.append('missing_verified_crest')
         except (OSError,ValueError):
             reasons.append('invalid_verified_crest')
-    if not MASTER.is_file():
-        reasons.append('missing_original_corner_asset')
     return sorted(set(reasons))
 
 
 
 def review_corner_png(payload):
-    """Pixel-level check of actual image against original; no mere data-only test."""
+    """Pixel check of the premium Corner card against its blank SVG master."""
     from PIL import ImageChops
     try:
+        import cairosvg
+        from netrattler_premium_compact import ASSETS
         with Image.open(io.BytesIO(payload)) as data:
-            if data.format != 'PNG' or data.size != (W,H):
+            if data.format != 'PNG' or data.size != (W, H):
                 return ['wrong_corner_png_geometry']
-            rendered=data.convert('RGB')
-        original=Image.open(MASTER).convert('RGB')
-        regions={'home_team':(222,238,477,295),
-                 'away_team':(648,238,904,295),
-                 'corner_history':(120,513,365,614),
-                 'corner_h2h':(449,495,683,617),
-                 'corner_quote':(116,1030,324,1137),
-                 'corner_probability':(435,1030,686,1137),
-                 'corner_settlement':(710,1218,1037,1276),
-                 'netrattler_ai_brand':(395,1315,745,1360)}
-        missing=[]
-        for label,rect in regions.items():
-            diff=ImageChops.difference(rendered.crop(rect),original.crop(rect))
-            if diff.getbbox() is None:
-                missing.append('unchanged_placeholder_'+label)
-        return missing
-    except (OSError,ValueError,TypeError):
-        return ['invalid_corner_png']
+            rendered = data.convert('RGB')
+        master = Image.open(io.BytesIO(cairosvg.svg2png(
+            url=str(ASSETS / 'premium_corner_blank.svg'), output_width=W, output_height=H))).convert('RGB')
+        regions = {'home_crest': (164, 242, 396, 360), 'away_crest': (726, 242, 958, 360),
+                   'selection_row': (60, 395, 1060, 460), 'corner_panels': (42, 650, 1080, 800),
+                   'corner_quote': (150, 1200, 330, 1270)}
+        return ['unchanged_placeholder_' + k for k, box in regions.items()
+                if ImageChops.difference(rendered.crop(box), master.crop(box)).getbbox() is None]
+    except (OSError, ValueError, TypeError, ImportError):
+        return ['corner_png_unreadable']

@@ -73,7 +73,7 @@ def test_builder_keeps_verified_player_identity_and_receipt():
     p=pick()
     import pytest
     # A single leg is not a complete Builder and must not masquerade as one.
-    with pytest.raises(ValueError, match="2–6 Legs"):
+    with pytest.raises(ValueError, match="2–6"):
         builder_cards.render_builder_card(p)
     payload=b"PNG_TEST_ONLY"
     with patch.object(builder_cards,'render_builder_card',return_value=payload), \
@@ -126,7 +126,7 @@ def test_model_card_preserves_no_quote_and_original_receipt():
     assert receipt=={'message_id':123,'chat_id':'42','text':'original'}
     import pytest
     # Model-only ladders have no bookmaker combined price: never display one.
-    with pytest.raises(ValueError, match="2–6 Legs"):
+    with pytest.raises(ValueError, match="2–6"):
         builder_cards.render_builder_card(adapted)
 
 
@@ -481,3 +481,19 @@ def test_scorer_photo_fallback_skips_grey_silhouette_instead_of_caching():
          patch("netrattler_apif_profile_photo.profile_photo",return_value=""), \
          patch("netrattler_reference_images.player_urls",return_value=[]):
         assert cards._player_photo("Philippe Coutinho","Santos")==b""
+
+
+def test_gradient_grey_default_avatar_is_rejected_as_player_photo():
+    import io
+    from PIL import Image, ImageDraw
+    from netrattler_visual_gate import _real_player_photo
+    im = Image.new("RGB", (200, 200), (235, 235, 235))
+    d = ImageDraw.Draw(im)
+    for y in range(200):
+        v = 235 - y // 8
+        d.line((0, y, 200, y), fill=(v, v, v))
+    d.ellipse((70, 40, 130, 100), fill=(150, 150, 150))
+    buf = io.BytesIO(); im.save(buf, "PNG")
+    assert not _real_player_photo(buf.getvalue())
+    color = Image.new("RGB", (200, 200), (190, 120, 90)); b2 = io.BytesIO(); color.save(b2, "PNG")
+    assert _real_player_photo(b2.getvalue())

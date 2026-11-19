@@ -36,6 +36,8 @@ def club_same(a, b):
         "atleticoparanaense": "athleticoparanaense",
         "athleticoparanaense": "athleticoparanaense",
         "chapecoensesc": "chapecoense",
+        "rbbragantino": "redbullbragantino",
+        "bragantino": "redbullbragantino",
     }
     a, b = clean(a), clean(b)
     a, b = aliases.get(a, a), aliases.get(b, b)
@@ -104,7 +106,7 @@ def _iso_future(value, match_date):
         return ""
 
 
-@lru_cache(maxsize=3)
+@lru_cache(maxsize=6)
 def _day_fixtures(day):
     """At most one bounded date request per process; only confirmed provider dates."""
     keys = (os.getenv("API_FOOTBALL_KEYS") or "").replace("\n", ",").split(",")
@@ -118,6 +120,7 @@ def _day_fixtures(day):
             params={"date": day}, timeout=9)
         data = response.json() if response.ok else {}
         if not isinstance(data, dict) or data.get("errors"):
+            print(f"[builder-diag] fixtures_api_errors={str(data.get('errors'))[:200] if isinstance(data, dict) else data!r}", flush=True)
             return ()
         rows = data.get("response")
         return tuple(rows[:500]) if isinstance(rows, list) else ()
@@ -129,16 +132,34 @@ def kickoff_for_match(match, day):
     home, away = _match_teams(match)
     if not (home and away and day):
         return ""
+    import netrattler_stats_match_cards as cards
     possibilities = []
-    for x in _day_fixtures(day[:10]):
+    rows_all = []
+    try:
+        base_day = dt.date.fromisoformat(day[:10])
+        for off in range(0, 4):
+            rows_all.extend(_day_fixtures((base_day + dt.timedelta(days=off)).isoformat()))
+    except ValueError:
+        rows_all = list(_day_fixtures(day[:10]))
+    print(f"[builder-diag] day={day[:10]} fixtures={len(rows_all)} match={match!r}", flush=True)
+    for x in rows_all:
         if not isinstance(x, dict):
             continue
         teams = x.get("teams") or {}
         h = (teams.get("home") or {}).get("name")
         a = (teams.get("away") or {}).get("name")
         if not (club_same(home, h) and club_same(away, a)):
+            if club_same(home, h) or club_same(away, a):
+                print(f"[builder-diag] partial_match api={h!r} vs {a!r} wanted={home!r} vs {away!r}", flush=True)
             continue
         fixture = x.get("fixture") or {}
+        try:
+            for side, nm in ((teams.get("home") or {}, home), (teams.get("away") or {}, away)):
+                logo = str(side.get("logo") or "")
+                if logo.startswith("https://media.api-sports.io/") and cards._norm(nm) not in cards._LOGO_CACHE:
+                    cards._LOGO_CACHE[cards._norm(nm)] = logo
+        except Exception:
+            pass
         stamp = _iso_future(fixture.get("date"), day)
         if stamp:
             possibilities.append(stamp)
@@ -155,6 +176,14 @@ def _picture_ok(payload):
             return im.width >= 60 and im.height >= 60
     except (ValueError, OSError, TypeError):
         return False
+
+
+def _real_player_photo(payload):
+    if not _picture_ok(payload):
+        return False
+    from netrattler_visual_review import _looks_like_grey_placeholder
+    with Image.open(io.BytesIO(payload)) as im:
+        return not _looks_like_grey_placeholder(im, (0, 0, im.width, im.height))
 
 
 def _with(leg, **kwargs):
@@ -181,12 +210,20 @@ def validate_builder(pick):
     day = str(getattr(pick, "match_date", "") or "")[:10]
     if not re.fullmatch(r"\d{4}-\d{2}-\d{2}", day):
         return None, ["missing_date"]
-    # No synthetic SGM/accumulator: reject before costly photo and fixture
-    # lookups when the bookmaker's complete combination is unverified.
+    # Combined price: a verified bookmaker price is used when present. Otherwise
+    # the card shows the product of the REAL single-leg quotes (clearly labelled
+    # "Einzelquoten ×", no EV claimed). Estimated/unsourced legs are rejected.
     combined = neon._number(getattr(pick, "combined_bookmaker_quote", None))
-    if not (getattr(pick, "combined_quote_verified", False) and
-            combined is not None and 1.01 < combined <= 100000):
-        return None, ["missing_verified_combo_quote"]
+    verified_combo = bool(getattr(pick, "combined_quote_verified", False) and
+                          combined is not None and 1.01 < combined <= 100000)
+    if not verified_combo:
+        if getattr(pick, "estimated_odds", False) or getattr(pick, "model_only", False):
+            return None, ["missing_real_leg_quotes"]
+        for leg in legs:
+            q = neon._number(getattr(leg, "odds", None))
+            if (q is None or not 1.01 <= q <= 1000 or getattr(leg, "estimated", False) or
+                    not str(getattr(leg, "source", "") or "").strip()):
+                return None, ["missing_real_leg_quotes"]
 
     reasons, fixed = set(), []
     for leg in legs:
@@ -197,20 +234,24 @@ def validate_builder(pick):
             club = club_for_player(player, match, day)
         if not club:
             reasons.add("missing_verified_team")
+            print(f"[builder-diag] team_missing player={player!r} match={match!r}", flush=True)
             continue
         kickoff = _iso_future(getattr(leg, "kickoff", ""), day) or kickoff_for_match(match, day)
         if not kickoff:
             reasons.add("missing_confirmed_kickoff")
+            print(f"[builder-diag] kickoff_missing player={player!r} club={club!r} match={match!r}", flush=True)
             continue
         updated = _with(leg, team=club, kickoff=kickoff)
         series = neon._stat_series(updated, engine, day)
-        if len(series) < 15:
-            reasons.add("missing_measured_l15")
+        if len(series) < 5:
+            reasons.add("missing_measured_history")
         # Explicit images rather than any generic initials/FC fallback.
-        if not _picture_ok(cards._player_photo(player, club)):
+        if not _real_player_photo(cards._player_photo(player, club)):
             reasons.add("missing_verified_photo")
+            print(f"[builder-diag] photo_missing player={player!r} club={club!r}", flush=True)
         if not _picture_ok(cards._badge_bytes(club)):
             reasons.add("missing_verified_crest")
+            print(f"[builder-diag] crest_missing club={club!r} url={cards._logo_url(club)!r}", flush=True)
         book_quote = neon._number(getattr(leg, "odds", None))
         if (book_quote is None or book_quote <= 1.01 or
             getattr(leg, "estimated", False) or not getattr(leg, "source", None)):
@@ -231,16 +272,6 @@ def validate_builder(pick):
                 model_joint = math.prod(ps)
         except (TypeError, ValueError, OverflowError):
             reasons.add("missing_valid_model_probability")
-    if len({str(x.match) for x in fixed}) == 1:
-        # Same-game prices cannot be obtained by multiplying individual odds.
-        q = neon._number(getattr(pick, "combined_bookmaker_quote", None))
-        if not (getattr(pick, "combined_quote_verified", False) and q and q > 1.01):
-            reasons.add("missing_verified_sgm_quote")
-    else:
-        # Cross-match also needs a real combined price for advertised EV.
-        q = neon._number(getattr(pick, "combined_bookmaker_quote", None))
-        if not (getattr(pick, "combined_quote_verified", False) and q and q > 1.01):
-            reasons.add("missing_verified_combo_quote")
     if reasons:
         return None, sorted(reasons)
     prepared = copy.copy(pick)
@@ -304,7 +335,7 @@ def validate_scorer(tip, day):
         reasons.append("missing_confirmed_kickoff")
     if not name or not team or not (club_same(team, home) or club_same(team, away)):
         reasons.append("unverified_scorer_team")
-    if not (_picture_ok(cards._player_photo(name, team))):
+    if not (_real_player_photo(cards._player_photo(name, team))):
         reasons.append("missing_scorer_photo")
     if any(not _picture_ok(cards._badge_bytes(s)) for s in (home, away)):
         reasons.append("missing_scorer_crest")

@@ -17,7 +17,7 @@ def compact_master(category: str, count: int) -> bytes:
     Supports the 10-slot Combo master (3..10 rows) and 6-slot Builder master
     (2..6 rows). Other categories are not silently treated as a Combo.
     """
-    limits = {"combo": (3, 10), "builder": (2, 6)}
+    limits = {"combo": (3, 10), "builder": (2, 6), "cross_mix": (2, 6)}
     if category not in limits:
         raise ValueError("Dynamic row layout is not configured for this category")
     low, high = limits[category]
