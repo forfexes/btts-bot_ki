@@ -1,0 +1,35 @@
+version: 2.1
+
+# Lightweight non-production check. Actual tips and Telegram delivery run only
+# in GitHub Actions. This job deliberately receives no provider/Telegram keys.
+jobs:
+  scorer-quality-check:
+    docker:
+      - image: cimg/python:3.11
+    resource_class: small
+    steps:
+      - checkout
+      - run:
+          name: Install test dependencies
+          command: |
+            python -m pip install --disable-pip-version-check -q pytest pillow requests
+      - run:
+          name: Check syntax of scorer and visual modules
+          command: |
+            python -m py_compile \
+              netrattler_stats_match_cards.py \
+              netrattler_visual_gate.py \
+              netrattler_visual_review.py \
+              netrattler_original_template_renderer.py \
+              netrattler_scorer_qualification.py \
+              test_netrattler_visual_cards.py
+      - run:
+          name: Test price provenance and rendered-player safety
+          command: |
+            python -m pytest -q test_netrattler_scorer_qualification.py -k "existing_configuration_is_honoured or no_synthetic_or_implausible_quotes"
+            python -m pytest -q test_netrattler_visual_cards.py -k "scorer_rejects_coutinho_unverified_high_quote_and_fake_rate or scorer_rejects_probability_fair_quote_mismatch or scorer_signatures_distinguish_players_same_fixture or mixed_scorer_cards_pass_through_individual_guard or verified_scorer_photo_fast_path_skips_all_secondary_searches or scorer_photo_fallback_skips_grey_silhouette_instead_of_caching or coutinho_santos_photo_fallback_uses_exact_fotmob_id or goal_hunter_silhouette_detection_blocks_monochrome_placeholder"
+
+workflows:
+  scorer-quality-check:
+    jobs:
+      - scorer-quality-check
