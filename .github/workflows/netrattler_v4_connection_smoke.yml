@@ -27,7 +27,7 @@ jobs:
         run: |
           python - <<'PY'
           import os, sys, socket
-          from urllib.parse import urlsplit
+          from urllib.parse import urlsplit, unquote
           import psycopg2
 
           dsn = os.environ.get("V4_DATABASE_URL", "")
@@ -84,7 +84,11 @@ jobs:
               print("TCP_IPV4=NO_ADDRESS")
 
           try:
-              with psycopg2.connect(dsn, connect_timeout=12, sslmode="require", application_name="netrattler_v4_smoke") as conn:
+              with psycopg2.connect(
+                  host=host, port=port, dbname=unquote(u.path.lstrip("/") or "postgres"),
+                  user=unquote(u.username or ""), password=unquote(u.password or ""),
+                  connect_timeout=12, sslmode="require", application_name="netrattler_v4_smoke"
+              ) as conn:
                   conn.set_session(readonly=True)
                   with conn.cursor() as cur:
                       cur.execute("SELECT current_setting('transaction_read_only')")
