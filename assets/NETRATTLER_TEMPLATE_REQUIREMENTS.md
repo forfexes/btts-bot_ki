@@ -5,6 +5,10 @@
 - `assets/netrattler_template_goal_original.webp`
 - `assets/netrattler_template_corner_original.webp`
 
+## Telegram handle (all NETRATTLER cards)
+- Every NETRATTLER card, including PROP BUILDER, GOAL HUNTER, CORNER SNIPER and other groups, must display **@prophunter** (not @netrattler). The NETRATTLER brand/logo stays unchanged.
+- Apply this to newly generated cards and the rendering code; updating these requirements alone does not change live Telegram cards.
+
 ## Visual rules
 - Preserve the **actual uploaded/original** artwork, composition, crown, typography, dark stadium, **cyan/blue and gold/yellow neon outlines**. Do not recolor borders green. Green is permitted only for original statistical signals or values, not as replacement outlines.
 - Clean out baked-in names, dates, numbers, odds, statistics, old player portraits and old team crests by restoring the underlying background. Do **not** conceal old text with opaque patches.
