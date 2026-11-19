@@ -46,6 +46,9 @@ on:
       - 'netrattler_1x_group_decode.py'
       - 'test_netrattler_1x_group_decode.py'
       - 'netrattler_stats_match_cards.py'
+      - 'netrattler_lmg_two_stage.py'
+      - 'test_netrattler_lmg_two_stage.py'
+      - 'netrattler_lmg_store.py'
       - 'netrattler_premium_verified_cards.py'
       - 'netrattler_premium_compact.py'
       - 'test_netrattler_premium_verified_cards.py'
@@ -116,6 +119,17 @@ jobs:
           path: premium-sandbox-preview/*.png
           if-no-files-found: warn
           retention-days: 7
+      - name: Goal Hunter discovery and 75-second polling offline Hardtest
+        if: success() || failure()
+        shell: bash
+        env:
+          LMG_SEND: 'false'
+          LMG_SHADOW_ENABLED: 'false'
+          TELEGRAM_TOKEN: ''
+          SUPABASE_URL: ''
+        run: |
+          set -o pipefail
+          python -m pytest -q -ra test_netrattler_lmg_two_stage.py test_netrattler_lmg_store.py test_netrattler_lmg_fotmob.py 2>&1 | tee netrattler-two-stage-hardtest.log
       - name: Upload diagnostics even when tests fail
         if: always()
         uses: actions/upload-artifact@v4
@@ -125,6 +139,7 @@ jobs:
             netrattler-hardtest.log
             netrattler-source-tests.log
             netrattler-premium-card-hardtest.log
+            netrattler-two-stage-hardtest.log
           if-no-files-found: warn
           retention-days: 7
 
