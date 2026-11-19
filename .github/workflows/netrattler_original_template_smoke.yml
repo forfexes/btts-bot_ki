@@ -47,13 +47,15 @@ jobs:
               print("builder_destination=VERIFIED via "+route[0])
           else:
               print("builder_destination=NOT_CONFIGURED")
-          for filename in (
-              "assets/premium_builder_blank.svg",
-              "assets/premium_goal_blank.svg"):
+          from pathlib import Path
+          masters = sorted(Path("assets").glob("premium_*_blank.svg"))
+          assert len(masters) == 16, f"Expected 16 premium masters, got {len(masters)}"
+          for filename in map(str, masters):
               with Image.open(io.BytesIO(cairosvg.svg2png(url=filename))) as im:
                   im.verify()
               print(filename.split("/")[-1]+": OK")
           if not test:
+              print("premium_masters=16 VERIFIED")
               print("live_photo_test=SKIPPED (private TELEGRAM_TEMPLATE_TEST_CHAT_ID not configured)")
               sys.exit(0)
           # Only a clearly labeled design smoke goes to the separate private
