@@ -41,3 +41,10 @@ These are implementation requirements, **not finished cleaned image assets**. Mo
 - Always include original-message settlement status (open/won/lost/void) and a visual QA gate checking crest/portrait presence, alignment, readability, row counts and accurate footer.
 - Never invent or infer betting odds, outcomes or statistics for production cards. Visual demo examples are not live picks.
 - These are approved design requirements only; implementation, testing and Telegram rollout remain separate tasks.
+
+## Full category coverage checklist (design specification, not deployment verification)
+- BTTS; Over 1.5 / Over 2.5 / Over 3.5; BTTS first half; Over 1.5 first half; 1X2 and Double Chance; Match Stats.
+- Combo / Multi (3–10 legs); Goal Hunter / Goalscorer; Prop Builder (3–6 players); Player Props (shots, shots on target, assists, cards, corners, tackles, fouls); Fouls / Tackles / Cards; Corner Sniper; VAR.
+- Last Minute Goal; Late Goals; Live Half-Time; Cross / Mix and mixed-market Builder.
+- Reuse market-specific visual components, but keep consistent NETRATTLER logo, blue/cyan-gold frame, authentic assets, verified odds, settlement, and @prophunter.
+- Coverage in this checklist means **design requirements only**, not evidence that every Telegram group is currently sending premium cards.
