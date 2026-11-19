@@ -50,8 +50,10 @@ jobs:
         with:
           python-version: "3.11"
       - run: python -m pip install --prefer-binary requests Pillow
-      - name: Verify sources and local SQLite module
-        run: python -m py_compile netrattler_lmg_store.py netrattler_lmg_free.py netrattler_lmg_fotmob.py netrattler_lmg_settle.py netrattler_lmg_shadow.py
+      - name: Verify SQLite and original live snapshot safety
+        run: |
+          python -m py_compile netrattler_lmg_store.py netrattler_lmg_free.py netrattler_lmg_fotmob.py netrattler_lmg_settle.py netrattler_lmg_shadow.py
+          python -m unittest -q test_netrattler_lmg_store.py test_netrattler_lmg_shadow.py
       - name: Mount Git-versioned SQLite from repository state branch
         run: |
           git fetch --no-tags origin '+refs/heads/state/goal-hunter:refs/remotes/origin/state/goal-hunter'
