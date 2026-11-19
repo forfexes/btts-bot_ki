@@ -474,8 +474,18 @@ def render_card(entries, target_date, result=None):
         return render_corner_card(rows[0][1], target_date, result)
     if len(rows) == 1 and str(rows[0][0]) == "scorer" and rows[0][1].get("player"):
         return render_scorer_card(rows[0][1], target_date, result)
-    if os.getenv("NETRATTLER_CARD_LAYOUT", "bis").lower() == "bis":
-        return render_bis_card(entries, target_date, result)
+    # The user-approved premium masters are the DEFAULT for new ordinary
+    # selections. The old BIS card must never be the silent production fallback.
+    # Historic multi-market settlements may still use their original legacy
+    # design; new sends split markets into independent premium cards below.
+    if len(rows) == 1:
+        if os.getenv("NETRATTLER_CARD_LAYOUT", "premium").lower() == "bis":
+            return render_bis_card(entries, target_date, result)  # explicit legacy QA only
+        from netrattler_premium_telegram_adapter import render as render_premium
+        return render_premium(rows, target_date, crest_provider=_badge_bytes, result=result)
+    if result is not None:
+        return render_bis_card(entries, target_date, result)  # existing historic grouped card
+    raise ValueError("premium_new_send_requires_single_market")
     w, h = 1080, 1130
     im = _neon_bg(w, h)
     draw = ImageDraw.Draw(im)
@@ -743,8 +753,9 @@ def send_cards(tips_by_market, target_date, token, stats_chat, log=print):
     for group in cards:
         ordinary = [entry for entry in group if entry[0] != "scorer"]
         scorers = [entry for entry in group if entry[0] == "scorer"]
-        if ordinary:
-            split_cards.append(ordinary)
+        # The new premium master has exactly one verified market slot.
+        # Split qualifying markets; never send a historic BIS dashboard.
+        split_cards.extend([[entry] for entry in ordinary])
         split_cards.extend([[entry] for entry in scorers])
     cards = split_cards
 
