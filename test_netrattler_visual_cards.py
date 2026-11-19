@@ -434,6 +434,7 @@ def test_mixed_scorer_cards_pass_through_individual_guard():
          patch.object(cards,"_crest_cache_load",return_value=None), \
          patch.object(cards,"_crest_cache_save",return_value=None), \
          patch.object(cards,"_badge_bytes",return_value=b""), \
+         patch.object(cards,"_player_photo",return_value=b""), \
          patch.object(cards.time,"sleep",return_value=None), \
          patch.object(cards,"render_card",return_value=b"ONLY_ORDINARY"), \
          patch.object(cards,"_send_photo",return_value=99) as send, \
