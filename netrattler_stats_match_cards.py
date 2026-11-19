@@ -1083,8 +1083,32 @@ def _player_photo(name, team=""):
     }
     known_id = _verified_fotmob.get((_norm(clean_name), _norm(team)))
     if known_id:
-        urls.append("https://images.fotmob.com/image_resources/playerimages/"
-                    + known_id + ".png")
+        known_url = ("https://images.fotmob.com/image_resources/playerimages/"
+                     + known_id + ".png")
+        # Fast path: do not spend several source-query timeouts before the
+        # first attempt for a confirmed full-name + club + player-ID match.
+        # Reject invalid HTML, tiny artwork and anonymous grey placeholders.
+        try:
+            from PIL import Image, ImageStat
+            response = requests.get(known_url, timeout=7,
+                                    headers={"User-Agent": "Mozilla/5.0 (NETRATTLER image fetch)"})
+            if response.ok and 150 < len(response.content) <= 8_000_000:
+                with Image.open(io.BytesIO(response.content)) as parsed:
+                    parsed.load()
+                    if min(parsed.size) >= 80:
+                        rgb = parsed.convert("RGB")
+                        rgb.thumbnail((96, 96))
+                        px = list(rgb.getdata())
+                        neutral = sum(max(p)-min(p) <= 6 for p in px)
+                        tones = {int(sum(p)/3)//8 for p in px}
+                        if px and not (neutral/len(px) > .96 and len(tones) <= 12):
+                            _PLAYER_CACHE[key] = response.content
+                            STATS["player_fotmob_ok"] = STATS.get("player_fotmob_ok", 0) + 1
+                            STATS["player_photo_ok"] = STATS.get("player_photo_ok", 0) + 1
+                            return response.content
+        except (OSError, ValueError, TypeError, requests.RequestException):
+            pass
+        urls.append(known_url)  # Preserve existing provider fallback behavior.
     try:
         from netrattler_espn_photo import espn_photo
         _ep = espn_photo(clean_name)
