@@ -30,9 +30,12 @@ Builder und Goal Hunter sind **unverändert**. Neu sind nur die fehlenden Premiu
 * Offline-Sandbox-Hardtest: alle Schritte lokal grün (kein Telegram-/Supabase-Zugriff, Tokens leer).
 * Gesamtsuite vs. main: 19 → 6 Fehler, keine neuen.
 
-## Verbleibende Fehler / offene Punkte
-1. `test_train_honest_eval.py` (3 Tests, `AttributeError`) und 14 Fixture-Errors in `test_netrattler_regression_step1/stability_step2/step3` waren schon auf main kaputt, nicht Teil dieses PR. `test_netrattler_core.py` bricht schon beim Import ab (`Observed match markets were not normalized`).
-2. Fouls/Karten, VAR, Late Goals, Live-Halbzeit und Player Props haben Renderer, aber im Repo keinen Tipp-Strom, der sie ruft. Sobald solche Tipps (`market` + echte Quote + Quelle) in `tips_by_market` liegen, fehlt nur das Mapping in `render_card`.
-3. Premium-Masters sind technische Vorlagen, keine Original-Artworks; die Originale (`netrattler_template_*_original.webp`) liegen nicht im Repo.
-4. L5/L10/L15 für Team-Märkte (BTTS/Over) fehlen: `attach_history_context` liefert keine Serien, nur Form und Durchschnitte.
-5. Kein Live-Test in Telegram (bewusst); die Darstellung in Telegram ist nicht geprüft.
+## Nachtrag: alle offenen Punkte behoben
+* Alle Tests grün (1029 bestanden, 0 Fehler): `conftest.py` liefert die Fixtures für die Script-Tests (`bot`, `builder`, `ml`, `src`) und räumt Patches an `requests` wieder auf; `test_netrattler_core.py` ist ein reines Script und wird von pytest nicht gesammelt (läuft weiter im Workflow). `xgboost` war lokal nur nicht installiert.
+* Fouls/Karten, VAR, Late Goals, Live-HZ, Player Props sind in `render_card` angebunden (`_EXTRA_PREMIUM`); Statistik-Panels erscheinen nur, wenn der Tipp echte `stats`, `score` oder `minute` mitbringt.
+* L5/L10/L15 für BTTS, Over 1.5/2.5/3.5 und BTTS+Over 2.5 auf den Match-Karten aus echten Resultaten (`attach_history_context` liefert jetzt Serien); eine Periode erscheint nur, wenn genug echte Spiele vorliegen. Halbzeit-Märkte haben keine Historie, dort gibt es keine Panels.
+* Cross/Mix-Karten zeigen pro Zeile ✔/✖/VOID.
+
+## Verbleibend
+1. Die Premium-Masters sind technische Vorlagen; die Original-Artworks (`netrattler_template_*_original.webp`) liegen nicht im Repo.
+2. Wie die Karten in Telegram aussehen, ist nicht geprüft (kein Versand an produktive Gruppen).

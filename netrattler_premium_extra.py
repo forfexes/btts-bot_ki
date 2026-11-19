@@ -230,6 +230,9 @@ def render_combo(legs: List[Dict], crest_provider, *, result=None, total_odds=No
         draw.text((text_x, y + (46 if small else 62)), market,
                   font=fit_font(draw, market, 640, 19 if small else 23), fill=GOLD, anchor="lm")
         draw.text((1050, y + h / 2), f"@ {q:.2f}", font=font(24), fill=GREEN, anchor="rm")
+        mark = {"win": ("✔", GREEN), "loss": ("✖", RED), "void": ("VOID", GOLD)}.get(str(leg.get("mark") or ""))
+        if mark:
+            draw.text((928, y + h / 2), mark[0], font=font(26), fill=mark[1], anchor="rm")
     shift = -(_max_rows(category) - n) * _step(rows, category)
     total = number(total_odds) if total_odds is not None else math.prod(odds)
     if total is None or total <= 1:
@@ -351,3 +354,55 @@ def send_combo_card(token, chat, combo: Dict, log=print):
     except Exception as exc:
         log("Combo-Karte übersprungen: " + type(exc).__name__ + ": " + str(exc)[:90])
         return None
+
+
+# ---------------------------------------------------------------- team hit-rate panels (L5/L10/L15)
+_SERIES_KEY = {"btts": "btts", "over25": "over25", "over15": "over15", "over35": "over35", "combo": "btts_over25"}
+
+
+def hit_text(series, period):
+    """'7/10' from real flags; None if fewer than `period` games are known."""
+    if not isinstance(series, (list, tuple)) or len(series) < period:
+        return None
+    window = series[:period]
+    if any(v not in (0, 1, True, False) for v in window):
+        return None
+    return f"{int(sum(window))}/{period}"
+
+
+def add_team_hit_panels(png: bytes, market: str, tip: Dict) -> bytes:
+    """Overlay real L5/L10/L15 hit rates of both teams on a premium match card.
+
+    Only periods with enough real games are drawn; without any data the PNG is
+    returned unchanged. Existing premium layout (header/footer/handle) is kept.
+    """
+    key = _SERIES_KEY.get(str(market))
+    if not key:
+        return png
+    home_s = (tip.get("home_series") or {}).get(key) if isinstance(tip.get("home_series"), dict) else None
+    away_s = (tip.get("away_series") or {}).get(key) if isinstance(tip.get("away_series"), dict) else None
+    try:
+        home, away = split_match(tip.get("match"))
+    except ValueError:
+        return png
+    items = []
+    for team, series in ((home, home_s), (away, away_s)):
+        for period in (5, 10, 15):
+            text = hit_text(series, period)
+            if text:
+                items.append((f"{team.upper()[:14]} L{period}", text, GREEN))
+    if not items:
+        return png
+    im = Image.open(io.BytesIO(png)).convert("RGBA")
+    draw = ImageDraw.Draw(im)
+    # Home row left-to-right on the first panel row, away on the second.
+    rows = {0: [], 1: []}
+    for i, it in enumerate(items):
+        rows[0 if it[0].startswith(home.upper()[:14]) else 1].append(it)
+    for r, its in rows.items():
+        for i, (title, value, colour) in enumerate(its):
+            x, y = _COLS[i], _ROWS[r] + 20
+            draw.rounded_rectangle((x, y, x + _PW, y + 130), radius=16, fill="#071724", outline="#28DFFF", width=3)
+            draw.text((x + _PW / 2, y + 30), title, font=fit_font(draw, title, _PW - 30, 22), fill=CYAN, anchor="mm")
+            draw.text((x + _PW / 2, y + 86), value, font=font(52), fill=colour, anchor="mm")
+    return _png(im)

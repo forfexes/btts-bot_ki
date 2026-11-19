@@ -460,6 +460,16 @@ def _form_chars(value):
     return chars[-5:]
 
 
+# Markets without their own renderer module use the premium match-stats card.
+_EXTRA_PREMIUM = {
+    "fouls": "fouls_cards", "cards": "fouls_cards", "fouls_cards": "fouls_cards",
+    "tackles": "fouls_cards", "var": "var",
+    "late_goal": "late_goals", "late_goals": "late_goals",
+    "live_halftime": "live_halftime", "hz_live": "live_halftime",
+    "player_props": "player_props", "props": "player_props",
+}
+
+
 def _combined_mark(marks, n):
     """win only if every row won, loss if any lost, void otherwise."""
     values = [str(marks.get(str(i)) or marks.get(i) or "") for i in range(n)]
@@ -488,11 +498,26 @@ def render_card(entries, target_date, result=None):
     # selections. The old BIS card must never be the silent production fallback.
     # Historic multi-market settlements may still use their original legacy
     # design; new sends split markets into independent premium cards below.
+    if len(rows) == 1 and str(rows[0][0]) in _EXTRA_PREMIUM:
+        from netrattler_premium_extra import render_match_stats
+        _cat = _EXTRA_PREMIUM[str(rows[0][0])]
+        _tip = rows[0][1]
+        _market = str(_tip.get("tip") or _tip.get("selection") or "").strip() or _label(rows[0][0], _tip)
+        try:
+            from netrattler_corner_cards import kickoff_label
+            _day, _clock = kickoff_label(_tip, target_date)
+            _ko = f"{_day} · {_clock} Uhr" if _clock != "Zeit nicht bestätigt" else ""
+        except Exception:
+            _ko = ""
+        return render_match_stats(_cat, _tip, _market, _badge_bytes, kickoff=_ko, result=result)
     if len(rows) == 1:
         if os.getenv("NETRATTLER_CARD_LAYOUT", "premium").lower() == "bis":
             return render_bis_card(entries, target_date, result)  # explicit legacy QA only
         from netrattler_premium_telegram_adapter import render as render_premium
-        return render_premium(rows, target_date, crest_provider=_badge_bytes, result=result)
+        from netrattler_premium_extra import add_team_hit_panels
+        return add_team_hit_panels(
+            render_premium(rows, target_date, crest_provider=_badge_bytes, result=result),
+            str(rows[0][0]), rows[0][1])
     # Several markets of one match (also historic grouped cards that get a
     # result edit) use the premium CROSS / MIX master, one row per market.
     if 2 <= len(rows) <= 6:
@@ -504,6 +529,9 @@ def render_card(entries, target_date, result=None):
                 raise ValueError("premium_cross_mix_requires_one_match")
             legs.append(dict(tip, market=_label(market, tip)))
         marks = (result or {}).get("marks") if isinstance(result, dict) else None
+        if marks:
+            for _i, _leg in enumerate(legs):
+                _leg["mark"] = str(marks.get(str(_i)) or marks.get(_i) or "")
         return render_combo(legs, _badge_bytes, category="cross_mix",
                             result={"marks": {"0": _combined_mark(marks, len(legs))}} if marks else None)
     raise ValueError("premium_new_send_requires_single_market")
@@ -2136,7 +2164,17 @@ def attach_history_context(tips_by_market, log=print):
             mine, opp = (hs, as_) if hk == key else (as_, hs)
             res.append("W" if mine > opp else "D" if mine == opp else "L")
             gf += mine; ga += opp; bt += 1 if hs > 0 and as_ > 0 else 0; n += 1
-        return {"form": "".join(res[:5][::-1]), "n": n, "gf": gf / n, "ga": ga / n, "bt": 100 * bt / n}
+        # Real per-game hit flags (newest first, up to 15) for L5/L10/L15 panels.
+        series = {"btts": [], "over15": [], "over25": [], "over35": [], "btts_over25": []}
+        for _d, hk, ak, hs, as_ in sorted(by_team[key], reverse=True)[:15]:
+            total = hs + as_
+            series["btts"].append(int(hs > 0 and as_ > 0))
+            series["over15"].append(int(total >= 2))
+            series["over25"].append(int(total >= 3))
+            series["over35"].append(int(total >= 4))
+            series["btts_over25"].append(int(hs > 0 and as_ > 0 and total >= 3))
+        return {"form": "".join(res[:5][::-1]), "n": n, "gf": gf / n, "ga": ga / n, "bt": 100 * bt / n,
+                "series": series}
 
     done = 0
     for tips in tips_by_market.values():
@@ -2151,6 +2189,7 @@ def attach_history_context(tips_by_market, log=print):
             if hs_["n"] < 3 or as_["n"] < 3:
                 continue
             t.setdefault("homeForm", hs_["form"]); t.setdefault("awayForm", as_["form"])
+            t.setdefault("home_series", hs_["series"]); t.setdefault("away_series", as_["series"])
             t.setdefault("avg_goals_home", round(hs_["gf"], 2)); t.setdefault("avg_goals_away", round(as_["gf"], 2))
             t.setdefault("btts_rate_home", round(hs_["bt"])); t.setdefault("btts_rate_away", round(as_["bt"]))
             t.setdefault("avg_conceded_home", round(hs_["ga"], 2)); t.setdefault("avg_conceded_away", round(as_["ga"], 2))

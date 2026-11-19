@@ -164,3 +164,49 @@ def test_no_legacy_handle_anywhere():
 def test_status_labels():
     assert status_text({"marks": {"0": "void"}})[0] == "VOID"
     assert status_text(None)[0] == "OFFEN"
+
+
+# ---------------------------------------------------------------- L5/L10/L15 + extra routing
+SERIES = [1, 1, 0, 1, 1, 0, 1, 1, 1, 0, 1, 1, 0, 1, 1]
+
+
+def test_team_hit_panels_only_with_real_data():
+    tip = dict(TIP, oddsYes=1.9, home_series={"btts": SERIES}, away_series={"btts": SERIES[:7]})
+    base = render_match([("btts", tip)], "2026-11-21", crest_provider=crest)
+    out = X.add_team_hit_panels(base, "btts", tip)
+    a, b = img(base), img(out)
+    assert changed(a, b, (42, 670, 1080, 800)), "home L5/L10/L15 panels missing"
+    assert changed(a, b, (42, 840, 400, 970)), "away L5 panel missing"
+    assert not changed(a, b, (396, 840, 1080, 970)), "away L10/L15 drawn without 10/15 real games"
+    # no history -> unchanged bytes, nothing invented
+    assert X.add_team_hit_panels(base, "btts", dict(TIP, oddsYes=1.9)) == base
+    # unsupported market (half-time has no goal-flag history) -> unchanged
+    assert X.add_team_hit_panels(base, "btts_ht", tip) == base
+
+
+def test_hit_text_edges():
+    assert X.hit_text(SERIES, 5) == "4/5" and X.hit_text(SERIES, 15) == "11/15"
+    assert X.hit_text(SERIES[:4], 5) is None and X.hit_text(None, 5) is None
+    assert X.hit_text([1, 2, 1, 1, 1], 5) is None
+
+
+@pytest.mark.parametrize("market,category", [("fouls", "fouls_cards"), ("var", "var"), ("late_goals", "late_goals"),
+                                             ("live_halftime", "live_halftime"), ("player_props", "player_props")])
+def test_stats_match_cards_routes_extra_markets(market, category, monkeypatch):
+    import netrattler_stats_match_cards as cards
+    monkeypatch.setattr(cards, "_badge_bytes", crest)
+    im = img(cards.render_card([(market, dict(TIP))], "2026-11-21"))
+    assert im.size == (1122, 1402)
+    assert changed(im, master(category), (164, 242, 396, 360))
+
+
+def test_multi_market_card_uses_cross_mix(monkeypatch):
+    import netrattler_stats_match_cards as cards
+    monkeypatch.setattr(cards, "_badge_bytes", crest)
+    entries = [("btts", dict(TIP, oddsYes=1.9)), ("over25", dict(TIP, oddsYes=1.8))]
+    im = img(cards.render_card(entries, "2026-11-21"))
+    assert im.size == (1122, 1402 - 4 * 84)
+    marked = img(cards.render_card(entries, "2026-11-21", {"marks": {"0": "win", "1": "win"}}))
+    assert marked.size == im.size and changed(im, marked, (42, 940, 1080, 975))
+    rows_changed = changed(im, marked, (900, 390, 1000, 470))
+    assert rows_changed, "per-row result mark missing"
