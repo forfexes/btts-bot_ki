@@ -74,6 +74,13 @@ def fetch_l20_rows(team_names: Iterable[str], max_rows: int = 40000,
                 if log:
                     log(f"🔑 player_game_log: {str(exc)[:80]}")
                 return rows
+            if r.status_code == 402:
+                # API quota exceeded. Another group/page cannot succeed, so
+                # stop here instead of requesting every team repeatedly.
+                # Drop incomplete coverage rather than offering partial L20 form.
+                if log:
+                    log("player_game_log unavailable: Supabase API quota (402)")
+                return []
             if not r.ok:
                 if log:
                     log(f"🔑 player_game_log HTTP {r.status_code}: {r.text[:120]}")
