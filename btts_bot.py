@@ -25857,7 +25857,13 @@ def odds_band_policy_ok(market: str, prob_pct: float, quote: float) -> bool:
         return True
     if 1.90 <= quote < 2.20:
         return False
-    if prob_pct < 65.0 and quote < 2.20:
+    # Gelockert: unter 1.90 (Backtest +23u / 271 Wetten) reicht eine Modell-Prob ab
+    # NETRATTLER_ODDS_BAND_LOW_PROB (Standard 58); die verlustreiche Zone 1.90-2.19 bleibt gesperrt.
+    try:
+        low_prob = float(env("NETRATTLER_ODDS_BAND_LOW_PROB", "58"))
+    except Exception:
+        low_prob = 58.0
+    if prob_pct < low_prob and quote < 2.20:
         return False
     return True
 
