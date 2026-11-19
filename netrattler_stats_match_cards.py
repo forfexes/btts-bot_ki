@@ -460,6 +460,16 @@ def _form_chars(value):
     return chars[-5:]
 
 
+def _combined_mark(marks, n):
+    """win only if every row won, loss if any lost, void otherwise."""
+    values = [str(marks.get(str(i)) or marks.get(i) or "") for i in range(n)]
+    if any(v == "loss" for v in values):
+        return "loss"
+    if values and all(v == "win" for v in values):
+        return "win"
+    return ""
+
+
 def render_card(entries, target_date, result=None):
     """Neon-blue premium match card (NETRATTLER branding, display-only).
 
@@ -483,8 +493,19 @@ def render_card(entries, target_date, result=None):
             return render_bis_card(entries, target_date, result)  # explicit legacy QA only
         from netrattler_premium_telegram_adapter import render as render_premium
         return render_premium(rows, target_date, crest_provider=_badge_bytes, result=result)
-    if result is not None:
-        return render_bis_card(entries, target_date, result)  # existing historic grouped card
+    # Several markets of one match (also historic grouped cards that get a
+    # result edit) use the premium CROSS / MIX master, one row per market.
+    if 2 <= len(rows) <= 6:
+        from netrattler_premium_extra import render_combo
+        match = str(rows[0][1].get("match") or "")
+        legs = []
+        for market, tip in rows:
+            if str(tip.get("match") or "") != match:
+                raise ValueError("premium_cross_mix_requires_one_match")
+            legs.append(dict(tip, market=_label(market, tip)))
+        marks = (result or {}).get("marks") if isinstance(result, dict) else None
+        return render_combo(legs, _badge_bytes, category="cross_mix",
+                            result={"marks": {"0": _combined_mark(marks, len(legs))}} if marks else None)
     raise ValueError("premium_new_send_requires_single_market")
     w, h = 1080, 1130
     im = _neon_bg(w, h)

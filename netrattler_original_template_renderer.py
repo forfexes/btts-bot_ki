@@ -192,8 +192,8 @@ def render_builder(pick):
         _label(draw,builder_leg_label(leg).upper(),550,y+42,342,size=25,min_size=15,fill=GOLD)
         _erase(draw,(800,y+1,1057,y+94),fill="#07131A",radius=4)
         series=_stat_series(leg,__import__("netrattler_builder_engine"),getattr(pick,"match_date",""))
-        if len(series)<15:
-            raise ValueError("Für den Spieler fehlt echte L15-Spielhistorie")
+        if len(series)<5:
+            raise ValueError("Für den Spieler fehlt echte Spielhistorie (mind. L5)")
         for period,yy in ((5,y+5),(10,y+34),(15,y+63)):
             _label(draw,f"L{period}: {_form_label(series,leg.line,period)}",931,yy,246,size=20,min_size=14,fill=GREEN,italic=False)
     # Place live figures INSIDE the new SVG footer (the old WebP

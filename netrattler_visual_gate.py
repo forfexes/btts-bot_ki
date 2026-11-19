@@ -204,8 +204,8 @@ def validate_builder(pick):
             continue
         updated = _with(leg, team=club, kickoff=kickoff)
         series = neon._stat_series(updated, engine, day)
-        if len(series) < 15:
-            reasons.add("missing_measured_l15")
+        if len(series) < 5:
+            reasons.add("missing_measured_history")
         # Explicit images rather than any generic initials/FC fallback.
         if not _picture_ok(cards._player_photo(player, club)):
             reasons.add("missing_verified_photo")

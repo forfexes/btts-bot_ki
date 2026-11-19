@@ -27,9 +27,14 @@ def valid_pick():
     }
 
 
+def _blank():
+    import cairosvg
+    from netrattler_premium_compact import ASSETS
+    return io.BytesIO(cairosvg.svg2png(url=str(ASSETS/"premium_corner_blank.svg"),output_width=1122,output_height=1402))
+
+
 def test_original_corner_image_is_exact_master_and_neon_art():
-    assert MASTER.is_file()
-    with Image.open(MASTER) as img:
+    with Image.open(_blank()) as img:
         assert img.size == (1122,1402)
     with patch.object(cards,"_badge_bytes",return_value=badge()):
         raw=render_corner_template(valid_pick(),"2026-11-21")
@@ -68,7 +73,7 @@ def test_corner_missing_metrics_block_telegram_without_fabricating():
 
 
 def test_blank_master_not_accepted_as_final_corner_image():
-    with Image.open(MASTER) as m:
+    with Image.open(_blank()) as m:
         buf=io.BytesIO()
         m.save(buf,"PNG")
     bad=review_corner_png(buf.getvalue())

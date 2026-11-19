@@ -28262,6 +28262,11 @@ def main():
                     _SENT_TIPS_CACHE.add(f"combo_{_combo_tip_id}")
                     generated += 1
                     try:
+                        from netrattler_premium_extra import send_combo_card
+                        send_combo_card(TELEGRAM_TOKEN, combo_chat, combo, log=log)
+                    except Exception:
+                        pass
+                    try:
                         save_to_supabase({
                             "tip_id": _combo_tip_id,
                             "date": str(target_date),

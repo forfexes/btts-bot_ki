@@ -102,88 +102,21 @@ def _stats(d, metrics, *, next_team=False):
 
 def make_card(fixture, metrics=None, *, final_score=None, won=None,
               next_goal_side=None, next_goal_result=None):
-    """Open: verified team statistics; finished: only verified final score and outcome."""
-    if not TEMPLATE.is_file():
-        raise RuntimeError("Approved GOAL HUNTER neon template missing")
-    with Image.open(TEMPLATE) as source:
-        if source.size != (BW, BH):
-            raise RuntimeError("Goal Hunter artboard dimensions do not match the approved design")
-        im = source.convert("RGB")
-    d = ImageDraw.Draw(im)
-    center(d, fixture.get("league") or "Fussball", 588, 280, 34, max_width=600)
-    home, away = str(fixture["home"]), str(fixture["away"])
-    for side, x, logo_id in ((home, 215, fixture.get("home_logo_id")),
-                             (away, 891, fixture.get("away_logo_id"))):
-        badge = crest(logo_id)
-        if badge is None:
-            center(d, "WAPPEN", x, 414, 25, GOLD, max_width=160)
-            center(d, "FEHLT", x, 450, 25, WHITE, max_width=160)
-        else:
-            im.paste(badge, (x - badge.width // 2, 411 - badge.height // 2), badge)
-        wrap_team(d, side, x, 574)
-    if final_score is None:
-        center(d, f"{fixture['minute']}. MINUTE", 565, 367, 39, GOLD, max_width=225)
-        score = f"{fixture['hg']}:{fixture['ag']}"
-    else:
-        center(d, "ENDRESULTAT", 565, 367, 35, GOLD, max_width=225)
-        score = str(final_score)
-    center(d, score, 564, 465, 100, WHITE, max_width=302, italic=True, outline=3)
-    if next_goal_side is None:
-        next_goal_side = (metrics or {}).get("next_goal_side")
-    if next_goal_side not in (None, "home", "away"):
-        raise ValueError("Unsupported next-goal team selection")
-    # The live bet line is a fixed market; only the tier is dynamic.
-    center(d, (metrics or {}).get("tier") or "STANDARD", 853, 734, 32, GOLD, max_width=240)
-    if final_score is None:
-        _stats(d, metrics, next_team=bool(next_goal_side))
-        if next_goal_side:
-            next_name = home if next_goal_side == "home" else away
-            center(d, "NÄCHSTES TOR: " + next_name, 565, 833, 29, GOLD,
-                   max_width=855)
-        center(d, "AUSWERTUNG: OFFEN", 602, 1204, 47, GOLD, max_width=815)
-    else:
-        # Final image: a clean, two-column tip snapshot. The main green/red
-        # result below refers ONLY to Over 0.5 Restspielzeit.
-        d.rounded_rectangle((100, 814, 1001, 1111), radius=18, fill=(4, 13, 20))
-        d.line((560, 847, 560, 986), fill=(39, 148, 180), width=3)
-        center(d, "TIPP-ZEITPUNKT", 322, 870, 33, GOLD, max_width=390)
-        center(d, f"{fixture['minute']}. MINUTE", 322, 943, 58, WHITE, max_width=405)
-        center(d, "SPIELSTAND BEIM TIPP", 782, 870, 29, GOLD,
-               max_width=394)
-        center(d, f"{fixture['hg']}:{fixture['ag']}", 782, 943, 70, WHITE,
-               max_width=280)
+    """Premium LAST MINUTE GOAL card (JPEG bytes). Real FotMob crests only."""
+    from netrattler_premium_extra import render_lmg
 
-        # Only evaluate a next-goal pick when that side was on the ORIGINAL
-        # Telegram tip. This row is separate from the main Over 0.5 result.
-        if next_goal_side is not None:
-            if next_goal_result is None:
-                raise ValueError("Original next-goal pick requires a separate verified grade")
-            next_name = home if next_goal_side == "home" else away
-            wording = {"won": "✓ RICHTIG", "lost": "✕ FALSCH",
-                       "void": "KEIN WEITERES TOR",
-                       "unverified": "NICHT VERIFIZIERT",
-                       None: "NOCH OFFEN"}.get(next_goal_result)
-            if wording is None:
-                raise ValueError("Invalid next-goal result")
-            tint = (GREEN if next_goal_result == "won"
-                    else RED if next_goal_result == "lost" else WHITE)
-            d.rounded_rectangle((132, 993, 969, 1097), radius=17,
-                                fill=(6, 22, 28),
-                                outline=tint, width=3)
-            center(d, "NÄCHSTES TOR: " + next_name, 560, 1027, 29, WHITE,
-                   max_width=795)
-            center(d, wording, 560, 1070, 34, tint, max_width=760)
-        if won is not True and won is not False:
-            raise ValueError("Final result requires a verified win/loss")
-        color = GREEN if won else RED
-        if not won:
-            for expand in (0, 5, 10):
-                d.rounded_rectangle((50-expand, 1159-expand, 1061+expand,
-                                     1260+expand), radius=25,
-                                    outline=(220 if expand == 0 else 96, 38, 36),
-                                    width=5)
-        center(d, ("✓ GEWONNEN" if won else "✕ VERLOREN"),
-               603, 1204, 57, color, max_width=790)
+    def provider(team):
+        side = "home_logo_id" if team == str(fixture["home"]) else "away_logo_id"
+        badge = crest(fixture.get(side))
+        if badge is None:
+            raise ValueError("Real club crest missing: no placeholder allowed")
+        out = io.BytesIO()
+        badge.save(out, "PNG")
+        return out.getvalue()
+
+    png = render_lmg(fixture, metrics, provider, final_score=final_score, won=won,
+                     next_goal_side=next_goal_side, next_goal_result=next_goal_result)
+    im = Image.open(io.BytesIO(png)).convert("RGB")
     out = io.BytesIO()
-    im.resize((W, H), Image.Resampling.LANCZOS).save(out, format="JPEG", quality=91, optimize=True)
+    im.save(out, format="JPEG", quality=92, optimize=True)
     return out.getvalue()
