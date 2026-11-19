@@ -66,7 +66,7 @@ def test_builder_rejects_grey_provider_avatar_before_telegram():
     out=io.BytesIO()
     grey.save(out,"PNG")
     with patch.object(cards,"_player_photo",return_value=out.getvalue()), \
-         patch.object(cards,"_badge_bytes",return_value=_test_photo()), \\
+         patch.object(cards,"_badge_bytes",return_value=_test_photo()), \
          patch.object(cards,"_send_photo") as send:
         import pytest
         with pytest.raises(ValueError,match="Standard-Avatar"):
