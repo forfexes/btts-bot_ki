@@ -17,8 +17,8 @@ from zoneinfo import ZoneInfo
 from PIL import Image, ImageDraw, ImageFont, ImageOps
 
 ASSETS = Path(__file__).resolve().parent / "assets"
-BUILDER_IMAGE = ASSETS / "netrattler_template_builder_original.webp"
-GOAL_IMAGE = ASSETS / "netrattler_template_goal_original.webp"
+BUILDER_IMAGE = ASSETS / "premium_builder_blank.svg"
+GOAL_IMAGE = ASSETS / "premium_goal_blank.svg"
 WHITE, GOLD, CYAN, GREEN, RED = "#FAFCFF", "#FFE14A", "#27E6FF", "#3AFD75", "#FF6C6C"
 
 
@@ -27,9 +27,18 @@ def _base(path: str):
     path = Path(path)
     if not path.is_file():
         raise FileNotFoundError(f"NETRATTLER Originalvorlage nicht gefunden: {path.name}")
-    with Image.open(path) as image:
+    if path.suffix.lower() == ".svg":
+        try:
+            import cairosvg
+        except ImportError as exc:
+            raise RuntimeError("cairosvg wird für die Premium-SVG-Master benötigt") from exc
+        data = cairosvg.svg2png(url=str(path), output_width=1122, output_height=1402)
+        source = io.BytesIO(data)
+    else:
+        source = path
+    with Image.open(source) as image:
         if image.size != (1122, 1402):
-            raise ValueError("Originalvorlage hat unerwartete Abmessungen")
+            raise ValueError("Premium-Vorlage hat unerwartete Abmessungen")
         return image.convert("RGB").copy()
 
 
