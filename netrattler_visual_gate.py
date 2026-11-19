@@ -104,7 +104,7 @@ def _iso_future(value, match_date):
         return ""
 
 
-@lru_cache(maxsize=3)
+@lru_cache(maxsize=6)
 def _day_fixtures(day):
     """At most one bounded date request per process; only confirmed provider dates."""
     keys = (os.getenv("API_FOOTBALL_KEYS") or "").replace("\n", ",").split(",")
@@ -130,8 +130,15 @@ def kickoff_for_match(match, day):
     home, away = _match_teams(match)
     if not (home and away and day):
         return ""
+    import netrattler_stats_match_cards as cards
     possibilities = []
-    rows_all = _day_fixtures(day[:10])
+    rows_all = []
+    try:
+        base_day = dt.date.fromisoformat(day[:10])
+        for off in range(0, 4):
+            rows_all.extend(_day_fixtures((base_day + dt.timedelta(days=off)).isoformat()))
+    except ValueError:
+        rows_all = list(_day_fixtures(day[:10]))
     print(f"[builder-diag] day={day[:10]} fixtures={len(rows_all)} match={match!r}", flush=True)
     for x in rows_all:
         if not isinstance(x, dict):
@@ -144,6 +151,13 @@ def kickoff_for_match(match, day):
                 print(f"[builder-diag] partial_match api={h!r} vs {a!r} wanted={home!r} vs {away!r}", flush=True)
             continue
         fixture = x.get("fixture") or {}
+        try:
+            for side, nm in ((teams.get("home") or {}, home), (teams.get("away") or {}, away)):
+                logo = str(side.get("logo") or "")
+                if logo.startswith("https://media.api-sports.io/") and cards._norm(nm) not in cards._LOGO_CACHE:
+                    cards._LOGO_CACHE[cards._norm(nm)] = logo
+        except Exception:
+            pass
         stamp = _iso_future(fixture.get("date"), day)
         if stamp:
             possibilities.append(stamp)
