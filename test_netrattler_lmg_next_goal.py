@@ -1,6 +1,10 @@
 """Offline tests for verified optional next-goal tip and separate settlement."""
+import os
+import tempfile
 import unittest
 from unittest.mock import Mock, patch
+
+import netrattler_lmg_store as store
 
 import netrattler_lmg_next_goal as next_goal
 import netrattler_lmg_free as common
@@ -10,6 +14,14 @@ import netrattler_lmg_card as card
 
 class NextGoalTests(unittest.TestCase):
     def setUp(self):
+        self.temp=tempfile.TemporaryDirectory()
+        self.addCleanup(self.temp.cleanup)
+        env=patch.dict(os.environ,{
+            "LMG_SQLITE_PATH":os.path.join(self.temp.name,"data","goal_hunter.sqlite3"),
+            "LMG_SQLITE_SYNC":"false"})
+        env.start()
+        self.addCleanup(env.stop)
+        store.init()
         self.metrics={"tier":"PREMIUM","shots":26,"sot":11,"corners":8,
                       "teams":{"home":{"shots":17,"sot":8,"xg":1.75,"corners":5},
                                "away":{"shots":9,"sot":3,"xg":0.60,"corners":3}}}
@@ -99,16 +111,12 @@ class NextGoalTests(unittest.TestCase):
 
     def test_sending_one_image_without_caption_and_with_db_side(self):
         self.metrics["next_goal_side"]="home"
-        response=Mock()
-        response.status_code=201
-        response.json.return_value=[{"alert_key":"1000014437"}]
-        with patch.dict("os.environ",{"SUPABASE_URL":"https://example.supabase.co",
-                                     "SUPABASE_KEY":"testsecret"}),\
-             patch("requests.post",return_value=response) as post:
-            key=common.reserve_alert(self.fx,self.metrics)
+        key=common.reserve_alert(self.fx,self.metrics)
         self.assertEqual(key,"1000014437")
-        self.assertEqual(post.call_args.kwargs["json"]["next_goal_side"],"home")
-        self.assertEqual(post.call_args.kwargs["json"]["signal_tier"],"PREMIUM")
+        row=store._connect().execute("SELECT next_goal_side, signal_tier FROM alerts "
+                                     "WHERE alert_key=?",(key,)).fetchone()
+        self.assertEqual(row["next_goal_side"],"home")
+        self.assertEqual(row["signal_tier"],"PREMIUM")
 
         reply=Mock()
         reply.json.return_value={"ok":True,"result":{"message_id":912}}
@@ -171,15 +179,14 @@ class NextGoalTests(unittest.TestCase):
         self.assertEqual(__import__("json").loads(media),
                          {"type":"photo","media":"attach://result_photo"})
 
-        response=Mock()
-        with patch.dict("os.environ",{"SUPABASE_URL":"https://example.supabase.co",
-                                     "SUPABASE_KEY":"testsecret"}),\
-             patch("requests.patch",return_value=response) as patcher:
-            row["alert_key"]="1000014437"
-            settle.mark_settled(row,(3,2),True)
-        body=patcher.call_args.kwargs["json"]
-        self.assertEqual(body["next_goal_result"],"won")
-        self.assertEqual(body["status"],"won")
+        key=common.reserve_alert(self.fx,self.metrics)
+        store.mark_sent(key,912)
+        row["alert_key"]=key
+        settle.mark_settled(row,(3,2),True)
+        saved=store._connect().execute("SELECT status, next_goal_result FROM alerts "
+                                       "WHERE alert_key=?",(key,)).fetchone()
+        self.assertEqual(saved["next_goal_result"],"won")
+        self.assertEqual(saved["status"],"won")
 
 
 if __name__=="__main__":

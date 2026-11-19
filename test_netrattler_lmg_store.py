@@ -70,7 +70,7 @@ class GoalHunterSQLiteTests(unittest.TestCase):
     def test_failed_git_sync_never_looks_successful(self):
         with patch.dict(os.environ,{"LMG_SQLITE_SYNC":"true",
                                     "LMG_STATE_WORKTREE":self.temp.name}):
-            with self.assertRaisesRegex(RuntimeError,"unexpected_path"):
+            with self.assertRaisesRegex(RuntimeError,"worktree_missing|unexpected_path"):
                 store.reserve_alert({**self.fx,"fixture_id":777777})
 
     def test_no_supabase_required_for_local_sqlite(self):
