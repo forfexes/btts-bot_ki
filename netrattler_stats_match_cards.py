@@ -737,6 +737,16 @@ def send_cards(tips_by_market, target_date, token, stats_chat, log=print):
         return 0
 
     cards = select_cards(tips_by_market, os.getenv("STATS_MATCH_CARDS_MAX", "0"))
+    # Scorer entries must NEVER travel inside a mixed-market card: only the
+    # dedicated single-player route performs player/photo/odds checks.
+    split_cards = []
+    for group in cards:
+        ordinary = [entry for entry in group if entry[0] != "scorer"]
+        scorers = [entry for entry in group if entry[0] == "scorer"]
+        if ordinary:
+            split_cards.append(ordinary)
+        split_cards.extend([[entry] for entry in scorers])
+    cards = split_cards
 
     # Badge lookup is presentation-only. Persistent cache first, then throttled lookups.
     try:
@@ -844,7 +854,8 @@ def _card_signature(entries):
     parts = []
     for m, t in entries:
         # odds are deliberately NOT part of the signature: a moved price must not re-post the same card
-        parts.append(f"{m}|{t.get('tip') or t.get('selection') or ''}")
+        player = _norm(t.get("player") or t.get("player_name") or "") if m == "scorer" else ""
+        parts.append(f"{m}|{player}|{t.get('tip') or t.get('selection') or ''}")
     return match_key(str(entries[0][1].get("match", ""))) + "#" + ";".join(sorted(parts))
 
 
