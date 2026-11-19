@@ -41,9 +41,14 @@ def test_builder_two_four_six_leg_masters_and_dry_run_send():
             raw=builder.render_builder_card(pick)
             im=Image.open(io.BytesIO(raw)).convert("RGB")
             assert im.size==(1122,height)
-            original=_base(str(BUILDER_IMAGE))
+            # The premium SVG header (logo + ribbon) must stay untouched; the compact
+            # master only removes unused rows below it.
+            from netrattler_premium_compact import compact_master
+            import cairosvg
+            master=Image.open(io.BytesIO(cairosvg.svg2png(bytestring=compact_master("builder",n)))).convert("RGB")
+            assert master.size==im.size
             assert ImageChops.difference(im.crop((0,0,1122,170)),
-                                          original.crop((0,0,1122,170))).getbbox() is None
+                                          master.crop((0,0,1122,170))).getbbox() is None
             quality=review_png(raw,"builder",legs=n)
             assert quality.passed,quality.describe()
             with patch("netrattler_visual_gate.validate_builder",return_value=(pick,[])), \

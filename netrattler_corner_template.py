@@ -198,7 +198,7 @@ def render_corner_template(tip, target_date, result=None):
     _label(draw,'AUSWERTUNG: '+label,870,1222,349,30,col)
     # User-approved NETRATTLER AI branding in the lower unused turf area.
     _label(draw,'NETRATTLER AI',562,1321,625,33,WHITE)
-    _label(draw,'@netrattler',562,1366,625,20,CYAN)
+    _label(draw,'@prophunter',562,1366,625,20,CYAN)
     out=io.BytesIO();im.save(out,'PNG',optimize=True);return out.getvalue()
 
 
