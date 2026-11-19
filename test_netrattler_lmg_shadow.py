@@ -1,6 +1,9 @@
 """Offline tests for bounded, non-betting shadow live-data collection."""
 import datetime as dt
 import unittest
+import os
+import tempfile
+import netrattler_lmg_store as store
 from unittest.mock import Mock, patch
 
 import netrattler_lmg_shadow as shadow
@@ -8,6 +11,15 @@ import netrattler_lmg_shadow as shadow
 
 class ShadowSnapshotTests(unittest.TestCase):
     def setUp(self):
+        self.temp = tempfile.TemporaryDirectory()
+        self.addCleanup(self.temp.cleanup)
+        self.env = patch.dict(os.environ, {
+            "LMG_SQLITE_PATH": os.path.join(self.temp.name, "history.sqlite3"),
+            "LMG_SQLITE_SYNC": "false",
+        })
+        self.env.start()
+        self.addCleanup(self.env.stop)
+        store.init()
         self.observed=dt.datetime(2026,11,18,19,17,tzinfo=dt.timezone.utc)
         self.fx={"source":"fotmob","fixture_id":6148609,"minute":77,
                  "kickoff":self.observed-dt.timedelta(minutes=80),
@@ -89,37 +101,33 @@ class ShadowSnapshotTests(unittest.TestCase):
              [0,1,2,3,3])
 
     def test_disabled_never_calls_database(self):
-        with patch.object(shadow,"_database",side_effect=AssertionError("database called")):
+        with patch.object(store,"_connect",side_effect=AssertionError("database called")):
             self.assertEqual(shadow.write_snapshots([{}])["status"],"disabled")
             self.assertEqual(shadow.settle_snapshots()["status"],"disabled")
 
     def test_idempotent_insert_and_retention(self):
         row=shadow.build_snapshot(self.fx,self.stats,"fotmob",self.observed)
-        ok=Mock()
-        get_response=Mock(headers={"Content-Range":"0-0/2"})
-        with patch.object(shadow,"_database",return_value=("https://db/test",{})), \
-             patch.object(shadow.requests,"delete",return_value=ok) as delete, \
-             patch.object(shadow.requests,"get",return_value=get_response), \
-             patch.object(shadow.requests,"post",return_value=ok) as post:
-            result=shadow.write_snapshots([row],enabled=True,now=self.observed)
-        self.assertEqual(result["status"],"saved")
-        self.assertEqual(result["existing"],2)
-        self.assertIn("ignore-duplicates",post.call_args.kwargs["headers"]["Prefer"])
-        self.assertEqual(post.call_args.kwargs["json"],[row])
-        self.assertEqual(post.call_args.kwargs["params"]["on_conflict"],
-                         "provider,fixture_id,slot")
-        self.assertIn("collected_at",delete.call_args.kwargs["params"])
+        first=shadow.write_snapshots([row],enabled=True,now=self.observed)
+        second=shadow.write_snapshots([row],enabled=True,now=self.observed)
+        self.assertEqual(first["status"],"saved")
+        self.assertEqual(first["inserted"],1)
+        self.assertEqual(second["inserted"],0)
+        self.assertEqual(second["existing"],1)
+        self.assertEqual(len(store.pending_snapshots(self.observed)),1)
+        # Retention must remove old rows, not keep unlimited data.
+        much_later=self.observed+dt.timedelta(days=48)
+        self.assertEqual(
+            shadow.write_snapshots([dict(row,fixture_id=7654321,slot=0,
+                collected_at=much_later.isoformat())],enabled=True,now=much_later
+            )["inserted"],1)
+        self.assertEqual(store.status()["snapshots"],1)
 
     def test_full_storage_skips_write(self):
         row=shadow.build_snapshot(self.fx,None,observed_at=self.observed)
-        ok=Mock()
-        get_response=Mock(headers={"Content-Range":"0-0/4500"})
-        with patch.object(shadow,"_database",return_value=("https://db/test",{})), \
-             patch.object(shadow.requests,"delete",return_value=ok), \
-             patch.object(shadow.requests,"get",return_value=get_response), \
-             patch.object(shadow.requests,"post",side_effect=AssertionError("write forbidden")):
+        with patch.object(store,"MAX_SHADOW_ROWS",0):
             result=shadow.write_snapshots([row],enabled=True,now=self.observed)
         self.assertEqual(result["status"],"capacity_limit")
+        self.assertEqual(store.status()["snapshots"],0)
 
     def test_batch_duplicate_mismatch_refused(self):
         row=shadow.build_snapshot(self.fx,None,observed_at=self.observed)
