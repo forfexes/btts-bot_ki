@@ -10,3 +10,5 @@ scipy
 scikit-learn
 joblib
 playwright
+Pillow
+CairoSVG
