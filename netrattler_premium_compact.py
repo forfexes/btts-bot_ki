@@ -52,3 +52,23 @@ def compact_master(category: str, count: int) -> bytes:
         if rect.get("x") == "22" and rect.get("height") == "1365":
             rect.set("height", str(height - 37))
     return ET.tostring(root, encoding="utf-8", xml_declaration=True)
+
+
+def render_blank_preview(category: str, count: int) -> bytes:
+    """Rasterize the compact empty master to PNG for visual QA only.
+
+    This is deliberately NOT a betting card: no players, badges or odds are
+    fabricated. Production must use a separate verified-data renderer.
+    """
+    import io
+    import cairosvg
+    from PIL import Image
+
+    svg = compact_master(category, count)
+    png = cairosvg.svg2png(bytestring=svg)
+    with Image.open(io.BytesIO(png)) as image:
+        if image.width != 1122 or image.height <= 0:
+            raise ValueError("Unexpected compact PNG dimensions")
+        output = io.BytesIO()
+        image.convert("RGB").save(output, "PNG")
+        return output.getvalue()
