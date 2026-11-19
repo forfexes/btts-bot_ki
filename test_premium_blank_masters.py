@@ -55,6 +55,22 @@ class PremiumMasterTests(unittest.TestCase):
                                  if "".join(t.itertext()).strip() == "@prophunter")
                     self.assertLess(float(brand.get("y")), height)
 
+    def test_rasterized_compact_previews(self):
+        import io
+        from PIL import Image
+        from netrattler_premium_compact import render_blank_preview
+        for category, counts in (("combo", (3, 7, 10)), ("builder", (3, 4, 6))):
+            for count in counts:
+                with self.subTest(category=category, count=count):
+                    payload = render_blank_preview(category, count)
+                    with Image.open(io.BytesIO(payload)) as im:
+                        im.verify()
+                    with Image.open(io.BytesIO(payload)) as im:
+                        self.assertEqual(im.width, 1122)
+                        step = 73 if category == "combo" else 100
+                        maximum = 10 if category == "combo" else 6
+                        self.assertEqual(im.height, 1402 - (maximum - count) * step)
+
     def test_dynamic_invalid_counts(self):
         from netrattler_premium_compact import compact_master
         for category, count in (("combo", 2), ("combo", 11), ("builder", 7),
