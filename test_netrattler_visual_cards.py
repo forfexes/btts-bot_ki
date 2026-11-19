@@ -481,3 +481,19 @@ def test_scorer_photo_fallback_skips_grey_silhouette_instead_of_caching():
          patch("netrattler_apif_profile_photo.profile_photo",return_value=""), \
          patch("netrattler_reference_images.player_urls",return_value=[]):
         assert cards._player_photo("Philippe Coutinho","Santos")==b""
+
+
+def test_gradient_grey_default_avatar_is_rejected_as_player_photo():
+    import io
+    from PIL import Image, ImageDraw
+    from netrattler_visual_gate import _real_player_photo
+    im = Image.new("RGB", (200, 200), (235, 235, 235))
+    d = ImageDraw.Draw(im)
+    for y in range(200):
+        v = 235 - y // 8
+        d.line((0, y, 200, y), fill=(v, v, v))
+    d.ellipse((70, 40, 130, 100), fill=(150, 150, 150))
+    buf = io.BytesIO(); im.save(buf, "PNG")
+    assert not _real_player_photo(buf.getvalue())
+    color = Image.new("RGB", (200, 200), (190, 120, 90)); b2 = io.BytesIO(); color.save(b2, "PNG")
+    assert _real_player_photo(b2.getvalue())

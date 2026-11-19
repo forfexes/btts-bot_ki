@@ -178,6 +178,14 @@ def _picture_ok(payload):
         return False
 
 
+def _real_player_photo(payload):
+    if not _picture_ok(payload):
+        return False
+    from netrattler_visual_review import _looks_like_grey_placeholder
+    with Image.open(io.BytesIO(payload)) as im:
+        return not _looks_like_grey_placeholder(im, (0, 0, im.width, im.height))
+
+
 def _with(leg, **kwargs):
     if is_dataclass(leg):
         return replace(leg, **kwargs)
@@ -238,7 +246,7 @@ def validate_builder(pick):
         if len(series) < 5:
             reasons.add("missing_measured_history")
         # Explicit images rather than any generic initials/FC fallback.
-        if not _picture_ok(cards._player_photo(player, club)):
+        if not _real_player_photo(cards._player_photo(player, club)):
             reasons.add("missing_verified_photo")
             print(f"[builder-diag] photo_missing player={player!r} club={club!r}", flush=True)
         if not _picture_ok(cards._badge_bytes(club)):
@@ -327,7 +335,7 @@ def validate_scorer(tip, day):
         reasons.append("missing_confirmed_kickoff")
     if not name or not team or not (club_same(team, home) or club_same(team, away)):
         reasons.append("unverified_scorer_team")
-    if not (_picture_ok(cards._player_photo(name, team))):
+    if not (_real_player_photo(cards._player_photo(name, team))):
         reasons.append("missing_scorer_photo")
     if any(not _picture_ok(cards._badge_bytes(s)) for s in (home, away)):
         reasons.append("missing_scorer_crest")

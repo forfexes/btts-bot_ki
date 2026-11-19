@@ -73,6 +73,11 @@ def _looks_like_grey_placeholder(im, box):
         return True
     grey = sum(1 for r, g, b in pixels if max(r, g, b) - min(r, g, b) <= 6)
     luminances = {int((r + g + b) / 3) // 8 for r, g, b in pixels}
+    # Provider default avatars are light-grey silhouettes WITH a gradient, so also
+    # reject images that are almost entirely near-neutral (real photos carry skin/kit colour).
+    near = sum(1 for r, g, b in pixels if max(r, g, b) - min(r, g, b) <= 14)
+    if near / len(pixels) >= 0.93:
+        return True
     return grey / len(pixels) > 0.96 and len(luminances) <= 12
 
 
