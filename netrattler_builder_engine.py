@@ -131,7 +131,9 @@ def history_text(leg: "PropLeg", n: int = 10) -> str:
     need = int(ln) if ln == int(ln) else math.floor(ln) + 1
     hits = sum(1 for v in series if v >= need)
     seq = ",".join(str(v) for v in series)
-    return f"L{len(series)}: {seq} ({need}+ in {hits}/{len(series)})"
+    l5 = series[:5]
+    l5_txt = f" · L5: {sum(1 for v in l5 if v >= need)}/{len(l5)}" if len(l5) == 5 else ""
+    return f"L{len(series)}: {seq} ({need}+ in {hits}/{len(series)}){l5_txt}"
 
 
 @dataclass(frozen=True)

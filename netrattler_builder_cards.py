@@ -91,7 +91,7 @@ def render_builder_card(pick):
         draw.text((185,y+12),fit(leg.player,28,750),font=font(28),fill='#ffffff')
         draw.text((185,y+52),fit(builder_leg_label(leg),23,760),font=font(23),fill='#d4ecff')
         series=getattr(leg,'series',None)
-        history=(f'L{len(series)}: '+','.join(str(v) for v in series)+f' ({sum(v>=leg.line for v in series)}/{len(series)})') if series else engine.history_text(leg)
+        history=(f'L{len(series)}: '+','.join(str(v) for v in series)+f' ({sum(v>=leg.line for v in series)}/{len(series)})'+(f' · L5: {sum(v>=leg.line for v in series[:5])}/5' if len(series)>=5 else '')) if series else engine.history_text(leg)
         if multi: history=leg.match+' · '+history
         draw.text((185,y+91),fit(history or 'Historie nicht verfügbar',18,955),font=font(18),fill='#a6c4dc')
         from netrattler_season_profiles import summary as season_summary

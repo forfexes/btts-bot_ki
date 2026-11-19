@@ -18,7 +18,7 @@ def test_history_text():
     assert be.history_text(leg) == ""
     be.LEG_HISTORY[(be.norm(leg.player), leg.category)] = [1, 3, 2, 3, 3, 2, 6, 4, 2, 4]
     t = be.history_text(leg)
-    assert t.startswith("L10: 1,3,2,3,3,2,6,4,2,4") and "2+ in 9/10" in t
+    assert t.startswith("L10: 1,3,2,3,3,2,6,4,2,4") and "2+ in 9/10" in t and t.endswith("L5: 4/5")
     be.LEG_HISTORY.clear()
 
 
