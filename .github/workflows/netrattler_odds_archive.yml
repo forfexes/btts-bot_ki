@@ -21,4 +21,8 @@ jobs:
           SUPABASE_SERVICE_ROLE_KEY: ${{ secrets.SUPABASE_SERVICE_ROLE_KEY }}
           V4_DATABASE_URL: ${{ secrets.V4_DATABASE_URL }}
           ARCHIVE_PRUNE: "false"
-        run: python netrattler_odds_archive.py
+          ARCHIVE_KEEP_DAYS: "14"
+        run: |
+          # Do not allow deletion before the separate private backup is verified.
+          test "$ARCHIVE_PRUNE" = "false"
+          python netrattler_odds_archive.py
