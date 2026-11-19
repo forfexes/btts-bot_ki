@@ -220,6 +220,18 @@ def fetch_fotmob(day):
     return common._get("https://www.fotmob.com/api/matches",params={"date":day})
 
 
+def _espn_fallback(reason):
+    """Record why the primary live source produced no Goal Hunter alert."""
+    result=common.main()
+    if isinstance(result,dict):
+        print("LMG_SCAN_REASON",json.dumps({
+            "source":"espn_backup","reason":reason,
+            "live_candidates":result.get("live_candidates"),
+            "qualified":result.get("qualified"),"sent":result.get("sent")
+        },ensure_ascii=False),flush=True)
+    return result
+
+
 def run():
     send_enabled=(os.getenv("LMG_SEND") or "false").lower() in ("1","yes","true")
     day=dt.datetime.now(dt.timezone.utc).strftime("%Y%m%d")
@@ -227,16 +239,16 @@ def run():
         feed=fetch_fotmob(day)
     except requests.RequestException as exc:
         print("LMG_FOTMOB_UNAVAILABLE",str(exc)[:140],flush=True)
-        return common.main()  # only if primary free feed unavailable
+        return _espn_fallback("fotmob_feed_unavailable")  # one safe independent backup
     coverage_diagnostics(feed)
     fixtures=fixtures_from_fotmob(feed)
     if not fixtures:
         print("LMG_FOTMOB_NO_LATE_MATCHES_ESPN_BACKUP",flush=True)
-        return common.main()
+        return _espn_fallback("fotmob_no_65_85_matches")
     fixtures.sort(key=lambda x:(x["minute"],x["fixture_id"]))
     report={"source":"fotmob","live_candidates":len(fixtures),"stats_checked":0,
             "missing_stats":0,"detail_errors":0,"espn_recovered":0,
-            "tier_rejected":0,"qualified":0,"sent":0,"odds_calls":0,
+            "tier_rejected":0,"qualified":0,"sent":0,"already_alerted":0,"odds_calls":0,
             "send_enabled":send_enabled}
     espn_board=None
     espn_board_loaded=False
@@ -317,6 +329,8 @@ def run():
                 message_id=common.send_alert(fx,metrics)
                 common.mark_sent(key,message_id)
                 report["sent"]+=1
+            else:
+                report["already_alerted"]+=1
     if shadow_enabled:
         from netrattler_lmg_shadow import write_snapshots
         try:
@@ -325,6 +339,22 @@ def run():
         except (requests.RequestException,RuntimeError,ValueError,TypeError) as exc:
             print("LMG_SHADOW_CAPTURE_UNAVAILABLE",
                   type(exc).__name__,str(exc)[:100],flush=True)
+    if report["sent"]:
+        reason="sent"
+    elif not send_enabled:
+        reason="dry_run"
+    elif report["qualified"] and report["already_alerted"] == report["qualified"]:
+        reason="already_alerted"
+    elif report["qualified"]:
+        reason="qualified_but_no_confirmed_send"
+    elif report["missing_stats"]:
+        reason="missing_verified_live_stats"
+    elif report["tier_rejected"]:
+        reason="below_signal_threshold"
+    else:
+        reason="no_qualified_live_candidates"
+    report["no_tip_reason"]=reason
+    print("LMG_SCAN_REASON",json.dumps({"source":"fotmob",**report},ensure_ascii=False),flush=True)
     print("LMG_FOTMOB_SUMMARY",json.dumps(report),flush=True)
     return report
 
