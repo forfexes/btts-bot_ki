@@ -412,3 +412,33 @@ def test_coutinho_santos_photo_fallback_uses_exact_fotmob_id():
         requested.clear()
         cards._player_photo(player,"Coritiba")
         assert "https://images.fotmob.com/image_resources/playerimages/184536.png" not in requested
+
+
+def test_scorer_signatures_distinguish_players_same_fixture():
+    first=("scorer",{"match":"Coritiba vs Santos","player":"Philippe Coutinho",
+                     "tip":"Anytime scorer"})
+    second=("scorer",{"match":"Coritiba vs Santos","player":"Sebastian Gomez",
+                      "tip":"Anytime scorer"})
+    assert cards._card_signature([first]) != cards._card_signature([second])
+
+
+def test_mixed_scorer_cards_pass_through_individual_guard():
+    # A mixed market card must not bypass scorer identity/photo/source checks.
+    scorer={"match":"Coritiba vs Santos","player":"No Photo",
+            "team":"Santos","tip":"Anytime scorer","odds":9.5,
+            "probability":18,"_source":"test_only"}
+    ordinary={"match":"Coritiba vs Santos","tip":"YES","odds":1.9,
+              "probability":55,"_source":"bookmaker"}
+    with patch.object(cards,"select_cards",return_value=[[("btts",ordinary),("scorer",scorer)]]), \
+         patch.object(cards,"_existing_card_signatures",return_value=set()), \
+         patch.object(cards,"_crest_cache_load",return_value=None), \
+         patch.object(cards,"_crest_cache_save",return_value=None), \
+         patch.object(cards,"_badge_bytes",return_value=b""), \
+         patch.object(cards.time,"sleep",return_value=None), \
+         patch.object(cards,"render_card",return_value=b"ONLY_ORDINARY"), \
+         patch.object(cards,"_send_photo",return_value=99) as send, \
+         patch.object(cards,"save_card",return_value=True):
+        assert cards.send_cards({"btts":[ordinary],"scorer":[scorer]},
+                                "2026-11-18","FAKE","FAKE") == 1
+    assert send.call_count == 1
+    assert send.call_args.args[3] == b"ONLY_ORDINARY"
