@@ -1,5 +1,5 @@
 name: NETRATTLER AI Tipp Bot
-# On-demand production run requested 2026-11-18: verify updated NETRATTLER AI match-card renderer.
+# On-demand production run requested 2026-11-19: run live tip pipeline after premium card changes.
 
 on:
   # Verify production on measured selection changes and renderer deployments.
