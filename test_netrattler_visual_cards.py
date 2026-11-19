@@ -470,7 +470,7 @@ def test_scorer_photo_fallback_skips_grey_silhouette_instead_of_caching():
     buf=io.BytesIO();grey.save(buf,format="PNG")
     silhouette=buf.getvalue()
     with patch.object(cards,"_PLAYER_CACHE",{}), \
-         patch.object(cards.requests,"get",return_value=SimpleNamespace(ok=True,content=silhouette)), \
+         patch.object(cards.requests,"get",return_value=SimpleNamespace(ok=True,content=silhouette,json=lambda:{"player":[]})), \
          patch("netrattler_espn_photo.espn_photo",return_value=""), \
          patch("netrattler_api_portraits.portrait",return_value=""), \
          patch("netrattler_commons_photos.commons_photo",return_value=""), \
