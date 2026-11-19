@@ -85,6 +85,13 @@ def init() -> Path:
         );
         CREATE INDEX IF NOT EXISTS snapshots_pending_idx
             ON shadow_snapshots(final_verified_at, collected_at);
+        CREATE TABLE IF NOT EXISTS source_api_budget (
+            source TEXT NOT NULL,
+            utc_day TEXT NOT NULL,
+            reserved_calls INTEGER NOT NULL,
+            last_attempt_at TEXT NOT NULL,
+            PRIMARY KEY(source, utc_day)
+        );
         """)
         conn.commit()
         check = conn.execute("PRAGMA integrity_check").fetchone()[0]
@@ -127,6 +134,60 @@ def persist(reason: str) -> bool:
          "commit", "-m", "state(goal-hunter): " + reason[:70])
     _git(worktree, "push", "origin", "HEAD:refs/heads/" + STATE_BRANCH)
     return True
+
+
+def reserve_source_calls(source: str, *, count: int = 2,
+                         max_per_day: int = 24, cooldown_seconds: int = 3600,
+                         now: dt.datetime | None = None) -> bool:
+    """Durable budget reservation BEFORE contacting third-party live APIs.
+
+    A crash may consume an unused reservation, never the reverse. The maximum
+    24/day is intentionally lower than API-Sports' public free-plan quota as
+    other NETRATTLER workflows may use the same key.
+    """
+    if source not in {"api_football"} or not 1 <= count <= 2 or max_per_day > 24:
+        raise ValueError("source_api_invalid_budget")
+    if cooldown_seconds < 3600 or max_per_day < count:
+        raise ValueError("source_api_unsafe_budget")
+    now = now or dt.datetime.now(dt.timezone.utc)
+    if now.utcoffset() is None:
+        raise ValueError("source_api_naive_timestamp")
+    now = now.astimezone(dt.timezone.utc)
+    day = now.date().isoformat()
+    conn = _connect()
+    granted = False
+    try:
+        conn.execute("BEGIN IMMEDIATE")
+        conn.execute("DELETE FROM source_api_budget WHERE utc_day < ?",
+                     ((now - dt.timedelta(days=14)).date().isoformat(),))
+        row = conn.execute("""
+          SELECT reserved_calls, last_attempt_at
+          FROM source_api_budget WHERE source=? AND utc_day=?
+        """, (source, day)).fetchone()
+        if row is None:
+            conn.execute("""
+              INSERT INTO source_api_budget
+              (source,utc_day,reserved_calls,last_attempt_at) VALUES (?,?,?,?)
+            """, (source, day, count, now.isoformat()))
+            granted = True
+        else:
+            last = dt.datetime.fromisoformat(row["last_attempt_at"])
+            elapsed = (now - last).total_seconds()
+            if elapsed >= cooldown_seconds and row["reserved_calls"] + count <= max_per_day:
+                conn.execute("""
+                  UPDATE source_api_budget SET reserved_calls=?, last_attempt_at=?
+                  WHERE source=? AND utc_day=?
+                """, (row["reserved_calls"] + count, now.isoformat(), source, day))
+                granted = True
+        conn.commit()
+    except Exception:
+        conn.rollback()
+        raise
+    finally:
+        conn.close()
+    if granted:
+        persist("reserve protected API calls " + source)
+    return granted
 
 
 def reserve_alert(fixture: dict, metrics: dict | None = None) -> str | None:
