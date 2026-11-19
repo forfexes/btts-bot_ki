@@ -1,9 +1,8 @@
-"""Render user-supplied NETRATTLER design masters (not lookalike illustrations).
+"""Render NETRATTLER cards using the current SVG technical masters.
 
-The source files under assets/ are the ORIGINAL reference pictures supplied by
-user on 18 November 2026. Never ship the baked-in demo faces, crests or odds:
-every variable region is replaced from verified player/team data. Rendering is
-strictly read-only. Telegram sending and settlement remain in existing modules.
+These SVGs are programmatically generated placeholders, NOT the original user
+reference pictures. Only verified player/team data may be rendered. Telegram
+sending and settlement remain in existing modules.
 """
 from __future__ import annotations
 
@@ -199,8 +198,8 @@ def render_builder(pick):
         series=_stat_series(leg,__import__("netrattler_builder_engine"),getattr(pick,"match_date",""))
         if len(series)<15:
             raise ValueError("Für den Spieler fehlt echte L15-Spielhistorie")
-        for j,yy in enumerate((y+9,y+48)):
-            _label(draw,f"L{10 if j==0 else 15}: {_form_label(series,leg.line,10 if j==0 else 15)}",931,yy,246,size=23,min_size=15,fill=GREEN,italic=False)
+        for period,yy in ((5,y+5),(10,y+34),(15,y+63)):
+            _label(draw,f"L{period}: {_form_label(series,leg.line,period)}",931,yy,246,size=20,min_size=14,fill=GREEN,italic=False)
     f=shift
     # Footer source locations remain exact, shifted when fewer than six legs.
     y0=1034+f
