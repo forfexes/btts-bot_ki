@@ -196,9 +196,9 @@ def render_builder(pick):
             raise ValueError("Für den Spieler fehlt echte L15-Spielhistorie")
         for period,yy in ((5,y+5),(10,y+34),(15,y+63)):
             _label(draw,f"L{period}: {_form_label(series,leg.line,period)}",931,yy,246,size=20,min_size=14,fill=GREEN,italic=False)
-    f=shift
-    # Footer source locations remain exact, shifted when fewer than six legs.
-    y0=1034+f
+    # Place live figures INSIDE the new SVG footer (the old WebP
+    # coordinates painted over tip rows on compact 2–5 leg cards).
+    footer_y = 1185 + shift
     probability=_percent(getattr(pick,"joint_probability",None))
     if probability is None:
         probability=_percent(getattr(pick,"probability",None))
@@ -208,19 +208,16 @@ def render_builder(pick):
     conf=str(getattr(pick,"confidence","") or "").upper()
     if not conf or conf=="—":
         raise ValueError("Konfidenz fehlt")
-    # Source template keeps neon borders and metric headings; replace values.
-    for box,label,center,color in [
-        ((167,y0+49,333,y0+121),f"{book_quote:.2f}",251,GOLD),
-        ((495,y0+49,645,y0+121),f"{ev:+.1f}%",571,GREEN if ev>=0 else RED),
-        ((881,y0+49,1046,y0+121),f"{probability:.1f}%",963,GOLD),
-    ]:
-        _erase(draw,box,fill="#03120C",radius=11)
-        _label(draw,label,center,y0+63,box[2]-box[0]-14,size=45,min_size=26,fill=color)
     status,col=nd._result_text(getattr(pick,"status",None))
-    _erase(draw,(362,1206+f,512,1269+f),fill="#FBD331",radius=15)
-    _label(draw,conf,437,1220+f,135,size=29,min_size=19,fill="#161514",shadow=False)
-    _erase(draw,(847,1198+f,1053,1267+f),fill="#071620",radius=10)
-    _label(draw,status,950,1223+f,195,size=27,min_size=18,fill=col)
+    for cx,heading,value,color in (
+        (235,"QUOTE",f"{book_quote:.2f}",GOLD),
+        (561,"VALUE",f"{ev:+.1f}%",GREEN if ev>=0 else RED),
+        (885,"MODELL",f"{probability:.1f}%",GOLD),
+    ):
+        _label(draw,heading,cx,footer_y+14,260,size=20,min_size=16,fill=CYAN,italic=False)
+        _label(draw,value,cx,footer_y+44,270,size=37,min_size=23,fill=color,italic=False)
+    _label(draw,conf,275,footer_y+91,260,size=22,min_size=15,fill=WHITE,italic=False)
+    _label(draw,status,850,footer_y+91,300,size=22,min_size=15,fill=col,italic=False)
     return _write(im)
 
 
