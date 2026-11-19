@@ -1063,6 +1063,17 @@ def _player_photo(name, team=""):
         return _PLAYER_CACHE[key]
 
     urls = []
+    # Verified identity-only photo fallback. The key includes the current
+    # fixture club, never just a last name. Image retrieval still has to pass
+    # decoding and the downstream visual gate before Telegram.
+    _verified_fotmob = {
+        ("philippecoutinho", "santos"): "184536",
+        ("philippecoutinho", "santosfc"): "184536",
+    }
+    known_id = _verified_fotmob.get((_norm(clean_name), _norm(team)))
+    if known_id:
+        urls.append("https://images.fotmob.com/image_resources/playerimages/"
+                    + known_id + ".png")
     try:
         from netrattler_espn_photo import espn_photo
         _ep = espn_photo(clean_name)
