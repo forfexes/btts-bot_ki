@@ -46,6 +46,11 @@ on:
       - 'netrattler_1x_group_decode.py'
       - 'test_netrattler_1x_group_decode.py'
       - 'netrattler_stats_match_cards.py'
+      - 'netrattler_premium_verified_cards.py'
+      - 'netrattler_premium_compact.py'
+      - 'test_netrattler_premium_verified_cards.py'
+      - 'test_netrattler_premium_dispatch_gate.py'
+      - 'assets/premium_*_blank.svg'
       - 'test_netrattler_goalhunter_photos.py'
       - '.github/workflows/netrattler_sandbox_hardtest.yml'
 
@@ -74,7 +79,7 @@ jobs:
           python-version: '3.11'
       - name: Install test dependencies
         run: |
-          python -m pip install --disable-pip-version-check requests python-dotenv pillow beautifulsoup4 lxml numpy scipy scikit-learn pytest
+          python -m pip install --disable-pip-version-check requests python-dotenv pillow cairosvg beautifulsoup4 lxml numpy scipy scikit-learn pytest
       - name: Run offline consolidated hardtest
         shell: bash
         run: |
@@ -86,6 +91,17 @@ jobs:
         run: |
           set -o pipefail
           python -m pytest -q -ra test_netrattler_keyless_odds.py test_netrattler_odds_cache_guard.py test_netrattler_scorer_history_fallback.py test_netrattler_scorer_identity.py test_netrattler_thesportsdb_guard.py test_netrattler_playwright_runtime.py test_netrattler_kambi_scorer_market.py test_netrattler_goalhunter_photos.py test_netrattler_open_source_registry.py test_netrattler_html_odds_scraper.py test_netrattler_new_odds_sources.py test_netrattler_open_matchday.py test_netrattler_odds_key_diagnostic.py test_netrattler_settlement_stats_schema.py test_netrattler_1x_group_decode.py test_model_builders.py 2>&1 | tee netrattler-source-tests.log
+      - name: Mandatory offline premium card visual and routing Hardtest
+        if: success() || failure()
+        shell: bash
+        env:
+          TELEGRAM_TOKEN: ''
+          TELEGRAM_CHAT_ID: ''
+          TELEGRAM_GROUP_MATCH_CARDS: ''
+          SUPABASE_URL: ''
+        run: |
+          set -o pipefail
+          python -m pytest -q -ra test_netrattler_premium_verified_cards.py test_netrattler_premium_dispatch_gate.py test_netrattler_ai_match_card_design.py 2>&1 | tee netrattler-premium-card-hardtest.log
       - name: Upload diagnostics even when tests fail
         if: always()
         uses: actions/upload-artifact@v4
@@ -94,6 +110,7 @@ jobs:
           path: |
             netrattler-hardtest.log
             netrattler-source-tests.log
+            netrattler-premium-card-hardtest.log
           if-no-files-found: warn
           retention-days: 7
 
