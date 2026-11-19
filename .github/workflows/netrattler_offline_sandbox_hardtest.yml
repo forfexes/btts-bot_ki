@@ -1,0 +1,77 @@
+name: NETRATTLER Offline Sandbox Hardtest
+on:
+  workflow_dispatch: {}
+  push:
+    branches: [main]
+    paths:
+      - '.github/workflows/netrattler_offline_sandbox_hardtest.yml'
+      - 'netrattler_premium_verified_cards.py'
+      - 'netrattler_premium_compact.py'
+      - 'netrattler_original_template_renderer.py'
+      - 'netrattler_neon_design.py'
+      - 'netrattler_stats_match_cards.py'
+      - 'netrattler_builder_cards.py'
+      - 'test_premium_verified_cards.py'
+      - 'test_premium_blank_masters.py'
+      - 'test_netrattler_original_templates.py'
+permissions:
+  contents: read
+jobs:
+  offline-hardtest:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    env:
+      TELEGRAM_TOKEN: ''
+      TELEGRAM_CHAT_ID: ''
+      SUPABASE_URL: ''
+      SUPABASE_KEY: ''
+      NETRATTLER_SANDBOX_HARDTEST: '1'
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+      - name: Install isolated render dependencies
+        run: python -m pip install --quiet pillow cairosvg pytest requests beautifulsoup4 python-dotenv numpy
+      - name: Syntax-check actual card entrypoints
+        run: python -m py_compile netrattler_premium_verified_cards.py netrattler_premium_compact.py netrattler_original_template_renderer.py netrattler_neon_design.py netrattler_stats_match_cards.py netrattler_builder_cards.py
+      - name: Test premium masters and 16-category verified render
+        run: python -m unittest -v test_premium_blank_masters test_premium_verified_cards
+      - name: Test actual Telegram renderers with mocked network
+        run: python -m pytest -q test_netrattler_original_templates.py
+      - name: Verify live routing does not silently use unapproved legacy art
+        run: |
+          python - <<'PY'
+          from pathlib import Path
+          design=Path('netrattler_neon_design.py').read_text()
+          stats=Path('netrattler_stats_match_cards.py').read_text()
+          builder=Path('netrattler_builder_cards.py').read_text()
+          premium=Path('netrattler_premium_verified_cards.py').read_text()
+          assert 'def render_verified_png' in premium
+          assert 'return neon_render(pick)' in builder
+          assert 'return neon_render(tip, target_date, result)' in stats
+          assert 'netrattler_original_template_renderer' in design
+          print('PRODUCTION_ROUTE_AUDIT: legacy renderer still active')
+          print('PRODUCTION_PREMIUM_SWITCH: NOT YET VERIFIED; DO NOT CLAIM DEPLOYED')
+          PY
+      - name: Create visual sandbox PNG artifact (never send to Telegram)
+        if: always()
+        run: |
+          mkdir -p sandbox-qa
+          python - <<'PY'
+          from pathlib import Path
+          from netrattler_premium_verified_cards import CATEGORIES, render_verified_png
+          leg={'match':'TEST HOME vs TEST AWAY','market':'TEST MARKET',
+               'bookmaker_odds':2.15,'bookmaker':'offline_test_fixture'}
+          for category in CATEGORIES:
+              count=3 if category in ('combo','builder') else 1
+              Path('sandbox-qa/'+category+'_SANDBOX_ONLY.png').write_bytes(
+                  render_verified_png(category,[leg.copy() for _ in range(count)]))
+          PY
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: netrattler-offline-hardtest-16-categories
+          path: sandbox-qa/*.png
+          if-no-files-found: warn
+          retention-days: 7
