@@ -66,9 +66,11 @@ def render_verified_svg(category, legs):
         master = (ASSETS / f"premium_{category}_blank.svg").read_bytes()
     verified = [_verified_leg(leg) for leg in legs]
     root = ET.fromstring(master)
+    # The footer uses the same x/width as a selection. Identify rows by
+    # their slot height instead of a canvas-relative y threshold.
     rows = sorted((e for e in root.findall(f"{{{NS}}}rect")
                    if e.get("x") == "42" and e.get("width") == "1038"
-                   and float(e.get("y", "0")) < float(root.get("height")) - 200),
+                   and float(e.get("height", "0")) < 120),
                   key=lambda e: float(e.get("y")))
     if len(rows) < len(verified):
         raise ValueError("Master lacks sufficient selection rows")
