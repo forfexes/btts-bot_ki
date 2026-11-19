@@ -248,10 +248,12 @@ def run():
     fixtures.sort(key=lambda x:(x["minute"],x["fixture_id"]))
     report={"source":"fotmob","live_candidates":len(fixtures),"stats_checked":0,
             "missing_stats":0,"detail_errors":0,"espn_recovered":0,
+            "api_football_checked":0,"api_football_recovered":0,
             "tier_rejected":0,"qualified":0,"sent":0,"already_alerted":0,"odds_calls":0,
             "send_enabled":send_enabled}
     espn_board=None
     espn_board_loaded=False
+    api_fallback_checked=False
     shadow_enabled=os.getenv("LMG_SHADOW_ENABLED","false").lower()=="true"
     shadow_batch=[]
     for fx in fixtures[:MAX_EVENTS]:
@@ -301,6 +303,18 @@ def run():
                     report["espn_recovered"]+=1
                     print("LMG_FOTMOB_ESPN_STATS_RECOVERED",
                           fx["fixture_id"],fx["minute"],flush=True)
+        # Free-plan quota is conserved: at most one additional API-Football
+        # recovery attempt per scanner run, and only for a real unverified match.
+        # In dry-run/smoke mode never use the optional credential or paid quota.
+        if not metrics and send_enabled and not api_fallback_checked:
+            from netrattler_lmg_api_fallback import configured_key, recover
+            if configured_key():
+                api_fallback_checked=True
+                report["api_football_checked"]+=1
+                metrics=recover(fx)
+                if metrics:
+                    data_provider="api_football"
+                    report["api_football_recovered"]+=1
         if shadow_enabled:
             # Side-channel evidence only; no extra Telegram messages and no
             # changes to selection/settlement when the shadow DB is unavailable.
