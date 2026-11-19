@@ -26,3 +26,18 @@
 
 ## Status
 These are implementation requirements, **not finished cleaned image assets**. Mockup images generated in chat are not pixel-accurate edits and are **not** committed here.
+
+## Unified premium design across all NETRATTLER groups
+- Use the original blue/cyan + gold visual identity, NETRATTLER crown, authentic team crests and player photos where relevant, and @prophunter footer on every card.
+- GOAL HUNTER: large real player portrait, both real club crests, goals/game, confirmed odds and probability.
+- PROP BUILDER: 3–6 dynamic player rows, portraits, verified player markets, L5/L10/L15, no blank rows.
+- CORNER SNIPER: authentic crests, corner L10/L15, verified H2H, tip and bookmaker odds.
+- BTTS: both authentic crests, team-to-score stats and home/away form.
+- OVER 1.5 / 2.5 and first-half markets: authentic crests, actual goal statistics, L10/L15, real odds.
+- COMBO: 3–10 dynamic rows, premium larger row layout for 3–7, compact but readable for 8–10, no duplicated or empty rows.
+- PLAYER PROPS: actual player portrait, market-specific stats (shots, fouls, tackles, cards), L5/L10/L15.
+- LAST MINUTE GOAL: live score, verified match minute, pressure metrics and real current odds; avoid stale data.
+- Other groups: same branding, but market-appropriate labels and verified statistics.
+- Always include original-message settlement status (open/won/lost/void) and a visual QA gate checking crest/portrait presence, alignment, readability, row counts and accurate footer.
+- Never invent or infer betting odds, outcomes or statistics for production cards. Visual demo examples are not live picks.
+- These are approved design requirements only; implementation, testing and Telegram rollout remain separate tasks.
