@@ -8,7 +8,7 @@
 ## COMBO card requirements
 - Include a separate NETRATTLER COMBO card using the user's actual original artwork when supplied; do not fabricate or replace it with an approximate design.
 - Show 3 to 10 combination legs with exactly that number of rows; remove unused rows and reposition the footer.
-- Preserve blue/cyan and gold neon borders, correct team crests, and display @prophunter.
+- Preserve blue/cyan and gold neon borders, display @prophunter, and render authentic, verified club crests for both teams in every leg (never generic shield placeholders). Include explicit 7-leg and 9-leg variants, as well as all other counts 3 through 10; number rows consecutively without duplicates.
 - Combo original image asset has not yet been located in assets; do not mark image or generator integration complete.
 
 ## Telegram handle (all NETRATTLER cards)
