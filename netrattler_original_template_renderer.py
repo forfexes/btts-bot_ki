@@ -137,21 +137,17 @@ def _write(io_image):
 
 
 def _builder_canvas(legs):
-    # Exact original image, with unused visual rows removed for 2-/4-leg cards.
-    n=len(legs)
-    if not 2<=n<=6:
-        raise ValueError("2–6 Legs nötig für Originalvorlage")
-    original=_base(str(BUILDER_IMAGE))
-    if n==6:
-        # Cached reference is immutable; every tip needs its own pixel buffer.
-        # Mutating it leaks the previous player's photo into the next tip.
-        return original.copy(),0
-    upper_y=405+100*n
-    footer_y=1013
-    im=Image.new("RGB",(1122,upper_y+1402-footer_y))
-    im.paste(original.crop((0,0,1122,upper_y)),(0,0))
-    im.paste(original.crop((0,footer_y,1122,1402)),(0,upper_y))
-    return im,upper_y-footer_y
+    """Use the new premium SVG master, not the removed legacy WebP crop."""
+    n = len(legs)
+    if not 3 <= n <= 6:
+        raise ValueError("Premium Builder requires 3–6 verified legs")
+    from netrattler_premium_compact import compact_master
+    import cairosvg
+    svg = compact_master("builder", n)
+    with Image.open(io.BytesIO(cairosvg.svg2png(bytestring=svg))) as source:
+        im = source.convert("RGB").copy()
+    # Existing footer labels are anchored to the six-row canvas.
+    return im, -100 * (6 - n)
 
 
 def render_builder(pick):
