@@ -70,6 +70,12 @@ class ShadowSnapshotTests(unittest.TestCase):
         r=shadow.build_snapshot(self.fx,self.stats,"espn",self.observed)
         self.assertEqual(r["provider"],"fotmob")
         self.assertEqual(r["data_provider"],"espn")
+        # Third-party statistics are allowed only after exact match proof in
+        # the dedicated adapter; the original FotMob fixture remains the key.
+        c=shadow.build_snapshot(self.fx,self.stats,"api_football",self.observed)
+        self.assertEqual(c["provider"],"fotmob")
+        self.assertEqual(c["data_provider"],"api_football")
+        self.assertEqual(c["fixture_id"],self.fx["fixture_id"])
         with self.assertRaisesRegex(ValueError,"provider_proof"):
             shadow.build_snapshot(self.fx,self.stats,None,self.observed)
         with self.assertRaisesRegex(ValueError,"unverified_provider"):
