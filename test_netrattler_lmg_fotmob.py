@@ -103,8 +103,31 @@ class FotmobTest(unittest.TestCase):
             report=bot.run()
         self.assertEqual(report["sent"],0)
         self.assertEqual(report["missing_stats"],1)
+        self.assertEqual(report["no_tip_reason"],"missing_verified_live_stats")
         send.assert_not_called()
 
+
+    def test_repeated_fixture_is_explained_not_sent_twice(self):
+        with patch.dict("os.environ",{"LMG_SEND":"true","LMG_SHADOW_ENABLED":"false"}), \
+             patch.object(bot,"fetch_fotmob",return_value=daily()), \
+             patch.object(bot.common,"_get",return_value=detail()), \
+             patch.object(bot.common,"reserve_alert",return_value=None), \
+             patch.object(bot.common,"send_alert") as send:
+            report=bot.run()
+        self.assertEqual(report["qualified"],1)
+        self.assertEqual(report["already_alerted"],1)
+        self.assertEqual(report["no_tip_reason"],"already_alerted")
+        self.assertEqual(report["sent"],0)
+        send.assert_not_called()
+
+    def test_dry_run_is_explicit(self):
+        with patch.dict("os.environ",{"LMG_SEND":"false","LMG_SHADOW_ENABLED":"false"}), \
+             patch.object(bot,"fetch_fotmob",return_value=daily()), \
+             patch.object(bot.common,"_get",return_value=detail()), \
+             patch.object(bot.common,"send_alert") as send:
+            report=bot.run()
+        self.assertEqual(report["no_tip_reason"],"dry_run")
+        send.assert_not_called()
 
     def test_recover_stats_only_for_same_live_game_with_fotmob_id(self):
         import netrattler_lmg_free as common
