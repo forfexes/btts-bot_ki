@@ -73,6 +73,33 @@ class GoalHunterSQLiteTests(unittest.TestCase):
             with self.assertRaisesRegex(RuntimeError,"worktree_missing|unexpected_path"):
                 store.reserve_alert({**self.fx,"fixture_id":777777})
 
+    def test_api_daily_budget_and_one_hour_cooldown_are_persistent(self):
+        start=dt.datetime(2026,11,19,0,0,tzinfo=dt.timezone.utc)
+        self.assertTrue(store.reserve_source_calls("api_football",now=start))
+        self.assertFalse(store.reserve_source_calls("api_football",
+                         now=start+dt.timedelta(minutes=59)))
+        for hour in range(1,12):
+            self.assertTrue(store.reserve_source_calls("api_football",
+                            now=start+dt.timedelta(hours=hour)))
+        self.assertFalse(store.reserve_source_calls("api_football",
+                         now=start+dt.timedelta(hours=12)))
+        # UTC-day rollover permits new calls, without reusing yesterday's budget.
+        self.assertTrue(store.reserve_source_calls("api_football",
+                        now=start+dt.timedelta(days=1)))
+        store.init()
+        self.assertFalse(store.reserve_source_calls("api_football",
+                         now=start+dt.timedelta(days=1,minutes=30)))
+
+    def test_api_budget_invalid_requests_are_rejected(self):
+        for kwargs in (
+            {"source":"unknown"},
+            {"source":"api_football","max_per_day":100},
+            {"source":"api_football","cooldown_seconds":300},
+            {"source":"api_football","count":0},
+        ):
+            with self.assertRaises(ValueError):
+                store.reserve_source_calls(**kwargs)
+
     def test_no_supabase_required_for_local_sqlite(self):
         with patch.dict(os.environ,{"SUPABASE_URL":"","SUPABASE_KEY":"",
                                     "SUPABASE_SERVICE_ROLE_KEY":""}):
