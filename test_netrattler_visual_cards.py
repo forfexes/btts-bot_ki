@@ -442,3 +442,38 @@ def test_mixed_scorer_cards_pass_through_individual_guard():
                                 "2026-11-18","FAKE","FAKE") == 1
     assert send.call_count == 1
     assert send.call_args.args[3] == b"ONLY_ORDINARY"
+
+
+def test_verified_scorer_photo_fast_path_skips_all_secondary_searches():
+    from types import SimpleNamespace
+    from PIL import Image, ImageDraw
+    import netrattler_stats_match_cards as cards
+    im=Image.new("RGB",(140,140),(40,85,150))
+    ImageDraw.Draw(im).ellipse((45,25,95,90),fill=(190,120,95))
+    out=io.BytesIO(); im.save(out,format="PNG")
+    raw=out.getvalue()
+    correct="https://images.fotmob.com/image_resources/playerimages/184536.png"
+    with patch.object(cards,"_PLAYER_CACHE",{}), \
+         patch.object(cards.requests,"get",return_value=SimpleNamespace(ok=True,content=raw)) as get, \
+         patch("netrattler_espn_photo.espn_photo",side_effect=AssertionError("unneeded lookup")):
+        assert cards._player_photo("Philippe Coutinho","Santos")==raw
+        assert get.call_count==1
+        assert get.call_args.args[0]==correct
+
+
+def test_scorer_photo_fallback_skips_grey_silhouette_instead_of_caching():
+    from types import SimpleNamespace
+    from PIL import Image, ImageDraw
+    import netrattler_stats_match_cards as cards
+    grey=Image.new("RGB",(140,140),(210,210,210))
+    ImageDraw.Draw(grey).ellipse((45,25,95,90),fill=(130,130,130))
+    buf=io.BytesIO();grey.save(buf,format="PNG")
+    silhouette=buf.getvalue()
+    with patch.object(cards,"_PLAYER_CACHE",{}), \
+         patch.object(cards.requests,"get",return_value=SimpleNamespace(ok=True,content=silhouette)), \
+         patch("netrattler_espn_photo.espn_photo",return_value=""), \
+         patch("netrattler_api_portraits.portrait",return_value=""), \
+         patch("netrattler_commons_photos.commons_photo",return_value=""), \
+         patch("netrattler_apif_profile_photo.profile_photo",return_value=""), \
+         patch("netrattler_reference_images.player_urls",return_value=[]):
+        assert cards._player_photo("Philippe Coutinho","Santos")==b""
