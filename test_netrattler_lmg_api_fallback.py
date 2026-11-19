@@ -48,7 +48,7 @@ class VerifiedApiFallbackTests(unittest.TestCase):
             lambda x: x["fixture"]["status"].update(elapsed=80),
             lambda x: x["fixture"]["status"].update(short="1H"),
             lambda x: x["fixture"].update(date="2026-11-18T15:30:00Z"),
-            lambda x: x["fixture"]["teams"].update() if "teams" in x["fixture"] else x["teams"]["home"].update(id=None),
+            lambda x: x["teams"]["home"].update(id=None),
         ):
             sample=copy.deepcopy(live_row())
             change(sample)
