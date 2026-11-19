@@ -92,6 +92,9 @@ def _picture(raw, min_size=60):
 def _portrait(im, cards, player, team, rect, *, circle=False):
     raw=cards._player_photo(player,team)
     pic=_picture(raw)
+    from netrattler_visual_review import _looks_like_grey_placeholder
+    if _looks_like_grey_placeholder(pic, (0, 0, pic.width, pic.height)):
+        raise ValueError("Grauer Standard-Avatar statt echtem Spielerfoto")
     x0,y0,x1,y1=map(int,rect)
     w,h=x1-x0,y1-y0
     pic=ImageOps.fit(pic,(w,h),Image.Resampling.LANCZOS,centering=(.5,.18))
