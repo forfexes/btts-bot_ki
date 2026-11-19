@@ -51,8 +51,7 @@ jobs:
           assert 'return neon_render(pick)' in builder
           assert 'return neon_render(tip, target_date, result)' in stats
           assert 'netrattler_original_template_renderer' in design
-          print('PRODUCTION_ROUTE_AUDIT: legacy renderer still active')
-          print('PRODUCTION_PREMIUM_SWITCH: NOT YET VERIFIED; DO NOT CLAIM DEPLOYED')
+          raise SystemExit('HARDTEST FAIL: production still routes to legacy renderer; premium deployment is incomplete')
           PY
       - name: Create visual sandbox PNG artifact (never send to Telegram)
         if: always()
