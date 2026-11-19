@@ -64,6 +64,10 @@ concurrency:
 
 jobs:
   run-bot:
+    # Changes to renderers must NOT launch Telegram production implicitly.
+    # The dedicated sandbox hardtest runs on pushes; scheduled/manual production
+    # still performs its own mandatory premium-card test before sending.
+    if: github.event_name != 'push'
     runs-on: ubuntu-latest
     timeout-minutes: 50
 
@@ -84,6 +88,7 @@ jobs:
           python -m pip install --prefer-binary \
             requests \
             pillow \
+            cairosvg \
             python-dotenv \
             beautifulsoup4 \
             lxml \
@@ -157,6 +162,15 @@ jobs:
           print("Diagnostic only: no Telegram messages sent")
           PY
 
+      - name: Mandatory offline premium-card sandbox hardtest before Telegram
+        env:
+          TELEGRAM_TOKEN: ''
+          TELEGRAM_CHAT_ID: ''
+          TELEGRAM_GROUP_MATCH_CARDS: ''
+          SUPABASE_URL: ''
+          SUPABASE_KEY: ''
+        run: |
+          python -m pytest -q -ra test_netrattler_premium_verified_cards.py test_netrattler_premium_dispatch_gate.py
       - name: Run Tips Bot 🤖
         env:
           NETRATTLER_FAST_TIPS:       "true"
