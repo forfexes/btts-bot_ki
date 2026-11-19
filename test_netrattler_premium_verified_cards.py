@@ -52,8 +52,10 @@ class PremiumVerifiedCardsTests(unittest.TestCase):
             # Our small real test crests have a measurable blue body in both slots.
             home=result.convert("RGB").crop((220,243,340,355))
             away=result.convert("RGB").crop((782,243,902,355))
-            self.assertEqual(home.getpixel((60,60)),(0,160,240))
-            self.assertEqual(away.getpixel((60,60)),(0,160,240))
+            # Sample safely inside the flat-colour crest area, not its gold
+            # centre marker (which is resampled during thumbnail creation).
+            self.assertEqual(home.getpixel((25,25)),(0,160,240))
+            self.assertEqual(away.getpixel((25,25)),(0,160,240))
 
     def test_result_is_drawn_on_same_premium_master(self):
         before=render([("over25",tip())],"2026-11-19",
