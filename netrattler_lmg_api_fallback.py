@@ -68,7 +68,10 @@ def unique_live_match(fx: dict, rows: list[dict]) -> dict | None:
             continue
         if (common._int(score.get("home")), common._int(score.get("away"))) != (fx["hg"], fx["ag"]):
             continue
-        found.append({"fixture_id":fixtureid, "home_id":homeid, "away_id":awayid})
+        # The shared real-stat validator needs the *observed* clock/score,
+        # not only team IDs. Omitting them raises KeyError and blocks fallback.
+        found.append({"fixture_id":fixtureid, "home_id":homeid, "away_id":awayid,
+                      "minute":minute, "hg":fx["hg"], "ag":fx["ag"]})
     return found[0] if len(found) == 1 else None
 
 
