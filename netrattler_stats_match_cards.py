@@ -267,6 +267,16 @@ def _search_badge(query, api_key, key):
     return "", True
 
 
+# Verified public crest sources for clubs the generic sources miss (tried in order).
+_CREST_OVERRIDES = {
+    "redbullbragantino": (
+        "https://commons.wikimedia.org/wiki/Special:FilePath/Red_Bull_Bragantino.svg?width=500",
+        "https://commons.wikimedia.org/wiki/Special:FilePath/RedBullBragantino.svg?width=500",
+        "https://media.api-sports.io/football/teams/794.png",
+    ),
+}
+
+
 def _logo_url(team):
     original_key = _norm(team)
     team = {"swanseacityafc":"Swansea", "blackburnroversfc":"Blackburn", "stuttgart":"VfB Stuttgart", "bragantino":"Red Bull Bragantino", "rbbragantino":"Red Bull Bragantino", "unliondesantafe":"Union Santa Fe", "uniondesantafe":"Union Santa Fe", "colondesantafe":"Colon Santa Fe", "inunsanjuan":"San Juan", "athleticopr":"Athletico Paranaense", "atleticopr":"Athletico Paranaense", "atleticoparanaense":"Athletico Paranaense"}.get(original_key, team)
@@ -277,6 +287,14 @@ def _logo_url(team):
         return ""
     if key in _LOGO_CACHE:
         return _LOGO_CACHE[key]
+    for cand in _CREST_OVERRIDES.get(key, ()):
+        try:
+            r = requests.get(cand, timeout=10, headers={"User-Agent": "Mozilla/5.0 (NETRATTLER crest lookup)"})
+            if r.ok and len(r.content) > 150 and "image" in r.headers.get("content-type", "").lower():
+                _LOGO_CACHE[key] = cand
+                return cand
+        except Exception:
+            pass
     try:
         from netrattler_flags import flag_url
         url = flag_url(team)
