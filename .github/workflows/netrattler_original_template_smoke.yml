@@ -8,6 +8,7 @@ on:
       - 'assets/premium_*_blank.svg'
       - 'netrattler_original_template_renderer.py'
       - 'test_premium_blank_masters.py'
+      - 'netrattler_premium_compact.py'
 permissions:
   contents: read
 jobs:
