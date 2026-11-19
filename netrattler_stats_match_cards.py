@@ -1239,8 +1239,14 @@ def _player_photo(name, team=""):
                 continue
             # A 200 HTML error/placeholder must not be pasted as a player face.
             from PIL import Image
+            from netrattler_visual_review import _looks_like_grey_placeholder
             with Image.open(io.BytesIO(resp.content)) as parsed:
-                parsed.verify()
+                parsed.load()
+                if min(parsed.size) < 80:
+                    continue
+                if _looks_like_grey_placeholder(parsed, (0, 0, parsed.width, parsed.height)):
+                    STATS["player_placeholder_skipped"] = STATS.get("player_placeholder_skipped", 0) + 1
+                    continue
             payload = resp.content
             if "fotmob.com" in url:
                 STATS["player_fotmob_ok"] = STATS.get("player_fotmob_ok", 0) + 1
