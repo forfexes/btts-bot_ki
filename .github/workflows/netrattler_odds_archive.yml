@@ -20,5 +20,5 @@ jobs:
           SUPABASE_KEY: ${{ secrets.SUPABASE_KEY }}
           SUPABASE_SERVICE_ROLE_KEY: ${{ secrets.SUPABASE_SERVICE_ROLE_KEY }}
           V4_DATABASE_URL: ${{ secrets.V4_DATABASE_URL }}
-          ARCHIVE_PRUNE: "true"
+          ARCHIVE_PRUNE: "false"
         run: python netrattler_odds_archive.py
