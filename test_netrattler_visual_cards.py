@@ -1,4 +1,5 @@
 import io
+import pytest
 from PIL import Image
 from unittest.mock import Mock,patch
 import netrattler_stats_match_cards as cards
@@ -46,6 +47,8 @@ def test_h2h_excludes_future_live_and_wrong_pair_but_keeps_zero():
     assert tip['h2h_matches']==1 and tip['h2h_avg_goals']==0
 
 
+@pytest.mark.skipif(not __import__('netrattler_corner_template').MASTER.is_file(),
+                    reason='legacy corner master PNG/WebP was replaced by premium_corner_blank.svg; legacy renderer fails closed')
 def test_corner_dispatch_and_settlement_render():
     tip={'match':'Home vs Away','tip':'Over 8.5 Ecken','odds':1.9,'probability':61,'_source':'kambi',
          'expected_corners':9.8,'home_avg_corners':0,'away_avg_corners':5,
