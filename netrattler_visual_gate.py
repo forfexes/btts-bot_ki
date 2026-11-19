@@ -118,6 +118,7 @@ def _day_fixtures(day):
             params={"date": day}, timeout=9)
         data = response.json() if response.ok else {}
         if not isinstance(data, dict) or data.get("errors"):
+            print(f"[builder-diag] fixtures_api_errors={str(data.get('errors'))[:200] if isinstance(data, dict) else data!r}", flush=True)
             return ()
         rows = data.get("response")
         return tuple(rows[:500]) if isinstance(rows, list) else ()
@@ -130,13 +131,17 @@ def kickoff_for_match(match, day):
     if not (home and away and day):
         return ""
     possibilities = []
-    for x in _day_fixtures(day[:10]):
+    rows_all = _day_fixtures(day[:10])
+    print(f"[builder-diag] day={day[:10]} fixtures={len(rows_all)} match={match!r}", flush=True)
+    for x in rows_all:
         if not isinstance(x, dict):
             continue
         teams = x.get("teams") or {}
         h = (teams.get("home") or {}).get("name")
         a = (teams.get("away") or {}).get("name")
         if not (club_same(home, h) and club_same(away, a)):
+            if club_same(home, h) or club_same(away, a):
+                print(f"[builder-diag] partial_match api={h!r} vs {a!r} wanted={home!r} vs {away!r}", flush=True)
             continue
         fixture = x.get("fixture") or {}
         stamp = _iso_future(fixture.get("date"), day)
