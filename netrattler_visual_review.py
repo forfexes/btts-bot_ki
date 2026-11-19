@@ -119,6 +119,8 @@ def _review_user_master(im, kind, legs):
             y=409+i*100
             edited((106,y+4,225,y+76),f"player_photo_replaced_{i+1}")
             check(_texture(im,(106,y+4,225,y+76))>18,f"photo_texture_{i+1}")
+            check(not _looks_like_grey_placeholder(im,(106,y+4,225,y+76)),
+                  f"player_placeholder_silhouette_{i+1}")
             check(_texture(im,(278,y+9,339,y+74))>12,f"crest_texture_{i+1}")
             count((370,y+3,741,y+41),_light,f"player_name_{i+1}")
             count((382,y+42,740,y+85),_gold,f"market_{i+1}")
