@@ -205,10 +205,12 @@ def validate_builder(pick):
             club = club_for_player(player, match, day)
         if not club:
             reasons.add("missing_verified_team")
+            print(f"[builder-diag] team_missing player={player!r} match={match!r}", flush=True)
             continue
         kickoff = _iso_future(getattr(leg, "kickoff", ""), day) or kickoff_for_match(match, day)
         if not kickoff:
             reasons.add("missing_confirmed_kickoff")
+            print(f"[builder-diag] kickoff_missing player={player!r} club={club!r} match={match!r}", flush=True)
             continue
         updated = _with(leg, team=club, kickoff=kickoff)
         series = neon._stat_series(updated, engine, day)
@@ -217,8 +219,10 @@ def validate_builder(pick):
         # Explicit images rather than any generic initials/FC fallback.
         if not _picture_ok(cards._player_photo(player, club)):
             reasons.add("missing_verified_photo")
+            print(f"[builder-diag] photo_missing player={player!r} club={club!r}", flush=True)
         if not _picture_ok(cards._badge_bytes(club)):
             reasons.add("missing_verified_crest")
+            print(f"[builder-diag] crest_missing club={club!r} url={cards._logo_url(club)!r}", flush=True)
         book_quote = neon._number(getattr(leg, "odds", None))
         if (book_quote is None or book_quote <= 1.01 or
             getattr(leg, "estimated", False) or not getattr(leg, "source", None)):
