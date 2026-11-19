@@ -54,7 +54,7 @@ def build_snapshot(fixture: dict, metrics: dict | None,
         raise ValueError("invalid_live_minute")
     source = fixture.get("source") or "fotmob"
     if source not in ("fotmob", "espn") or (
-            data_provider is not None and data_provider not in ("fotmob", "espn")):
+            data_provider is not None and data_provider not in ("fotmob", "espn", "api_football")):
         raise ValueError("unverified_provider")
     eid = _count(fixture.get("fixture_id"), 10**17)
     kickoff = fixture.get("kickoff")
