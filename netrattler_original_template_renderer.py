@@ -175,10 +175,16 @@ def render_builder(pick):
     _label(draw,f"{len(legs)}-LEG BUILDER",423,326,390,size=40,min_size=27)
     from netrattler_neon_design import _builder_quote_display,_stat_series,_form_label,_percent,_number
     title,value,book_quote=_builder_quote_display(pick,legs)
-    if book_quote is None:
-        raise ValueError("Keine bestätigte Buchmacher-Kombiquote")
+    product_only = book_quote is None
+    if product_only:
+        # Real single-leg quotes multiplied; never presented as a bookmaker
+        # combination price and never used for a displayed EV.
+        if str(title).startswith("EINZELQUOTEN"):
+            book_quote = math.prod(float(l.odds) for l in legs)
+        else:
+            raise ValueError("Keine echten Einzelquoten für die Kombiquote")
     _erase(draw,(710,333,1000,376),fill="#F6C92E",radius=10)
-    _label(draw,f"@ {book_quote:.2f}",857,333,260,size=35,min_size=22,fill="#11121B",shadow=False)
+    _label(draw,(f"× {book_quote:.2f}" if product_only else f"@ {book_quote:.2f}"),857,333,260,size=35,min_size=22,fill="#11121B",shadow=False)
     for i,leg in enumerate(legs):
         y=409+100*i
         # Erase baked-in sample photo, club crest, label and statistics before
@@ -204,14 +210,14 @@ def render_builder(pick):
         probability=_percent(getattr(pick,"probability",None))
     if probability is None:
         raise ValueError("Bestätigte Modellwahrscheinlichkeit fehlt")
-    ev=(probability/100*book_quote-1)*100
+    ev=None if product_only else (probability/100*book_quote-1)*100
     conf=str(getattr(pick,"confidence","") or "").upper()
     if not conf or conf=="—":
         raise ValueError("Konfidenz fehlt")
     status,col=nd._result_text(getattr(pick,"status",None))
     for cx,heading,value,color in (
-        (235,"QUOTE",f"{book_quote:.2f}",GOLD),
-        (561,"VALUE",f"{ev:+.1f}%",GREEN if ev>=0 else RED),
+        (235,"EINZELQUOTEN ×" if product_only else "QUOTE",f"{book_quote:.2f}",GOLD),
+        (561,"VALUE","—" if ev is None else f"{ev:+.1f}%",WHITE if ev is None else (GREEN if ev>=0 else RED)),
         (885,"MODELL",f"{probability:.1f}%",GOLD),
     ):
         _label(draw,heading,cx,footer_y+14,260,size=20,min_size=16,fill=CYAN,italic=False)

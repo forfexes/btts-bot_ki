@@ -181,12 +181,20 @@ def validate_builder(pick):
     day = str(getattr(pick, "match_date", "") or "")[:10]
     if not re.fullmatch(r"\d{4}-\d{2}-\d{2}", day):
         return None, ["missing_date"]
-    # No synthetic SGM/accumulator: reject before costly photo and fixture
-    # lookups when the bookmaker's complete combination is unverified.
+    # Combined price: a verified bookmaker price is used when present. Otherwise
+    # the card shows the product of the REAL single-leg quotes (clearly labelled
+    # "Einzelquoten ×", no EV claimed). Estimated/unsourced legs are rejected.
     combined = neon._number(getattr(pick, "combined_bookmaker_quote", None))
-    if not (getattr(pick, "combined_quote_verified", False) and
-            combined is not None and 1.01 < combined <= 100000):
-        return None, ["missing_verified_combo_quote"]
+    verified_combo = bool(getattr(pick, "combined_quote_verified", False) and
+                          combined is not None and 1.01 < combined <= 100000)
+    if not verified_combo:
+        if getattr(pick, "estimated_odds", False) or getattr(pick, "model_only", False):
+            return None, ["missing_real_leg_quotes"]
+        for leg in legs:
+            q = neon._number(getattr(leg, "odds", None))
+            if (q is None or not 1.01 <= q <= 1000 or getattr(leg, "estimated", False) or
+                    not str(getattr(leg, "source", "") or "").strip()):
+                return None, ["missing_real_leg_quotes"]
 
     reasons, fixed = set(), []
     for leg in legs:
@@ -231,16 +239,6 @@ def validate_builder(pick):
                 model_joint = math.prod(ps)
         except (TypeError, ValueError, OverflowError):
             reasons.add("missing_valid_model_probability")
-    if len({str(x.match) for x in fixed}) == 1:
-        # Same-game prices cannot be obtained by multiplying individual odds.
-        q = neon._number(getattr(pick, "combined_bookmaker_quote", None))
-        if not (getattr(pick, "combined_quote_verified", False) and q and q > 1.01):
-            reasons.add("missing_verified_sgm_quote")
-    else:
-        # Cross-match also needs a real combined price for advertised EV.
-        q = neon._number(getattr(pick, "combined_bookmaker_quote", None))
-        if not (getattr(pick, "combined_quote_verified", False) and q and q > 1.01):
-            reasons.add("missing_verified_combo_quote")
     if reasons:
         return None, sorted(reasons)
     prepared = copy.copy(pick)

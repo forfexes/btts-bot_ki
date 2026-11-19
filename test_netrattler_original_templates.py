@@ -188,3 +188,22 @@ def test_builder_shows_all_three_verified_form_windows():
     for period in (5,10,15):
         assert any(text.startswith(f"L{period}:") for text in labels), f"L{period} absent"
     assert raw.startswith(bytes.fromhex("89504e470d0a1a0a"))
+
+
+def test_builder_without_verified_combo_quote_uses_single_leg_product():
+    """Real single quotes multiplied are allowed (labelled), no EV is claimed."""
+    import math
+    photo=_test_photo()
+    pick=_fixture(4)
+    pick.combined_quote_verified=False
+    pick.combined_bookmaker_quote=None
+    with patch.object(cards,"_player_photo",return_value=photo), \
+         patch.object(cards,"_badge_bytes",return_value=photo):
+        raw=builder.render_builder_card(pick)
+        assert review_png(raw,"builder",legs=4).passed
+        pick.estimated_odds=True
+        try:
+            builder.render_builder_card(pick)
+            raise AssertionError("estimated odds must not render")
+        except ValueError:
+            pass
