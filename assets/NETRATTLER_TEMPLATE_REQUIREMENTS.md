@@ -8,7 +8,7 @@
 ## Visual rules
 - Preserve the **actual uploaded/original** artwork, composition, crown, typography, dark stadium, **cyan/blue and gold/yellow neon outlines**. Do not recolor borders green. Green is permitted only for original statistical signals or values, not as replacement outlines.
 - Clean out baked-in names, dates, numbers, odds, statistics, old player portraits and old team crests by restoring the underlying background. Do **not** conceal old text with opaque patches.
-- Retain structural labels such as PROP BUILDER, GOAL HUNTER, CORNER SNIPER, labels for odds, probability, EV, confidence, settlement and @netrattler.
+- Retain structural labels such as PROP BUILDER, GOAL HUNTER, CORNER SNIPER, labels for odds, probability, EV, confidence, settlement and @prophunter.
 - At rendering time, add verified match names, team crests, licensed player portraits, lines, real bookmaker odds, L5/L10/L15 where relevant, model metrics, and original Telegram settlement status.
 - PROP BUILDER must have exactly the actual number of player-leg rows (3, 4, 5 or 6), physically remove unused rows, reposition footer and crop card height. No blank rows.
 - Use separate cleaned master assets and never overwrite the three originals.
