@@ -34,6 +34,18 @@ class VerifiedCardTests(unittest.TestCase):
                     texts = [t.text for t in root.iter("{http://www.w3.org/2000/svg}text")]
                     self.assertEqual(texts.count("@ 2.15"), n)
 
+    def test_pngs_have_correct_dimensions_and_no_baked_in_example(self):
+        for category in CATEGORIES:
+            n = 3 if category in ("combo", "builder") else 1
+            raw = render_verified_png(category, [LEG.copy() for _ in range(n)])
+            with Image.open(io.BytesIO(raw)) as image:
+                self.assertEqual(image.width, 1122)
+                self.assertGreater(image.height, 400)
+                self.assertEqual(image.format, "PNG")
+            svg = render_verified_svg(category, [LEG.copy() for _ in range(n)])
+            self.assertNotIn(b"@netrattler", svg.lower())
+            self.assertNotIn(b"BEISPIEL SPIELER", svg.upper())
+
     def test_reject_missing_or_fabricated_odds(self):
         for replacement in ({"bookmaker_odds": None}, {"estimated": True},
                             {"synthetic": True}, {"model_odds": 2.2},
