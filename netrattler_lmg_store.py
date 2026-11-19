@@ -85,6 +85,20 @@ def init() -> Path:
         );
         CREATE INDEX IF NOT EXISTS snapshots_pending_idx
             ON shadow_snapshots(final_verified_at, collected_at);
+        CREATE TABLE IF NOT EXISTS deep_stats_observations (
+            provider TEXT NOT NULL,
+            fixture_id INTEGER NOT NULL,
+            observed_at TEXT NOT NULL,
+            discovery_minute INTEGER NOT NULL,
+            shots INTEGER,
+            shots_on_target INTEGER,
+            corners INTEGER,
+            home_xg REAL,
+            away_xg REAL,
+            PRIMARY KEY(provider,fixture_id,observed_at)
+        );
+        CREATE INDEX IF NOT EXISTS deep_stats_recent_idx
+            ON deep_stats_observations(observed_at);
         CREATE TABLE IF NOT EXISTS source_api_budget (
             source TEXT NOT NULL,
             utc_day TEXT NOT NULL,
@@ -134,6 +148,44 @@ def persist(reason: str) -> bool:
          "commit", "-m", "state(goal-hunter): " + reason[:70])
     _git(worktree, "push", "origin", "HEAD:refs/heads/" + STATE_BRANCH)
     return True
+
+
+def write_deep_observations(rows: list[dict]) -> dict:
+    """Persist genuine polled stats; discovery minute is NOT the poll minute.
+
+    One Git branch commit per whole polling session, never one per request.
+    """
+    if not rows:
+        return {"inserted":0,"status":"empty"}
+    if len(rows)>20:
+        raise ValueError("deep_observation_batch_exceeds_limit")
+    conn=_connect()
+    try:
+        now=dt.datetime.now(dt.timezone.utc)
+        cutoff=(now-dt.timedelta(days=14)).isoformat()
+        conn.execute("DELETE FROM deep_stats_observations WHERE observed_at < ?",(cutoff,))
+        count=conn.execute("SELECT COUNT(*) FROM deep_stats_observations").fetchone()[0]
+        if count+len(rows)>5000:
+            conn.rollback()
+            return {"inserted":0,"status":"capacity_limit","rows":count}
+        inserted=0
+        for row in rows:
+            cursor=conn.execute("""
+              INSERT OR IGNORE INTO deep_stats_observations
+              (provider,fixture_id,observed_at,discovery_minute,shots,
+               shots_on_target,corners,home_xg,away_xg)
+              VALUES (?,?,?,?,?,?,?,?,?)
+            """,(row["provider"],row["fixture_id"],row["observed_at"],
+                 row["discovery_minute"],row.get("shots"),
+                 row.get("shots_on_target"),row.get("corners"),
+                 row.get("home_xg"),row.get("away_xg")))
+            inserted+=cursor.rowcount
+        conn.commit()
+    finally:
+        conn.close()
+    if inserted:
+        persist("save deep live stats polling session")
+    return {"inserted":inserted,"status":"saved"}
 
 
 def reserve_source_calls(source: str, *, count: int = 2,
