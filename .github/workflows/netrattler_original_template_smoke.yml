@@ -12,6 +12,8 @@ on:
       - 'netrattler_premium_verified_cards.py'
       - 'netrattler_premium_telegram_adapter.py'
       - 'netrattler_btts_owner_original.py'
+      - 'netrattler_combo_owner_original.py'
+      - 'test_netrattler_combo_owner_original.py'
       - 'test_netrattler_btts_owner_original.py'
       - 'assets/original_templates/NETRATTLER_BTTS_originalkarte.png'
       - 'test_netrattler_premium_dispatch_gate.py'
@@ -60,7 +62,7 @@ jobs:
       - name: Verify production card renderer with mocked photos and Telegram
         run: |
           python -m pip install --quiet pytest
-          python -m pytest -q test_netrattler_original_templates.py test_netrattler_premium_dispatch_gate.py test_netrattler_btts_owner_original.py
+          python -m pytest -q test_netrattler_original_templates.py test_netrattler_premium_dispatch_gate.py test_netrattler_btts_owner_original.py test_netrattler_combo_owner_original.py
       - name: Expose preview of actual owner's BTTS card with synthetic input
         run: |
           python - <<'PY'
@@ -76,6 +78,23 @@ jobs:
           print('NETRATTLER_BTTS_OWNER_PREVIEW '+
                 base64.b64encode(buf.getvalue()).decode('ascii'))
           print('ORIGINAL BTTS QA ONLY: no bookmaker quote or Telegram send')
+          PY
+      - name: Review authentic COMBO 7/9 owner references in safe synthetic QA
+        run: |
+          python - <<'PY'
+          from test_netrattler_combo_owner_original import render
+          from PIL import Image
+          import io, base64
+          for n in (7,9):
+              raw=render(n)
+              with Image.open(io.BytesIO(raw)) as source:
+                  thumb=source.convert('RGB')
+                  thumb.thumbnail((360,510),Image.Resampling.LANCZOS)
+                  buf=io.BytesIO()
+                  thumb.save(buf,'JPEG',quality=55,optimize=True)
+              print('NETRATTLER_COMBO_OWNER_PREVIEW '+str(n)+' '+
+                    base64.b64encode(buf.getvalue()).decode('ascii'))
+          print('SYNTHETIC OWNER COMBO QA ONLY: no Telegram publication')
           PY
       - name: Generate visual QA PNGs (not betting tips)
         run: |
