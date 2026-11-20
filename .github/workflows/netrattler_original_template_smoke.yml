@@ -55,7 +55,7 @@ jobs:
           PROPS_CHAT: ${{ secrets.TELEGRAM_GROUP_PLAYER_PROPS }}
           STATS_CHAT: ${{ secrets.TELEGRAM_GROUP_STATS }}
           DEFAULT_CHAT: ${{ secrets.TELEGRAM_CHAT_ID }}
-          TEST_CHAT: ${{ secrets.TELEGRAM_TEMPLATE_TEST_CHAT_ID }}
+          TEST_CHAT: '' # Sending disabled until all user-original cards pass visual acceptance
         run: |
           python - <<'PY'
           import io, os, sys
