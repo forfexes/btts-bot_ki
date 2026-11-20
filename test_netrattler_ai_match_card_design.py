@@ -70,9 +70,17 @@ def test_ai_card_settlement_remains_inside_original_image():
 
 def test_ai_match_card_dispatch_remains_separate_from_specialist_templates(monkeypatch):
     monkeypatch.setenv("NETRATTLER_CARD_LAYOUT", "bis")
+    monkeypatch.setenv("NETRATTLER_SANDBOX_HARDTEST", "1")
     marker = b"ai_match_card"
     monkeypatch.setattr(cards, "render_bis_card", lambda entries, day, result=None: marker)
     assert cards.render_card(_entries(), "2026-11-21") == marker
+    # The same legacy toggle must NOT allow the old template into production.
+    monkeypatch.setenv("NETRATTLER_SANDBOX_HARDTEST", "0")
+    from netrattler_premium_telegram_adapter import render as premium_render
+    with patch("netrattler_premium_telegram_adapter.render",
+               return_value=b"verified_premium") as premium:
+        assert cards.render_card(_entries(), "2026-11-21") == b"verified_premium"
+        premium.assert_called_once()
     with patch.object(cards,"render_corner_card",create=True):
         # A dedicated corner template is dispatched before the general layout.
         from netrattler_corner_cards import render_corner_card
