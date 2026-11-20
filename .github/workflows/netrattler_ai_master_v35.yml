@@ -470,7 +470,7 @@ jobs:
           BETFAIR_SESSION_TOKEN: ${{ secrets.BETFAIR_SESSION_TOKEN }}
         run: NETRATTLER_LEARNING_MODE=learning python netrattler_learning_engine.py
       - name: Optional AI Tipp Bot
-        if: github.event.inputs.run_tip_bot == 'true'
+        if: ${{ false }} # PAUSED: no AI tip Telegram dispatch until original cards approved
         env:
           SUPABASE_URL: ${{ secrets.SUPABASE_URL }}
           SUPABASE_KEY: ${{ secrets.SUPABASE_KEY }}
@@ -478,8 +478,8 @@ jobs:
           GITHUB_TOKEN: ${{ github.token }}
           ODDS_API_KEYS: ${{ secrets.ODDS_API_KEYS }}
           ODDS_API_KEY: ${{ secrets.ODDS_API_KEY }}
-          TELEGRAM_TOKEN: ${{ secrets.TELEGRAM_TOKEN }}
-          TELEGRAM_BOT_TOKEN: ${{ secrets.TELEGRAM_BOT_TOKEN }}
+          TELEGRAM_TOKEN: '' # PAUSED until cards approved
+          TELEGRAM_BOT_TOKEN: '' # PAUSED until cards approved
           TELEGRAM_CHAT_ID: ${{ secrets.TELEGRAM_CHAT_ID }}
           TELEGRAM_GROUP_BTTS: ${{ secrets.TELEGRAM_GROUP_BTTS }}
           TELEGRAM_GROUP_OVER25: ${{ secrets.TELEGRAM_GROUP_OVER25 }}
