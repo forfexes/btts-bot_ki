@@ -80,7 +80,12 @@ def test_multi_combo_sanity(bot):
     combo = bot.generate_multi_combo_bets(good, 3)
     assert combo is not None
     assert combo["total_odds"] < 20
-    msg = bot.format_combo_telegram_message(combo)
+    # Multiplied individual quotes are NOT a bookmaker-issued combo ticket.
+    assert combo["combined_odds_observed"] is False
+    assert bot.format_combo_telegram_message(combo) == ""
+    verified=dict(combo,combined_odds_observed=True,
+                  combined_quote_id="SYNTHETIC_TEST_TICKET",bookmaker="TEST_BOOK")
+    msg = bot.format_combo_telegram_message(verified)
     assert "Over 8.5 Ecken @ 2.55" in msg
 
 
