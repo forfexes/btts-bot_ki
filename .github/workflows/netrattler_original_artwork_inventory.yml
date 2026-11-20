@@ -1,0 +1,64 @@
+name: NETRATTLER Real Original Artwork Inventory
+
+"on":
+  workflow_dispatch: {}
+  push:
+    paths:
+      - '.github/workflows/netrattler_original_artwork_inventory.yml'
+      - 'assets/original_templates/**'
+
+permissions:
+  contents: read
+
+jobs:
+  originals:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+      - run: python -m pip install --quiet pillow
+      - name: Inspect five actual user PNG templates and emit visual QA thumbnails
+        run: |
+          python - <<'PY'
+          from PIL import Image
+          from pathlib import Path
+          import io, base64, json
+          names = {
+              'BTTS': 'NETRATTLER_BTTS_originalkarte.png',
+              'BUILDER_4': 'NETRATTLER_BUILDER_4_originalkarte.png',
+              'COMBO_7': 'NETRATTLER_COMBO_7_originalkarte.png',
+              'COMBO_9': 'NETRATTLER_COMBO_9_originalkarte.png',
+              'GOAL_HUNTER': 'NETRATTLER_GOAL_HUNTER_originalkarte.png',
+          }
+          outdir = Path('original-inventory')
+          outdir.mkdir(exist_ok=True)
+          meta = {}
+          for name, file in names.items():
+              path = Path('assets/original_templates') / file
+              if not path.is_file():
+                  raise SystemExit(f'Missing original: {path}')
+              with Image.open(path) as im:
+                  im.load()
+                  if im.format != 'PNG' or min(im.size) < 600:
+                      raise SystemExit(f'Invalid source image: {path}')
+                  meta[name] = {'source': str(path), 'width': im.width,
+                                'height': im.height, 'sha_is_original_reference': True}
+                  thumb = im.convert('RGB')
+                  thumb.thumbnail((340, 490), Image.Resampling.LANCZOS)
+                  buf=io.BytesIO()
+                  thumb.save(buf, 'JPEG', quality=53, optimize=True)
+                  (outdir / (name + '_ORIGINAL_REFERENCE_ONLY.jpg')).write_bytes(buf.getvalue())
+                  print('NETRATTLER_REFERENCE_THUMB ' + name + ' ' +
+                        base64.b64encode(buf.getvalue()).decode('ascii'))
+          (outdir / 'manifest.json').write_text(json.dumps(meta, indent=2))
+          print('Reference artwork verified: ' + ', '.join(names))
+          print('NOT A CLEAN PRODUCTION MASTER; no Telegram publishing')
+          PY
+      - uses: actions/upload-artifact@v4
+        with:
+          name: netrattler-actual-five-original-reference-artworks
+          path: original-inventory/
+          retention-days: 7
