@@ -41,12 +41,10 @@ def test_builder_two_four_six_leg_masters_and_dry_run_send():
             raw=builder.render_builder_card(pick)
             im=Image.open(io.BytesIO(raw)).convert("RGB")
             assert im.size==(1122,height)
-            # Compact SVG gradients depend on canvas height. Compare against
-            # the SAME compact master, never the full-height 6-leg SVG.
-            from netrattler_premium_compact import compact_master
-            import cairosvg
-            master=Image.open(io.BytesIO(cairosvg.svg2png(
-                bytestring=compact_master("builder",n)))).convert("RGB")
+            # Header must match the exact source owner's WebP even for
+            # compact 2/4-leg cards: NEVER an approximate SVG replacement.
+            from netrattler_original_template_renderer import _builder_canvas
+            master, _ = _builder_canvas(pick.legs)
             assert master.size==im.size
             assert ImageChops.difference(im.crop((0,0,1122,170)),
                                           master.crop((0,0,1122,170))).getbbox() is None
