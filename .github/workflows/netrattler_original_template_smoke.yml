@@ -11,6 +11,9 @@ on:
       - 'netrattler_premium_compact.py'
       - 'netrattler_premium_verified_cards.py'
       - 'netrattler_premium_telegram_adapter.py'
+      - 'netrattler_btts_owner_original.py'
+      - 'test_netrattler_btts_owner_original.py'
+      - 'assets/original_templates/NETRATTLER_BTTS_originalkarte.png'
       - 'test_netrattler_premium_dispatch_gate.py'
       - 'test_premium_verified_cards.py'
 permissions:
@@ -57,7 +60,23 @@ jobs:
       - name: Verify production card renderer with mocked photos and Telegram
         run: |
           python -m pip install --quiet pytest
-          python -m pytest -q test_netrattler_original_templates.py test_netrattler_premium_dispatch_gate.py
+          python -m pytest -q test_netrattler_original_templates.py test_netrattler_premium_dispatch_gate.py test_netrattler_btts_owner_original.py
+      - name: Expose preview of actual owner's BTTS card with synthetic input
+        run: |
+          python - <<'PY'
+          from test_netrattler_btts_owner_original import OwnerBttsImageTests
+          from PIL import Image
+          import io,base64
+          raw=OwnerBttsImageTests().draw()
+          with Image.open(io.BytesIO(raw)) as src:
+              thumb=src.convert('RGB')
+              thumb.thumbnail((360,490),Image.Resampling.LANCZOS)
+              buf=io.BytesIO()
+              thumb.save(buf,'JPEG',quality=56,optimize=True)
+          print('NETRATTLER_BTTS_OWNER_PREVIEW '+
+                base64.b64encode(buf.getvalue()).decode('ascii'))
+          print('ORIGINAL BTTS QA ONLY: no bookmaker quote or Telegram send')
+          PY
       - name: Generate visual QA PNGs (not betting tips)
         run: |
           mkdir -p premium-qa
