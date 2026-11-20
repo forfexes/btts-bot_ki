@@ -171,7 +171,7 @@ jobs:
           SUPABASE_URL: ''
           SUPABASE_KEY: ''
         run: |
-          python -m pytest -q -ra test_netrattler_premium_verified_cards.py test_netrattler_premium_dispatch_gate.py
+          python -m pytest -q -ra test_netrattler_premium_verified_cards.py test_netrattler_premium_dispatch_gate.py test_netrattler_btts_owner_original.py test_netrattler_original_templates.py
       - name: Run Tips Bot 🤖
         env:
           NETRATTLER_FAST_TIPS:       "true"
