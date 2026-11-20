@@ -171,9 +171,10 @@ jobs:
           SUPABASE_URL: ''
           SUPABASE_KEY: ''
         run: |
-          python -m pytest -q -ra test_netrattler_premium_verified_cards.py test_netrattler_premium_dispatch_gate.py test_netrattler_btts_owner_original.py test_netrattler_original_templates.py
+          python -m pytest -q -ra test_netrattler_premium_verified_cards.py test_netrattler_premium_dispatch_gate.py test_netrattler_btts_owner_original.py test_netrattler_combo_owner_original.py test_netrattler_combo_dynamic_cards.py test_netrattler_original_templates.py
       - name: Run Tips Bot 🤖
         env:
+          NETRATTLER_ORIGINAL_ONLY:   "1"  # fail closed: no unapproved generic COMBO card on Telegram
           NETRATTLER_FAST_TIPS:       "true"
           NETRATTLER_PLAYWRIGHT_ENABLED: "true"
           NETRATTLER_PLAYWRIGHT_BUDGET_SEC: "45"
