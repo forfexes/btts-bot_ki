@@ -203,9 +203,10 @@ def render_builder(pick):
             raise ValueError("Für den Spieler fehlt echte L15-Spielhistorie")
         for period,yy in ((5,y+5),(10,y+34),(15,y+63)):
             _label(draw,f"L{period}: {_form_label(series,leg.line,period)}",931,yy,246,size=20,min_size=14,fill=GREEN,italic=False)
-    # Place live figures INSIDE the new SVG footer (the old WebP
-    # coordinates painted over tip rows on compact 2–5 leg cards).
-    footer_y = 1185 + shift
+    # The REAL owner artwork already prints "GESAMTQUOTE", "EV",
+    # "WAHRSCHEINLICHKEIT", "KONFIDENZ" and "AUSWERTUNG".
+    # Populate their existing value boxes only. Never draw duplicate headings
+    # over the lower status row (observed in the synthetic 2/4/6-leg QA PNGs).
     probability=_percent(getattr(pick,"joint_probability",None))
     if probability is None:
         probability=_percent(getattr(pick,"probability",None))
@@ -216,15 +217,24 @@ def render_builder(pick):
     if not conf or conf=="—":
         raise ValueError("Konfidenz fehlt")
     status,col=nd._result_text(getattr(pick,"status",None))
-    for cx,heading,value,color in (
-        (235,"QUOTE",f"{book_quote:.2f}",GOLD),
-        (561,"VALUE",f"{ev:+.1f}%",GREEN if ev>=0 else RED),
-        (885,"MODELL",f"{probability:.1f}%",GOLD),
+    for cx,value,color in (
+        (235,f"{book_quote:.2f}",GOLD),
+        (561,f"{ev:+.1f}%",GREEN if ev>=0 else RED),
+        (885,f"{probability:.1f}%",GOLD),
     ):
-        _label(draw,heading,cx,footer_y+14,260,size=20,min_size=16,fill=CYAN,italic=False)
-        _label(draw,value,cx,footer_y+44,270,size=37,min_size=23,fill=color,italic=False)
-    _label(draw,conf,275,footer_y+91,260,size=22,min_size=15,fill=WHITE,italic=False)
-    _label(draw,status,850,footer_y+91,300,size=22,min_size=15,fill=col,italic=False)
+        # Clear demo dash INSIDE the existing neon value cell; keep its frame.
+        _erase(draw,(cx-124,1100+shift,cx+124,1164+shift),
+               fill="#06131B",radius=10)
+        _label(draw,value,cx,1107+shift,232,size=41,min_size=24,
+               fill=color,italic=False)
+    # The bottom footer is a separate row ~1200px below the original header.
+    # Right-hand results must NOT collide with the three metric value boxes.
+    _erase(draw,(385,1230+shift,503,1285+shift),fill="#07131B",radius=9)
+    _label(draw,conf,445,1240+shift,113,size=25,min_size=16,
+           fill=WHITE,italic=False)
+    _erase(draw,(863,1230+shift,1055,1285+shift),fill="#07131B",radius=9)
+    _label(draw,status,957,1240+shift,183,size=28,min_size=17,
+           fill=col,italic=False)
     return _write(im)
 
 
