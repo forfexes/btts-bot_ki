@@ -44,7 +44,7 @@ def _label(draw, value, x,y,max_width, size=28,color=WHITE):
 
 def _photo_crest(data):
     if not isinstance(data,(bytes,bytearray)) or len(data)<100:
-        raise ValueError("Echtes Vereinswappen fehlt: keine Platzhalter erlaubt")
+        raise ValueError("Echtes Vereins-Wappen fehlt: keine Platzhalter erlaubt")
     try:
         with Image.open(BytesIO(data)) as source:
             source.load()
