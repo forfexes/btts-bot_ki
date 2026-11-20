@@ -49,6 +49,27 @@ jobs:
         run: python -m pytest -q test_netrattler_corner_original.py
       - name: Render 2/4/6-leg Builder and Goal Hunter PNG previews
         run: python netrattler_card_visual_preview.py --outdir visual_review_previews
+      - name: Emit synthetic visual thumbnails for independent review
+        run: |
+          python - <<'PY'
+          from pathlib import Path
+          from PIL import Image
+          import base64, io
+          root = Path("visual_review_previews")
+          for name in ("TEST_ONLY_builder_2leg.png", "TEST_ONLY_builder_4leg.png",
+                       "TEST_ONLY_builder_6leg.png", "TEST_ONLY_goal_hunter.png"):
+              path = root / name
+              if not path.is_file():
+                  raise SystemExit(f"Missing preview {path}")
+              with Image.open(path) as im:
+                  thumb = im.convert("RGB")
+                  thumb.thumbnail((340, 460), Image.Resampling.LANCZOS)
+                  out = io.BytesIO()
+                  thumb.save(out, "JPEG", quality=48, optimize=True)
+              # Small review-only assets, never real tips or Telegram delivery.
+              print("NETRATTLER_VISUAL_THUMB " + name + " " +
+                    base64.b64encode(out.getvalue()).decode("ascii"))
+          PY
       - name: Publish image previews and visual QA report
         if: always()
         uses: actions/upload-artifact@v4
