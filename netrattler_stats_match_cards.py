@@ -479,8 +479,12 @@ def render_card(entries, target_date, result=None):
     # Historic multi-market settlements may still use their original legacy
     # design; new sends split markets into independent premium cards below.
     if len(rows) == 1:
-        if os.getenv("NETRATTLER_CARD_LAYOUT", "premium").lower() == "bis":
-            return render_bis_card(entries, target_date, result)  # explicit legacy QA only
+        if (os.getenv("NETRATTLER_CARD_LAYOUT", "premium").lower() == "bis"
+                and os.getenv("NETRATTLER_SANDBOX_HARDTEST") == "1"):
+            # The historical dashboard is for isolated offline regression ONLY.
+            # A stray production environment variable must never republish
+            # this disallowed legacy design in fresh Telegram image cards.
+            return render_bis_card(entries, target_date, result)
         from netrattler_premium_telegram_adapter import render as render_premium
         return render_premium(rows, target_date, crest_provider=_badge_bytes, result=result)
     if result is not None:
