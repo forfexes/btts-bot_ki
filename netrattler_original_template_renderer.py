@@ -143,7 +143,7 @@ def _builder_canvas(legs):
     """
     n = len(legs)
     if not 2 <= n <= 6:
-        raise ValueError("Original Builder requires 2–6 verified legs")
+        raise ValueError("Original Builder requires 2–6 Legs (verified)")
     source = _base(str(BUILDER_IMAGE))
     row_start, six_rows_end = 409, 1009
     shift = -100 * (6 - n)
