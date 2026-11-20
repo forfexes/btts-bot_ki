@@ -31,6 +31,17 @@ class PremiumTelegramDispatchTests(unittest.TestCase):
         with Image.open(io.BytesIO(raw)) as im:
             self.assertEqual(im.size,(1122,1402))
 
+    def test_no_selection_may_be_silently_reversed_to_yes(self):
+        for market in ("btts", "over25", "btts_ht", "over15_ht", "combo"):
+            entry = tip(market)
+            entry["selection"] = "NO"
+            with self.subTest(market=market), \
+                 patch.object(cards, "_badge_bytes", return_value=crest()), \
+                 patch.object(cards, "render_bis_card",
+                              side_effect=AssertionError("Legacy image used")):
+                with self.assertRaisesRegex(ValueError, "contradicts"):
+                    cards.render_card([(market, entry)], "2026-11-20")
+
     def test_no_silent_fallback_to_old_when_premium_fails(self):
         with patch.dict(os.environ,{"NETRATTLER_CARD_LAYOUT":""}), \
              patch.object(cards,"_badge_bytes",return_value=b""), \
