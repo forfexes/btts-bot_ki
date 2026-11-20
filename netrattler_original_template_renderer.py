@@ -12,7 +12,7 @@ from functools import lru_cache
 from pathlib import Path
 from zoneinfo import ZoneInfo
 
-from PIL import Image, ImageDraw, ImageFont, ImageOps
+from PIL import Image, ImageDraw, ImageFilter, ImageFont, ImageOps
 
 ASSETS = Path(__file__).resolve().parent / "assets"
 BUILDER_IMAGE = ASSETS / "original_templates" / "prop_builder_original.webp"
@@ -279,4 +279,15 @@ def render_goal(tip,target_date,result=None):
     label,col=nd._result_text(status)
     _erase(draw,(456,1214,647,1283),fill="#07151D",radius=14)
     _label(draw,label,550,1220,182,size=39,min_size=25,fill=col)
+    # The supplied original footer contains the OLD baked-in @netrattler.
+    # Restore its grass texture from the same real image before overlaying the
+    # user-requested @prophunter. Keep the original cyan frame/logo intact.
+    crop = im.crop((821, 1327, 1098, 1384)).resize((277, 72),
+          Image.Resampling.LANCZOS)
+    feather = Image.new("L", (277, 72), 0)
+    ImageDraw.Draw(feather).rounded_rectangle((3, 3, 273, 69),
+                                                radius=12, fill=255)
+    im.paste(crop, (821, 1232), feather.filter(ImageFilter.GaussianBlur(5)))
+    _label(draw, "@prophunter", 961, 1241, 252, size=34,
+           min_size=22, fill=WHITE)
     return _write(im)
