@@ -44,7 +44,7 @@ def _label(draw, value, x,y,max_width, size=28,color=WHITE):
 
 def _photo_crest(data):
     if not isinstance(data,(bytes,bytearray)) or len(data)<100:
-        raise ValueError("Authentic club crest missing, no dummy shield allowed")
+        raise ValueError("Echtes Vereinswappen fehlt: keine Platzhalter erlaubt")
     try:
         with Image.open(BytesIO(data)) as source:
             source.load()
@@ -89,7 +89,7 @@ def render_original_combo(legs,*,combined_odds,probability,ev,confidence,
         market=str(leg.get("market") or "").strip()
         if not (home and away and home.casefold()!=away.casefold() and market):
             raise ValueError(f"Leg {i} missing exact fixture/market")
-        price=_num(leg.get("odds"),f"leg {i} bookmaker price",1.01,10000)
+        price=_num(leg.get("odds"),f"Einzelquote Leg {i}",1.01,10000)
         for team in (home,away):
             if team not in badges:
                 badges[team]=_photo_crest(crest_provider(team))
