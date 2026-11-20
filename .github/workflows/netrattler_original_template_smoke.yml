@@ -13,6 +13,8 @@ on:
       - 'netrattler_premium_telegram_adapter.py'
       - 'netrattler_btts_owner_original.py'
       - 'netrattler_combo_owner_original.py'
+      - 'netrattler_combo_dynamic_cards.py'
+      - 'test_netrattler_combo_dynamic_cards.py'
       - 'test_netrattler_combo_owner_original.py'
       - 'test_netrattler_btts_owner_original.py'
       - 'assets/original_templates/NETRATTLER_BTTS_originalkarte.png'
@@ -62,7 +64,7 @@ jobs:
       - name: Verify production card renderer with mocked photos and Telegram
         run: |
           python -m pip install --quiet pytest
-          python -m pytest -q test_netrattler_original_templates.py test_netrattler_premium_dispatch_gate.py test_netrattler_btts_owner_original.py test_netrattler_combo_owner_original.py
+          python -m pytest -q test_netrattler_original_templates.py test_netrattler_premium_dispatch_gate.py test_netrattler_btts_owner_original.py test_netrattler_combo_owner_original.py test_netrattler_combo_dynamic_cards.py
       - name: Expose preview of actual owner's BTTS card with synthetic input
         run: |
           python - <<'PY'
