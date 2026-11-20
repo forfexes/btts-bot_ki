@@ -64,11 +64,24 @@ class PremiumTelegramDispatchTests(unittest.TestCase):
         self.assertEqual(count,2)
         self.assertEqual(len(sent),2)
 
-    def test_old_dashboard_requires_explicit_legacy_setting(self):
-        fake=b"explicit_legacy"
-        with patch.dict(os.environ,{"NETRATTLER_CARD_LAYOUT":"bis"}), \
+    def test_old_dashboard_requires_explicit_offline_sandbox(self):
+        # Legacy artwork is permitted for isolated regression only.
+        fake=b"explicit_offline_legacy"
+        with patch.dict(os.environ,{"NETRATTLER_CARD_LAYOUT":"bis",
+                                    "NETRATTLER_SANDBOX_HARDTEST":"1"}), \
              patch.object(cards,"render_bis_card",return_value=fake):
             self.assertEqual(cards.render_card([("over25",tip())],"2026-11-19"),fake)
+
+    def test_accidental_legacy_env_flag_does_not_publish_old_card(self):
+        with patch.dict(os.environ,{"NETRATTLER_CARD_LAYOUT":"bis",
+                                    "NETRATTLER_SANDBOX_HARDTEST":"0"}), \
+             patch("netrattler_premium_telegram_adapter.render",
+                   return_value=b"PREMIUM") as premium, \
+             patch.object(cards,"render_bis_card",
+                          side_effect=AssertionError("legacy card sent")):
+            self.assertEqual(cards.render_card([("over25",tip())],
+                                               "2026-11-19"),b"PREMIUM")
+            premium.assert_called_once()
 
 
 if __name__=="__main__":
