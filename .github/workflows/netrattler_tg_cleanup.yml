@@ -10,6 +10,7 @@ on:
         default: "scorer_dups"
 jobs:
   cleanup:
+    if: ${{ false }} # PAUSED: do not alter Telegram messages during design QA
     runs-on: ubuntu-latest
     timeout-minutes: 15
     steps:
