@@ -14,6 +14,7 @@ concurrency:
   cancel-in-progress: false
 jobs:
   lineup:
+    if: ${{ false }} # TEMPORARILY PAUSED: no Telegram production until original-card acceptance.
     runs-on: ubuntu-latest
     timeout-minutes: 8
     steps:
