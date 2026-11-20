@@ -1,8 +1,7 @@
-"""Render NETRATTLER cards using the current SVG technical masters.
+"""Render NETRATTLER cards on the actual user-supplied reference artwork.
 
-These SVGs are programmatically generated placeholders, NOT the original user
-reference pictures. Only verified player/team data may be rendered. Telegram
-sending and settlement remain in existing modules.
+Original WebP sources remain immutable; verified match, player and price data
+are overlaid for card rendering. This module never sends Telegram messages.
 """
 from __future__ import annotations
 
@@ -16,8 +15,8 @@ from zoneinfo import ZoneInfo
 from PIL import Image, ImageDraw, ImageFont, ImageOps
 
 ASSETS = Path(__file__).resolve().parent / "assets"
-BUILDER_IMAGE = ASSETS / "premium_builder_blank.svg"
-GOAL_IMAGE = ASSETS / "premium_goal_blank.svg"
+BUILDER_IMAGE = ASSETS / "original_templates" / "prop_builder_original.webp"
+GOAL_IMAGE = ASSETS / "original_templates" / "goal_hunter_original.webp"
 WHITE, GOLD, CYAN, GREEN, RED = "#FAFCFF", "#FFE14A", "#27E6FF", "#3AFD75", "#FF6C6C"
 
 
@@ -137,17 +136,25 @@ def _write(io_image):
 
 
 def _builder_canvas(legs):
-    """Use the new premium SVG master, not the removed legacy WebP crop."""
+    """Crop UNUSED rows from the exact six-leg owner artwork.
+
+    Preserve the original crown, stadium, neon rows and footer. Render_builder
+    replaces remaining demo portraits, logos and labels with verified data.
+    """
     n = len(legs)
     if not 2 <= n <= 6:
-        raise ValueError("Premium Builder requires 2–6 Legs (verified)")
-    from netrattler_premium_compact import compact_master
-    import cairosvg
-    svg = compact_master("builder", n)
-    with Image.open(io.BytesIO(cairosvg.svg2png(bytestring=svg))) as source:
-        im = source.convert("RGB").copy()
-    # Existing footer labels are anchored to the six-row canvas.
-    return im, -100 * (6 - n)
+        raise ValueError("Original Builder requires 2–6 verified legs")
+    source = _base(str(BUILDER_IMAGE))
+    row_start, six_rows_end = 409, 1009
+    shift = -100 * (6 - n)
+    if n == 6:
+        return source.copy(), shift
+    canvas = Image.new("RGB", (1122, 1402 + shift))
+    canvas.paste(source.crop((0, 0, 1122, row_start)), (0, 0))
+    canvas.paste(source.crop((0, row_start, 1122, row_start + n * 100)), (0, row_start))
+    canvas.paste(source.crop((0, six_rows_end, 1122, 1402)),
+                 (0, row_start + n * 100))
+    return canvas, shift
 
 
 def render_builder(pick):
