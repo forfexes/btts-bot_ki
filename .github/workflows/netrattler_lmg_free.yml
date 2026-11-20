@@ -27,10 +27,7 @@ on:
       - netrattler_last_minute_goal.py
       - test_netrattler_lmg_free.py
       - .github/workflows/netrattler_lmg_free.yml
-  # 24h public-data scanning every 5m; shifted cron re-registers the schedule on default branch.
-  # GitHub schedule is best-effort; manual workflow_dispatch remains available.
-  schedule:
-    - cron: "3,8,13,18,23,28,33,38,43,48,53,58 * * * *"
+  # Schedule paused pending approved premium card templates.
 
 permissions:
   contents: read
@@ -124,7 +121,8 @@ jobs:
 
   scan:
     needs: verify
-    if: github.event_name != 'push'
+    # TEMPORARILY DISABLED: no live Telegram scans until original cards pass visual acceptance.
+    if: ${{ false }}
     runs-on: ubuntu-latest
     timeout-minutes: 8
     permissions:
