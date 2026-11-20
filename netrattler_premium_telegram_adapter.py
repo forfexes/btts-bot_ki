@@ -99,6 +99,13 @@ def render(entries, target_date, *, crest_provider, result=None):
         selection = str(tip.get("selection") or tip.get("tip") or "").strip()
         if selection not in ("1", "X", "2", "HOME", "DRAW", "AWAY"):
             raise ValueError("1X2 selection not verified")
+    # Owner-provided authentic BTTS image is now the primary renderer,
+    # never a generic substitute SVG. Always clear its baked-in example odds.
+    if market == "btts":
+        from netrattler_btts_owner_original import render as render_owner_btts
+        first = _crest(crest_provider(home))
+        second = _crest(crest_provider(away))
+        return render_owner_btts(tip,home,away,first,second,_price(tip),result)
     image_bytes = render_verified_png(category, [{
         "match": name, "market": selection,
         "bookmaker_odds": _price(tip), "bookmaker": str(provenance),
