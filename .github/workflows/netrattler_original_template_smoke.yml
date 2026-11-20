@@ -27,6 +27,31 @@ jobs:
         run: python -m unittest -v test_premium_blank_masters
       - name: Verify all 16 categories with confirmed-data fixtures
         run: python -m unittest -v test_premium_verified_cards
+      - name: Verify actual uploaded original PNG assets, not just technical SVG blanks
+        run: |
+          python - <<'PY'
+          from pathlib import Path
+          from PIL import Image
+          base = Path("assets/original_templates")
+          originals = (
+              "NETRATTLER_BTTS_originalkarte.png",
+              "NETRATTLER_BUILDER_4_originalkarte.png",
+              "NETRATTLER_COMBO_7_originalkarte.png",
+              "NETRATTLER_COMBO_9_originalkarte.png",
+              "NETRATTLER_GOAL_HUNTER_originalkarte.png",
+          )
+          for name in originals:
+              target = base / name
+              assert target.is_file(), f"Missing user reference: {target}"
+              with Image.open(target) as source:
+                  assert source.format == "PNG" and min(source.size) > 500, name
+                  source.verify()
+          technical = list(Path("assets").glob("premium_*_blank.svg"))
+          assert len(technical) == 16
+          print("actual_user_reference_pngs=5 VERIFIED")
+          print("technical_svg_skeletons=16 VERIFIED")
+          print("production_pixel_match_and_16_original_approvals=NOT_VERIFIED")
+          PY
       - name: Verify production card renderer with mocked photos and Telegram
         run: |
           python -m pip install --quiet pytest
@@ -90,7 +115,7 @@ jobs:
                   im.verify()
               print(filename.split("/")[-1]+": OK")
           if not test or not token:
-              print("premium_masters=16 VERIFIED")
+              print("technical_svg_skeletons=16 VERIFIED; original_design_approval=NOT_VERIFIED")
               print("live_photo_test=SKIPPED (private TELEGRAM_TEMPLATE_TEST_CHAT_ID not configured)")
               sys.exit(0)
           # Only a clearly labeled design smoke goes to the separate private
