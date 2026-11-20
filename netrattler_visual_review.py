@@ -90,10 +90,11 @@ def _review_user_master(im, kind, legs):
     check(im.size==expected,"master_dimensions")
     if im.size!=expected: return Review(kind,False,problems,checks)
     if kind=="builder":
-        import cairosvg
-        from netrattler_premium_compact import compact_master
-        source=Image.open(io.BytesIO(cairosvg.svg2png(
-            bytestring=compact_master("builder",legs)))).convert("RGB")
+        # Compare against the SAME cropped user-owned WebP source, not a
+        # synthetic SVG. The crown, logo and top 170 pixels must be identical.
+        from netrattler_original_template_renderer import _builder_canvas
+        from types import SimpleNamespace
+        source,_ = _builder_canvas([SimpleNamespace() for _ in range(legs)])
     else:
         source=_base(str(GOAL_IMAGE))
     check(ImageChops.difference(im.crop((0,0,1122,170)),
