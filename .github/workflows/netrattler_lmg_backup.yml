@@ -17,9 +17,7 @@ on:
       - NETRATTLER FPLCI Spielerstats Import
       - NETRATTLER Footballdata.io Daily
     types: [completed]
-  # Independent trigger for 5-minute scans; SQLite primary key prevents duplicates.
-  schedule:
-    - cron: "0,5,10,15,20,25,30,35,40,45,50,55 * * * *"
+  # Schedule paused pending approved premium card templates.
 
 permissions:
   contents: read
@@ -30,13 +28,8 @@ concurrency:
 
 jobs:
   scan:
-    # Post-run checks themselves run after approved upstream tasks; never self-trigger.
-    if: >-
-      github.event_name != 'push' &&
-      (github.event_name != 'workflow_run' ||
-      (github.event.workflow_run.conclusion == 'success' &&
-       (github.event.workflow_run.event == 'schedule' ||
-        github.event.workflow_run.name == 'NETRATTLER Post-Run Check')))
+    # TEMPORARILY DISABLED: no backup Telegram scans until original cards pass visual acceptance.
+    if: ${{ false }}
     runs-on: ubuntu-latest
     timeout-minutes: 8
     permissions:
