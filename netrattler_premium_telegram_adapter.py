@@ -87,6 +87,14 @@ def render(entries, target_date, *, crest_provider, result=None):
     if not str(provenance or "").strip():
         raise ValueError("Real bookmaker source missing")
     category, selection = MARKETS[market]
+    # Never publish "YES" when a qualified source pick actually says NO.
+    # The absence of a separate selection field is valid for markets whose
+    # canonical type already implies YES, but explicit contradictory values
+    # must fail closed instead of silently reversing the betting direction.
+    if market in ("btts", "over25", "btts_ht", "over15_ht", "combo"):
+        declared = str(tip.get("selection") or tip.get("tip") or "").strip().upper()
+        if declared in ("NO", "NEIN", "FALSE", "0", "UNDER", "UNTER"):
+            raise ValueError("Market selection contradicts premium YES artwork")
     if market == "1x2":
         selection = str(tip.get("selection") or tip.get("tip") or "").strip()
         if selection not in ("1", "X", "2", "HOME", "DRAW", "AWAY"):
