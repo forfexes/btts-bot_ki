@@ -116,6 +116,10 @@ def evaluate(run):
         # A newer push replaces this verification run via Actions concurrency.
         # Cancellation is still visible in Actions, but not a production failure.
         return True, f"NETRATTLER | PUSH-TEST ABGEBROCHEN: {name}\n{url}"
+    if conclusion == "skipped":
+        # Job-level `if:` gate (e.g. deliberate Telegram pause during original-card QA):
+        # nothing ran, nothing failed.
+        return True, f"NETRATTLER | UEBERSPRUNGEN (Pause/Gate): {name}\n{url}"
     return False, f"NETRATTLER | RUN-FEHLER: {name}\nStatus: {conclusion or 'unknown'}\n{url}"
 
 

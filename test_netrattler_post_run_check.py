@@ -22,6 +22,12 @@ class PostRunTests(unittest.TestCase):
         self.assertTrue(ok)
         self.assertIn("PUSH-TEST ABGEBROCHEN", msg)
 
+    def test_skipped_gate_is_not_failure(self):
+        ok, msg = evaluate({"name": "NETRATTLER AI Tipp Bot", "status": "completed",
+                            "conclusion": "skipped", "event": "push", "html_url": "https://example.test/s"})
+        self.assertTrue(ok)
+        self.assertIn("UEBERSPRUNGEN", msg)
+
     def test_cancelled_scheduled_run_still_warns(self):
         ok, msg = evaluate({"name": "NETRATTLER AI Tipp Bot",
                             "status": "completed", "conclusion": "cancelled",
