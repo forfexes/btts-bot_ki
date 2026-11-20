@@ -105,10 +105,13 @@ def render_original_combo(legs,*,combined_odds,probability,ev,confidence,
     draw=ImageDraw.Draw(im)
     # Keep the owner's crown, metallic logo, yellow COMBO title and original
     # TIPPS ribbon completely untouched. Hide all baked example fixtures.
-    top=344 if n==9 else 364
+    # The owner's uploaded examples begin directly below the TIPPS ribbon.
+    # Clear that FIRST sample row too; previously Barcelona/Over-2.5 or
+    # Liverpool from the reference was still visible behind the new first leg.
+    top=304
     end=1097
     row_step=(end-top)/n
-    draw.rounded_rectangle((31,top-8,1090,end+6),radius=18,
+    draw.rounded_rectangle((31,280,1090,end+6),radius=18,
                            fill="#04111D",outline=CYAN,width=4)
     for i,(home,away,market,price) in enumerate(checked):
         y0=top+round(i*row_step)+3
