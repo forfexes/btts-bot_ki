@@ -182,10 +182,15 @@ def render_builder(pick):
     _label(draw,f"{len(legs)}-LEG BUILDER",423,326,390,size=40,min_size=27)
     from netrattler_neon_design import _builder_quote_display,_stat_series,_form_label,_percent,_number
     title,value,book_quote=_builder_quote_display(pick,legs)
+    # Preserve the user's original artwork even without a bookmaker combo price.
+    # Display calculated individual-leg product only as an unconfirmed reference.
     if book_quote is None:
-        raise ValueError("Keine bestätigte Buchmacher-Kombiquote")
+        shown = ("BERECHNET " + value) if value != "—" else "QUOTE OFFEN"
+    else:
+        shown = f"@ {book_quote:.2f}"
     _erase(draw,(710,333,1000,376),fill="#F6C92E",radius=10)
-    _label(draw,f"@ {book_quote:.2f}",857,333,260,size=35,min_size=22,fill="#11121B",shadow=False)
+    _label(draw,shown,857,333,275,size=27 if book_quote is None else 35,
+           min_size=15,fill="#11121B",shadow=False)
     for i,leg in enumerate(legs):
         y=409+100*i
         # Erase baked-in sample photo, club crest, label and statistics before
