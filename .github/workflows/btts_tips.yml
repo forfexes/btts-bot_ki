@@ -67,7 +67,7 @@ jobs:
     # Changes to renderers must NOT launch Telegram production implicitly.
     # The dedicated sandbox hardtest runs on pushes; scheduled/manual production
     # still performs its own mandatory premium-card test before sending.
-    if: github.event_name != 'push'
+    if: ${{ false }} # TEMPORARILY PAUSED: no Telegram production until original-card acceptance.
     runs-on: ubuntu-latest
     timeout-minutes: 50
 
