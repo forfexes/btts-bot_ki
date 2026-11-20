@@ -181,12 +181,9 @@ def validate_builder(pick):
     day = str(getattr(pick, "match_date", "") or "")[:10]
     if not re.fullmatch(r"\d{4}-\d{2}-\d{2}", day):
         return None, ["missing_date"]
-    # No synthetic SGM/accumulator: reject before costly photo and fixture
-    # lookups when the bookmaker's complete combination is unverified.
-    combined = neon._number(getattr(pick, "combined_bookmaker_quote", None))
-    if not (getattr(pick, "combined_quote_verified", False) and
-            combined is not None and 1.01 < combined <= 100000):
-        return None, ["missing_verified_combo_quote"]
+    # A missing combined bookmaker quote is not a reason to suppress a builder.
+    # Individual leg-price provenance is checked below; unverified combined
+    # prices are clearly distinguished by the premium renderer.
 
     reasons, fixed = set(), []
     for leg in legs:
@@ -231,16 +228,7 @@ def validate_builder(pick):
                 model_joint = math.prod(ps)
         except (TypeError, ValueError, OverflowError):
             reasons.add("missing_valid_model_probability")
-    if len({str(x.match) for x in fixed}) == 1:
-        # Same-game prices cannot be obtained by multiplying individual odds.
-        q = neon._number(getattr(pick, "combined_bookmaker_quote", None))
-        if not (getattr(pick, "combined_quote_verified", False) and q and q > 1.01):
-            reasons.add("missing_verified_sgm_quote")
-    else:
-        # Cross-match also needs a real combined price for advertised EV.
-        q = neon._number(getattr(pick, "combined_bookmaker_quote", None))
-        if not (getattr(pick, "combined_quote_verified", False) and q and q > 1.01):
-            reasons.add("missing_verified_combo_quote")
+    # Combined-price absence is informational, never a rejection reason.
     if reasons:
         return None, sorted(reasons)
     prepared = copy.copy(pick)
