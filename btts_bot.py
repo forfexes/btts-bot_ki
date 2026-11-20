@@ -17398,6 +17398,12 @@ def generate_multi_combo_bets(all_tips, num_tips=3):
         "desc": desc,
         "tips": selected,
         "total_odds": round(total_odds, 2),
+        # A multiplication of separately observed individual leg quotes is
+        # NOT an independently issued bookmaker combination ticket.
+        "combined_odds_observed": False,
+        "combined_quote_id": "",
+        "bookmaker": "",
+        "odds_source_type": "indicative_product_of_legs_not_a_bookmaker_ticket",
         "expected_confidence": round(avg_confidence, 1),
         "combined_probability": round(combined_probability, 6),
         "stake_suggestion": stake,
@@ -17406,7 +17412,10 @@ def generate_multi_combo_bets(all_tips, num_tips=3):
 
 def format_combo_telegram_message(combo):
     """Formatiert Multi-Combo für Telegram — V31 clean, stake capped."""
-    if not combo:
+    from netrattler_combo_quote_guard import publishable_combo
+    # The displayed total MUST be a real bookmaker-issued combined ticket;
+    # multiplying leg odds may be used in offline exploration but not tips.
+    if not publishable_combo(combo):
         return ""
 
     def _fnum(x, default=0.0):
@@ -28238,6 +28247,10 @@ def main():
         for n in _combo_sizes:
             combo = generate_multi_combo_bets(all_tips_flat, num_tips=n)
             if combo:
+                from netrattler_combo_quote_guard import publishable_combo
+                if not publishable_combo(combo):
+                    log("   ⏭️ COMBO gesperrt: multiplizierte Einzelquoten sind keine echte Buchmacher-Kombiquote", "WARN")
+                    continue
                 # Deterministische Signatur — identische Kombi (gleiche Legs) wird nicht erneut gesendet
                 _sig = _combo_signature(combo.get("tips", []), prefix=f"combo{n}")
                 _combo_tip_id = f"combo_{n}leg_{target_date}_{_sig}".replace(" ", "_")
