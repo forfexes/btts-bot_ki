@@ -90,7 +90,13 @@ def test_corner_combo_contract(bot):
     corner = next(x for x in combo["tips"] if x["market"] == "corners")
     assert corner["line"] == 7.5
     assert corner["selection"] == "Over 7.5 Ecken"
-    message = bot.format_combo_telegram_message(combo)
+    # Preview may use the observed leg price, but Telegram requires a real
+    # combined ticket with independent bookmaker evidence.
+    assert combo["combined_odds_observed"] is False
+    assert bot.format_combo_telegram_message(combo) == ""
+    verified=dict(combo,combined_odds_observed=True,
+                  combined_quote_id="SYNTHETIC_TEST_TICKET",bookmaker="TEST_BOOK")
+    message = bot.format_combo_telegram_message(verified)
     assert "Over 7.5 Ecken @ 2.55" in message
     assert "· Corners @ 2.55" not in message
 
