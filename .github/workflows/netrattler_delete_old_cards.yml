@@ -5,6 +5,7 @@ permissions:
   contents: read
 jobs:
   run:
+    if: ${{ false }} # PAUSED: preserve existing Telegram cards during design QA
     runs-on: ubuntu-latest
     timeout-minutes: 10
     steps:
