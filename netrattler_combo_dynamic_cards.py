@@ -4,6 +4,7 @@ Standalone renderer: it never substitutes generic shields for missing crests.
 Caller supplies real crests from its trusted club-identity/image pipeline.
 """
 from __future__ import annotations
+import os
 from io import BytesIO
 from PIL import Image, ImageDraw, ImageFont, ImageOps
 
@@ -46,7 +47,8 @@ def _text(draw, x, y, value, width, size=27, color=WHITE):
     draw.text((x, y), str(value), font=f, fill=color)
 
 def render_combo(legs, *, combined_odds, probability, ev, confidence, status="OFFEN",
-                 crest_provider=None):
+                 crest_provider=None, stake=1.0, combined_odds_observed=False,
+                 combined_quote_id="", bookmaker=""):
     """Each leg: home, away, market, odds; crest_provider(team)->image bytes.
 
     Explicit inputs avoid invented odds, fixtures and probabilities.
@@ -55,6 +57,19 @@ def render_combo(legs, *, combined_odds, probability, ev, confidence, status="OF
     legs = list(legs)
     if not 3 <= len(legs) <= 10:
         raise ValueError("COMBO erfordert 3 bis 10 Tipps")
+    if len(legs) in (7,9):
+        from netrattler_combo_owner_original import render_original_combo
+        return render_original_combo(
+            legs,combined_odds=combined_odds,probability=probability,
+            ev=ev,confidence=confidence,status=status,stake=stake,
+            combined_odds_observed=combined_odds_observed,
+            combined_quote_id=combined_quote_id,bookmaker=bookmaker,
+            crest_provider=crest_provider)
+    # No source-artwork screenshot exists for other count/layouts. The legacy
+    # generic drawing remains usable for OFFLINE QA only; in the actual bot it
+    # must NEVER substitute itself for an owner's original.
+    if os.getenv("NETRATTLER_ORIGINAL_ONLY","0")=="1":
+        raise ValueError("Keine freigegebene NETRATTLER Original-COMBO-Vorlage für diesen Umfang")
     if not callable(crest_provider):
         raise ValueError("Verifizierte Vereinswappen-Quelle fehlt")
     for v in (combined_odds, probability, ev):
