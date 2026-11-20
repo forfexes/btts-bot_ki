@@ -140,7 +140,7 @@ def _builder_canvas(legs):
     """Use the new premium SVG master, not the removed legacy WebP crop."""
     n = len(legs)
     if not 2 <= n <= 6:
-        raise ValueError("Premium Builder requires 2–6 verified legs")
+        raise ValueError("Premium Builder requires 2–6 Legs (verified)")
     from netrattler_premium_compact import compact_master
     import cairosvg
     svg = compact_master("builder", n)
