@@ -530,31 +530,24 @@ _EDIT_LAST_BY_CHAT: Dict[str, float] = {}
 
 
 def _photo_caption_from_settled_text(text: str) -> str:
-    """Plain-text caption fallback, within Telegram's 1024-char media limit.
+    """Preserve EVERY character of the original photo caption.
 
-    Keep the original game identification plus V/X, score, profit and as many
-    individual leg results as fit. Plain text cannot contain broken HTML tags.
+    Telegram photo captions have a 1024-character limit. Never shorten,
+    overwrite, or silently drop the user's originally published premium
+    betting selection to squeeze in a settlement. An oversized edit is
+    rejected; no second Telegram message is sent.
     """
     raw_original, marker, summary = str(text).partition("\n\n⸻⸻")
-    plain = lambda s: html.unescape(re.sub(r"<[^>]*>", "", s)).strip()
-    prefix = plain(raw_original)
+    plain = lambda value: html.unescape(re.sub(r"<[^>]*>", "", value)).strip()
+    original = plain(raw_original)
     if not marker:
-        return prefix[:1010]
-    summary = "⸻⸻" + plain(summary)
-    lines = summary.splitlines()
-    try:
-        leg_start = next(i for i, line in enumerate(lines) if "Leg-Auswertung:" in line)
-    except StopIteration:
-        leg_start = len(lines)
-    head = "\n".join(lines[:leg_start])
-    legs = [line[:64] for line in lines[leg_start + 1:] if line.strip()]
-    if leg_start < len(lines):
-        head += "\nLeg-Auswertung:"
-    compact_summary = head + ("\n" + "\n".join(legs) if legs else "")
-    compact_summary = compact_summary[:790]
-    prefix = prefix[:max(0, 1005 - len(compact_summary))]
-    return (prefix + "\n\n" + compact_summary).strip()[:1024]
-
+        caption = original
+    else:
+        summary = "⸻⸻" + plain(summary)
+        caption = original + "\n\n" + summary
+    if len(caption) > 1024:
+        raise ValueError("original_photo_caption_cannot_fit_settlement_without_truncation")
+    return caption
 
 _LAST_EDIT_ERROR: Dict[str, str] = {}
 
@@ -588,14 +581,21 @@ def telegram_edit(chat_id: str, message_id: Any, text: str) -> bool:
                 return True
             detail = str(response.text or "")
             if response.status_code == 400 and "there is no text in the message to edit" in detail.lower():
-                # sendPhoto cards have captions, not text messages. Edit the
-                # same message_id instead of posting a duplicate result.
+                # sendPhoto cards have captions, not text messages. The
+                # original text MUST fit completely: never truncate betting
+                # selections or attach a second result post.
+                try:
+                    caption = _photo_caption_from_settled_text(text)
+                except ValueError as exc:
+                    _LAST_EDIT_ERROR["last"] = str(exc)
+                    log("TG Foto-Caption zu lang: Original-Tipp nicht beschädigt", "WARN")
+                    return False
                 response = requests.post(
                     f"https://api.telegram.org/bot{TG_TOKEN}/editMessageCaption",
                     json={
                         "chat_id": chat_id,
                         "message_id": int(message_id),
-                        "caption": _photo_caption_from_settled_text(text),
+                        "caption": caption,
                     },
                     timeout=20,
                 )
