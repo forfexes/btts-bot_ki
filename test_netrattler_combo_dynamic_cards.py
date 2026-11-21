@@ -50,10 +50,18 @@ def test_actual_telegram_card_route_uses_full_verified_owner_combo(n, monkeypatc
         with Image.open(ROOT / f"NETRATTLER_COMBO_{source_n}_originalkarte.png") as source:
             from PIL import ImageChops
             source = source.convert("RGB").resize((W, H), Image.Resampling.LANCZOS)
+            # Owner's crown/header remain unchanged; only the baked
+            # 7/9 TIPPS ribbon changes when the real leg count differs.
+            upper = 280 if n == source_n else 190
             assert ImageChops.difference(
-                image.convert("RGB").crop((0, 0, W, 280)),
-                source.crop((0, 0, W, 280))
+                image.convert("RGB").crop((0, 0, W, upper)),
+                source.crop((0, 0, W, upper))
             ).getbbox() is None
+            if n != source_n:
+                assert ImageChops.difference(
+                    image.convert("RGB").crop((360,208,768,268)),
+                    source.crop((360,208,768,268))
+                ).getbbox() is not None
 
 
 def test_actual_telegram_combo_route_rejects_unconfirmed_ticket(monkeypatch):
@@ -106,5 +114,8 @@ def test_original_only_mode_uses_real_combos_not_a_generic_fallback(n,monkeypatc
             original=original.convert("RGB").resize((W,H),Image.Resampling.LANCZOS)
             from PIL import ImageChops
             assert ImageChops.difference(
-                result.crop((0,0,W,280)).convert("RGB"),
-                original.crop((0,0,W,280))).getbbox() is None
+                result.crop((0,0,W,190)).convert("RGB"),
+                original.crop((0,0,W,190))).getbbox() is None
+            assert ImageChops.difference(
+                result.crop((360,208,768,268)).convert("RGB"),
+                original.crop((360,208,768,268))).getbbox() is not None
