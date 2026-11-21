@@ -552,6 +552,18 @@ def _photo_caption_from_settled_text(text: str) -> str:
 _LAST_EDIT_ERROR: Dict[str, str] = {}
 
 
+def _confirmed_telegram_edit(response, message_id: Any) -> bool:
+    """Require a Telegram result referring to the exact original message."""
+    if not response.ok:
+        return False
+    try:
+        body = response.json()
+    except (ValueError, AttributeError, TypeError):
+        return False
+    result = body.get("result") if isinstance(body, dict) and body.get("ok") is True else None
+    return isinstance(result, dict) and str(result.get("message_id")) == str(message_id)
+
+
 def telegram_edit(chat_id: str, message_id: Any, text: str) -> bool:
     """Edit the same Telegram tip, respecting rate limits and retry_after."""
     _LAST_EDIT_ERROR.pop("last", None)
@@ -584,7 +596,10 @@ def telegram_edit(chat_id: str, message_id: Any, text: str) -> bool:
                 timeout=20,
             )
             if response.ok:
-                return True
+                if _confirmed_telegram_edit(response, message_id):
+                    return True
+                _LAST_EDIT_ERROR["last"] = "telegram_edit_ack_unverified_original_message_id"
+                return False
             detail = str(response.text or "")
             if response.status_code == 400 and "there is no text in the message to edit" in detail.lower():
                 # sendPhoto cards have captions, not text messages. The
@@ -606,7 +621,10 @@ def telegram_edit(chat_id: str, message_id: Any, text: str) -> bool:
                     timeout=20,
                 )
                 if response.ok:
-                    return True
+                    if _confirmed_telegram_edit(response, message_id):
+                        return True
+                    _LAST_EDIT_ERROR["last"] = "telegram_caption_ack_unverified_original_message_id"
+                    return False
                 detail = str(response.text or "")
             # Idempotent replay: Telegram's 400 means the original already carries this result.
             if response.status_code == 400 and "message is not modified" in detail.lower():
