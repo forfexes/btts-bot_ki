@@ -538,10 +538,19 @@ def render_card(entries, target_date, result=None):
                     "home": home, "away": away,
                     "market": leg.get("selection") or leg.get("market"),
                     "odds": leg.get("odds"),
+                    "model_probability": leg.get("model_probability",
+                                                  leg.get("probability")),
+                    "odds_observed": leg.get("odds_observed") is True,
                 })
+            if leg_rows:
+                # Only owner-verified matched conditional/joint data may
+                # estimate a same-game Builder probability.
+                leg_rows[0]["conditional_probabilities"] = tip.get("conditional_probabilities")
+                leg_rows[0]["joint_observations"] = tip.get("joint_observations")
+            # The owner Combo renderer can infer a multi-game joint model
+            # probability from verified per-leg model probabilities. If those
+            # are missing, it rejects the card rather than fabricating data.
             probability = _pct(tip.get("probability"))
-            if probability is None:
-                raise ValueError("Original combo needs verified model probability")
             if tip.get("stake") is None or not str(tip.get("confidence") or "").strip():
                 raise ValueError("Original combo stake/confidence missing")
             odds_total = tip.get("combined_odds")
