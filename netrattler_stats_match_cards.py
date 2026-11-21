@@ -27,16 +27,21 @@ def _number(value):
 
 
 def _price(tip, market=None):
-    # A verified combo may carry its book-issued ticket price solely under
-    # combined_odds. Never substitute the single-leg oddsYes value.
-    keys = ("combined_odds", "odds") if (market or tip.get("market")) == "combo" else (
+    # A 7-12 leg real bookmaker Combo/Lottery may exceed the ordinary 100x
+    # single-market ceiling. Accept that range ONLY with genuine bookmaker
+    # combined-ticket provenance; multiplying leg odds is not a book quote.
+    combo = (market or tip.get("market")) == "combo"
+    if combo and not (tip.get("combined_odds_observed") is True
+                      and str(tip.get("combined_quote_id") or "").strip()):
+        return None
+    keys = ("combined_odds", "odds") if combo else (
         "oddsYes", "odds", "odd", "price")
+    ceiling = 100000.0 if combo else 100.0
     for key in keys:
         value = _number(tip.get(key))
-        if value is not None and 1.01 <= value <= 100:
+        if value is not None and 1.01 <= value <= ceiling:
             return value
     return None
-
 
 def _valid(tip, market=None):
     if not isinstance(tip, dict) or tip.get("_no_real_odds"):
