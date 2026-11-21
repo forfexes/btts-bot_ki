@@ -30,7 +30,7 @@ class PremiumVerifiedCardsTests(unittest.TestCase):
                 if market=="1x2":
                     item["selection"]="1"
                 if market=="combo":
-                    item.update(combined_odds_observed=True, odds=2.10,
+                    item.update(combined_odds_observed=True, combined_odds=2.10,
                                 combined_quote_id="QA-OBSERVED-BOOKMAKER-TICKET")
                 if market=="var":
                     item.update(selection="YES", tip_eligible=True,
@@ -51,14 +51,14 @@ class PremiumVerifiedCardsTests(unittest.TestCase):
                 render([("combo", {**base, **unsafe})], "2026-11-19",
                        crest_provider=lambda _:crest())
         ok={**base,"combined_odds_observed":True,"combined_quote_id":"QA-CONFIRMED",
-            "odds":3.15}
+            "combined_odds":3.15}
         with Image.open(io.BytesIO(render([("combo",ok)],"2026-11-19",
                        crest_provider=lambda _:crest()))) as image:
             self.assertEqual(image.size,(1122,1402))
 
     def test_combo_uses_real_total_not_single_leg_odds_yes(self):
         from unittest.mock import patch
-        base={**tip(),"oddsYes":1.40,"odds":3.15,
+        base={**tip(),"oddsYes":1.40,"odds":1.75,"combined_odds":3.15,
               "combined_odds_observed":True,"combined_quote_id":"QA-COMBINED"}
         with patch("netrattler_premium_telegram_adapter.render_verified_png",
                    wraps=render_verified_png) as renderer:
@@ -66,7 +66,7 @@ class PremiumVerifiedCardsTests(unittest.TestCase):
                    crest_provider=lambda _:crest())
         self.assertEqual(renderer.call_args.args[1][0]["bookmaker_odds"],3.15)
         with self.assertRaisesRegex(ValueError,"odds missing"):
-            render([("combo",{**base,"odds":None})],"2026-11-19",
+            render([("combo",{**base,"combined_odds":None})],"2026-11-19",
                    crest_provider=lambda _:crest())
 
     def test_one_x_two_conflicting_directions_rejected(self):
