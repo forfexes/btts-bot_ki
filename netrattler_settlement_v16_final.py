@@ -3049,13 +3049,12 @@ def main() -> None:
         _recent = list(_recent_by_tip.values())
     except Exception:
         _recent = list(newly_closed)
-    if os.getenv("SETTLEMENT_TG_ORIGINAL_EDIT_ONLY", "1") != "1":
-        # editMessageMedia replaces artwork and may substitute an unapproved
-        # technical card for the owner's original. Keep the original bitmap
-        # untouched until every family has a pixel-approved replacement.
-        send_result_cards(_recent or newly_closed)
-    else:
-        log("Originalkarten bleiben unverändert; Auswertung nur im Original-Tipp/Caption")
+    # The in-image updater can repaint ONLY approved BTTS, scorer and
+    # corner owner-original families in original-only mode. Any unapproved
+    # category keeps its bitmap and receives an edit of its existing caption.
+    send_result_cards(_recent or newly_closed)
+    if os.getenv("SETTLEMENT_TG_ORIGINAL_EDIT_ONLY", "1") == "1":
+        log("Owner-only: In-Image-Ergebnis nur BTTS/Scorer/Corners; andere Karten unverändert")
 
     history = dedup_history(existing + settled)
     EXISTING_FOR_REPORTS[:] = list(existing)
