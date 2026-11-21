@@ -175,7 +175,7 @@ def validate_builder(pick):
     import netrattler_stats_match_cards as cards
 
     legs = list(getattr(pick, "legs", []) or [])
-    if not (2 <= len(legs) <= 6):
+    if not (2 <= len(legs) <= 7):
         return None, ["invalid_leg_count"]
 
     day = str(getattr(pick, "match_date", "") or "")[:10]
