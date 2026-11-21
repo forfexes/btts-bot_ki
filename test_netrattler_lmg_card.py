@@ -68,6 +68,33 @@ class GoalHunterCards(unittest.TestCase):
             with self.assertRaisesRegex(ValueError, "Verified team crest missing"):
                 card.make_card(self.fx, self.metrics)
 
+    def test_verified_espn_crest_url_and_host_rejection(self):
+        import io
+        from PIL import Image
+        buf = io.BytesIO()
+        Image.new("RGBA", (64, 64), (32, 142, 220, 255)).save(buf, "PNG")
+        reply = Mock()
+        reply.content = buf.getvalue()
+        reply.headers = {"Content-Type": "image/png"}
+        with patch.object(card.requests, "get", return_value=reply) as get:
+            crest = card.crest("https://a.espncdn.com/i/teamlogos/soccer/500/1.png")
+            self.assertIsNotNone(crest)
+            self.assertEqual(crest.size, (64, 64))
+            self.assertEqual(get.call_count, 1)
+            self.assertIsNone(card.crest("https://a.espncdn.com.evil.example/logo.png"))
+            self.assertIsNone(card.crest("https://evil.example/logo.png"))
+            self.assertIsNone(card.crest("https://a.espncdn.com:abc/logo.png"))
+            self.assertIsNone(card.crest(None))
+            self.assertEqual(get.call_count, 1)
+
+    def test_card_prefers_verified_espn_crest_url(self):
+        fixture = dict(self.fx, home_logo_url="https://a.espncdn.com/home.png",
+                       away_logo_url="https://a.espncdn.com/away.png")
+        with patch.object(card, "crest", return_value=Image.new("RGBA", (96, 96))) as load:
+            card.make_card(fixture, self.metrics)
+        self.assertEqual([call.args[0] for call in load.call_args_list],
+                         [fixture["home_logo_url"], fixture["away_logo_url"]])
+
     def test_finished_only_and_identity_guard(self):
         feed={"leagues":[{"name":"ASEAN","matches":[{
             "id":1000014437,"home":{"name":"Tampines Rovers FC","score":2},
