@@ -88,6 +88,14 @@ class PremiumTelegramDispatchTests(unittest.TestCase):
         qualified = cards.select_cards({"var": [eligible]})
         self.assertEqual(len(qualified), 1)
         self.assertEqual(qualified[0][0][0], "var")
+        for bad in ({"commence_time": None},
+                    {"commence_time": "2026-11-21T18:30:00"},
+                    {"commence_time": "not-a-date"},
+                    {"match": "Only One Team"},
+                    {"selection": "NO"},
+                    {"selection": "YES", "tip": "NO"}):
+            with self.subTest(bad=bad):
+                self.assertEqual(cards.select_cards({"var": [{**eligible, **bad}]}), [])
 
     def test_no_silent_fallback_to_old_when_premium_fails(self):
         with patch.dict(os.environ,{"NETRATTLER_CARD_LAYOUT":""}), \
