@@ -68,7 +68,7 @@ def already_snapshotted() -> set:
     return {x["match_name"] for x in r.json()} if r.ok and isinstance(r.json(), list) else set()
 
 
-STOP_MB = float(os.getenv("X1_SNAP_STOP_MB", "420"))
+STOP_MB = float(os.getenv("X1_SNAP_STOP_MB", "450"))
 
 
 def db_too_full() -> bool:
