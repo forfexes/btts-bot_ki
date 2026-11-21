@@ -509,6 +509,11 @@ def render_card(entries, target_date, result=None):
     Every block is optional: it is drawn only when the tip carries the real
     value. Nothing here is invented or estimated.
     """
+    # Stop production photo repaint from raw, example-filled owner screenshots.
+    # This blocks both first publication AND in-place historical media edits.
+    # Offline QA remains available without the production-only release switch.
+    if os.getenv("NETRATTLER_BLOCK_OVERPAINTED_MASTERS", "0") == "1":
+        raise ValueError("premium_owner_original_still_overpainted_no_telegram")
     from PIL import Image, ImageDraw, ImageFont
 
     rows = entries[:5]
