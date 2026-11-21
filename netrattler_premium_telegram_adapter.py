@@ -101,9 +101,14 @@ def render(entries, target_date, *, crest_provider, result=None):
                 raise ValueError("naive kickoff")
         except (TypeError, ValueError, OverflowError) as exc:
             raise ValueError("VAR publication requires a verified timezone-aware match kickoff") from exc
-        declared = str(tip.get("selection") or tip.get("tip") or "").strip().upper()
-        if declared not in ("YES", "JA", "TRUE", "1"):
-            raise ValueError("VAR-EINGRIFF JA requires an explicitly verified YES selection")
+        # Both fields may be supplied by different upstream collectors.
+        # Never let a YES selection conceal a contradictory NO tip (or vice versa).
+        declarations = [str(tip[key]).strip().upper()
+                        for key in ("selection", "tip")
+                        if tip.get(key) is not None and str(tip[key]).strip()]
+        if not declarations or any(value not in ("YES", "JA", "TRUE", "1")
+                                   for value in declarations):
+            raise ValueError("VAR-EINGRIFF JA requires consistent verified YES selections")
     # Never publish "YES" when a qualified source pick actually says NO.
     # The absence of a separate selection field is valid for markets whose
     # canonical type already implies YES, but explicit contradictory values
