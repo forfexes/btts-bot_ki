@@ -61,6 +61,10 @@ def _percent(value, *, strict=False):
         raise ValueError("Invalid BTTS probability") from None
     if not math.isfinite(p) or p < 0 or p > 100:
         raise ValueError("Invalid BTTS probability")
+    # Model feeds use both 0..1 fractions and 0..100 percentages.
+    # 0.643 means 64.3%, never 0.6%; explicit "0.643%" stays 0.643%.
+    if "%" not in str(value) and 0 < p <= 1:
+        p *= 100
     return f"{p:.1f}%"
 
 
@@ -148,7 +152,10 @@ def render(tip: dict, home: str, away: str, home_img: Image.Image,
     # slot (not overlaid on an old tip or a screenshot label).
     _text(draw,"KI-MODELL",227,1106,240,27,CYAN)
     _text(draw,model,485,1106,230,38,GREEN)
-    estimated_edge=(float(str(probability).replace("%",""))/100*float(odds)-1)*100
+    # EV must use the SAME normalized probability printed on the card,
+    # otherwise fractional model inputs silently produce a false loss.
+    effective_probability = float(model.rstrip("%"))
+    estimated_edge=(effective_probability/100*float(odds)-1)*100
     _text(draw,"EV",704,1106,100,29,CYAN)
     _text(draw,f"{estimated_edge:+.1f}%",911,1106,202,37,
           GREEN if estimated_edge>=0 else "#FF7777")
