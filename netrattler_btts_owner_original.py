@@ -144,7 +144,9 @@ def render(tip: dict, home: str, away: str, home_img: Image.Image,
     _text(draw,"TIPP: BTTS — JA",414,969,650,45,GOLD)
     _text(draw,f"@{float(odds):.2f}",892,969,235,48,GOLD)
     _panel(draw,(81,1061,1041,1150),width=3)
-    _text(draw,"MODELL",227,1106,240,30,CYAN)
+    # Explicit AI-model evidence label, inside a dedicated empty statistics
+    # slot (not overlaid on an old tip or a screenshot label).
+    _text(draw,"KI-MODELL",227,1106,240,27,CYAN)
     _text(draw,model,485,1106,230,38,GREEN)
     estimated_edge=(float(str(probability).replace("%",""))/100*float(odds)-1)*100
     _text(draw,"EV",704,1106,100,29,CYAN)
