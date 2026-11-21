@@ -79,7 +79,7 @@ def generate(directory):
     with patch.object(cards, "_player_photo", return_value=fake_photo), \
          patch.object(cards, "_badge_bytes",return_value=badge_buf.getvalue()), \
          patch.object(cards, "_paste_badge", side_effect=fake_badge):
-        for count in (2, 4, 6):
+        for count in (2, 3, 4, 5, 6):
             p = SimpleNamespace(legs=demo_legs(count), match_date="2099-05-21",
                 tiers=[], model_only=False, combined_quote_verified=True,
                 combined_bookmaker_quote=round(3.4 * count, 2),
