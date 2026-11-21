@@ -245,6 +245,35 @@ class PremiumTelegramDispatchTests(unittest.TestCase):
             premium.assert_called_once()
 
 
+    def test_verified_long_combo_ticket_uses_actual_total_not_leg_odds(self):
+        from netrattler_premium_telegram_adapter import _price as premium_price
+
+        verified = {"combined_odds_observed": True,
+                    "combined_quote_id": "QA_ACTUAL_BOOKMAKER_TICKET_12",
+                    "combined_odds": 312.5, "odds": 1.75}
+        self.assertEqual(premium_price(verified, "combo"), 312.5)
+        # An alternative observed-total field is valid; the leg's odds is not.
+        total_only = {**verified, "total_odds": 312.5}
+        total_only.pop("combined_odds")
+        self.assertEqual(premium_price(total_only, "combo"), 312.5)
+        leg_only = {**verified}
+        leg_only.pop("combined_odds")
+        with self.assertRaises(ValueError):
+            premium_price(leg_only, "combo")
+        for field, invalid in (("combined_odds_observed", False),
+                               ("combined_quote_id", "  "),
+                               ("combined_quote_calculated", True)):
+            with self.subTest(field=field):
+                with self.assertRaises(ValueError):
+                    premium_price({**verified, field: invalid}, "combo")
+        with self.assertRaises(ValueError):
+            premium_price({**verified, "combined_odds": float("inf")}, "combo")
+        # Preserve the tighter cap for singles; 312.5 must not become a leg.
+        self.assertEqual(premium_price({"oddsYes": 1.75}, "over25"), 1.75)
+        with self.assertRaises(ValueError):
+            premium_price({"oddsYes": 312.5}, "over25")
+
+
 if __name__=="__main__":
     unittest.main()
 
