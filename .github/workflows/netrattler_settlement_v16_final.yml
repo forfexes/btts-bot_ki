@@ -86,6 +86,7 @@ jobs:
           # Captions / existing text can be edited without replacing original
           # artwork or creating extra result messages.
           SETTLEMENT_TG_ORIGINAL_EDIT_ONLY: "1"
+          NETRATTLER_BLOCK_OVERPAINTED_MASTERS: "1"  # no historical image repaint of owner screenshots
           TELEGRAM_CHAT_ID: ${{ secrets.TELEGRAM_CHAT_ID }}
           TELEGRAM_GROUP_BTTS: ${{ secrets.TELEGRAM_GROUP_BTTS }}
           TELEGRAM_GROUP_OVER25: ${{ secrets.TELEGRAM_GROUP_OVER25 }}
