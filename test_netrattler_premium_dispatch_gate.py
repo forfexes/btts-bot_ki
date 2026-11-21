@@ -62,6 +62,18 @@ class PremiumTelegramDispatchTests(unittest.TestCase):
         with Image.open(io.BytesIO(image)) as output:
             self.assertEqual(output.size, (1122, 1402))
 
+    def test_conflicting_selection_fields_never_publish_wrong_yes_market(self):
+        for market in ("btts", "over25", "btts_ht", "over15_ht", "combo"):
+            for contradict in ({"selection": "YES", "tip": "NO"},
+                               {"selection": "NO", "tip": "YES"}):
+                item = {**tip(market), **contradict}
+                with self.subTest(market=market, contradict=contradict), \
+                     patch.object(cards, "_badge_bytes", return_value=crest()), \
+                     patch.object(cards, "render_bis_card",
+                                  side_effect=AssertionError("legacy fallback")):
+                    with self.assertRaisesRegex(ValueError, "contradicts"):
+                        cards.render_card([(market, item)], "2026-11-21")
+
     def test_no_silent_fallback_to_old_when_premium_fails(self):
         with patch.dict(os.environ,{"NETRATTLER_CARD_LAYOUT":""}), \
              patch.object(cards,"_badge_bytes",return_value=b""), \
