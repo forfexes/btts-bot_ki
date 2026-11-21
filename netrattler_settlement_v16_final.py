@@ -933,8 +933,20 @@ def retry_unedited_originals(existing: Sequence[Dict[str, Any]], newly_closed: S
         if row.get("market_group") == "builder" and not BUILDER_RESULT_IN_TIP:
             continue
         raw = row.get("raw") if isinstance(row.get("raw"), dict) else {}
-        if raw.get("telegram_edit_ok") or as_int(raw.get("telegram_edit_attempts"), 0) >= 4:
+        if raw.get("telegram_edit_ok"):
             continue
+        previous_attempts = as_int(raw.get("telegram_edit_attempts"), 0)
+        if previous_attempts >= 4:
+            # The bot was intentionally disabled in an earlier workflow.
+            # Those attempts were not real Telegram edits. Give only this
+            # recorded, recoverable cause two additional guarded opportunities
+            # after credentials are restored. Never reopen 400 not-found posts.
+            blocked_by_disabled_token = (
+                str(raw.get("telegram_edit_error") or "") ==
+                "missing Telegram token/chat/message id"
+            )
+            if not (TG_TOKEN and blocked_by_disabled_token and previous_attempts < 6):
+                continue
         payload = unpack(row.get("tip_payload") or {})
         if not anyv(payload, ["telegram_msg_id", "telegram_message_id", "message_id", "tg_message_id"], None):
             continue
