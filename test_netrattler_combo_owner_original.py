@@ -71,8 +71,28 @@ class VerifiedOriginalComboTests(unittest.TestCase):
                 with self.assertRaises((ValueError,OSError)):
                     render(7,**kwargs)
 
-    def test_do_not_fake_missing_owner_original_for_other_counts(self):
-        for n in (2,3,4,5,6,8,10):
+    def test_derived_counts_keep_the_real_original_header_and_footer(self):
+        for n in (3,4,5,6,8,10):
+            with self.subTest(n=n):
+                rendered=render(n,combined_odds_observed=False,
+                                combined_quote_id="",bookmaker="",
+                                combined_odds=None,ev=None)
+                source_n=7 if n<=7 else 9
+                with Image.open(io.BytesIO(rendered)) as output, Image.open(
+                    ROOT/f"NETRATTLER_COMBO_{source_n}_originalkarte.png") as original:
+                    original=original.convert("RGB").resize((W,H),Image.Resampling.LANCZOS)
+                    self.assertEqual(output.width,W)
+                    self.assertEqual(output.height,
+                                     H if n==10 else H+round(793*n/source_n)-793)
+                    self.assertIsNone(ImageChops.difference(
+                        output.crop((0,0,W,280)),
+                        original.crop((0,0,W,280))).getbbox())
+                    self.assertIsNone(ImageChops.difference(
+                        output.crop((0,output.height-82,W,output.height)),
+                        original.crop((0,H-82,W,H))).getbbox())
+
+    def test_only_unsupported_leg_counts_are_rejected(self):
+        for n in (0,1,2,11):
             with self.subTest(n=n),self.assertRaises(ValueError):
                 render(n)
 
