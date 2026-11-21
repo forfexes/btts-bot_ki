@@ -54,7 +54,7 @@ class SettlementV21Tests(unittest.TestCase):
                 return result
             assert url.endswith("/editMessageCaption"), url
             assert "caption" in kwargs["json"]
-            return FakeResponse({"ok": True}, status=200)
+            return FakeResponse({"ok": True, "result":{"message_id":44}}, status=200)
         with patch.dict(os.environ, {"SETTLEMENT_TG_EDIT_GAP_SEC": "0",
                                       "SETTLEMENT_TG_ORIGINAL_EDIT_ONLY": "1"}), \
              patch.object(mod, "TG_TOKEN", "TEST_BOT_TOKEN"), \
@@ -99,9 +99,22 @@ class SettlementV21Tests(unittest.TestCase):
         with patch.object(mod, "TG_TOKEN", "QA_TOKEN"), \
              patch.dict(os.environ, {"SETTLEMENT_TG_EDIT_GAP_SEC": "0"}), \
              patch.object(mod.requests, "post",
-                          return_value=FakeResponse({"ok":True})) as post:
+                          return_value=FakeResponse({"ok":True,"result":{"message_id":55}})) as post:
             self.assertTrue(mod.telegram_edit("123", 55, full_text))
             self.assertEqual(post.call_args.kwargs["json"]["text"], full_text)
+
+    def test_telegram_edit_rejects_success_for_wrong_original_message(self):
+        for result in ({"ok":True,"result":{"message_id":56}},
+                       {"ok":True}, {"ok":False,"result":{"message_id":55}}):
+            with self.subTest(result=result), \
+                 patch.object(mod, "TG_TOKEN", "QA_TOKEN"), \
+                 patch.dict(os.environ, {"SETTLEMENT_TG_EDIT_GAP_SEC":"0"}), \
+                 patch.object(mod.requests, "post",
+                              return_value=FakeResponse(result)) as post:
+                self.assertFalse(mod.telegram_edit("123",55,"Exact original"))
+                self.assertEqual(post.call_count,1)
+                self.assertEqual(mod._LAST_EDIT_ERROR.get("last"),
+                                 "telegram_edit_ack_unverified_original_message_id")
 
     def test_double_chance_routes_to_1x2_original_settlement(self):
         for choice in ("1X", "X2", "12"):
@@ -233,7 +246,7 @@ class SettlementV21Tests(unittest.TestCase):
 
     def test_rate_limited_edit_waits_for_telegram_and_retries(self):
         throttled = FakeResponse({"parameters": {"retry_after": 4}}, status=429)
-        success = FakeResponse({"ok": True})
+        success = FakeResponse({"ok": True, "result":{"message_id":55}})
         with patch.object(mod, "TG_TOKEN", "test-token"), \
              patch.dict(os.environ, {"SETTLEMENT_TG_EDIT_GAP_SEC": "0"}), \
              patch.object(mod.requests, "post", side_effect=[throttled, success]) as post, \
@@ -595,7 +608,7 @@ class SettlementV21Tests(unittest.TestCase):
             f"❌ Player {i} SOT — verified result" for i in range(1, 12))
         not_text = FakeResponse({}, status=400)
         not_text.text = '{"description":"Bad Request: there is no text in the message to edit"}'
-        ok = FakeResponse({"ok": True}, status=200)
+        ok = FakeResponse({"ok": True, "result":{"message_id":8765}}, status=200)
         with patch.object(mod, "TG_TOKEN", "test-token"), \
              patch.dict(os.environ, {"SETTLEMENT_TG_EDIT_GAP_SEC": "0"}), \
              patch.object(mod.requests, "post", side_effect=[not_text, ok]) as post:
