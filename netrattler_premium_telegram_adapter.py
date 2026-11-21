@@ -121,10 +121,24 @@ def render(entries, target_date, *, crest_provider, result=None):
         if any(declared in ("NO", "NEIN", "FALSE", "0", "UNDER", "UNTER")
                for declared in declarations):
             raise ValueError("Market selection contradicts premium YES artwork")
+    if market == "combo":
+        # A combined bet needs an independently observed ticket quote.
+        # Multiplying component prices does not establish its bookmaker price.
+        if (tip.get("combined_odds_observed") is not True
+                or not str(tip.get("combined_quote_id") or "").strip()):
+            raise ValueError("Combo requires verified combined bookmaker quote")
     if market == "1x2":
-        selection = str(tip.get("selection") or tip.get("tip") or "").strip()
-        if selection not in ("1", "X", "2", "HOME", "DRAW", "AWAY"):
+        selections = [str(tip[k]).strip().upper()
+                      for k in ("selection", "tip")
+                      if tip.get(k) is not None and str(tip[k]).strip()]
+        if not selections or any(choice not in
+               ("1", "X", "2", "HOME", "DRAW", "AWAY") for choice in selections):
             raise ValueError("1X2 selection not verified")
+        canonical = {"HOME": "1", "DRAW": "X", "AWAY": "2"}
+        canonical_selections = {canonical.get(x, x) for x in selections}
+        if len(canonical_selections) != 1:
+            raise ValueError("Conflicting 1X2 selections")
+        selection = canonical_selections.pop()
     # Owner-provided authentic BTTS image is now the primary renderer,
     # never a generic substitute SVG. Always clear its baked-in example odds.
     if market == "btts":
