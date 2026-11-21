@@ -11,6 +11,8 @@ name: Premium Joint Formula QA
       - "netrattler_combo_owner_original.py"
       - "netrattler_stats_match_cards.py"
       - "test_netrattler_combo_dynamic_cards.py"
+      - "netrattler_builder_engine.py"
+      - "test_netrattler_builder_formula.py"
       - ".github/workflows/premium_joint_formula_qa.yml"
 permissions:
   contents: read
@@ -33,7 +35,7 @@ jobs:
         run: python -m pip install -q 'pytest>=8' 'Pillow>=10' 'requests>=2.31'
       - name: Verify joint and conditional math without invented bookmaker quotes
         run: |
-          python -m pytest -q test_premium_joint_formula.py
+          python -m pytest -q test_premium_joint_formula.py test_netrattler_builder_formula.py
       - name: Verify owner Combo formula uses actual PNG and conditional probability
         run: python -m pytest -q test_netrattler_combo_dynamic_cards.py
       - name: Confirm no live publication
