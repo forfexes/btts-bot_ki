@@ -23,5 +23,26 @@ jobs:
         run: python -m pip install pillow pytest requests
       - name: Compile modified modules
         run: python -m py_compile netrattler_combo_owner_original.py netrattler_combo_dynamic_cards.py netrattler_visual_gate.py netrattler_original_template_renderer.py test_netrattler_combo_owner_original.py test_netrattler_combo_dynamic_cards.py
-      - name: Test original 7/9 combo masters and quote calculation
+      - name: Test all original-derived COMBO 3-10 and missing-quote cases
         run: python -m pytest -q test_netrattler_combo_owner_original.py test_netrattler_combo_dynamic_cards.py
+      - name: Produce owner-original visual QA previews (synthetic offline data)
+        run: |
+          python - <<'PY'
+          from pathlib import Path
+          from netrattler_combo_dynamic_cards import render_combo
+          from test_netrattler_combo_dynamic_cards import badge, legs
+          root=Path("combo-owner-qa")
+          root.mkdir(exist_ok=True)
+          for n in range(3,11):
+              raw=render_combo(legs(n),combined_odds=None,probability=40.0,
+                               ev=None,confidence="HIGH",crest_provider=badge)
+              name=root/f"TEST_ONLY_COMBO_{n}_owner_derived.png"
+              name.write_bytes(raw)
+              print(name, len(raw))
+          print("TEST ONLY - no Telegram, bookmaker quote or real fixture claims")
+          PY
+      - uses: actions/upload-artifact@v4
+        with:
+          name: netrattler-combo-3-to-10-owner-original-qa
+          path: combo-owner-qa/*.png
+          retention-days: 7
