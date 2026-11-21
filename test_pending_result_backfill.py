@@ -29,6 +29,28 @@ class T(unittest.TestCase):
         self.assertTrue(m.team_match("Boca Juniors de Cali", "Boca Juniors Cali"))
         self.assertTrue(m.team_match("Real Madrid", "Real Madrid Club"))
 
+    def test_result_backfill_ambiguous_event_ids_never_assign_wrong_score(self):
+        wanted = [("Arsenal", "Leeds United", True)]
+        match = {"home_team": "Arsenal FC", "away_team": "Leeds United",
+                 "match_date": "2026-11-21", "status": "finished"}
+        # Two different events with identical names: no reliable identity.
+        rows = [dict(match, event_id="123", home_score=1, away_score=0),
+                dict(match, event_id="456", home_score=0, away_score=1)]
+        self.assertEqual(m.select_rows(rows, wanted), [])
+        # Even one event ID cannot override contradictory scored fixtures.
+        bad = [dict(match, event_id="123", home_score=1, away_score=0),
+               dict(match, event_id="123", home_score=3, away_score=0)]
+        self.assertEqual(m.select_rows(bad, wanted), [])
+        # Identical duplicate payload rows must count as one observation,
+        # preserving the half-time requirement of either pending tip.
+        correct = dict(match, event_id="123", home_score=1, away_score=0)
+        self.assertEqual(m.select_rows([correct, dict(correct)], wanted),
+                         [(correct, True)])
+        # Missing source event IDs cannot disambiguate duplicate score rows.
+        self.assertEqual(m.select_rows([
+            dict(match, home_score=1, away_score=0),
+            dict(match, home_score=1, away_score=0)], wanted), [])
+
     def test_plan_and_select(self):
         tips = [{"tip_id": "over15_ht_2026-10-10_1", "market": "over15_ht", "message_text": "<b>Arsenal vs Leeds United</b>"}]
         p = m.plan(tips)
