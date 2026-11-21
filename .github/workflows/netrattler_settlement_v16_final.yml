@@ -122,14 +122,14 @@ jobs:
           SETTLEMENT_TG_REPLAY_DAYS: "7"
           SETTLEMENT_TG_REPLAY_MAX: "50"
         run: python netrattler_settlement_runner.py
-      - name: Void tips pending > 7 days with no result (DB only, backed up)
+      - name: Audit tips pending > 7 days (read only, NEVER auto-void)
         if: always()
         continue-on-error: true
         env:
           SUPABASE_URL: ${{ secrets.SUPABASE_URL }}
           SUPABASE_KEY: ${{ secrets.SUPABASE_KEY }}
           SUPABASE_SERVICE_ROLE_KEY: ${{ secrets.SUPABASE_SERVICE_ROLE_KEY }}
-          STALE_APPLY: "1"
+          STALE_APPLY: "0"
         run: python netrattler_stale_pending_void.py
       - name: Closing-line value for single tips (read-only on odds)
         if: always()
