@@ -1111,12 +1111,12 @@ def update_cards_with_results(token, results, log=print):
                 if not entries:
                     continue
                 if os.getenv("SETTLEMENT_TG_ORIGINAL_EDIT_ONLY", "0") == "1":
-                    # Only these routes are guaranteed to repaint an actual
-                    # user-supplied original, never a technical SVG or legacy
-                    # BIS substitute. Other original images stay untouched.
-                    if len(entries) != 1 or str(entries[0][0]) not in (
-                        "btts", "scorer", "corners"
-                    ):
+                    # Only the BTTS clean, verified owner plate is now
+                    # approved for an actual in-image result edit. In
+                    # particular, old scorer/corner source screenshots may
+                    # contain baked-in example labels; update their original
+                    # caption/text only, never overwrite their media.
+                    if len(entries) != 1 or str(entries[0][0]) != "btts":
                         diag["unapproved_original_skipped"] = (
                             diag.get("unapproved_original_skipped", 0) + 1
                         )
