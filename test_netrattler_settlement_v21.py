@@ -19,6 +19,24 @@ class FakeResponse:
         return self._payload
 
 class SettlementV21Tests(unittest.TestCase):
+    def test_missing_original_receipt_has_specific_failure_reason(self):
+        base = {"status": "win", "market_group": "btts",
+                "profit": 0.5, "match_result": {},
+                "tip_payload": {"message_text": "Original", "match": "A vs B"}}
+        with patch.object(mod, "TG_TOKEN", "TEST_BOT_TOKEN"), \
+             patch.object(mod, "telegram_edit") as edit:
+            self.assertFalse(mod.edit_original_tip(base))
+            self.assertEqual(mod._LAST_EDIT_ERROR.get("last"),
+                             "missing original telegram message id")
+            edit.assert_not_called()
+            has_id = {**base, "tip_payload":
+                      {"telegram_msg_id": 44, "telegram_chat_id": "123",
+                       "match": "A vs B"}}
+            self.assertFalse(mod.edit_original_tip(has_id))
+            self.assertEqual(mod._LAST_EDIT_ERROR.get("last"),
+                             "missing preserved original text or caption")
+            edit.assert_not_called()
+
     def test_original_only_mode_never_posts_new_telegram_result(self):
         with patch.dict(os.environ, {"SETTLEMENT_TG_ORIGINAL_EDIT_ONLY": "1"}), \
              patch.object(mod, "TG_TOKEN", "TEST_BOT_TOKEN"), \
