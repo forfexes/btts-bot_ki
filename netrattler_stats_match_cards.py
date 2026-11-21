@@ -26,20 +26,39 @@ def _number(value):
         return None
 
 
+def _verified_combo_receipt(tip):
+    """Require a real sportsbook total, never a multiplied individual leg."""
+    if not isinstance(tip, dict):
+        return False
+    features = tip.get("features") if isinstance(tip.get("features"), dict) else {}
+    observed = (tip.get("combined_odds_observed") is True
+                or features.get("combined_odds_observed") is True)
+    quote_id = str(tip.get("combined_quote_id")
+                   or features.get("combined_quote_id") or "").strip()
+    if not observed or not quote_id:
+        return False
+    for scope in (tip, features):
+        if (scope.get("combined_quote_calculated") is True
+                or scope.get("builder_odds_estimated_from_legs") is True
+                or str(scope.get("price_type") or "").strip().lower()
+                in {"estimated", "derived_builder", "calculated_from_leg_odds"}):
+            return False
+    return True
+
+
 def _price(tip, market=None):
     # A 7-12 leg real bookmaker Combo/Lottery may exceed the ordinary 100x
-    # single-market ceiling. Accept that range ONLY with genuine bookmaker
-    # combined-ticket provenance; multiplying leg odds is not a book quote.
+    # single-market ceiling. The shared 'odds' field often holds just one
+    # leg and must NEVER become a false bookmaker combined ticket.
     combo = (market or tip.get("market")) == "combo"
-    if combo and not (tip.get("combined_odds_observed") is True
-                      and str(tip.get("combined_quote_id") or "").strip()):
+    if combo and not _verified_combo_receipt(tip):
         return None
-    keys = ("combined_odds", "odds") if combo else (
+    keys = ("combined_odds", "total_odds") if combo else (
         "oddsYes", "odds", "odd", "price")
     ceiling = 100000.0 if combo else 100.0
     for key in keys:
         value = _number(tip.get(key))
-        if value is not None and 1.01 <= value <= ceiling:
+        if value is not None and 1.01 <= value < ceiling:
             return value
     return None
 
@@ -430,10 +449,10 @@ def select_cards(tips_by_market, max_cards=0):
             # The published combo master displays a combined bookmaker quote,
             # never a multiplied or unobserved estimate.
             if market == "combo":
-                if not (tip.get("combined_odds_observed") is True
-                        and str(tip.get("combined_quote_id") or "").strip()):
+                if not _verified_combo_receipt(tip):
                     continue
-                if _number(tip.get("combined_odds")) is None and _number(tip.get("odds")) is None:
+                if (_number(tip.get("combined_odds")) is None
+                        and _number(tip.get("total_odds")) is None):
                     continue
             # An observed VAR quote is not a publishable pick until the
             # provider's rule-specific settlement is independently verified.
