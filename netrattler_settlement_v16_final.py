@@ -558,6 +558,12 @@ def telegram_edit(chat_id: str, message_id: Any, text: str) -> bool:
     if not TG_TOKEN or not chat_id or not message_id:
         _LAST_EDIT_ERROR["last"] = "missing Telegram token/chat/message id"
         return False
+    # Telegram text edits are limited to 4096 characters. Cutting the
+    # original selection/price/receipt to 3900 characters silently destroys
+    # evidence. Reject the edit instead of changing a user's tip.
+    if len(text) > 4096:
+        _LAST_EDIT_ERROR["last"] = "original_telegram_text_exceeds_4096_no_truncation"
+        return False
     chat_key = str(chat_id)
     for attempt in range(3):
         gap = max(0.0, float(os.getenv("SETTLEMENT_TG_EDIT_GAP_SEC", "1.2")))
@@ -571,7 +577,7 @@ def telegram_edit(chat_id: str, message_id: Any, text: str) -> bool:
                 json={
                     "chat_id": chat_id,
                     "message_id": int(message_id),
-                    "text": text[:3900],
+                    "text": text,
                     "parse_mode": "HTML",
                     "disable_web_page_preview": True,
                 },
