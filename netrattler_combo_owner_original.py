@@ -10,6 +10,7 @@ from __future__ import annotations
 from io import BytesIO
 from pathlib import Path
 import math
+import os
 
 from PIL import Image, ImageDraw, ImageFont, ImageOps, ImageFilter
 
@@ -138,7 +139,12 @@ def _original_tip_count(im, n, source_legs):
 def render_original_combo(legs,*,combined_odds,probability,ev,confidence,
                           stake,combined_odds_observed,combined_quote_id,
                           bookmaker,crest_provider,status="OFFEN"):
-    legs=list(legs)
+
+    # The uploaded original contains baked example details. Until a fully
+    # cleaned and visually approved master exists, no screenshot repaint may
+    # reach Telegram, even through a direct renderer call.
+    if os.getenv("NETRATTLER_BLOCK_OVERPAINTED_MASTERS", "0") == "1":
+        raise ValueError("owner_original_overpainted_compositor_blocked")    legs=list(legs)
     n=len(legs)
     if not 3 <= n <= 12:
         raise ValueError("Original COMBO requires 3–12 legs")
