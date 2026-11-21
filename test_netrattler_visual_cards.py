@@ -73,7 +73,7 @@ def test_builder_keeps_verified_player_identity_and_receipt():
     p=pick()
     import pytest
     # A single leg is not a complete Builder and must not masquerade as one.
-    with pytest.raises(ValueError, match="2–6 Legs"):
+    with pytest.raises(ValueError, match="2–7 Legs"):
         builder_cards.render_builder_card(p)
     payload=b"PNG_TEST_ONLY"
     with patch.object(builder_cards,'render_builder_card',return_value=payload), \
@@ -126,7 +126,7 @@ def test_model_card_preserves_no_quote_and_original_receipt():
     assert receipt=={'message_id':123,'chat_id':'42','text':'original'}
     import pytest
     # Model-only ladders have no bookmaker combined price: never display one.
-    with pytest.raises(ValueError, match="2–6 Legs"):
+    with pytest.raises(ValueError, match="2–7 Legs"):
         builder_cards.render_builder_card(adapted)
 
 
