@@ -82,7 +82,7 @@ class PremiumTelegramDispatchTests(unittest.TestCase):
             with self.subTest(flags=flags):
                 self.assertEqual(cards.select_cards({"combo": [{**combo, **flags}]}), [])
         confirmed = {**combo, "combined_odds_observed": True,
-                     "combined_quote_id": "BOOK-123"}
+                     "combined_quote_id": "BOOK-123", "combined_odds": 3.45}
         selected = cards.select_cards({"combo": [confirmed]})
         self.assertEqual(selected[0][0][0], "combo")
         # Many feeds provide only the ticket-specific combined_odds field.
