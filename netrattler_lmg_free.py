@@ -80,6 +80,7 @@ def fixtures_from_espn(payload):
             out.append({"fixture_id": event_id, "minute": minute, "clock": clock,
                         "home": home["displayName"], "away": away["displayName"],
                         "home_id": str(home["id"]), "away_id": str(away["id"]),
+                        "home_logo_url": home.get("logo"), "away_logo_url": away.get("logo"),
                         "hg": home_goals, "ag": away_goals, "kickoff": kickoff,
                         "league": league_name, "slug": slug})
         except (KeyError, IndexError, TypeError, ValueError, AttributeError):
