@@ -1,8 +1,7 @@
-"""Only real bookmaker-issued multi-leg ticket prices reach NETRATTLER Telegram.
+"""NETRATTLER combo gate: publish real-legged combos without a combined book ticket.
 
-Multiplying individually observed leg odds is an indicative calculation,
-NOT independently observed bookmaker combined odds. This guard never
-fabricates a quote, and never silently applies a generic fallback.
+An unconfirmed price is strictly the calculated product of individually
+observed decimal odds, NOT an accepted bookmaker offer or a realised P/L.
 """
 from __future__ import annotations
 
@@ -10,23 +9,14 @@ import math
 
 
 def publishable_combo(combo):
-    if not isinstance(combo,dict):
+    if not isinstance(combo, dict):
         return False
-    if (combo.get("combined_odds_observed") is not True
-            or not str(combo.get("combined_quote_id") or "").strip()
-            or not str(combo.get("bookmaker") or "").strip()):
+    legs = combo.get("tips")
+    if not isinstance(legs, list) or not 3 <= len(legs) <= 12:
         return False
-    try:
-        quote=float(combo.get("total_odds"))
-        if not math.isfinite(quote) or quote<=1.01 or quote>=100000:
-            return False
-    except (ValueError,TypeError):
-        return False
-    legs=combo.get("tips")
-    if not isinstance(legs,list) or not 3<=len(legs)<=12:
-        return False
+    prices = []
     for tip in legs:
-        if not isinstance(tip,dict):
+        if not isinstance(tip, dict):
             return False
         if not str(tip.get("match") or "").strip():
             return False
@@ -35,9 +25,34 @@ def publishable_combo(combo):
                 tip.get("estimated_odds") is True):
             return False
         try:
-            leg_price=float(tip.get("odds",tip.get("oddsYes")))
-        except (TypeError,ValueError):
+            price = float(tip.get("odds", tip.get("oddsYes")))
+        except (ValueError, TypeError, OverflowError):
             return False
-        if not math.isfinite(leg_price) or not 1.01<leg_price<10000:
+        if not math.isfinite(price) or not 1.01 < price < 10000:
             return False
+        prices.append(price)
+
+    observed = (combo.get("combined_odds_observed") is True
+                and bool(str(combo.get("combined_quote_id") or "").strip())
+                and bool(str(combo.get("bookmaker") or "").strip()))
+    if observed:
+        try:
+            quote = float(combo.get("total_odds"))
+        except (ValueError, TypeError, OverflowError):
+            return False
+        if not math.isfinite(quote) or not 1.01 < quote < 100000:
+            return False
+        combo["combined_quote_calculated"] = False
+        return True
+
+    # Never trust an old displayed estimated total when its real leg quotes
+    # disagree. Recompute from the current observed legs and label it.
+    product = math.prod(prices)
+    if not math.isfinite(product) or product <= 1.01:
+        return False
+    combo["total_odds"] = round(product, 4)
+    combo["combined_odds_observed"] = False
+    combo["combined_quote_calculated"] = True
+    combo["odds_source_type"] = "calculated_from_observed_leg_odds"
+    combo["combined_quote_id"] = ""
     return True
