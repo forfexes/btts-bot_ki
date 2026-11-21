@@ -17413,10 +17413,11 @@ def generate_multi_combo_bets(all_tips, num_tips=3):
 def format_combo_telegram_message(combo):
     """Formatiert Multi-Combo für Telegram — V31 clean, stake capped."""
     from netrattler_combo_quote_guard import publishable_combo
-    # The displayed total MUST be a real bookmaker-issued combined ticket;
-    # multiplying leg odds may be used in offline exploration but not tips.
+    # A combined bookmaker price is preferred, but its absence does not
+    # suppress valid real-legged combinations. Never mislabel an estimate.
     if not publishable_combo(combo):
         return ""
+    quote_confirmed = not bool(combo.get("combined_quote_calculated"))
 
     def _fnum(x, default=0.0):
         try:
@@ -17443,7 +17444,8 @@ def format_combo_telegram_message(combo):
         stake = min(stake, 0.10)
     combo["stake_suggestion"] = stake
 
-    win = round((total_odds - 1) * stake, 1) if total_odds else "?"
+    win = (round((total_odds - 1) * stake, 1)
+           if total_odds and quote_confirmed else None)
     label = combo.get("label", "COMBO")
     if nlegs >= 7:
         risk = "LOTTERY"
@@ -17454,8 +17456,12 @@ def format_combo_telegram_message(combo):
 
     msg = f"<b>🎰 {label}</b>\n"
     msg += "━━━━━━━━━━━━━━━━━━\n"
-    msg += f"🎯 Gesamt-Quote: <b>{total_odds:.2f}</b>\n"
-    msg += f"💵 Einsatz: <b>{stake:.2f} Units</b> · Gewinn: ~{win} Units\n"
+    if quote_confirmed:
+        msg += f"🎯 Bestätigte Gesamtquote: <b>{total_odds:.2f}</b>\n"
+        msg += f"💵 Einsatz: <b>{stake:.2f} Units</b> · Gewinn: ~{win} Units\n"
+    else:
+        msg += f"🎯 Berechnete Gesamtquote: <b>{total_odds:.2f}</b> (unbestätigt)\n"
+        msg += f"💵 Recheneinsatz: <b>{stake:.2f} Units</b> · Kein bestätigter Buchmachergewinn\n"
     msg += f"⚠️ Risiko: <b>{risk}</b>\n\n"
     msg += "<b>📋 Legs:</b>\n"
 
@@ -17475,7 +17481,9 @@ def format_combo_telegram_message(combo):
         msg += f"{i}. {market_emoji} <b>{tip.get('match','?')}</b> · {display_pick} @ {odds_val}\n"
 
     msg += "\n━━━━━━━━━━━━━━━━━━\n"
-    msg += "<i>💡 REAL_ODDS Cross-Match Combo · pro Spiel maximal ein Leg.</i>"
+    msg += ("<i>💡 REAL_ODDS Cross-Match Combo · pro Spiel maximal ein Leg.</i>"
+            if quote_confirmed else
+            "<i>⚠️ Produkt der echten Einzelquoten; keine bestätigte oder garantiert spielbare Kombiquote. Kein realisierter ROI.</i>")
     return msg
 
 
@@ -28218,7 +28226,7 @@ def main():
     if len(all_tips_flat) >= 3:
         log("")
         try:
-            _multi_max_legs = max(3, min(11, int(env("NETRATTLER_MULTI_COMBO_MAX_LEGS", "5"))))
+            _multi_max_legs = max(3, min(12, int(env("NETRATTLER_MULTI_COMBO_MAX_LEGS", "12"))))
         except Exception:
             _multi_max_legs = 5
         _combo_sizes = list(range(3, _multi_max_legs + 1))
@@ -28249,7 +28257,7 @@ def main():
             if combo:
                 from netrattler_combo_quote_guard import publishable_combo
                 if not publishable_combo(combo):
-                    log("   ⏭️ COMBO gesperrt: multiplizierte Einzelquoten sind keine echte Buchmacher-Kombiquote", "WARN")
+                    log("   ⏭️ COMBO verworfen: echte Einzelquoten, Match oder Leg-Zahl ungültig", "WARN")
                     continue
                 # Deterministische Signatur — identische Kombi (gleiche Legs) wird nicht erneut gesendet
                 _sig = _combo_signature(combo.get("tips", []), prefix=f"combo{n}")
