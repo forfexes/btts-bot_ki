@@ -86,6 +86,23 @@ class SettlementV21Tests(unittest.TestCase):
         self.assertIn("\n\n⸻⸻", value)
         self.assertIn("✅ V", value)
 
+    def test_same_message_text_edit_never_truncates_original_tip(self):
+        too_long = "ORIGINAL PREMIUM TIP " + ("REAL MARKET @1.95 " * 250)
+        self.assertGreater(len(too_long), 4096)
+        with patch.object(mod, "TG_TOKEN", "QA_TOKEN"), \
+             patch.object(mod.requests, "post") as post:
+            self.assertFalse(mod.telegram_edit("123", 55, too_long))
+            post.assert_not_called()
+        self.assertEqual(mod._LAST_EDIT_ERROR.get("last"),
+                         "original_telegram_text_exceeds_4096_no_truncation")
+        full_text = "Q" * 3950
+        with patch.object(mod, "TG_TOKEN", "QA_TOKEN"), \
+             patch.dict(os.environ, {"SETTLEMENT_TG_EDIT_GAP_SEC": "0"}), \
+             patch.object(mod.requests, "post",
+                          return_value=FakeResponse({"ok":True})) as post:
+            self.assertTrue(mod.telegram_edit("123", 55, full_text))
+            self.assertEqual(post.call_args.kwargs["json"]["text"], full_text)
+
     def test_double_chance_routes_to_1x2_original_settlement(self):
         for choice in ("1X", "X2", "12"):
             self.assertEqual(mod.group_of({"market_group": "double_chance",
