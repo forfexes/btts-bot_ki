@@ -1,20 +1,16 @@
 import netrattler_settlement_v16_final as s
 
-def test_pending_with_void_source_gets_void(monkeypatch):
+def test_bare_source_void_id_does_not_close_a_published_tip(monkeypatch):
     calls = []
-    monkeypatch.setattr(s, "sb_patch_in", lambda t, c, v, p: calls.append((t, c, list(v), p)) or len(v))
+    monkeypatch.setattr(s, "sb_patch_in", lambda *args: calls.append(args))
     existing = [
         {"settlement_id": "a", "tip_id": "1", "status": "pending", "source_table": "tips"},
         {"settlement_id": "b", "tip_id": "2", "status": "pending", "source_table": "tips"},
-        {"settlement_id": "c", "tip_id": "1", "status": "win", "source_table": "tips"},
-        {"settlement_id": "d", "tip_id": "1", "status": "pending", "source_table": "netrattler_builder_picks"},
     ]
-    n = s.reconcile_pending_with_void_sources(existing, {"1"})
-    assert n == 1 and existing[0]["status"] == "void" and existing[1]["status"] == "pending"
-    assert existing[2]["status"] == "win" and existing[3]["status"] == "pending"
-    assert calls and calls[0][2] == ["a"] and calls[0][3]["status"] == "void" and calls[0][3]["reason"].startswith("void: kein Ergebnis nach")
-    # idempotent: zweiter Durchlauf aendert nichts
     assert s.reconcile_pending_with_void_sources(existing, {"1"}) == 0
+    assert all(row["status"] == "pending" for row in existing)
+    assert not calls
+
 
 
 def test_unpublished_builders_get_void(monkeypatch):
