@@ -86,7 +86,7 @@ def _review_user_master(im, kind, legs):
         nonlocal checks
         checks+=1
         if not ok: problems.append(label)
-    expected=(1122,1402-100*(6-legs)) if kind=="builder" and 2 <= legs <= 6 else (1122,1402) if kind!="builder" else (1122,0)
+    expected=(1122,1402-100*(6-legs)) if kind=="builder" and 2 <= legs <= 7 else (1122,1402) if kind!="builder" else (1122,0)
     check(im.size==expected,"master_dimensions")
     if im.size!=expected: return Review(kind,False,problems,checks)
     if kind=="builder":
@@ -120,7 +120,7 @@ def _review_user_master(im, kind, legs):
             count((370,y+3,741,y+41),_light,f"player_name_{i+1}")
             count((382,y+42,740,y+85),_gold,f"market_{i+1}")
             count((805,y+5,1053,y+84),_green,f"l10_l15_{i+1}")
-        dy=0 if legs==6 else 405+100*legs-1013
+        dy=100 if legs==7 else 0 if legs==6 else 405+100*legs-1013
         count((839,1203+dy,1053,1267+dy),
               lambda p:_green(p) or _gold(p) or (p[0]>185 and p[1]<135),
               "builder_settlement")
@@ -168,7 +168,7 @@ def review_png(payload: bytes, kind: str, *, legs: int = 0) -> Review:
     if w == 1122 and kind in ("builder", "scorer"):
         return _review_user_master(im, kind, legs)
     if kind == "builder":
-        if not 2 <= legs <= 6:
+        if not 2 <= legs <= 7:
             return Review(kind, False, ["leg_count"], 1)
         check((w, h) == (1200, 650 + 160 * legs), "dimensions")
     elif kind == "scorer":
