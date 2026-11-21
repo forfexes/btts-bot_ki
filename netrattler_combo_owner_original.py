@@ -1,4 +1,4 @@
-"""NETRATTLER COMBO 3–10 legs derived from the actual 7/9 PNG originals.
+"""NETRATTLER COMBO 3–12 legs derived from the actual 7/9 PNG originals.
 
 Always preserve the owner's crown, header and original footer; unused row
 space is physically removed, and no synthetic generic design is ever used.
@@ -69,8 +69,8 @@ def _owner_canvas(n):
     The header and footer are pixel copies from the real owner reference.
     The middle section is repainted with exactly n selection rows.
     """
-    if not 3 <= n <= 10:
-        raise ValueError("Original COMBO requires 3–10 legs")
+    if not 3 <= n <= 12:
+        raise ValueError("Original COMBO requires 3–12 legs")
     source_legs = 7 if n <= 7 else 9
     path = ROOT / f"NETRATTLER_COMBO_{source_legs}_originalkarte.png"
     if not path.is_file():
@@ -80,16 +80,26 @@ def _owner_canvas(n):
         if original.format != "PNG" or min(original.size) < 600:
             raise ValueError("Owner original COMBO source invalid")
         source = original.convert("RGBA").resize((W,H),Image.Resampling.LANCZOS)
-    # 10 rows fit within the original nine-row field using a smaller row step.
-    if n in (7,9,10):
+    # Keep readable original row height even at 10, 11 and 12 legs.
+    if n == source_legs:
         return source.copy(), 0
     top, end, footer_start = 304, 1097, 1108
-    master_legs = 7 if n < 7 else 9
-    desired_height = round((end-top) * n/master_legs)
-    shift = desired_height - (end-top)
-    canvas = Image.new("RGBA",(W,H+shift),"#04111D")
-    canvas.paste(source.crop((0,0,W,280)),(0,0))
-    canvas.paste(source.crop((0,footer_start,W,H)),(0,footer_start+shift))
+    shift = round((end - top) * (n - source_legs) / source_legs)
+    canvas = Image.new("RGBA", (W, H + shift), "#04111D")
+    canvas.paste(source.crop((0, 0, W, 280)), (0, 0))
+    if shift < 0:
+        canvas.paste(source.crop((0, 280, W, footer_start + shift)), (0, 280))
+    else:
+        canvas.paste(source.crop((0, 280, W, footer_start)), (0, 280))
+        # Repeat authentic bottom-row texture; dynamic player rows replace
+        # sample contents and the genuine footer moves down unchanged.
+        row_top, row_height = 1020, 88
+        for offset in range(0, shift, row_height):
+            height = min(row_height, shift - offset)
+            canvas.paste(source.crop((0, row_top, W, row_top + height)),
+                         (0, footer_start + offset))
+    canvas.paste(source.crop((0, footer_start, W, H)),
+                 (0, footer_start + shift))
     return canvas, shift
 
 
@@ -98,8 +108,8 @@ def render_original_combo(legs,*,combined_odds,probability,ev,confidence,
                           bookmaker,crest_provider,status="OFFEN"):
     legs=list(legs)
     n=len(legs)
-    if not 3 <= n <= 10:
-        raise ValueError("Original COMBO requires 3–10 legs")
+    if not 3 <= n <= 12:
+        raise ValueError("Original COMBO requires 3–12 legs")
     verified = (combined_odds_observed is True and
                 bool(str(combined_quote_id or "").strip()) and
                 bool(str(bookmaker or "").strip()))
