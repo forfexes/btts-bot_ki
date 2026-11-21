@@ -60,7 +60,7 @@ class VerifiedOriginalComboTests(unittest.TestCase):
                 image=render(n,combined_odds_observed=False,
                              combined_quote_id="",bookmaker="",
                              combined_odds=None)
-                self.assertTrue(image.startswith(b"\\x89PNG"))
+                self.assertTrue(image.startswith(bytes((137,80,78,71))))
 
     def test_strict_observed_quote_crest_and_settlement(self):
         for kwargs in ({"combined_odds":float("nan")},
