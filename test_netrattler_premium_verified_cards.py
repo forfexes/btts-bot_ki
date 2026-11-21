@@ -60,6 +60,8 @@ class PremiumVerifiedCardsTests(unittest.TestCase):
             {"commence_time":None},
             {"commence_time":"2026-11-19T18:30:00"},
             {"selection":"NO"},
+            {"selection":"YES", "tip":"NO"},
+            {"selection":"NO", "tip":"YES"},
             {"match":"Example United"},
             {"bookmaker":""},
         ):
