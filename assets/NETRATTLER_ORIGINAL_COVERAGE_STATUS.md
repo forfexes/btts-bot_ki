@@ -76,3 +76,12 @@ Die Existenz eines Referenzbilds beweist auch keinen erfolgreichen Telegram-Prod
 3. Für fehlende Kategorien ausdrücklich `Original noch nicht vorhanden` melden – niemals eine aus einem SVG erzeugte Karte als Original ausgeben.
 4. Berechnete Combo-/Builder-Quoten als **berechnet / unbestätigt** markieren; ohne bestätigte Buchmacherquote keinen kombinationsbezogenen EV oder realisierten ROI ausweisen.
 5. Bild-QA, Offline-Tests und produktiven Telegram-Versand separat verifizieren; keine Erfolgsbehauptungen nur aufgrund der Dateipräsenz.
+
+
+## Abgenommene Offline-Checks nach Original-COMBO-Produktionsrouting (21.11.2026)
+
+- [Combo-Hardtest #44867278873](https://github.com/forfexes/btts-bot_ki/actions/runs/44867278873): **SUCCESS**. Dynamische, tatsächliche Eigentümer-Combo-Quellen für 3–12 Legs gerendert; die eingebaute alte "7 TIPPS"/"9 TIPPS"-Zahl wird bei abweichender Legzahl aktualisiert. Verdeckte Beispielzeilen in den kompakten Varianten entfernt. Die neu gerenderten PNGs und die ursprünglichen Builder-Varianten 2–7 Legs wurden getestet.
+- [Premium-/Telegram-Smoke #44867278900](https://github.com/forfexes/btts-bot_ki/actions/runs/44867278900): **SUCCESS**. Kontrollierter Offline-Versand mit gefälschten Testdaten/Mock-Transport; **kein echter Telegram-Post**.
+- `netrattler_stats_match_cards.render_card` führt bestätigte COMBO-Datensätze mit **3–12 vollständigen Legs**, echten Gesamtquoten und Bestätigungs-ID über `netrattler_combo_dynamic_cards.render_combo` zu den verfügbaren originalen 7/9-Bildvorlagen. Bei fehlenden Pflichtangaben ist dieser Pfad gesperrt. Nicht vorhandenes Modell-EV wird als „EV —“ ausgewiesen und nicht erfunden.
+- Die 16 aus der Nutzer-Collage ausgeschnittenen Übersichts-Kacheln sind **nur Designreferenzen mit eingebrannten Beispielinformationen**, keine sauberen 16 Produktionsmaster. Die bildgenaue Freigabe aller übrigen Kategorien und ein bestätigter echter Telegram-Produktivversand bleiben **offen**.
+- Auf Grund der ursprünglich hochgeladenen Originale sind weiterhin nicht alle 16 Kategorien als eigenständige echte, datenfreie Original-Vorlagen fertig. Die technischen SVG-Skeletons dürfen nicht als solche ausgegeben werden.
