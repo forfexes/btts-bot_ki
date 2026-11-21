@@ -8,6 +8,10 @@ on:
       - 'netrattler_original_template_renderer.py'
       - 'test_netrattler_combo_owner_original.py'
       - 'test_netrattler_combo_dynamic_cards.py'
+      - 'netrattler_combo_quote_guard.py'
+      - 'btts_bot.py'
+      - 'netrattler_settlement_v16_final.py'
+      - 'test_netrattler_combo_quote_guard.py'
       - 'test_netrattler_original_templates.py'
       - 'netrattler_card_visual_preview.py'
       - '.github/workflows/combo-odds-hardtest.yml'
@@ -24,7 +28,9 @@ jobs:
       - name: Install image test dependencies
         run: python -m pip install pillow pytest requests beautifulsoup4 python-dotenv numpy cairosvg
       - name: Compile modified modules
-        run: python -m py_compile netrattler_combo_owner_original.py netrattler_combo_dynamic_cards.py netrattler_visual_gate.py netrattler_original_template_renderer.py test_netrattler_combo_owner_original.py test_netrattler_combo_dynamic_cards.py
+        run: python -m py_compile netrattler_combo_owner_original.py netrattler_combo_dynamic_cards.py netrattler_combo_quote_guard.py btts_bot.py netrattler_settlement_v16_final.py netrattler_visual_gate.py netrattler_original_template_renderer.py test_netrattler_combo_quote_guard.py test_netrattler_combo_owner_original.py test_netrattler_combo_dynamic_cards.py
+      - name: COMBO pricing gate and production persistence QA
+        run: python test_netrattler_combo_quote_guard.py
       - name: Test all original-derived COMBO 3-12 and missing-quote cases
         run: python -m pytest -q test_netrattler_combo_owner_original.py test_netrattler_combo_dynamic_cards.py
       - name: Verify original PROP BUILDER 2-7-leg cropping
