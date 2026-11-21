@@ -21,12 +21,15 @@ def test_clean_derived_master_preserves_crown_and_contains_no_sample_data(catego
         source = _source(path)
         # Exact top user-original crown, not an approximate painted replacement.
         top = (0, 0, W, 125)
-        assert ImageChops.difference(result.convert("RGBA").crop(top),
-                                     source.crop(top)).getbbox() is None
-        # All sample odds/players from the owner source in the central data
-        # zone must have been repainted by blank panels.
-        assert ImageChops.difference(result.convert("RGBA").crop((120,300,1002,1250)),
-                                     source.crop((120,300,1002,1250))).getbbox()
+        # RGB comparison is deliberate: PIL's RGBA getbbox() can report
+        # *no* differences when the alpha channel is identical everywhere,
+        # even if the visible RGB pixels have completely changed.
+        assert ImageChops.difference(result.convert("RGB").crop(top),
+                                     source.convert("RGB").crop(top)).getbbox() is None
+        # The sample data-bearing centre must be replaced, never left
+        # readable underneath the QA plate.
+        assert ImageChops.difference(result.convert("RGB").crop((120,300,1002,1250)),
+                                     source.convert("RGB").crop((120,300,1002,1250))).getbbox() is not None
     assert hashlib.sha256(path.read_bytes()).hexdigest() == raw_before
     assert not metadata["production_approved"]
     assert metadata["classification"].startswith("owner-derived")
