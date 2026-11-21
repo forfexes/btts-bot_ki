@@ -136,22 +136,28 @@ def _write(io_image):
 
 
 def _builder_canvas(legs):
-    """Crop UNUSED rows from the exact six-leg owner artwork.
+    """Derive 2–7 leg layouts only from the uploaded six-row owner WebP.
 
-    Preserve the original crown, stadium, neon rows and footer. Render_builder
-    replaces remaining demo portraits, logos and labels with verified data.
+    For 7 legs, repeat the original sixth row's *artwork*, then overwrite its
+    player, club and statistics with the seventh verified selection. The
+    owner's crown, header and footer stay untouched and move by exactly 100px.
     """
     n = len(legs)
-    if not 2 <= n <= 6:
-        raise ValueError("Original Builder requires 2–6 Legs (verified)")
+    if not 2 <= n <= 7:
+        raise ValueError("Original Builder requires 2–7 Legs (verified)")
     source = _base(str(BUILDER_IMAGE))
     row_start, six_rows_end = 409, 1009
-    shift = -100 * (6 - n)
+    shift = 100 * (n - 6)
     if n == 6:
         return source.copy(), shift
     canvas = Image.new("RGB", (1122, 1402 + shift))
     canvas.paste(source.crop((0, 0, 1122, row_start)), (0, 0))
-    canvas.paste(source.crop((0, row_start, 1122, row_start + n * 100)), (0, row_start))
+    retained = min(n, 6)
+    canvas.paste(source.crop((0, row_start, 1122,
+                              row_start + retained * 100)), (0, row_start))
+    if n == 7:
+        canvas.paste(source.crop((0, six_rows_end - 100, 1122, six_rows_end)),
+                     (0, six_rows_end))
     canvas.paste(source.crop((0, six_rows_end, 1122, 1402)),
                  (0, row_start + n * 100))
     return canvas, shift
