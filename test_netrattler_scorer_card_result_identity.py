@@ -58,6 +58,34 @@ def test_existing_wrong_scorer_marks_corrected_in_original_photos():
     assert [p["result"]["marks"]["0"] for p in patches] == ["win","loss"]
 
 
+def test_owner_only_in_image_settlement_never_replaces_unapproved_svg_card():
+    import os
+    match="Home FC vs Away FC"
+    sample=[
+        {"card_id":11,"chat_id":"chat","message_id":111,
+         "match_key":cards.match_key(match),"card_date":"2026-11-21",
+         "entries":[["over25",{"match":match,"odds":1.75}]],"result":{}},
+        {"card_id":12,"chat_id":"chat","message_id":112,
+         "match_key":cards.match_key(match),"card_date":"2026-11-21",
+         "entries":[["btts",{"match":match,"odds":1.75}]],"result":{}},
+    ]
+    results=[{"match":match,"status":"win","group":"btts",
+              "odds":1.75,"tip_date":"2026-11-21","ft":"2-2"}]
+    edits=[]
+    with patch.dict(os.environ,{"SETTLEMENT_TG_ORIGINAL_EDIT_ONLY":"1"}), \
+         patch.object(cards,"_sb",return_value=("https://example.test/netrattler_match_cards",{})), \
+         patch.object(cards.requests,"get",return_value=SimpleNamespace(ok=True,json=lambda:sample)), \
+         patch.object(cards.requests,"post",return_value=SimpleNamespace(ok=True)), \
+         patch.object(cards.requests,"patch",return_value=SimpleNamespace(ok=True)), \
+         patch.object(cards,"render_card",return_value=b"approved-owner-png") as render, \
+         patch.object(cards,"_edit_photo",side_effect=lambda _token,_chat,mid,*a,**k: edits.append(mid) or True), \
+         patch.object(cards.time,"sleep",return_value=None):
+        assert cards.update_cards_with_results("token",results)==1
+    assert edits == [112],edits
+    render.assert_called_once()
+    assert render.call_args.args[0][0][0]=="btts"
+
+
 def test_pending_player_can_revert_previous_wrong_win():
     results=[{"group":"scorer","player":"Player A","team":"Home","status":"pending"}]
     a=("scorer",{"player":"Player A","team":"Home"})
