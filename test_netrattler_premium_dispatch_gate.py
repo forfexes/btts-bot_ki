@@ -274,6 +274,15 @@ class PremiumTelegramDispatchTests(unittest.TestCase):
             premium_price({"oddsYes": 312.5}, "over25")
 
 
+    def test_direct_premium_adapter_cannot_render_unapproved_svg_skeleton(self):
+        import netrattler_premium_telegram_adapter as adapter
+        with patch.dict(os.environ, {"NETRATTLER_BLOCK_OVERPAINTED_MASTERS": "1"}):
+            with self.assertRaisesRegex(ValueError, "not_visually_approved"):
+                adapter.render([("over25", tip("over25"))],
+                    "2026-11-21",
+                    crest_provider=lambda _: (_ for _ in ()).throw(
+                        AssertionError("No source/crest fetch should occur")))
+
     def test_direct_owner_renderers_cannot_bypass_live_overpaint_block(self):
         from netrattler_btts_owner_original import render as owner_btts
         from netrattler_combo_owner_original import render_original_combo
