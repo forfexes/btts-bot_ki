@@ -530,6 +530,34 @@ def total_odds(legs: Sequence[PropLeg]) -> float:
     return round(result, 2)
 
 
+def builder_formula(pick, *, conditional_probabilities=None,
+                    joint_observations=None, observed_ticket=None):
+    """Recalculate real Builder model/fair odds, without fake bookmaker price.
+
+    Same-game markets (shots, fouls, tackles, cards, goals) may be correlated:
+    their probabilities are NEVER multiplied without a source-based chain
+    probability or an observed shared historical event sample.
+    """
+    from premium_joint_formula import estimate_combo
+    rows=[]
+    for leg in (pick.get("legs",[]) if isinstance(pick,dict)
+                else getattr(pick,"legs",[]) or []):
+        field=(lambda name: leg.get(name) if isinstance(leg,dict)
+               else getattr(leg,name,None))
+        rows.append({
+            "game":field("match") or field("game"),
+            "event_id":field("event_id"),
+            "odds":field("odds"),
+            "model_probability":field("probability"),
+            "odds_observed":field("odds_observed") is True,
+        })
+    return estimate_combo(rows,
+        conditional_probabilities=conditional_probabilities,
+        joint_observations=joint_observations,
+        observed_ticket=observed_ticket,
+        allow_missing_leg_prices=True)
+
+
 def builder_signature(style: str, legs: Sequence[PropLeg], match_date: str) -> str:
     tokens = sorted(f"{norm(x.match)}|{norm(x.player)}|{x.category}|{x.line}" for x in legs)
     raw = f"{match_date}|{style}|" + "||".join(tokens)
