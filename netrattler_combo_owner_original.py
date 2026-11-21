@@ -117,7 +117,10 @@ def render_original_combo(legs,*,combined_odds,probability,ev,confidence,
     quote = (_num(combined_odds, "combined bookmaker quote", 1.01, 100000.0)
              if verified else None)
     prob=_num(probability,"model probability",0.0,100.0)
-    ev_num=_num(ev,"expected value",-100.0,100000.0) if verified else None
+    # An observed bookmaker ticket does not imply an observed model EV.
+    # Keep the real quote visible while marking unavailable EV explicitly.
+    ev_num=(_num(ev,"expected value",-100.0,100000.0)
+            if verified and ev not in (None, "") else None)
     wager=_num(stake,"stake",0.001,5.0)
     if not callable(crest_provider):
         raise ValueError("Verified crest provider missing")
@@ -186,9 +189,10 @@ def render_original_combo(legs,*,combined_odds,probability,ev,confidence,
                                radius=11,fill="#091523",outline=GOLD,width=2)
         _label(draw,title,cx,1143+shift,296,22,WHITE)
         _label(draw,value,cx,1181+shift,296,37,GOLD)
-    _label(draw,("EV "+f"{ev_num:+.1f}%") if verified else "QUOTE UNBESTÄTIGT",
-           258,1249+shift,345,22 if not verified else 27,
-           GREEN if verified and ev_num>=0 else "#FF7777" if verified else WHITE)
+    ev_label=("EV "+f"{ev_num:+.1f}%" if ev_num is not None else "EV —") if verified else "QUOTE UNBESTÄTIGT"
+    ev_color=(GREEN if ev_num >= 0 else "#FF7777") if ev_num is not None else WHITE
+    _label(draw,ev_label,258,1249+shift,345,22 if not verified else 27,
+           ev_color)
     _label(draw,"CONF "+str(confidence).strip().upper(),621,1249+shift,310,24,GOLD)
     state=str(status or "OFFEN").strip().upper()
     if state not in ("OFFEN","GEWONNEN","VERLOREN","VOID","PUSH"):
