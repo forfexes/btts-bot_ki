@@ -70,11 +70,12 @@ class PremiumVerifiedCardsTests(unittest.TestCase):
                    crest_provider=lambda _:crest())
 
     def test_one_x_two_conflicting_directions_rejected(self):
-        for pair in ({"selection":"1","tip":"2"}, {"selection":"X","tip":"HOME"}):
+        for pair in ({"selection":"1","tip":"2"}, {"selection":"X","tip":"HOME"},
+                     {"selection":"1X","tip":"X2"}):
             with self.subTest(pair=pair),self.assertRaisesRegex(ValueError,"Conflicting 1X2"):
                 render([("1x2",{**tip(),**pair})],"2026-11-19",
                        crest_provider=lambda _:crest())
-        for choice in ("1","X","2"):
+        for choice in ("1","X","2","1X","X2","12"):
             raw=render([("1x2",{**tip(),"selection":choice,"tip":choice})],
                        "2026-11-19",crest_provider=lambda _:crest())
             with Image.open(io.BytesIO(raw)) as image:
