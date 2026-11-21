@@ -1,0 +1,46 @@
+name: NETRATTLER Clean Owner-Derived Masters QA
+"on":
+  workflow_dispatch: {}
+  push:
+    branches: [main]
+    paths:
+      - 'netrattler_clean_master_builder.py'
+      - 'test_netrattler_clean_master_builder.py'
+      - '.github/workflows/netrattler_clean_masters_qa.yml'
+permissions:
+  contents: read
+jobs:
+  derived-clean-masters:
+    runs-on: ubuntu-latest
+    timeout-minutes: 12
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+      - name: Install isolated image dependencies
+        run: python -m pip install 'Pillow>=10' 'pytest>=8'
+      - name: Render eleven source-derived clean masters (QA only)
+        run: python -u netrattler_clean_master_builder.py --outdir output/clean-masters
+      - name: Verify original crown, empty real-data slots and immutable assets
+        run: python -m pytest -q test_netrattler_clean_master_builder.py
+      - name: List non-production masters
+        run: |
+          python - <<'PY'
+          import json
+          from pathlib import Path
+          rows=json.loads(Path('output/clean-masters/manifest.json').read_text())
+          assert len(rows)==11
+          assert all(not row['production_approved'] for row in rows)
+          print('Clean master count:',len(rows))
+          for row in rows:
+              print(row['category'],row['source_file'],row['classification'])
+          print('Synthetic QA only; Telegram not touched; source originals retained')
+          PY
+      - name: Publish clean master PNG previews and machine-readable slot manifest
+        uses: actions/upload-artifact@v4
+        with:
+          name: netrattler-11-owner-derived-clean-masters-QA
+          path: output/clean-masters/*
+          retention-days: 14
+          if-no-files-found: error
