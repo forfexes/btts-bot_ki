@@ -31,7 +31,8 @@ class PremiumTelegramDispatchTests(unittest.TestCase):
                    side_effect=AssertionError("unapproved premium SVG produced")), \
              patch.object(cards, "render_bis_card",
                           side_effect=AssertionError("old BIS image produced")):
-            for market in ("over25","btts_ht","over15_ht","1x2","var"):
+            for market in ("over25","btts_ht","over15_ht","1x2","var",
+                           "scorer","corners","combo"):
                 with self.subTest(market=market), self.assertRaisesRegex(
                         ValueError, "premium_ai_master_not_owner_approved"):
                     cards.render_card([(market, tip(market))], "2026-11-21")
@@ -46,6 +47,26 @@ class PremiumTelegramDispatchTests(unittest.TestCase):
                     cards.render_card([("btts",tip("btts"))],"2026-11-21"),
                     b"owner-original-btts")
                 approved.assert_called_once()
+
+    def test_owner_only_direct_senders_never_repaint_old_sample_tips(self):
+        import netrattler_corner_cards as corner
+        import netrattler_builder_cards as builder
+        with patch.dict(os.environ, {"NETRATTLER_ORIGINAL_ONLY":"1"}), \
+             patch.object(cards, "_send_photo",
+                          side_effect=AssertionError("unapproved card sent")) as upload, \
+             patch.object(cards, "render_scorer_card",
+                          side_effect=AssertionError("scorer old card drawn")), \
+             patch.object(corner, "render_corner_card",
+                          side_effect=AssertionError("corner old card drawn")), \
+             patch.object(builder, "render_builder_card",
+                          side_effect=AssertionError("builder old card drawn")):
+            self.assertFalse(cards.send_scorer_card("token","chat",tip("scorer"),
+                                                   "2026-11-21"))
+            self.assertIsNone(corner.send_corner_card("token","chat",tip("corners"),
+                                                      "2026-11-21"))
+            self.assertIsNone(builder.send_builder_card(
+                "token","chat",object()))
+            upload.assert_not_called()
 
     def test_new_regular_single_market_is_not_old_bis_by_default(self):
         with patch.dict(os.environ,{"NETRATTLER_CARD_LAYOUT":""}), \
