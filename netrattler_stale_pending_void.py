@@ -6,7 +6,7 @@ that the bookmaker settled a wager as VOID. This module deliberately makes
 NO Supabase writes, even when an old workflow passes STALE_APPLY=1.
 Only verified bookmaker cancellation/no-appearance rules are handled by
 the separate evidence-based settlement pipeline.
-""
+"""
 from __future__ import annotations
 
 import os
