@@ -139,6 +139,24 @@ def test_edit_message_media_preserves_caption_and_original_message_id():
     assert "files" in arguments and "card" in arguments["files"]
 
 
+def test_premium_photo_upload_requires_real_original_message_id():
+    cases=[
+        ({"ok":True,"result":{"message_id":918}},918),
+        ({"ok":True,"result":{}},False),
+        ({"ok":True,"result":True},False),
+        ({"ok":True,"result":{"message_id":0}},False),
+        ({"ok":True,"result":{"message_id":True}},False),
+    ]
+    for response,expected in cases:
+        reply=SimpleNamespace(ok=True,status_code=200,
+                              json=lambda response=response:response)
+        with patch.object(cards.requests,"post",return_value=reply) as post:
+            result=cards._send_photo("token","chat","",b"synthetic_qa_png",
+                                     lambda *_:None)
+            assert result==expected,(response,result)
+            post.assert_called_once()
+
+
 def test_media_edit_never_truncates_original_caption():
     original="ORIGINAL PREMIUM TIPP " + "Quote 1.95 | " * 100
     assert len(original)>1024
