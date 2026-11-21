@@ -388,10 +388,17 @@ def stale_unresolvable(status: str, tip_date: str, today: Any = None) -> bool:
 
 def _genuine_void_reason(reason: Any) -> bool:
     text = norm(str(reason or ""))
+    # An old "void: data missing" label is NOT genuine bookmaker evidence.
+    # Previously the generic substring "void" made those mistakes permanent.
+    if any(token in text for token in (
+        "kein ergebnis nach", "nicht bewertbar nach", "daten fehlen",
+        "ohne datenquelle", "score fehlt", "stats fehlen",
+    )):
+        return False
     genuine = (
         "cancel", "cancell", "abandon", "postpon", "annull", "abgesagt",
-        "void", "push", "walkover", "walk over", "w.o", "nicht angetreten",
-        "unplausible odds",  # protective odds guard; never reopen as missing-data VOID
+        "push", "walkover", "walk over", "w.o", "nicht angetreten",
+        "spieler ohne einsatz", "unplausible odds",
     )
     return any(token in text for token in genuine)
 
@@ -2350,10 +2357,9 @@ def settle_tip(tip: Dict[str, Any], results: Sequence[Dict[str, Any]], player_st
     ):
         # Impossible single odds (e.g. American odds read as decimal): never count in ROI.
         status, reason = "void", f"unplausible odds {odds}"
-    if stale_no_result(status, result, row_date(tip)):
-        status, reason = "void", f"void: kein Ergebnis nach {STALE_VOID_DAYS} Tagen verfuegbar (Liga ohne Datenquelle)"
-    if stale_unresolvable(status, row_date(tip)):
-        status, reason = "void", f"void: nicht bewertbar nach {STALE_HARD_DAYS} Tagen (Daten/Legs fehlen) · {reason}"
+    # Missing result feeds/player statistics are DATA GAPS, not bookmaker
+    # cancellations. Keep them PENDING indefinitely for later source backfill.
+    # Only evidenced sporting/official voids may close a published ticket.
     if unpriced_ticket:
         profit = None
     elif status == "win":
@@ -2492,17 +2498,14 @@ def _confirmed_scorer_no_appearance(settlement: Dict[str, Any]) -> bool:
 def _original_update_allowed(settlement: Dict[str, Any]) -> bool:
     return (normalized_status(settlement.get("status")) in {"win", "loss"}
             or _confirmed_all_void(settlement)
-            or _confirmed_scorer_no_appearance(settlement)
-            or _data_gap_notice(settlement))
+            or _confirmed_scorer_no_appearance(settlement))
 
 
 def _writes_to_source(settlement: Dict[str, Any]) -> bool:
-    """win/loss always; VOID only for the explicit stale-no-result case (never for legacy missing-data voids)."""
-    if (settlement.get("status") in {"win", "loss"}
+    """Write results only with sporting proof; never convert data gaps to VOID."""
+    return (settlement.get("status") in {"win", "loss"}
             or _confirmed_all_void(settlement)
-            or _confirmed_scorer_no_appearance(settlement)):
-        return True
-    return settlement.get("status") == "void" and str(settlement.get("reason") or "").startswith(("void: kein Ergebnis nach", "void: nicht bewertbar nach"))
+            or _confirmed_scorer_no_appearance(settlement))
 
 
 def update_source_tip(settlement: Dict[str, Any]) -> None:
