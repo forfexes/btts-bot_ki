@@ -28,6 +28,47 @@ def test_exact_rows_and_height(n):
     _, shift = _owner_canvas(n)
     assert im.size == (W, H + shift)
 
+@pytest.mark.parametrize("n", [3, 7, 9, 12])
+def test_actual_telegram_card_route_uses_full_verified_owner_combo(n, monkeypatch):
+    import netrattler_stats_match_cards as cards
+    monkeypatch.setattr(cards, "_badge_bytes", badge)
+    entry = {
+        "match": "Home 0 vs Away 0", "market": "combo", "probability": 40,
+        "bookmaker": "TEST_QA_ONLY", "combined_odds_observed": True,
+        "combined_quote_id": "SYNTHETIC_QA_ONLY",
+        "combined_odds": 12.5, "stake": 0.5, "confidence": "HIGH",
+        "legs": [
+            {"match": f"Home {i} vs Away {i}", "market": "Over 2.5",
+             "odds": 1.8}
+            for i in range(n)
+        ],
+    }
+    output = cards.render_card([("combo", entry)], "2026-11-21")
+    with Image.open(io.BytesIO(output)) as image:
+        assert image.size == (W, H + _owner_canvas(n)[1])
+        source_n = 7 if n <= 7 else 9
+        with Image.open(ROOT / f"NETRATTLER_COMBO_{source_n}_originalkarte.png") as source:
+            from PIL import ImageChops
+            source = source.convert("RGB").resize((W, H), Image.Resampling.LANCZOS)
+            assert ImageChops.difference(
+                image.convert("RGB").crop((0, 0, W, 280)),
+                source.crop((0, 0, W, 280))
+            ).getbbox() is None
+
+
+def test_actual_telegram_combo_route_rejects_unconfirmed_ticket(monkeypatch):
+    import netrattler_stats_match_cards as cards
+    monkeypatch.setattr(cards, "_badge_bytes", badge)
+    item = {
+        "match": "Home 0 vs Away 0", "market": "combo",
+        "probability": 40, "bookmaker": "TEST_QA_ONLY",
+        "combined_odds": 12.5, "stake": 0.5, "confidence": "HIGH",
+        "legs": legs(3),
+    }
+    with pytest.raises(ValueError, match="verified bookmaker ticket"):
+        cards.render_card([("combo", item)], "2026-11-21")
+
+
 @pytest.mark.parametrize("n", [0, 2, 13])
 def test_reject_invalid_counts(n):
     with pytest.raises(ValueError):
