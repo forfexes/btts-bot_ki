@@ -73,6 +73,23 @@ class OwnerBttsImageTests(unittest.TestCase):
         self.assertIn("7/10",observed)
         self.assertNotIn("BEISPIELQUOTE",observed)
 
+    def test_fractional_model_probability_matches_percent_and_ev(self):
+        import netrattler_btts_owner_original as original
+        self.assertEqual(original._percent(0.643), "64.3%")
+        self.assertEqual(original._percent("64.3%"), "64.3%")
+        # Explicit percentages must not be silently multiplied by 100.
+        self.assertEqual(original._percent("0.643%"), "0.6%")
+        seen=[]
+        real_text=original._text
+        def inspect_text(draw, value, *args, **kwargs):
+            seen.append(str(value))
+            return real_text(draw, value, *args, **kwargs)
+        with patch.object(original, "_text", side_effect=inspect_text):
+            self.draw(probability=0.643)
+        self.assertIn("64.3%", seen)
+        self.assertIn("+23.5%", seen)
+        self.assertNotIn("0.6%", seen)
+
     def test_real_selection_changes_original_image(self):
         first=self.draw()
         second=self.draw(oddsYes=2.15,probability=59.8,btts_l10="5/10")
