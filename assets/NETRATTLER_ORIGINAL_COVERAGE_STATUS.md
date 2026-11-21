@@ -50,6 +50,25 @@ sind damit noch **nicht alle durch eigenständige Originalgrafiken belegt**.
 KEINE 16 vom Nutzer zur Verfügung gestellten Originalgrafiken.
 Die Existenz eines Referenzbilds beweist auch keinen erfolgreichen Telegram-Produktivversand.
 
+## Dynamische Ableitung aus echten Originalen (21.11.2026)
+
+- **PROP BUILDER 2–6 Legs:** Renderpfad verwendet die echte
+  `assets/original_templates/prop_builder_original.webp` als unveränderte
+  Quelle, entfernt unbenutzte Zeilen und repositioniert den Footer.
+- **COMBO 3–10 Legs:** Der Produktions-nahe Kartenrenderer
+  `netrattler_combo_dynamic_cards.render_combo` verwendet ausschliesslich
+  `NETRATTLER_COMBO_7_originalkarte.png` für 3–7 Legs und
+  `NETRATTLER_COMBO_9_originalkarte.png` für 8–10 Legs. Die Varianten
+  erhalten echte Original-Kopf-/Fussbereiche; 7/9-Quellen bleiben unverändert.
+  Es werden **keine** generischen Ersatzkarten erzeugt.
+- Die Ableitungen sind **keine neuen vom Nutzer hochgeladenen Originaldateien**.
+  Sie werden aus den Originaldateien bei Bedarf als PNG gerendert.
+- Für 3/4/5/6/8/10 Combo sowie 2/3/4/5/6 Builder existieren
+  Offline-Regressionstests. Ein GitHub-Workflow exportiert synthetische QA-PNGs.
+- **Noch nicht bestätigt:** Grüner CI-Lauf, visuelle Freigabe aller Varianten,
+  durchgängig verdrahteter produktiver Telegram-Versand; der Renderer allein
+  belegt keine erfolgreiche Telegram-Veröffentlichung.
+
 ## Verbindliche Handhabung
 
 1. Echte Originaldateien unverändert aufbewahren und niemals durch generische Entwürfe ersetzen.
