@@ -32,11 +32,11 @@ def _fixture(n):
              joint_probability=.3,style="BUILDER",variant="",tiers=[])
 
 
-def test_builder_two_four_six_leg_masters_and_dry_run_send():
+def test_builder_two_to_seven_leg_masters_and_dry_run_send():
     photo=_test_photo()
     with patch.object(cards,"_player_photo",return_value=photo), \
          patch.object(cards,"_badge_bytes",return_value=photo):
-        for n,height in ((2,1002),(3,1102),(4,1202),(5,1302),(6,1402)):
+        for n,height in ((2,1002),(3,1102),(4,1202),(5,1302),(6,1402),(7,1502)):
             pick=_fixture(n)
             raw=builder.render_builder_card(pick)
             im=Image.open(io.BytesIO(raw)).convert("RGB")
