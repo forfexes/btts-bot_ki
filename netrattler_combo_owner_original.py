@@ -148,7 +148,12 @@ def render_original_combo(legs,*,combined_odds,probability,ev,confidence,
     # Without a confirmed ticket price, calculate from the observed legs below.
     quote = (_num(combined_odds, "combined bookmaker quote", 1.01, 100000.0)
              if verified else None)
-    prob=_num(probability,"model probability",0.0,100.0)
+    # A multi-game model may supply per-leg probabilities instead of a
+    # manually supplied joint percentage. For same-game Builders we require
+    # genuine joint/conditional evidence, never an independence assumption.
+    prob = None
+    if probability is not None:
+        prob = _num(probability, "model probability", 0.0, 100.0)
     # An observed bookmaker ticket does not imply an observed model EV.
     # Keep the real quote visible while marking unavailable EV explicitly.
     ev_num=(_num(ev,"expected value",-100.0,100000.0)
@@ -171,9 +176,33 @@ def render_original_combo(legs,*,combined_odds,probability,ev,confidence,
             if team not in badges:
                 badges[team]=_photo_crest(crest_provider(team))
         checked.append((home,away,market,price))
+    from premium_joint_formula import estimate_combo
+    formula_legs = [
+        {"game": f"{home} vs {away}", "odds": price,
+         "model_probability": legs[i].get("model_probability",
+                                        legs[i].get("probability")),
+         "odds_observed": legs[i].get("odds_observed") is True}
+        for i, (home, away, market, price) in enumerate(checked)
+    ]
+    formula = estimate_combo(
+        formula_legs,
+        conditional_probabilities=(
+            legs[0].get("conditional_probabilities") if legs else None),
+        joint_observations=(
+            legs[0].get("joint_observations") if legs else None),
+        observed_ticket=(
+            dict(combined_odds_observed=True,
+                 combined_quote_id=combined_quote_id, odds=quote)
+            if verified else None),
+    )
     if quote is None:
-        quote = math.prod(item[3] for item in checked)
-        quote = _num(quote, "calculated combination quote", 1.01, 100000.0)
+        quote = _num(formula["indicative_leg_product"],
+                     "calculated combination quote", 1.01, 100000.0)
+    if prob is None:
+        joint = formula["joint_probability"]
+        if joint is None:
+            raise ValueError("Model probability missing: no valid joint or independent formula data")
+        prob = _num(100 * joint, "joint model probability", 0.0, 100.0)
     im, shift = _owner_canvas(n)
     _original_tip_count(im, n, 7 if n <= 7 else 9)
     draw=ImageDraw.Draw(im)
