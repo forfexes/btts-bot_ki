@@ -879,6 +879,14 @@ def edit_original_tip(settlement: Dict[str, Any]) -> bool:
             if telegram_edit(chat_id, message_id, edited):
                 return True
 
+    if not message_id:
+        _LAST_EDIT_ERROR["last"] = "missing original telegram message id"
+    elif not original:
+        _LAST_EDIT_ERROR["last"] = "missing preserved original text or caption"
+    elif not (stored_chat or canonical_chat):
+        _LAST_EDIT_ERROR["last"] = "missing original telegram chat routing"
+    elif not _LAST_EDIT_ERROR.get("last"):
+        _LAST_EDIT_ERROR["last"] = "original Telegram edit failed without provider detail"
     log(f"Original-Tipp konnte nicht editiert werden; KEIN separater Post: {settlement.get('tip_id')}", "WARN")
     return False
 
