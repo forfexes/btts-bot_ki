@@ -11,7 +11,7 @@ from io import BytesIO
 from pathlib import Path
 import math
 
-from PIL import Image, ImageDraw, ImageFont, ImageOps
+from PIL import Image, ImageDraw, ImageFont, ImageOps, ImageFilter
 
 ROOT=Path(__file__).resolve().parent/"assets"/"original_templates"
 W,H=1122,1402
@@ -103,6 +103,38 @@ def _owner_canvas(n):
     return canvas, shift
 
 
+def _original_tip_count(im, n, source_legs):
+    """Set the true tip count inside the owner's original neon number ribbon.
+
+    The unchanged owner source already says 7 or 9 TIPPS. All derived counts
+    must replace those baked digits, without painting over the outer cyan
+    outline, metallic COMBO header, crown or football artwork.
+    """
+    if n == source_legs:
+        return
+    # Reconstruct only the dark central background beneath the baked number
+    # from the original midnight-blue ribbon; keep its neon border untouched.
+    overlay = Image.new("RGBA", im.size, (0, 0, 0, 0))
+    paint = ImageDraw.Draw(overlay)
+    for y in range(207, 269):
+        shade = abs(y - 238) / 31
+        paint.line((360, y, 769, y),
+                   fill=(2, int(8 + 6*shade), int(20 + 9*shade), 255),
+                   width=1)
+    mask = Image.new("L", im.size, 0)
+    ImageDraw.Draw(mask).rounded_rectangle((361, 207, 768, 269),
+                                           radius=20, fill=255)
+    im.paste(overlay, (0, 0), mask.filter(ImageFilter.GaussianBlur(4)))
+    draw = ImageDraw.Draw(im)
+    path = "/usr/share/fonts/truetype/dejavu/DejaVuSansCondensed-BoldOblique.ttf"
+    try:
+        font = ImageFont.truetype(path, 56)
+    except OSError:
+        font = _font(56)
+    draw.text((560, 239), f"{n} TIPPS", font=font, anchor="mm",
+              fill="#F5F8FF", stroke_width=2, stroke_fill="#101625")
+
+
 def render_original_combo(legs,*,combined_odds,probability,ev,confidence,
                           stake,combined_odds_observed,combined_quote_id,
                           bookmaker,crest_provider,status="OFFEN"):
@@ -143,7 +175,12 @@ def render_original_combo(legs,*,combined_odds,probability,ev,confidence,
         quote = math.prod(item[3] for item in checked)
         quote = _num(quote, "calculated combination quote", 1.01, 100000.0)
     im, shift = _owner_canvas(n)
+    _original_tip_count(im, n, 7 if n <= 7 else 9)
     draw=ImageDraw.Draw(im)
+    # The cropped source can retain baked demo-leg text under short cards.
+    # Clear only the original rows' INTERNAL midnight-blue field, preserving
+    # the outer source neon border, crown, stadium and original footer.
+    draw.rectangle((34, 280, 1088, 1114 + shift), fill=NAVY)
     # Keep the owner's crown, metallic logo, yellow COMBO title and original
     # TIPPS ribbon completely untouched. Hide all baked example fixtures.
     # The owner's uploaded examples begin directly below the TIPPS ribbon.
