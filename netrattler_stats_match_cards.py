@@ -823,10 +823,18 @@ def _send_photo(token, chat, caption, payload, log):
             except Exception:
                 body = {}
             if resp.ok and body.get("ok"):
+                # A Telegram photo is not a settlement-editable tip unless
+                # the original persisted message ID is positively confirmed.
                 try:
-                    return int((body.get("result") or {}).get("message_id") or 0) or True
-                except Exception:
-                    return True
+                    result=body.get("result")
+                    message_id=(result.get("message_id") if isinstance(result,dict) else None)
+                    value=int(message_id)
+                    if value > 0 and not isinstance(message_id,bool):
+                        return value
+                except (TypeError,ValueError,OverflowError):
+                    pass
+                log("Match-Card Telegram ohne bestätigte Nachrichten-ID; nicht als Tipp zählen")
+                return False
             if resp.status_code == 429:
                 retry_after = int((body.get("parameters") or {}).get("retry_after") or 2)
                 wait = max(1, min(30, retry_after + 1))
