@@ -1,6 +1,7 @@
 """Offline regression tests for photo-card and settlement safety."""
 import unittest
 from unittest.mock import patch,Mock
+from PIL import Image
 import netrattler_lmg_card as card
 import netrattler_lmg_settle as settle
 
@@ -12,7 +13,7 @@ class GoalHunterCards(unittest.TestCase):
         self.metrics={"tier":"STANDARD","teams":{"home":{"shots":10,"sot":4,"corners":3,"xg":1.62},
                                                    "away":{"shots":5,"sot":2,"corners":2,"xg":0.87}}}
     def test_open_and_final_render(self):
-        with patch.object(card,"crest",return_value=None):
+        with patch.object(card,"crest",return_value=Image.new("RGBA", (96, 96), (120, 200, 240, 255))):
             opening=card.make_card(self.fx,self.metrics)
             final=card.make_card(self.fx,final_score="2:2",won=True)
             lost=card.make_card(self.fx,final_score="1:2",won=False)
@@ -24,7 +25,7 @@ class GoalHunterCards(unittest.TestCase):
     def test_approved_neon_frame_header_survives_render(self):
         import io
         from PIL import Image,ImageChops,ImageStat
-        with patch.object(card,"crest",return_value=None):
+        with patch.object(card,"crest",return_value=Image.new("RGBA", (96, 96), (120, 200, 240, 255))):
             rendered=Image.open(io.BytesIO(card.make_card(self.fx,self.metrics))).convert("RGB")
         source=Image.open(card.TEMPLATE).convert("RGB").resize((1080,1350))
         diff=ImageChops.difference(source.crop((0,0,1080,230)),
@@ -38,7 +39,7 @@ class GoalHunterCards(unittest.TestCase):
         no_xg={"tier":"STANDARD","teams":{"home":{"shots":10,"sot":4,"corners":3},
                                                  "away":{"shots":5,"sot":2,"corners":2}}}
         totals={"tier":"STANDARD","shots":15,"sot":6,"corners":5}
-        with patch.object(card,"crest",return_value=None):
+        with patch.object(card,"crest",return_value=Image.new("RGBA", (96, 96), (120, 200, 240, 255))):
             a=card.make_card(self.fx,no_xg)
             b=card.make_card(self.fx,totals)
         self.assertEqual(Image.open(io.BytesIO(a)).size,(1080,1350))
@@ -48,7 +49,7 @@ class GoalHunterCards(unittest.TestCase):
     def test_visual_layout_and_telegram_photo_limits(self):
         import io
         from PIL import Image,ImageStat
-        with patch.object(card,"crest",return_value=None):
+        with patch.object(card,"crest",return_value=Image.new("RGBA", (96, 96), (120, 200, 240, 255))):
             for label,options in (("open",{"metrics":self.metrics}),
                                   ("won",{"final_score":"3:2","won":True}),
                                   ("lost",{"final_score":"1:2","won":False})):
@@ -61,6 +62,11 @@ class GoalHunterCards(unittest.TestCase):
                 self.assertGreater(ImageStat.Stat(img.crop((0,0,1080,300))).stddev[0],12,label)
                 self.assertGreater(ImageStat.Stat(img.crop((0,1200,1080,1350))).stddev[0],5,label)
                 self.assertGreater(ImageStat.Stat(img.crop((50,600,1030,1150))).stddev[0],15,label)
+
+    def test_missing_verified_team_crest_fails_closed(self):
+        with patch.object(card, "crest", return_value=None):
+            with self.assertRaisesRegex(ValueError, "Verified team crest missing"):
+                card.make_card(self.fx, self.metrics)
 
     def test_finished_only_and_identity_guard(self):
         feed={"leagues":[{"name":"ASEAN","matches":[{
