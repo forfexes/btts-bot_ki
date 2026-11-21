@@ -247,3 +247,24 @@ class PremiumTelegramDispatchTests(unittest.TestCase):
 
 if __name__=="__main__":
     unittest.main()
+
+
+def test_owner_verified_large_combos_are_not_mistaken_for_single_market_odds():
+    from netrattler_stats_match_cards import _price, select_cards
+    verified={
+        "market":"combo", "match":"Real Home vs Real Away",
+        "source":"QA_REAL_BOOK_SIMULATION", "bookmaker":"QA_REAL_BOOK_SIMULATION",
+        "combined_odds":312.5,
+        "combined_odds_observed":True,
+        "combined_quote_id":"QA_BOOK_TICKET_ORIGINAL",
+        "probability":12.5,
+    }
+    assert _price(verified,"combo")==312.5
+    chosen=select_cards({"combo":[verified]})
+    assert len(chosen)==1 and chosen[0][0][0]=="combo"
+    for key in ("combined_odds_observed","combined_quote_id"):
+        bad=dict(verified)
+        bad[key]=False if key=="combined_odds_observed" else "  "
+        assert _price(bad,"combo") is None
+        assert select_cards({"combo":[bad]})==[]
+    assert _price({"market":"btts","odds":312.5},"btts") is None
