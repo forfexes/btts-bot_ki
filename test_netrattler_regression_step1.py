@@ -93,7 +93,10 @@ def test_corner_combo_contract(bot):
     # Preview may use the observed leg price, but Telegram requires a real
     # combined ticket with independent bookmaker evidence.
     assert combo["combined_odds_observed"] is False
-    assert bot.format_combo_telegram_message(combo) == ""
+    message = bot.format_combo_telegram_message(combo)
+    assert "Berechnete Gesamtquote" in message
+    assert "Kein bestätigter Buchmachergewinn" in message
+    assert combo["combined_quote_calculated"] is True
     verified=dict(combo,combined_odds_observed=True,
                   combined_quote_id="SYNTHETIC_TEST_TICKET",bookmaker="TEST_BOOK")
     message = bot.format_combo_telegram_message(verified)
