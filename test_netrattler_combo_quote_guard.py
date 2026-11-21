@@ -22,13 +22,14 @@ assert not publishable_combo(dict(base,combined_odds_observed=True,
 observed=dict(base,combined_odds_observed=True,
               combined_quote_id="QA_TEST",bookmaker="TEST_ONLY")
 assert publishable_combo(observed)
+assert publishable_combo(dict(observed,tips=legs(12)))
 for mutation in (
     {"total_odds":float("nan")},
     {"total_odds":float("inf")},
     {"total_odds":1.0},
     {"tips":[]},
     {"tips":legs(2)},
-    {"tips":legs(12)},
+    {"tips":legs(13)},
     {"tips":[dict(legs(7)[0],synthetic=True)]+legs(6)},
     {"tips":[dict(legs(7)[0],_no_real_odds=True)]+legs(6)},
     {"tips":[dict(legs(7)[0],odds=None)]+legs(6)},
