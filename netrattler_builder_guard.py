@@ -12,7 +12,7 @@ Production rules enforced here:
 - Modelled builder edge is model probability minus bookmaker implied probability.
 - Implausibly large player-model gaps are rejected as parser/model mismatch.
 - The old LLM Advanced-Props builder with estimated combo prices is disabled.
-- Cross-match combos 3-11 use the best validated tips across all groups, including
+- Cross-match combos 3-12 use the best validated tips across all groups, including
   independently modelled player props, with a different market mix per leg count.
 """
 from __future__ import annotations
@@ -514,7 +514,7 @@ def _player_prop_combo_candidates(bot) -> List[Dict[str, Any]]:
 
 
 def _install_multi_combo_guard(bot) -> None:
-    """Build 3-11 leg variants from the best validated tips across every group."""
+    """Build 3-12 leg variants from the best validated tips across every group."""
     original_generate = bot.generate_multi_combo_bets
 
     profiles = [
@@ -526,7 +526,7 @@ def _install_multi_combo_guard(bot) -> None:
 
     def generate_all_groups_combo(all_tips, num_tips=3):
         try:
-            n = max(3, min(11, int(num_tips)))
+            n = max(3, min(12, int(num_tips)))
         except Exception:
             n = 3
 
