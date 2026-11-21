@@ -245,6 +245,48 @@ class PremiumTelegramDispatchTests(unittest.TestCase):
             premium.assert_called_once()
 
 
+    def test_combo_queue_and_renderer_require_same_actual_bookmaker_total(self):
+        from netrattler_premium_telegram_adapter import _price as premium_price
+        valid = {**tip("combo"), "combined_odds_observed": True,
+                 "combined_quote_id": "QA_BOOKMAKER_TICKET",
+                 "combined_odds": 4.25, "odds": 1.74}
+        self.assertEqual(cards._price(valid, "combo"), 4.25)
+        self.assertEqual(premium_price(valid, "combo"), 4.25)
+        self.assertTrue(cards.select_cards({"combo": [valid]}))
+        # An individual-leg 'odds' field may never replace the observed
+        # COMBINED total even if an old receipt marker still exists.
+        only_leg = dict(valid)
+        only_leg.pop("combined_odds")
+        self.assertIsNone(cards._price(only_leg, "combo"))
+        self.assertEqual(cards.select_cards({"combo": [only_leg]}), [])
+        with self.assertRaises(ValueError):
+            premium_price(only_leg, "combo")
+        # An actual bookmaker total can use the second dedicated key.
+        actual_total = {**only_leg, "total_odds": 4.35}
+        self.assertEqual(cards._price(actual_total, "combo"), 4.35)
+        self.assertEqual(premium_price(actual_total, "combo"), 4.35)
+        # A stale observed flag cannot override derived odds provenance,
+        # no matter whether that metadata lives at root or in features.
+        bad_flags = (
+            {"combined_quote_calculated": True},
+            {"builder_odds_estimated_from_legs": True},
+            {"price_type": "estimated"},
+            {"price_type": "derived_builder"},
+            {"price_type": "calculated_from_leg_odds"},
+        )
+        for flags in bad_flags:
+            for nested in (False, True):
+                with self.subTest(flags=flags, nested=nested):
+                    bad = {**valid}
+                    if nested:
+                        bad["features"] = flags
+                    else:
+                        bad.update(flags)
+                    self.assertIsNone(cards._price(bad, "combo"))
+                    self.assertEqual(cards.select_cards({"combo": [bad]}), [])
+                    with self.assertRaises(ValueError):
+                        premium_price(bad, "combo")
+
     def test_verified_long_combo_ticket_uses_actual_total_not_leg_odds(self):
         from netrattler_premium_telegram_adapter import _price as premium_price
 
