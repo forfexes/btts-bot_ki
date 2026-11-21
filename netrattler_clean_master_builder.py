@@ -112,6 +112,9 @@ def render_clean_master(category):
     glow = glow.filter(ImageFilter.GaussianBlur(90))
     interior = Image.alpha_composite(interior, glow)
     result = Image.alpha_composite(result, interior)
+    # Preserve the uploaded owner's crown/header pixel-for-pixel even when
+    # the background stadium glow reaches the top of the canvas.
+    result.paste(original.crop((0, 0, W, 140)), (0, 0))
 
     draw = ImageDraw.Draw(result)
     draw.rounded_rectangle((145, 163, 977, 275), radius=23,
