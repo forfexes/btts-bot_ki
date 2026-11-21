@@ -29,11 +29,43 @@ class PremiumVerifiedCardsTests(unittest.TestCase):
                 item=tip()
                 if market=="1x2":
                     item["selection"]="1"
+                if market=="var":
+                    item.update(selection="YES", tip_eligible=True,
+                                settlement_rule_verified=True,
+                                commence_time="2026-11-19T18:30:00Z")
                 raw=render([(market,item)],"2026-11-19",crest_provider=lambda _:crest())
                 with Image.open(io.BytesIO(raw)) as im:
                     self.assertEqual(im.format,"PNG")
                     self.assertEqual(im.size,(1122,1402))
                     self.assertGreater(im.convert("RGB").getextrema()[0][1],170)
+
+    def test_var_card_has_real_fixture_and_kickoff_no_unsafe_publication(self):
+        from unittest.mock import patch
+        base=tip()
+        base.update(selection="YES", tip_eligible=True,
+                    settlement_rule_verified=True,
+                    commence_time="2026-11-19T18:30:00Z")
+        with patch("netrattler_premium_telegram_adapter.render_verified_png",
+                   wraps=render_verified_png) as renders:
+            raw=render([("var",base)],"2026-11-19",
+                       crest_provider=lambda _:crest())
+        with Image.open(io.BytesIO(raw)) as image:
+            self.assertEqual(image.size,(1122,1402))
+        self.assertEqual(renders.call_args.args[0],"var")
+        self.assertIn("Example United vs Sample Town",
+                      renders.call_args.args[1][0]["match"])
+        for unsafe in (
+            {"tip_eligible":False},
+            {"settlement_rule_verified":False},
+            {"commence_time":None},
+            {"commence_time":"2026-11-19T18:30:00"},
+            {"selection":"NO"},
+            {"match":"Example United"},
+            {"bookmaker":""},
+        ):
+            with self.subTest(unsafe=unsafe), self.assertRaises(ValueError):
+                render([("var",{**base,**unsafe})],"2026-11-19",
+                       crest_provider=lambda _:crest())
 
     def test_pixel_inspection_preserves_premium_master_header_and_real_crests(self):
         source=render_verified_png("over",[{
