@@ -13,13 +13,16 @@ def test_recent_or_with_result_untouched():
     assert not s.stale_no_result("win", {}, "2026-10-10", date(2026, 10, 24))
 
 
-def test_reason_counts_as_genuine_void():
-    assert s._genuine_void_reason("void: kein Ergebnis nach 3 Tagen verfuegbar (Liga ohne Datenquelle)")
+def test_missing_data_is_not_genuine_void():
+    assert not s._genuine_void_reason("void: kein Ergebnis nach 3 Tagen verfuegbar (Liga ohne Datenquelle)")
+    assert not s._genuine_void_reason("void: nicht bewertbar nach 6 Tagen (Daten/Legs fehlen)")
+    assert s._genuine_void_reason("void: Spieler ohne Einsatz (Spiel in Spielerdaten, Spieler nicht gelistet)")
 
 
-def test_stale_void_is_written_to_source_but_legacy_void_is_not():
+def test_stale_void_is_not_written_to_source_without_sporting_proof():
     assert s._writes_to_source({"status": "win"})
-    assert s._writes_to_source({"status": "void", "reason": "void: kein Ergebnis nach 3 Tagen verfuegbar (Liga ohne Datenquelle)"})
+    assert not s._writes_to_source({"status": "void", "reason": "void: kein Ergebnis nach 3 Tagen verfuegbar (Liga ohne Datenquelle)"})
+    assert not s._writes_to_source({"status": "void", "reason": "void: nicht bewertbar nach 6 Tagen (Daten/Legs fehlen)"})
     assert not s._writes_to_source({"status": "void", "reason": "Score fehlt"})
     assert not s._writes_to_source({"status": "pending", "reason": "x"})
 
