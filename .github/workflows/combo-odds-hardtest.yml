@@ -1,0 +1,27 @@
+name: Combo Odds Hardtest
+on:
+  push:
+    paths:
+      - 'netrattler_combo_owner_original.py'
+      - 'netrattler_combo_dynamic_cards.py'
+      - 'netrattler_visual_gate.py'
+      - 'netrattler_original_template_renderer.py'
+      - 'test_netrattler_combo_owner_original.py'
+      - 'test_netrattler_combo_dynamic_cards.py'
+      - '.github/workflows/combo-odds-hardtest.yml'
+  workflow_dispatch:
+jobs:
+  offline-combo-cards:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+      - name: Install image test dependencies
+        run: python -m pip install pillow pytest requests
+      - name: Compile modified modules
+        run: python -m py_compile netrattler_combo_owner_original.py netrattler_combo_dynamic_cards.py netrattler_visual_gate.py netrattler_original_template_renderer.py test_netrattler_combo_owner_original.py test_netrattler_combo_dynamic_cards.py
+      - name: Test original 7/9 combo masters and quote calculation
+        run: python -m pytest -q test_netrattler_combo_owner_original.py test_netrattler_combo_dynamic_cards.py
