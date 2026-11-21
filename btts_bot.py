@@ -28297,6 +28297,10 @@ def main():
                             "status": "pending",
                             "group_key": "combos",
                             "pick_type": "combo_multi",
+                            # Existing Supabase `source` column tracks price
+                            # provenance; no DB migration or invented book quote.
+                            "source": ("calculated_combo_leg_product" if combo.get("combined_quote_calculated")
+                                       else "bookmaker_confirmed_combo"),
                             "builder_total_legs": n,
                             "builder_legs": [
                                 {
