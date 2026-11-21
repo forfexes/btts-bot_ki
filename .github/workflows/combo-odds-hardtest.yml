@@ -8,6 +8,8 @@ on:
       - 'netrattler_original_template_renderer.py'
       - 'test_netrattler_combo_owner_original.py'
       - 'test_netrattler_combo_dynamic_cards.py'
+      - 'test_netrattler_original_templates.py'
+      - 'netrattler_card_visual_preview.py'
       - '.github/workflows/combo-odds-hardtest.yml'
   workflow_dispatch:
 jobs:
