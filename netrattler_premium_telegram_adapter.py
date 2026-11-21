@@ -18,6 +18,7 @@ MARKETS = {
     "over15_ht": ("over_halftime", "OVER 1.5 1. HZ"),
     "1x2": ("match_result", "1X2"),
     "combo": ("cross_mix", "BTTS + OVER 2.5"),
+    "var": ("var", "VAR-EINGRIFF – JA"),
 }
 
 
@@ -87,6 +88,22 @@ def render(entries, target_date, *, crest_provider, result=None):
     if not str(provenance or "").strip():
         raise ValueError("Real bookmaker source missing")
     category, selection = MARKETS[market]
+    if market == "var":
+        # VAR bookie rule coverage and event-level settlement are not yet
+        # verified globally. A parser-observed price is NOT a publishable tip.
+        if tip.get("tip_eligible") is not True or tip.get("settlement_rule_verified") is not True:
+            raise ValueError("VAR publication blocked: bookmaker rules/settlement not verified")
+        from datetime import datetime
+        start = str(tip.get("commence_time") or "").strip()
+        try:
+            kickoff = datetime.fromisoformat(start.replace("Z", "+00:00"))
+            if kickoff.tzinfo is None or kickoff.utcoffset() is None:
+                raise ValueError("naive kickoff")
+        except (TypeError, ValueError, OverflowError) as exc:
+            raise ValueError("VAR publication requires a verified timezone-aware match kickoff") from exc
+        declared = str(tip.get("selection") or tip.get("tip") or "").strip().upper()
+        if declared not in ("YES", "JA", "TRUE", "1"):
+            raise ValueError("VAR-EINGRIFF JA requires an explicitly verified YES selection")
     # Never publish "YES" when a qualified source pick actually says NO.
     # The absence of a separate selection field is valid for markets whose
     # canonical type already implies YES, but explicit contradictory values
@@ -123,7 +140,11 @@ def render(entries, target_date, *, crest_provider, result=None):
     if league:
         draw.text((561,530),league[:55],font=_fit(draw,league[:55],950,26),
                   fill="#27E6FF",anchor="mm")
-    t = str(tip.get("time_local") or tip.get("time") or "").strip()
+    if market == "var":
+        from zoneinfo import ZoneInfo
+        t = kickoff.astimezone(ZoneInfo("Europe/Zurich")).strftime("%d.%m.%Y · %H:%M")
+    else:
+        t = str(tip.get("time_local") or tip.get("time") or "").strip()
     if t:
         draw.text((561,585),t[:25],font=_font(27),fill="#FAFCFF",anchor="mm")
     probability = tip.get("probability")
