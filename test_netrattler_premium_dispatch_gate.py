@@ -74,6 +74,21 @@ class PremiumTelegramDispatchTests(unittest.TestCase):
                     with self.assertRaisesRegex(ValueError, "contradicts"):
                         cards.render_card([(market, item)], "2026-11-21")
 
+    def test_unverified_var_never_enters_telegram_send_queue(self):
+        var = tip("var")
+        var.update(selection="YES", commence_time="2026-11-21T18:30:00Z")
+        # Observed bookmaker market by itself is not a valid settlement rule.
+        for flags in ({}, {"tip_eligible": True},
+                      {"settlement_rule_verified": True},
+                      {"tip_eligible": True, "settlement_rule_verified": False}):
+            with self.subTest(flags=flags):
+                assert cards.select_cards({"var": [{**var, **flags}]}) == []
+        eligible = {**var, "tip_eligible": True,
+                    "settlement_rule_verified": True}
+        qualified = cards.select_cards({"var": [eligible]})
+        self.assertEqual(len(qualified), 1)
+        self.assertEqual(qualified[0][0][0], "var")
+
     def test_no_silent_fallback_to_old_when_premium_fails(self):
         with patch.dict(os.environ,{"NETRATTLER_CARD_LAYOUT":""}), \
              patch.object(cards,"_badge_bytes",return_value=b""), \
