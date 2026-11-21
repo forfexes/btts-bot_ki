@@ -23,16 +23,25 @@ MARKETS = {
 
 
 def _price(tip, market=None):
-    # A combo's quoted total MUST come from an observed combined ticket.
-    # oddsYes may be a single-leg price and is never a substitute.
-    keys = ("combined_odds", "odds") if market == "combo" else (
-        "oddsYes", "odds", "odd", "price")
+    # A combined ticket is not an individual-leg price. Its independently
+    # observed bookmaker total can exceed 100 for large 6-12 leg parlays.
+    if market == "combo":
+        if (tip.get("combined_odds_observed") is not True
+                or not str(tip.get("combined_quote_id") or "").strip()
+                or tip.get("combined_quote_calculated") is True):
+            raise ValueError("Verified bookmaker combined ticket missing")
+        # Never use plain odds/oddsYes here: they may contain a single-leg quote.
+        keys = ("combined_odds", "total_odds")
+        ceiling = 100000.0
+    else:
+        keys = ("oddsYes", "odds", "odd", "price")
+        ceiling = 100.0
     for key in keys:
         try:
             num = float(tip.get(key))
         except (TypeError, ValueError, OverflowError):
             continue
-        if math.isfinite(num) and 1.01 <= num <= 100:
+        if math.isfinite(num) and 1.01 <= num < ceiling:
             return num
     raise ValueError("Verified original bookmaker odds missing")
 
