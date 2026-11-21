@@ -85,6 +85,15 @@ class PremiumTelegramDispatchTests(unittest.TestCase):
                      "combined_quote_id": "BOOK-123"}
         selected = cards.select_cards({"combo": [confirmed]})
         self.assertEqual(selected[0][0][0], "combo")
+        # Many feeds provide only the ticket-specific combined_odds field.
+        only_ticket = {**confirmed, "combined_odds": 3.45}
+        only_ticket.pop("oddsYes", None)
+        only_ticket.pop("odds", None)
+        self.assertEqual(cards.select_cards({"combo": [only_ticket]})[0][0][0], "combo")
+        # A single-leg YES quote must never qualify an unpriced combo.
+        leg_only = {**confirmed, "oddsYes": 1.65}
+        leg_only.pop("odds", None)
+        self.assertEqual(cards.select_cards({"combo": [leg_only]}), [])
 
     def test_unverified_var_never_enters_telegram_send_queue(self):
         var = tip("var")
