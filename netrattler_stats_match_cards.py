@@ -558,6 +558,15 @@ def render_card(entries, target_date, result=None):
         return render_corner_card(rows[0][1], target_date, result)
     if len(rows) == 1 and str(rows[0][0]) == "scorer" and rows[0][1].get("player"):
         return render_scorer_card(rows[0][1], target_date, result)
+    # Universal premium-AI rule: Telegram must NEVER receive stickered-over
+    # sample text, unapproved technical SVG skeletons, or legacy dashboard
+    # substitutes. Owner-only mode is enabled in the production tips workflow.
+    # Missing owner-approved, data-free plates fail CLOSED: keep the verified
+    # pick in its text channel instead of publishing an illegible image.
+    if os.getenv("NETRATTLER_ORIGINAL_ONLY", "0") == "1":
+        approved = len(rows) == 1 and str(rows[0][0]) == "btts"
+        if not approved:
+            raise ValueError("premium_ai_master_not_owner_approved")
     # The user-approved premium masters are the DEFAULT for new ordinary
     # selections. The old BIS card must never be the silent production fallback.
     # Historic multi-market settlements may still use their original legacy
