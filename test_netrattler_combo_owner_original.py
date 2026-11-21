@@ -92,12 +92,21 @@ class VerifiedOriginalComboTests(unittest.TestCase):
                     self.assertEqual(output.width,W)
                     self.assertEqual(output.height,
                                      H+round(793*(n-source_n)/source_n))
+                    # The metallic crown and source header remain pixel
+                    # identical; the old baked 7/9 TIPPS label must change.
                     self.assertIsNone(ImageChops.difference(
-                        output.crop((0,0,W,280)),
-                        original.crop((0,0,W,280))).getbbox())
+                        output.crop((0,0,W,190)),
+                        original.crop((0,0,W,190))).getbbox())
+                    self.assertIsNotNone(ImageChops.difference(
+                        output.crop((365,208,768,268)),
+                        original.crop((365,208,768,268))).getbbox())
                     self.assertIsNone(ImageChops.difference(
                         output.crop((0,output.height-82,W,output.height)),
                         original.crop((0,H-82,W,H))).getbbox())
+                    # No sample-leg text remains in the original row/footer seam.
+                    shift=output.height-H
+                    self.assertEqual(output.convert("RGB").getpixel(
+                        (520,1109+shift)),(7,21,35))
 
     def test_only_unsupported_leg_counts_are_rejected(self):
         for n in (0,1,2,13):
