@@ -37,6 +37,11 @@ def main(path="premium-sandbox-preview"):
             "bookmaker": "offline_verified_fixture",
             "selection": "1" if market == "1x2" else "YES",
         }
+        if market == "combo":
+            # Synthetic QA-only ticket: exercise confirmed-total gate without
+            # ever publishing these fictional names or prices to Telegram.
+            tip.update(odds=3.25, combined_odds_observed=True,
+                       combined_quote_id="OFFLINE-QA-ONLY")
         payload = render([(market, tip)], "2026-11-19",
                          crest_provider=_example_crest)
         outfile = folder / f"demo-{market}.png"
