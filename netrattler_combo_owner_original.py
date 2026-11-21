@@ -107,7 +107,7 @@ def render_original_combo(legs,*,combined_odds,probability,ev,confidence,
     quote = (_num(combined_odds, "combined bookmaker quote", 1.01, 100000.0)
              if verified else None)
     prob=_num(probability,"model probability",0.0,100.0)
-    ev_num=_num(ev,"expected value",-100.0,100000.0)
+    ev_num=_num(ev,"expected value",-100.0,100000.0) if verified else None
     wager=_num(stake,"stake",0.001,5.0)
     if not callable(crest_provider):
         raise ValueError("Verified crest provider missing")
