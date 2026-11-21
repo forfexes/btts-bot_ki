@@ -217,14 +217,21 @@ def render_builder(pick):
         probability=_percent(getattr(pick,"probability",None))
     if probability is None:
         raise ValueError("Bestätigte Modellwahrscheinlichkeit fehlt")
-    ev=(probability/100*book_quote-1)*100
+    # Only a bookmaker-confirmed combined ticket can support an advertised EV.
+    # For a calculated same-game builder, keep the estimate visible but show
+    # no invented EV or realised bookmaker P/L.
+    ev=(probability/100*book_quote-1)*100 if book_quote is not None else None
+    quote_text=f"{book_quote:.2f}" if book_quote is not None else value
+    if quote_text=="—":
+        raise ValueError("Builder hat keine berechenbaren echten Einzelquoten")
     conf=str(getattr(pick,"confidence","") or "").upper()
     if not conf or conf=="—":
         raise ValueError("Konfidenz fehlt")
     status,col=nd._result_text(getattr(pick,"status",None))
     for cx,value,color in (
-        (235,f"{book_quote:.2f}",GOLD),
-        (561,f"{ev:+.1f}%",GREEN if ev>=0 else RED),
+        (235,quote_text,GOLD),
+        (561,f"{ev:+.1f}%" if ev is not None else "—",
+         GREEN if ev is not None and ev>=0 else RED if ev is not None else WHITE),
         (885,f"{probability:.1f}%",GOLD),
     ):
         # Clear demo dash INSIDE the existing neon value cell; keep its frame.
