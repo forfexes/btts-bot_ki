@@ -68,6 +68,12 @@ def test_owner_only_in_image_settlement_never_replaces_unapproved_svg_card():
         {"card_id":12,"chat_id":"chat","message_id":112,
          "match_key":cards.match_key(match),"card_date":"2026-11-21",
          "entries":[["btts",{"match":match,"odds":1.75}]],"result":{}},
+        {"card_id":13,"chat_id":"chat","message_id":113,
+         "match_key":cards.match_key(match),"card_date":"2026-11-21",
+         "entries":[["scorer",{"match":match,"player":"Test A","odds":1.75}]],"result":{}},
+        {"card_id":14,"chat_id":"chat","message_id":114,
+         "match_key":cards.match_key(match),"card_date":"2026-11-21",
+         "entries":[["corners",{"match":match,"odds":1.75}]],"result":{}},
     ]
     results=[{"match":match,"status":"win","group":"btts",
               "odds":1.75,"tip_date":"2026-11-21","ft":"2-2"}]
