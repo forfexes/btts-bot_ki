@@ -175,6 +175,7 @@ jobs:
       - name: Run Tips Bot 🤖
         env:
           NETRATTLER_ORIGINAL_ONLY:   "1"  # fail closed: no unapproved generic COMBO card on Telegram
+          NETRATTLER_BLOCK_OVERPAINTED_MASTERS: "1"  # do not publish patched screenshots as premium cards
           NETRATTLER_FAST_TIPS:       "true"
           NETRATTLER_PLAYWRIGHT_ENABLED: "true"
           NETRATTLER_PLAYWRIGHT_BUDGET_SEC: "45"
