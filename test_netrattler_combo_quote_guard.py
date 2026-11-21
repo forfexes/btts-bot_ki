@@ -41,7 +41,7 @@ for mutation in (
     {"tips":legs(13)},
     {"tips":[dict(legs(7)[0],odds=float("nan"))]+legs(6)},
 ):
-    assert not publishable_combo(dict(tips=legs(7),combined_odds_observed=False,**mutation))
+    assert not publishable_combo(dict({"tips":legs(7),"combined_odds_observed":False},**mutation))
 
 # Require the production formatter to avoid fictional profit for derived prices.
 source=Path("btts_bot.py").read_text(encoding="utf-8")
