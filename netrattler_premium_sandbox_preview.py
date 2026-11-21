@@ -40,7 +40,7 @@ def main(path="premium-sandbox-preview"):
         if market == "combo":
             # Synthetic QA-only ticket: exercise confirmed-total gate without
             # ever publishing these fictional names or prices to Telegram.
-            tip.update(odds=3.25, combined_odds_observed=True,
+            tip.update(combined_odds=3.25, combined_odds_observed=True,
                        combined_quote_id="OFFLINE-QA-ONLY")
         payload = render([(market, tip)], "2026-11-19",
                          crest_provider=_example_crest)
