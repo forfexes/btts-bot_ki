@@ -42,6 +42,26 @@ class PremiumTelegramDispatchTests(unittest.TestCase):
                 with self.assertRaisesRegex(ValueError, "contradicts"):
                     cards.render_card([(market, entry)], "2026-11-20")
 
+    def test_var_requires_verified_match_kickoff_and_settlement_rules(self):
+        base = tip("var")
+        base.update(selection="YES", tip_eligible=True,
+                    settlement_rule_verified=True,
+                    commence_time="2026-11-19T18:30:00Z")
+        for bad in ({"tip_eligible": False}, {"settlement_rule_verified": False},
+                    {"commence_time": ""}, {"match": "One Team"}):
+            with self.subTest(bad=bad), \
+                 patch.object(cards, "_badge_bytes", return_value=crest()), \
+                 patch.object(cards, "render_bis_card",
+                              side_effect=AssertionError("legacy fallback")):
+                with self.assertRaises(ValueError):
+                    cards.render_card([("var", {**base, **bad})], "2026-11-19")
+        with patch.object(cards, "_badge_bytes", return_value=crest()), \
+             patch.object(cards, "render_bis_card",
+                          side_effect=AssertionError("legacy fallback")):
+            image = cards.render_card([("var", base)], "2026-11-19")
+        with Image.open(io.BytesIO(image)) as output:
+            self.assertEqual(output.size, (1122, 1402))
+
     def test_no_silent_fallback_to_old_when_premium_fails(self):
         with patch.dict(os.environ,{"NETRATTLER_CARD_LAYOUT":""}), \
              patch.object(cards,"_badge_bytes",return_value=b""), \
