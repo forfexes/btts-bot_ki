@@ -2287,7 +2287,13 @@ def settle_tip(tip: Dict[str, Any], results: Sequence[Dict[str, Any]], player_st
     # Same-game builders with only individual-leg prices are informational.
     # Zero provided stake MUST NOT be replaced with an invented 0.01-unit bet.
     unpriced_builder = group == "builder" and bool(data.get("estimated_odds")) and not odds
-    stake = 0.0 if unpriced_builder else stake_of(tip)
+    # A calculated Combo remains sportingly settleable, but without a real
+    # bookmaker combined ticket its profit and ROI MUST remain unpriced.
+    calculated_combo = (group in {"combo", "combo_multi"}
+                        and str(data.get("source") or "").strip()
+                            == "calculated_combo_leg_product")
+    unpriced_ticket = unpriced_builder or calculated_combo
+    stake = 0.0 if unpriced_ticket else stake_of(tip)
     if odds and status in {"win", "loss"} and (
         (group not in {"combo", "combo_multi", "builder"} and odds >= MAX_SINGLE_ODDS)
         or odds > MAX_COMBO_ODDS
@@ -2299,7 +2305,7 @@ def settle_tip(tip: Dict[str, Any], results: Sequence[Dict[str, Any]], player_st
         status, reason = "void", f"void: kein Ergebnis nach {STALE_VOID_DAYS} Tagen verfuegbar (Liga ohne Datenquelle)"
     if stale_unresolvable(status, row_date(tip)):
         status, reason = "void", f"void: nicht bewertbar nach {STALE_HARD_DAYS} Tagen (Daten/Legs fehlen) · {reason}"
-    if unpriced_builder:
+    if unpriced_ticket:
         profit = None
     elif status == "win":
         profit = (odds - 1.0) * stake if odds else 0.0
