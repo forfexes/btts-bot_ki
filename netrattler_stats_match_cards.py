@@ -1051,8 +1051,12 @@ def _edit_photo(token, chat, message_id, payload, log, caption=None):
     try:
         media = {"type": "photo", "media": "attach://card"}
         if caption is not None:
-            # editMessageMedia otherwise erases the original settlement caption.
-            media["caption"] = str(caption)[:1024]
+            # Telegram media captions must fit completely. Never silently
+            # cut the original tip/odds to force a settlement result.
+            if len(str(caption)) > 1024:
+                log("Card-Edit blockiert: Original-Caption passt nicht vollständig")
+                return False
+            media["caption"] = str(caption)
         r = requests.post(
             f"https://api.telegram.org/bot{token}/editMessageMedia",
             data={"chat_id": chat, "message_id": int(message_id),
@@ -1064,7 +1068,19 @@ def _edit_photo(token, chat, message_id, payload, log, caption=None):
             return False
         if not r.ok:
             log(f"Card-Edit HTTP {r.status_code}: {r.text[:100]}")
-        return r.ok
+            return False
+        # A 200 response alone does not confirm which historic message was
+        # updated. Require the exact original Telegram message_id.
+        try:
+            ack = r.json()
+            result = ack.get("result") if isinstance(ack, dict) and ack.get("ok") is True else None
+            if not isinstance(result, dict) or str(result.get("message_id")) != str(message_id):
+                log("Card-Edit nicht bestätigt: falsche/fehlende Original-Nachrichten-ID")
+                return False
+        except (ValueError, AttributeError, TypeError):
+            log("Card-Edit nicht bestätigt: ungültige Telegram-Antwort")
+            return False
+        return True
     except Exception as exc:
         log(f"Card-Edit Fehler: {type(exc).__name__}")
         return False
