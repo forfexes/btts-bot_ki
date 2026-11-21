@@ -536,8 +536,8 @@ def builder_signature(style: str, legs: Sequence[PropLeg], match_date: str) -> s
     return "nb_" + hashlib.sha1(raw.encode("utf-8")).hexdigest()[:24]
 
 
-def valid_builder(legs: Sequence[PropLeg], min_legs: int = 2, max_legs: int = 6) -> bool:
-    max_legs = as_int(os.getenv("NETRATTLER_BUILDER_MAX_LEGS", "12"), 12)  # harte Obergrenze (Env gewinnt)
+def valid_builder(legs: Sequence[PropLeg], min_legs: int = 2, max_legs: int = 7) -> bool:
+    max_legs = min(7, as_int(os.getenv("NETRATTLER_BUILDER_MAX_LEGS", "7"), 7))  # max 7 owner-original rows
     if not (min_legs <= len(legs) <= max_legs):
         return False
     keys = [x.key() for x in legs]
