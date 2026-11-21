@@ -153,15 +153,38 @@ def plan(tips: List[Dict[str, Any]]):
 
 
 def select_rows(rows: List[Dict[str, Any]], wanted: List[Tuple[str, str, bool]]):
-    """Rows matching a pending tip (both teams), with a flag whether HT is needed."""
-    out = []
+    """Select exact official fixtures; reject ambiguous duplicate match events.
+
+    A finished fixture must have an unambiguous opponent pair AND a unique
+    source event on that calendar day. If a feed contains two separate games
+    with the same club names, neither can safely settle a tip by name alone.
+    """
+    candidates = []
     for row in rows:
-        need = None
-        for h, a, ht in wanted:
-            if team_match(h, row.get("home_team")) and team_match(a, row.get("away_team")):
-                need = bool(need) or ht
-        if need is not None:
-            out.append((row, need))
+        needs = [
+            bool(ht) for h, a, ht in wanted
+            if team_match(h, row.get("home_team"))
+            and team_match(a, row.get("away_team"))
+        ]
+        if needs:
+            candidates.append((row, any(needs)))
+    groups: Dict[Tuple[str, str], List[Tuple[Dict[str, Any], bool]]] = {}
+    for row, need in candidates:
+        key = norm_team(row.get("home_team")), norm_team(row.get("away_team"))
+        groups.setdefault(key, []).append((row, need))
+    out = []
+    for group in groups.values():
+        if len(group) > 1:
+            signatures = {
+                (str(row.get("event_id") or ""), str(row.get("home_score")),
+                 str(row.get("away_score")))
+                for row, _ in group
+            }
+            # Distinct event identifiers OR conflicting full-time scores
+            # must never be silently collapsed into a fictitious settlement.
+            if len(signatures) != 1 or not next(iter(signatures))[0]:
+                continue
+        out.extend(group)
     return out
 
 
