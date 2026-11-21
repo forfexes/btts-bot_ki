@@ -227,6 +227,35 @@ class SettlementV21Tests(unittest.TestCase):
         self.assertEqual(row["raw"]["telegram_edit_attempts"], 3)
         self.assertFalse(row["raw"].get("telegram_edit_ok"))
 
+    def test_disabled_bot_token_exhaustion_gets_only_two_safe_retries(self):
+        base = {
+            "settlement_id": "legacy-no-token",
+            "status": "loss", "market_group": "btts",
+            "tip_date": mod.TODAY_S, "settled_at": mod.NOW.isoformat(),
+            "tip_payload": {"match": "A vs B", "message_text": "Original",
+                            "telegram_chat_id": "123", "telegram_msg_id": 55},
+            "raw": {"telegram_edit_attempts": 4,
+                    "telegram_edit_error": "missing Telegram token/chat/message id"},
+        }
+        with patch.object(mod, "TG_TOKEN", "TEST_BOT_TOKEN"), \
+             patch.object(mod, "edit_original_tip", return_value=True) as edit, \
+             patch.object(mod, "sb_patch", return_value=True):
+            self.assertEqual(mod.retry_unedited_originals([base], []), (1, 1))
+            edit.assert_called_once()
+        self.assertTrue(base["raw"]["telegram_edit_ok"])
+        base["raw"] = {"telegram_edit_attempts": 6,
+                       "telegram_edit_error": "missing Telegram token/chat/message id"}
+        with patch.object(mod, "TG_TOKEN", "TEST_BOT_TOKEN"), \
+             patch.object(mod, "edit_original_tip") as edit:
+            self.assertEqual(mod.retry_unedited_originals([base], []), (0, 0))
+            edit.assert_not_called()
+        base["raw"] = {"telegram_edit_attempts": 4,
+                       "telegram_edit_error": "400 message to edit not found"}
+        with patch.object(mod, "TG_TOKEN", "TEST_BOT_TOKEN"), \
+             patch.object(mod, "edit_original_tip") as edit:
+            self.assertEqual(mod.retry_unedited_originals([base], []), (0, 0))
+            edit.assert_not_called()
+
     @staticmethod
     def _legacy_prop_builder(*, estimated=False, sent=True, message_id="321"):
         legs = [
