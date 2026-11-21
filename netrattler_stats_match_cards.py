@@ -569,7 +569,8 @@ def render_card(entries, target_date, result=None):
     # Historic multi-market settlements may still use their original legacy
     # design; new sends split markets into independent premium cards below.
     if len(rows) == 1:
-        if (os.getenv("NETRATTLER_CARD_LAYOUT", "premium").lower() == "bis"
+        if (os.getenv("NETRATTLER_ORIGINAL_ONLY", "0") != "1"
+                and os.getenv("NETRATTLER_CARD_LAYOUT", "premium").lower() == "bis"
                 and os.getenv("NETRATTLER_SANDBOX_HARDTEST") == "1"):
             # The historical dashboard is for isolated offline regression ONLY.
             # A stray production environment variable must never republish
@@ -852,6 +853,20 @@ def send_cards(tips_by_market, target_date, token, stats_chat, log=print):
         split_cards.extend([[entry] for entry in ordinary])
         split_cards.extend([[entry] for entry in scorers])
     cards = split_cards
+    if os.getenv("NETRATTLER_ORIGINAL_ONLY", "0") == "1":
+        # This preflight must run BEFORE expensive team-photo/cache requests
+        # and BEFORE dedup/signature persistence: unsupported designs are
+        # never candidates for a Telegram send in original-only production.
+        blocked = sum(len(entries) for entries in cards
+                      if len(entries) != 1 or str(entries[0][0]) != "btts")
+        if blocked:
+            STATS["unapproved_master_blocked"] = (
+                STATS.get("unapproved_master_blocked", 0) + blocked)
+            log(f"Premium KI Master Gate: {blocked} unapproved card(s) skipped")
+        cards = [entries for entries in cards if len(entries) == 1
+                 and str(entries[0][0]) == "btts"]
+    if not cards:
+        return 0
 
     # Badge lookup is presentation-only. Persistent cache first, then throttled lookups.
     try:
