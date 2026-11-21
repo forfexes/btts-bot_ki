@@ -26,11 +26,10 @@ def _number(value):
         return None
 
 
-def _price(tip):
+def _price(tip, market=None):
     # A verified combo may carry its book-issued ticket price solely under
-    # combined_odds. Do not reject that valid market before the card adapter
-    # can apply its strict combined-ticket provenance checks.
-    keys = ("combined_odds", "odds") if tip.get("market") == "combo" else (
+    # combined_odds. Never substitute the single-leg oddsYes value.
+    keys = ("combined_odds", "odds") if (market or tip.get("market")) == "combo" else (
         "oddsYes", "odds", "odd", "price")
     for key in keys:
         value = _number(tip.get(key))
@@ -39,7 +38,7 @@ def _price(tip):
     return None
 
 
-def _valid(tip):
+def _valid(tip, market=None):
     if not isinstance(tip, dict) or tip.get("_no_real_odds"):
         return False
     if tip.get("_synthetic") or tip.get("synthetic") or tip.get("estimated_odds"):
@@ -48,7 +47,7 @@ def _valid(tip):
         return False
     if not str(tip.get("match", "")).strip():
         return False
-    return _price(tip) is not None
+    return _price(tip, market) is not None
 
 
 def _label(market, tip):
@@ -421,7 +420,7 @@ def select_cards(tips_by_market, max_cards=0):
     matches = defaultdict(list)
     for market, tips in (tips_by_market or {}).items():
         for tip in tips or []:
-            if not _valid(tip) or not _card_model_consistent(market, tip):
+            if not _valid(tip, market) or not _card_model_consistent(market, tip):
                 continue
             # The published combo master displays a combined bookmaker quote,
             # never a multiplied or unobserved estimate.
