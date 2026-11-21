@@ -19,7 +19,7 @@ def owner_ticket(n):
             "combined_quote_id":"SYNTHETIC_QA_TICKET",
             "bookmaker":"TEST_BOOK_ONLY"} if n in (7,9) else {}
 
-@pytest.mark.parametrize("n", range(3, 11))
+@pytest.mark.parametrize("n", range(3, 13))
 def test_exact_rows_and_height(n):
     raw = render_combo(legs(n), combined_odds=3.2, probability=40.0,
                        ev=28.0, confidence="HIGH", crest_provider=badge,
@@ -28,7 +28,7 @@ def test_exact_rows_and_height(n):
     _, shift = _owner_canvas(n)
     assert im.size == (W, H + shift)
 
-@pytest.mark.parametrize("n", [0, 2, 11])
+@pytest.mark.parametrize("n", [0, 2, 13])
 def test_reject_invalid_counts(n):
     with pytest.raises(ValueError):
         render_combo(legs(n), combined_odds=3.2, probability=40,
@@ -48,13 +48,13 @@ def test_missing_odds_fails_closed():
                      ev=28, confidence="HIGH", crest_provider=badge,
                      **owner_ticket(9))
 
-@pytest.mark.parametrize("n",range(3,11))
+@pytest.mark.parametrize("n",range(3,13))
 def test_original_combo_can_render_with_calculated_leg_odds(n):
     image=render_combo(legs(n),combined_odds=None,probability=40,
                        ev=None,confidence="HIGH",crest_provider=badge)
     assert Image.open(io.BytesIO(image)).size == (W, H + _owner_canvas(n)[1])
 
-@pytest.mark.parametrize("n",(3,4,5,6,8,10))
+@pytest.mark.parametrize("n",(3,4,5,6,8,10,11,12))
 def test_original_only_mode_uses_real_combos_not_a_generic_fallback(n,monkeypatch):
     monkeypatch.setenv("NETRATTLER_ORIGINAL_ONLY","1")
     raw=render_combo(legs(n),combined_odds=None,probability=40,
