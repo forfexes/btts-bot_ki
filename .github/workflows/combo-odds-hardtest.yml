@@ -27,7 +27,7 @@ jobs:
         run: python -m py_compile netrattler_combo_owner_original.py netrattler_combo_dynamic_cards.py netrattler_visual_gate.py netrattler_original_template_renderer.py test_netrattler_combo_owner_original.py test_netrattler_combo_dynamic_cards.py
       - name: Test all original-derived COMBO 3-12 and missing-quote cases
         run: python -m pytest -q test_netrattler_combo_owner_original.py test_netrattler_combo_dynamic_cards.py
-      - name: Verify original PROP BUILDER 2/4/6-leg cropping
+      - name: Verify original PROP BUILDER 2-7-leg cropping
         run: python -m pytest -q test_netrattler_original_templates.py
       - name: Produce owner-original visual QA previews (synthetic offline data)
         run: |
