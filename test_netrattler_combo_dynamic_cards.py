@@ -48,10 +48,10 @@ def test_missing_odds_fails_closed():
                      **owner_ticket(9))
 
 @pytest.mark.parametrize("n",(7,9))
-def test_original_combo_cannot_render_without_real_bookmaker_ticket(n):
-    with pytest.raises(ValueError,match="combination ticket"):
-        render_combo(legs(n),combined_odds=3.2,probability=40,
-                     ev=28,confidence="HIGH",crest_provider=badge)
+def test_original_combo_can_render_with_calculated_leg_odds(n):
+    image=render_combo(legs(n),combined_odds=None,probability=40,
+                       ev=28,confidence="HIGH",crest_provider=badge)
+    assert Image.open(io.BytesIO(image)).size == (1122,1402)
 
 @pytest.mark.parametrize("n",(3,4,5,6,8,10))
 def test_generic_combo_never_replaces_owner_artwork_in_production(n,monkeypatch):
