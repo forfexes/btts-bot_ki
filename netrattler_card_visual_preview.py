@@ -56,6 +56,7 @@ def demo_legs(count):
         ("Spieler Delta", "fouls_won", 1, "Fouls Won"),
         ("Spieler Epsilon", "shots", 3, "Shots"),
         ("Spieler Zeta", "sot", 1, "Shots on Target"),
+        ("Spieler Eta", "shots", 1, "Shots"),
     ]
     return [SimpleNamespace(player=name,
         team=("Beispiel FC" if i % 2 == 0 else "Test United"),
@@ -79,7 +80,7 @@ def generate(directory):
     with patch.object(cards, "_player_photo", return_value=fake_photo), \
          patch.object(cards, "_badge_bytes",return_value=badge_buf.getvalue()), \
          patch.object(cards, "_paste_badge", side_effect=fake_badge):
-        for count in (2, 3, 4, 5, 6):
+        for count in (2, 3, 4, 5, 6, 7):
             p = SimpleNamespace(legs=demo_legs(count), match_date="2099-05-21",
                 tiers=[], model_only=False, combined_quote_verified=True,
                 combined_bookmaker_quote=round(3.4 * count, 2),
