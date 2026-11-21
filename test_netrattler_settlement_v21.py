@@ -62,6 +62,29 @@ class SettlementV21Tests(unittest.TestCase):
             self.assertTrue(mod.telegram_edit("123", 44, "Original tip\\n\\n⸻⸻ Match Summary ⸻⸻\\n✅ V"))
         self.assertEqual(calls, ["editMessageText", "editMessageCaption"])
 
+    def test_oversized_original_photo_caption_is_never_truncated_or_uploaded(self):
+        original = "PREMIUM WETTE " + ("ORIGINAL-QUOTE-1.95 " * 65)
+        settlement = "⸻⸻ Match Summary ⸻⸻\\n✅ V"
+        with self.assertRaisesRegex(ValueError, "cannot_fit_settlement_without_truncation"):
+            mod._photo_caption_from_settled_text(original + "\\n\\n" + settlement)
+        no_photo_text = FakeResponse({"ok": False}, status=400)
+        no_photo_text.text = "Bad Request: there is no text in the message to edit"
+        with patch.object(mod, "TG_TOKEN", "QA_ONLY"), \
+             patch.dict(os.environ, {"SETTLEMENT_TG_EDIT_GAP_SEC": "0"}), \
+             patch.object(mod.requests, "post", return_value=no_photo_text) as post:
+            self.assertFalse(mod.telegram_edit("123", 42, original + "\\n\\n" + settlement))
+            self.assertEqual(post.call_count, 1)
+            self.assertIn("cannot_fit_settlement_without_truncation",
+                          mod._LAST_EDIT_ERROR.get("last", ""))
+            self.assertTrue(post.call_args.args[0].endswith("/editMessageText"))
+
+    def test_normal_photo_caption_retains_original_without_shortening(self):
+        original = "ORIGINAL PREMIUM QUOTE @2.05\\nL5 4/5 L10 7/10 L15 12/15"
+        summary = "⸻⸻ Match Summary ⸻⸻\\n✅ V"
+        value = mod._photo_caption_from_settled_text(original + "\\n\\n" + summary)
+        self.assertTrue(value.startswith(original))
+        self.assertIn("✅ V", value)
+
     def test_double_chance_routes_to_1x2_original_settlement(self):
         for choice in ("1X", "X2", "12"):
             self.assertEqual(mod.group_of({"market_group": "double_chance",
