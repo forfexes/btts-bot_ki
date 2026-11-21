@@ -60,7 +60,7 @@ def test_builder_two_four_six_leg_masters_and_dry_run_send():
 def test_builder_original_calculates_missing_combo_quote_without_fake_ev():
     """Real original 3-leg artwork remains usable with observed leg prices."""
     photo=_test_photo()
-    with patch.object(cards,"_player_photo",return_value=photo), \\
+    with patch.object(cards,"_player_photo",return_value=photo), \
          patch.object(cards,"_badge_bytes",return_value=photo):
         pick=_fixture(3)
         pick.combined_quote_verified=False
