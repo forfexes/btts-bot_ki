@@ -12,8 +12,8 @@ These are unmodified user reference artworks, NOT cleaned render-ready masters. 
 
 ## COMBO card requirements
 - Include a separate NETRATTLER COMBO card using the user's actual original artwork when supplied; do not fabricate or replace it with an approximate design.
-- Show 3 to 10 combination legs with exactly that number of rows; remove unused rows and reposition the footer.
-- Preserve blue/cyan and gold neon borders, display @prophunter, and render authentic, verified club crests for both teams in every leg (never generic shield placeholders). Include explicit 7-leg and 9-leg variants, as well as all other counts 3 through 10; number rows consecutively without duplicates.
+- Show 3 to 12 combination legs with exactly that number of rows; remove unused rows and reposition the footer.
+- Preserve blue/cyan and gold neon borders, display @prophunter, and render authentic, verified club crests for both teams in every leg (never generic shield placeholders). Include explicit 7-leg and 9-leg variants, as well as all other counts 3 through 12; number rows consecutively without duplicates.
 - Both 7-leg and 9-leg COMBO source PNGs are present under `assets/original_templates/`. Their cleaned dynamic masters and Telegram production integration are **not yet complete**; do not mark them approved.
 
 ## Telegram handle (all NETRATTLER cards)
@@ -39,7 +39,7 @@ These are implementation requirements, **not finished cleaned image assets**. Mo
 - CORNER SNIPER: authentic crests, corner L10/L15, verified H2H, tip and bookmaker odds.
 - BTTS: both authentic crests, team-to-score stats and home/away form.
 - OVER 1.5 / 2.5 and first-half markets: authentic crests, actual goal statistics, L10/L15, real odds.
-- COMBO: 3–10 dynamic rows, premium larger row layout for 3–7, compact but readable for 8–10, no duplicated or empty rows.
+- COMBO: 3–12 dynamic rows, premium larger row layout for 3–7, compact but readable for 8–10, no duplicated or empty rows.
 - PLAYER PROPS: actual player portrait, market-specific stats (shots, fouls, tackles, cards), L5/L10/L15.
 - LAST MINUTE GOAL: live score, verified match minute, pressure metrics and real current odds; avoid stale data.
 - Other groups: same branding, but market-appropriate labels and verified statistics.
