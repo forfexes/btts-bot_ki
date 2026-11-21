@@ -274,6 +274,20 @@ class PremiumTelegramDispatchTests(unittest.TestCase):
             premium_price({"oddsYes": 312.5}, "over25")
 
 
+    def test_direct_owner_renderers_cannot_bypass_live_overpaint_block(self):
+        from netrattler_btts_owner_original import render as owner_btts
+        from netrattler_combo_owner_original import render_original_combo
+        with patch.dict(os.environ, {"NETRATTLER_BLOCK_OVERPAINTED_MASTERS": "1"}):
+            # Both entrypoints must reject before any image processing or
+            # external crest lookup, even when called outside send_cards().
+            with self.assertRaisesRegex(ValueError, "overpainted"):
+                owner_btts({}, "HOME", "AWAY", None, None, 1.75)
+            with self.assertRaisesRegex(ValueError, "overpainted"):
+                render_original_combo([], combined_odds=None, probability=None,
+                    ev=None, confidence=None, stake=None,
+                    combined_odds_observed=False, combined_quote_id="",
+                    bookmaker="", crest_provider=None)
+
     def test_production_blocks_opaque_rectangles_on_owner_originals(self):
         # A successful mock PNG is NOT approval for legacy painted screenshot.
         with patch.dict(os.environ, {"NETRATTLER_BLOCK_OVERPAINTED_MASTERS":"1"}):
