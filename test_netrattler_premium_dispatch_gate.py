@@ -68,6 +68,34 @@ class PremiumTelegramDispatchTests(unittest.TestCase):
                 "token","chat",object()))
             upload.assert_not_called()
 
+    def test_owner_only_filters_unapproved_cards_before_crest_cache_or_telegram(self):
+        # Verify actual send_cards preflight, not just direct render_card().
+        with patch.dict(os.environ, {"NETRATTLER_ORIGINAL_ONLY": "1"}), \
+             patch.object(cards, "select_cards", return_value=[
+                 [("over25", tip("over25"))],
+                 [("scorer", tip("scorer"))],
+                 [("corners", tip("corners"))],
+                 [("combo", tip("combo"))],
+             ]), \
+             patch.object(cards, "_crest_cache_load",
+                          side_effect=AssertionError("unapproved crest prefetch")), \
+             patch.object(cards, "_send_photo",
+                          side_effect=AssertionError("unapproved Telegram upload")):
+            self.assertEqual(cards.send_cards({}, "2026-11-21", "test", "chat",
+                                              log=lambda *_: None), 0)
+
+    def test_owner_only_btts_ignores_legacy_bis_even_with_sandbox_flags(self):
+        with patch.dict(os.environ, {"NETRATTLER_ORIGINAL_ONLY": "1",
+                                      "NETRATTLER_CARD_LAYOUT": "bis",
+                                      "NETRATTLER_SANDBOX_HARDTEST": "1"}), \
+             patch.object(cards, "render_bis_card",
+                          side_effect=AssertionError("legacy BIS rendered")), \
+             patch("netrattler_premium_telegram_adapter.render",
+                   return_value=b"approved-owner-btts"):
+            self.assertEqual(
+                cards.render_card([("btts", tip("btts"))], "2026-11-21"),
+                b"approved-owner-btts")
+
     def test_new_regular_single_market_is_not_old_bis_by_default(self):
         with patch.dict(os.environ,{"NETRATTLER_CARD_LAYOUT":""}), \
              patch.object(cards,"_badge_bytes",return_value=crest()), \
