@@ -1,9 +1,9 @@
-"""NETRATTLER owner's actual 7/9-tip COMBO PNG masters.
+"""NETRATTLER COMBO 3–10 legs derived from the actual 7/9 PNG originals.
 
-Preserves the uploaded COMBO-7 or COMBO-9 photographic artwork while
-replacing every baked example crest, fixture, market, price, model statistic
-and result in the dynamic regions. No Telegram or network calls here.
-Strict bookmaker ticket provenance required; no multiplied/estimated odds.
+Always preserve the owner's crown, header and original footer; unused row
+space is physically removed, and no synthetic generic design is ever used.
+Unconfirmed combo prices are explicitly marked as calculated from leg quotes.
+No Telegram or network calls.
 """
 from __future__ import annotations
 
@@ -63,13 +63,43 @@ def _num(value,what,minimum,maximum):
     return num
 
 
+def _owner_canvas(n):
+    """Load a verified 7/9 source and crop unused rows, never generate a fallback.
+
+    The header and footer are pixel copies from the real owner reference.
+    The middle section is repainted with exactly n selection rows.
+    """
+    if not 3 <= n <= 10:
+        raise ValueError("Original COMBO requires 3–10 legs")
+    source_legs = 7 if n <= 7 else 9
+    path = ROOT / f"NETRATTLER_COMBO_{source_legs}_originalkarte.png"
+    if not path.is_file():
+        raise FileNotFoundError(f"Actual COMBO-{source_legs} source is missing")
+    with Image.open(path) as original:
+        original.load()
+        if original.format != "PNG" or min(original.size) < 600:
+            raise ValueError("Owner original COMBO source invalid")
+        source = original.convert("RGBA").resize((W,H),Image.Resampling.LANCZOS)
+    # 10 rows fit within the original nine-row field using a smaller row step.
+    if n in (7,9,10):
+        return source.copy(), 0
+    top, end, footer_start = 304, 1097, 1108
+    master_legs = 7 if n < 7 else 9
+    desired_height = round((end-top) * n/master_legs)
+    shift = desired_height - (end-top)
+    canvas = Image.new("RGBA",(W,H+shift),"#04111D")
+    canvas.paste(source.crop((0,0,W,280)),(0,0))
+    canvas.paste(source.crop((0,footer_start,W,H)),(0,footer_start+shift))
+    return canvas, shift
+
+
 def render_original_combo(legs,*,combined_odds,probability,ev,confidence,
                           stake,combined_odds_observed,combined_quote_id,
                           bookmaker,crest_provider,status="OFFEN"):
     legs=list(legs)
     n=len(legs)
-    if n not in (7,9):
-        raise ValueError("Only uploaded 7/9-leg owner COMBO originals are approved")
+    if not 3 <= n <= 10:
+        raise ValueError("Original COMBO requires 3–10 legs")
     verified = (combined_odds_observed is True and
                 bool(str(combined_quote_id or "").strip()) and
                 bool(str(bookmaker or "").strip()))
@@ -99,14 +129,7 @@ def render_original_combo(legs,*,combined_odds,probability,ev,confidence,
     if quote is None:
         quote = math.prod(item[3] for item in checked)
         quote = _num(quote, "calculated combination quote", 1.01, 100000.0)
-    path=ROOT/f"NETRATTLER_COMBO_{n}_originalkarte.png"
-    if not path.is_file():
-        raise FileNotFoundError(f"Actual COMBO-{n} source is missing")
-    with Image.open(path) as original:
-        original.load()
-        if original.format!="PNG" or min(original.size)<600:
-            raise ValueError("Owner original COMBO source invalid")
-        im=original.convert("RGBA").resize((W,H),Image.Resampling.LANCZOS)
+    im, shift = _owner_canvas(n)
     draw=ImageDraw.Draw(im)
     # Keep the owner's crown, metallic logo, yellow COMBO title and original
     # TIPPS ribbon completely untouched. Hide all baked example fixtures.
@@ -114,7 +137,7 @@ def render_original_combo(legs,*,combined_odds,probability,ev,confidence,
     # Clear that FIRST sample row too; previously Barcelona/Over-2.5 or
     # Liverpool from the reference was still visible behind the new first leg.
     top=304
-    end=1097
+    end=1097+shift
     row_step=(end-top)/n
     draw.rounded_rectangle((31,280,1090,end+6),radius=18,
                            fill="#04111D",outline=CYAN,width=4)
@@ -141,7 +164,7 @@ def render_original_combo(legs,*,combined_odds,probability,ev,confidence,
         _label(draw,f"{price:.2f}",1014,cy,105,25,GOLD)
     # Replace EVERY sample figure in the original footer while retaining the
     # original glow outside each data box and the exact @prophunter banner.
-    draw.rounded_rectangle((35,1112,1085,1303),radius=16,
+    draw.rounded_rectangle((35,1112+shift,1085,1303+shift),radius=16,
                            fill="#03111D",outline=CYAN,width=4)
     columns=(
         (210,"GESAMTQUOTE" if verified else "BERECHNET",f"{quote:.2f}"),
@@ -149,17 +172,18 @@ def render_original_combo(legs,*,combined_odds,probability,ev,confidence,
         (909,"EINSATZ",f"{wager:g}u"),
     )
     for cx,title,value in columns:
-        draw.rounded_rectangle((cx-159,1121,cx+159,1201),
+        draw.rounded_rectangle((cx-159,1121+shift,cx+159,1201+shift),
                                radius=11,fill="#091523",outline=GOLD,width=2)
-        _label(draw,title,cx,1143,296,22,WHITE)
-        _label(draw,value,cx,1181,296,37,GOLD)
-    _label(draw,("EV "+f"{ev_num:+.1f}%") if verified else "QUOTE UNBESTÄTIGT",258,1249,345,22 if not verified else 27,
-           GREEN if ev_num>=0 else "#FF7777")
-    _label(draw,"CONF "+str(confidence).strip().upper(),621,1249,310,24,GOLD)
+        _label(draw,title,cx,1143+shift,296,22,WHITE)
+        _label(draw,value,cx,1181+shift,296,37,GOLD)
+    _label(draw,("EV "+f"{ev_num:+.1f}%") if verified else "QUOTE UNBESTÄTIGT",
+           258,1249+shift,345,22 if not verified else 27,
+           GREEN if verified and ev_num>=0 else "#FF7777" if verified else WHITE)
+    _label(draw,"CONF "+str(confidence).strip().upper(),621,1249+shift,310,24,GOLD)
     state=str(status or "OFFEN").strip().upper()
     if state not in ("OFFEN","GEWONNEN","VERLOREN","VOID","PUSH"):
         raise ValueError("Unverified COMBO settlement state")
-    _label(draw,state,968,1249,198,25,GREEN if state=="GEWONNEN" else WHITE)
+    _label(draw,state,968,1249+shift,198,25,GREEN if state=="GEWONNEN" else WHITE)
     buffer=BytesIO()
     im.convert("RGB").save(buffer,"PNG",optimize=True)
     return buffer.getvalue()
