@@ -70,10 +70,12 @@ def render_original_combo(legs,*,combined_odds,probability,ev,confidence,
     n=len(legs)
     if n not in (7,9):
         raise ValueError("Only uploaded 7/9-leg owner COMBO originals are approved")
-    if not (combined_odds_observed is True and str(combined_quote_id or "").strip()
-            and str(bookmaker or "").strip()):
-        raise ValueError("Real observed combination ticket/bookmaker missing")
-    quote=_num(combined_odds,"combined bookmaker quote",1.01,100000.0)
+    verified = (combined_odds_observed is True and
+                bool(str(combined_quote_id or "").strip()) and
+                bool(str(bookmaker or "").strip()))
+    # Without a confirmed ticket price, calculate from the observed legs below.
+    quote = (_num(combined_odds, "combined bookmaker quote", 1.01, 100000.0)
+             if verified else None)
     prob=_num(probability,"model probability",0.0,100.0)
     ev_num=_num(ev,"expected value",-100.0,100000.0)
     wager=_num(stake,"stake",0.001,5.0)
@@ -94,6 +96,9 @@ def render_original_combo(legs,*,combined_odds,probability,ev,confidence,
             if team not in badges:
                 badges[team]=_photo_crest(crest_provider(team))
         checked.append((home,away,market,price))
+    if quote is None:
+        quote = math.prod(item[3] for item in checked)
+        quote = _num(quote, "calculated combination quote", 1.01, 100000.0)
     path=ROOT/f"NETRATTLER_COMBO_{n}_originalkarte.png"
     if not path.is_file():
         raise FileNotFoundError(f"Actual COMBO-{n} source is missing")
@@ -139,7 +144,7 @@ def render_original_combo(legs,*,combined_odds,probability,ev,confidence,
     draw.rounded_rectangle((35,1112,1085,1303),radius=16,
                            fill="#03111D",outline=CYAN,width=4)
     columns=(
-        (210,"GESAMTQUOTE",f"{quote:.2f}"),
+        (210,"GESAMTQUOTE" if verified else "BERECHNET",f"{quote:.2f}"),
         (561,"MODELL",f"{prob:.1f}%"),
         (909,"EINSATZ",f"{wager:g}u"),
     )
@@ -148,7 +153,7 @@ def render_original_combo(legs,*,combined_odds,probability,ev,confidence,
                                radius=11,fill="#091523",outline=GOLD,width=2)
         _label(draw,title,cx,1143,296,22,WHITE)
         _label(draw,value,cx,1181,296,37,GOLD)
-    _label(draw,"EV "+f"{ev_num:+.1f}%",258,1249,345,27,
+    _label(draw,("EV "+f"{ev_num:+.1f}%") if verified else "QUOTE UNBESTÄTIGT",258,1249,345,22 if not verified else 27,
            GREEN if ev_num>=0 else "#FF7777")
     _label(draw,"CONF "+str(confidence).strip().upper(),621,1249,310,24,GOLD)
     state=str(status or "OFFEN").strip().upper()
