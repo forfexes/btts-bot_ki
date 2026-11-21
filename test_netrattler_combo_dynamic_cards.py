@@ -119,3 +119,43 @@ def test_original_only_mode_uses_real_combos_not_a_generic_fallback(n,monkeypatc
             assert ImageChops.difference(
                 result.crop((360,208,768,268)).convert("RGB"),
                 original.crop((360,208,768,268))).getbbox() is not None
+
+def test_owner_combo_infers_multigame_model_probability_from_leg_formulas(monkeypatch):
+    import netrattler_combo_owner_original as owner
+    data = legs(3)
+    for row, p in zip(data, [0.8, 0.6, 0.5]):
+        row["model_probability"] = p
+    drawn = []
+    real_label = owner._label
+    def inspect(draw, value, *args, **kwargs):
+        drawn.append(str(value))
+        return real_label(draw, value, *args, **kwargs)
+    monkeypatch.setattr(owner, "_label", inspect)
+    output = render_combo(data, combined_odds=None, probability=None,
+                          ev=None, confidence="HIGH", crest_provider=badge)
+    assert output.startswith(bytes((137,80,78,71,13,10,26,10)))
+    assert "24.0%" in drawn
+    assert "BERECHNET" in drawn
+    assert "QUOTE UNBESTÄTIGT" in drawn
+
+
+def test_same_game_builder_needs_joint_or_conditional_evidence(monkeypatch):
+    import netrattler_combo_owner_original as owner
+    rows=legs(3)
+    for row, p in zip(rows,[0.8,0.6,0.5]):
+        row.update(home="Same Home",away="Same Away",model_probability=p)
+    with pytest.raises(ValueError,match="joint or independent formula"):
+        render_combo(rows,combined_odds=None,probability=None,
+                     ev=None,confidence="HIGH",crest_provider=badge)
+    rows[0]["conditional_probabilities"]=[0.7,0.6]
+    observed=[]
+    real_label=owner._label
+    def inspect(draw,value,*args,**kwargs):
+        observed.append(str(value))
+        return real_label(draw,value,*args,**kwargs)
+    monkeypatch.setattr(owner,"_label",inspect)
+    output=render_combo(rows,combined_odds=None,probability=None,
+                        ev=None,confidence="HIGH",crest_provider=badge)
+    assert output.startswith(bytes((137,80,78,71,13,10,26,10)))
+    assert "33.6%" in observed
+
