@@ -13,16 +13,17 @@ def test_bare_source_void_id_does_not_close_a_published_tip(monkeypatch):
 
 
 
-def test_unpublished_builders_get_void(monkeypatch):
+def test_missing_telegram_id_never_proves_unpublished_builder(monkeypatch):
     calls = []
-    monkeypatch.setattr(s, "sb_patch_in", lambda t, c, v, p: calls.append((list(v), p)) or len(v))
+    monkeypatch.setattr(s, "sb_patch_in", lambda *args: calls.append(args))
     existing = [
         {"settlement_id": "x", "tip_id": "b1", "status": "pending", "source_table": "netrattler_builder_picks"},
         {"settlement_id": "y", "tip_id": "b2", "status": "pending", "source_table": "netrattler_builder_picks"},
     ]
-    assert s.reconcile_unpublished_builders(existing, {"b1"}) == 1
-    assert existing[0]["status"] == "void" and existing[1]["status"] == "pending"
-    assert calls[0][0] == ["x"] and calls[0][1]["reason"].startswith("void:")
+    assert s.reconcile_unpublished_builders(existing, {"b1"}) == 0
+    assert all(row["status"] == "pending" for row in existing)
+    assert not calls
+
 
 
 def test_msg_id_confirms_delivery():
