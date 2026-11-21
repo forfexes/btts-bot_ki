@@ -1,0 +1,39 @@
+name: NETRATTLER Owner Original Artwork Audit (No Telegram)
+"on":
+  workflow_dispatch: {}
+  push:
+    paths:
+      - '.github/workflows/netrattler_owner_artwork_audit.yml'
+permissions:
+  contents: read
+jobs:
+  audit:
+    runs-on: ubuntu-latest
+    timeout-minutes: 6
+    steps:
+      - uses: actions/checkout@v4
+      - name: Verify literal owner assets exist (never generate substitutes)
+        run: |
+          set -euo pipefail
+          for asset in NETRATTLER_BTTS_originalkarte.png NETRATTLER_BUILDER_4_originalkarte.png NETRATTLER_COMBO_7_originalkarte.png NETRATTLER_COMBO_9_originalkarte.png NETRATTLER_GOAL_HUNTER_originalkarte.png; do
+            test -s "assets/original_templates/$asset"
+          done
+          for asset in prop_builder_original.webp goal_hunter_original.webp; do
+            test -s "assets/original_templates/$asset"
+          done
+          test -s assets/netrattler_template_corner_original.webp
+      - name: Export only owner-supplied images for independent review
+        uses: actions/upload-artifact@v4
+        with:
+          name: netrattler-owner-original-artwork-read-only
+          path: |
+            assets/original_templates/NETRATTLER_BTTS_originalkarte.png
+            assets/original_templates/NETRATTLER_BUILDER_4_originalkarte.png
+            assets/original_templates/NETRATTLER_COMBO_7_originalkarte.png
+            assets/original_templates/NETRATTLER_COMBO_9_originalkarte.png
+            assets/original_templates/NETRATTLER_GOAL_HUNTER_originalkarte.png
+            assets/original_templates/prop_builder_original.webp
+            assets/original_templates/goal_hunter_original.webp
+            assets/netrattler_template_corner_original.webp
+          retention-days: 2
+          if-no-files-found: error
