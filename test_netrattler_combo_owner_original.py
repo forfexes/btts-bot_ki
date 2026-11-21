@@ -54,11 +54,16 @@ class VerifiedOriginalComboTests(unittest.TestCase):
         self.assertNotEqual(render(7),render(7,combined_odds=18.75))
         self.assertNotEqual(render(9),render(9,status="GEWONNEN"))
 
-    def test_strict_combined_bookmaker_ticket_and_crest(self):
-        for kwargs in ({"combined_odds_observed":False},
-                       {"combined_quote_id":""},
-                       {"bookmaker":""},
-                       {"combined_odds":float("nan")},
+    def test_calculated_quote_without_combined_bookmaker_ticket(self):
+        for n in (7,9):
+            with self.subTest(n=n):
+                image=render(n,combined_odds_observed=False,
+                             combined_quote_id="",bookmaker="",
+                             combined_odds=None)
+                self.assertTrue(image.startswith(b"\\x89PNG"))
+
+    def test_strict_observed_quote_crest_and_settlement(self):
+        for kwargs in ({"combined_odds":float("nan")},
                        {"combined_odds":1.0},
                        {"crest_provider":lambda team: b""},
                        {"status":"GUESSED"}):
