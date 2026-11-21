@@ -274,6 +274,20 @@ class PremiumTelegramDispatchTests(unittest.TestCase):
             premium_price({"oddsYes": 312.5}, "over25")
 
 
+    def test_production_blocks_opaque_rectangles_on_owner_originals(self):
+        # A successful mock PNG is NOT approval for legacy painted screenshot.
+        with patch.dict(os.environ, {"NETRATTLER_BLOCK_OVERPAINTED_MASTERS":"1"}):
+            with patch.object(cards, "render_bis_card",
+                              side_effect=AssertionError("legacy fallback")):
+                with self.assertRaisesRegex(ValueError, "overpainted"):
+                    cards.render_card([("btts", tip("btts"))], "2026-11-21")
+            from netrattler_original_template_renderer import render_builder, render_goal
+            with self.assertRaisesRegex(ValueError, "overlay-free"):
+                render_builder(None)
+            with self.assertRaisesRegex(ValueError, "overlay-free"):
+                render_goal({}, "2026-11-21")
+
+
 if __name__=="__main__":
     unittest.main()
 
