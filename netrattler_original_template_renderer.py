@@ -7,6 +7,7 @@ from __future__ import annotations
 
 import io
 import math
+import os
 from datetime import datetime
 from functools import lru_cache
 from pathlib import Path
@@ -164,6 +165,8 @@ def _builder_canvas(legs):
 
 
 def render_builder(pick):
+    if os.getenv("NETRATTLER_BLOCK_OVERPAINTED_MASTERS", "0") == "1":
+        raise ValueError("Original Builder has no approved overlay-free clean source")
     import netrattler_stats_match_cards as cards
     import netrattler_neon_design as nd
     from netrattler_builder_cards import builder_leg_label
@@ -257,6 +260,8 @@ def render_builder(pick):
 
 
 def render_goal(tip,target_date,result=None):
+    if os.getenv("NETRATTLER_BLOCK_OVERPAINTED_MASTERS", "0") == "1":
+        raise ValueError("Original Goal Hunter has no approved overlay-free clean source")
     import netrattler_stats_match_cards as cards
     import netrattler_neon_design as nd
     im=_base(str(GOAL_IMAGE)).copy()
