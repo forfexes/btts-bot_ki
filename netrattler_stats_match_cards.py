@@ -507,6 +507,52 @@ def render_card(entries, target_date, result=None):
     from PIL import Image, ImageDraw, ImageFont
 
     rows = entries[:5]
+    if len(rows) == 1 and str(rows[0][0]) == "combo":
+        # An actual 3-12-leg COMBO must show its individual verified legs on
+        # the user's original 7/9-leg PNG, not the simplified two-market
+        # CROSS/MIX dashboard. Missing evidence fails closed.
+        tip = rows[0][1]
+        combo_legs = tip.get("legs") or tip.get("leg_details") or []
+        if combo_legs:
+            if not 3 <= len(combo_legs) <= 12:
+                raise ValueError("Original combo requires 3-12 real legs")
+            if tip.get("combined_odds_observed") is not True or not str(
+                    tip.get("combined_quote_id") or "").strip():
+                raise ValueError("Original combo needs verified bookmaker ticket")
+            from netrattler_combo_dynamic_cards import render_combo
+            leg_rows = []
+            for leg in combo_legs:
+                if not isinstance(leg, dict):
+                    raise ValueError("Original combo leg must be a verified dictionary")
+                home = str(leg.get("home") or "").strip()
+                away = str(leg.get("away") or "").strip()
+                if not (home and away):
+                    home, away = _teams(leg.get("match") or leg.get("game") or "")
+                leg_rows.append({
+                    "home": home, "away": away,
+                    "market": leg.get("selection") or leg.get("market"),
+                    "odds": leg.get("odds"),
+                })
+            probability = _pct(tip.get("probability"))
+            if probability is None:
+                raise ValueError("Original combo needs verified model probability")
+            if tip.get("stake") is None or not str(tip.get("confidence") or "").strip():
+                raise ValueError("Original combo stake/confidence missing")
+            odds_total = tip.get("combined_odds")
+            if odds_total is None:
+                odds_total = tip.get("odds")
+            return render_combo(
+                leg_rows, combined_odds=odds_total,
+                probability=probability, ev=tip.get("ev"),
+                confidence=tip["confidence"], stake=tip["stake"],
+                combined_odds_observed=True,
+                combined_quote_id=tip["combined_quote_id"],
+                bookmaker=tip.get("bookmaker") or tip.get("odds_source") or tip.get("_source"),
+                crest_provider=_badge_bytes,
+                status="OFFEN" if result is None else (
+                    {"win": "GEWONNEN", "loss": "VERLOREN", "void": "VOID"}.get(
+                        str((result.get("marks") or {}).get("0") or "").lower(), "OFFEN")),
+            )
     if len(rows) == 1 and str(rows[0][0]) == "corners":
         from netrattler_corner_cards import render_corner_card
         return render_corner_card(rows[0][1], target_date, result)
