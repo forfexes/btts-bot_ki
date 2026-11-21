@@ -44,13 +44,30 @@ def norm_team(name: Any) -> str:
 
 
 def team_match(a: Any, b: Any) -> bool:
+    """Conservative club identity match; do not accept a shared generic word.
+
+    The old substring fallback matched e.g. "Paris FC" to "Paris
+    Saint-Germain", or "United" to "Manchester United", potentially
+    settling a real Telegram pick against the wrong club's score. A data
+    gap is preferable to false WIN/LOSS or a fabricated HT settlement.
+    """
     x, y = norm_team(a), norm_team(b)
     if not x or not y:
         return False
     if x == y:
         return True
-    # containment only for reasonably specific names (avoid 'united' matching everything)
-    return (len(x) >= 5 and len(y) >= 5) and (x in y or y in x)
+    # Never collapse reserve/youth/women's squads into the senior club.
+    squad = {"ii", "b", "reserves", "reserve", "u17", "u18", "u19", "u20",
+             "u21", "u23", "women", "womens", "femenino", "feminino"}
+    xt, yt = x.split(), y.split()
+    if (set(xt) & squad) != (set(yt) & squad):
+        return False
+    # Whole-token containment only. A single-word name cannot uniquely
+    # disambiguate "Paris FC"/"Paris SG" or "Manchester City"/"United".
+    short, long = (xt, yt) if len(xt) <= len(yt) else (yt, xt)
+    if len(short) < 2 or len(long) - len(short) > 1:
+        return False
+    return (long[:len(short)] == short or long[-len(short):] == short)
 
 
 def tip_pair(row: Dict[str, Any]) -> Optional[Tuple[str, str]]:
@@ -175,7 +192,7 @@ def run() -> Dict[str, int]:
         found_rows = [r for r, _ in hits]
         rest = unmatched(found_rows, rest)
         stats.setdefault("unmatched", []).extend(f"{day} {h} vs {a}" for h, a, _ in rest[:6])
-        if rest and rapid_budget > 0 and day >= (datetime.now(timezone.utc).date() - timedelta(days=3)).isoformat():  # older tips are voided anyway
+        if rest and rapid_budget > 0 and day >= (datetime.now(timezone.utc).date() - timedelta(days=3)).isoformat():  # rate-limit window only; older tips remain PENDING
             rapid_budget -= 1
             extra = select_rows(rapid.fetch_day(day), rest)
             stats["rapid"] = stats.get("rapid", 0) + len(extra)
