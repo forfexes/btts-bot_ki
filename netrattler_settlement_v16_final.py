@@ -2768,6 +2768,10 @@ def _remember_builder_results(tip_ids: Sequence[str]) -> None:
 
 
 def telegram_send(chat_id: str, text: str) -> bool:
+    # Settlement must update the original user-facing message, never create
+    # a second Telegram result notification while original-only mode is on.
+    if os.getenv("SETTLEMENT_TG_ORIGINAL_EDIT_ONLY", "1") == "1":
+        return False
     if not TG_TOKEN or not chat_id:
         return False
     for attempt in range(3):
@@ -3025,7 +3029,13 @@ def main() -> None:
         _recent = list(_recent_by_tip.values())
     except Exception:
         _recent = list(newly_closed)
-    send_result_cards(_recent or newly_closed)
+    if os.getenv("SETTLEMENT_TG_ORIGINAL_EDIT_ONLY", "1") != "1":
+        # editMessageMedia replaces artwork and may substitute an unapproved
+        # technical card for the owner's original. Keep the original bitmap
+        # untouched until every family has a pixel-approved replacement.
+        send_result_cards(_recent or newly_closed)
+    else:
+        log("Originalkarten bleiben unverändert; Auswertung nur im Original-Tipp/Caption")
 
     history = dedup_history(existing + settled)
     EXISTING_FOR_REPORTS[:] = list(existing)
