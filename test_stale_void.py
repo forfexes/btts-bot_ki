@@ -58,3 +58,19 @@ def test_load_results_dedupe_keeps_corners(monkeypatch):
     monkeypatch.setattr(s, "public_results", lambda day: [])
     out = s.load_results(["2026-10-18"])
     assert len(out) == 1 and s._has_corners(out[0])
+
+def test_old_published_tip_stays_pending_without_result_evidence():
+    # Even a months-old real Telegram tip is not a bookmaker VOID just because
+    # its league or player data is missing from result feeds.
+    tip = {
+        "_table": "tips", "tip_id": "QA-OLD-BTTS-UNSETTLED",
+        "market_group": "btts", "market": "btts",
+        "match": "HOME FC vs AWAY FC", "date": "2026-01-01",
+        "tip": "YES", "odds": 1.75, "stake": 1,
+        "telegram_msg_id": 123, "telegram_chat_id": "-100000",
+    }
+    result = s.settle_tip(tip, [], [])
+    assert result["status"] == "pending", result
+    assert result["profit"] is None, result
+    assert not s._writes_to_source(result), result
+
