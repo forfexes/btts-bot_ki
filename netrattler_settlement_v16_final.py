@@ -404,32 +404,14 @@ def _genuine_void_reason(reason: Any) -> bool:
 
 
 def reconcile_pending_with_void_sources(existing: List[Dict[str, Any]], void_tip_ids: Any = None) -> int:
-    """Settlement-Zeilen, die noch 'pending' sind, obwohl der Quell-Tipp (tips) schon VOID ist
-    (stale-Void wurde in tips geschrieben, aber load_tips() laedt nur offene Tipps und schreibt die
-    Settlement-Zeile nie mehr neu). Setzt sie auf VOID (profit 0, zaehlt nicht im ROI). Idempotent."""
-    if void_tip_ids is None:
-        start_day = (TODAY - timedelta(days=DAYS)).isoformat()
-        rows = sb_get_paged("tips", {"select": "tip_id,status", "status": "eq.void", "date": f"gte.{start_day}"},
-                            max_rows=LIMIT, quiet=True) or []
-        void_tip_ids = {str(r.get("tip_id")) for r in rows if r.get("tip_id") not in (None, "")}
-    ids = []
-    for row in existing:
-        if normalized_status(row.get("status")) != "pending":
-            continue
-        if str(row.get("source_table") or "") != "tips":
-            continue
-        if str(row.get("tip_id") or "") in void_tip_ids:
-            ids.append(row.get("settlement_id"))
-            row["status"] = "void"
-            row["result_label"] = "VOID"
-            row["profit"] = 0.0
-            row["profit_units"] = 0.0
-    if not ids:
-        return 0
-    payload = {"status": "void", "result_label": "VOID", "profit": 0.0, "profit_units": 0.0,
-               "reason": f"void: kein Ergebnis nach {STALE_VOID_DAYS} Tagen verfuegbar (Liga ohne Datenquelle) · abgeglichen"}
-    sb_patch_in("netrattler_settlements", "settlement_id", ids, payload)
-    return len(ids)
+    """Do not promote a source VOID to settlements on a bare tip ID.
+
+    Historical bulk stale closures used the exact same status as genuine
+    bookmaker cancellations. Without match-specific cancellation or DNP proof,
+    even a source-row status=void is insufficient to close a published tip.
+    Evidence-based VOID is handled by settle_tip, not this legacy mass updater.
+    """
+    return 0
 
 
 def reconcile_unpublished_builders(existing: List[Dict[str, Any]], unpublished_ids: Any = None) -> int:
