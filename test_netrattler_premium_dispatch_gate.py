@@ -23,6 +23,30 @@ def crest():
 
 
 class PremiumTelegramDispatchTests(unittest.TestCase):
+    def test_owner_only_premium_ai_never_sends_unapproved_stickered_master(self):
+        # In production, even a verified bookmaker quote is NOT permission to
+        # cover a sample-filled owner screenshot with a generic SVG template.
+        with patch.dict(os.environ, {"NETRATTLER_ORIGINAL_ONLY":"1"}), \
+             patch("netrattler_premium_telegram_adapter.render",
+                   side_effect=AssertionError("unapproved premium SVG produced")), \
+             patch.object(cards, "render_bis_card",
+                          side_effect=AssertionError("old BIS image produced")):
+            for market in ("over25","btts_ht","over15_ht","1x2","var"):
+                with self.subTest(market=market), self.assertRaisesRegex(
+                        ValueError, "premium_ai_master_not_owner_approved"):
+                    cards.render_card([(market, tip(market))], "2026-11-21")
+            self.assertRaisesRegex(
+                ValueError,"premium_ai_master_not_owner_approved",
+                cards.render_card,
+                [("over25",tip()),("btts",tip("btts"))],"2026-11-21")
+            # The real BTTS owner renderer is still allowed.
+            with patch("netrattler_premium_telegram_adapter.render",
+                       return_value=b"owner-original-btts") as approved:
+                self.assertEqual(
+                    cards.render_card([("btts",tip("btts"))],"2026-11-21"),
+                    b"owner-original-btts")
+                approved.assert_called_once()
+
     def test_new_regular_single_market_is_not_old_bis_by_default(self):
         with patch.dict(os.environ,{"NETRATTLER_CARD_LAYOUT":""}), \
              patch.object(cards,"_badge_bytes",return_value=crest()), \
