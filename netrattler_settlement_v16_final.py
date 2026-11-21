@@ -994,7 +994,12 @@ def group_of(row: Dict[str, Any]) -> str:
     )).lower()
     if any(x in low for x in ("goal hunter", "goalscorer", "anytime scorer", "to score", "scorer")):
         return "scorer"
-    if any(x in low for x in ("1x2", "match result", "home win", "away win")) or re.search(r"(?:^|\s)(?:1|x|2)(?:\s|$)", str(data.get("tip") or "").lower()):
+    if (any(x in low for x in (
+            "1x2", "match result", "home win", "away win",
+            "double chance", "double_chance", "doppelte chance"))
+            or str(data.get("category") or "").lower() == "double_chance"
+            or re.fullmatch(r"(?:1|x|2|1x|x2|12)",
+                            str(data.get("tip") or data.get("selection") or "").strip().lower())):
         return "1x2"
     if "builder" in low:
         return "builder"
