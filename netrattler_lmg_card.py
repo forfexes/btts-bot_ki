@@ -52,9 +52,17 @@ def wrap_team(d, text, x, y):
 
 def crest(team_id):
     """Retrieve an actual club logo by verified FotMob team ID, never approximate it."""
-    if not team_id or not str(team_id).isdigit():
+    if isinstance(team_id, str) and team_id.startswith("https://"):
+        # Accept only the official ESPN crest CDN; never fetch arbitrary URLs.
+        from urllib.parse import urlsplit
+        parsed = urlsplit(team_id)
+        if parsed.hostname != "a.espncdn.com" or parsed.username or parsed.password or parsed.port not in (None, 443):
+            return None
+        url = team_id
+    elif team_id and str(team_id).isdigit():
+        url = f"https://images.fotmob.com/image_resources/logo/teamlogo/{team_id}.png"
+    else:
         return None
-    url = f"https://images.fotmob.com/image_resources/logo/teamlogo/{team_id}.png"
     try:
         response = requests.get(url, timeout=10, headers={"Accept": "image/png,image/*"})
         response.raise_for_status()
@@ -112,8 +120,8 @@ def make_card(fixture, metrics=None, *, final_score=None, won=None,
     d = ImageDraw.Draw(im)
     center(d, fixture.get("league") or "Fussball", 588, 280, 34, max_width=600)
     home, away = str(fixture["home"]), str(fixture["away"])
-    for side, x, logo_id in ((home, 215, fixture.get("home_logo_id")),
-                             (away, 891, fixture.get("away_logo_id"))):
+    for side, x, logo_id in ((home, 215, fixture.get("home_logo_url") or fixture.get("home_logo_id")),
+                             (away, 891, fixture.get("away_logo_url") or fixture.get("away_logo_id"))):
         badge = crest(logo_id)
         if badge is None:
             raise ValueError(
