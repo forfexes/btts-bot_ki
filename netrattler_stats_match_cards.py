@@ -1058,6 +1058,17 @@ def update_cards_with_results(token, results, log=print):
                 entries = [(m, t) for m, t in (card.get("entries") or [])]
                 if not entries:
                     continue
+                if os.getenv("SETTLEMENT_TG_ORIGINAL_EDIT_ONLY", "0") == "1":
+                    # Only these routes are guaranteed to repaint an actual
+                    # user-supplied original, never a technical SVG or legacy
+                    # BIS substitute. Other original images stay untouched.
+                    if len(entries) != 1 or str(entries[0][0]) not in (
+                        "btts", "scorer", "corners"
+                    ):
+                        diag["unapproved_original_skipped"] = (
+                            diag.get("unapproved_original_skipped", 0) + 1
+                        )
+                        continue
                 old = card.get("result") or {}
                 marks = dict(old.get("marks") or {})
                 ft = old.get("ft") or ""
