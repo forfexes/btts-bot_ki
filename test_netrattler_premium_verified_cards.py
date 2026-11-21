@@ -29,6 +29,9 @@ class PremiumVerifiedCardsTests(unittest.TestCase):
                 item=tip()
                 if market=="1x2":
                     item["selection"]="1"
+                if market=="combo":
+                    item.update(combined_odds_observed=True,
+                                combined_quote_id="QA-OBSERVED-BOOKMAKER-TICKET")
                 if market=="var":
                     item.update(selection="YES", tip_eligible=True,
                                 settlement_rule_verified=True,
@@ -38,6 +41,30 @@ class PremiumVerifiedCardsTests(unittest.TestCase):
                     self.assertEqual(im.format,"PNG")
                     self.assertEqual(im.size,(1122,1402))
                     self.assertGreater(im.convert("RGB").getextrema()[0][1],170)
+
+    def test_combo_requires_observed_bookmaker_ticket(self):
+        base=tip()
+        for unsafe in ({}, {"combined_odds_observed": True},
+                       {"combined_quote_id": "book-ticket"},
+                       {"combined_odds_observed": True, "combined_quote_id": ""}):
+            with self.subTest(unsafe=unsafe), self.assertRaisesRegex(ValueError,"combined bookmaker"):
+                render([("combo", {**base, **unsafe})], "2026-11-19",
+                       crest_provider=lambda _:crest())
+        ok={**base,"combined_odds_observed":True,"combined_quote_id":"QA-CONFIRMED"}
+        with Image.open(io.BytesIO(render([("combo",ok)],"2026-11-19",
+                       crest_provider=lambda _:crest()))) as image:
+            self.assertEqual(image.size,(1122,1402))
+
+    def test_one_x_two_conflicting_directions_rejected(self):
+        for pair in ({"selection":"1","tip":"2"}, {"selection":"X","tip":"HOME"}):
+            with self.subTest(pair=pair),self.assertRaisesRegex(ValueError,"Conflicting 1X2"):
+                render([("1x2",{**tip(),**pair})],"2026-11-19",
+                       crest_provider=lambda _:crest())
+        for choice in ("1","X","2"):
+            raw=render([("1x2",{**tip(),"selection":choice,"tip":choice})],
+                       "2026-11-19",crest_provider=lambda _:crest())
+            with Image.open(io.BytesIO(raw)) as image:
+                self.assertEqual(image.size,(1122,1402))
 
     def test_var_card_has_real_fixture_and_kickoff_no_unsafe_publication(self):
         from unittest.mock import patch
