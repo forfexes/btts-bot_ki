@@ -418,6 +418,14 @@ def select_cards(tips_by_market, max_cards=0):
         for tip in tips or []:
             if not _valid(tip) or not _card_model_consistent(market, tip):
                 continue
+            # An observed VAR quote is not a publishable pick until the
+            # provider's rule-specific settlement is independently verified.
+            # Reject it before expensive crest lookups and Telegram preparation.
+            if market == "var" and not (
+                tip.get("tip_eligible") is True
+                and tip.get("settlement_rule_verified") is True
+            ):
+                continue
             match = str(tip["match"]).strip()
             matches[match.casefold()].append((market, tip))
 
