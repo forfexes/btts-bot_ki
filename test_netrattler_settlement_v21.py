@@ -19,6 +19,31 @@ class FakeResponse:
         return self._payload
 
 class SettlementV21Tests(unittest.TestCase):
+    def test_original_only_mode_never_posts_new_telegram_result(self):
+        with patch.dict(os.environ, {"SETTLEMENT_TG_ORIGINAL_EDIT_ONLY": "1"}), \
+             patch.object(mod, "TG_TOKEN", "TEST_BOT_TOKEN"), \
+             patch.object(mod.requests, "post") as send:
+            self.assertFalse(mod.telegram_send("123", "Not a new post"))
+            send.assert_not_called()
+
+    def test_existing_photo_is_edited_as_caption_not_new_message(self):
+        calls = []
+        def edit(url, **kwargs):
+            calls.append(url.rsplit("/", 1)[-1])
+            if url.endswith("/editMessageText"):
+                result = FakeResponse({"ok": False}, status=400)
+                result.text = "Bad Request: there is no text in the message to edit"
+                return result
+            assert url.endswith("/editMessageCaption"), url
+            assert "caption" in kwargs["json"]
+            return FakeResponse({"ok": True}, status=200)
+        with patch.dict(os.environ, {"SETTLEMENT_TG_EDIT_GAP_SEC": "0",
+                                      "SETTLEMENT_TG_ORIGINAL_EDIT_ONLY": "1"}), \
+             patch.object(mod, "TG_TOKEN", "TEST_BOT_TOKEN"), \
+             patch.object(mod.requests, "post", side_effect=edit):
+            self.assertTrue(mod.telegram_edit("123", 44, "Original tip\\n\\n⸻⸻ Match Summary ⸻⸻\\n✅ V"))
+        self.assertEqual(calls, ["editMessageText", "editMessageCaption"])
+
     def test_similarity_normalizes_club_tokens(self):
         self.assertGreaterEqual(mod.similarity("FC Bayern München", "Bayern Munich"), 0.5)
 
