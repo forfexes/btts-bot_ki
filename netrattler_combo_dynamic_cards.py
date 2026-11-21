@@ -1,127 +1,25 @@
-"""Dynamic NETRATTLER COMBO card (3–10 legs) with verified team crest bytes.
+"""NETRATTLER 3–10-leg COMBO renderer using only uploaded owner originals.
 
-Standalone renderer: it never substitutes generic shields for missing crests.
-Caller supplies real crests from its trusted club-identity/image pipeline.
+3–7 legs use the real COMBO-7 PNG, 8–10 legs use the COMBO-9 PNG.
+No procedural, technical SVG or generic fallback is permitted in Telegram.
 """
 from __future__ import annotations
-import os
-from io import BytesIO
-from PIL import Image, ImageDraw, ImageFont, ImageOps
 
-CYAN = "#27E6FF"
-GOLD = "#FFE14A"
-WHITE = "#FAFCFF"
-BG = "#06111C"
+from netrattler_combo_owner_original import render_original_combo
 
-def _font(size):
-    for p in ("/usr/share/fonts/truetype/dejavu/DejaVuSansCondensed-Bold.ttf",
-              "/usr/share/fonts/truetype/dejavu/DejaVuSans-Bold.ttf"):
-        try:
-            return ImageFont.truetype(p, size)
-        except OSError:
-            continue
-    return ImageFont.load_default()
 
-def _fit(draw, value, max_width, size=27):
-    value = str(value or "").strip()
-    if not value:
-        raise ValueError("Leerer Combo-Kartentext")
-    while size >= 14:
-        f = _font(size)
-        if draw.textbbox((0, 0), value, font=f)[2] <= max_width:
-            return f
-        size -= 1
-    raise ValueError("Combo-Text zu lang: " + value[:40])
+def render_combo(legs, *, combined_odds=None, probability, ev=None, confidence,
+                 status="OFFEN", crest_provider=None, stake=1.0,
+                 combined_odds_observed=False, combined_quote_id="", bookmaker=""):
+    """Render true-original 3–10-leg artwork with real crests and decimal odds.
 
-def _crest(raw):
-    if not isinstance(raw, (bytes, bytearray)) or not raw:
-        raise ValueError("Echtes Vereinswappen fehlt: keine Platzhalter erlaubt")
-    with Image.open(BytesIO(raw)) as source:
-        source.load()
-        if min(source.size) < 24:
-            raise ValueError("Vereinswappen hat zu geringe Auflösung")
-        return source.convert("RGBA").copy()
-
-def _text(draw, x, y, value, width, size=27, color=WHITE):
-    f = _fit(draw, value, width, size)
-    draw.text((x, y), str(value), font=f, fill=color)
-
-def render_combo(legs, *, combined_odds, probability, ev, confidence, status="OFFEN",
-                 crest_provider=None, stake=1.0, combined_odds_observed=False,
-                 combined_quote_id="", bookmaker=""):
-    """Each leg: home, away, market, odds; crest_provider(team)->image bytes.
-
-    Explicit inputs avoid invented odds, fixtures and probabilities.
-    Returns PNG bytes. Does not send Telegram messages.
+    The combined bookmaker ticket is optional. When missing, only the product
+    of authentic supplied leg prices is shown, explicitly labelled BERECHNET.
     """
-    legs = list(legs)
-    if not 3 <= len(legs) <= 10:
-        raise ValueError("COMBO erfordert 3 bis 10 Tipps")
-    if len(legs) in (7,9):
-        from netrattler_combo_owner_original import render_original_combo
-        return render_original_combo(
-            legs,combined_odds=combined_odds,probability=probability,
-            ev=ev,confidence=confidence,status=status,stake=stake,
-            combined_odds_observed=combined_odds_observed,
-            combined_quote_id=combined_quote_id,bookmaker=bookmaker,
-            crest_provider=crest_provider)
-    # No source-artwork screenshot exists for other count/layouts. The legacy
-    # generic drawing remains usable for OFFLINE QA only; in the actual bot it
-    # must NEVER substitute itself for an owner's original.
-    if os.getenv("NETRATTLER_ORIGINAL_ONLY","0")=="1":
-        raise ValueError("Keine freigegebene NETRATTLER Original-COMBO-Vorlage für diesen Umfang")
-    if not callable(crest_provider):
-        raise ValueError("Verifizierte Vereinswappen-Quelle fehlt")
-    for v in (combined_odds, probability, ev):
-        if not isinstance(v, (float, int)) or isinstance(v, bool):
-            raise ValueError("Bestätigte Quote/Wahrscheinlichkeit/EV fehlt")
-    if combined_odds <= 1 or not 0 <= probability <= 100:
-        raise ValueError("Ungültige Quote oder Wahrscheinlichkeit")
-    for leg in legs:
-        if not all(str(leg.get(k) or "").strip() for k in ("home", "away", "market")):
-            raise ValueError("Unvollständiger COMBO-Tipp")
-        if not isinstance(leg.get("odds"), (int, float)) or leg["odds"] <= 1:
-            raise ValueError("Echte Einzelquote fehlt")
-    # Validate and cache all badges BEFORE painting; never output partial cards.
-    crests = {}
-    for leg in legs:
-        for team in (leg["home"], leg["away"]):
-            if team not in crests:
-                crests[team] = _crest(crest_provider(team))
-    width, top, row_h, footer = 1100, 290, 114, 315
-    height = top + len(legs) * row_h + footer
-    im = Image.new("RGB", (width, height), BG)
-    d = ImageDraw.Draw(im)
-    d.rounded_rectangle((24, 20, width-24, height-22), radius=35,
-                        outline=CYAN, width=5)
-    _text(d, 165, 38, "NETRATTLER", 790, 78)
-    d.rounded_rectangle((280, 140, 820, 212), radius=18, outline=GOLD, width=5)
-    _text(d, 405, 155, "COMBO", 400, 48, GOLD)
-    _text(d, 420, 235, f"{len(legs)} TIPPS", 310, 34, GOLD)
-    for i, leg in enumerate(legs):
-        y = top + i * row_h
-        d.rounded_rectangle((42, y, width-42, y+row_h-13), radius=18,
-                            outline=CYAN, width=4, fill="#071B28")
-        _text(d, 60, y+29, str(i+1), 50, 32, GOLD)
-        for team, x in ((leg["home"], 115), (leg["away"], 573)):
-            badge = ImageOps.contain(crests[team], (64, 64))
-            im.paste(badge, (x, y+13), badge)
-            _text(d, x+74, y+12, team.upper(), 270, 25)
-        _text(d, 510, y+16, "VS", 60, 25, GOLD)
-        _text(d, 195, y+63, leg["market"], 610, 23, GOLD)
-        _text(d, 897, y+42, f'{leg["odds"]:.2f}', 120, 30, GOLD)
-    y = top + len(legs) * row_h + 20
-    for x, label, val, color in (
-        (50, "QUOTE", f"{combined_odds:.2f}", GOLD),
-        (395, "WAHRSCHEINLICHKEIT", f"{probability:.1f}%", WHITE),
-        (770, "EV", f"{ev:+.1f}%", GOLD),
-    ):
-        d.rounded_rectangle((x, y, x+285, y+130), radius=18, outline=CYAN, width=4)
-        _text(d, x+18, y+14, label, 252, 25)
-        _text(d, x+22, y+58, val, 250, 42, color)
-    _text(d, 62, y+165, f"KONFIDENZ: {str(confidence).upper()}", 500, 26, GOLD)
-    _text(d, 62, y+220, f"AUSWERTUNG: {str(status).upper()}", 580, 25)
-    _text(d, 795, y+220, "@prophunter", 260, 27, GOLD)
-    output = BytesIO()
-    im.save(output, format="PNG")
-    return output.getvalue()
+    return render_original_combo(
+        legs, combined_odds=combined_odds, probability=probability, ev=ev,
+        confidence=confidence, status=status, stake=stake,
+        combined_odds_observed=combined_odds_observed,
+        combined_quote_id=combined_quote_id, bookmaker=bookmaker,
+        crest_provider=crest_provider,
+    )
