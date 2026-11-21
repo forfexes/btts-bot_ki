@@ -27,7 +27,12 @@ def _number(value):
 
 
 def _price(tip):
-    for key in ("oddsYes", "odds", "odd", "price"):
+    # A verified combo may carry its book-issued ticket price solely under
+    # combined_odds. Do not reject that valid market before the card adapter
+    # can apply its strict combined-ticket provenance checks.
+    keys = ("combined_odds", "odds") if tip.get("market") == "combo" else (
+        "oddsYes", "odds", "odd", "price")
+    for key in keys:
         value = _number(tip.get(key))
         if value is not None and 1.01 <= value <= 100:
             return value
@@ -420,11 +425,12 @@ def select_cards(tips_by_market, max_cards=0):
                 continue
             # The published combo master displays a combined bookmaker quote,
             # never a multiplied or unobserved estimate.
-            if market == "combo" and not (
-                tip.get("combined_odds_observed") is True
-                and str(tip.get("combined_quote_id") or "").strip()
-            ):
-                continue
+            if market == "combo":
+                if not (tip.get("combined_odds_observed") is True
+                        and str(tip.get("combined_quote_id") or "").strip()):
+                    continue
+                if _number(tip.get("combined_odds")) is None and _number(tip.get("odds")) is None:
+                    continue
             # An observed VAR quote is not a publishable pick until the
             # provider's rule-specific settlement is independently verified.
             # Reject it before expensive crest lookups and Telegram preparation.
