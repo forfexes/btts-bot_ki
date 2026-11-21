@@ -117,7 +117,11 @@ def render_builder_card(pick):
 
 
 def send_builder_card(token,chat,pick,log=print):
+    import os
     import netrattler_stats_match_cards as cards
+    if os.getenv("NETRATTLER_ORIGINAL_ONLY", "0") == "1":
+        log("Builder-Premiumbild gesperrt: clean_owner_master_not_approved")
+        return None
     if not token or not chat:return None
     from netrattler_visual_gate import validate_builder
     checked, reasons = validate_builder(pick)
