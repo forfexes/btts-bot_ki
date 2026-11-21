@@ -57,6 +57,25 @@ def test_builder_two_four_six_leg_masters_and_dry_run_send():
                 assert send.call_args.args[3].startswith(b"\x89PNG\r\n\x1a\n")
 
 
+def test_builder_original_calculates_missing_combo_quote_without_fake_ev():
+    """Real original 3-leg artwork remains usable with observed leg prices."""
+    photo=_test_photo()
+    with patch.object(cards,"_player_photo",return_value=photo), \\
+         patch.object(cards,"_badge_bytes",return_value=photo):
+        pick=_fixture(3)
+        pick.combined_quote_verified=False
+        pick.combined_bookmaker_quote=None
+        raw=builder.render_builder_card(pick)
+        im=Image.open(io.BytesIO(raw))
+        assert im.size==(1122,1102)
+        assert raw.startswith(bytes((137,80,78,71)))
+        from netrattler_neon_design import _builder_quote_display
+        title,value,verified=_builder_quote_display(pick,pick.legs)
+        assert title=="EINZELQUOTEN ×"
+        assert value=="5.36"
+        assert verified is None
+
+
 def test_goal_hunter_master_and_dry_run_send():
     photo=_test_photo()
     tip={"match":"Demo United vs Test FC","player":"Beispiel Stürmer",
