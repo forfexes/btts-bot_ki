@@ -23,7 +23,7 @@ def publishable_combo(combo):
     except (ValueError,TypeError):
         return False
     legs=combo.get("tips")
-    if not isinstance(legs,list) or not 3<=len(legs)<=11:
+    if not isinstance(legs,list) or not 3<=len(legs)<=12:
         return False
     for tip in legs:
         if not isinstance(tip,dict):
