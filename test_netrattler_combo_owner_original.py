@@ -54,6 +54,14 @@ class VerifiedOriginalComboTests(unittest.TestCase):
         self.assertNotEqual(render(7),render(7,combined_odds=18.75))
         self.assertNotEqual(render(9),render(9,status="GEWONNEN"))
 
+    def test_bookmaker_verified_combo_without_model_ev_uses_no_fake_ev(self):
+        # A real, confirmed book quote must still render without a
+        # fabricated EV metric. Offline fixture must never enter Telegram.
+        raw=render(7,ev=None)
+        with Image.open(io.BytesIO(raw)) as im:
+            self.assertEqual(im.size,(W,H))
+        self.assertNotEqual(raw,render(7,ev=3.1))
+
     def test_calculated_quote_without_combined_bookmaker_ticket(self):
         for n in (7,9):
             with self.subTest(n=n):
