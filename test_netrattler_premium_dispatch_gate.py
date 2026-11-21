@@ -93,6 +93,7 @@ class PremiumTelegramDispatchTests(unittest.TestCase):
         # A single-leg YES quote must never qualify an unpriced combo.
         leg_only = {**confirmed, "oddsYes": 1.65}
         leg_only.pop("odds", None)
+        leg_only.pop("combined_odds", None)
         self.assertEqual(cards.select_cards({"combo": [leg_only]}), [])
 
     def test_unverified_var_never_enters_telegram_send_queue(self):
