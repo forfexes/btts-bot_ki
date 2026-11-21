@@ -72,7 +72,7 @@ class VerifiedOriginalComboTests(unittest.TestCase):
                     render(7,**kwargs)
 
     def test_derived_counts_keep_the_real_original_header_and_footer(self):
-        for n in (3,4,5,6,8,10):
+        for n in (3,4,5,6,8,10,11,12):
             with self.subTest(n=n):
                 rendered=render(n,combined_odds_observed=False,
                                 combined_quote_id="",bookmaker="",
@@ -83,7 +83,7 @@ class VerifiedOriginalComboTests(unittest.TestCase):
                     original=original.convert("RGB").resize((W,H),Image.Resampling.LANCZOS)
                     self.assertEqual(output.width,W)
                     self.assertEqual(output.height,
-                                     H if n==10 else H+round(793*n/source_n)-793)
+                                     H+round(793*(n-source_n)/source_n))
                     self.assertIsNone(ImageChops.difference(
                         output.crop((0,0,W,280)),
                         original.crop((0,0,W,280))).getbbox())
@@ -92,7 +92,7 @@ class VerifiedOriginalComboTests(unittest.TestCase):
                         original.crop((0,H-82,W,H))).getbbox())
 
     def test_only_unsupported_leg_counts_are_rejected(self):
-        for n in (0,1,2,11):
+        for n in (0,1,2,13):
             with self.subTest(n=n),self.assertRaises(ValueError):
                 render(n)
 
