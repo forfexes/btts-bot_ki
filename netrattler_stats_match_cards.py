@@ -421,11 +421,29 @@ def select_cards(tips_by_market, max_cards=0):
             # An observed VAR quote is not a publishable pick until the
             # provider's rule-specific settlement is independently verified.
             # Reject it before expensive crest lookups and Telegram preparation.
-            if market == "var" and not (
-                tip.get("tip_eligible") is True
-                and tip.get("settlement_rule_verified") is True
-            ):
-                continue
+            if market == "var":
+                if not (tip.get("tip_eligible") is True
+                        and tip.get("settlement_rule_verified") is True):
+                    continue
+                # Validate the same mandatory VAR identity and market
+                # direction before enqueueing, not after other cards are sent.
+                from datetime import datetime
+                start = str(tip.get("commence_time") or "").strip()
+                try:
+                    kickoff = datetime.fromisoformat(start.replace("Z", "+00:00"))
+                    if kickoff.tzinfo is None or kickoff.utcoffset() is None:
+                        continue
+                except (TypeError, ValueError, OverflowError):
+                    continue
+                declared = [str(tip[k]).strip().upper()
+                            for k in ("selection", "tip")
+                            if tip.get(k) is not None and str(tip[k]).strip()]
+                if not declared or any(x not in ("YES", "JA", "TRUE", "1")
+                                       for x in declared):
+                    continue
+                home, away = _teams(tip.get("match"))
+                if not home or not away:
+                    continue
             match = str(tip["match"]).strip()
             matches[match.casefold()].append((market, tip))
 
