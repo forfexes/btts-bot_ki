@@ -418,6 +418,13 @@ def select_cards(tips_by_market, max_cards=0):
         for tip in tips or []:
             if not _valid(tip) or not _card_model_consistent(market, tip):
                 continue
+            # The published combo master displays a combined bookmaker quote,
+            # never a multiplied or unobserved estimate.
+            if market == "combo" and not (
+                tip.get("combined_odds_observed") is True
+                and str(tip.get("combined_quote_id") or "").strip()
+            ):
+                continue
             # An observed VAR quote is not a publishable pick until the
             # provider's rule-specific settlement is independently verified.
             # Reject it before expensive crest lookups and Telegram preparation.
