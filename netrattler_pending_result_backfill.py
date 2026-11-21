@@ -43,6 +43,15 @@ def norm_team(name: Any) -> str:
     return " ".join(toks)
 
 
+# Only named, unambiguous editorial short forms. Never generic substring
+# matching: "Paris" could be Paris FC or Paris Saint-Germain, and a shared
+# "United" does not identify any single football club.
+_VERIFIED_TEAM_ALIASES = {
+    "wolverhampton": "wolverhampton wanderers",
+    "wolves": "wolverhampton wanderers",
+}
+
+
 def team_match(a: Any, b: Any) -> bool:
     """Conservative club identity match; do not accept a shared generic word.
 
@@ -52,6 +61,8 @@ def team_match(a: Any, b: Any) -> bool:
     gap is preferable to false WIN/LOSS or a fabricated HT settlement.
     """
     x, y = norm_team(a), norm_team(b)
+    x = _VERIFIED_TEAM_ALIASES.get(x, x)
+    y = _VERIFIED_TEAM_ALIASES.get(y, y)
     if not x or not y:
         return False
     if x == y:
