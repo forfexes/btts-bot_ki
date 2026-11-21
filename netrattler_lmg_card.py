@@ -116,10 +116,10 @@ def make_card(fixture, metrics=None, *, final_score=None, won=None,
                              (away, 891, fixture.get("away_logo_id"))):
         badge = crest(logo_id)
         if badge is None:
-            center(d, "WAPPEN", x, 414, 25, GOLD, max_width=160)
-            center(d, "FEHLT", x, 450, 25, WHITE, max_width=160)
-        else:
-            im.paste(badge, (x - badge.width // 2, 411 - badge.height // 2), badge)
+            raise ValueError(
+                f"Verified team crest missing for {side!r}; do not publish a placeholder card"
+            )
+        im.paste(badge, (x - badge.width // 2, 411 - badge.height // 2), badge)
         wrap_team(d, side, x, 574)
     if final_score is None:
         center(d, f"{fixture['minute']}. MINUTE", 565, 367, 39, GOLD, max_width=225)
