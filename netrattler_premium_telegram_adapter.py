@@ -136,7 +136,8 @@ def render(entries, target_date, *, crest_provider, result=None):
                       for k in ("selection", "tip")
                       if tip.get(k) is not None and str(tip[k]).strip()]
         if not selections or any(choice not in
-               ("1", "X", "2", "HOME", "DRAW", "AWAY") for choice in selections):
+               ("1", "X", "2", "1X", "X2", "12", "HOME", "DRAW", "AWAY")
+               for choice in selections):
             raise ValueError("1X2 selection not verified")
         canonical = {"HOME": "1", "DRAW": "X", "AWAY": "2"}
         canonical_selections = {canonical.get(x, x) for x in selections}
