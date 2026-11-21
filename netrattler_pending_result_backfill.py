@@ -62,12 +62,11 @@ def team_match(a: Any, b: Any) -> bool:
     xt, yt = x.split(), y.split()
     if (set(xt) & squad) != (set(yt) & squad):
         return False
-    # Whole-token containment only. A single-word name cannot uniquely
-    # disambiguate "Paris FC"/"Paris SG" or "Manchester City"/"United".
-    short, long = (xt, yt) if len(xt) <= len(yt) else (yt, xt)
-    if len(short) < 2 or len(long) - len(short) > 1:
-        return False
-    return (long[:len(short)] == short or long[-len(short):] == short)
+    # Partial club names are NOT verified aliases, even with two matching
+    # words: "Boca Juniors" can mean Boca Juniors (Argentina) or Boca Juniors
+    # de Cali (Colombia). Full normalized identity is mandatory. Teams that
+    # cannot be verified remain PENDING for a canonical-ID source lookup.
+    return False
 
 
 def tip_pair(row: Dict[str, Any]) -> Optional[Tuple[str, str]]:
