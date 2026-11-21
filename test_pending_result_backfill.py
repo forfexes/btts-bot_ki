@@ -16,6 +16,16 @@ class T(unittest.TestCase):
         self.assertTrue(m.team_match("Arsenal", "Arsenal FC"))
         self.assertTrue(m.team_match("Sao Luiz", "São Luiz"))
         self.assertFalse(m.team_match("Manchester United", "Manchester City"))
+        # Do not confuse different clubs, their reserve/youth teams, or
+        # generic one-word suffixes while backfilling real bookmaker tips.
+        self.assertFalse(m.team_match("Paris FC", "Paris Saint-Germain"))
+        self.assertFalse(m.team_match("United", "Manchester United"))
+        self.assertFalse(m.team_match("Madrid", "Atletico Madrid"))
+        self.assertFalse(m.team_match("Boca Juniors", "Boca Juniors de Cali"))
+        self.assertFalse(m.team_match("Manchester United", "Manchester United U21"))
+        self.assertFalse(m.team_match("Arsenal Women", "Arsenal"))
+        self.assertTrue(m.team_match("Boca Juniors de Cali", "Boca Juniors Cali"))
+        self.assertTrue(m.team_match("Real Madrid", "Real Madrid Club"))
 
     def test_plan_and_select(self):
         tips = [{"tip_id": "over15_ht_2026-10-10_1", "market": "over15_ht", "message_text": "<b>Arsenal vs Leeds United</b>"}]
