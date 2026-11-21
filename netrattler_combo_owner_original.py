@@ -144,7 +144,8 @@ def render_original_combo(legs,*,combined_odds,probability,ev,confidence,
     # cleaned and visually approved master exists, no screenshot repaint may
     # reach Telegram, even through a direct renderer call.
     if os.getenv("NETRATTLER_BLOCK_OVERPAINTED_MASTERS", "0") == "1":
-        raise ValueError("owner_original_overpainted_compositor_blocked")    legs=list(legs)
+        raise ValueError("owner_original_overpainted_compositor_blocked")
+    legs=list(legs)
     n=len(legs)
     if not 3 <= n <= 12:
         raise ValueError("Original COMBO requires 3–12 legs")
