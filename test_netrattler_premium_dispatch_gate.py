@@ -74,6 +74,18 @@ class PremiumTelegramDispatchTests(unittest.TestCase):
                     with self.assertRaisesRegex(ValueError, "contradicts"):
                         cards.render_card([(market, item)], "2026-11-21")
 
+    def test_unconfirmed_combo_total_never_enters_telegram_queue(self):
+        combo = tip("combo")
+        for flags in ({}, {"combined_odds_observed": True},
+                      {"combined_quote_id": "BOOK-123"},
+                      {"combined_odds_observed": True, "combined_quote_id": ""}):
+            with self.subTest(flags=flags):
+                self.assertEqual(cards.select_cards({"combo": [{**combo, **flags}]}), [])
+        confirmed = {**combo, "combined_odds_observed": True,
+                     "combined_quote_id": "BOOK-123"}
+        selected = cards.select_cards({"combo": [confirmed]})
+        self.assertEqual(selected[0][0][0], "combo")
+
     def test_unverified_var_never_enters_telegram_send_queue(self):
         var = tip("var")
         var.update(selection="YES", commence_time="2026-11-21T18:30:00Z")
