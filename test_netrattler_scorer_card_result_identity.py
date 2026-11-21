@@ -46,7 +46,11 @@ def test_existing_wrong_scorer_marks_corrected_in_original_photos():
          "team":"Israel","status":"void","odds":3.0,"tip_date":"2026-11-17","ft":"1-1"},
     ]
     patches=[]
-    with patch.object(cards, "_sb", return_value=("https://example.test/netrattler_match_cards",{})), \
+    # Historical identity correction is exercised only in isolated Legacy QA.
+    # Production uses SETTLEMENT_TG_ORIGINAL_EDIT_ONLY=1 and must never
+    # replace sample-filled scorer artwork. Its blocking test is below.
+    with patch.dict("os.environ", {"SETTLEMENT_TG_ORIGINAL_EDIT_ONLY":"0"}), \
+         patch.object(cards, "_sb", return_value=("https://example.test/netrattler_match_cards",{})), \
          patch.object(cards.requests, "get", return_value=SimpleNamespace(ok=True,json=lambda:sample)), \
          patch.object(cards.requests, "patch", side_effect=lambda *args,**kwargs: patches.append(kwargs["json"]) or SimpleNamespace(ok=True)), \
          patch.object(cards.requests, "post", return_value=SimpleNamespace(ok=True)), \
