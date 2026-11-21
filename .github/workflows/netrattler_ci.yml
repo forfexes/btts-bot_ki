@@ -71,6 +71,7 @@ on:
       - "netrattler_apif_response.py"
       - "netrattler_apifootball_players.py"
       - "netrattler_pending_result_backfill.py"
+      - "test_pending_result_backfill.py"
       - "test_netrattler_operational_failures.py"
       - "netrattler_builder_engine.py"
       - "test_netrattler_builder_delivery.py"
@@ -205,8 +206,10 @@ jobs:
         run: python test_espn_ht_backfill.py
       - name: Settlement adjacent-day test
         run: python test_settlement_adjacent_day.py
-      - name: Pending result backfill test
-        run: python test_pending_result_backfill.py
+      - name: Strict pending result identity regression (never match another club)
+        run: |
+          python -m py_compile netrattler_pending_result_backfill.py test_pending_result_backfill.py
+          python -m unittest -v test_pending_result_backfill.py
       - name: Stale pending void test
         run: python test_stale_pending_void.py
       - name: ML model quality gate test
