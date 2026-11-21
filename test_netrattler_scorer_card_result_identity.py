@@ -128,7 +128,8 @@ def test_do_not_change_old_match_with_same_pairing_on_another_day():
 
 def test_edit_message_media_preserves_caption_and_original_message_id():
     import json
-    reply = SimpleNamespace(status_code=200,ok=True,text="ok")
+    reply = SimpleNamespace(status_code=200,ok=True,text="ok",
+                            json=lambda:{"ok":True,"result":{"message_id":918}})
     with patch.object(cards.requests, "post", return_value=reply) as send:
         assert cards._edit_photo("token","chat",918,b"png",lambda x:None,
                                  caption="❌ Auswertung: verloren")
@@ -136,6 +137,25 @@ def test_edit_message_media_preserves_caption_and_original_message_id():
     assert arguments["data"]["message_id"] == 918
     assert json.loads(arguments["data"]["media"])["caption"] == "❌ Auswertung: verloren"
     assert "files" in arguments and "card" in arguments["files"]
+
+
+def test_media_edit_never_truncates_original_caption():
+    original="ORIGINAL PREMIUM TIPP " + "Quote 1.95 | " * 100
+    assert len(original)>1024
+    with patch.object(cards.requests,"post",
+                      side_effect=AssertionError("overlong caption uploaded")):
+        assert not cards._edit_photo("token","chat",918,b"png",lambda *_:None,
+                                     caption=original)
+
+
+def test_media_edit_rejects_wrong_original_message_confirmation():
+    for response in ({"ok":True,"result":{"message_id":919}},
+                     {"ok":True,"result":True}, {"ok":False}):
+        reply=SimpleNamespace(status_code=200,ok=True,text="ok",json=lambda:response)
+        with patch.object(cards.requests,"post",return_value=reply) as post:
+            assert not cards._edit_photo("token","chat",918,b"png",lambda *_:None,
+                                         caption="❌ Auswertung: verloren")
+            post.assert_called_once()
 
 
 def test_no_synthetic_void_on_unverified_goal_hunter_result():
