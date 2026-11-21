@@ -14,6 +14,8 @@ class T(unittest.TestCase):
 
     def test_team_match(self):
         self.assertTrue(m.team_match("Arsenal", "Arsenal FC"))
+        self.assertTrue(m.team_match("Wolverhampton", "Wolverhampton Wanderers"))
+        self.assertTrue(m.team_match("Wolves", "Wolverhampton Wanderers"))
         self.assertTrue(m.team_match("Sao Luiz", "São Luiz"))
         self.assertFalse(m.team_match("Manchester United", "Manchester City"))
         # Do not confuse different clubs, their reserve/youth teams, or
