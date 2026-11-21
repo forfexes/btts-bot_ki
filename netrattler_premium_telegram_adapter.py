@@ -114,8 +114,12 @@ def render(entries, target_date, *, crest_provider, result=None):
     # canonical type already implies YES, but explicit contradictory values
     # must fail closed instead of silently reversing the betting direction.
     if market in ("btts", "over25", "btts_ht", "over15_ht", "combo"):
-        declared = str(tip.get("selection") or tip.get("tip") or "").strip().upper()
-        if declared in ("NO", "NEIN", "FALSE", "0", "UNDER", "UNTER"):
+        # Two upstream direction fields can disagree. Do not ignore a NO
+        # merely because another field happens to contain YES.
+        declarations = (str(tip.get(key) or "").strip().upper()
+                        for key in ("selection", "tip"))
+        if any(declared in ("NO", "NEIN", "FALSE", "0", "UNDER", "UNTER")
+               for declared in declarations):
             raise ValueError("Market selection contradicts premium YES artwork")
     if market == "1x2":
         selection = str(tip.get("selection") or tip.get("tip") or "").strip()
