@@ -1135,6 +1135,11 @@ def update_cards_with_results(token, results, log=print):
     """results: list of dicts {match, status('win'/'loss'), odds, group, ft, ht}.
     Re-renders the stored card of that match with a ✔/✖ per settled market and edits
     the original photo message (no new post)."""
+    # Owner images are immutable until the source design is clean.
+    # Do not overwrite historical Telegram media with an opaque re-render.
+    if os.getenv("NETRATTLER_BLOCK_OVERPAINTED_MASTERS", "0") == "1":
+        log("NETRATTLER original photo edit deferred: no overlay-free approved master")
+        return 0
     if os.getenv("ENABLE_RESULT_IN_CARD", "true").lower() not in ("1", "true", "yes", "on"):
         return 0
     url, hdr = _sb()
