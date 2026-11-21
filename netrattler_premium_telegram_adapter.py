@@ -27,9 +27,20 @@ def _price(tip, market=None):
     # A combined ticket is not an individual-leg price. Its independently
     # observed bookmaker total can exceed 100 for large 6-12 leg parlays.
     if market == "combo":
-        if (tip.get("combined_odds_observed") is not True
-                or not str(tip.get("combined_quote_id") or "").strip()
-                or tip.get("combined_quote_calculated") is True):
+        evidence = tip.get("features") if isinstance(tip.get("features"), dict) else {}
+        # A stored observed flag and ticket ID do not turn formula-derived
+        # odds into an actual bookmaker quote. Old source writers used both
+        # root and nested feature fields for these contradictory markers.
+        def is_estimated(source):
+            return (source.get("combined_quote_calculated") is True
+                    or source.get("builder_odds_estimated_from_legs") is True
+                    or str(source.get("price_type") or "").strip().lower()
+                    in {"estimated", "derived_builder", "calculated_from_leg_odds"})
+        observed = (tip.get("combined_odds_observed") is True
+                    or evidence.get("combined_odds_observed") is True)
+        quote_id = str(tip.get("combined_quote_id")
+                       or evidence.get("combined_quote_id") or "").strip()
+        if not observed or not quote_id or is_estimated(tip) or is_estimated(evidence):
             raise ValueError("Verified bookmaker combined ticket missing")
         # Never use plain odds/oddsYes here: they may contain a single-leg quote.
         keys = ("combined_odds", "total_odds")
