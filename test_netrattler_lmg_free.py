@@ -49,6 +49,20 @@ class GoalHunterFreeTests(unittest.TestCase):
         self.assertEqual(lmg.fixtures_from_espn(board(90)), [])
         self.assertEqual(lmg.fixtures_from_espn(board(65, period=1)), [])
 
+    def test_provider_logo_urls_preserved_without_guessing_team_ids(self):
+        payload = board()
+        teams = payload["events"][0]["competitions"][0]["competitors"]
+        teams[0]["team"]["logo"] = "https://a.espncdn.com/i/teamlogos/soccer/500/10.png"
+        teams[1]["team"]["logo"] = "https://a.espncdn.com/i/teamlogos/soccer/500/20.png"
+        item = lmg.fixtures_from_espn(payload)[0]
+        self.assertEqual(item["home_logo_url"], teams[0]["team"]["logo"])
+        self.assertEqual(item["away_logo_url"], teams[1]["team"]["logo"])
+        self.assertEqual(item["home_id"], "10")
+        self.assertEqual(item["away_id"], "20")
+        without_logos = lmg.fixtures_from_espn(board())[0]
+        self.assertIsNone(without_logos["home_logo_url"])
+        self.assertIsNone(without_logos["away_logo_url"])
+
     def test_zero_zero_score_and_numeric_zero_are_valid(self):
         payload = board(65, (0, 0))
         payload["events"][0]["competitions"][0]["competitors"][0]["score"] = 0
