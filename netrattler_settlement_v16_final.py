@@ -415,29 +415,13 @@ def reconcile_pending_with_void_sources(existing: List[Dict[str, Any]], void_tip
 
 
 def reconcile_unpublished_builders(existing: List[Dict[str, Any]], unpublished_ids: Any = None) -> int:
-    """Alte Settlement-Zeilen von Buildern, die nie in Telegram gesendet wurden, bleiben sonst ewig 'pending'
-    (load_tips() ignoriert unpublizierte Builder). Sie sind keine echten Tipps -> VOID, zaehlen nicht im ROI."""
-    if unpublished_ids is None:
-        start_day = (TODAY - timedelta(days=DAYS)).isoformat()
-        rows = sb_get_paged("netrattler_builder_picks", {"select": "tip_id,telegram_msg_id", "match_date": f"gte.{start_day}"},
-                            max_rows=LIMIT, quiet=True) or []
-        unpublished_ids = {str(r.get("tip_id")) for r in rows
-                           if r.get("tip_id") and not str(r.get("telegram_msg_id") or "").isdigit()}
-    ids = []
-    for row in existing:
-        if normalized_status(row.get("status")) != "pending":
-            continue
-        if str(row.get("source_table") or "") != "netrattler_builder_picks":
-            continue
-        if str(row.get("tip_id") or "") in unpublished_ids:
-            ids.append(row.get("settlement_id"))
-            row["status"] = "void"
-    if not ids:
-        return 0
-    sb_patch_in("netrattler_settlements", "settlement_id", ids,
-                {"status": "void", "result_label": "VOID", "profit": 0.0, "profit_units": 0.0,
-                 "reason": "void: Builder nie publiziert (kein echter Tipp)"})
-    return len(ids)
+    """Never VOID a Builder merely because its Telegram message ID is missing.
+
+    Historical writer failures lost real published Telegram IDs. An absent
+    receipt is not evidence that the pick was never published. Keep PENDING
+    until reliable sporting result or confirmed non-appearance is available.
+    """
+    return 0
 
 
 def repair_legacy_false_voids(existing: List[Dict[str, Any]]) -> int:
