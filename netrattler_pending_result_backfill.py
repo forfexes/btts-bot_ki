@@ -184,7 +184,9 @@ def select_rows(rows: List[Dict[str, Any]], wanted: List[Tuple[str, str, bool]])
             # must never be silently collapsed into a fictitious settlement.
             if len(signatures) != 1 or not next(iter(signatures))[0]:
                 continue
-        out.extend(group)
+        # Identical feed duplicates count as one real fixture and inherit the
+        # strongest halftime-evidence requirement across pending tips.
+        out.append((group[0][0], any(need for _, need in group)))
     return out
 
 
