@@ -58,6 +58,21 @@ class OwnerBttsImageTests(unittest.TestCase):
                 rendered.crop((100,330,1010,1030)),
                 source.crop((100,330,1010,1030))).getbbox())
 
+    def test_premium_ai_shows_real_model_probability_in_clean_slot(self):
+        import netrattler_btts_owner_original as original
+        observed=[]
+        drawing=original._text
+        def capture(draw,label,*args,**kwargs):
+            observed.append(str(label))
+            return drawing(draw,label,*args,**kwargs)
+        with patch.object(original,"_text",side_effect=capture):
+            self.draw()
+        self.assertIn("KI-MODELL",observed)
+        self.assertIn("64.3%",observed)
+        self.assertIn("EV",observed)
+        self.assertIn("7/10",observed)
+        self.assertNotIn("BEISPIELQUOTE",observed)
+
     def test_real_selection_changes_original_image(self):
         first=self.draw()
         second=self.draw(oddsYes=2.15,probability=59.8,btts_l10="5/10")
