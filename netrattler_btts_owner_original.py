@@ -99,13 +99,13 @@ def _result_label(result):
 
 def render(tip: dict, home: str, away: str, home_img: Image.Image,
            away_img: Image.Image, odds: float, result=None) -> bytes:
-    if not (REFERENCE.is_file() and home and away and home != away):
-
     # The uploaded original contains baked example details. Until a fully
     # cleaned and visually approved master exists, no screenshot repaint may
     # reach Telegram, even through a direct renderer call.
     if os.getenv("NETRATTLER_BLOCK_OVERPAINTED_MASTERS", "0") == "1":
-        raise ValueError("owner_original_overpainted_compositor_blocked")        raise ValueError("Authentic BTTS original or verified clubs missing")
+        raise ValueError("owner_original_overpainted_compositor_blocked")
+    if not (REFERENCE.is_file() and home and away and home != away):
+        raise ValueError("Authentic BTTS original or verified clubs missing")
     if not isinstance(tip,dict) or not (1.01 <= float(odds) <= 100.0):
         raise ValueError("Verified bookmaker odds missing")
     probability = _optional(tip,"probability","model_probability")
