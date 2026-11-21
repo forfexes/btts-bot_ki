@@ -82,7 +82,10 @@ def test_multi_combo_sanity(bot):
     assert combo["total_odds"] < 20
     # Multiplied individual quotes are NOT a bookmaker-issued combo ticket.
     assert combo["combined_odds_observed"] is False
-    assert bot.format_combo_telegram_message(combo) == ""
+    message = bot.format_combo_telegram_message(combo)
+    assert "Berechnete Gesamtquote" in message
+    assert "Kein bestätigter Buchmachergewinn" in message
+    assert combo["combined_quote_calculated"] is True
     verified=dict(combo,combined_odds_observed=True,
                   combined_quote_id="SYNTHETIC_TEST_TICKET",bookmaker="TEST_BOOK")
     msg = bot.format_combo_telegram_message(verified)
