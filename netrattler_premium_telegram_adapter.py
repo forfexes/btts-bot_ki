@@ -22,11 +22,15 @@ MARKETS = {
 }
 
 
-def _price(tip):
-    for key in ("oddsYes", "odds", "odd", "price"):
+def _price(tip, market=None):
+    # A combo's quoted total MUST come from an observed combined ticket.
+    # oddsYes may be a single-leg price and is never a substitute.
+    keys = ("combined_odds", "odds") if market == "combo" else (
+        "oddsYes", "odds", "odd", "price")
+    for key in keys:
         try:
             num = float(tip.get(key))
-        except (TypeError, ValueError):
+        except (TypeError, ValueError, OverflowError):
             continue
         if math.isfinite(num) and 1.01 <= num <= 100:
             return num
@@ -148,7 +152,7 @@ def render(entries, target_date, *, crest_provider, result=None):
         return render_owner_btts(tip,home,away,first,second,_price(tip),result)
     image_bytes = render_verified_png(category, [{
         "match": name, "market": selection,
-        "bookmaker_odds": _price(tip), "bookmaker": str(provenance),
+        "bookmaker_odds": _price(tip, market), "bookmaker": str(provenance),
     }])
     first = _crest(crest_provider(home))
     second = _crest(crest_provider(away))
