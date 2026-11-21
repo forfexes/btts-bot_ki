@@ -56,7 +56,7 @@ def crest(team_id):
         # Accept only the official ESPN crest CDN; never fetch arbitrary URLs.
         from urllib.parse import urlsplit
         parsed = urlsplit(team_id)
-        if parsed.hostname != "a.espncdn.com" or parsed.username or parsed.password or parsed.port not in (None, 443):
+        if parsed.netloc not in ("a.espncdn.com", "a.espncdn.com:443"):
             return None
         url = team_id
     elif team_id and str(team_id).isdigit():
