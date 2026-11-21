@@ -62,6 +62,15 @@ class SettlementV21Tests(unittest.TestCase):
             self.assertTrue(mod.telegram_edit("123", 44, "Original tip\\n\\n⸻⸻ Match Summary ⸻⸻\\n✅ V"))
         self.assertEqual(calls, ["editMessageText", "editMessageCaption"])
 
+    def test_double_chance_routes_to_1x2_original_settlement(self):
+        for choice in ("1X", "X2", "12"):
+            self.assertEqual(mod.group_of({"market_group": "double_chance",
+                                           "selection": choice}), "1x2")
+            self.assertEqual(mod.group_of({"category": "double_chance",
+                                           "tip": choice}), "1x2")
+            self.assertEqual(mod.group_of({"market": f"Double Chance {choice}"}),
+                             "1x2")
+
     def test_similarity_normalizes_club_tokens(self):
         self.assertGreaterEqual(mod.similarity("FC Bayern München", "Bayern Munich"), 0.5)
 
