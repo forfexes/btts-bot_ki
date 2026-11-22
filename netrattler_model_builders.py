@@ -406,6 +406,15 @@ def run(rows, match_date, send, url, key, logger=print):
         return 0
     sent = 0
     for pick in dedupe_overlap(build_ladders(rows, match_date) + build_nate_mix(rows, match_date) + build_shot_ladders(rows, match_date) + build_cards(rows, match_date) + build_fouls(rows, match_date) + build(rows, match_date)):
+        # Old Foul/Nate model ladders were built by multiplying per-leg form
+        # rates. They do not contain a confirmed same-game bookmaker ticket,
+        # and the old image does not satisfy the owner's clean-master gate.
+        # Never reserve a ghost Supabase pick or send this legacy card.
+        # The new read-only premium route is netrattler_fouls_builder_premium.
+        if pick.get("style") in {"MODEL FOULS BUILDER", "MODEL FOULS LADDER",
+                                 "MODEL NATE MIX"}:
+            logger("LEGACY FOUL MODEL BLOCKED: combined_quote_and_clean_owner_required")
+            continue
         if not _pick_not_started(pick, datetime.now(timezone.utc)):
             logger("Modell-Builder ausgelassen: Anpfiff erfolgt oder Zeit nicht eindeutig")
             continue
