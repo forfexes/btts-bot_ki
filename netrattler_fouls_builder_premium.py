@@ -101,6 +101,48 @@ def _lineup(fixture, lineup, now):
     return roster
 
 
+
+def lineup_from_api_football(fixture, provider_lineups, *, observed_at):
+    """Parse actual /fixtures/lineups response with exact provider team IDs.
+
+    Never flatten two teams' starters into one name list; that would permit
+    a player to be assigned to the wrong side of the game.
+    """
+    when = _time(observed_at)
+    event, hid, aid, home, away, kickoff = _fixture(fixture, when)
+    if not isinstance(provider_lineups, list) or len(provider_lineups) != 2:
+        raise ValueError("two_verified_provider_lineups_required")
+    result = {
+        "fixture_id": event, "confirmed": True, "source": "api_football",
+        "confirmed_at": when.isoformat(),
+    }
+    found = set()
+    for entry in provider_lineups:
+        if not isinstance(entry, dict):
+            raise ValueError("malformed_provider_lineup")
+        team = entry.get("team") or {}
+        if not isinstance(team, dict):
+            raise ValueError("malformed_provider_team")
+        tid = team.get("id")
+        side = "home" if tid == hid else "away" if tid == aid else None
+        if side is None or tid in found:
+            raise ValueError("provider_team_does_not_match_fixture")
+        found.add(tid)
+        raw = entry.get("startXI")
+        if not isinstance(raw, list) or len(raw) != 11:
+            raise ValueError("incomplete_starting_eleven")
+        names = []
+        for item in raw:
+            if not isinstance(item, dict) or not isinstance(item.get("player"), dict):
+                raise ValueError("invalid_provider_starter")
+            player = item["player"]
+            if type(player.get("id")) is not int or player["id"] < 1:
+                raise ValueError("missing_provider_player_identity")
+            names.append(str(player.get("name") or "").strip())
+        result[side] = {"team_id": tid, "starters": names}
+    _lineup(fixture, result, when)
+    return result
+
 def _history(profile, market, threshold):
     if not isinstance(profile, dict) or profile.get("source") != "foul_profile":
         raise ValueError("unverified_player_history")
