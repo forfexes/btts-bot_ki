@@ -61,6 +61,8 @@ def _one_pick(monkeypatch):
     monkeypatch.setattr(mb, "build", lambda rows, day: [p])
     monkeypatch.setattr(mb, "build_fouls", lambda rows, day: [])
     monkeypatch.setenv("NETRATTLER_MODEL_BUILDERS", "on")
+    # The original send/receipt tests are hermetic QA, NEVER live releases.
+    monkeypatch.setenv("NETRATTLER_MODEL_BUILDER_OFFLINE_QA", "1")
     return p
 
 
@@ -264,3 +266,48 @@ def test_legacy_foul_nate_models_never_reserve_or_send(monkeypatch):
                   logger=warnings.append)
     assert sent == 0
     assert any("LEGACY FOUL MODEL BLOCKED" in w for w in warnings)
+
+
+def test_all_unpriced_model_markets_blocked_before_db(monkeypatch):
+    """No legacy MODEL shots, SOT, cards or crosses may reserve production."""
+    candidates=[
+        {**leg("Athlete Alpha",94),"category":"shots","market":"2+ Shots"},
+        {**leg("Athlete Beta",91),"category":"shots","market":"3+ Shots"},
+        {**leg("Athlete Gamma",92),"category":"sot","market":"1+ Shots on Target"},
+    ]
+    chosen=mb.build(candidates,"2099-10-29")
+    assert chosen and chosen[0]["joint"]>0
+    for name in ("build", "build_ladders", "build_nate_mix",
+                 "build_shot_ladders", "build_cards", "build_fouls"):
+        monkeypatch.setattr(mb,name,lambda *_: [])
+    monkeypatch.setattr(mb,"build",lambda *_:[chosen[0]])
+    monkeypatch.setenv("NETRATTLER_MODEL_BUILDERS","on")
+    monkeypatch.delenv("NETRATTLER_MODEL_BUILDER_OFFLINE_QA",raising=False)
+    monkeypatch.delenv("TELEGRAM_TOKEN",raising=False)
+    monkeypatch.delenv("TELEGRAM_BOT_TOKEN",raising=False)
+    def never_db(*a,**kw):
+        raise AssertionError("Unpriced MODEL-only pick must never reserve database")
+    monkeypatch.setattr(mb.requests,"post",never_db)
+    log=[]
+    assert mb.run([],"2099-10-29",never_db,"https://db.invalid","qa",logger=log.append)==0
+    assert any("MODEL_ONLY_PICK_BLOCKED" in m for m in log)
+
+
+def test_qa_flag_cannot_enable_real_football_model_send(monkeypatch):
+    """A leaked CI flag with a non-test DB is NOT an override."""
+    candidate=mb.build([
+        {**leg("Athlete Alpha",94),"category":"shots"},
+        {**leg("Athlete Beta",93),"category":"sot"},
+    ],"2099-10-29")[0]
+    for name in ("build", "build_ladders", "build_nate_mix",
+                 "build_shot_ladders", "build_cards", "build_fouls"):
+        monkeypatch.setattr(mb,name,lambda *_: [])
+    monkeypatch.setattr(mb,"build",lambda *_:[candidate])
+    monkeypatch.setenv("NETRATTLER_MODEL_BUILDERS","on")
+    monkeypatch.setenv("NETRATTLER_MODEL_BUILDER_OFFLINE_QA","1")
+    monkeypatch.delenv("TELEGRAM_TOKEN",raising=False)
+    monkeypatch.delenv("TELEGRAM_BOT_TOKEN",raising=False)
+    def never_db(*a,**kw):
+        raise AssertionError("CI override used on real URL")
+    monkeypatch.setattr(mb.requests,"post",never_db)
+    assert mb.run([],"2099-10-29",never_db,"https://real.example.org","real",logger=lambda *_:None)==0
