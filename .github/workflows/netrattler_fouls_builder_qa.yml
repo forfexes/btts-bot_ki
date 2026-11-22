@@ -29,6 +29,7 @@ jobs:
       SUPABASE_URL: ""
       SUPABASE_KEY: ""
       NETRATTLER_FOULS_BUILDER_SEND: "false"
+      NETRATTLER_MODEL_BUILDER_OFFLINE_QA: "0"
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-python@v5
@@ -42,9 +43,9 @@ jobs:
         run: python -m unittest -v test_netrattler_fouls_builder_premium
       - name: Existing player-stat and quota regressions
         run: python -m pytest -q test_foul_props.py
-      - name: Prevent legacy no-quote Fouls builder from reaching Telegram
+      - name: Prevent all unquoted model builders from reaching database or Telegram
         run: |
           python -m pytest -q test_netrattler_fouls_legacy_send_gate.py
-          python -m pytest -q test_model_builders.py -k test_legacy_foul_nate_models_never_reserve_or_send
+          python -m pytest -q test_model_builders.py
       - name: Exact provider start XI to safe scouting integration
         run: python -m pytest -q test_netrattler_lineup_foul_scout.py test_lineup_builders.py
