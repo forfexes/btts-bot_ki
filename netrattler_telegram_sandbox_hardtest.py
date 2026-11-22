@@ -158,7 +158,23 @@ report={
 (DEST/"report.json").write_text(
     json.dumps(report,ensure_ascii=False,indent=2),encoding="utf-8"
 )
-assert len(results)>=19, "Missing owner screenshot preview families"
+# Hard fail if any of the ten actual owner-derived previews disappear.
+# Previously the loose >=19 threshold could pass with only 16 technical
+# skeletons + three originals, silently omitting Builder 2-7/Goal Hunter.
+expected_owner={
+    "owner_btts","owner_combo_7","owner_combo_9",
+    *(f"TEST_ONLY_builder_{n}_original" for n in range(2,8)),
+    "TEST_ONLY_goal_hunter_original",
+}
+missing_owner=sorted(expected_owner-set(results))
+if missing_owner:
+    raise AssertionError("MISSING_OWNER_VISUAL_VARIANTS: "+", ".join(missing_owner))
+assert len(results)==len(CATEGORIES)+len(expected_owner), (
+    "Unexpected Telegram preview count",len(results),len(expected_owner)
+)
+assert all(v["telegram_overlay_hits_original_art"] is False
+           for v in results.values())
+assert all(v["production_send"] is False for v in results.values())
 print("NETRATTLER_TELEGRAM_SANDBOX_16_CATEGORIES_AND_OWNER_REFERENCES_PASS",
       len(results))
 print("PRODUCTION_BLOCKED_MISSING_APPROVED_ORIGINALS",
