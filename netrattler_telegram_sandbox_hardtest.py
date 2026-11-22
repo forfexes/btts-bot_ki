@@ -76,7 +76,12 @@ def preview(name,original_bytes,source,approval_status):
     )
     d.rounded_rectangle((x0+w-127,clock_top,x0+w-7,clock_top+16),
                         radius=4,fill=(10,22,32))
-    d.text((x0+w-120,clock_top+2),"bearbeitet 23:01",
+    label="bearbeitet 23:01"
+    bbox=d.textbbox((x0+w-120,clock_top+2),label,font=font)
+    assert bbox[2] <= x0+w-9 and bbox[3] <= y0+scaled_h, (
+        name,"Telegram clock text clipped outside metadata gutter"
+    )
+    d.text((x0+w-120,clock_top+2),label,
            font=font,fill=(240,245,254))
     d.text((18,y0+scaled_h+15),"SIMULATION · KEIN TELEGRAM-VERSAND",
            font=font,fill=(245,209,108))
