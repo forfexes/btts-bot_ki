@@ -108,11 +108,11 @@ class GoalHunterCards(unittest.TestCase):
         from netrattler_lmg_free import send_alert, reserve_alert
         with patch.dict("os.environ",{"LMG_OWNER_CLEAN_RELEASED":"0",
                                      "TELEGRAM_TOKEN":"qa",
-                                     "TELEGRAM_GROUP_LATE_GOALS":"-1"}), \\
+                                     "TELEGRAM_GROUP_LATE_GOALS":"-1"}), \
              patch("netrattler_lmg_card.make_card",
-                   side_effect=AssertionError("Legacy JPEG must not render")), \\
+                   side_effect=AssertionError("Legacy JPEG must not render")), \
              patch("netrattler_lmg_store.reserve_alert",
-                   side_effect=AssertionError("No abandoned reservation")) as store, \\
+                   side_effect=AssertionError("No abandoned reservation")) as store, \
              patch("requests.post",
                    side_effect=AssertionError("No Telegram post")) as post:
             with self.assertRaisesRegex(RuntimeError,"visual_release_required"):
@@ -128,13 +128,13 @@ class GoalHunterCards(unittest.TestCase):
         reply.json.return_value={"ok":True,"result":{"message_id":345}}
         with patch.dict("os.environ",{"LMG_OWNER_CLEAN_RELEASED":"1",
                                      "TELEGRAM_TOKEN":"qa",
-                                     "TELEGRAM_GROUP_LATE_GOALS":"-1"}), \\
+                                     "TELEGRAM_GROUP_LATE_GOALS":"-1"}), \
              patch("netrattler_lmg_card.make_card",
-                   side_effect=AssertionError("Old JPEG fallback")), \\
+                   side_effect=AssertionError("Old JPEG fallback")), \
              patch("netrattler_lmg_card.crest",
-                   return_value=Image.new("RGBA",(100,100),(10,20,30,255))), \\
+                   return_value=Image.new("RGBA",(100,100),(10,20,30,255))), \
              patch("last_minute_owner_20261122.live_data_bridge.make_live",
-                   return_value=b"synthetic-clean-owner-png") as renderer, \\
+                   return_value=b"synthetic-clean-owner-png") as renderer, \
              patch("requests.post",return_value=reply) as post:
             message_id=send_alert(self.fx,self.metrics)
         self.assertEqual(message_id,345)
@@ -155,9 +155,9 @@ class GoalHunterCards(unittest.TestCase):
         reply=Mock()
         reply.json.return_value={"ok":True}
         with patch.dict("os.environ",{"TELEGRAM_TOKEN":"qa",
-                                     "TELEGRAM_GROUP_LATE_GOALS":"-1"}), \\
+                                     "TELEGRAM_GROUP_LATE_GOALS":"-1"}), \
              patch("last_minute_owner_20261122.live_data_bridge.make_settled",
-                   return_value=b"synthetic-settled-owner-png") as render, \\
+                   return_value=b"synthetic-settled-owner-png") as render, \
              patch("requests.post",return_value=reply) as post:
             settle.edit_original(row,final,True)
         self.assertEqual(render.call_count,1)
