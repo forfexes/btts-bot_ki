@@ -147,8 +147,8 @@ def send_model_builder_card(pick, match_date, text, log=print):
     import os
     from types import SimpleNamespace
     token=os.getenv('TELEGRAM_TOKEN') or os.getenv('TELEGRAM_BOT_TOKEN')
-    chat=(os.getenv('TELEGRAM_GROUP_BUILDER') or os.getenv('TELEGRAM_GROUP_PLAYER_PROPS')
-          or os.getenv('TELEGRAM_GROUP_STATS') or os.getenv('TELEGRAM_CHAT_ID'))
+    # Never misroute a Builder pick to Props, Stats or the default channel.
+    chat=os.getenv('TELEGRAM_GROUP_BUILDER')
     if not token or not chat:
         return None
     adapted=SimpleNamespace(legs=[SimpleNamespace(**leg) for leg in pick['legs']],
