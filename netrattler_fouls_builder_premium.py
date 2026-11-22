@@ -230,6 +230,63 @@ def _check_leg(leg, lineup, fixture, profiles):
     }
 
 
+
+def scout_foul_candidates(fixture, lineup, profiles, *, now=None):
+    """Find verified 2+/3+ Fouls & Fouls Won form patterns without prices.
+
+    This is a research-only scouting board, NEVER a publishable bet.
+    Exact team identities and full 22-player lineups remain mandatory.
+    No synthetic book ticket, multi-leg probability, or EV is computed.
+    """
+    now = _time(now or datetime.now(timezone.utc))
+    event, hid, aid, home, away, kickoff = _fixture(fixture, now)
+    roster = _lineup(fixture, lineup, now)
+    if not isinstance(profiles, list):
+        raise ValueError("verified_profiles_required")
+    candidates = []
+    seen = set()
+    for team_id, team in ((hid, home), (aid, away)):
+        for p in profiles:
+            if not isinstance(p, dict) or p.get("source") != "foul_profile":
+                continue
+            if not same_team(p.get("team"), team):
+                continue
+            player = _key(p.get("player"))
+            if (not player or player not in roster[team_id]
+                    or _key(p.get("match")) != _key(home + " vs " + away)):
+                continue
+            for market in _ALLOWED:
+                for threshold in (2, 3):
+                    identity = (team_id, player, market, threshold)
+                    if identity in seen:
+                        continue
+                    seen.add(identity)
+                    try:
+                        form = _history(p, market, threshold)
+                    except ValueError:
+                        continue  # No guessed L15 values, just skip this market.
+                    if form["L10"] < 3 or form["L15"] < 4:
+                        continue
+                    candidates.append({
+                        "player": p["player"], "team": team, "team_id": team_id,
+                        "market": market, "market_label": _MARKET[market],
+                        "threshold": threshold, **form,
+                    })
+    candidates.sort(key=lambda x: (
+        -x["L15"] / 15, -x["L10"] / 10, -x["threshold"],
+        x["team_id"], _key(x["player"]), x["market"]))
+    return {
+        "fixture_id": event,
+        "match": home + " vs " + away,
+        "lineup_verified": True,
+        "quoted_builder_count": 0,
+        "bookmaker_total_odds": None,
+        "model_joint_probability": None,
+        "publication_allowed": False,
+        "status": "RESEARCH_ONLY_NO_BOOKMAKER_TICKET",
+        "candidates": candidates,
+    }
+
 def prepare_quoted_builder(fixture, lineup, profiles, quote, *, now=None):
     """Return only a ticket-backed, data-valid builder; no Telegram action.
 
