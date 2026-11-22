@@ -10,6 +10,8 @@ on:
       - "test_netrattler_fouls_builder_premium.py"
       - "test_netrattler_fouls_legacy_send_gate.py"
       - "netrattler_model_builders.py"
+      - "netrattler_lineup_builders.py"
+      - "test_netrattler_lineup_foul_scout.py"
       - "test_model_builders.py"
       - "netrattler_builder_cards.py"
       - ".github/workflows/netrattler_fouls_builder_qa.yml"
@@ -44,3 +46,5 @@ jobs:
         run: |
           python -m pytest -q test_netrattler_fouls_legacy_send_gate.py
           python -m pytest -q test_model_builders.py -k test_legacy_foul_nate_models_never_reserve_or_send
+      - name: Exact provider start XI to safe scouting integration
+        run: python -m pytest -q test_netrattler_lineup_foul_scout.py test_lineup_builders.py
