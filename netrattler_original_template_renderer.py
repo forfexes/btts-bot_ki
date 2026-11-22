@@ -171,6 +171,14 @@ def render_builder(pick):
     import netrattler_neon_design as nd
     from netrattler_builder_cards import builder_leg_label
     legs=list(getattr(pick,"legs",None) or [])
+    if not 2 <= len(legs) <= 7:
+        raise ValueError("Original Builder requires 2–7 Legs (verified)")
+    # Preflight bookmaker combined price BEFORE any image/network lookup. The
+    # price may not be substituted by a product of single-leg odds.
+    from netrattler_neon_design import _builder_quote_display,_stat_series,_form_label,_percent,_number
+    title,value,book_quote=_builder_quote_display(pick,legs)
+    if book_quote is None:
+        raise ValueError("Keine bestätigte Buchmacher-Kombiquote; Formelprodukt darf nicht als Wettquote erscheinen")
     im,shift=_builder_canvas(legs)
     draw=ImageDraw.Draw(im)
     home,away=cards._teams(legs[0].match)
@@ -189,13 +197,6 @@ def render_builder(pick):
     _label(draw,_kickoff(legs[0].kickoff),562,278,450,size=23,min_size=17)
     _erase(draw,(220,325,636,385),fill="#08131D")
     _label(draw,f"{len(legs)}-LEG BUILDER",423,326,390,size=40,min_size=27)
-    from netrattler_neon_design import _builder_quote_display,_stat_series,_form_label,_percent,_number
-    title,value,book_quote=_builder_quote_display(pick,legs)
-    # The product of individual-leg prices is NOT an actual same-game
-    # bookmaker quote. Reject the card instead of presenting an unbookable
-    # calculated number as GESAMTQUOTE (or deriving an invalid EV).
-    if book_quote is None:
-        raise ValueError("Keine bestätigte Buchmacher-Kombiquote; Formelprodukt darf nicht als Wettquote erscheinen")
     shown = f"@ {book_quote:.2f}"
     _erase(draw,(710,333,1000,376),fill="#F6C92E",radius=10)
     _label(draw,shown,857,333,275,size=35,
