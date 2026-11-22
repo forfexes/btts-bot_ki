@@ -243,3 +243,24 @@ def test_unrenderable_model_builder_never_uses_plain_text_fallback(monkeypatch):
     sent = []
     assert mb.run([], "2026-10-28", sent.append, "https://db.invalid", "key") == 0
     assert sent == []
+
+
+def test_legacy_foul_nate_models_never_reserve_or_send(monkeypatch):
+    """No old unpriced 60/1-style foul builder is a bookable premium pick."""
+    p = mb.build_fouls([leg("Player Alpha", 90),
+                        leg("Player Beta", 90),
+                        leg("Player Gamma", 90)], "2026-11-22")[0]
+    assert p["style"] == "MODEL FOULS BUILDER"
+    for name in ("build", "build_ladders", "build_nate_mix",
+                 "build_shot_ladders", "build_cards"):
+        monkeypatch.setattr(mb, name, lambda *_: [])
+    monkeypatch.setattr(mb, "build_fouls", lambda *_: [p])
+    monkeypatch.setenv("NETRATTLER_MODEL_BUILDERS", "on")
+    def never_db(*a, **kw):
+        raise AssertionError("Legacy foul pick must never reserve Supabase or send")
+    monkeypatch.setattr(mb.requests, "post", never_db)
+    warnings = []
+    sent = mb.run([], "2026-11-22", never_db, "https://db.invalid", "qa",
+                  logger=warnings.append)
+    assert sent == 0
+    assert any("LEGACY FOUL MODEL BLOCKED" in w for w in warnings)
