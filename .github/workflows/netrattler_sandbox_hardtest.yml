@@ -113,6 +113,11 @@ jobs:
           python -m pytest -q -ra test_netrattler_premium_verified_cards.py test_netrattler_premium_dispatch_gate.py test_netrattler_ai_match_card_design.py 2>&1 | tee netrattler-premium-card-hardtest.log
       - name: Render synthetic premium PNG previews for visual inspection
         if: success()
+        env:
+          # TEST ONLY; no production credentials or Telegram publishing.
+          NETRATTLER_BLOCK_OVERPAINTED_MASTERS: '0'
+          TELEGRAM_TOKEN: ''
+          SUPABASE_URL: ''
         run: |
           python netrattler_premium_sandbox_preview.py
       - name: Mandatory OFFLINE Telegram thumbnail/owner visual quality Hardtest
