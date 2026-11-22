@@ -30,6 +30,11 @@ jobs:
   verify:
     runs-on: ubuntu-latest
     timeout-minutes: 5
+    env:
+      # Only isolated fixture tests opt in; production remains fail-closed.
+      NETRATTLER_BLOCK_OVERPAINTED_MASTERS: '0'
+      TELEGRAM_TOKEN: ''
+      TELEGRAM_CHAT_ID: ''
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-python@v5
