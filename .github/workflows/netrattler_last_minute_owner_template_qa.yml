@@ -1,0 +1,48 @@
+name: NETRATTLER Last Minute Owner Original QA
+on:
+  workflow_dispatch: {}
+  push:
+    branches: [main]
+    paths:
+      - "last_minute_owner_20261122/**"
+      - ".github/workflows/netrattler_last_minute_owner_template_qa.yml"
+
+permissions:
+  contents: read
+
+jobs:
+  offline-original-template:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    env:
+      TELEGRAM_TOKEN: ""
+      TELEGRAM_BOT_TOKEN: ""
+      TELEGRAM_CHAT_ID: ""
+      SUPABASE_URL: ""
+      SUPABASE_KEY: ""
+      LMG_SEND: "false"
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+      - name: Install isolated visual QA dependencies
+        run: python -m pip install --quiet 'Pillow>=10' 'opencv-python-headless>=4.8' 'numpy>=1.24'
+      - name: Syntax and offline source-original tests
+        working-directory: last_minute_owner_20261122
+        run: |
+          python -m py_compile build_master.py last_minute_dynamic_card.py test_last_minute_dynamic_card.py
+          python -m unittest -v test_last_minute_dynamic_card
+      - name: Generate only synthetic labelled Telegram preview
+        working-directory: last_minute_owner_20261122
+        run: python last_minute_dynamic_card.py
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: netrattler-last-minute-owner-original-offline-review
+          path: |
+            last_minute_owner_20261122/last_minute_user_original.png
+            last_minute_owner_20261122/last_minute_clean_plate.png
+            last_minute_owner_20261122/last_minute_render_test.png
+          retention-days: 7
+          if-no-files-found: error
