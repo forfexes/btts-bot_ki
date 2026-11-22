@@ -173,6 +173,10 @@ def render_builder(pick):
     legs=list(getattr(pick,"legs",None) or [])
     if not 2 <= len(legs) <= 7:
         raise ValueError("Original Builder requires 2–7 Legs (verified)")
+    # Reject cross-fixture and missing fixtures before quote or image lookup.
+    home,away=cards._teams(legs[0].match)
+    if not home or not away or len({str(l.match) for l in legs})!=1:
+        raise ValueError("Original-Builder-Vorlage erfordert ein eindeutiges Spiel")
     # Preflight bookmaker combined price BEFORE any image/network lookup. The
     # price may not be substituted by a product of single-leg odds.
     from netrattler_neon_design import _builder_quote_display,_stat_series,_form_label,_percent,_number
@@ -181,9 +185,6 @@ def render_builder(pick):
         raise ValueError("Keine bestätigte Buchmacher-Kombiquote; Formelprodukt darf nicht als Wettquote erscheinen")
     im,shift=_builder_canvas(legs)
     draw=ImageDraw.Draw(im)
-    home,away=cards._teams(legs[0].match)
-    if not home or not away or len({str(l.match) for l in legs})!=1:
-        raise ValueError("Original-Builder-Vorlage erfordert ein eindeutiges Spiel")
     # Original metallic logo and gold ribbon are deliberately untouched.
     for name,rect,txt_rect,center in [
         (home,(132,182,237,296),(262,212,490,269),377),
