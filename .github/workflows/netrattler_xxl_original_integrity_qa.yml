@@ -35,6 +35,9 @@ jobs:
       SETTLEMENT_TG_EDIT_GAP_SEC: "0"
       SETTLEMENT_TG_ORIGINAL_EDIT_ONLY: "1"
       NETRATTLER_SANDBOX_HARDTEST: "1"
+      # Offline regression fixtures can exercise legacy render paths without
+      # granting production approval or sending Telegram photos.
+      NETRATTLER_BLOCK_OVERPAINTED_MASTERS: "0"
       NETRATTLER_ORIGINAL_ONLY: "0"
     steps:
       - uses: actions/checkout@v4
@@ -58,6 +61,7 @@ jobs:
           tips = Path(".github/workflows/btts_tips.yml").read_text(encoding="utf-8")
           settle = Path(".github/workflows/netrattler_settlement_v16_final.yml").read_text(encoding="utf-8")
           assert 'NETRATTLER_ORIGINAL_ONLY:   "1"' in tips
+          assert 'NETRATTLER_BLOCK_OVERPAINTED_MASTERS: "1"' in tips
           assert 'SETTLEMENT_TG_ORIGINAL_EDIT_ONLY: "1"' in settle
           print("PREMIUM ORIGINAL-ONLY & NO-OVERPAINT SETTLEMENT GATES PRESENT")
           print("OFFLINE TEST ONLY: no secrets, no Telegram messages, no database mutations")
