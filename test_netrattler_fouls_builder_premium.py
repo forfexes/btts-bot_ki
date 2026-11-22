@@ -6,7 +6,7 @@ from datetime import datetime, timedelta, timezone
 import unittest
 
 import netrattler_foul_props as props
-from netrattler_fouls_builder_premium import prepare_quoted_builder
+from netrattler_fouls_builder_premium import prepare_quoted_builder, lineup_from_api_football
 
 
 NOW = datetime(2026, 11, 22, 12, 0, tzinfo=timezone.utc)
@@ -69,6 +69,39 @@ class OriginalFoulsBuilderQA(unittest.TestCase):
     def go(self):
         return prepare_quoted_builder(self.fixture, self.lineup,
                                       self.profiles, self.quote, now=NOW)
+
+    def test_exact_api_football_xi_adapter_preserves_club_membership(self):
+        provider=[
+            {"team":{"id":10},
+             "startXI":[{"player":{"id":100+i,"name":name}}
+                        for i,name in enumerate(HOME)]},
+            {"team":{"id":20},
+             "startXI":[{"player":{"id":200+i,"name":name}}
+                        for i,name in enumerate(AWAY)]},
+        ]
+        x=lineup_from_api_football(self.fixture,provider,observed_at=NOW)
+        self.assertEqual(x["fixture_id"],80001)
+        self.assertEqual(x["home"]["team_id"],10)
+        self.assertEqual(x["away"]["team_id"],20)
+        self.assertEqual(x["home"]["starters"][0],"Joe Willock")
+        out=prepare_quoted_builder(self.fixture,x,self.profiles,self.quote,now=NOW)
+        self.assertEqual(out["legs_count"],4)
+
+    def test_api_lineup_wrong_club_id_and_partial_roster_rejected(self):
+        provider=[
+            {"team":{"id":10},
+             "startXI":[{"player":{"id":100+i,"name":name}}
+                        for i,name in enumerate(HOME)]},
+            {"team":{"id":999},
+             "startXI":[{"player":{"id":200+i,"name":name}}
+                        for i,name in enumerate(AWAY)]},
+        ]
+        with self.assertRaisesRegex(ValueError,"provider_team_does_not_match_fixture"):
+            lineup_from_api_football(self.fixture,provider,observed_at=NOW)
+        provider[1]["team"]["id"]=20
+        provider[1]["startXI"].pop()
+        with self.assertRaisesRegex(ValueError,"incomplete_starting_eleven"):
+            lineup_from_api_football(self.fixture,provider,observed_at=NOW)
 
     def test_valid_single_match_builder_is_still_not_published(self):
         out = self.go()
