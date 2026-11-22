@@ -212,3 +212,23 @@ def test_builder_shows_all_three_verified_form_windows():
     for period in (5,10,15):
         assert any(text.startswith(f"L{period}:") for text in labels), f"L{period} absent"
     assert raw.startswith(bytes.fromhex("89504e470d0a1a0a"))
+
+
+def test_model_builder_requires_its_own_telegram_group():
+    """Missing BUILDER_CHAT must never silently route a pick to Stats/Props."""
+    import os
+    from netrattler_builder_cards import send_model_builder_card
+    env = {
+        "TELEGRAM_TOKEN": "FAKE_TOKEN",
+        "TELEGRAM_GROUP_BUILDER": "",
+        "TELEGRAM_GROUP_PLAYER_PROPS": "-100111",
+        "TELEGRAM_GROUP_STATS": "-100222",
+        "TELEGRAM_CHAT_ID": "-100333",
+    }
+    with patch.dict(os.environ, env):
+        with patch("netrattler_builder_cards.send_builder_card") as publish:
+            result = send_model_builder_card(
+                {"legs": [], "joint": 0.50, "fair": 2.0},
+                "2026-11-22", "OFFLINE_TEST_ONLY", log=lambda *_: None)
+    assert result is None
+    publish.assert_not_called()
