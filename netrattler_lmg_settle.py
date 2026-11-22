@@ -109,6 +109,11 @@ def edit_original(row,final,won):
     is_photo=version=="photo"
     is_clean_owner=version=="owner_clean_png"
     if is_clean_owner:
+        # Prefer the exact original provider IDs/crest URLs that were stored
+        # with this Telegram message. ESPN final feeds may omit team logos;
+        # never search by team name or substitute an unrelated crest.
+        fixture["home_logo_id"]=row.get("home_logo_source") or fixture.get("home_logo_id")
+        fixture["away_logo_id"]=row.get("away_logo_source") or fixture.get("away_logo_id")
         from io import BytesIO
         from netrattler_lmg_card import crest
         from last_minute_owner_20261122.live_data_bridge import make_settled
