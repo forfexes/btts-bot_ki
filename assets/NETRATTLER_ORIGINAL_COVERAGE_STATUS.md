@@ -85,3 +85,12 @@ Die Existenz eines Referenzbilds beweist auch keinen erfolgreichen Telegram-Prod
 - `netrattler_stats_match_cards.render_card` führt bestätigte COMBO-Datensätze mit **3–12 vollständigen Legs**, echten Gesamtquoten und Bestätigungs-ID über `netrattler_combo_dynamic_cards.render_combo` zu den verfügbaren originalen 7/9-Bildvorlagen. Bei fehlenden Pflichtangaben ist dieser Pfad gesperrt. Nicht vorhandenes Modell-EV wird als „EV —“ ausgewiesen und nicht erfunden.
 - Die 16 aus der Nutzer-Collage ausgeschnittenen Übersichts-Kacheln sind **nur Designreferenzen mit eingebrannten Beispielinformationen**, keine sauberen 16 Produktionsmaster. Die bildgenaue Freigabe aller übrigen Kategorien und ein bestätigter echter Telegram-Produktivversand bleiben **offen**.
 - Auf Grund der ursprünglich hochgeladenen Originale sind weiterhin nicht alle 16 Kategorien als eigenständige echte, datenfreie Original-Vorlagen fertig. Die technischen SVG-Skeletons dürfen nicht als solche ausgegeben werden.
+
+
+## Telegram-Sandbox-Hardtest vom 22.11.2026
+
+- [Sandbox-Lauf #44988540628](https://github.com/forfexes/btts-bot_ki/actions/runs/44988540628): **SUCCESS** (Offline). 16 technische Marktgrafiken plus BTTS-/Combo-Original- und Builder-/Goal-Hunter-Varianten, insgesamt **26 PNGs in simulierten Telegram-Chats**. Die Chat-Uhrzeit wurde ausschliesslich im zusätzlich freigehaltenen unteren Metadatenbereich platziert.
+- Achtung: Ein erfolgreicher Chat-Mock **bestätigt keine Pixelgleichheit mit der echten Telegram-Android-App**, keine originale Freigabe und keine echte Sendung. Die Simulation nutzt synthetische Wett-/Spielerdaten.
+- Stand Originalabdeckung: Für **11 von 16** Marktgruppen besteht weiterhin **kein eigenständiges hochgeladenes Original** (Over, Halbzeit, Match Result, Player Props, Fouls/Karten, VAR, Last Minute, Late Goals, Live Halbzeit, Cross Mix etc.). Die technische SVG-Vorlage ist kein Premium-Original.
+- Die ursprünglichen Builder-/Goal-Hunter-Bildquellen enthalten weiterhin Laufzeit-Überdeckungen. Auch die BTTS- und Combo-Quellen bedürfen noch einer echten ästhetischen Abnahme. **Produktionssperre bleibt bestehen**; kein automatisch freigegebener Versand bei Grün im Offline-Mock.
+- Die nachfolgenden Hardtests verwenden `netrattler_telegram_sandbox_hardtest.py` und exportieren `sandbox-telegram-qa/report.json` sowie Screenshots. Es werden **keine Telegram- oder Datenbank-Credentials** für die offline Rendering-Tests genutzt.
