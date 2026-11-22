@@ -120,12 +120,17 @@ def test_model_card_preserves_no_quote_and_original_receipt():
     with patch.dict('os.environ',{'TELEGRAM_TOKEN':'test','TELEGRAM_GROUP_BUILDER':'42'}), \
          patch.object(builder_cards,'send_builder_card',return_value=123) as send:
         receipt=builder_cards.send_model_builder_card(model,'2099-01-01','original')
-    adapted=send.call_args.args[2]
-    assert adapted.model_only and adapted.legs[0].odds==0
-    assert adapted.legs[0].series==model['legs'][0]['series']
-    assert receipt=={'message_id':123,'chat_id':'42','text':'original'}
+    # Real sends must reject legacy foul designs with fabricated/bookless
+    # combined prices even if a generic image renderer appears available.
+    assert receipt is None
+    send.assert_not_called()
+    adapted=SimpleNamespace(
+        legs=[SimpleNamespace(**model['legs'][0])],
+        style='FOUL BUILDER',variant='',stake=0,match_date='2099-01-01',
+        model_only=True,joint=model['joint'],fair=model['fair'],tiers=None,
+        tier_shift=False)
     import pytest
-    # Model-only ladders have no bookmaker combined price: never display one.
+    # An underfilled premium card is still never a shippable original.
     with pytest.raises(ValueError, match="2–7 Legs"):
         builder_cards.render_builder_card(adapted)
 
