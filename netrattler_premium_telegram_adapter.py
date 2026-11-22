@@ -93,7 +93,7 @@ def _fit(draw, text, maxwidth, size=26):
 def render(entries, target_date, *, crest_provider, result=None):
     # Central direct-call guard: SVG skeletons and patched owner screenshots
     # are not equivalent to visually accepted user-original Telegram masters.
-    if os.getenv("NETRATTLER_BLOCK_OVERPAINTED_MASTERS", "0") == "1":
+    if os.getenv("NETRATTLER_BLOCK_OVERPAINTED_MASTERS", "1") != "0":
         raise ValueError("premium_master_not_visually_approved")
     if len(entries) != 1:
         raise ValueError("Premium single-market card needs one real selection")
