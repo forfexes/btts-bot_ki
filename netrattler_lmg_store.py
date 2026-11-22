@@ -68,7 +68,9 @@ def init() -> Path:
             next_goal_side TEXT,
             next_goal_result TEXT,
             signal_tier TEXT,
-            source TEXT NOT NULL
+            source TEXT NOT NULL,
+            home_logo_source TEXT,
+            away_logo_source TEXT
         );
         CREATE INDEX IF NOT EXISTS alerts_pending_idx
             ON alerts(status, sent_at);
@@ -107,6 +109,13 @@ def init() -> Path:
             PRIMARY KEY(source, utc_day)
         );
         """)
+        # Existing state/goal-hunter SQLite files predate the template-version
+        # release and must retain their original Telegram message histories.
+        # Only add nullable source-ID fields: no replacement or data loss.
+        names={row[1] for row in conn.execute("PRAGMA table_info(alerts)")}
+        for column in ("home_logo_source","away_logo_source"):
+            if column not in names:
+                conn.execute(f"ALTER TABLE alerts ADD COLUMN {column} TEXT")
         conn.commit()
         check = conn.execute("PRAGMA integrity_check").fetchone()[0]
         if check != "ok":
@@ -249,15 +258,18 @@ def reserve_alert(fixture: dict, metrics: dict | None = None) -> str | None:
         cursor = conn.execute("""
           INSERT OR IGNORE INTO alerts
           (alert_key, fixture_id, home, away, minute, score, selection,
-           status, created_at, message_kind, next_goal_side, signal_tier, source)
-          VALUES (?, ?, ?, ?, ?, ?, ?, 'reserved', ?, ?, ?, ?, ?)
+           status, created_at, message_kind, next_goal_side, signal_tier, source,
+           home_logo_source, away_logo_source)
+          VALUES (?, ?, ?, ?, ?, ?, ?, 'reserved', ?, ?, ?, ?, ?, ?, ?)
         """, (key, int(fixture["fixture_id"]), fixture["home"], fixture["away"],
               int(fixture["minute"]), f'{fixture["hg"]}:{fixture["ag"]}',
               "Over 0.5 rest of match", utcnow(),
               "owner_clean_png" if os.getenv("LMG_OWNER_CLEAN_RELEASED", "0") == "1"
               else "photo",
               (metrics or {}).get("next_goal_side"), (metrics or {}).get("tier"),
-              fixture.get("source") or "espn"))
+              fixture.get("source") or "espn",
+              str(fixture.get("home_logo_url") or fixture.get("home_logo_id") or "") or None,
+              str(fixture.get("away_logo_url") or fixture.get("away_logo_id") or "") or None))
         conn.commit()
         inserted = cursor.rowcount == 1
     finally:
