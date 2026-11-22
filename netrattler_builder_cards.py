@@ -146,6 +146,15 @@ def send_model_builder_card(pick, match_date, text, log=print):
     """Adapt model picks without creating fictional leg prices or stakes."""
     import os
     from types import SimpleNamespace
+    # The legacy path is permitted for historical offline tests only, never
+    # for new Fouls/Fouls-Won model tickets. It has no observed combined
+    # bookmaker offer and its renderer is not an approved clean owner master.
+    # The isolated premium scorer/quote gate is netrattler_fouls_builder_premium.
+    contact_categories={'fouls','fouls_won','fouls_committed','fouls_drawn'}
+    if any(str(leg.get('category') or '').lower() in contact_categories
+           for leg in (pick.get('legs') or []) if isinstance(leg,dict)):
+        log('FOUL BUILDER BLOCKED: owner_original_and_bookmaker_ticket_required')
+        return None
     token=os.getenv('TELEGRAM_TOKEN') or os.getenv('TELEGRAM_BOT_TOKEN')
     # Never misroute a Builder pick to Props, Stats or the default channel.
     chat=os.getenv('TELEGRAM_GROUP_BUILDER')
