@@ -55,6 +55,8 @@ on:
       - 'test_netrattler_premium_dispatch_gate.py'
       - 'netrattler_premium_telegram_adapter.py'
       - 'netrattler_premium_sandbox_preview.py'
+      - 'netrattler_telegram_sandbox_hardtest.py'
+      - 'netrattler_card_visual_preview.py'
       - 'assets/premium_*_blank.svg'
       - 'test_netrattler_goalhunter_photos.py'
       - '.github/workflows/netrattler_sandbox_hardtest.yml'
@@ -111,6 +113,41 @@ jobs:
         if: success()
         run: |
           python netrattler_premium_sandbox_preview.py
+      - name: Mandatory OFFLINE Telegram thumbnail/owner visual quality Hardtest
+        if: success() || failure()
+        shell: bash
+        env:
+          TELEGRAM_TOKEN: ''
+          SUPABASE_URL: ''
+          V2_SUPABASE_URL: ''
+          V2_SUPABASE_SERVICE_KEY: ''
+        run: |
+          set -o pipefail
+          python -m py_compile netrattler_telegram_sandbox_hardtest.py netrattler_card_visual_preview.py
+          mkdir -p sandbox-qa
+          python - <<'PY'
+          from pathlib import Path
+          from netrattler_premium_verified_cards import CATEGORIES,render_verified_png
+          leg={'match':'OFFLINE HOME vs OFFLINE AWAY','market':'QA ONLY',
+               'bookmaker_odds':2.15,'bookmaker':'offline_test_fixture'}
+          for category in CATEGORIES:
+              count=3 if category in ('combo','builder') else 1
+              Path('sandbox-qa/'+category+'_SANDBOX_ONLY.png').write_bytes(
+                  render_verified_png(category,[leg.copy() for _ in range(count)]))
+          PY
+          python netrattler_card_visual_preview.py --outdir visual_review_previews
+          python netrattler_telegram_sandbox_hardtest.py 2>&1 | tee netrattler-telegram-visual-hardtest.log
+      - name: Upload offline simulated Telegram chat previews for all original families
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: netrattler-telegram-screen-16-plus-owners
+          path: |
+            sandbox-telegram-qa/*.png
+            sandbox-telegram-qa/report.json
+            netrattler-telegram-visual-hardtest.log
+          retention-days: 7
+          if-no-files-found: warn
       - name: Upload approved-format offline visual previews
         if: always()
         uses: actions/upload-artifact@v4
@@ -147,5 +184,5 @@ jobs:
 env:
   PYTHONPATH: ${{ github.workspace }}
   NETRATTLER_ROUTE_TABLES: player_match_stats,netrattler_match_history
-  V2_SUPABASE_URL: ${{ secrets.V2_SUPABASE_URL }}
-  V2_SUPABASE_SERVICE_KEY: ${{ secrets.V2_SUPABASE_SERVICE_KEY }}
+  V2_SUPABASE_URL: ''  # OFFLINE sandbox never receives DB credentials
+  V2_SUPABASE_SERVICE_KEY: ''
