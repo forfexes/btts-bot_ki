@@ -34,6 +34,24 @@ class BridgeQA(unittest.TestCase):
         with self.assertRaises(ValueError):
             make_live(FIXTURE,{**METRICS,'next_goal_side':'unknown'},
                       crest_provider=authentic_qa_image)
+    def test_final_goal_growth_must_match_bet_settlement(self):
+        # An unchanged 1:1 match is never an Over 0.5 remaining-time win.
+        with self.assertRaisesRegex(ValueError,'verdict contradicts'):
+            make_settled(FIXTURE,final_score='1:1',won=True,
+                         crest_provider=authentic_qa_image,preview_only=True)
+        # A later goal is never a loss even when manually mislabeled.
+        with self.assertRaisesRegex(ValueError,'verdict contradicts'):
+            make_settled(FIXTURE,final_score='1:2',won=False,
+                         crest_provider=authentic_qa_image,preview_only=True)
+        # Exactly the same verified final score correctly settles as lost.
+        raw=make_settled(FIXTURE,final_score='1:1',won=False,
+                         crest_provider=authentic_qa_image,preview_only=True)
+        with Image.open(BytesIO(raw)) as im:
+            self.assertEqual(im.size,(1024,1078))
+        for invalid in ('1:NaN','-1:2','1.1:2','1:31','1:2:3'):
+            with self.subTest(invalid=invalid),self.assertRaises(ValueError):
+                make_settled(FIXTURE,final_score=invalid,won=True,
+                             crest_provider=authentic_qa_image)
     def test_final_result_must_be_verified_and_cannot_go_backwards(self):
         with self.assertRaisesRegex(ValueError,'Confirmed win/loss'):
             make_settled(FIXTURE,final_score='2:1',won=None,
