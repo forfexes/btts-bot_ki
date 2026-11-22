@@ -164,7 +164,9 @@ class GoalHunterCards(unittest.TestCase):
         row={"home":"Tampines Rovers FC","away":"Ratchaburi FC",
              "minute":68,"score":"1:2","telegram_message_id":975,
              "message_kind":"owner_clean_png","next_goal_side":"home",
-             "next_goal_result":"won"}
+             "next_goal_result":"won",
+             "home_logo_source":"12345",
+             "away_logo_source":"https://a.espncdn.com/i/teamlogos/soccer/500/1.png"}
         final={"score":(2,2),"league":"ASEAN",
                "home":{"id":1},"away":{"id":2}}
         reply=Mock()
@@ -177,6 +179,10 @@ class GoalHunterCards(unittest.TestCase):
             settle.edit_original(row,final,True)
         self.assertEqual(render.call_count,1)
         self.assertEqual(render.call_args.kwargs["next_goal_result"],"won")
+        self.assertEqual(render.call_args.args[0]["home_logo_id"],"12345")
+        self.assertEqual(
+            render.call_args.args[0]["away_logo_id"],
+            "https://a.espncdn.com/i/teamlogos/soccer/500/1.png")
         self.assertIn("editMessageMedia",post.call_args.args[0])
         self.assertEqual(post.call_args.kwargs["files"]["result_photo"][2],"image/png")
         self.assertEqual(post.call_args.kwargs["data"]["message_id"],975)
