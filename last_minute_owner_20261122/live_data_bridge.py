@@ -69,7 +69,8 @@ def make_live(fixture, metrics, *, crest_provider, preview_only=False):
 
 
 def make_settled(fixture, *, final_score, won, crest_provider,
-                 next_goal_side=None, preview_only=False):
+                 next_goal_side=None, next_goal_result=None,
+                 preview_only=False):
     fields=_fixture(fixture)
     if type(won) is not bool:raise ValueError('Confirmed win/loss required')
     if next_goal_side not in (None,'home','away'):
@@ -104,7 +105,12 @@ def make_settled(fixture, *, final_score, won, crest_provider,
     fields['status']='gewonnen' if won else 'verloren'
     fields['final_score']=final_score
     if next_goal_side:
+        if next_goal_result not in ('won','lost','void','unverified'):
+            raise ValueError('Verified next-goal settlement required for the original pick')
         fields['next_goal_team']=fixture[next_goal_side]
+        fields['next_goal_result']=next_goal_result
+    elif next_goal_result is not None:
+        raise ValueError('Next-goal result without an original pick')
     home_logo,away_logo=_logos(fixture,crest_provider)
     return render_card(fields,home_crest=home_logo,away_crest=away_logo,
                        preview_only=preview_only)
