@@ -180,27 +180,50 @@ def format_tip(fixture, metrics):
 
 
 def reserve_alert(fixture, metrics=None):
-    """Durably reserve a match in GitHub-backed SQLite BEFORE Telegram delivery."""
+    """Reserve only after the clean owner's picture is explicitly released.
+
+    A disabled send must not leave a durable SQLite 'reserved' record that
+    prevents the fixture being sent once its design is approved.
+    """
+    if os.getenv("LMG_OWNER_CLEAN_RELEASED", "0") != "1":
+        raise RuntimeError("last_minute_original_visual_release_required")
     from netrattler_lmg_store import reserve_alert as sqlite_reserve
     return sqlite_reserve(fixture, metrics)
 
 
 def send_alert(fixture, metrics):
-    """Send ONLY the approved GOAL HUNTER image, without repeated caption text.
+    """Never send the old sample-painted card or an unapproved replacement.
 
-    All information including the optional next-goal side and @prophunter
-    is already rendered into the image. Telegram caption stays absent.
+    The owner-derived clean plate is a distinct PNG renderer with real data
+    layers; no text caption, no fallback to the legacy JPEG compositor.
     """
-    from netrattler_lmg_card import make_card
+    if os.getenv("LMG_OWNER_CLEAN_RELEASED", "0") != "1":
+        raise RuntimeError("last_minute_original_visual_release_required")
+    from io import BytesIO
+    from netrattler_lmg_card import crest
+    from last_minute_owner_20261122.live_data_bridge import make_live
+
     token = os.getenv("TELEGRAM_TOKEN") or os.getenv("TELEGRAM_BOT_TOKEN")
     chat = os.getenv("TELEGRAM_GROUP_LATE_GOALS")
     if not token or not chat:
         raise RuntimeError("Telegram Goal Hunter group/bot secret missing")
-    photo=make_card(fixture,metrics)
+    def verified_crest_png(source):
+        badge=crest(source)
+        if badge is None:
+            raise ValueError("Verified Goal Hunter team crest unavailable")
+        with BytesIO() as buff:
+            badge.save(buff,format="PNG")
+            return buff.getvalue()
+    vetted_metrics=dict(metrics or {})
+    if vetted_metrics.get("next_goal_side") in ("home","away"):
+        # The direction comes from select_next_goal's real-stat rule;
+        # it is not a bookmaker quote or a calibrated percentage.
+        vetted_metrics["next_goal_verified"]=True
+    photo=make_live(fixture,vetted_metrics,crest_provider=verified_crest_png)
     resp=requests.post(
         f"https://api.telegram.org/bot{token}/sendPhoto",
         data={"chat_id":chat},
-        files={"photo":("goal_hunter.jpg",photo,"image/jpeg")},timeout=30)
+        files={"photo":("last_minute_owner_original.png",photo,"image/png")},timeout=30)
     resp.raise_for_status()
     payload=resp.json()
     message_id=(payload.get("result") or {}).get("message_id")
