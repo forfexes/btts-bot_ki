@@ -4,7 +4,8 @@ import netrattler_builder_cards as cards
 
 
 def test_no_fouls_or_fouls_won_legacy_card_reaches_telegram():
-    for category in ("fouls", "fouls_won", "fouls_committed", "fouls_drawn"):
+    for category in ("fouls", "fouls_won", "fouls_committed", "fouls_drawn",
+                     "shots", "sot", "cards", "yellow", "tackles"):
         model = {
             "title": "FOUL BUILDER", "joint": 0.45, "fair": 2.22,
             "legs": [{
