@@ -29,6 +29,8 @@ jobs:
       SUPABASE_URL: ''
       SUPABASE_KEY: ''
       NETRATTLER_SANDBOX_HARDTEST: '1'
+      # Explicit test-only override; real Telegram publishing stays blocked.
+      NETRATTLER_BLOCK_OVERPAINTED_MASTERS: '0'
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-python@v5
