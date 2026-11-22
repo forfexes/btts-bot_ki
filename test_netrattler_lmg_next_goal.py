@@ -19,7 +19,8 @@ class NextGoalTests(unittest.TestCase):
         self.addCleanup(self.temp.cleanup)
         env=patch.dict(os.environ,{
             "LMG_SQLITE_PATH":os.path.join(self.temp.name,"data","goal_hunter.sqlite3"),
-            "LMG_SQLITE_SYNC":"false"})
+            "LMG_SQLITE_SYNC":"false",
+            "LMG_OWNER_CLEAN_RELEASED":"1"})  # QA fixture only; production stays blocked
         env.start()
         self.addCleanup(env.stop)
         store.init()
@@ -118,14 +119,21 @@ class NextGoalTests(unittest.TestCase):
                                      "WHERE alert_key=?",(key,)).fetchone()
         self.assertEqual(row["next_goal_side"],"home")
         self.assertEqual(row["signal_tier"],"PREMIUM")
+        self.assertEqual(
+            store._connect().execute("SELECT message_kind FROM alerts WHERE alert_key=?",
+                                     (key,)).fetchone()["message_kind"],
+            "owner_clean_png")
 
         reply=Mock()
         reply.json.return_value={"ok":True,"result":{"message_id":912}}
         with patch.dict("os.environ",{"TELEGRAM_TOKEN":"test",
                                      "TELEGRAM_GROUP_LATE_GOALS":"-1"}),\
-             patch("netrattler_lmg_card.make_card",return_value=b"JPEG"),\
+             patch("last_minute_owner_20261122.live_data_bridge.make_live",
+                   return_value=b"QA_PNG") as render,\
              patch("requests.post",return_value=reply) as post:
             self.assertEqual(common.send_alert(self.fx,self.metrics),912)
+        self.assertEqual(render.call_count,1)
+        self.assertEqual(post.call_args.kwargs["files"]["photo"][2],"image/png")
         self.assertTrue(post.call_args.args[0].endswith("/sendPhoto"))
         self.assertEqual(post.call_args.kwargs["data"],{"chat_id":"-1"})
         self.assertNotIn("caption",post.call_args.kwargs["data"])
