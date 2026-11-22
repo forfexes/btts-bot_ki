@@ -6,7 +6,8 @@ from datetime import datetime, timedelta, timezone
 import unittest
 
 import netrattler_foul_props as props
-from netrattler_fouls_builder_premium import prepare_quoted_builder, lineup_from_api_football
+from netrattler_fouls_builder_premium import (
+    prepare_quoted_builder, lineup_from_api_football, scout_foul_candidates)
 
 
 NOW = datetime(2026, 11, 22, 12, 0, tzinfo=timezone.utc)
@@ -102,6 +103,38 @@ class OriginalFoulsBuilderQA(unittest.TestCase):
         provider[1]["startXI"].pop()
         with self.assertRaisesRegex(ValueError,"incomplete_starting_eleven"):
             lineup_from_api_football(self.fixture,provider,observed_at=NOW)
+
+    def test_research_only_scouter_has_no_fictional_price_or_joint_ev(self):
+        report=scout_foul_candidates(self.fixture,self.lineup,self.profiles,now=NOW)
+        self.assertFalse(report["publication_allowed"])
+        self.assertIsNone(report["bookmaker_total_odds"])
+        self.assertIsNone(report["model_joint_probability"])
+        self.assertEqual(report["status"],"RESEARCH_ONLY_NO_BOOKMAKER_TICKET")
+        candidates=report["candidates"]
+        self.assertGreaterEqual(len(candidates),10)
+        self.assertTrue({p["market"] for p in candidates} ==
+                        {"fouls_won","fouls_committed"})
+        self.assertEqual({p["threshold"] for p in candidates},{2,3})
+        self.assertTrue(all(p["L10"]>=3 and p["L15"]>=4 for p in candidates))
+        self.assertTrue(all(p["team_id"] in (10,20) for p in candidates))
+        self.assertFalse(any("odds" in p for p in candidates))
+
+    def test_scout_discards_unverified_old_or_wrong_club_player(self):
+        self.profiles[0]["fouls"] = self.profiles[0]["fouls"][:10]
+        self.profiles.append({
+            "player":"Ezri Konsa","team":"Aston Villa",
+            "match":"Newcastle United vs Arsenal",
+            "source":"foul_profile","history_order":"latest_first",
+            "fouls":[4]*15,"fouls_won":[4]*15,
+        })
+        report=scout_foul_candidates(self.fixture,self.lineup,self.profiles,now=NOW)
+        self.assertFalse(any(p["player"]=="Ezri Konsa" for p in report["candidates"]))
+        self.assertFalse(any(
+            p["player"]=="Joe Willock" and p["market"]=="fouls_committed"
+            for p in report["candidates"]))
+        self.assertTrue(any(
+            p["player"]=="Joe Willock" and p["market"]=="fouls_won"
+            for p in report["candidates"]))
 
     def test_valid_single_match_builder_is_still_not_published(self):
         out = self.go()
