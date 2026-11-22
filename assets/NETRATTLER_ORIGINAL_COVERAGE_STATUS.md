@@ -94,3 +94,11 @@ Die Existenz eines Referenzbilds beweist auch keinen erfolgreichen Telegram-Prod
 - Stand Originalabdeckung: Für **11 von 16** Marktgruppen besteht weiterhin **kein eigenständiges hochgeladenes Original** (Over, Halbzeit, Match Result, Player Props, Fouls/Karten, VAR, Last Minute, Late Goals, Live Halbzeit, Cross Mix etc.). Die technische SVG-Vorlage ist kein Premium-Original.
 - Die ursprünglichen Builder-/Goal-Hunter-Bildquellen enthalten weiterhin Laufzeit-Überdeckungen. Auch die BTTS- und Combo-Quellen bedürfen noch einer echten ästhetischen Abnahme. **Produktionssperre bleibt bestehen**; kein automatisch freigegebener Versand bei Grün im Offline-Mock.
 - Die nachfolgenden Hardtests verwenden `netrattler_telegram_sandbox_hardtest.py` und exportieren `sandbox-telegram-qa/report.json` sowie Screenshots. Es werden **keine Telegram- oder Datenbank-Credentials** für die offline Rendering-Tests genutzt.
+
+## Verifizierter Abschluss-Audit 22.11.2026
+
+**Produktionsfreigabe: BLOCKIERT, nicht fertig.** GitHub enthält 5 PNG-Referenzen (BTTS, Builder 4, Combo 7/9, Goal Hunter) und weitere WebP-Referenzen für Builder, Goal Hunter und Corner Sniper. Die 16 `premium_*_blank.svg` sind technische Vorlagen, **keine Originale**. Bei 11 der 16 Marktgruppen fehlt ein eigenständiges vom Nutzer geliefertes Original. Es gibt keine legitime Methode, die fehlenden Originale allein durch Umbenennen, Kopieren oder Laufzeit-Übermalen vorhandener Bilder herzustellen.
+
+Der neue strenge 26-Karten-Offline-Hardtest wurde in den Läufen [#44990606781](https://github.com/forfexes/btts-bot_ki/actions/runs/44990606781) und [#44990606768](https://github.com/forfexes/btts-bot_ki/actions/runs/44990606768) erfolgreich abgeschlossen. Das bestätigt **nur** die vorhandenen technischen und abgeleiteten Vorschauen, nicht 16 abgenommene Premium-Master oder echten Telegram-Versand.
+
+**Abnahmebedingung:** Für jeden der elf fehlenden Märkte ein unabhängiges, datenfreies Originalbild bereitstellen oder ausdrücklich ein neu entworfenes Design als neue Vorlage freigeben; danach die saubere Masterdatei prüfen, Renderer ohne Überdeckungen testen, echte Telegram-Ansicht kontrollieren und erst dann die produktive Sperre selektiv aufheben. Bis dahin keine automatischen Telegram-Tipps mit technischen SVG-Ersatzdesigns.
