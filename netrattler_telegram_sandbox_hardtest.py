@@ -163,8 +163,8 @@ report={
 # skeletons + three originals, silently omitting Builder 2-7/Goal Hunter.
 expected_owner={
     "owner_btts","owner_combo_7","owner_combo_9",
-    *(f"TEST_ONLY_builder_{n}_original" for n in range(2,8)),
-    "TEST_ONLY_goal_hunter_original",
+    *(f"TEST_ONLY_builder_{n}leg" for n in range(2,8)),
+    "TEST_ONLY_goal_hunter",
 }
 missing_owner=sorted(expected_owner-set(results))
 if missing_owner:
