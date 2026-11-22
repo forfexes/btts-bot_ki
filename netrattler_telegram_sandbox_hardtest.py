@@ -68,13 +68,15 @@ def preview(name,original_bytes,source,approval_status):
     d.text((20,24),"NETRATTLER  ·  SANDBOX",font=title_font,fill=(247,247,252))
     canvas.paste(poster.resize((w,scaled_h),Image.Resampling.LANCZOS),(x0,y0))
     d=ImageDraw.Draw(canvas)
-    clock_top=y0+scaled_h-26
-    assert clock_top>=y0+original_h+6,(
+    # Tiny Telegram clock strip belongs at the very bottom of the metadata
+    # gutter, well below the actual original photo's Auswertung/footer.
+    clock_top=y0+scaled_h-18
+    assert clock_top>=y0+original_h+6,
         name,"Telegram's clock has covered player/card/settlement area"
     )
-    d.rounded_rectangle((x0+w-127,clock_top,x0+w-7,clock_top+21),
-                        radius=6,fill=(10,22,32))
-    d.text((x0+w-120,clock_top+4),"bearbeitet 23:01",
+    d.rounded_rectangle((x0+w-127,clock_top,x0+w-7,clock_top+16),
+                        radius=4,fill=(10,22,32))
+    d.text((x0+w-120,clock_top+2),"bearbeitet 23:01",
            font=font,fill=(240,245,254))
     d.text((18,y0+scaled_h+15),"SIMULATION · KEIN TELEGRAM-VERSAND",
            font=font,fill=(245,209,108))
