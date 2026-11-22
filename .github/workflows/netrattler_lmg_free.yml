@@ -72,33 +72,52 @@ jobs:
         with:
           python-version: "3.11"
       - run: python -m pip install --prefer-binary requests Pillow
-      - name: Render example cards without live data or Telegram posting
+      - name: Render source-derived owner PNG previews, never legacy JPEGs
         run: |
           mkdir -p visual-preview
           python - <<'PY'
-          from netrattler_lmg_card import make_card
-          fixture={"home":"Tampines Rovers FC","away":"Ratchaburi FC",
-                   "hg":1,"ag":2,"minute":68,"league":"ASEAN Club Championship",
-                   "home_logo_id":67386,"away_logo_id":421346}
-          from netrattler_lmg_next_goal import select_next_goal
-          metrics={"tier":"STANDARD","teams":{"home":{"shots":17,"sot":8,"corners":5,"xg":1.75},
-                                                   "away":{"shots":9,"sot":3,"corners":3,"xg":0.60}}}
-          metrics["next_goal_side"]=select_next_goal(metrics)
-          assert metrics["next_goal_side"]=="home", "Demo team side must pass production rules"
-          for name,opts in (("open",{"metrics":metrics}),
-                            ("won",{"final_score":"3:2","won":True,"next_goal_side":"home","next_goal_result":"won"}),
-                            ("lost",{"final_score":"1:2","won":False,"next_goal_side":"home","next_goal_result":"void"})):
-              data=make_card(fixture,**opts)
-              with open(f"visual-preview/{name}.jpg","wb") as out:
-                  out.write(data)
-              print("LMG_VISUAL_PREVIEW",name,len(data))
-          print("LMG_VISUAL_NOTE demo statistics only; real matching club IDs used for crest loading")
+          from io import BytesIO
+          from PIL import Image, ImageDraw
+          from last_minute_owner_20261122.live_data_bridge import make_live, make_settled
+
+          fixture={"home":"TEST HEIM","away":"TEST GAST","hg":1,"ag":1,
+                   "minute":75,"league":"SANDBOX TESTLIGA",
+                   "home_logo_id":1,"away_logo_id":2}
+          def qa_crest(team_id):
+              assert team_id in (1,2)
+              im=Image.new("RGBA",(110,110),(0,0,0,0))
+              d=ImageDraw.Draw(im)
+              d.ellipse((6,6,104,104),fill=(25,91,158) if team_id==1 else (151,84,31),
+                        outline=(246,201,51),width=5)
+              b=BytesIO()
+              im.save(b,"PNG")
+              return b.getvalue()
+          metrics={"teams":{"home":{"shots":15,"sot":7,"corners":4,"xg":1.40},
+                            "away":{"shots":8,"sot":2,"corners":3,"xg":0.63}},
+                   "next_goal_side":"home","next_goal_verified":True}
+          cards={
+              "open":make_live(fixture,metrics,crest_provider=qa_crest,preview_only=True),
+              "won":make_settled(fixture,final_score="2:1",won=True,
+                                 next_goal_side="home",next_goal_result="won",
+                                 crest_provider=qa_crest,preview_only=True),
+              "lost":make_settled(fixture,final_score="1:1",won=False,
+                                  next_goal_side="home",next_goal_result="void",
+                                  crest_provider=qa_crest,preview_only=True),
+          }
+          for name,png in cards.items():
+              with Image.open(BytesIO(png)) as im:
+                  assert im.format=="PNG" and im.size==(1024,1078)
+                  im.verify()
+              with open(f"visual-preview/{name}.png","wb") as out:
+                  out.write(png)
+              print("OWNER_ORIGINAL_SANDBOX_PREVIEW",name,len(png))
+          print("NO LIVE ODDS / NO TELEGRAM / NO LEGACY JPEG / QA-ONLY CRESTS")
           PY
       - uses: actions/upload-artifact@v4
         with:
-          name: goal-hunter-visual-preview
-          path: visual-preview/*.jpg
-          retention-days: 3
+          name: goal-hunter-owner-original-visual-preview
+          path: visual-preview/*.png
+          retention-days: 7
 
   smoke:
     needs: verify
