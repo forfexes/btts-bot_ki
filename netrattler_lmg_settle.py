@@ -105,8 +105,36 @@ def edit_original(row,final,won):
                                   f"🎯 Nächstes Tor: {predicted} · {grade}\n@prophunter")
     # Old messages are text. Only new photo cards support editing the image in place.
     # Photo cards can be identified via a versioned prefix in the alert row, if persisted.
-    is_photo=row.get("message_kind")=="photo"
-    if is_photo:
+    version=row.get("message_kind")
+    is_photo=version=="photo"
+    is_clean_owner=version=="owner_clean_png"
+    if is_clean_owner:
+        from io import BytesIO
+        from netrattler_lmg_card import crest
+        from last_minute_owner_20261122.live_data_bridge import make_settled
+
+        def verified_crest_png(source):
+            badge=crest(source)
+            if badge is None:
+                raise ValueError("Verified settled Goal Hunter crest unavailable")
+            with BytesIO() as buff:
+                badge.save(buff,format="PNG")
+                return buff.getvalue()
+
+        # Even when a release flag changes after publication, the stored
+        # per-message version guarantees the EXACT owner family is re-rendered.
+        photo=make_settled(fixture,final_score=final_text,won=won,
+                           next_goal_side=row.get("next_goal_side"),
+                           next_goal_result=row.get("next_goal_result"),
+                           crest_provider=verified_crest_png)
+        media=json.dumps({"type":"photo","media":"attach://result_photo"})
+        resp=requests.post(
+            f"https://api.telegram.org/bot{token}/editMessageMedia",
+            data={"chat_id":chat,"message_id":row["telegram_message_id"],
+                  "media":media},
+            files={"result_photo":("last_minute_settled.png",photo,"image/png")},
+            timeout=30)
+    elif is_photo:
         from netrattler_lmg_card import make_card
         photo=make_card(fixture,metrics={"tier":signal_tier or "STANDARD"},
                         final_score=final_text,won=won,
@@ -119,10 +147,12 @@ def edit_original(row,final,won):
                            data={"chat_id":chat,"message_id":row["telegram_message_id"],
                                  "media":media},
                            files={"result_photo":("result.jpg",photo,"image/jpeg")},timeout=30)
-    else:
+    elif version=="text":
         resp=requests.post(f"https://api.telegram.org/bot{token}/editMessageText",
                            json={"chat_id":chat,"message_id":row["telegram_message_id"],
                                  "text":caption},timeout=20)
+    else:
+        raise ValueError("Unknown Telegram image template version; settlement deferred")
     if resp.status_code==400 and "message is not modified" in resp.text.lower():
         return  # Previous identical edit succeeded; safe to persist settlement.
     resp.raise_for_status()
