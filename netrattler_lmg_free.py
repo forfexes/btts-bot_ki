@@ -187,6 +187,10 @@ def reserve_alert(fixture, metrics=None):
     """
     if os.getenv("LMG_OWNER_CLEAN_RELEASED", "0") != "1":
         raise RuntimeError("last_minute_original_visual_release_required")
+    from netrattler_lmg_next_goal import select_next_goal
+    claimed=(metrics or {}).get("next_goal_side")
+    if claimed is not None and claimed != select_next_goal(metrics):
+        raise ValueError("Unverified next-goal prediction; no SQLite reservation")
     from netrattler_lmg_store import reserve_alert as sqlite_reserve
     return sqlite_reserve(fixture, metrics)
 
@@ -215,9 +219,13 @@ def send_alert(fixture, metrics):
             badge.save(buff,format="PNG")
             return buff.getvalue()
     vetted_metrics=dict(metrics or {})
-    if vetted_metrics.get("next_goal_side") in ("home","away"):
-        # The direction comes from select_next_goal's real-stat rule;
-        # it is not a bookmaker quote or a calibrated percentage.
+    claimed=vetted_metrics.get("next_goal_side")
+    if claimed is not None:
+        from netrattler_lmg_next_goal import select_next_goal
+        if claimed not in ("home","away") or select_next_goal(vetted_metrics)!=claimed:
+            raise ValueError("Unverified next-goal prediction; no Telegram upload")
+        # Recomputed from the same provider-observed stats, not accepted as a
+        # caller-supplied directional claim or calibrated probability.
         vetted_metrics["next_goal_verified"]=True
     photo=make_live(fixture,vetted_metrics,crest_provider=verified_crest_png)
     resp=requests.post(
