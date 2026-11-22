@@ -120,12 +120,36 @@ for item in sorted(Path("visual_review_previews").glob("TEST_ONLY_*.png")):
 main=Path(".github/workflows/btts_tips.yml").read_text(encoding="utf-8")
 assert "if: ${{ false }}" in main, "Unsafe LIVE tips resumed without original-art acceptance"
 assert 'NETRATTLER_BLOCK_OVERPAINTED_MASTERS: "1"' in main
+# Export a full 26-card Telegram contact sheet for actual design review.
+# Producing a PNG and passing geometry does NOT approve the 16 source designs.
+files=sorted(DEST.glob("telegram_*.png"))
+columns=5
+tw,th=215,520
+sheet=Image.new("RGB",(tw*columns,th*((len(files)+columns-1)//columns)),
+                (20,28,43))
+pen=ImageDraw.Draw(sheet)
+for i,path in enumerate(files):
+    with Image.open(path) as img:
+        thumb=img.convert("RGB")
+        thumb.thumbnail((tw-12,th-35),Image.Resampling.LANCZOS)
+    x=(i%columns)*tw+6
+    y=(i//columns)*th+25
+    sheet.paste(thumb,(x,y))
+    pen.text((x,y-20),path.stem.replace("telegram_","")[:28],
+             font=font,fill=(245,249,252))
+sheet.save(DEST/"contact_sheet.png",optimize=True)
+print("NETRATTLER_TELEGRAM_VISUAL_CONTACT_SHEET",len(files),
+      "no Telegram API")
+
 report={
     "date":"2026-11-22",
     "sandbox_only":True,
     "telegram_real_app_pixel_match":"NOT_VERIFIED",
     "technical_families_rendered":16,
     "all_16_owner_artwork_approved":False,
+    "visual_owner_signoff":"NOT_GRANTED",
+    "visible_source_overlay_risk":"PRESENT_IN_DERIVED_ORIGINALS",
+    "telegram_android_exact_pixel_match":"NOT_VERIFIED",
     "missing_independent_originals":sorted(set(CATEGORIES)-set(reference)),
     "individual_results":results,
 }
