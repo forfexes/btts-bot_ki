@@ -836,6 +836,14 @@ def render_card(entries, target_date, result=None):
 
 
 def _send_photo(token, chat, caption, payload, log):
+    # Telegram draws the time/edited label inside a chat photo's bottom-right.
+    # In original-only production, add an EMPTY metadata strip below the
+    # *unchanged* approved artwork, never patch text or @prophunter in place.
+    if (os.getenv("NETRATTLER_ORIGINAL_ONLY", "0") == "1"
+            and isinstance(payload, (bytes, bytearray))
+            and payload.startswith(b"\\x89PNG\\r\\n\\x1a\\n")):
+        from netrattler_telegram_safe_zone import append_safe_margin
+        payload = append_safe_margin(payload)
     url = f"https://api.telegram.org/bot{token}/sendPhoto"
     max_retries = max(1, int(os.getenv("STATS_MATCH_CARDS_RETRIES", "4")))
     for attempt in range(max_retries):
@@ -1084,6 +1092,13 @@ def save_card(chat, message_id, entries, target_date, log=print):
 
 
 def _edit_photo(token, chat, message_id, payload, log, caption=None):
+    # Keep old Telegram message_id; never send a replacement post on failure.
+    # For future owner-approved result photos apply the same harmless gutter.
+    if (os.getenv("NETRATTLER_ORIGINAL_ONLY", "0") == "1"
+            and isinstance(payload, (bytes, bytearray))
+            and payload.startswith(b"\\x89PNG\\r\\n\\x1a\\n")):
+        from netrattler_telegram_safe_zone import append_safe_margin
+        payload = append_safe_margin(payload)
     import json as _json
     try:
         media = {"type": "photo", "media": "attach://card"}
