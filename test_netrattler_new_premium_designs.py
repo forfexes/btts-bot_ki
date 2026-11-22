@@ -45,3 +45,11 @@ def test_all_rejected_mockups_are_explicitly_quarantined():
     for path in REJECTED.glob("*.svg"):
         data = path.read_text(encoding="utf-8")
         assert "NEW DESIGN / QA ONLY" in data, path
+
+
+def test_unapproved_premium_renderer_is_blocked_by_default(monkeypatch):
+    monkeypatch.delenv("NETRATTLER_BLOCK_OVERPAINTED_MASTERS", raising=False)
+    from netrattler_premium_telegram_adapter import render
+    import pytest
+    with pytest.raises(ValueError, match="premium_master_not_visually_approved"):
+        render([], "2026-11-22", crest_provider=lambda _: None)
