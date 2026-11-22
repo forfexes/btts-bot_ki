@@ -191,14 +191,14 @@ def render_builder(pick):
     _label(draw,f"{len(legs)}-LEG BUILDER",423,326,390,size=40,min_size=27)
     from netrattler_neon_design import _builder_quote_display,_stat_series,_form_label,_percent,_number
     title,value,book_quote=_builder_quote_display(pick,legs)
-    # Preserve the user's original artwork even without a bookmaker combo price.
-    # Display calculated individual-leg product only as an unconfirmed reference.
+    # The product of individual-leg prices is NOT an actual same-game
+    # bookmaker quote. Reject the card instead of presenting an unbookable
+    # calculated number as GESAMTQUOTE (or deriving an invalid EV).
     if book_quote is None:
-        shown = ("BERECHNET " + value) if value != "—" else "QUOTE OFFEN"
-    else:
-        shown = f"@ {book_quote:.2f}"
+        raise ValueError("Keine bestätigte Buchmacher-Kombiquote; Formelprodukt darf nicht als Wettquote erscheinen")
+    shown = f"@ {book_quote:.2f}"
     _erase(draw,(710,333,1000,376),fill="#F6C92E",radius=10)
-    _label(draw,shown,857,333,275,size=27 if book_quote is None else 35,
+    _label(draw,shown,857,333,275,size=35,
            min_size=15,fill="#11121B",shadow=False)
     for i,leg in enumerate(legs):
         y=409+100*i
@@ -226,13 +226,9 @@ def render_builder(pick):
         probability=_percent(getattr(pick,"probability",None))
     if probability is None:
         raise ValueError("Bestätigte Modellwahrscheinlichkeit fehlt")
-    # Only a bookmaker-confirmed combined ticket can support an advertised EV.
-    # For a calculated same-game builder, keep the estimate visible but show
-    # no invented EV or realised bookmaker P/L.
-    ev=(probability/100*book_quote-1)*100 if book_quote is not None else None
-    quote_text=f"{book_quote:.2f}" if book_quote is not None else value
-    if quote_text=="—":
-        raise ValueError("Builder hat keine berechenbaren echten Einzelquoten")
+    # EV may only use the bookmaker-confirmed combined price.
+    ev=(probability/100*book_quote-1)*100
+    quote_text=f"{book_quote:.2f}"
     conf=str(getattr(pick,"confidence","") or "").upper()
     if not conf or conf=="—":
         raise ValueError("Konfidenz fehlt")
