@@ -187,9 +187,11 @@ class OriginalFoulsBuilderQA(unittest.TestCase):
 
     def test_wrong_market_semantics_and_nonbookmaker_line(self):
         self.quote["legs"][2]["market"] = "fouls_committed"
+        self.quote["legs"][3]["market"] = "fouls_committed"
         with self.assertRaisesRegex(ValueError, "both_foul_directions"):
             self.go()
         self.quote["legs"][2]["market"] = "fouls_won"
+        self.quote["legs"][3]["market"] = "fouls_won"
         self.quote["legs"][2]["threshold"] = 1
         with self.assertRaisesRegex(ValueError, "unsupported_foul_line"):
             self.go()
