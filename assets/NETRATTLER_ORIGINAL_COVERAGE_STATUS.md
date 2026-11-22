@@ -102,3 +102,23 @@ Die Existenz eines Referenzbilds beweist auch keinen erfolgreichen Telegram-Prod
 Der neue strenge 26-Karten-Offline-Hardtest wurde in den Läufen [#44990606781](https://github.com/forfexes/btts-bot_ki/actions/runs/44990606781) und [#44990606768](https://github.com/forfexes/btts-bot_ki/actions/runs/44990606768) erfolgreich abgeschlossen. Das bestätigt **nur** die vorhandenen technischen und abgeleiteten Vorschauen, nicht 16 abgenommene Premium-Master oder echten Telegram-Versand.
 
 **Abnahmebedingung:** Für jeden der elf fehlenden Märkte ein unabhängiges, datenfreies Originalbild bereitstellen oder ausdrücklich ein neu entworfenes Design als neue Vorlage freigeben; danach die saubere Masterdatei prüfen, Renderer ohne Überdeckungen testen, echte Telegram-Ansicht kontrollieren und erst dann die produktive Sperre selektiv aufheben. Bis dahin keine automatischen Telegram-Tipps mit technischen SVG-Ersatzdesigns.
+
+## Fortschrittskorrektur 22.11.2026 – Original Last Minute + Fussball-XI
+
+Der historische Audit oben nennt Last Minute Goal als fehlendes Original. Inzwischen
+wurde das echte Nutzerbild samt bereinigter datenfreier Grundgrafik unter
+`last_minute_owner_20261122/` aufgenommen. Der source-derived PNG-Renderer und
+der geschützte Settlement-Pfad sind offline getestet; die produktive visuelle
+Telegram-Freigabe bleibt getrennt **offen**. Die historischen Listen bleiben
+zur Nachvollziehbarkeit unverändert.
+
+Der neue Fussball-Fouls-Builder verwendet die bestätigte Startelf des korrekten
+Teams (11+11 mit echten Team-IDs) und L10/L15-Historien; Spieler anderer Clubs
+werden aus sämtlichen über den Lineup-Run gebauten Spieler-Props ausgefiltert.
+Ohne aktuelle echte Buchmacher-**Gesamtquote** und sauberen Original-Fouls-Master
+erfolgt **kein** Versand.
+
+- [Fouls- und Team-XI-Hardtest #45026436570](https://github.com/forfexes/btts-bot_ki/actions/runs/45026436570): SUCCESS, isolierter Offline-Run.
+- [Core CI #45026411722](https://github.com/forfexes/btts-bot_ki/actions/runs/45026411722): SUCCESS.
+- Noch offene Originalmaster sind nicht durch technische SVG-Skeletons
+  oder Inpainting-Beispielkacheln ersetzt.
