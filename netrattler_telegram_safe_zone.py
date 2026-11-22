@@ -17,7 +17,9 @@ PNG = b"\x89PNG\r\n\x1a\n"
 def telegram_safe_margin_height(height: int) -> int:
     if height < 400:
         raise ValueError("Premium original image is too short")
-    return max(190, round(height * 0.16))
+    # Compact Android time/edited overlay zone. The former 16% black
+    # extension was visually oversized; preserve actual original pixels.
+    return max(112, round(height * 0.075))
 
 
 def append_safe_margin(png: bytes) -> bytes:
