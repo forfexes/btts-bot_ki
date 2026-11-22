@@ -17,6 +17,6 @@ jobs:
       - uses: actions/setup-python@v5
         with:
           python-version: '3.11'
-      - run: python -m pip install --quiet pytest
+      - run: python -m pip install --quiet pytest pillow
       - name: Check all eleven editable new designs
         run: python -m pytest -q test_netrattler_new_premium_designs.py
