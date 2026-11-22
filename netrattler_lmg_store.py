@@ -250,10 +250,12 @@ def reserve_alert(fixture: dict, metrics: dict | None = None) -> str | None:
           INSERT OR IGNORE INTO alerts
           (alert_key, fixture_id, home, away, minute, score, selection,
            status, created_at, message_kind, next_goal_side, signal_tier, source)
-          VALUES (?, ?, ?, ?, ?, ?, ?, 'reserved', ?, 'photo', ?, ?, ?)
+          VALUES (?, ?, ?, ?, ?, ?, ?, 'reserved', ?, ?, ?, ?, ?)
         """, (key, int(fixture["fixture_id"]), fixture["home"], fixture["away"],
               int(fixture["minute"]), f'{fixture["hg"]}:{fixture["ag"]}',
               "Over 0.5 rest of match", utcnow(),
+              "owner_clean_png" if os.getenv("LMG_OWNER_CLEAN_RELEASED", "0") == "1"
+              else "photo",
               (metrics or {}).get("next_goal_side"), (metrics or {}).get("tier"),
               fixture.get("source") or "espn"))
         conn.commit()
