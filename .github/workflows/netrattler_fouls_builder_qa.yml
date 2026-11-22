@@ -8,6 +8,10 @@ on:
       - "netrattler_fouls_builder_premium.py"
       - "test_foul_props.py"
       - "test_netrattler_fouls_builder_premium.py"
+      - "test_netrattler_fouls_legacy_send_gate.py"
+      - "netrattler_model_builders.py"
+      - "test_model_builders.py"
+      - "netrattler_builder_cards.py"
       - ".github/workflows/netrattler_fouls_builder_qa.yml"
 
 permissions:
@@ -29,10 +33,14 @@ jobs:
         with:
           python-version: "3.11"
       - name: Install isolated testing requirements
-        run: python -m pip install --quiet requests pytest
+        run: python -m pip install --quiet requests Pillow pytest
       - name: Syntax gate
-        run: python -m py_compile netrattler_foul_props.py netrattler_fouls_builder_premium.py test_netrattler_fouls_builder_premium.py test_foul_props.py
+        run: python -m py_compile netrattler_foul_props.py netrattler_fouls_builder_premium.py test_netrattler_fouls_builder_premium.py test_foul_props.py test_model_builders.py test_netrattler_fouls_legacy_send_gate.py
       - name: Untrusted screenshot and same-match Fouls QA
         run: python -m unittest -v test_netrattler_fouls_builder_premium
       - name: Existing player-stat and quota regressions
         run: python -m pytest -q test_foul_props.py
+      - name: Prevent legacy no-quote Fouls builder from reaching Telegram
+        run: |
+          python -m pytest -q test_netrattler_fouls_legacy_send_gate.py
+          python -m pytest -q test_model_builders.py -k test_legacy_foul_nate_models_never_reserve_or_send
