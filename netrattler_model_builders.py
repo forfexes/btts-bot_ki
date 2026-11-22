@@ -415,6 +415,19 @@ def run(rows, match_date, send, url, key, logger=print):
                                  "MODEL NATE MIX"}:
             logger("LEGACY FOUL MODEL BLOCKED: combined_quote_and_clean_owner_required")
             continue
+        # Every pick created in this legacy module is a MODEL-ONLY selection,
+        # not a real combined bookmaker offer. It must not reserve Supabase
+        # rows or send an owner card in production (shots/cards included).
+        # An explicit hermetic CI exception is restricted to the fake DB
+        # endpoint AND absent Telegram credentials, for old receipt tests.
+        offline_sim = (
+            os.getenv("NETRATTLER_MODEL_BUILDER_OFFLINE_QA", "0") == "1"
+            and url == "https://db.invalid"
+            and not (os.getenv("TELEGRAM_TOKEN") or os.getenv("TELEGRAM_BOT_TOKEN"))
+        )
+        if not offline_sim:
+            logger("MODEL_ONLY_PICK_BLOCKED: original_master_and_actual_combined_bookmaker_ticket_required")
+            continue
         if not _pick_not_started(pick, datetime.now(timezone.utc)):
             logger("Modell-Builder ausgelassen: Anpfiff erfolgt oder Zeit nicht eindeutig")
             continue
