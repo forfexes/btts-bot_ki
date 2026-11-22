@@ -841,7 +841,7 @@ def _send_photo(token, chat, caption, payload, log):
     # *unchanged* approved artwork, never patch text or @prophunter in place.
     if (os.getenv("NETRATTLER_ORIGINAL_ONLY", "0") == "1"
             and isinstance(payload, (bytes, bytearray))
-            and payload.startswith(b"\\x89PNG\\r\\n\\x1a\\n")):
+            and payload.startswith(bytes((137, 80, 78, 71, 13, 10, 26, 10)))):
         from netrattler_telegram_safe_zone import append_safe_margin
         payload = append_safe_margin(payload)
     url = f"https://api.telegram.org/bot{token}/sendPhoto"
@@ -1096,7 +1096,7 @@ def _edit_photo(token, chat, message_id, payload, log, caption=None):
     # For future owner-approved result photos apply the same harmless gutter.
     if (os.getenv("NETRATTLER_ORIGINAL_ONLY", "0") == "1"
             and isinstance(payload, (bytes, bytearray))
-            and payload.startswith(b"\\x89PNG\\r\\n\\x1a\\n")):
+            and payload.startswith(bytes((137, 80, 78, 71, 13, 10, 26, 10)))):
         from netrattler_telegram_safe_zone import append_safe_margin
         payload = append_safe_margin(payload)
     import json as _json
