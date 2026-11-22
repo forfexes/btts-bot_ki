@@ -88,6 +88,8 @@ def foul_profiles(by_player, team, match, league, kickoff, n=15):
         # calculated without inventing exposure. A missing minute stays None.
         prof["minutes_series"] = [g.get("minutes") for g in games]
         prof["observed_games"] = len(games)
+        # The REST query is match_date.desc; preserve the evidence order.
+        prof["history_order"] = "latest_first"
         for k, col in keys.items():
             vals = [g.get(col) for g in games]
             if all(v is not None for v in vals):
