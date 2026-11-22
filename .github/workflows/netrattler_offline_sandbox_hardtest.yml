@@ -14,6 +14,9 @@ on:
       - 'test_premium_verified_cards.py'
       - 'test_premium_blank_masters.py'
       - 'test_netrattler_original_templates.py'
+      - 'netrattler_telegram_sandbox_hardtest.py'
+      - 'netrattler_card_visual_preview.py'
+      - 'netrattler_telegram_safe_zone.py'
 permissions:
   contents: read
 jobs:
@@ -99,6 +102,33 @@ jobs:
               Path('sandbox-qa/'+category+'_SANDBOX_ONLY.png').write_bytes(
                   render_verified_png(category,[leg.copy() for _ in range(count)]))
           PY
+      - name: Render original WebP Builder 2-7 and Goal Hunter images OFFLINE
+        run: |
+          python -m py_compile netrattler_card_visual_preview.py netrattler_telegram_sandbox_hardtest.py
+          python netrattler_card_visual_preview.py --outdir visual_review_previews
+      - name: Simulate Telegram chat PHOTO thumbnails for all 16 categories and originals
+        run: |
+          python netrattler_telegram_sandbox_hardtest.py
+          python - <<'PY'
+          import json
+          from pathlib import Path
+          x=json.loads(Path('sandbox-telegram-qa/report.json').read_text())
+          assert x['technical_families_rendered']==16
+          assert not x['all_16_owner_artwork_approved']
+          assert all(not v['production_send'] for v in x['individual_results'].values())
+          print('TELEGRAM CHAT PREVIEW OFFLINE PASS',len(x['individual_results']))
+          print('OWNER-ORIGINAL PRODUCTION RELEASE: BLOCKED pending clean art')
+          PY
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: netrattler-telegram-offline-chat-hardtest
+          path: |
+            sandbox-telegram-qa/*.png
+            sandbox-telegram-qa/report.json
+            visual_review_previews/*.png
+          retention-days: 7
+          if-no-files-found: warn
       - uses: actions/upload-artifact@v4
         if: always()
         with:
