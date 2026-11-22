@@ -147,7 +147,9 @@ def edit_original(row,final,won):
                            data={"chat_id":chat,"message_id":row["telegram_message_id"],
                                  "media":media},
                            files={"result_photo":("result.jpg",photo,"image/jpeg")},timeout=30)
-    elif version=="text":
+    elif version in (None,"text"):
+        # Historical legacy text rows predate the SQLite message_kind field.
+        # Edit in place; NEVER post an additional settlement message.
         resp=requests.post(f"https://api.telegram.org/bot{token}/editMessageText",
                            json={"chat_id":chat,"message_id":row["telegram_message_id"],
                                  "text":caption},timeout=20)
