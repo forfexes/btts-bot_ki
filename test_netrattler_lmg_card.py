@@ -104,6 +104,69 @@ class GoalHunterCards(unittest.TestCase):
         self.assertEqual(final["score"],(2,2))
         feed["leagues"][0]["matches"][0]["status"]["finished"]=False
         self.assertIsNone(settle.finished_match(feed,1000014437))
+    def test_clean_owner_release_blocks_legacy_jpeg_and_sqlite_reservation(self):
+        from netrattler_lmg_free import send_alert, reserve_alert
+        with patch.dict("os.environ",{"LMG_OWNER_CLEAN_RELEASED":"0",
+                                     "TELEGRAM_TOKEN":"qa",
+                                     "TELEGRAM_GROUP_LATE_GOALS":"-1"}), \\
+             patch("netrattler_lmg_card.make_card",
+                   side_effect=AssertionError("Legacy JPEG must not render")), \\
+             patch("netrattler_lmg_store.reserve_alert",
+                   side_effect=AssertionError("No abandoned reservation")) as store, \\
+             patch("requests.post",
+                   side_effect=AssertionError("No Telegram post")) as post:
+            with self.assertRaisesRegex(RuntimeError,"visual_release_required"):
+                reserve_alert(self.fx,self.metrics)
+            with self.assertRaisesRegex(RuntimeError,"visual_release_required"):
+                send_alert(self.fx,self.metrics)
+            store.assert_not_called()
+            post.assert_not_called()
+
+    def test_clean_owner_png_is_the_only_live_release_path(self):
+        from netrattler_lmg_free import send_alert
+        reply=Mock()
+        reply.json.return_value={"ok":True,"result":{"message_id":345}}
+        with patch.dict("os.environ",{"LMG_OWNER_CLEAN_RELEASED":"1",
+                                     "TELEGRAM_TOKEN":"qa",
+                                     "TELEGRAM_GROUP_LATE_GOALS":"-1"}), \\
+             patch("netrattler_lmg_card.make_card",
+                   side_effect=AssertionError("Old JPEG fallback")), \\
+             patch("netrattler_lmg_card.crest",
+                   return_value=Image.new("RGBA",(100,100),(10,20,30,255))), \\
+             patch("last_minute_owner_20261122.live_data_bridge.make_live",
+                   return_value=b"synthetic-clean-owner-png") as renderer, \\
+             patch("requests.post",return_value=reply) as post:
+            message_id=send_alert(self.fx,self.metrics)
+        self.assertEqual(message_id,345)
+        self.assertEqual(renderer.call_count,1)
+        self.assertEqual(post.call_count,1)
+        payload=post.call_args.kwargs["files"]["photo"]
+        self.assertEqual(payload[0],"last_minute_owner_original.png")
+        self.assertEqual(payload[2],"image/png")
+        self.assertNotIn("caption",post.call_args.kwargs["data"])
+
+    def test_versioned_clean_png_settlement_edits_same_message(self):
+        row={"home":"Tampines Rovers FC","away":"Ratchaburi FC",
+             "minute":68,"score":"1:2","telegram_message_id":975,
+             "message_kind":"owner_clean_png","next_goal_side":"home",
+             "next_goal_result":"won"}
+        final={"score":(2,2),"league":"ASEAN",
+               "home":{"id":1},"away":{"id":2}}
+        reply=Mock()
+        reply.json.return_value={"ok":True}
+        with patch.dict("os.environ",{"TELEGRAM_TOKEN":"qa",
+                                     "TELEGRAM_GROUP_LATE_GOALS":"-1"}), \\
+             patch("last_minute_owner_20261122.live_data_bridge.make_settled",
+                   return_value=b"synthetic-settled-owner-png") as render, \\
+             patch("requests.post",return_value=reply) as post:
+            settle.edit_original(row,final,True)
+        self.assertEqual(render.call_count,1)
+        self.assertEqual(render.call_args.kwargs["next_goal_result"],"won")
+        self.assertIn("editMessageMedia",post.call_args.args[0])
+        self.assertEqual(post.call_args.kwargs["files"]["result_photo"][2],"image/png")
+        self.assertEqual(post.call_args.kwargs["data"]["message_id"],975)
+        self.assertNotIn("caption",post.call_args.kwargs["data"])
+
     def test_no_extra_telegram_message_on_settlement(self):
         row={"home":"Tampines Rovers FC","away":"Ratchaburi FC","minute":68,
              "score":"1:2","telegram_message_id":971,"message_kind":"photo"}
