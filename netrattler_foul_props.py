@@ -72,7 +72,7 @@ def _played(g):
     return any((g.get(k) or 0) > 0 for k in ("shots", "sot", "fouls_committed", "fouls_won", "tackles", "passes"))
 
 
-def foul_profiles(by_player, team, match, league, kickoff, n=10):
+def foul_profiles(by_player, team, match, league, kickoff, n=15):
     """Je Spieler die Reihen der letzten Spiele (Fouls begangen/gezogen, Schuesse, Schuesse aufs Tor, Gelbe) fuer Leitern/Karten."""
     out = []
     keys = {"fouls": "fouls_committed", "fouls_won": "fouls_won", "tackles": "tackles", "shots": "shots", "sot": "sot", "yellow": "yellow_cards"}
@@ -84,6 +84,10 @@ def foul_profiles(by_player, team, match, league, kickoff, n=10):
         if known and sum(known) / len(known) < MIN_AVG_MINUTES:
             continue
         prof = {"source": "foul_profile", "player": name, "team": team, "match": match, "league": league, "kickoff": kickoff}
+        # Keep genuine per-match minutes so L10/L15 foul rates per 90 can be
+        # calculated without inventing exposure. A missing minute stays None.
+        prof["minutes_series"] = [g.get("minutes") for g in games]
+        prof["observed_games"] = len(games)
         for k, col in keys.items():
             vals = [g.get(col) for g in games]
             if all(v is not None for v in vals):
