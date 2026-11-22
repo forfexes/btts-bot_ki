@@ -154,7 +154,9 @@ def main() -> int:
         try:
             saved = persist_snapshots(snapshots, url, key)
         except requests.RequestException as exc:
-            print("X1_SHADOW_WRITE_FAILED", type(exc).__name__)
+            resp = getattr(exc, "response", None)
+            print("X1_SHADOW_WRITE_FAILED", type(exc).__name__,
+                  "http", getattr(resp, "status_code", None))
             return 1
     print("X1_SHADOW_PLAYER_OBSERVATIONS", len(snapshots), "saved", saved,
           "semantic_codes_validated", 0, flush=True)
