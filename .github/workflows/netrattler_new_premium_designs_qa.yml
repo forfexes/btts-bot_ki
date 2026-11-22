@@ -1,0 +1,22 @@
+name: NETRATTLER New Premium Designs QA
+on:
+  push:
+    paths:
+      - 'assets/new_premium_designs/**'
+      - 'test_netrattler_new_premium_designs.py'
+      - '.github/workflows/netrattler_new_premium_designs_qa.yml'
+  workflow_dispatch:
+permissions:
+  contents: read
+jobs:
+  svg-integrity:
+    runs-on: ubuntu-latest
+    timeout-minutes: 8
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+      - run: python -m pip install --quiet pytest
+      - name: Check all eleven editable new designs
+        run: python -m pytest -q test_netrattler_new_premium_designs.py
