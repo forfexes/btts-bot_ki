@@ -173,7 +173,19 @@ def render_card(data,*,home_crest:bytes|None=None,away_crest:bytes|None=None,
     _text(d,_fmt(p2,1)+'%' if p2 is not None else '–',432,458,21,max_width=74,color=(201,255,79))
     # The outcome belongs on the original card, not a separate Telegram post.
     # The line is small so it stays between the prediction frame and footer.
-    _text(d,'AUSWERTUNG '+status.upper(),265,485,9,max_width=206,
+    next_grade=data.get('next_goal_result')
+    grade_names={'won':'RICHTIG','lost':'FALSCH','void':'KEIN TOR',
+                 'unverified':'NICHT VERIFIZIERT'}
+    if next_grade is not None and next_grade not in grade_names:
+        raise ValueError('Unknown next-goal settlement')
+    if next_grade is not None and not next_team:
+        raise ValueError('Next-goal result without original selected team')
+    status_line='AUSWERTUNG '+status.upper()
+    if next_grade is not None:
+        status_line+=' · NÄCHSTES TOR '+grade_names[next_grade]
+    # Settlement and next-goal result are both inside this SAME image, not
+    # standalone Telegram messages. Fit the full line into the clear footer.
+    _text(d,status_line,265,485,9,max_width=330,
           color=WHITE if status=='offen' else ((118,255,121) if status=='gewonnen' else (255,119,110)))
     if preview_only:
         # Never let fixture data or a QA crest be mistaken for real betting tips.
