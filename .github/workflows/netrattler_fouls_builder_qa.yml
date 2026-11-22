@@ -1,0 +1,38 @@
+name: NETRATTLER Fouls Builder Premium Hardtest
+on:
+  workflow_dispatch: {}
+  push:
+    branches: [main]
+    paths:
+      - "netrattler_foul_props.py"
+      - "netrattler_fouls_builder_premium.py"
+      - "test_foul_props.py"
+      - "test_netrattler_fouls_builder_premium.py"
+      - ".github/workflows/netrattler_fouls_builder_qa.yml"
+
+permissions:
+  contents: read
+
+jobs:
+  foul-ticket-verification:
+    runs-on: ubuntu-latest
+    timeout-minutes: 8
+    env:
+      TELEGRAM_TOKEN: ""
+      TELEGRAM_BOT_TOKEN: ""
+      SUPABASE_URL: ""
+      SUPABASE_KEY: ""
+      NETRATTLER_FOULS_BUILDER_SEND: "false"
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+      - name: Install isolated testing requirements
+        run: python -m pip install --quiet requests pytest
+      - name: Syntax gate
+        run: python -m py_compile netrattler_foul_props.py netrattler_fouls_builder_premium.py test_netrattler_fouls_builder_premium.py test_foul_props.py
+      - name: Untrusted screenshot and same-match Fouls QA
+        run: python -m unittest -v test_netrattler_fouls_builder_premium
+      - name: Existing player-stat and quota regressions
+        run: python -m pytest -q test_foul_props.py
