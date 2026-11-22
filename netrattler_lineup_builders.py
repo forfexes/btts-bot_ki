@@ -17,6 +17,7 @@ from netrattler_apif_response import checked_response
 
 import netrattler_foul_props as fp
 import netrattler_model_builders as mb
+import netrattler_fouls_builder_premium as premium_fouls
 
 B = "https://v3.football.api-sports.io"
 KEYS = [k.strip() for k in (os.getenv("API_FOOTBALL_KEYS") or "").replace("\n", ",").split(",") if k.strip()]
@@ -133,7 +134,9 @@ def load_fixtures(day, now):
         fixtures.append({"id": x["fixture"]["id"], "ko": x["fixture"]["date"], "league_id": (x.get("league") or {}).get("id"),
                          "league": (x.get("league") or {}).get("name", ""),
                          "home": (x.get("teams") or {}).get("home", {}).get("name", ""),
-                         "away": (x.get("teams") or {}).get("away", {}).get("name", "")})
+                         "away": (x.get("teams") or {}).get("away", {}).get("name", ""),
+                         "home_team_id": (x.get("teams") or {}).get("home", {}).get("id"),
+                         "away_team_id": (x.get("teams") or {}).get("away", {}).get("id")})
     fixtures = fixtures[:400]
     _diag({"probe": "lineup_fixtures", "day": day, "fixtures": fixtures})
     return fixtures, 1
@@ -193,15 +196,33 @@ def run():
     used = len(_diag_rows("lineup_req", day))
     todo = due_fixtures(fixtures, state, now, used)
     matches, starters_by_match, confirmed_ids = [], {}, []
+    strict_foul_fixtures = {}
     for f in todo:
         _diag({"probe": "lineup_req", "day": day, "fixture_id": f["id"]})
         r = _api("/fixtures/lineups", {"fixture": f["id"]})
-        names = starters_from(checked_response(r))
+        provider_lineups = checked_response(r)
+        names = starters_from(provider_lineups)
         tries = state.get(str(f["id"]), {}).get("tries", 0) + 1
         _diag({"probe": "lineup_state", "day": day, "fixture_id": f["id"], "done": False, "tries": tries})
         if not names:
             continue
         match = f"{f['home']} vs {f['away']}"
+        # Preserve exact provider club IDs and both independent 11-player XIs
+        # for the *new* Fouls scanner. Legacy flat-name matching is not proof
+        # that a player belongs to the correct side of this fixture.
+        exact_fixture = {
+            "fixture_id": f["id"], "home_team_id": f.get("home_team_id"),
+            "away_team_id": f.get("away_team_id"), "home": f["home"],
+            "away": f["away"], "league": f.get("league"), "kickoff": f["ko"],
+            "status": "NS",
+        }
+        try:
+            seen_at = dt.datetime.now(dt.timezone.utc)
+            verified = premium_fouls.lineup_from_api_football(
+                exact_fixture, provider_lineups, observed_at=seen_at)
+            strict_foul_fixtures[match] = (exact_fixture, verified)
+        except ValueError as exc:
+            print("PREMIUM_FOUL_XI_SKIPPED",f["id"],str(exc)[:85])
         matches.append({"match": match, "league": f.get("league", ""), "kickoff": f["ko"]})
         starters_by_match[match] = names
         confirmed_ids.append(f["id"])
@@ -210,6 +231,18 @@ def run():
         os.environ["NETRATTLER_LINEUP_CONFIRMED"] = "1"
         rows = fp.rows_for_matches(matches, SB, SK, norm)
         rows = filter_to_starters(rows, starters_by_match)
+        for match, (exact_fixture,verified) in strict_foul_fixtures.items():
+            try:
+                # Read-only scouting. Zero bookable tips without a genuine
+                # combined ticket; NEVER send a fallback Fouls card.
+                board = premium_fouls.scout_foul_candidates(
+                    exact_fixture, verified, rows,
+                    now=dt.datetime.now(dt.timezone.utc))
+                print("PREMIUM_FOUL_SCOUT_RESEARCH_ONLY",
+                      exact_fixture["fixture_id"],len(board["candidates"]))
+            except ValueError as exc:
+                print("PREMIUM_FOUL_SCOUT_BLOCKED",
+                      exact_fixture["fixture_id"],str(exc)[:85])
         try:
             sent = mb.run(rows, day, make_sender(), SB, SK)
         finally:
