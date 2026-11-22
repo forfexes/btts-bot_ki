@@ -143,9 +143,10 @@ jobs:
           from PIL import Image, ImageDraw, ImageFont
           import cairosvg
           token = os.environ.get("TOKEN","")
-          sources=("BUILDER_CHAT","PROPS_CHAT","STATS_CHAT","DEFAULT_CHAT")
-          route=next(((name,os.environ[name]) for name in sources if os.environ.get(name)),None)
-          group=route[1] if route else ""
+          # Check ONLY the dedicated Builder destination. Falling back to
+          # Props/Stats/default hides a missing BUILDER_CHAT configuration.
+          route=("BUILDER_CHAT",os.environ.get("BUILDER_CHAT",""))
+          group=route[1]
           test = os.environ.get("TEST_CHAT","")
           endpoint = f"https://api.telegram.org/bot{token}/" if token else ""
           if token:
@@ -159,7 +160,7 @@ jobs:
               assert chat.get("ok"), "Configured Builder chat is inaccessible"
               print("builder_destination=VERIFIED via "+route[0])
           else:
-              print("builder_destination=NOT_CONFIGURED")
+              print("builder_destination=NOT_CONFIGURED (dedicated BUILDER_CHAT required)")
           from pathlib import Path
           masters = sorted(Path("assets").glob("premium_*_blank.svg"))
           assert len(masters) == 16, f"Expected 16 premium masters, got {len(masters)}"
