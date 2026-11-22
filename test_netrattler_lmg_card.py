@@ -122,6 +122,21 @@ class GoalHunterCards(unittest.TestCase):
             store.assert_not_called()
             post.assert_not_called()
 
+    def test_next_goal_claim_must_match_verified_pressure(self):
+        from netrattler_lmg_free import send_alert, reserve_alert
+        invalid={**self.metrics,"next_goal_side":"away"}
+        with patch.dict("os.environ",{"LMG_OWNER_CLEAN_RELEASED":"1",
+                                     "TELEGRAM_TOKEN":"qa",
+                                     "TELEGRAM_GROUP_LATE_GOALS":"-1"}), \
+             patch("netrattler_lmg_store.reserve_alert") as store, \
+             patch("requests.post") as post:
+            with self.assertRaisesRegex(ValueError,"Unverified next-goal"):
+                reserve_alert(self.fx,invalid)
+            with self.assertRaisesRegex(ValueError,"Unverified next-goal"):
+                send_alert(self.fx,invalid)
+            store.assert_not_called()
+            post.assert_not_called()
+
     def test_clean_owner_png_is_the_only_live_release_path(self):
         from netrattler_lmg_free import send_alert
         reply=Mock()
