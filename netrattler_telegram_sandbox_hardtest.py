@@ -71,7 +71,7 @@ def preview(name,original_bytes,source,approval_status):
     # Tiny Telegram clock strip belongs at the very bottom of the metadata
     # gutter, well below the actual original photo's Auswertung/footer.
     clock_top=y0+scaled_h-18
-    assert clock_top>=y0+original_h+6,
+    assert clock_top>=y0+original_h+6, (
         name,"Telegram's clock has covered player/card/settlement area"
     )
     d.rounded_rectangle((x0+w-127,clock_top,x0+w-7,clock_top+16),
