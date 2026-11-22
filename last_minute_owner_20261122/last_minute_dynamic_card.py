@@ -109,8 +109,27 @@ def render_card(data,*,home_crest:bytes|None=None,away_crest:bytes|None=None,
     _logo(image,away_crest,x=419,y=132)
     _text(d,home.upper(),122,182,17,max_width=118)
     _text(d,away.upper(),397,182,17,max_width=129)
-    _text(d,f"{minute}′",256,135,23,max_width=43)
-    _text(d,f'{hg} - {ag}',257,173,33,max_width=76,color=YELLOW,stroke=1)
+    status=str(data.get('status') or 'offen').lower()
+    if status not in ('offen','gewonnen','verloren','void'):
+        raise ValueError('Unsupported settlement state')
+    final=data.get('final_score')
+    if final is not None:
+        if status=='offen':raise ValueError('Final score cannot remain OFFEN')
+        if isinstance(final,str):
+            sides=final.replace(' ','').split(':')
+        elif isinstance(final,(list,tuple)) and len(final)==2:
+            sides=list(final)
+        else:raise ValueError('Invalid final score')
+        if len(sides)!=2:raise ValueError('Invalid final score')
+        fh=_n(sides[0],'final home',maximum=30,integer=True)
+        fa=_n(sides[1],'final away',maximum=30,integer=True)
+        if fh<hg or fa<ag:raise ValueError('Final score below tip snapshot')
+    elif status!='offen':
+        raise ValueError('Settlement requires verified final score')
+    else:fh,fa=hg,ag
+    _text(d,'FT' if final is not None else 'LIVE',259,112,14,max_width=40)
+    _text(d,'FT' if final is not None else f"{minute}′",256,135,23,max_width=43)
+    _text(d,f'{fh} - {fa}',257,173,33,max_width=76,color=YELLOW,stroke=1)
     # Actual xG history; blank means unknown, not made up.
     hp=_n(data.get('xg_prev_home'),'xg_prev_home',maximum=15)
     ap=_n(data.get('xg_prev_away'),'xg_prev_away',maximum=15)
@@ -152,9 +171,6 @@ def render_card(data,*,home_crest:bytes|None=None,away_crest:bytes|None=None,
     if next_team is None and p2 is not None:raise ValueError('Unattributed next-goal probability')
     _text(d,(next_team or 'KEIN SIGNAL'),270,451,18,max_width=130,color=YELLOW)
     _text(d,_fmt(p2,1)+'%' if p2 is not None else '–',432,458,21,max_width=74,color=(201,255,79))
-    status=str(data.get('status') or 'offen').lower()
-    if status not in ('offen','gewonnen','verloren','void'):
-        raise ValueError('Unsupported settlement state')
     # The outcome belongs on the original card, not a separate Telegram post.
     # The line is small so it stays between the prediction frame and footer.
     _text(d,'AUSWERTUNG '+status.upper(),265,485,9,max_width=206,

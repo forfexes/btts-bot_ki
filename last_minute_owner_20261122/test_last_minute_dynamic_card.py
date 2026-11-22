@@ -4,8 +4,12 @@ import unittest
 from pathlib import Path
 from PIL import Image,ImageDraw
 
-from build_master import SOURCE,TARGET,REGIONS,make_plate
-from last_minute_dynamic_card import render_card
+try:
+    from .build_master import SOURCE,TARGET,REGIONS,make_plate
+    from .last_minute_dynamic_card import render_card
+except ImportError:  # direct invocation from the isolated QA directory
+    from build_master import SOURCE,TARGET,REGIONS,make_plate
+    from last_minute_dynamic_card import render_card
 
 
 def crest():
@@ -68,6 +72,18 @@ class LastMinuteOriginalQa(unittest.TestCase):
                     {'next_goal_team':None,'next_probability':72}):
             with self.subTest(bad=bad),self.assertRaises(ValueError):
                 render_card({**DATA,**bad},home_crest=crest(),away_crest=crest())
+
+    def test_final_uses_verified_fulltime_score_and_one_card_outcome(self):
+        scored={**DATA,'status':'gewonnen','final_score':'2:3'}
+        raw=render_card(scored,home_crest=crest(),away_crest=crest(),preview_only=True)
+        with Image.open(io.BytesIO(raw)) as im:
+            self.assertEqual(im.size,(1024,1078))
+        with self.assertRaisesRegex(ValueError,'Final score below'):
+            render_card({**scored,'final_score':'0:3'},home_crest=crest(),away_crest=crest())
+        with self.assertRaisesRegex(ValueError,'cannot remain OFFEN'):
+            render_card({**scored,'status':'offen'},home_crest=crest(),away_crest=crest())
+        with self.assertRaisesRegex(ValueError,'requires verified final'):
+            render_card({**DATA,'status':'verloren'},home_crest=crest(),away_crest=crest())
 
     def test_never_draw_sample_filled_reference_directly(self):
         with self.assertRaisesRegex(ValueError,'sample-filled'):

@@ -33,6 +33,8 @@ jobs:
         run: |
           python -m py_compile build_master.py last_minute_dynamic_card.py test_last_minute_dynamic_card.py
           python -m unittest -v test_last_minute_dynamic_card
+      - name: Verify live fixture and settlement data bridge (no network)
+        run: python -m unittest -v last_minute_owner_20261122.test_live_data_bridge
       - name: Generate only synthetic labelled Telegram preview
         working-directory: last_minute_owner_20261122
         run: python last_minute_dynamic_card.py

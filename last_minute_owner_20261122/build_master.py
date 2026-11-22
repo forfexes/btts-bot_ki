@@ -19,6 +19,7 @@ TARGET=HERE/'last_minute_clean_plate.png'
 # Do not clear surrounding frame/branding or the permanent market names.
 REGIONS={
  'league':(160,80,380,94),
+ 'live_badge':(239,105,279,121),
  'minute':(240,124,274,147),
  'score':(218,156,295,189),
  'team_home':(61,173,183,191),
@@ -64,7 +65,8 @@ def make_plate(source=SOURCE,target=TARGET):
     # Neutral reconstructive fills avoid inpainting ghost numbers. These
     # changes belong to the static plate generation, NEVER the live renderer.
     palette={
-        'league':(1,23,25),'minute':(2,7,11),'score':(1,8,12),
+        'league':(1,23,25),'live_badge':(175,15,11),
+        'minute':(2,7,11),'score':(1,8,12),
         'team_home':(0,35,29),'team_away':(0,35,29),
         'home_xg':(1,38,32),'center_xg':(0,31,27),
         'away_xg':(1,38,32),'winrate_l':(0,25,22),
