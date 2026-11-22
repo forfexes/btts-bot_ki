@@ -43,6 +43,22 @@ class GoalHunterSQLiteTests(unittest.TestCase):
         self.assertEqual(store.status()["alerts"], {"won":1})
         self.assertIsNone(store.reserve_alert(self.fx))
 
+    def test_original_crest_sources_survive_sqlite_state_and_schema_reinit(self):
+        original={**self.fx,"home_logo_id":4201,
+                  "away_logo_url":"https://a.espncdn.com/i/teamlogos/soccer/500/99.png"}
+        with patch.dict(os.environ,{"LMG_OWNER_CLEAN_RELEASED":"1"}):
+            self.assertEqual(store.reserve_alert(original),"123456")
+        store.mark_sent("123456",918)
+        before=store.pending()[0]
+        self.assertEqual(before["message_kind"],"owner_clean_png")
+        self.assertEqual(before["home_logo_source"],"4201")
+        self.assertEqual(before["away_logo_source"],original["away_logo_url"])
+        store.init()  # never discard existing team identity or card version
+        after=store.pending()[0]
+        self.assertEqual(after["message_kind"],"owner_clean_png")
+        self.assertEqual(after["home_logo_source"],"4201")
+        self.assertEqual(after["away_logo_source"],original["away_logo_url"])
+
     def test_shadow_deduplicated_and_correctly_settled(self):
         timestamp = dt.datetime.now(dt.timezone.utc)
         row = {"provider":"fotmob","fixture_id":123456,"slot":1,
