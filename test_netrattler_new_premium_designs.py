@@ -1,29 +1,47 @@
-"""Offline integrity checks for the eleven newly designed editable NETRATTLER masters.
+"""Regression: user's original artwork is the only permitted design reference.
 
-These are NEW designs, not user-supplied original artwork. No Telegram send.
+The eleven improvised SVG mockups are REJECTED, never production masters.
+They remain in a quarantined folder only to preserve change history.
 """
 from pathlib import Path
-from xml.etree import ElementTree as ET
 
-ROOT = Path(__file__).resolve().parent / "assets" / "new_premium_designs"
-NAMES = (
-    "over", "btts_halftime", "over_halftime", "match_result",
-    "player_props", "fouls_cards", "var", "last_minute_goal",
-    "late_goals", "live_halftime", "cross_mix",
+ROOT = Path(__file__).resolve().parent
+REJECTED = ROOT / "assets" / "new_premium_designs"
+ORIGINAL = ROOT / "assets" / "original_templates"
+REQUIRED_ORIGINALS = (
+    "NETRATTLER_BTTS_originalkarte.png",
+    "NETRATTLER_BUILDER_4_originalkarte.png",
+    "NETRATTLER_COMBO_7_originalkarte.png",
+    "NETRATTLER_COMBO_9_originalkarte.png",
+    "NETRATTLER_GOAL_HUNTER_originalkarte.png",
 )
-NS = "{http://www.w3.org/2000/svg}"
+PRODUCTION_MODULES = (
+    "netrattler_premium_telegram_adapter.py",
+    "netrattler_original_template_renderer.py",
+    "netrattler_premium_verified_cards.py",
+    "netrattler_premium_compact.py",
+)
 
 
-def test_all_eleven_new_designs_are_editable_clean_svgs():
-    assert sorted(p.stem for p in ROOT.glob("*.svg")) == sorted(NAMES)
-    for name in NAMES:
-        data = (ROOT / f"{name}.svg").read_text(encoding="utf-8")
-        root = ET.fromstring(data)
-        assert root.tag == NS + "svg"
-        assert root.attrib["viewBox"] == "0 0 1122 1402"
-        texts = ["".join(t.itertext()) for t in root.findall(NS + "text")]
-        assert "NETRATTLER" in texts
-        assert any("@prophunter" in t for t in texts)
-        assert any("NEW DESIGN / QA ONLY" in t for t in texts)
-        assert not any("1.75" in t or "65.0%" in t for t in texts)
-        assert "#27D9F6" in data and "url(#gold)" in data
+def test_user_original_artwork_remains_authoritative():
+    assert all((ORIGINAL / name).is_file() for name in REQUIRED_ORIGINALS)
+    assert (ROOT / "assets" / "netrattler_template_corner_original.webp").is_file()
+
+
+def test_rejected_mockups_never_enter_production_renderers():
+    for module in PRODUCTION_MODULES:
+        source = (ROOT / module).read_text(encoding="utf-8")
+        assert "new_premium_designs" not in source, module
+    assert (REJECTED / "REJECTED_NOT_FOR_PRODUCTION.md").is_file()
+
+
+def test_all_rejected_mockups_are_explicitly_quarantined():
+    expected = {
+        "over", "btts_halftime", "over_halftime", "match_result",
+        "player_props", "fouls_cards", "var", "last_minute_goal",
+        "late_goals", "live_halftime", "cross_mix",
+    }
+    assert {p.stem for p in REJECTED.glob("*.svg")} == expected
+    for path in REJECTED.glob("*.svg"):
+        data = path.read_text(encoding="utf-8")
+        assert "NEW DESIGN / QA ONLY" in data, path
