@@ -76,9 +76,9 @@ def test_builder_rejects_formula_derived_combo_quote():
     photo=_test_photo()
     pick.combined_quote_verified=True
     pick.combined_bookmaker_quote=8.5
-    with patch.object(cards,"_player_photo",return_value=photo), \\
-         patch.object(cards,"_badge_bytes",return_value=photo):
-        raw=builder.render_builder_card(pick)
+    with patch.object(cards,"_player_photo",return_value=photo):
+        with patch.object(cards,"_badge_bytes",return_value=photo):
+            raw=builder.render_builder_card(pick)
     assert Image.open(io.BytesIO(raw)).size==(1122,1102)
 
 
