@@ -74,6 +74,33 @@ def make_settled(fixture, *, final_score, won, crest_provider,
     if type(won) is not bool:raise ValueError('Confirmed win/loss required')
     if next_goal_side not in (None,'home','away'):
         raise ValueError('Unknown next-goal side')
+    # A settlement decision must agree with the independently verified final
+    # match score. No manually supplied win/loss may override real goal growth.
+    if isinstance(final_score, str):
+        parts = final_score.replace(' ', '').split(':')
+    elif isinstance(final_score, (tuple, list)):
+        parts = list(final_score)
+    else:
+        raise ValueError('Invalid final score')
+    if len(parts) != 2:
+        raise ValueError('Invalid final score')
+    def _goal(value):
+        if isinstance(value, bool):
+            raise ValueError('Invalid final goals')
+        try:
+            number = int(value)
+        except (TypeError, ValueError, OverflowError) as exc:
+            raise ValueError('Invalid final goals') from exc
+        if str(value).strip() != str(number) or number < 0 or number > 30:
+            raise ValueError('Invalid final goals')
+        return number
+    final_home, final_away = (_goal(parts[0]), _goal(parts[1]))
+    initial_home, initial_away = (_goal(fields['hg']), _goal(fields['ag']))
+    if final_home < initial_home or final_away < initial_away:
+        raise ValueError('Final score below tip snapshot')
+    verified_won = (final_home + final_away) > (initial_home + initial_away)
+    if won != verified_won:
+        raise ValueError('Settlement verdict contradicts observed final score')
     fields['status']='gewonnen' if won else 'verloren'
     fields['final_score']=final_score
     if next_goal_side:
