@@ -69,6 +69,42 @@ def filter_to_starters(rows, starters_by_match):
     return out
 
 
+def filter_verified_team_starters(rows, strict_by_match):
+    """Only actual right-team XI players from the verified provider fixture.
+
+    A flat 22-name list is not a safe player-to-club join: a same-named
+    opponent or transfer could otherwise be assigned to the wrong team.
+    Without both exact provider team IDs, fail closed and defer the pick.
+    """
+    accepted=[]
+    for row in rows:
+        if not isinstance(row,dict):
+            continue
+        evidence=strict_by_match.get(row.get("match"))
+        if not evidence:
+            continue
+        fixture, lineup = evidence
+        expected_player=norm(row.get("player"))
+        actual_team=row.get("team")
+        if not expected_player or not actual_team:
+            continue
+        for side in ("home","away"):
+            team_name=fixture.get(side)
+            team_id=fixture.get(f"{side}_team_id")
+            if not (team_id and fp.same_team(actual_team,team_name)):
+                continue
+            roster=(lineup.get(side) or {})
+            if roster.get("team_id")!=team_id:
+                continue
+            # Exact full-name equality; abbreviations and surnames alone are
+            # insufficient to establish a player identity in a betting slip.
+            names={norm(x) for x in roster.get("starters",[])}
+            if expected_player in names:
+                accepted.append(row)
+            break
+    return accepted
+
+
 def due_fixtures(fixtures, state, now, used_req):
     """Spiele im Zeitfenster, noch nicht erledigt, unter MAX_TRIES; nach Liga-Prioritaet, begrenzt durch Budget."""
     cands = []
@@ -231,6 +267,10 @@ def run():
         os.environ["NETRATTLER_LINEUP_CONFIRMED"] = "1"
         rows = fp.rows_for_matches(matches, SB, SK, norm)
         rows = filter_to_starters(rows, starters_by_match)
+        # Security: the old flat 22-name list is insufficient for any
+        # player-prop builder, not just Fouls. Require verified team-specific
+        # XI identity for every leg BEFORE model ranking and DB reservation.
+        rows = filter_verified_team_starters(rows, strict_foul_fixtures)
         for match, (exact_fixture,verified) in strict_foul_fixtures.items():
             try:
                 # Read-only scouting. Zero bookable tips without a genuine
