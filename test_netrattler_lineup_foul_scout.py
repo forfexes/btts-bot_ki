@@ -57,3 +57,32 @@ def test_lineup_scan_collects_fouls_research_without_telegram(monkeypatch, capsy
     assert seen[0]["bookmaker_total_odds"] is None
     assert "PREMIUM_FOUL_SCOUT_RESEARCH_ONLY" in capsys.readouterr().out
     assert any(x["probe"]=="lineup_run" and x["sent"]==0 for x in reports)
+
+
+def test_team_specific_xi_rejects_opponents_and_foreign_player():
+    fixture={"home":"Newcastle United","away":"Arsenal",
+             "home_team_id":10,"away_team_id":20}
+    original={
+        "home":{"team_id":10,"starters":["Joe Willock","William Osula"]},
+        "away":{"team_id":20,"starters":["Arsenal One","Arsenal Two"]},
+    }
+    verified={"Newcastle United vs Arsenal":(fixture,original)}
+    rows=[
+        {"match":"Newcastle United vs Arsenal","player":"Joe Willock",
+         "team":"Newcastle United","source":"foul_profile"},
+        {"match":"Newcastle United vs Arsenal","player":"Joe Willock",
+         "team":"Arsenal","source":"foul_profile"},
+        {"match":"Newcastle United vs Arsenal","player":"Ezri Konsa",
+         "team":"Aston Villa","source":"foul_profile"},
+        {"match":"Newcastle United vs Arsenal","player":"Arsenal One",
+         "team":"Arsenal","source":"foul_profile"},
+        {"match":"Liverpool vs Arsenal","player":"Arsenal One",
+         "team":"Arsenal","source":"foul_profile"},
+    ]
+    filtered=lineup.filter_verified_team_starters(rows,verified)
+    assert filtered==[rows[0],rows[3]]
+    assert lineup.filter_verified_team_starters(rows,{})==[]
+    # An invalid source team-ID must never silently reuse the same names.
+    suspicious={"Newcastle United vs Arsenal":(
+        fixture,{**original,"home":{**original["home"],"team_id":999}})}
+    assert lineup.filter_verified_team_starters(rows[:1],suspicious)==[]
