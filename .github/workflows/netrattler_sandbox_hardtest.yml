@@ -106,6 +106,8 @@ jobs:
           TELEGRAM_CHAT_ID: ''
           TELEGRAM_GROUP_MATCH_CARDS: ''
           SUPABASE_URL: ''
+          # Offline-only fixture authorization: NEVER a production release.
+          NETRATTLER_BLOCK_OVERPAINTED_MASTERS: '0'
         run: |
           set -o pipefail
           python -m pytest -q -ra test_netrattler_premium_verified_cards.py test_netrattler_premium_dispatch_gate.py test_netrattler_ai_match_card_design.py 2>&1 | tee netrattler-premium-card-hardtest.log
@@ -121,6 +123,8 @@ jobs:
           SUPABASE_URL: ''
           V2_SUPABASE_URL: ''
           V2_SUPABASE_SERVICE_KEY: ''
+          # Synthetic screenshot QA only; the live workflow remains blocked.
+          NETRATTLER_BLOCK_OVERPAINTED_MASTERS: '0'
         run: |
           set -o pipefail
           python -m py_compile netrattler_telegram_sandbox_hardtest.py netrattler_card_visual_preview.py
