@@ -148,7 +148,7 @@ def _ticket(category, record, now):
     _observed(dict(record, quote_id=record["combined_quote_id"], quote_observed=True), now)
     total = _price(record["combined_odds"])
     legs = record.get("legs")
-    max_legs = 7 if category == "builder" else 10
+    max_legs = 10  # Builder, Combo and Cross/Mix: EVERY count 2..10
     if not isinstance(legs, (list, tuple)) or not 2 <= len(legs) <= max_legs:
         raise ValueError("2 through valid max individually verified legs required")
     for idx, leg in enumerate(legs, 1):
