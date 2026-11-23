@@ -63,3 +63,20 @@ def test_verified_club_aliases_for_real_index_assets():
     assert not same_club('PSV', 'PSV II')
     assert not same_club('Lens', 'Lens II')
     assert not same_club('Atalanta', 'Atalanta U23')
+
+
+def test_football_logos_reject_wrong_club_filename(monkeypatch):
+    """The provider must never attach Sporting CP to Atletico CP."""
+    monkeypatch.setenv("ENABLE_FOOTBALL_LOGOS_CC", "true")
+    monkeypatch.setattr(cards, "_fl_country_slugs", lambda country: [])
+    monkeypatch.setattr(cards, "_fl_get", lambda url:
+        '<img src="https://assets.football-logos.cc/logos/portugal/700x700/sporting-cp.6d17a40c.png">')
+    assert cards._fl_logo("Atletico CP", "Portugal - Primeira Liga") == ""
+
+
+def test_football_logos_accept_matching_club_filename(monkeypatch):
+    monkeypatch.setenv("ENABLE_FOOTBALL_LOGOS_CC", "true")
+    monkeypatch.setattr(cards, "_fl_country_slugs", lambda country: [])
+    actual = "https://assets.football-logos.cc/logos/germany/700x700/bayer-04-leverkusen.1234abcd.png"
+    monkeypatch.setattr(cards, "_fl_get", lambda url: '<img src="' + actual + '">')
+    assert cards._fl_logo("Bayer Leverkusen", "Germany - Bundesliga") == actual
