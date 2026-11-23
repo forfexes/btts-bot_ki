@@ -1,0 +1,25 @@
+name: NETRATTLER Player Photo Identity QA
+"on":
+  workflow_dispatch: {}
+  push:
+    branches: [main]
+    paths:
+      - netrattler_espn_photo.py
+      - test_netrattler_espn_photo.py
+      - .github/workflows/netrattler_photo_identity_qa.yml
+permissions:
+  contents: read
+jobs:
+  player-identity:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+      - run: python -m pip install --quiet requests==2.32.5 pytest
+      - name: Validate source-specific photo IDs and ambiguity guard
+        run: |
+          python -m py_compile netrattler_espn_photo.py test_netrattler_espn_photo.py
+          python -m pytest -q test_netrattler_espn_photo.py
