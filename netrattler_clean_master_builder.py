@@ -1,4 +1,4 @@
-"""Produce CLEAN, EMPTY, owner-DERIVED QA masters for the ten missing categories.
+"""Produce CLEAN, EMPTY, owner-DERIVED QA masters for ten missing categories.
 
 These masters preserve a real source card's crown/frame artwork but rebuild
 its data-bearing centre. They are NOT additional user-uploaded originals and
@@ -24,7 +24,6 @@ SOURCE_MAP = {
     "player_props": SOURCE_DIR / "goal_hunter_original.webp",
     "fouls_cards": SOURCE_DIR / "goal_hunter_original.webp",
     "var": ROOT / "assets" / "netrattler_template_corner_original.webp",
-    "last_minute_goal": ROOT / "assets" / "netrattler_template_corner_original.webp",
     "late_goals": ROOT / "assets" / "netrattler_template_corner_original.webp",
     "live_halftime": SOURCE_DIR / "NETRATTLER_BTTS_originalkarte.png",
     "cross_mix": SOURCE_DIR / "NETRATTLER_COMBO_7_originalkarte.png",
@@ -37,7 +36,6 @@ TITLE = {
     "player_props": "PLAYER PROPS",
     "fouls_cards": "FOULS / TACKLES / KARTEN",
     "var": "VAR",
-    "last_minute_goal": "LAST MINUTE GOAL",
     "late_goals": "LATE GOALS",
     "live_halftime": "LIVE HALBZEIT",
     "cross_mix": "CROSS / MIX",
@@ -50,7 +48,6 @@ LABELS = {
     "player_props": ("MARKT / LINIE", "L5 / L10 / L15", "SPIELER"),
     "fouls_cards": ("FOULS", "TACKLES", "KARTEN"),
     "var": ("BUCHMACHER-REGEL", "ANSTOSS / EVENT", "VAR-MARKT"),
-    "last_minute_goal": ("SPIELMINUTE / SCORE", "LIVE-DRUCK", "TORCHANCE"),
     "late_goals": ("TORE AB 75'", "LIVE-DRUCK", "FORM L10"),
     "live_halftime": ("SPIELSTAND", "SCHUESSE / XG", "BALLBESITZ"),
     "cross_mix": ("AUSWAHL 1", "AUSWAHL 2", "AUSWAHL 3"),
