@@ -58,7 +58,9 @@ def _for_category(category):
     record["selection"] = SELECTIONS[category]
     if category == "player_props":
         record.update(player_id="p10", player_name="QA Player",
-                      confirmed_starter=True, player_team_id="aa")
+                      confirmed_starter=True, player_team_id="aa",
+                      player_photo_source="OFFLINE-FAKE-IMAGE-QA",
+                      player_photo=_asset())
     if category == "cross_mix":
         record.update(combined_odds_observed=True, combined_quote_id="book-ticket-123",
                       legs=[{"id": "leg1"}, {"id": "leg2"}])
@@ -219,3 +221,31 @@ def test_cross_mix_never_hides_rows_or_uses_synthetic_ticket_price():
     ticket["legs"][1]["quote_observed"]=False
     with pytest.raises(ValueError):
         render_cross_mix_qa(ticket,now=NOW)
+
+
+
+def test_player_prop_fails_without_verified_alpha_photo_and_team_identity():
+    good = _for_category("player_props")
+    for field, bad in (
+        ("player_photo", None),
+        ("player_photo", Image.new("RGB", (80, 100), "pink")),
+        ("player_photo_source", ""),
+        ("player_team_id", "wrong-team"),
+        ("player_id", ""),
+        ("confirmed_starter", False),
+    ):
+        record={**good,field:bad}
+        with pytest.raises(ValueError):
+            render_qa_card(_plate(), {**_metadata(),"category":"player_props"},record,now=NOW)
+
+
+def test_statistics_must_belong_to_the_same_fixture():
+    good=_record()
+    good["stats"]={
+        "stat_1":{
+            "value": "7/10", "source": "observed-provider",
+            "event_id": "ANOTHER_MATCH",
+            "observed_at": NOW-timedelta(minutes=4),
+        }}
+    with pytest.raises(ValueError,match="different fixture"):
+        render_qa_card(_plate(),_metadata(),good,now=NOW)
