@@ -202,5 +202,34 @@ class GoalHunterCards(unittest.TestCase):
         self.assertNotIn("sendMessage",post.call_args.args[0])
         self.assertNotIn("sendPhoto",post.call_args.args[0])
 
+    def test_settlement_never_marks_an_unverified_telegram_edit_as_success(self):
+        row={"home":"Tampines Rovers FC","away":"Ratchaburi FC",
+             "minute":68,"score":"1:2","telegram_message_id":975,
+             "message_kind":"photo"}
+        final={"score":(2,2),"league":"ASEAN",
+               "home":{"id":1},"away":{"id":2}}
+        for answer in (
+            {"ok":True},  # No Message object returned
+            {"ok":True,"result":{"message_id":976,"chat":{"id":-1}}},
+            {"ok":True,"result":{"message_id":975,"chat":{"id":-2}}},
+            {"ok":False,"result":{"message_id":975,"chat":{"id":-1}}},
+        ):
+            with self.subTest(answer=answer):
+                response=Mock()
+                response.json.return_value=answer
+                response.status_code=200
+                response.text=""
+                with patch.dict("os.environ",{
+                         "TELEGRAM_TOKEN":"qa",
+                         "TELEGRAM_GROUP_LATE_GOALS":"-1"}), \
+                     patch("netrattler_lmg_card.make_card",return_value=b"JPEG"), \
+                     patch("requests.post",return_value=response) as post:
+                    with self.assertRaisesRegex(RuntimeError,"Telegram edit"):
+                        settle.edit_original(row,final,True)
+                self.assertEqual(post.call_count,1)
+                self.assertIn("/editMessageMedia",post.call_args.args[0])
+                self.assertNotIn("/sendPhoto",post.call_args.args[0])
+
+
 if __name__=="__main__":
     unittest.main()
