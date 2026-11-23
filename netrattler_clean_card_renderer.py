@@ -112,8 +112,11 @@ def _market_guard(category: str, record: Mapping[str, Any]) -> bool:
         if (not record.get("player_id") or not record.get("player_name") or
                 record.get("confirmed_starter") is not True or
                 str(record.get("player_team_id")) not in
-                (str(record.get("home_id")), str(record.get("away_id")))):
-            raise ValueError("Player card needs verified player and confirmed XI")
+                (str(record.get("home_id")), str(record.get("away_id"))) or
+                not str(record.get("player_photo_source") or "").strip() or
+                not isinstance(record.get("player_photo"), Image.Image)):
+            raise ValueError("Player card needs authenticated cutout photo, player and confirmed XI")
+        _logo(record["player_photo"], 128, 158)
     if category == "cross_mix":
         if (record.get("combined_odds_observed") is not True or
                 not record.get("combined_quote_id") or
@@ -191,14 +194,26 @@ def render_qa_card(plate_png: bytes, metadata: Mapping[str, Any],
     for slot, source in zip(slots, (record.get("home_crest"), record.get("away_crest"))):
         _crest(canvas, source, slot)
     draw = ImageDraw.Draw(canvas)
-    _text(draw, "VS", (W//2, 420), max_width=165, max_height=72,
-          start_size=48, color="#FFE56C")
+    if category == "player_props":
+        # A real alpha-cutout photo floats between the actual club crests
+        # on the data-free original stadium. Never draw a circular avatar,
+        # sticker, opaque portrait box, or substitute generic sports icon.
+        photo = _logo(record["player_photo"], 128, 158)
+        canvas.alpha_composite(photo, (
+            W//2-photo.width//2, 433-photo.height//2))
+        _text(draw, str(record["fixture_id"]), (W//2, 563),
+              max_width=330, max_height=29, start_size=16)
+        _text(draw, str(record["player_name"]), (W//2, 602),
+              max_width=395, max_height=31, start_size=23, color="#FFE56C")
+    else:
+        _text(draw, "VS", (W//2, 420), max_width=165, max_height=72,
+              start_size=48, color="#FFE56C")
+        _text(draw, str(record["fixture_id"]), (W//2, 479),
+              max_width=355, max_height=38, start_size=19)
     _text(draw, str(record["home"]), (250, 564),
           max_width=250, max_height=44, start_size=24)
     _text(draw, str(record["away"]), (872, 564),
           max_width=250, max_height=44, start_size=24)
-    _text(draw, str(record["fixture_id"]), (W//2, 479),
-          max_width=355, max_height=38, start_size=19)
     stats = record.get("stats") or {}
     if not isinstance(stats, Mapping):
         raise ValueError("Only source-verified statistics mappings accepted")
@@ -216,6 +231,8 @@ def render_qa_card(plate_png: bytes, metadata: Mapping[str, Any],
             stamp = _stamp(item["observed_at"])
             if stamp > now or (not live and stamp > kickoff):
                 raise ValueError("Look-ahead statistic or mismatched timing")
+            if str(item["event_id"]) != str(record["fixture_id"]):
+                raise ValueError("Statistics belong to a different fixture")
             value = str(item["value"])
         _text(draw, value,
               (int(loc["x"]) + int(loc["width"])//2,
