@@ -136,6 +136,38 @@ def test_no_fake_combined_ticket_and_no_hidden_legs():
         render_owner_reference_qa("builder",{**original,"legs":[bad_leg,*original["legs"][1:]]},now=NOW)
 
 
+
+def test_large_ticket_extends_actual_stadium_rails_not_black_rectangle():
+    for family, count in (("builder",7), ("combo",10)):
+        rendered=render_owner_reference_qa(family,ticket(family,count),now=NOW)
+        with Image.open(BytesIO(rendered)) as image:
+            pic=image.convert("RGB")
+            extra=max(0,count*ROW_H+36-(BODY_END-BODY_TOP))
+            assert extra > 0
+            # Cyan stadium border and grid must continue throughout
+            # the inserted body; a solid strip (3,16,29) is forbidden.
+            for y in (BODY_END+19, BODY_END+extra//2, BODY_END+extra-17):
+                r,g,b=pic.getpixel((95,y))
+                assert g > 100 and b > 130, (family,count,y,(r,g,b))
+                assert pic.getpixel((0,y)) != (3,16,29), (family,count,y)
+
+
+def test_cross_match_kickoff_and_brand_provenance_are_explicit():
+    from unittest.mock import patch
+    from pathlib import Path
+    import netrattler_five_owner_dynamic_qa as module
+    with patch.object(module,"_text",wraps=module._text) as draw_text:
+        render_owner_reference_qa("combo",ticket("combo",7),now=NOW)
+        strings=[str(call.args[1]) for call in draw_text.call_args_list]
+    assert sum(s.endswith("UTC") for s in strings)==7
+    assert "7 AUSWAHLEN · ECHTE GESAMTQUOTE" in strings
+    # No source-derived football poster may leak another bot's handle.
+    source=(Path(__file__).resolve().parent /
+            "netrattler_clean_master_builder.py").read_text(encoding="utf-8")
+    assert "@prophunter" not in source
+    assert "NETRATTLER AI" in source
+
+
 def test_combo_rejects_11_legs_instead_of_truncating_to_10():
     with pytest.raises(ValueError):
         render_owner_reference_qa("combo",ticket("combo",11),now=NOW)
