@@ -47,6 +47,9 @@ on:
       - 'test_netrattler_1x_group_decode.py'
       - 'netrattler_stats_match_cards.py'
       - 'netrattler_lmg_two_stage.py'
+      - 'netrattler_lmg_external_sources.py'
+      - 'netrattler_lmg_sportscore_probe.py'
+      - 'test_netrattler_lmg_sportscore.py'
       - 'test_netrattler_lmg_two_stage.py'
       - 'netrattler_lmg_store.py'
       - 'netrattler_premium_verified_cards.py'
@@ -175,7 +178,7 @@ jobs:
           SUPABASE_URL: ''
         run: |
           set -o pipefail
-          python -m pytest -q -ra test_netrattler_lmg_two_stage.py test_netrattler_lmg_store.py test_netrattler_lmg_fotmob.py 2>&1 | tee netrattler-two-stage-hardtest.log
+          python -m pytest -q -ra test_netrattler_lmg_two_stage.py test_netrattler_lmg_sportscore.py test_netrattler_lmg_store.py test_netrattler_lmg_fotmob.py 2>&1 | tee netrattler-two-stage-hardtest.log
       - name: Upload diagnostics even when tests fail
         if: always()
         uses: actions/upload-artifact@v4
