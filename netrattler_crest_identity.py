@@ -8,6 +8,9 @@ ALIASES = {
     'derby':'derby county', 'inter':'inter milan', 'internazionale':'inter milan',
     'mechelen':'kv mechelen', 'sint truidense':'sint truidense vv', 'twente 65':'twente enschede',
     'atletico madrid':'atletico de madrid', 'athletic bilbao':'athletic club',
+    # Verified exact aliases for club names in the pinned football-logos index.
+    'atalanta':'atalanta bc', 'bayer leverkusen':'bayer 04 leverkusen',
+    'lens':'rc lens', 'psv':'psv eindhoven',
 }
 STOP = {'fc','cf','afc','sc','fk','football','club','futbol','futebol','clube'}
 
