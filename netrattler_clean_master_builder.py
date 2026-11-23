@@ -87,11 +87,21 @@ def render_clean_master(category):
         raise ValueError("No owner-derived source mapping for category: " + str(category))
     source_path = SOURCE_MAP[category]
     original = _source(source_path)
-    result = original.copy()
+    # A flattened owner screenshot is NEVER a blank card background.
+    # The old approach retained its match/odds text in the side strips and
+    # category banner. Rebuild an ambient, source-derived arena ONCE, before
+    # adding empty slots. Do not use the original screenshot under a live
+    # renderer; this file remains offline QA only, never approved Telegram art.
+    bokeh = original.filter(ImageFilter.GaussianBlur(radius=75))
+    result = Image.blend(
+        bokeh, Image.new("RGBA", (W, H), (3, 16, 30, 255)), 0.62
+    )
+    # Top 112px are the actual immutable crown/NETRATTLER mark. The category
+    # banner begins below this boundary and MUST NOT leak through.
+    result.paste(original.crop((0, 0, W, 112)), (0, 0))
 
-    # Preserve the authentic owner-image perimeter, top crown, and lighting.
-    # Mask ALL baked-in sample faces, match crests, names, prices, results,
-    # old category titles, and demo statistics in the interior.
+    # Build EMPTY data-bearing artwork. No baked-in faces, bookmaker prices,
+    # club names, scores, or sample statistics are copied from the screenshot.
     interior = Image.new("RGBA", (W, H), (0, 0, 0, 0))
     p = ImageDraw.Draw(interior)
     p.rounded_rectangle((78, 145, 1044, 1307), radius=18,
@@ -109,9 +119,9 @@ def render_clean_master(category):
     glow = glow.filter(ImageFilter.GaussianBlur(90))
     interior = Image.alpha_composite(interior, glow)
     result = Image.alpha_composite(result, interior)
-    # Preserve the uploaded owner's crown/header pixel-for-pixel even when
-    # the background stadium glow reaches the top of the canvas.
-    result.paste(original.crop((0, 0, W, 140)), (0, 0))
+    # Keep only the real original mark untouched. The old banner immediately
+    # underneath must be reconstructed as blank ambient background.
+    result.paste(original.crop((0, 0, W, 112)), (0, 0))
 
     draw = ImageDraw.Draw(result)
     draw.rounded_rectangle((145, 163, 977, 275), radius=23,
