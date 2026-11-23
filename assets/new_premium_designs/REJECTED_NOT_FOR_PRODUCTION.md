@@ -4,7 +4,7 @@ Die elf SVG-Entwürfe in diesem Ordner entsprechen **nicht** dem vom Nutzer verb
 
 ## Verbindliche Designregel
 
-Die tatsächlichen, unveränderten Originalreferenzen in `assets/original_templates/` sowie `assets/netrattler_template_corner_original.webp` sind die einzige visuelle Grundlage. Das originale NETRATTLER-Branding, der Stadionhintergrund, Cyan-/Blau- und Goldrahmen, Typografie, Wappen-/Porträtpositionen und `@prophunter` müssen erhalten bleiben. Neue Märkte dürfen ausschliesslich als **Ableitungen der echten Originale** entstehen; fehlende Datenfelder werden separat und ohne Übermalen eingebrannter Beispielinhalte gestaltet.
+Die tatsächlichen, unveränderten Originalreferenzen in `assets/original_templates/` sowie `assets/netrattler_template_corner_original.webp` sind die einzige visuelle Grundlage. Das originale NETRATTLER-Branding, der Stadionhintergrund, Cyan-/Blau- und Goldrahmen, Typografie, Wappen-/Porträtpositionen und `NETRATTLER AI` als Kartenbranding müssen erhalten bleiben; `@prophunter` gehört laut Nutzer **unter den Tipp als Telegram-Text**, nicht ins PNG. Neue Märkte dürfen ausschliesslich als **Ableitungen der echten Originale** entstehen; fehlende Datenfelder werden separat und ohne Übermalen eingebrannter Beispielinhalte gestaltet.
 
 Bei fehlendem sauberem Originalmaster: **fail closed**, keine automatische Ersatzvorlage und keine Telegram-Veröffentlichung. Visuelle Freigabe anhand echter Bildvergleiche und Telegram-Screenshots ist vor Aktivierung Pflicht.
 
