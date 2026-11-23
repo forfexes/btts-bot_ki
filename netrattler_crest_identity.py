@@ -12,6 +12,7 @@ ALIASES = {
     'atalanta':'atalanta bc', 'bayer leverkusen':'bayer 04 leverkusen',
     'lens':'rc lens', 'psv':'psv eindhoven',
     'lyon':'olympique lyon', 'nice':'ogc nice', 'sassuolo':'us sassuolo',
+    'juventus':'juventus fc', 'frosinone':'frosinone calcio',
 }
 STOP = {'fc','cf','afc','sc','fk','football','club','futbol','futebol','clube'}
 
