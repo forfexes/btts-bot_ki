@@ -101,7 +101,7 @@ jobs:
                                  next_goal_side="home",next_goal_result="won",
                                  crest_provider=qa_crest,preview_only=True),
               "lost":make_settled(fixture,final_score="1:1",won=False,
-                                  next_goal_side="home",next_goal_result="void",
+                                  next_goal_side="home",next_goal_result="unverified",
                                   crest_provider=qa_crest,preview_only=True),
           }
           for name,png in cards.items():
