@@ -58,11 +58,13 @@ class OriginalCrestsFloatWithoutPastedDiscs(unittest.TestCase):
                 self.assertEqual(aa.getpixel(pixel),(5,22,37))
             for cx in (280,842):
                 self.assertEqual(aa.getpixel((cx,300)),(238,30,50))
-            # 116px tall, vertically centred on y=280. The 12px
-            # gap before the team-name label must remain pure stadium.
+            # Max 104px tall, centred on y=283. The 14px minimum gap
+            # before the club label must remain original stadium pixels;
+            # the protected source masthead ends at y225.
             self.assertEqual(aa.getpixel((280,235)),(238,30,50))
             self.assertEqual(aa.getpixel((280,325)),(238,30,50))
             self.assertEqual(aa.getpixel((280,341)),(5,22,37))
+            self.assertEqual(aa.getpixel((280,224)),(5,22,37))
 
     def test_opaque_rectangle_is_blocked_not_glued_to_original_background(self):
         for data in (opaque_sticker(),b""):
