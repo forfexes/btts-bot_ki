@@ -143,7 +143,7 @@ def render_original_combo(legs,*,combined_odds,probability,ev,confidence,
     # The uploaded original contains baked example details. Until a fully
     # cleaned and visually approved master exists, no screenshot repaint may
     # reach Telegram, even through a direct renderer call.
-    if os.getenv("NETRATTLER_BLOCK_OVERPAINTED_MASTERS", "0") == "1":
+    if os.getenv("NETRATTLER_BLOCK_OVERPAINTED_MASTERS", "1") != "0":
         raise ValueError("owner_original_overpainted_compositor_blocked")
     legs=list(legs)
     n=len(legs)
