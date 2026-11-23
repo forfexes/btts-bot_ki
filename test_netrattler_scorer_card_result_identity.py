@@ -197,6 +197,8 @@ def test_media_edit_never_truncates_original_caption():
 
 def test_media_edit_rejects_wrong_original_message_confirmation():
     for response in ({"ok":True,"result":{"message_id":919}},
+                     {"ok":True,"result":{"message_id":918,
+                                           "chat":{"id":"different-chat"}}},
                      {"ok":True,"result":True}, {"ok":False}):
         reply=SimpleNamespace(status_code=200,ok=True,text="ok",json=lambda:response)
         with patch.object(cards.requests,"post",return_value=reply) as post:
