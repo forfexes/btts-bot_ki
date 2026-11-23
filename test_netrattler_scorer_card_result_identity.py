@@ -147,6 +147,32 @@ def test_settled_scorer_does_not_require_made_up_full_time_score():
     assert 'SETTLEMENT_TG_REPLAY_DAYS' in main_source
 
 
+def test_repeated_fixture_requires_result_date_before_editing_any_old_photo():
+    # The exact same clubs can meet again; undated provider results are
+    # insufficient to identify which earlier Telegram picture belongs to it.
+    two=[
+        {"card_id":"old","match_key":cards.match_key("HOME vs AWAY"),
+         "card_date":"2026-10-09","chat_id":"123","message_id":1001,
+         "entries":[["btts",{"odds":1.85}]],"result":{"marks":{}}},
+        {"card_id":"new","match_key":cards.match_key("HOME vs AWAY"),
+         "card_date":"2026-11-23","chat_id":"123","message_id":1002,
+         "entries":[["btts",{"odds":1.85}]],"result":{"marks":{}}},
+    ]
+    no_date=[{"match":"HOME vs AWAY","group":"btts",
+              "status":"win","odds":1.85}]
+    with patch.dict("os.environ",{
+            "NETRATTLER_BLOCK_OVERPAINTED_MASTERS":"0"}), \
+         patch.object(cards,"_sb",return_value=("https://example.test/netrattler_match_cards",{})), \
+         patch.object(cards.requests,"get",
+                      return_value=SimpleNamespace(ok=True,json=lambda:two)), \
+         patch.object(cards.requests,"post",return_value=SimpleNamespace(ok=True)), \
+         patch.object(cards,"render_card") as render, \
+         patch.object(cards,"_edit_photo") as edit:
+        assert cards.update_cards_with_results("TEST_TOKEN",no_date)==0
+        render.assert_not_called()
+        edit.assert_not_called()
+
+
 def test_do_not_change_old_match_with_same_pairing_on_another_day():
     assert cards.match_key("Israel vs Austria") == cards.match_key("Israel vs Austria")
     import inspect
