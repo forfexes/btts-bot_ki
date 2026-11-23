@@ -7,7 +7,7 @@ import os
 import pytest
 from PIL import Image, ImageDraw
 
-from netrattler_clean_card_renderer import render_qa_card, _logo
+from netrattler_clean_card_renderer import render_qa_card, render_cross_mix_qa, _logo
 from netrattler_clean_master_builder import W, H, SOURCE_MAP, render_clean_master
 
 NOW = datetime(2026, 11, 23, 13, 0, tzinfo=timezone.utc)
@@ -71,6 +71,30 @@ def _for_category(category):
     return record
 
 
+def _cross_ticket(count=2):
+    base = _record()
+    base.update(quote_observed=True, market="BTTS", selection="YES")
+    legs = []
+    for i in range(count):
+        leg = dict(base)
+        leg.update(
+            fixture_id=f"QA-CROSS-{i}", home=f"QA HOME {i}",
+            away=f"QA AWAY {i}", home_id=f"H{i}", away_id=f"A{i}",
+            quote_id=f"QA-LEG-{i}",
+        )
+        legs.append(leg)
+    return {
+        "bookmaker": base["bookmaker"],
+        "combined_quote_id": "QA-REAL-COMBINED-TICKET",
+        "combined_odds": 3.94,
+        "combined_odds_observed": True,
+        "price_estimated": False,
+        "quote_observed_at": base["quote_observed_at"],
+        "kickoff": base["kickoff"],
+        "legs": legs,
+    }
+
+
 def _plate():
     out = BytesIO()
     Image.new("RGB", (W, H), (5, 18, 34)).save(out, "PNG")
@@ -81,9 +105,16 @@ def test_all_ten_categories_render_sandbox_without_legacy_stickers():
     for family in sorted(SOURCE_MAP):
         meta = _metadata()
         meta["category"] = family
-        png = render_qa_card(_plate(), meta, _for_category(family), now=NOW)
+        if family == "cross_mix":
+            with pytest.raises(ValueError, match="Cross/Mix"):
+                render_qa_card(_plate(), meta, _for_category(family), now=NOW)
+            png = render_cross_mix_qa(_cross_ticket(), now=NOW)
+        else:
+            png = render_qa_card(_plate(), meta, _for_category(family), now=NOW)
         with Image.open(BytesIO(png)) as im:
             assert im.format == "PNG" and im.size == (W, H)
+            if family == "cross_mix":
+                continue
             assert im.getpixel((155, 356)) == (5, 18, 34)
             assert im.getpixel((767, 356)) == (5, 18, 34)
             assert im.getpixel((250, 456))[0] > 100
@@ -97,7 +128,10 @@ def test_actual_owner_derived_plate_in_sandbox_only(family):
     # Unlike the synthetic fixture above this uses the real repo's
     # original artwork, but the preview ALWAYS has a sandbox watermark.
     plate, meta = render_clean_master(family)
-    png = render_qa_card(plate, meta, _for_category(family), now=NOW)
+    if family == "cross_mix":
+        png = render_cross_mix_qa(_cross_ticket(), now=NOW)
+    else:
+        png = render_qa_card(plate, meta, _for_category(family), now=NOW)
     with Image.open(BytesIO(png)) as im:
         assert im.format == "PNG"
         assert im.size == (W, H)
@@ -117,7 +151,7 @@ def test_market_mismatch_never_reaches_any_visual_card():
         meta["category"] = family
         record = _for_category(family)
         record["selection"] = "OVER 2.5"
-        with pytest.raises(ValueError, match="Selection"):
+        with pytest.raises(ValueError, match="Cross/Mix" if family=="cross_mix" else "Selection"):
             render_qa_card(_plate(), meta, record, now=NOW)
 
 
@@ -159,3 +193,29 @@ def test_lookahead_stats_and_anonymous_statistics_rejected():
 def test_too_small_logo_is_not_scaled_into_an_artificial_badge():
     with pytest.raises(ValueError):
         _logo(Image.new("RGBA", (10, 10), (240, 10, 20, 255)), 194, 195)
+
+
+@pytest.mark.parametrize("count", (2, 4, 7, 10))
+def test_cross_mix_all_rows_kept_and_actual_ticket_required(count):
+    from netrattler_five_owner_dynamic_qa import ROW_H, BODY_END, BODY_TOP
+    png=render_cross_mix_qa(_cross_ticket(count),now=NOW)
+    extra=max(0,count*ROW_H+36-(BODY_END-BODY_TOP))
+    with Image.open(BytesIO(png)) as im:
+        assert im.size==(W,H+extra)
+        im.verify()
+
+
+def test_cross_mix_never_hides_rows_or_uses_synthetic_ticket_price():
+    with pytest.raises(ValueError):
+        render_cross_mix_qa(_cross_ticket(11),now=NOW)
+    for field,bad in (("combined_quote_id",""),
+                      ("combined_odds_observed",False),
+                      ("combined_odds",float("nan"))):
+        ticket=_cross_ticket()
+        ticket[field]=bad
+        with pytest.raises(ValueError):
+            render_cross_mix_qa(ticket,now=NOW)
+    ticket=_cross_ticket()
+    ticket["legs"][1]["quote_observed"]=False
+    with pytest.raises(ValueError):
+        render_cross_mix_qa(ticket,now=NOW)
