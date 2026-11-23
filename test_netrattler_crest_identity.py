@@ -105,3 +105,23 @@ def test_wrong_named_cached_club_wappen_is_rejected(monkeypatch):
     cards._crest_cache_load()
     assert "atleticocp" not in cards._LOGO_CACHE
     assert cards._LOGO_CACHE["bayerleverkusen"] == good
+
+
+def test_verified_club_country_hint_finds_nashville_and_sabah_without_league(monkeypatch):
+    monkeypatch.setenv("ENABLE_FOOTBALL_LOGOS_CC", "true")
+    monkeypatch.setattr(cards, "_fl_country_slugs", lambda country: [])
+    nashville = "https://assets.football-logos.cc/logos/usa/700x700/nashville-sc.1234abcd.png"
+    sabah = "https://assets.football-logos.cc/logos/azerbaijan/700x700/sabah.1234abcd.png"
+    seen = []
+    def get(url):
+        seen.append(url)
+        if url == "https://football-logos.cc/usa/nashville-sc/":
+            return '<img src="' + nashville + '">'
+        if url == "https://football-logos.cc/azerbaijan/sabah/":
+            return '<img src="' + sabah + '">'
+        return ""
+    monkeypatch.setattr(cards, "_fl_get", get)
+    assert cards._fl_logo("Nashville SC", "") == nashville
+    assert cards._fl_logo("Sabah FK", "") == sabah
+    assert "https://football-logos.cc/azerbaijan/sabah/" in seen
+    assert cards._fl_logo("Unrelated Club", "") == ""
