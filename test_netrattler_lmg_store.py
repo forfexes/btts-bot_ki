@@ -116,6 +116,31 @@ class GoalHunterSQLiteTests(unittest.TestCase):
             with self.assertRaises(ValueError):
                 store.reserve_source_calls(**kwargs)
 
+    def test_deep_stats_persist_with_real_timestamp_and_no_supabase(self):
+        now=dt.datetime.now(dt.timezone.utc).isoformat()
+        row={"provider":"fotmob","fixture_id":123456,
+             "observed_at":now,"discovery_minute":70,
+             "shots":20,"shots_on_target":7,"corners":5,
+             "home_xg":1.15,"away_xg":0.71}
+        with patch.dict(os.environ,{"SUPABASE_URL":"","SUPABASE_KEY":""}):
+            a=store.write_deep_observations([row])
+            b=store.write_deep_observations([row])
+        self.assertEqual((a["inserted"],b["inserted"]),(1,0))
+        with store._connect() as conn:
+            got=conn.execute("SELECT * FROM deep_stats_observations").fetchone()
+        self.assertEqual(got["discovery_minute"],70)
+        self.assertEqual(got["shots"],20)
+        self.assertEqual(got["shots_on_target"],7)
+        self.assertEqual(got["home_xg"],1.15)
+        store.init()
+        with store._connect() as conn:
+            self.assertEqual(conn.execute(
+                "SELECT COUNT(*) FROM deep_stats_observations").fetchone()[0],1)
+
+    def test_deep_stats_batch_bound_is_enforced(self):
+        with self.assertRaisesRegex(ValueError,"batch_exceeds_limit"):
+            store.write_deep_observations([{}]*21)
+
     def test_no_supabase_required_for_local_sqlite(self):
         with patch.dict(os.environ,{"SUPABASE_URL":"","SUPABASE_KEY":"",
                                     "SUPABASE_SERVICE_ROLE_KEY":""}):
