@@ -105,8 +105,21 @@ def make_settled(fixture, *, final_score, won, crest_provider,
     fields['status']='gewonnen' if won else 'verloren'
     fields['final_score']=final_score
     if next_goal_side:
-        if next_goal_result not in ('won','lost','void','unverified'):
-            raise ValueError('Verified next-goal settlement required for the original pick')
+        if next_goal_result not in ('won','lost','unverified'):
+            # No automatic void: the actual bookmaker must confirm how
+            # an unanswered next-goal market settles before any VOID.
+            raise ValueError('Verified next-goal grade required; no blanket void')
+        from netrattler_lmg_next_goal import evaluate_next_goal
+        provable=evaluate_next_goal(next_goal_side,
+                                   (initial_home,initial_away),
+                                   (final_home,final_away))
+        if provable == 'unverified':
+            if next_goal_result != 'unverified':
+                # Both sides scored? Chronological first-scorer events are
+                # needed. No further goal? Provider-specific terms are needed.
+                raise ValueError('Next-goal settlement requires evidence not final score alone')
+        elif next_goal_result not in ('unverified',provable):
+            raise ValueError('Next-goal grade contradicts confirmed goal growth')
         fields['next_goal_team']=fixture[next_goal_side]
         fields['next_goal_result']=next_goal_result
     elif next_goal_result is not None:
