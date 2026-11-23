@@ -213,7 +213,7 @@ def _multi(category, base, record, now):
         # invented shared time for a cross-game ticket.
         leg_time = _stamp(leg["kickoff"]).strftime("%d.%m.%Y %H:%M UTC")
         _text(draw, leg_time, (540,y+84), max_width=410,
-              max_height=23, start_size=13, color="#AEC8D5")
+              max_height=23, start_size=17, color="#AEC8D5")
         _text(draw, f'@{_price(leg["bookmaker_odds"]):.2f}',
               (938,y+49), max_width=96, max_height=37, start_size=20,
               color="#40F58A")
