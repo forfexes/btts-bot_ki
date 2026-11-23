@@ -14,6 +14,10 @@ name: NETRATTLER XXL Original-Integrity QA
       - "test_netrattler_settlement_v21.py"
       - "test_netrattler_premium_dispatch_gate.py"
       - "test_netrattler_scorer_card_result_identity.py"
+      - "netrattler_clean_card_renderer.py"
+      - "netrattler_clean_master_builder.py"
+      - "test_netrattler_clean_card_renderer.py"
+      - "test_netrattler_clean_master_builder.py"
 
 permissions:
   contents: read
@@ -54,6 +58,21 @@ jobs:
         run: |
           python test_netrattler_settlement_v21.py
           python -m pytest -q test_netrattler_premium_dispatch_gate.py test_netrattler_scorer_card_result_identity.py
+      - name: Offline ten original-derived blank/dynamic cards, no fake crests or prices
+        env:
+          NETRATTLER_CARD_QA_PREVIEW_DIR: output/netrattler_ten_sandbox
+        run: |
+          python -m py_compile netrattler_clean_master_builder.py netrattler_clean_card_renderer.py test_netrattler_clean_card_renderer.py
+          python -m pytest -q test_netrattler_clean_master_builder.py test_netrattler_clean_card_renderer.py
+          echo "ALL TEN WATERMARKED QA PREVIEWS ONLY: no Telegram and no release approval"
+      - name: Upload only unapproved, watermarked source-derived previews
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: NETRATTLER-TEN-SANDBOX-NOT-OWNER-APPROVED
+          path: output/netrattler_ten_sandbox/*_SANDBOX_NOT_APPROVED.png
+          if-no-files-found: ignore
+          retention-days: 3
       - name: Assert real production uses owner-only gate and caption-only fallback
         run: |
           python - <<'PY'
