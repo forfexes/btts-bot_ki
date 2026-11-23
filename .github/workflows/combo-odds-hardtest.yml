@@ -36,6 +36,8 @@ jobs:
       - name: Verify original PROP BUILDER 2-7-leg cropping
         run: python -m pytest -q test_netrattler_original_templates.py
       - name: Produce owner-original visual QA previews (synthetic offline data)
+        env:
+          NETRATTLER_BLOCK_OVERPAINTED_MASTERS: '0'
         run: |
           python - <<'PY'
           from pathlib import Path
@@ -52,6 +54,8 @@ jobs:
           print("TEST ONLY - no Telegram, bookmaker quote or real fixture claims")
           PY
       - name: Produce original Builder QA previews (2–7 legs)
+        env:
+          NETRATTLER_BLOCK_OVERPAINTED_MASTERS: '0'
         run: python netrattler_card_visual_preview.py --outdir combo-owner-qa
       - uses: actions/upload-artifact@v4
         with:
