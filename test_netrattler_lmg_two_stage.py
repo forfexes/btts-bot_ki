@@ -49,6 +49,23 @@ class GoalHunterTwoStageTests(unittest.TestCase):
         self.assertEqual(len(calls),3)
         self.assertEqual(r["sent"],0)
 
+    def test_team_split_observations_are_real_not_guessed(self):
+        candidates=stage.discover(fake_feed())
+        observations=[]
+        with patch.object(stage.common,"reserve_alert",side_effect=AssertionError("no Telegram")):
+            r=stage.poll_once(candidates,first_pass=True,send=False,shadow=False,
+                              observations=observations,
+                              fetch=lambda *args,**kwargs:detail())
+        self.assertEqual(r["stats_verified"],1)
+        self.assertEqual(len(observations),1)
+        row=observations[0]
+        self.assertEqual((row["shots"],row["shots_on_target"],row["corners"]),(22,9,7))
+        self.assertEqual((row["home_shots"],row["away_shots"]),(12,10))
+        self.assertEqual((row["home_sot"],row["away_sot"]),(5,4))
+        self.assertEqual((row["home_corners"],row["away_corners"]),(2,5))
+        self.assertIsNone(row["home_xg"])
+        self.assertIsNone(row["away_xg"])
+
     def test_no_unverified_early_tip_even_if_stats_available(self):
         fixtures=stage.discover(fake_feed("60’","0 - 0"))
         with patch.object(stage.common,"reserve_alert",side_effect=AssertionError("early send")), \
