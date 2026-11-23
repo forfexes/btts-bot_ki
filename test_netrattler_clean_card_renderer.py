@@ -197,7 +197,7 @@ def test_too_small_logo_is_not_scaled_into_an_artificial_badge():
         _logo(Image.new("RGBA", (10, 10), (240, 10, 20, 255)), 194, 195)
 
 
-@pytest.mark.parametrize("count", (2, 4, 7, 10))
+@pytest.mark.parametrize("count", range(2, 11))
 def test_cross_mix_all_rows_kept_and_actual_ticket_required(count):
     from netrattler_five_owner_dynamic_qa import ROW_H, BODY_END, BODY_TOP
     png=render_cross_mix_qa(_cross_ticket(count),now=NOW)
