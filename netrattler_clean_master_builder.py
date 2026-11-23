@@ -85,7 +85,19 @@ def _source(path):
 def render_clean_master(category):
     if category not in SOURCE_MAP:
         raise ValueError("No owner-derived source mapping for category: " + str(category))
-    source_path = SOURCE_MAP[category]
+    return render_clean_master_from_reference(
+        category, SOURCE_MAP[category], TITLE[category], LABELS[category])
+
+
+def render_clean_master_from_reference(category, source_path, title, labels):
+    """Offline-only category plate from a REAL owner source, not a replacement original.
+
+    Uses the same source-integrity, logo-slot and no-screenshot-background rules
+    for other genuine owner references without changing the ten-card registry.
+    """
+    if not category or not str(title).strip() or not isinstance(labels,(tuple,list)) or len(labels)!=3:
+        raise ValueError("Complete three-stat owner card layout required")
+    source_path = Path(source_path)
     original = _source(source_path)
     # A flattened owner screenshot is NEVER a blank card background.
     # The old approach retained its match/odds text in the side strips and
@@ -126,13 +138,12 @@ def render_clean_master(category):
     draw = ImageDraw.Draw(result)
     draw.rounded_rectangle((145, 163, 977, 275), radius=23,
                            fill="#061421", outline="#FDD348", width=5)
-    title = TITLE[category]
     draw.text((561, 215), title, font=_fitted(draw, title, 794, 51),
               anchor="mm", fill="#FFE56C",
               stroke_width=2, stroke_fill="#1A1010")
     draw.rounded_rectangle((131, 330, 991, 596), radius=22,
                            fill="#071926", outline="#25DFFF", width=4)
-    # Owner rule for all eleven derived categories: REAL team crests
+    # Owner rule for every owner-reference-derived QA category: REAL team crests
     # FLOAT freely over the existing dark fixture stadium. Do NOT
     # manufacture gold-outlined crest rectangles, circles, shields, or
     # name-stickers here. These spaces stay EMPTY until genuine provider
@@ -142,7 +153,7 @@ def render_clean_master(category):
                            fill="#0A1A2A", outline="#136B91", width=2)
 
     slots = {}
-    for i, label in enumerate(LABELS[category]):
+    for i, label in enumerate(labels):
         y = 638 + i * 142
         rect = (131, y, 991, y + 114)
         draw.rounded_rectangle(rect, radius=18, fill="#081A29",
