@@ -8,6 +8,13 @@ import netrattler_stats_match_cards as cards
 import netrattler_builder_cards as builder
 from netrattler_original_template_renderer import _base, BUILDER_IMAGE, GOAL_IMAGE
 from netrattler_visual_review import review_png
+import pytest
+
+
+@pytest.fixture(autouse=True)
+def _original_screenshot_render_only_in_offline_qa(monkeypatch):
+    """Tests draw historical owner screenshots, never production Telegram."""
+    monkeypatch.setenv("NETRATTLER_BLOCK_OVERPAINTED_MASTERS","0")
 
 
 def _test_photo():
