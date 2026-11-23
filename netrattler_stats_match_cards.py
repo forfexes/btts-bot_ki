@@ -1129,6 +1129,12 @@ def _edit_photo(token, chat, message_id, payload, log, caption=None):
             if not isinstance(result, dict) or str(result.get("message_id")) != str(message_id):
                 log("Card-Edit nicht bestätigt: falsche/fehlende Original-Nachrichten-ID")
                 return False
+            acknowledged_chat = result.get("chat")
+            if (isinstance(acknowledged_chat, dict)
+                    and acknowledged_chat.get("id") is not None
+                    and str(acknowledged_chat["id"]) != str(chat)):
+                log("Card-Edit nicht bestätigt: Telegram quittierte eine andere Gruppe")
+                return False
         except (ValueError, AttributeError, TypeError):
             log("Card-Edit nicht bestätigt: ungültige Telegram-Antwort")
             return False
