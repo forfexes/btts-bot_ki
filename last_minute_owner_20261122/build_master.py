@@ -82,12 +82,10 @@ def make_plate(source=SOURCE,target=TARGET):
             fill=palette[key]
         d.rectangle((x0,y0,x1-1,y1-1),fill=fill)
 
-    # Restore badge plates in the same space as the original shields. The
-    # *actual verified* logo will become a separate transparent image layer.
-    for cx,side in ((96,'left'),(419,'right')):
-        coords=[(cx-38,100),(cx,96),(cx+38,103),(cx+34,143),
-                (cx+22,160),(cx,169),(cx-22,160),(cx-35,143)]
-        d.polygon(coords,fill=(5,26,39),outline=(229,185,70),width=2)
+    # Do not redraw the old shield silhouettes. The two owner-crest zones
+    # have already been reconstructed into the CLEAN static plate above.
+    # Only a real transparent team emblem is added by the runtime renderer.
+    # Never add a decorative ring, backing polygon, or crest sticker.
     result.save(target,format='PNG',optimize=True)
     # Produce exact static-pixel proof: only sanctioned regions differ.
     new=np.array(result)
