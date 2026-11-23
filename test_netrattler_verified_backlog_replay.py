@@ -29,10 +29,10 @@ class BacklogSameOriginalMessageQA(unittest.TestCase):
         with patch.dict(os.environ,{
                 "SETTLEMENT_TG_REPLAY_DAYS":"7",
                 "SETTLEMENT_TG_BACKLOG_REPLAY_DAYS":env,
-                "SETTLEMENT_TG_REPLAY_MAX":"10"}), \\
+                "SETTLEMENT_TG_REPLAY_MAX":"10"}), \
              patch.object(mod,"edit_original_tip",
-                          side_effect=lambda r:calls.append(r["tip_id"]) or True), \\
-             patch.object(mod,"_save_tip_edit_receipt") as receipts, \\
+                          side_effect=lambda r:calls.append(r["tip_id"]) or True), \
+             patch.object(mod,"_save_tip_edit_receipt") as receipts, \
              patch.object(mod,"telegram_send",
                           side_effect=AssertionError("Forbidden new result post")):
             got=mod.retry_unedited_originals(rows,[])
