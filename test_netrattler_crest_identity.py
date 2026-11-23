@@ -46,3 +46,15 @@ def test_old_unverified_cache_is_not_loaded(monkeypatch):
     cards._crest_cache_load()
     assert calls[0]['team_key']=='like.v2:*'
     assert cards._LOGO_CACHE=={'chelsea':'verified.png'}
+
+def test_verified_club_aliases_for_real_index_assets():
+    for short_name, official in [
+        ('Atalanta', 'Atalanta BC'),
+        ('Bayer Leverkusen', 'Bayer 04 Leverkusen'),
+        ('Lens', 'RC Lens'),
+        ('PSV', 'PSV Eindhoven'),
+    ]:
+        assert same_club(short_name, official)
+    assert not same_club('PSV', 'PSV II')
+    assert not same_club('Lens', 'Lens II')
+    assert not same_club('Atalanta', 'Atalanta U23')
