@@ -57,7 +57,7 @@ class BridgeQA(unittest.TestCase):
         valid=make_settled(FIXTURE,final_score='2:1',won=True,
                            next_goal_side='home',next_goal_result='won',
                            crest_provider=authentic_qa_image,preview_only=True)
-        self.assertTrue(valid.startswith(b'\\x89PNG'))
+        self.assertTrue(valid.startswith(b'\x89PNG'))
         # Final scores cannot establish who scored FIRST if both sides did.
         with self.assertRaisesRegex(ValueError,'evidence not final score'):
             make_settled(FIXTURE,final_score='2:2',won=True,
@@ -77,7 +77,7 @@ class BridgeQA(unittest.TestCase):
             self.assertTrue(make_settled(
                 FIXTURE,final_score=final,won=won,next_goal_side='home',
                 next_goal_result='unverified',crest_provider=authentic_qa_image,
-                preview_only=True).startswith(b'\\x89PNG'))
+                preview_only=True).startswith(b'\x89PNG'))
 
     def test_final_result_must_be_verified_and_cannot_go_backwards(self):
         with self.assertRaisesRegex(ValueError,'Confirmed win/loss'):
