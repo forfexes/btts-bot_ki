@@ -8,6 +8,16 @@ import netrattler_builder_cards as builder_cards
 import netrattler_builder_engine as engine
 
 
+@pytest.fixture(autouse=True)
+def _only_synthetic_original_preview(monkeypatch):
+    """Legacy screenshot previews are allowed ONLY in this offline QA module.
+
+    The live renderers themselves now block screenshot repaint by DEFAULT.
+    No Telegram credential or production workflow gets this exception.
+    """
+    monkeypatch.setenv("NETRATTLER_BLOCK_OVERPAINTED_MASTERS", "0")
+
+
 
 def _fake_reference_photo():
     """Valid synthetic raster solely for offline unit tests; never Telegram."""
