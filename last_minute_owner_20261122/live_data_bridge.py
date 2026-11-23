@@ -39,7 +39,30 @@ def _logos(fixture,provider):
     # Do not substitute an arbitrary team graphic or quietly publish it.
     if str(ids[0]).strip().casefold()==str(ids[1]).strip().casefold():
         raise ValueError('Home and away cannot share a verified crest identifier')
-    return provider(ids[0]),provider(ids[1])
+    home,away=provider(ids[0]),provider(ids[1])
+    # Distinct IDs can still be mapped to the SAME badge by a broken CDN or
+    # source alias. Compare visible pixels, not just URL or encoded metadata.
+    from io import BytesIO
+    from PIL import Image
+    def visible_crest(raw):
+        if not isinstance(raw,(bytes,bytearray)):
+            return None
+        try:
+            with Image.open(BytesIO(raw)) as src:
+                icon=src.convert('RGBA')
+        except (OSError,ValueError):
+            return None  # The owner renderer rejects corrupt artwork itself.
+        bbox=icon.getchannel('A').point(
+            lambda alpha: 255 if alpha>=24 else 0).getbbox()
+        if bbox is None:
+            return None
+        icon=icon.crop(bbox)
+        icon.thumbnail((96,96),Image.Resampling.LANCZOS)
+        return icon.size,icon.tobytes()
+    first,second=visible_crest(home),visible_crest(away)
+    if first is not None and first == second:
+        raise ValueError('Home and away resolved to identical team crest artwork')
+    return home,away
 
 
 def make_live(fixture, metrics, *, crest_provider, preview_only=False):
