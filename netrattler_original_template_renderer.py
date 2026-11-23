@@ -127,7 +127,14 @@ def _crest(im, cards, team, rect):
     badge=badge.crop(visible)
     if min(badge.size)<12:
         raise ValueError("Club crest artwork too small")
-    badge.thumbnail((w,h),Image.Resampling.LANCZOS)
+    # Fit the visible authentic crest to the original slot in both
+    # directions. thumbnail() would leave small provider artwork tiny.
+    scale=min(w/badge.width,h/badge.height)
+    if scale>4:
+        raise ValueError("Club crest artwork too low-resolution for premium slot")
+    dims=(max(1,round(badge.width*scale)),
+          max(1,round(badge.height*scale)))
+    badge=badge.resize(dims,Image.Resampling.LANCZOS)
     p=(round((x0+x1-badge.width)/2),
        round((y0+y1-badge.height)/2))
     if im.mode == "RGBA":
