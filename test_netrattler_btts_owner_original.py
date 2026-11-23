@@ -43,6 +43,19 @@ class OwnerBttsImageTests(unittest.TestCase):
                 crest_provider=lambda team: sample_crest(
                   "#45ABF2" if team.startswith("Example") else "#F2A243"))
 
+    def test_btts_direct_renderer_refuses_opaque_pasted_on_club_logo(self):
+        from netrattler_btts_owner_original import _crest
+        canvas=Image.new("RGBA",(W,H),(4,17,29,255))
+        before=canvas.copy()
+        for mode in ("RGB","RGBA"):
+            with self.subTest(mode=mode):
+                tile=Image.new(mode,(125,125),
+                               (250,250,250) if mode=="RGB" else (250,250,250,255))
+                ImageDraw.Draw(tile).ellipse((14,14,110,110),fill=(60,129,218))
+                with self.assertRaisesRegex(ValueError,"Opaque BTTS badge tile"):
+                    _crest(canvas,tile,281)
+                self.assertIsNone(ImageChops.difference(canvas,before).getbbox())
+
     def test_user_original_header_and_footer_unchanged(self):
         raw=self.draw()
         with Image.open(io.BytesIO(raw)) as rendered, Image.open(REFERENCE) as src:
