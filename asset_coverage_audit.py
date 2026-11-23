@@ -115,10 +115,10 @@ def main():
 
     def person(name, team="", sport="", boost=0, provider_id=None):
         raw = str(name or "").strip()
-        if re.search(r"\\s+Player['’]s$", raw, flags=re.I):
-            raw = re.sub(r"\\s+Player['’]s$", "", raw, flags=re.I)
+        if re.search(r"\s+Player['’]s$", raw, flags=re.I):
+            raw = re.sub(r"\s+Player['’]s$", "", raw, flags=re.I)
             blank["trimmed_player_possessive_suffix"] += 1
-        if re.search(r"(?i)\\b(btts|over|under|both teams|either team|to score|shots|corners|fouls|settled using|same amount|first half|1st half)\\b", raw):
+        if re.search(r"(?i)\b(btts|over|under|both teams|either team|to score|shots|corners|fouls|settled using|same amount|first half|1st half)\b", raw):
             blank["malformed_market_in_player_field"] += 1
             return
         n = norm(raw)
