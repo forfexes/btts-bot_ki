@@ -1404,6 +1404,16 @@ def _player_photo(name, team=""):
             urls.append(_ep)
     except Exception:
         STATS["player_espn_err"] = STATS.get("player_espn_err", 0) + 1
+    # Native ESPN player IDs already stored in the football stats tables.
+    # Exact name + verified club + single ESPN ID only; no cross-provider IDs.
+    try:
+        from netrattler_espn_photo import espn_photo_by_id
+        direct_espn_photo = espn_photo_by_id(clean_name, team)
+        if direct_espn_photo:
+            urls.append(direct_espn_photo)
+            STATS["player_direct_espn_id_found"] = STATS.get("player_direct_espn_id_found", 0) + 1
+    except Exception:
+        STATS["player_direct_espn_id_error"] = STATS.get("player_direct_espn_id_error", 0) + 1
     try:
         from netrattler_api_portraits import portrait
         api_portrait = portrait(clean_name, team)
