@@ -27,8 +27,8 @@ jobs:
       LMG_SHADOW_ENABLED: 'true'
       LMG_SEND: 'false'
       LMG_DEEP_POLL_CYCLES: '1'
-      LMG_SOURCE_SPORTSCORE_READ_ONLY: 'true'
-      LMG_EXTERNAL_SOURCES_SHADOW: 'true'
+      LMG_SOURCE_SPORTSCORE_READ_ONLY: 'false'
+      LMG_EXTERNAL_SOURCES_SHADOW: 'false'
       TELEGRAM_TOKEN: ''
       TELEGRAM_GROUP_LATE_GOALS: ''
       SUPABASE_URL: ''
@@ -49,6 +49,9 @@ jobs:
       - name: Migrate SQLite without dropping previous data
         run: python netrattler_lmg_store.py init
       - name: Collect at most one detail snapshot cycle with NO Telegram
+        env:
+          LMG_SOURCE_SPORTSCORE_READ_ONLY: 'true'
+          LMG_EXTERNAL_SOURCES_SHADOW: 'true'
         run: python netrattler_lmg_two_stage.py
       - name: Report SQLite counts, no private keys
         run: python netrattler_lmg_store.py status
