@@ -91,7 +91,15 @@ def _crest(im, img: Image.Image, cx: int):
     crest = crest.crop(visible)
     if min(crest.size) < 12:
         raise ValueError("BTTS team crest visible artwork too small")
-    crest.thumbnail((155,155),Image.Resampling.LANCZOS)
+    # Pillow.thumbnail() only downsizes: it left genuine but small artwork
+    # tiny inside a 155px circle. Scale proportionally in BOTH directions,
+    # refusing excessive enlargement that would blur a miniature icon.
+    factor = min(155 / crest.width, 155 / crest.height)
+    if factor > 4:
+        raise ValueError("BTTS crest source resolution too low for premium image")
+    dims = (max(1,round(crest.width*factor)),
+            max(1,round(crest.height*factor)))
+    crest=crest.resize(dims,Image.Resampling.LANCZOS)
     im.alpha_composite(crest,(round(cx-crest.width/2),
                               round(427.5-crest.height/2)))
 
