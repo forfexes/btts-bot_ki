@@ -44,6 +44,28 @@ def red_bbox(im):
 
 
 class OriginalCrestTests(unittest.TestCase):
+    def test_small_real_crest_expands_to_owner_ring_without_fake_disc(self):
+        badge=Image.new("RGBA",(140,140),(0,0,0,0))
+        ImageDraw.Draw(badge).rectangle((55,55,84,84),
+                                        fill=(240,20,30,255))
+        raw=io.BytesIO()
+        badge.save(raw,"PNG")
+        canvas=Image.new("RGBA",(240,200),(9,20,36,255))
+        _crest(canvas,Provider(raw.getvalue()),"VERIFIED CLUB",
+               (40,20,120,100))
+        x0,y0,x1,y1=red_bbox(canvas)
+        self.assertEqual((x1-x0,y1-y0),(80,80))
+        self.assertEqual((x0,y0),(40,20))
+        self.assertEqual(canvas.getpixel((0,0)),(9,20,36,255))
+        # Reject artifacts that would need a >4x upscale: no blurry sticker.
+        miniature=Image.new("RGBA",(12,12),(240,20,30,255))
+        raw=io.BytesIO()
+        miniature.save(raw,"PNG")
+        with self.assertRaises(ValueError):
+            _crest(Image.new("RGBA",(240,200)),
+                   Provider(raw.getvalue()),"VERIFIED CLUB",
+                   (40,20,120,100))
+
     def test_alpha_trim_and_two_axis_center_in_existing_slot(self):
         im=Image.new("RGBA", (240, 200), (9, 20, 36, 255))
         original=im.copy()
