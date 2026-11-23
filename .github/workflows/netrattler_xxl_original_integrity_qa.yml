@@ -18,6 +18,8 @@ name: NETRATTLER XXL Original-Integrity QA
       - "netrattler_clean_master_builder.py"
       - "test_netrattler_clean_card_renderer.py"
       - "test_netrattler_clean_master_builder.py"
+      - "netrattler_five_owner_reference_qa.py"
+      - "test_netrattler_five_owner_reference_qa.py"
 
 permissions:
   contents: read
@@ -72,6 +74,21 @@ jobs:
           name: NETRATTLER-TEN-SANDBOX-NOT-OWNER-APPROVED
           path: output/netrattler_ten_sandbox/*_SANDBOX_NOT_APPROVED.png
           if-no-files-found: ignore
+          retention-days: 3
+      - name: Offline five additional genuine owner-reference clean masters
+        env:
+          TELEGRAM_BOT_TOKEN: ""
+          SUPABASE_URL: ""
+        run: |
+          python -m pytest -q test_netrattler_five_owner_reference_qa.py
+          python netrattler_five_owner_reference_qa.py --outdir output/netrattler_five_owner_qa
+          echo "FIVE SOURCE-DERIVED DRAFTS ONLY: no Telegram release"
+      - name: Export five owner-derived drafts for human pixel review
+        uses: actions/upload-artifact@v4
+        with:
+          name: NETRATTLER-FIVE-ORIGINAL-SOURCES-NOT-APPROVED
+          path: output/netrattler_five_owner_qa/*_SOURCE_DERIVED_SANDBOX.png
+          if-no-files-found: error
           retention-days: 3
       - name: Export user-original clean-frame source backgrounds for offline pixel QA
         uses: actions/upload-artifact@v4
