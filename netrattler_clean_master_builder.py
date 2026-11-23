@@ -153,13 +153,18 @@ def render_clean_master_from_reference(category, source_path, title, labels):
                            fill="#0A1A2A", outline="#136B91", width=2)
 
     slots = {}
+    # Multi-leg cards need a truly EMPTY list area, not three preprinted
+    # "AUSWAHL" rails subsequently covered by the live data layer.
+    # One-time plate creation is the only place that changes this artwork.
+    multi_layout = category in ("builder", "combo")
     for i, label in enumerate(labels):
         y = 638 + i * 142
-        rect = (131, y, 991, y + 114)
-        draw.rounded_rectangle(rect, radius=18, fill="#081A29",
-                               outline="#25CFF4", width=3)
-        draw.text((157, y + 28), label, font=_fitted(draw, label, 480, 27),
-                  fill="#F4D05D")
+        if not multi_layout:
+            rect = (131, y, 991, y + 114)
+            draw.rounded_rectangle(rect, radius=18, fill="#081A29",
+                                   outline="#25CFF4", width=3)
+            draw.text((157, y + 28), label, font=_fitted(draw, label, 480, 27),
+                      fill="#F4D05D")
         slots["stat_" + str(i + 1)] = {"x": 555, "y": y + 24, "width": 388,
                                     "height": 66}
     draw.rounded_rectangle((135, 1102, 986, 1233), radius=24,
