@@ -47,8 +47,18 @@ jobs:
         run: python -m pytest -q test_netrattler_original_templates.py
       - name: NETRATTLER AI Corner Sniper original and Telegram transport
         run: python -m pytest -q test_netrattler_corner_original.py
-      - name: Render 2/4/6-leg Builder and Goal Hunter PNG previews
-        run: python netrattler_card_visual_preview.py --outdir visual_review_previews
+      - name: Confirm real Telegram rejects unapproved screenshot-repainted originals
+        run: python -m unittest -v test_netrattler_no_screenshot_overpaint_by_default
+      - name: Render legacy Builder/Goal previews ONLY in isolated QA (NOT production)
+        env:
+          # This unlocks mock-only previews. Never set it in a live send job.
+          NETRATTLER_BLOCK_OVERPAINTED_MASTERS: '0'
+          TELEGRAM_TOKEN: ''
+          TELEGRAM_BOT_TOKEN: ''
+          TELEGRAM_CHAT_ID: ''
+        run: |
+          echo "TEST ONLY - unapproved original screenshot compositors, NO Telegram"
+          python netrattler_card_visual_preview.py --outdir visual_review_previews
       - name: Emit synthetic visual thumbnails for independent review
         run: |
           python - <<'PY'
