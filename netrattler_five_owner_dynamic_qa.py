@@ -183,7 +183,9 @@ def _multi(category, base, record, now):
     legs, total = _ticket(category, record, now)
     canvas, extra = _multi_canvas(base, len(legs))
     draw = ImageDraw.Draw(canvas)
-    _text(draw, "MEHRERE SPIELE", (W//2, 428),
+    fixture_count = len({str(leg["fixture_id"]) for leg in legs})
+    match_caption = "MEHRERE SPIELE" if fixture_count > 1 else "EIN SPIEL"
+    _text(draw, match_caption, (W//2, 428),
           max_width=346, max_height=45, start_size=26, color="#FFE56C")
     _text(draw, f"{len(legs)} AUSWAHLEN · ECHTE GESAMTQUOTE",
           (W//2, 487), max_width=355, max_height=32, start_size=16)
