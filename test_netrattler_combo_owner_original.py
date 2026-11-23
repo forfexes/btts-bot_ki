@@ -37,6 +37,18 @@ def render(n,**changes):
 
 
 class VerifiedOriginalComboTests(unittest.TestCase):
+    def test_real_combo_club_crest_must_have_transparent_shape_not_white_tile(self):
+        from netrattler_combo_owner_original import _photo_crest
+        opaque=Image.new("RGB",(100,100),(250,250,250))
+        ImageDraw.Draw(opaque).ellipse((8,8,92,92),fill=(36,156,214))
+        buf=io.BytesIO();opaque.save(buf,"PNG")
+        with self.assertRaisesRegex(ValueError,"Opaque Combo club crest sticker"):
+            _photo_crest(buf.getvalue())
+        # The correctly transparent provider asset remains supported.
+        good=_photo_crest(crest("VERIFIED TEAM"))
+        self.assertEqual(good.mode,"RGBA")
+        self.assertLess(max(good.size),100)
+
     def test_both_owner_originals_preserve_crown_and_real_footer(self):
         for n in (7,9):
             with self.subTest(n=n):
