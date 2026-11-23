@@ -22,3 +22,10 @@ def test_rows_for(monkeypatch):
     assert (r["player_name"], r["team"], r["opponent"], r["tackles"], r["fouls_committed"], r["fouls_drawn"], r["shots_on"], r["match_date"]) == ("Saka", "Arsenal", "Chelsea", 2, 2, 1, 1, "2026-10-03")
 
     assert (r["goals"], r["assists"]) == (1, 0)
+
+
+def test_prefer_header_ignores_duplicates_by_default(monkeypatch):
+    monkeypatch.delenv("FPLCI_UPSERT_MODE", raising=False)
+    assert "ignore-duplicates" in f.prefer_header()
+    monkeypatch.setenv("FPLCI_UPSERT_MODE", "merge")
+    assert "merge-duplicates" in f.prefer_header()

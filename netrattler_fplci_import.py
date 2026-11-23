@@ -105,11 +105,21 @@ def rows_for(season, gw):
     return out
 
 
+def prefer_header():
+    """Standard: bestehende Zeilen NICHT neu schreiben (ignore-duplicates).
+    Das Dauer-Upsert von ~324k unveraenderten Zeilen 2x taeglich erzeugte
+    Tupel-Bloat (>1 Mio Updates, DB-Groesse). FPLCI_UPSERT_MODE=merge
+    erzwingt das alte Verhalten (Korrekturen nachziehen)."""
+    mode = os.getenv("FPLCI_UPSERT_MODE", "ignore").strip().lower()
+    res = "merge-duplicates" if mode == "merge" else "ignore-duplicates"
+    return f"resolution={res},return=minimal"
+
+
 def upsert(rows):
     if not rows or not (SB and SK):
         return 0
     h = {"apikey": SK, "Authorization": f"Bearer {SK}", "Content-Type": "application/json",
-         "Prefer": "resolution=merge-duplicates,return=minimal"}
+         "Prefer": prefer_header()}
     n = 0
     for i in range(0, len(rows), 400):
         r = requests.post(f"{SB}/rest/v1/fplci_player_match?on_conflict=match_id,player_id", headers=h,
