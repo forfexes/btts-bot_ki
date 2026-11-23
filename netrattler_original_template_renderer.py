@@ -118,7 +118,7 @@ def _crest(im, cards, team, rect):
     badge=_picture(raw,min_size=24)
     x0,y0,x1,y1=map(int,rect)
     w,h=x1-x0,y1-y0
-    if w<=0 or h<=0 or im.mode!="RGBA":
+    if w<=0 or h<=0 or im.mode not in ("RGB", "RGBA"):
         raise ValueError("Invalid original club crest slot")
     visible=badge.getchannel("A").point(
         lambda alpha: 255 if alpha>=24 else 0).getbbox()
@@ -130,7 +130,12 @@ def _crest(im, cards, team, rect):
     badge.thumbnail((w,h),Image.Resampling.LANCZOS)
     p=(round((x0+x1-badge.width)/2),
        round((y0+y1-badge.height)/2))
-    im.alpha_composite(badge,p)
+    if im.mode == "RGBA":
+        im.alpha_composite(badge,p)
+    else:
+        # The owner's original WEBP production artwork is RGB. Blend the
+        # authentic transparent crest once; never force a new background.
+        im.paste(badge,p,badge.getchannel("A"))
 
 
 def _kickoff(value):
