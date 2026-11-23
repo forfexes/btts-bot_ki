@@ -81,10 +81,19 @@ def _crest(im, img: Image.Image, cx: int):
     if not isinstance(img, Image.Image):
         raise ValueError("Genuine BTTS team crest missing")
     crest = img.convert("RGBA")
+    # Providers can wrap a genuine logo in hundreds of transparent pixels.
+    # Scaling that canvas instead of the visible emblem makes it float too
+    # small in the owner's fixed badge slot. Keep the original frame intact.
+    visible = crest.getchannel("A").point(
+        lambda alpha: 255 if alpha >= 24 else 0).getbbox()
+    if visible is None:
+        raise ValueError("BTTS team crest contains no visible artwork")
+    crest = crest.crop(visible)
+    if min(crest.size) < 12:
+        raise ValueError("BTTS team crest visible artwork too small")
     crest.thumbnail((155,155),Image.Resampling.LANCZOS)
-    if not crest.width or not crest.height:
-        raise ValueError("Empty BTTS team crest")
-    im.alpha_composite(crest,(cx-crest.width//2,350+(155-crest.height)//2))
+    im.alpha_composite(crest,(round(cx-crest.width/2),
+                              round(427.5-crest.height/2)))
 
 
 def _result_label(result):
