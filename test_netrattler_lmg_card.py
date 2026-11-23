@@ -170,7 +170,7 @@ class GoalHunterCards(unittest.TestCase):
         final={"score":(2,2),"league":"ASEAN",
                "home":{"id":1},"away":{"id":2}}
         reply=Mock()
-        reply.json.return_value={"ok":True}
+        reply.json.return_value={"ok":True,"result":{"message_id":975,"chat":{"id":-1}}}
         with patch.dict("os.environ",{"TELEGRAM_TOKEN":"qa",
                                      "TELEGRAM_GROUP_LATE_GOALS":"-1"}), \
              patch("last_minute_owner_20261122.live_data_bridge.make_settled",
@@ -193,7 +193,7 @@ class GoalHunterCards(unittest.TestCase):
              "score":"1:2","telegram_message_id":971,"message_kind":"photo"}
         final={"score":(2,2),"league":"ASEAN","home":{"id":1},"away":{"id":2}}
         reply=Mock()
-        reply.json.return_value={"ok":True}
+        reply.json.return_value={"ok":True,"result":{"message_id":971,"chat":{"id":-1}}}
         with patch.dict("os.environ",{"TELEGRAM_TOKEN":"test","TELEGRAM_GROUP_LATE_GOALS":"-1"}),\
              patch("netrattler_lmg_card.make_card",return_value=b"JPEG"),\
              patch("requests.post",return_value=reply) as post:
