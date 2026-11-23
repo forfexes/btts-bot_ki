@@ -172,7 +172,7 @@ class NextGoalTests(unittest.TestCase):
              "next_goal_result":"won"}
         final={"score":(3,2),"home":{"id":12},"away":{"id":14},"league":"ASEAN"}
         reply=Mock()
-        reply.json.return_value={"ok":True}
+        reply.json.return_value={"ok":True,"result":{"message_id":912,"chat":{"id":-1}}}
         with patch.dict("os.environ",{"TELEGRAM_TOKEN":"test",
                                      "TELEGRAM_GROUP_LATE_GOALS":"-1"}),\
              patch("netrattler_lmg_card.make_card",return_value=b"JPEG") as render,\
