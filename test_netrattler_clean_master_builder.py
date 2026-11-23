@@ -1,4 +1,4 @@
-"""Offline master QA: 11 derived categories, no invented live details."""
+"""Offline master QA: ten missing category drafts; Last Minute uses its own owner art."""
 import hashlib
 import io
 from pathlib import Path
@@ -35,11 +35,21 @@ def test_clean_derived_master_preserves_crown_and_contains_no_sample_data(catego
     assert metadata["classification"].startswith("owner-derived")
     assert metadata["category"] == category
     assert len(metadata["blank_slots"]) == 3
+    assert metadata["logo_backplates"] is False
+    assert [slot["center_x"] for slot in metadata["floating_crest_slots"]] == [250,872]
+    with Image.open(io.BytesIO(png)) as check:
+        # No gold frame/paste-on rings at either genuine team's alpha slot.
+        for xx in (153,775):
+            rr,gg,bb=check.convert("RGB").getpixel((xx,450))
+            assert rr < 140 and gg < 180, (category,xx,rr,gg,bb)
 
 def test_all_clean_derived_masters_have_distinct_labels(tmp_path):
     manifest = write_all(tmp_path)
-    assert len(manifest) == len(SOURCE_MAP) == 11
-    assert len(list(tmp_path.glob("*_CLEAN_DERIVED_QA.png"))) == 11
+    assert len(manifest) == len(SOURCE_MAP) == 10
+    assert len(list(tmp_path.glob("*_CLEAN_DERIVED_QA.png"))) == 10
+    # The real uploaded LAST MINUTE GOAL original must never be falsely
+    # represented by a recoloured Corner Sniper reference.
+    assert "last_minute_goal" not in SOURCE_MAP
     assert (tmp_path / "manifest.json").is_file()
     assert len({item["category"] for item in manifest}) == 11
 
