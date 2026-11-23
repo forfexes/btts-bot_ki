@@ -128,7 +128,7 @@ def parse_sportscore(body: Any) -> list[dict]:
         def goals(v):
             if type(v) is int and 0 <= v <= 99:
                 return v
-            if isinstance(v,str) and re.fullmatch(r"\\d{1,2}",v.strip()):
+            if isinstance(v,str) and re.fullmatch(r"\d{1,2}",v.strip()):
                 return int(v.strip())
             return None
         slug=row.get("url")
