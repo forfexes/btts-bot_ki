@@ -8,6 +8,8 @@ name: NETRATTLER Floating Original Crests - Full Offline QA
       - "last_minute_owner_20261122/last_minute_dynamic_card.py"
       - "last_minute_owner_20261122/test_last_minute_dynamic_card.py"
       - "netrattler_stats_match_cards.py"
+      - "netrattler_premium_telegram_adapter.py"
+      - "test_netrattler_premium_floating_crest_adapter.py"
       - "test_netrattler_floating_crests_all_cards.py"
       - ".github/workflows/netrattler_floating_crest_master_qa.yml"
 permissions:
@@ -41,6 +43,7 @@ jobs:
         run: |
           python -m unittest -v last_minute_owner_20261122.test_last_minute_dynamic_card
           python -m unittest -v test_netrattler_floating_crests_all_cards
+          python -m unittest -v test_netrattler_premium_floating_crest_adapter
       - name: Save source-derived clean plate after checks pass
         run: |
           git add last_minute_owner_20261122/last_minute_clean_plate.png
