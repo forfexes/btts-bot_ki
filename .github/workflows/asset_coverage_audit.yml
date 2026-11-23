@@ -11,7 +11,7 @@ name: Asset Coverage Audit (netrattler) - Read Only
       - "netrattler_crest_identity.py"
       - ".github/workflows/asset_coverage_audit.yml"
   schedule:
-    - cron: '21 4 * * 0'
+    - cron: '21 4 * * *'
 
 permissions:
   contents: read
@@ -40,10 +40,10 @@ jobs:
           SUPABASE_SERVICE_ROLE_KEY: ${{ secrets.SUPABASE_SERVICE_ROLE_KEY }}
           API_FOOTBALL_KEYS: ${{ secrets.API_FOOTBALL_KEYS }}
           ALLSPORTS_API_KEY: ${{ secrets.ALLSPORTS_API_KEY }}
-          ASSET_FULL_CHAIN_SAMPLE: '8'
-          ASSET_MAX_PHOTOS: '80'
-          ASSET_MAX_TEAMS: '100'
-        run: python -u asset_coverage_audit.py --bot netrattler --max-photos 80 --max-teams 100
+          ASSET_FULL_CHAIN_SAMPLE: '16'
+          ASSET_MAX_PHOTOS: '100'
+          ASSET_MAX_TEAMS: '120'
+        run: python -u asset_coverage_audit.py --bot netrattler --max-photos 100 --max-teams 120 --rotate
       - name: Upload private-data-minimized audit report
         if: always()
         uses: actions/upload-artifact@v4
