@@ -5,6 +5,9 @@ on:
     branches: [main]
     paths:
       - .github/workflows/netrattler_sportscore_probe.yml
+      - netrattler_lmg_external_sources.py
+      - netrattler_lmg_sportscore_probe.py
+      - test_netrattler_lmg_sportscore.py
 permissions:
   contents: read
 jobs:
