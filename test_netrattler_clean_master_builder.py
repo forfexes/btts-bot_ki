@@ -20,12 +20,31 @@ def test_clean_derived_master_preserves_crown_and_contains_no_sample_data(catego
         assert result.format == "PNG"
         source = _source(path)
         # Exact top user-original crown, not an approximate painted replacement.
-        top = (0, 0, W, 125)
+        top = (0, 0, W, 110)
         # RGB comparison is deliberate: PIL's RGBA getbbox() can report
         # *no* differences when the alpha channel is identical everywhere,
         # even if the visible RGB pixels have completely changed.
         assert ImageChops.difference(result.convert("RGB").crop(top),
                                      source.convert("RGB").crop(top)).getbbox() is None
+        # The original is a flattened betting screenshot; old team names,
+        # quotes, odds and score labels must not survive in the outer strips
+        # or in the market-title band after the clean derivation.
+        result_rgb = result.convert("RGB")
+        source_rgb = source.convert("RGB")
+        for region in ((0, 165, 75, 1230),
+                       (1047, 165, W, 1230),
+                       (170, 118, W-170, 158)):
+            old = source_rgb.crop(region)
+            cleaned = result_rgb.crop(region)
+            changed = ImageChops.difference(old, cleaned).convert("L")
+            assert changed.getbbox() is not None
+            # No untouched original screenshot pixels: this is a new,
+            # source-derived background, not a live text-cover-up.
+            original_pixels = list(old.getdata())
+            clean_pixels = list(cleaned.getdata())
+            same = sum(a == b for a, b in zip(original_pixels,clean_pixels))
+            assert same / len(original_pixels) < 0.01, (category, region, same)
+
         # The sample data-bearing centre must be replaced, never left
         # readable underneath the QA plate.
         assert ImageChops.difference(result.convert("RGB").crop((120,300,1002,1250)),
