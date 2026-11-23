@@ -1733,11 +1733,20 @@ def _crest_cache_load():
         if not url:
             return
         base = url.replace("netrattler_match_cards", "netrattler_crest_cache")
-        r = requests.get(base, headers=hdr, params={"select": "team_key,url", "team_key": "like.v2:*", "limit": "5000"}, timeout=15)
+        r = requests.get(base, headers=hdr, params={"select": "team_key,team,url", "team_key": "like.v2:*", "limit": "5000"}, timeout=15)
         if r.ok:
             n = 0
+            from netrattler_crest_identity import named_crest_url_matches_club
             for row in r.json():
-                if row.get("team_key") and row.get("url") and row["team_key"][3:] not in _LOGO_CACHE:
+                if not (row.get("team_key") and row.get("url")):
+                    continue
+                # A successful image request alone is not proof of club identity.
+                # Old saved URLs may point to another club's original crest.
+                match = named_crest_url_matches_club(row.get("team"), row["url"])
+                if match is False:
+                    STATS["crest_cache_wrong_club_rejected"] = STATS.get("crest_cache_wrong_club_rejected", 0) + 1
+                    continue
+                if row["team_key"][3:] not in _LOGO_CACHE:
                     _LOGO_CACHE[row["team_key"][3:]] = row["url"]
                     n += 1
             STATS["crest_cache_loaded"] = n
