@@ -90,6 +90,47 @@ def _crest(canvas: Image.Image, source: Image.Image, slot: Mapping[str, Any]) ->
     canvas.alpha_composite(icon, (x, y))
 
 
+_MARKET_WORDS = {
+    "over": ("OVER", "UNDER"),
+    "btts_halftime": ("BTTS", "BEIDE TEAMS"),
+    "over_halftime": ("OVER", "UNDER"),
+    "match_result": ("HOME", "AWAY", "DRAW", "1X2", "HEIM", "AUSW", "UNENTSCHIEDEN"),
+    "player_props": ("PLAYER", "SHOTS", "GOALS", "ASSISTS", "SCHUESSE", "SCHÜSSE", "TORE"),
+    "fouls_cards": ("FOUL", "TACKLE", "CARD", "KARTE"),
+    "var": ("VAR",),
+    "late_goals": ("RESTSPIELZEIT", "NÄCHSTES TOR", "NEXT GOAL"),
+    "live_halftime": ("HALBZEIT", "HT", "1. HÄLFTE"),
+    "cross_mix": ("CROSS", "KOMBI", "BUILDER", "MIX"),
+}
+
+
+def _market_guard(category: str, record: Mapping[str, Any]) -> bool:
+    selection = str(record.get("selection") or "").strip().upper()
+    if not any(word in selection for word in _MARKET_WORDS[category]):
+        raise ValueError("Selection does not belong to the verified card category")
+    if category == "player_props":
+        if (not record.get("player_id") or not record.get("player_name") or
+                record.get("confirmed_starter") is not True or
+                str(record.get("player_team_id")) not in
+                (str(record.get("home_id")), str(record.get("away_id")))):
+            raise ValueError("Player card needs verified player and confirmed XI")
+    if category == "cross_mix":
+        if (record.get("combined_odds_observed") is not True or
+                not record.get("combined_quote_id") or
+                not isinstance(record.get("legs"), (list, tuple)) or
+                len(record["legs"]) < 2):
+            raise ValueError("Multi-leg card needs a real combined bookmaker ticket")
+    live = category in ("late_goals", "live_halftime")
+    if live:
+        minute = record.get("match_minute")
+        if not (isinstance(minute, int) and
+                (65 <= minute <= 90 if category == "late_goals" else 1 <= minute <= 45) and
+                record.get("live_event_id") and record.get("live_source") and
+                record.get("current_score")):
+            raise ValueError("Live card missing exact event, score or minute")
+    return live
+
+
 def render_qa_card(plate_png: bytes, metadata: Mapping[str, Any],
                    record: Mapping[str, Any], *, now: datetime | None = None) -> bytes:
     """Render one strictly labeled SANDBOX PNG; never produce a publishable tip.
@@ -124,10 +165,17 @@ def render_qa_card(plate_png: bytes, metadata: Mapping[str, Any],
         raise ValueError("Real observed bookmaker price required") from None
     if not (isfinite(price) and 1.01 <= price <= 1000.0) or record.get("price_estimated") is not False:
         raise ValueError("Unverified or estimated bookmaker quote")
+    live = _market_guard(category, record)
     now = _stamp(now or datetime.now(timezone.utc))
     kickoff, observed = _stamp(record.get("kickoff")), _stamp(record.get("quote_observed_at"))
-    if not (observed <= now < kickoff and timedelta(0) <= now-observed <= timedelta(minutes=15)):
-        raise ValueError("Outdated, future, or post-kickoff bookmaker quote")
+    if live:
+        fresh = (kickoff <= now <= kickoff + timedelta(hours=3) and
+                 timedelta(0) <= now-observed <= timedelta(seconds=90))
+    else:
+        fresh = (observed <= now < kickoff and
+                 timedelta(0) <= now-observed <= timedelta(minutes=15))
+    if not fresh:
+        raise ValueError("Outdated, future, or wrongly timed bookmaker quote")
     if not isinstance(plate_png, (bytes, bytearray)):
         raise ValueError("Expected a clean PNG plate")
     with Image.open(BytesIO(plate_png)) as original:
@@ -162,7 +210,7 @@ def render_qa_card(plate_png: bytes, metadata: Mapping[str, Any],
             raise ValueError("Statistics need independent provider/event/time evidence")
         else:
             stamp = _stamp(item["observed_at"])
-            if stamp > now or stamp > kickoff:
+            if stamp > now or (not live and stamp > kickoff):
                 raise ValueError("Look-ahead statistic or mismatched timing")
             value = str(item["value"])
         _text(draw, value,
