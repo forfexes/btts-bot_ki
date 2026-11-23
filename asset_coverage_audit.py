@@ -307,8 +307,12 @@ def main():
     def crest_test(t):
         if args.bot == "netrattler":
             url = existing_crests.get(norm(t["name"]))
-            if url and image_ok(url, transparent=True):
-                return True, "verified_cached_url"
+            from netrattler_crest_identity import named_crest_url_matches_club
+            url_identity = named_crest_url_matches_club(t["name"], url)
+            if url_identity is False:
+                blank["cached_wrong_club_crest"] += 1
+            if url and url_identity is True and image_ok(url, transparent=True):
+                return True, "named_crest_identity_and_pixels_verified"
             try:
                 payload = card._badge_bytes(t["name"])
                 if not payload:
