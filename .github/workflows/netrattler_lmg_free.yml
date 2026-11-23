@@ -25,7 +25,7 @@ on:
       - test_netrattler_lmg_fotmob.py
       - netrattler_lmg_probe.py
       - netrattler_lmg_source_compare.py
-      - test_netrattler_lmg_source_compare.py test_netrattler_lmg_two_stage.py
+      - test_netrattler_lmg_source_compare.py netrattler_lmg_two_stage.py test_netrattler_lmg_two_stage.py
       - netrattler_last_minute_goal.py
       - test_netrattler_lmg_free.py
       - .github/workflows/netrattler_lmg_free.yml
@@ -53,7 +53,7 @@ jobs:
       - name: Fast syntax check for scheduled live scans
         if: github.event_name == 'schedule'
         run: |
-          python -m py_compile netrattler_last_minute_goal.py netrattler_lmg_free.py netrattler_lmg_fotmob.py netrattler_lmg_card.py netrattler_lmg_settle.py netrattler_lmg_next_goal.py netrattler_lmg_shadow.py netrattler_lmg_store.py netrattler_lmg_api_fallback.py netrattler_lmg_source_compare.py
+          python -m py_compile netrattler_last_minute_goal.py netrattler_lmg_free.py netrattler_lmg_fotmob.py netrattler_lmg_card.py netrattler_lmg_settle.py netrattler_lmg_next_goal.py netrattler_lmg_shadow.py netrattler_lmg_store.py netrattler_lmg_api_fallback.py netrattler_lmg_two_stage.py netrattler_lmg_source_compare.py
       - name: Install dependencies for full regression suite
         if: github.event_name != 'schedule'
         run: python -m pip install --prefer-binary requests Pillow
