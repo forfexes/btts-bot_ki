@@ -33,6 +33,18 @@ class RealOwnerOriginalReleaseQA(unittest.TestCase):
             self.assertTrue(statuses[family]["technical_svg_only"])
             self.assertFalse(statuses[family]["approved_for_telegram"])
         self.assertFalse(any(x["approved_for_telegram"] for x in statuses.values()))
+        # All 16 requested categories have offline reference-derived QA
+        # capability, but not a single one has verified Telegram release.
+        self.assertEqual(sum(x["qa_draft_buildable"] for x in statuses.values()),16)
+        self.assertTrue(all(x["qa_draft_is_not_approved_original"]
+                            for x in statuses.values()))
+        self.assertEqual(sum(x["approved_for_telegram"] for x in statuses.values()),0)
+        for category in ("builder","goal","corner","btts","combo"):
+            self.assertEqual(statuses[category]["qa_preview_generator"],
+                             "netrattler_five_owner_reference_qa.py")
+        self.assertEqual(statuses["last_minute_goal"]["qa_preview_generator"],
+                         "last_minute_owner_20261122/last_minute_dynamic_card.py")
+
 
     def test_a_self_signed_json_can_never_release_a_master(self):
         # Simulated protected release only. No actual app secrets or Telegram.
