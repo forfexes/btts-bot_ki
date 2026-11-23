@@ -150,6 +150,14 @@ def test_large_ticket_extends_actual_stadium_rails_not_black_rectangle():
                 r,g,b=pic.getpixel((95,y))
                 assert g > 100 and b > 130, (family,count,y,(r,g,b))
                 assert pic.getpixel((0,y)) != (3,16,29), (family,count,y)
+            for x in (0, 28, 55):
+                # The left stadium glow must connect to its owner source
+                # both above and below the inserted blank arena extension.
+                for before, after in ((BODY_END-1, BODY_END),
+                                      (BODY_END+extra-1, BODY_END+extra)):
+                    a=pic.getpixel((x,before))
+                    b=pic.getpixel((x,after))
+                    assert max(abs(t-u) for t,u in zip(a,b)) <= 4, (family,count,x,a,b)
 
 
 def test_cross_match_kickoff_and_brand_provenance_are_explicit():
