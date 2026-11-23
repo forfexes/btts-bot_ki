@@ -55,6 +55,34 @@ class LastMinuteOriginalQa(unittest.TestCase):
         with self.assertRaisesRegex(ValueError,'crest'):
             render_card(DATA,home_crest=b'synthetic image',away_crest=crest())
 
+    def test_real_crest_alpha_padding_is_cropped_and_centered(self):
+        try:
+            from .last_minute_dynamic_card import _logo
+        except ImportError:
+            from last_minute_dynamic_card import _logo
+        original=Image.new('RGBA',(512,512),(2,16,28,255))
+        padded=Image.new('RGBA',(150,140),(0,0,0,0))
+        ImageDraw.Draw(padded).rectangle((59,16,81,124),
+                                          fill=(245,22,38,255))
+        stream=io.BytesIO()
+        padded.save(stream,format='PNG')
+        _logo(original,stream.getvalue(),x=96,y=132)
+        pixels=original.convert('RGB').load()
+        positions=[(x,y) for y in range(60,205)
+                         for x in range(30,160)
+                         if pixels[x,y][0]>225
+                         and pixels[x,y][1]<55]
+        self.assertTrue(positions)
+        x1,x2=min(p[0] for p in positions),max(p[0] for p in positions)
+        y1,y2=min(p[1] for p in positions),max(p[1] for p in positions)
+        self.assertLessEqual(abs((x1+x2)/2-96),1)
+        self.assertLessEqual(abs((y1+y2)/2-132),1)
+        self.assertEqual(original.getpixel((200,200)),(2,16,28,255))
+        clear=Image.new('RGBA',(140,140),(0,0,0,0))
+        stream=io.BytesIO();clear.save(stream,'PNG')
+        with self.assertRaisesRegex(ValueError,'visible pixels'):
+            _logo(original,stream.getvalue(),x=96,y=132)
+
     def test_missing_data_are_not_fabricated(self):
         clean={k:v for k,v in DATA.items() if k not in (
             'over_probability','next_probability','next_goal_team','stats')}
