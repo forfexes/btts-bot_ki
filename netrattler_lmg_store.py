@@ -116,6 +116,13 @@ def init() -> Path:
         for column in ("home_logo_source","away_logo_source"):
             if column not in names:
                 conn.execute(f"ALTER TABLE alerts ADD COLUMN {column} TEXT")
+        # Add nullable home/away stats without losing older SQLite observations.
+        # No backfill: missing historical team split remains unknown (NULL).
+        deep_columns = {col[1] for col in conn.execute("PRAGMA table_info(deep_stats_observations)")}
+        for column in ("home_shots", "away_shots", "home_sot", "away_sot",
+                       "home_corners", "away_corners"):
+            if column not in deep_columns:
+                conn.execute(f"ALTER TABLE deep_stats_observations ADD COLUMN {column} INTEGER")
         conn.commit()
         check = conn.execute("PRAGMA integrity_check").fetchone()[0]
         if check != "ok":
@@ -174,20 +181,31 @@ def write_deep_observations(rows: list[dict]) -> dict:
         cutoff=(now-dt.timedelta(days=14)).isoformat()
         conn.execute("DELETE FROM deep_stats_observations WHERE observed_at < ?",(cutoff,))
         count=conn.execute("SELECT COUNT(*) FROM deep_stats_observations").fetchone()[0]
+        # Rolling cap keeps the collector live without growing the Git binary
+        # indefinitely. Preserve the newest observations, never invent values.
         if count+len(rows)>5000:
-            conn.rollback()
-            return {"inserted":0,"status":"capacity_limit","rows":count}
+            excess=count+len(rows)-5000
+            conn.execute("""
+                DELETE FROM deep_stats_observations WHERE rowid IN (
+                    SELECT rowid FROM deep_stats_observations
+                    ORDER BY observed_at ASC, rowid ASC LIMIT ?
+                )
+            """,(excess,))
         inserted=0
         for row in rows:
             cursor=conn.execute("""
               INSERT OR IGNORE INTO deep_stats_observations
               (provider,fixture_id,observed_at,discovery_minute,shots,
-               shots_on_target,corners,home_xg,away_xg)
-              VALUES (?,?,?,?,?,?,?,?,?)
+               shots_on_target,corners,home_xg,away_xg,
+               home_shots,away_shots,home_sot,away_sot,home_corners,away_corners)
+              VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)
             """,(row["provider"],row["fixture_id"],row["observed_at"],
                  row["discovery_minute"],row.get("shots"),
                  row.get("shots_on_target"),row.get("corners"),
-                 row.get("home_xg"),row.get("away_xg")))
+                 row.get("home_xg"),row.get("away_xg"),
+                 row.get("home_shots"),row.get("away_shots"),
+                 row.get("home_sot"),row.get("away_sot"),
+                 row.get("home_corners"),row.get("away_corners")))
             inserted+=cursor.rowcount
         conn.commit()
     finally:
