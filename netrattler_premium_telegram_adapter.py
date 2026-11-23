@@ -208,8 +208,10 @@ def render(entries, target_date, *, crest_provider, result=None):
         dims=(max(1,round(crest.width*zoom)),
               max(1,round(crest.height*zoom)))
         crest=crest.resize(dims,Image.Resampling.LANCZOS)
+        # 116px max height centred at 280 => bottom <=338.
+        # The genuine team label starts around y349; no overlap with crest.
         im.alpha_composite(crest,(round(cx-crest.width/2),
-                                  round(300-crest.height/2)))
+                                  round(280-crest.height/2)))
         draw.text((cx,361),team,font=_fit(draw,team,430),fill="#FAFCFF",anchor="mm")
     league = str(tip.get("league") or "").strip()
     if league:
