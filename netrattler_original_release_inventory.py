@@ -9,6 +9,7 @@ from __future__ import annotations
 import argparse
 import hashlib
 import json
+import os
 from pathlib import Path
 
 ROOT=Path(__file__).resolve().parent
@@ -59,12 +60,19 @@ def audit(root=ROOT):
         approved_file=under(Path("assets")/"approved_original_masters"/(category+".png"))
         attestation=under(Path("assets")/"approved_original_masters"/(category+".json"))
         verified=False
-        if reference_exists and approved_file.is_file() and attestation.is_file():
+        # An editable JSON in a public GitHub repository cannot, by
+        # itself, prove the owner's approval. The separate protected
+        # environment must explicitly pin the approved PNG's digest.
+        protected_digest=os.getenv(
+            "NETRATTLER_APPROVED_MASTER_"+category.upper(),"").strip().lower()
+        if (reference_exists and approved_file.is_file()
+                and attestation.is_file() and len(protected_digest)==64):
             try:
                 evidence=json.loads(attestation.read_text(encoding="utf-8"))
                 verified=(
                     evidence.get("original_source_sha256")==_hash(source)
                     and evidence.get("approved_png_sha256")==_hash(approved_file)
+                    and protected_digest == _hash(approved_file)
                     and evidence.get("human_visual_approved") is True
                     and evidence.get("telegram_android_qa_approved") is True
                 )
