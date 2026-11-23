@@ -115,7 +115,13 @@ def _gold_bar(im, area):
 
 
 def render_corner_template(tip, target_date, result=None):
-    """Replace ALL static example values on the exact Corner Sniper master PNG."""
+    """Offline QA only until an independently clean Corner owner plate exists."""
+    # The old Corner screenshot still has baked sample figures and badges.
+    # Refuse ANY production image overlay; only explicitly isolated sandbox
+    # previews may call this compositor. Never replace old Telegram cards
+    # with a partially covered screenshot.
+    if os.getenv("NETRATTLER_BLOCK_OVERPAINTED_MASTERS", "1") != "0":
+        raise ValueError("corner_original_overpainted_compositor_blocked")
     import netrattler_stats_match_cards as cards
     from netrattler_corner_cards import kickoff_label
     if not MASTER.is_file():
