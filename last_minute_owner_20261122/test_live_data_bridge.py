@@ -14,7 +14,9 @@ METRICS={'teams':{'home':{'shots':8,'sot':3,'xg':0.67,'corners':3},
 def authentic_qa_image(team_id):
     assert team_id in (17,22)
     im=Image.new('RGBA',(96,96),(0,0,0,0))
-    ImageDraw.Draw(im).ellipse((5,5,91,91),fill=(18,107,158))
+    # Different fake colours stand in for two DIFFERENT observed logos.
+    ImageDraw.Draw(im).ellipse((5,5,91,91),
+        fill=(18,107,158) if team_id==17 else (181,40,65))
     b=BytesIO();im.save(b,'PNG');return b.getvalue()
 
 class BridgeQA(unittest.TestCase):
@@ -48,6 +50,21 @@ class BridgeQA(unittest.TestCase):
                     ValueError,'cannot share a verified crest'):
                 make_settled(fixture,final_score='2:1',won=True,
                              crest_provider=authentic_qa_image)
+
+    def test_distinct_provider_ids_cannot_return_identical_images(self):
+        # An upstream source may resolve IDs 17 and 22 to the same
+        # wrongly cached club crest. No visual sticker fix is allowed.
+        def same_badge(team_id):
+            return authentic_qa_image(17)
+        with self.assertRaisesRegex(ValueError,'identical team crest artwork'):
+            make_live(FIXTURE,METRICS,crest_provider=same_badge)
+        with self.assertRaisesRegex(ValueError,'identical team crest artwork'):
+            make_settled(FIXTURE,final_score='2:1',won=True,
+                         crest_provider=same_badge)
+        # Normal verified identities still work.
+        rendered=make_live(FIXTURE,METRICS,
+                           crest_provider=authentic_qa_image,preview_only=True)
+        self.assertTrue(rendered.startswith(b'\x89PNG'))
 
     def test_final_goal_growth_must_match_bet_settlement(self):
         # An unchanged 1:1 match is never an Over 0.5 remaining-time win.
