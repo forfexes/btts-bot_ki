@@ -917,7 +917,12 @@ def retry_unedited_originals(existing: Sequence[Dict[str, Any]], newly_closed: S
     excluded = {str(row.get("settlement_id") or "") for row in newly_closed}
     days = max(1, int(os.getenv("SETTLEMENT_TG_REPLAY_DAYS", "3")))
     cutoff = (TODAY - timedelta(days=days)).isoformat()
-    limit = max(0, int(os.getenv("SETTLEMENT_TG_REPLAY_MAX", "60")))
+    # Bounded historical recovery for verifiably graded tips ONLY.
+    # Never invent a result, create another Telegram post or re-render
+    # an unapproved legacy image. Default 0 preserves old rollout.
+    backlog_days = max(0, min(365, int(os.getenv("SETTLEMENT_TG_BACKLOG_REPLAY_DAYS", "0"))))
+    backlog_cutoff = (TODAY - timedelta(days=backlog_days)).isoformat()
+    limit = max(0, min(100, int(os.getenv("SETTLEMENT_TG_REPLAY_MAX", "60"))))
     attempts = successes = 0
     candidates = sorted(
         existing,
@@ -929,10 +934,14 @@ def retry_unedited_originals(existing: Sequence[Dict[str, Any]], newly_closed: S
             break
         if not _original_update_allowed(row):
             continue
-        if str(row.get("tip_date") or "")[:10] < cutoff:
-            # Old tips newly closed for data gaps still need an original notice.
-            if not (_data_gap_notice(row) and str(row.get("settled_at") or "")[:10] >= cutoff):
-                continue
+        row_date_text = str(row.get("tip_date") or "")[:10]
+        recent_close = (_data_gap_notice(row) and
+                        str(row.get("settled_at") or "")[:10] >= cutoff)
+        backlog_proven = (backlog_days > 0 and
+                          row_date_text >= backlog_cutoff and
+                          normalized_status(row.get("status")) in {"win", "loss"})
+        if row_date_text < cutoff and not (recent_close or backlog_proven):
+            continue
         if str(row.get("settlement_id") or "") in excluded:
             continue
         if row.get("market_group") == "builder" and not BUILDER_RESULT_IN_TIP:
@@ -941,6 +950,17 @@ def retry_unedited_originals(existing: Sequence[Dict[str, Any]], newly_closed: S
         if raw.get("telegram_edit_ok"):
             continue
         previous_attempts = as_int(raw.get("telegram_edit_attempts"), 0)
+        # Telegram 400 means the bot cannot edit this original message.
+        # Retrying that exact old chat/message id only wastes quota.
+        last_error = str(raw.get("telegram_edit_error") or "").lower()
+        if ("message to edit not found" in last_error or
+                "message can't be edited" in last_error or
+                "message cannot be edited" in last_error):
+            continue
+        # Historical recovery is allowed only for verified, previously
+        # unpublished edit receipts; older records get at most two tries.
+        if backlog_proven and row_date_text < cutoff and previous_attempts >= 2:
+            continue
         if previous_attempts >= 4:
             # The bot was intentionally disabled in an earlier workflow.
             # Those attempts were not real Telegram edits. Give only this
