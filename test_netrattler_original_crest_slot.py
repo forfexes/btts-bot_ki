@@ -58,6 +58,14 @@ class OriginalCrestTests(unittest.TestCase):
             self.assertEqual(original.getpixel(pos),im.getpixel(pos))
         self.assertEqual(im.getpixel((80,60))[:3],(240,20,30))
 
+    def test_original_rgb_stadium_can_accept_same_authentic_alpha_crest(self):
+        im=Image.new("RGB", (240, 200), (9, 20, 36))
+        _crest(im, Provider(sample_badge()), "VERIFIED CLUB", (40,20,120,100))
+        x0,y0,x1,y1=red_bbox(im)
+        self.assertLessEqual(abs((x0+x1)/2 - 80), 1)
+        self.assertLessEqual(abs((y0+y1)/2 - 60), 1)
+        self.assertEqual(im.getpixel((0,0)), (9,20,36))
+
     def test_missing_or_unrenderable_club_logo_must_fail(self):
         for raw in (b"",sample_badge(empty=True)):
             with self.subTest(case=len(raw)),self.assertRaises(ValueError):
