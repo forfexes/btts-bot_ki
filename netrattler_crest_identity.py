@@ -11,6 +11,7 @@ ALIASES = {
     # Verified exact aliases for club names in the pinned football-logos index.
     'atalanta':'atalanta bc', 'bayer leverkusen':'bayer 04 leverkusen',
     'lens':'rc lens', 'psv':'psv eindhoven',
+    'lyon':'olympique lyon', 'nice':'ogc nice', 'sassuolo':'us sassuolo',
 }
 STOP = {'fc','cf','afc','sc','fk','football','club','futbol','futebol','clube'}
 
