@@ -10,6 +10,8 @@ on:
       - 'assets/netrattler_template_corner_original.webp'
       - 'test_netrattler_corner_original.py'
       - 'netrattler_stats_match_cards.py'
+      - 'netrattler_premium_telegram_adapter.py'
+      - 'test_netrattler_premium_floating_crest_adapter.py'
       - 'test_netrattler_ai_match_card_design.py'
       - 'netrattler_builder_cards.py'
       - 'netrattler_neon_design.py'
@@ -39,6 +41,8 @@ jobs:
           python-version: '3.11'
       - run: python -m pip install --prefer-binary requests pillow cairosvg pytest
       - run: python -m pytest -q test_netrattler_visual_cards.py test_netrattler_commons_inventory.py test_netrattler_commons_photos.py
+      - name: Original transparent floating-crest premium direct-call guard
+        run: python -m pytest -q test_netrattler_premium_floating_crest_adapter.py
       - name: Normal NETRATTLER AI match-card template regression
         run: python -m pytest -q test_netrattler_ai_match_card_design.py
       - name: Pixel-level visual PNG regression tests
