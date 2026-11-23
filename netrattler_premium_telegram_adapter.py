@@ -202,16 +202,17 @@ def render(entries, target_date, *, crest_provider, result=None):
         # Crop transparent outer padding in _crest(), then scale the actual
         # emblem up OR down as needed. thumbnail() alone left small crests
         # glued tiny to the top edge of the 116px region.
-        zoom=min(116/crest.width,116/crest.height)
+        zoom=min(104/crest.width,104/crest.height)
         if zoom>4:
             raise ValueError("Genuine club crest too small for premium floating position")
         dims=(max(1,round(crest.width*zoom)),
               max(1,round(crest.height*zoom)))
         crest=crest.resize(dims,Image.Resampling.LANCZOS)
-        # 116px max height centred at 280 => bottom <=338.
-        # The genuine team label starts around y349; no overlap with crest.
+        # 104px max height centred at 283 => y231..335.
+        # This also protects the immutable owner/header pixels above y225
+        # and leaves at least 14px before the team-name typography.
         im.alpha_composite(crest,(round(cx-crest.width/2),
-                                  round(280-crest.height/2)))
+                                  round(283-crest.height/2)))
         draw.text((cx,361),team,font=_fit(draw,team,430),fill="#FAFCFF",anchor="mm")
     league = str(tip.get("league") or "").strip()
     if league:
