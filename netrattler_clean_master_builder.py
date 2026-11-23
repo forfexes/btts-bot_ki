@@ -177,7 +177,7 @@ def render_clean_master_from_reference(category, source_path, title, labels):
     # from the source can survive. The outer pixel-art rim stays intact.
     draw.rounded_rectangle((100, 1310, 1022, 1383), radius=16,
                            fill="#06131F", outline="#1DCFF2", width=3)
-    draw.text((561, 1347), "@prophunter", anchor="mm",
+    draw.text((561, 1347), "NETRATTLER AI", anchor="mm",
               font=_font(39), fill="#FCFCFF")
 
     out = io.BytesIO()
