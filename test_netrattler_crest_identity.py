@@ -58,6 +58,8 @@ def test_verified_club_aliases_for_real_index_assets():
         ('Sassuolo', 'US Sassuolo'),
         ('Juventus', 'Juventus FC'),
         ('Frosinone', 'Frosinone Calcio'),
+        ('Atlético-MG', 'Atlético Mineiro'),
+        ('RC Deportivo La Coruña', 'Deportivo A Coruña'),
     ]:
         assert same_club(short_name, official)
     assert not same_club('PSV', 'PSV II')
