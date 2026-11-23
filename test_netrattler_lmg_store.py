@@ -136,7 +136,7 @@ class GoalHunterSQLiteTests(unittest.TestCase):
         self.assertEqual(got["home_xg"],1.15)
         self.assertEqual((got["home_shots"],got["away_shots"]),(12,8))
         self.assertEqual((got["home_sot"],got["away_sot"]),(5,2))
-        self.assertEqual((got["home_corners"],got["away_corners"]),(3,2)
+        self.assertEqual((got["home_corners"],got["away_corners"]),(3,2))
         store.init()
         with store._connect() as conn:
             self.assertEqual(conn.execute(
