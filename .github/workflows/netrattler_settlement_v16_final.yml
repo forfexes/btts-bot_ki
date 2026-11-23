@@ -18,6 +18,7 @@ on:
       - 'test_void_reconcile.py'
       - 'netrattler_stats_match_cards.py'
       - 'test_netrattler_scorer_card_result_identity.py'
+      - 'test_netrattler_verified_backlog_replay.py'
 
   schedule:
     - cron: "20 13 * * *"
@@ -58,6 +59,8 @@ jobs:
           python test_netrattler_settlement_runner.py
           python test_settlement_lenient_match.py
           python -m pytest -q test_netrattler_scorer_card_result_identity.py
+          python -m py_compile test_netrattler_verified_backlog_replay.py
+          python -m unittest -v test_netrattler_verified_backlog_replay
           python -m pytest -q test_netrattler_reviewed_players.py test_netrattler_data_gap_notice.py test_settle_prefers_observed.py test_netrattler_apif_settlement.py test_netrattler_confirmed_void.py test_netrattler_scorer_identity.py
           python -m pytest -q test_stale_pending_void.py test_stale_void.py test_void_reconcile.py
           python -m unittest -v test_pending_result_backfill.py
@@ -126,6 +129,7 @@ jobs:
           # Retry 429 edits with throttling, then restore missed original posts.
           SETTLEMENT_TG_EDIT_GAP_SEC: "1.5"
           SETTLEMENT_TG_REPLAY_DAYS: "7"
+          SETTLEMENT_TG_BACKLOG_REPLAY_DAYS: "120"  # only previously verified win/loss + original Telegram ID; no new posts
           SETTLEMENT_TG_REPLAY_MAX: "50"
         run: python netrattler_settlement_runner.py
       - name: Audit tips pending > 7 days (read only, NEVER auto-void)
