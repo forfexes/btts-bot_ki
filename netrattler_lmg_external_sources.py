@@ -273,7 +273,9 @@ def provider_enabled(provider: str, env: dict | None = None) -> bool:
     if provider not in SUPPORTED or env.get("LMG_EXTERNAL_SOURCES_SHADOW") != "true":
         return False
     if provider=="sportscore":
-        return env.get("LMG_SOURCE_SPORTSCORE_APPROVED")=="true"
+        # Read-only shadow coverage only; this flag NEVER authorizes copying
+        # results onto public Telegram cards or using SportScore for betting.
+        return env.get("LMG_SOURCE_SPORTSCORE_READ_ONLY")=="true"
     secret = {"pitchapi":"PITCHAPI_KEY","highlightly":"HIGHLIGHTLY_API_KEY",
               "sportmonks":"SPORTMONKS_API_KEY"}.get(provider)
     return bool(secret and env.get(secret))
@@ -301,8 +303,8 @@ def fetch_provider(provider: str, *, day: str, session=None, env=None) -> list[d
         headers={"X-API-KEY":env["PITCHAPI_KEY"]}
     else:
         url=SOURCE_URLS[provider]
-        params={"sport":"football","limit":50}
-        headers={}
+        params={"sport":"football","limit":50,"src":"netrattler-readonly-qa"}
+        headers={"Accept":"application/json"}
     try:
         resp=http.get(url,params=params,headers=headers,timeout=12)
         if resp.status_code in (401,403,429):
