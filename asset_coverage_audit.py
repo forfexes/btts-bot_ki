@@ -114,13 +114,20 @@ def main():
     existing_crests = {}
 
     def person(name, team="", sport="", boost=0, provider_id=None):
-        n = norm(name)
+        raw = str(name or "").strip()
+        if re.search(r"\\s+Player['’]s$", raw, flags=re.I):
+            raw = re.sub(r"\\s+Player['’]s$", "", raw, flags=re.I)
+            blank["trimmed_player_possessive_suffix"] += 1
+        if re.search(r"(?i)\\b(btts|over|under|both teams|either team|to score|shots|corners|fouls|settled using|same amount|first half|1st half)\\b", raw):
+            blank["malformed_market_in_player_field"] += 1
+            return
+        n = norm(raw)
         if not n or len(n) < 4:
             blank["invalid_player"] += 1
             return
         k = (str(sport or "").upper(), n)
         if k not in people:
-            people[k] = {"name": str(name).strip(), "sport": str(sport or "").upper(),
+            people[k] = {"name": raw, "sport": str(sport or "").upper(),
                          "teams": set(), "api_football_ids": set(), "count": 0}
         p = people[k]
         p["count"] += 1
