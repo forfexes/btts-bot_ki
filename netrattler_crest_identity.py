@@ -31,3 +31,26 @@ def identity(name):
 def same_club(a,b):
     a,b=identity(a),identity(b)
     return bool(a and b and a==b)
+
+
+def named_crest_url_matches_club(team, url):
+    """True/False when a provider filename names the club; None when opaque.
+
+    Reject known wrong-club CDN filenames without guessing opaque API asset IDs.
+    """
+    from urllib.parse import unquote, urlparse
+
+    if not team or not url or not str(url).startswith("https://"):
+        return None
+    address = urlparse(url)
+    path = unquote(address.path or "")
+    basename = path.rsplit("/", 1)[-1]
+    if address.hostname == "assets.football-logos.cc" and "/logos/" in path:
+        candidate = basename.split(".")[0].replace("-", " ")
+    elif address.hostname == "raw.githubusercontent.com" and "/logos/" in path:
+        candidate = basename.rsplit(".", 1)[0]
+    else:
+        return None
+    if not candidate:
+        return None
+    return same_club(team, candidate)
