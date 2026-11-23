@@ -1154,13 +1154,23 @@ def _result_matches_card_entry(market, tip, result, entries):
         if saved_team and settled_team and saved_team != settled_team:
             return False
         return True
+    # Equal bookmaker prices are NOT a market identifier. A BTTS result
+    # must NEVER turn an Over 2.5 photo green simply because both tickets
+    # happen to be priced @1.85. Only known synonymous market keys may match.
+    aliases = {"over": "over25", "over_2_5": "over25",
+               "both_teams_to_score": "btts", "goal_hunter": "scorer",
+               "goalscorer": "scorer", "late_goals": "scorer",
+               "corner": "corners"}
+    canonical_market = aliases.get(market.strip().lower(), market.strip().lower())
+    canonical_group = aliases.get(group.strip().lower(), group.strip().lower())
+    if not canonical_group or canonical_market != canonical_group:
+        return False
     odds_t = _number(tip.get("odds") or tip.get("oddsYes"))
     odds_r = _number(result.get("odds"))
     same_odds = odds_t is not None and odds_r is not None and abs(odds_t - odds_r) < 0.011
-    if market != group and not same_odds:
-        return False
-    if market == group and odds_t and odds_r and not same_odds and (
-            sum(str(m) == market for m, _ in entries) > 1):
+    if odds_t and odds_r and not same_odds and (
+            sum(aliases.get(str(m).strip().lower(),str(m).strip().lower()) ==
+                canonical_market for m, _ in entries) > 1):
         return False
     return True
 
