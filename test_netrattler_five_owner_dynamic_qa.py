@@ -172,8 +172,8 @@ def test_cross_match_kickoff_and_brand_provenance_are_explicit():
     # No source-derived football poster may leak another bot's handle.
     source=(Path(__file__).resolve().parent /
             "netrattler_clean_master_builder.py").read_text(encoding="utf-8")
-    assert "@prophunter" not in source
-    assert "NETRATTLER AI" in source
+    assert "NETRATTLER AI" not in source
+    assert 'draw.text((561, 1347), "@prophunter"' in source
 
 
 @pytest.mark.parametrize("family", ("builder", "combo"))
