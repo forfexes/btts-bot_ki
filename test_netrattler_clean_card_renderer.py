@@ -43,6 +43,34 @@ def _record():
             "selection": "OVER 2.5", "stats": {}}
 
 
+SELECTIONS = {
+    "over": "OVER 2.5", "btts_halftime": "BTTS YES HT",
+    "over_halftime": "OVER 1.5 HT", "match_result": "HOME WIN",
+    "player_props": "PLAYER SHOTS OVER 2.5",
+    "fouls_cards": "CARDS OVER 3.5", "var": "VAR YES",
+    "late_goals": "OVER 0.5 RESTSPIELZEIT",
+    "live_halftime": "OVER 0.5 HT", "cross_mix": "CROSS BUILDER",
+}
+
+
+def _for_category(category):
+    record = _record()
+    record["selection"] = SELECTIONS[category]
+    if category == "player_props":
+        record.update(player_id="p10", player_name="QA Player",
+                      confirmed_starter=True, player_team_id="aa")
+    if category == "cross_mix":
+        record.update(combined_odds_observed=True, combined_quote_id="book-ticket-123",
+                      legs=[{"id": "leg1"}, {"id": "leg2"}])
+    if category in ("late_goals", "live_halftime"):
+        minute = 75 if category == "late_goals" else 35
+        record.update(kickoff=NOW-timedelta(minutes=minute),
+                      quote_observed_at=NOW-timedelta(seconds=20),
+                      match_minute=minute, live_event_id="evt-100",
+                      live_source="verified-provider", current_score="1:1")
+    return record
+
+
 def _plate():
     out = BytesIO()
     Image.new("RGB", (W, H), (5, 18, 34)).save(out, "PNG")
@@ -53,7 +81,7 @@ def test_all_ten_categories_render_sandbox_without_legacy_stickers():
     for family in sorted(SOURCE_MAP):
         meta = _metadata()
         meta["category"] = family
-        png = render_qa_card(_plate(), meta, _record(), now=NOW)
+        png = render_qa_card(_plate(), meta, _for_category(family), now=NOW)
         with Image.open(BytesIO(png)) as im:
             assert im.format == "PNG" and im.size == (W, H)
             assert im.getpixel((155, 356)) == (5, 18, 34)
@@ -69,7 +97,7 @@ def test_actual_owner_derived_plate_in_sandbox_only(family):
     # Unlike the synthetic fixture above this uses the real repo's
     # original artwork, but the preview ALWAYS has a sandbox watermark.
     plate, meta = render_clean_master(family)
-    png = render_qa_card(plate, meta, _record(), now=NOW)
+    png = render_qa_card(plate, meta, _for_category(family), now=NOW)
     with Image.open(BytesIO(png)) as im:
         assert im.format == "PNG"
         assert im.size == (W, H)
@@ -79,6 +107,18 @@ def test_actual_owner_derived_plate_in_sandbox_only(family):
         outdir = Path(preview_dir)
         outdir.mkdir(parents=True, exist_ok=True)
         (outdir / (family + "_SANDBOX_NOT_APPROVED.png")).write_bytes(png)
+
+
+def test_market_mismatch_never_reaches_any_visual_card():
+    for family in SELECTIONS:
+        if family in ("over", "over_halftime"):
+            continue
+        meta = _metadata()
+        meta["category"] = family
+        record = _for_category(family)
+        record["selection"] = "OVER 2.5"
+        with pytest.raises(ValueError, match="Selection"):
+            render_qa_card(_plate(), meta, record, now=NOW)
 
 
 def test_missing_or_fake_assets_fail_closed():
