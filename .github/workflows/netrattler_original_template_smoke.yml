@@ -19,6 +19,7 @@ on:
       - 'test_netrattler_combo_owner_original.py'
       - 'test_netrattler_btts_owner_original.py'
       - 'test_netrattler_btts_crest_slots.py'
+      - 'test_netrattler_no_screenshot_overpaint_by_default.py'
       - 'assets/original_templates/NETRATTLER_BTTS_originalkarte.png'
       - 'test_netrattler_premium_dispatch_gate.py'
       - 'test_netrattler_premium_verified_cards.py'
@@ -47,6 +48,10 @@ jobs:
         run: |
           python -m py_compile netrattler_original_template_renderer.py test_netrattler_original_crest_slot.py
           python -m unittest -v test_netrattler_original_crest_slot
+      - name: Block screenshot-overpainted originals by default (all entrypoints)
+        run: |
+          python -m py_compile test_netrattler_no_screenshot_overpaint_by_default.py
+          python -m unittest -v test_netrattler_no_screenshot_overpaint_by_default
       - name: Validate empty premium masters and non-overlapping rows
         run: python -m unittest -v test_premium_blank_masters
       - name: Verify all 16 categories with confirmed-data fixtures
