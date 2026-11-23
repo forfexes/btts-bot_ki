@@ -4,6 +4,13 @@ from io import BytesIO
 from PIL import Image, ImageDraw
 from netrattler_visual_review import review_png
 from netrattler_card_visual_preview import generate
+import pytest
+
+
+@pytest.fixture(autouse=True)
+def _synthetic_visual_review_only(monkeypatch):
+    """Only pixel-inspection QA may render the historical screenshot plates."""
+    monkeypatch.setenv("NETRATTLER_BLOCK_OVERPAINTED_MASTERS","0")
 
 
 def _samples(tmp_path):
