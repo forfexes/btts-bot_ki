@@ -7,7 +7,7 @@ composed on the resulting static plate, with no old text underneath.
 """
 from __future__ import annotations
 from pathlib import Path
-from PIL import Image, ImageDraw
+from PIL import Image, ImageDraw, ImageFilter
 import cv2
 import numpy as np
 
@@ -44,7 +44,7 @@ for i,y in enumerate(STAT_Y):
 
 # The two example crests must be removed at plate-build time, not patched
 # with invisible historical art under every new team's authentic logo.
-CRESTS=((58,97,136,169),(379,97,461,169))
+CRESTS=((52,94,140,172),(376,94,466,172))
 
 def make_plate(source=SOURCE,target=TARGET):
     im=Image.open(source).convert('RGB')
@@ -82,10 +82,21 @@ def make_plate(source=SOURCE,target=TARGET):
             fill=palette[key]
         d.rectangle((x0,y0,x1-1,y1-1),fill=fill)
 
-    # Do not redraw the old shield silhouettes. The two owner-crest zones
-    # have already been reconstructed into the CLEAN static plate above.
-    # Only a real transparent team emblem is added by the runtime renderer.
-    # Never add a decorative ring, backing polygon, or crest sticker.
+    # Remove the *shield-shaped* sample backgrounds as well as sample logos.
+    # Plain CV inpainting over those 90px blocks propagated the old bright
+    # gold-and-white shield colours into metallic X/triangle artifacts.
+    # Restore the crowd/stadium from adjacent, unobstructed OWNER pixels ONCE
+    # in this derived static plate. Runtime draws no fake backplates.
+    for (x0,y0,x1,y1),donor_box in zip(
+            CRESTS,((141,99,198,172),(317,99,374,172))):
+        width,height=x1-x0,y1-y0
+        real_stadium=im.crop(donor_box).resize(
+            (width,height),Image.Resampling.BICUBIC)
+        feather=Image.new('L',(width,height),0)
+        md=ImageDraw.Draw(feather)
+        md.rounded_rectangle((2,2,width-3,height-3),radius=10,fill=255)
+        feather=feather.filter(ImageFilter.GaussianBlur(2.5))
+        result.paste(real_stadium,(x0,y0),feather)
     result.save(target,format='PNG',optimize=True)
     # Produce exact static-pixel proof: only sanctioned regions differ.
     new=np.array(result)
