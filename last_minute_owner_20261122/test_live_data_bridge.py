@@ -34,6 +34,21 @@ class BridgeQA(unittest.TestCase):
         with self.assertRaises(ValueError):
             make_live(FIXTURE,{**METRICS,'next_goal_side':'unknown'},
                       crest_provider=authentic_qa_image)
+    def test_duplicate_home_away_crest_identifiers_blocked(self):
+        # The same provider logo id cannot represent the two opposing clubs.
+        for override in (
+            {'away_logo_id':17},
+            {'home_logo_url':'17','away_logo_url':'17'},
+        ):
+            fixture={**FIXTURE,**override}
+            with self.subTest(override=override), self.assertRaisesRegex(
+                    ValueError,'cannot share a verified crest'):
+                make_live(fixture,METRICS,crest_provider=authentic_qa_image)
+            with self.subTest(settled=override), self.assertRaisesRegex(
+                    ValueError,'cannot share a verified crest'):
+                make_settled(fixture,final_score='2:1',won=True,
+                             crest_provider=authentic_qa_image)
+
     def test_final_goal_growth_must_match_bet_settlement(self):
         # An unchanged 1:1 match is never an Over 0.5 remaining-time win.
         with self.assertRaisesRegex(ValueError,'verdict contradicts'):
