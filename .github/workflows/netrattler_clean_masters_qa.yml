@@ -40,6 +40,34 @@ jobs:
               print(row['category'],row['source_file'],row['classification'])
           print('Synthetic QA only; Telegram not touched; source originals retained')
           PY
+      - name: Assemble all 10 cards as visibly UNAPPROVED inline QA contact sheet
+        run: |
+          python - <<'PY'
+          import base64,io,json
+          from pathlib import Path
+          from PIL import Image,ImageDraw
+          folder=Path("output/clean-masters")
+          manifest=json.loads((folder/"manifest.json").read_text())
+          assert len(manifest)==10
+          cw,ch=235,333
+          sheet=Image.new("RGB",(cw*5,ch*2),(2,12,22))
+          draw=ImageDraw.Draw(sheet)
+          for i,meta in enumerate(manifest):
+              raw=folder/(meta["category"]+"_CLEAN_DERIVED_QA.png")
+              with Image.open(raw) as im:
+                  thumb=im.convert("RGB")
+                  thumb.thumbnail((225,283),Image.Resampling.LANCZOS)
+              left=(i%5)*cw+5
+              top=(i//5)*ch+17
+              sheet.paste(thumb,(left,top))
+              draw.text((left,top-14),meta["category"],fill=(255,221,126))
+              draw.text((left,top+289),"QA • NICHT FREIGEGEBEN",fill=(255,165,90))
+          sheet.save(folder/"ALL_10_QA_NOT_APPROVED.png")
+          preview=io.BytesIO()
+          sheet.save(preview,"JPEG",quality=65,optimize=True)
+          print("NETRATTLER_DERIVED_INLINE_QA "+
+                base64.b64encode(preview.getvalue()).decode("ascii"))
+          PY
       - name: Publish clean master PNG previews and machine-readable slot manifest
         uses: actions/upload-artifact@v4
         with:
