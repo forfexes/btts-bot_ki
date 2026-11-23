@@ -23,7 +23,9 @@ def _fake_reference_photo():
     """Valid synthetic raster solely for offline unit tests; never Telegram."""
     from PIL import Image
     import io
-    im=Image.new("RGB",(140,140),"#20668A")
+    im=Image.new("RGBA",(140,140),(0,0,0,0))
+    from PIL import ImageDraw
+    ImageDraw.Draw(im).ellipse((13,13,126,126),fill=(32,102,138,255))
     out=io.BytesIO()
     im.save(out,"PNG")
     return out.getvalue()
