@@ -68,6 +68,8 @@ def image_ok(url, transparent=False):
         "a.espncdn.com", "resources.premierleague.com", "www.thesportsdb.com",
         "www.fotmob.com", "images.fotmob.com", "upload.wikimedia.org",
         "r2.thesportsdb.com", "r1.thesportsdb.com",
+        "apiv2.allsportsapi.com", "thumb.wikimedia.org",
+        "commons.wikimedia.org", "flagcdn.com",
         "assets.football-logos.cc", "raw.githubusercontent.com",
         "media.api-sports.io", "img.mlbstatic.com", "assets.nhle.com",
         "cdn.nhle.com", "media.gettyimages.com", "static.www.nfl.com",
