@@ -21,7 +21,7 @@ These are unmodified user reference artworks, NOT cleaned render-ready masters. 
 - Apply this to newly generated cards and the rendering code; updating these requirements alone does not change live Telegram cards.
 
 ## Visual rules
-- Preserve the **actual uploaded/original** artwork, composition, crown, typography, dark stadium, **cyan/blue and gold/yellow neon outlines**. Do not recolor borders green. Green is permitted only for original statistical signals or values, not as replacement outlines.
+- Preserve the **actual uploaded/original** artwork, composition, crown, typography, dark stadium, **cyan/blue and gold/yellow neon outlines**. Do not recolor borders green. **Original club crests must float independently as transparent alpha images on the cleaned stadium (no pasted discs, shields, circles, initials, rectangular logo backplates, or duplicate baked-in team crests).** Green is permitted only for original statistical signals or values, not as replacement outlines.
 - Clean out baked-in names, dates, numbers, odds, statistics, old player portraits and old team crests by restoring the underlying background. Do **not** conceal old text with opaque patches.
 - Retain structural labels such as PROP BUILDER, GOAL HUNTER, CORNER SNIPER, labels for odds, probability, EV, confidence, settlement and @prophunter.
 - At rendering time, add verified match names, team crests, licensed player portraits, lines, real bookmaker odds, L5/L10/L15 where relevant, model metrics, and original Telegram settlement status.
