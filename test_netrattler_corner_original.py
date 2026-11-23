@@ -1,5 +1,6 @@
 """Original user-chosen Corner Sniper artwork and Telegram delivery regression."""
 import io
+import pytest
 from unittest.mock import patch
 from PIL import Image,ImageDraw
 import netrattler_corner_cards as corner
@@ -31,7 +32,8 @@ def test_original_corner_image_is_exact_master_and_neon_art():
     assert MASTER.is_file()
     with Image.open(MASTER) as img:
         assert img.size == (1122,1402)
-    with patch.object(cards,"_badge_bytes",return_value=badge()):
+    with patch.dict("os.environ",{"NETRATTLER_BLOCK_OVERPAINTED_MASTERS":"0"}), \
+         patch.object(cards,"_badge_bytes",return_value=badge()):
         raw=render_corner_template(valid_pick(),"2026-11-21")
         win=render_corner_template(valid_pick(),"2026-11-21",{"marks":{"0":"win"}})
     with Image.open(io.BytesIO(raw)) as img:
@@ -43,7 +45,8 @@ def test_original_corner_image_is_exact_master_and_neon_art():
 
 def test_direct_corner_send_passes_pixel_qa_and_stores_original_message():
     tip=valid_pick()
-    with patch.object(cards,"_badge_bytes",return_value=badge()), \
+    with patch.dict("os.environ",{"NETRATTLER_BLOCK_OVERPAINTED_MASTERS":"0"}), \
+         patch.object(cards,"_badge_bytes",return_value=badge()), \
          patch.object(cards,"attach_h2h_api",return_value=0), \
          patch.object(cards,"_send_photo",return_value=12345) as send, \
          patch.object(cards,"save_card",return_value=True) as save:
@@ -65,6 +68,17 @@ def test_corner_missing_metrics_block_telegram_without_fabricating():
     tip=valid_pick();tip.pop("_source")
     with patch.object(cards,"_badge_bytes",return_value=badge()):
         assert "missing_real_bookmaker_quote" in validate_corner(tip,"2026-11-21",cards)
+
+
+def test_legacy_screenshot_never_sends_in_production_without_clean_master():
+    with patch.dict("os.environ",{"NETRATTLER_BLOCK_OVERPAINTED_MASTERS":"1"}), \
+         patch.object(cards,"_badge_bytes",return_value=badge()), \
+         patch.object(cards,"attach_h2h_api",return_value=0), \
+         patch.object(cards,"_send_photo") as send:
+        with pytest.raises(ValueError,match="corner_original_overpainted"):
+            render_corner_template(valid_pick(),"2026-11-21")
+        assert corner.send_corner_card("token","chat",valid_pick(),"2026-11-21") is None
+        send.assert_not_called()
 
 
 def test_blank_master_not_accepted_as_final_corner_image():
