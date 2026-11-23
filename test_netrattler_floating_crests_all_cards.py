@@ -43,6 +43,20 @@ class AllFootballFloatingOriginalCrests(unittest.TestCase):
         self.assertGreater(red[0],220)
         self.assertLess(red[1],60)
 
+    def test_opaque_sticker_tile_never_replaces_original_stadium(self):
+        opaque=Image.new("RGB",(140,140),(250,250,250))
+        ImageDraw.Draw(opaque).rectangle(
+            (30,20,110,120),fill=(244,20,35))
+        stream=io.BytesIO()
+        opaque.save(stream,"PNG")
+        stadium=Image.new("RGBA",(220,190),(6,23,38,255))
+        before=stadium.copy()
+        with patch.object(cards,"_badge_bytes",return_value=stream.getvalue()):
+            with self.assertRaisesRegex(ValueError,"Invalid genuine club crest"):
+                cards._paste_badge(stadium,ImageDraw.Draw(stadium),"OPAQUE TILE",
+                                   (30,20,130,120),None)
+        self.assertIsNone(ImageChops.difference(stadium,before).getbbox())
+
     def test_provider_transparency_padding_cannot_shrink_logo(self):
         for mode in ("RGB","RGBA"):
             with self.subTest(mode=mode):
