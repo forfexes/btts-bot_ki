@@ -523,6 +523,9 @@ def _photo_caption_from_settled_text(text: str) -> str:
     return caption
 
 _LAST_EDIT_ERROR: Dict[str, str] = {}
+# Audit the actual Telegram surface. A successful caption/text edit is NOT
+# a proof that pixels in the original premium image have changed.
+_LAST_EDIT_SURFACE: Dict[str, str] = {}
 
 
 def _confirmed_telegram_edit(response, message_id: Any) -> bool:
@@ -540,6 +543,7 @@ def _confirmed_telegram_edit(response, message_id: Any) -> bool:
 def telegram_edit(chat_id: str, message_id: Any, text: str) -> bool:
     """Edit the same Telegram tip, respecting rate limits and retry_after."""
     _LAST_EDIT_ERROR.pop("last", None)
+    _LAST_EDIT_SURFACE.pop("last", None)
     if not TG_TOKEN or not chat_id or not message_id:
         _LAST_EDIT_ERROR["last"] = "missing Telegram token/chat/message id"
         return False
@@ -570,6 +574,7 @@ def telegram_edit(chat_id: str, message_id: Any, text: str) -> bool:
             )
             if response.ok:
                 if _confirmed_telegram_edit(response, message_id):
+                    _LAST_EDIT_SURFACE["last"] = "text"
                     return True
                 _LAST_EDIT_ERROR["last"] = "telegram_edit_ack_unverified_original_message_id"
                 return False
@@ -595,12 +600,14 @@ def telegram_edit(chat_id: str, message_id: Any, text: str) -> bool:
                 )
                 if response.ok:
                     if _confirmed_telegram_edit(response, message_id):
+                        _LAST_EDIT_SURFACE["last"] = "caption"
                         return True
                     _LAST_EDIT_ERROR["last"] = "telegram_caption_ack_unverified_original_message_id"
                     return False
                 detail = str(response.text or "")
             # Idempotent replay: Telegram's 400 means the original already carries this result.
             if response.status_code == 400 and "message is not modified" in detail.lower():
+                _LAST_EDIT_SURFACE["last"] = "already_unchanged"
                 return True
             if response.status_code == 429 and attempt < 2:
                 try:
@@ -854,6 +861,7 @@ def edit_original_tip(settlement: Dict[str, Any]) -> bool:
     Separate result messages are disabled, including emergency fallbacks.
     """
     _LAST_EDIT_ERROR.pop("last", None)
+    _LAST_EDIT_SURFACE.pop("last", None)
     if not _original_update_allowed(settlement):
         return False
     payload = settlement.get("tip_payload") or {}
@@ -897,6 +905,13 @@ def _save_tip_edit_receipt(settlement: Dict[str, Any], edited: bool) -> None:
     raw = dict(raw)
     raw["telegram_edit_attempts"] = as_int(raw.get("telegram_edit_attempts"), 0) + 1
     raw["telegram_edit_ok"] = bool(edited)
+    if edited:
+        surface = _LAST_EDIT_SURFACE.get("last") or "unknown"
+        raw["telegram_edit_surface"] = surface
+        # A text/caption response cannot certify that the ORIGINAL image
+        # now visibly says GEWONNEN/VERLOREN. Only verified editMessageMedia
+        # of that same message id could support that claim.
+        raw["telegram_image_result_verified"] = surface == "image"
     if not edited and _LAST_EDIT_ERROR.get("last"):
         raw["telegram_edit_error"] = _LAST_EDIT_ERROR["last"]
     if edited:
