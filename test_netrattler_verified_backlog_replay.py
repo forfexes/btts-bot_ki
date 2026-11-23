@@ -24,12 +24,12 @@ def row(name, days_ago, *, state="win", raw=None):
 
 
 class BacklogSameOriginalMessageQA(unittest.TestCase):
-    def _check(self, rows, env):
+    def _check(self, rows, env, limit="10"):
         calls=[]
         with patch.dict(os.environ,{
                 "SETTLEMENT_TG_REPLAY_DAYS":"7",
                 "SETTLEMENT_TG_BACKLOG_REPLAY_DAYS":env,
-                "SETTLEMENT_TG_REPLAY_MAX":"10"}), \
+                "SETTLEMENT_TG_REPLAY_MAX":limit}), \
              patch.object(mod,"edit_original_tip",
                           side_effect=lambda r:calls.append(r["tip_id"]) or True), \
              patch.object(mod,"_save_tip_edit_receipt") as receipts, \
@@ -59,6 +59,17 @@ class BacklogSameOriginalMessageQA(unittest.TestCase):
             [row("recent",2),row("old",75)],"0")
         self.assertEqual((ok,attempts),(1,1))
         self.assertEqual(calls,["recent"])
+
+    def test_recent_tip_beats_old_backfill_with_newer_settled_at(self):
+        # Production #45109371189 wasted 50 calls on September message IDs.
+        # The real tip date must outrank a bulk backfill's recent settled_at.
+        older=row("september_backfill",67)
+        older["settled_at"]="2026-11-23T04:20:00+00:00"
+        newest=row("recent_live_tip",1)
+        newest["settled_at"]="2026-11-22T19:00:00+00:00"
+        (ok,attempts),calls=self._check([older,newest],"120",limit="1")
+        self.assertEqual((ok,attempts),(1,1))
+        self.assertEqual(calls,["recent_live_tip"])
 
     def test_persistent_telegram_400_cannot_be_retried(self):
         (ok,attempts),calls=self._check([
