@@ -76,7 +76,20 @@ def _crest(raw):
         im.load()
         if min(im.size) < 40:
             raise ValueError("Team crest has insufficient resolution")
-        return im.convert("RGBA")
+        crest=im.convert("RGBA")
+        # A full opaque JPG/PNG rectangle is a pasted sticker, NOT a
+        # transparent free-floating team emblem. Refuse it, never invent a
+        # backing disc or attempt to remove a photographed background.
+        alpha=crest.getchannel("A")
+        if alpha.getextrema()[0]>=255:
+            raise ValueError("Crest provider returned opaque rectangular tile")
+        visible=alpha.point(lambda v:255 if v>=24 else 0).getbbox()
+        if visible is None:
+            raise ValueError("Authentic crest has no visible artwork")
+        crest=crest.crop(visible)
+        if min(crest.size)<12:
+            raise ValueError("Visible genuine crest too small")
+        return crest
     except (OSError, ValueError) as exc:
         raise ValueError("Invalid genuine team crest") from exc
 
@@ -186,8 +199,17 @@ def render(entries, target_date, *, crest_provider, result=None):
         im = source.convert("RGBA")
     draw = ImageDraw.Draw(im)
     for crest, team, cx in ((first,home,280),(second,away,842)):
-        crest.thumbnail((116,116),Image.Resampling.LANCZOS)
-        im.alpha_composite(crest, (int(cx-crest.width/2),242))
+        # Crop transparent outer padding in _crest(), then scale the actual
+        # emblem up OR down as needed. thumbnail() alone left small crests
+        # glued tiny to the top edge of the 116px region.
+        zoom=min(116/crest.width,116/crest.height)
+        if zoom>4:
+            raise ValueError("Genuine club crest too small for premium floating position")
+        dims=(max(1,round(crest.width*zoom)),
+              max(1,round(crest.height*zoom)))
+        crest=crest.resize(dims,Image.Resampling.LANCZOS)
+        im.alpha_composite(crest,(round(cx-crest.width/2),
+                                  round(300-crest.height/2)))
         draw.text((cx,361),team,font=_fit(draw,team,430),fill="#FAFCFF",anchor="mm")
     league = str(tip.get("league") or "").strip()
     if league:
