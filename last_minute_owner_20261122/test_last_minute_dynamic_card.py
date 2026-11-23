@@ -2,7 +2,7 @@
 import io
 import unittest
 from pathlib import Path
-from PIL import Image,ImageDraw
+from PIL import Image,ImageDraw,ImageChops
 
 try:
     from .build_master import SOURCE,TARGET,REGIONS,make_plate
@@ -48,6 +48,21 @@ class LastMinuteOriginalQa(unittest.TestCase):
             pic.load()
             self.assertEqual(pic.size,(1024,1078))
         self.assertGreater(len(raw),200_000)
+
+    def test_real_netrattler_logo_is_pixel_identical_to_owner_plate(self):
+        # Brand header is fixed owner artwork. Variable league/date fields
+        # begin BELOW the original logo; no dynamic layer may redraw it.
+        raw=render_card(DATA,home_crest=crest(),away_crest=crest(),
+                        preview_only=True)
+        with Image.open(TARGET) as original, Image.open(io.BytesIO(raw)) as final:
+            full=original.convert('RGB').resize(
+                (1024,1024),Image.Resampling.LANCZOS)
+            posted=final.convert('RGB').crop((0,0,1024,1024))
+            # The entire original header band excluding variable league y80+.
+            for rect in ((140,6,780,134),(310,6,714,115)):
+                self.assertIsNone(ImageChops.difference(
+                    full.crop(rect),posted.crop(rect)).getbbox(),
+                    ('Original NETRATTLER header changed',rect))
 
     def test_missing_or_unverified_logo_never_falls_back(self):
         with self.assertRaisesRegex(ValueError,'crest'):
