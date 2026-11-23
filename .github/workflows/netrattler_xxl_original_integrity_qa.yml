@@ -20,6 +20,8 @@ name: NETRATTLER XXL Original-Integrity QA
       - "test_netrattler_clean_master_builder.py"
       - "netrattler_five_owner_reference_qa.py"
       - "test_netrattler_five_owner_reference_qa.py"
+      - "netrattler_five_owner_dynamic_qa.py"
+      - "test_netrattler_five_owner_dynamic_qa.py"
       - "netrattler_original_release_inventory.py"
       - "test_netrattler_original_release_inventory.py"
 
@@ -87,6 +89,25 @@ jobs:
           python netrattler_original_release_inventory.py --json > output/netrattler_qa_inventory.json
           python netrattler_five_owner_reference_qa.py --outdir output/netrattler_five_owner_qa
           echo "FIVE SOURCE-DERIVED DRAFTS ONLY: no Telegram release"
+      - name: Hardtest fully filled owner-reference BTTS Goal Corner Builder Combo cards
+        env:
+          NETRATTLER_FIVE_DYNAMIC_QA: output/netrattler_five_filled_sandbox
+          TELEGRAM_TOKEN: ""
+          TELEGRAM_BOT_TOKEN: ""
+          TELEGRAM_CHAT_ID: ""
+          SUPABASE_URL: ""
+        run: |
+          python -m py_compile netrattler_five_owner_dynamic_qa.py test_netrattler_five_owner_dynamic_qa.py
+          python -m pytest -q test_netrattler_five_owner_dynamic_qa.py
+          echo "SOURCE-INSPIRED OFFLINE DYNAMIC SANDBOX ONLY - NOT TELEGRAM APPROVED"
+      - name: Upload fully filled five-family dynamic QA previews
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: NETRATTLER-FIVE-FILLED-ORIGINAL-QA-NO-TELEGRAM
+          path: output/netrattler_five_filled_sandbox/*_SANDBOX_DYNAMIC.png
+          if-no-files-found: ignore
+          retention-days: 3
       - name: Save factual approval inventory for all sixteen card families
         uses: actions/upload-artifact@v4
         with:
