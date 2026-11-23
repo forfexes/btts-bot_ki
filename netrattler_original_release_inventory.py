@@ -12,6 +12,8 @@ import json
 import os
 from pathlib import Path
 
+from PIL import Image
+
 ROOT=Path(__file__).resolve().parent
 ASSET=ROOT/"assets"
 ORIGINAL=ASSET/"original_templates"
@@ -69,14 +71,19 @@ def audit(root=ROOT):
                 and attestation.is_file() and len(protected_digest)==64):
             try:
                 evidence=json.loads(attestation.read_text(encoding="utf-8"))
+                with Image.open(approved_file) as image:
+                    # A disguised SVG/text blob is not a genuine clean PNG.
+                    valid_png=(image.format=="PNG" and min(image.size)>=512)
+                    image.verify()
                 verified=(
-                    evidence.get("original_source_sha256")==_hash(source)
+                    valid_png
+                    and evidence.get("original_source_sha256")==_hash(source)
                     and evidence.get("approved_png_sha256")==_hash(approved_file)
                     and protected_digest == _hash(approved_file)
                     and evidence.get("human_visual_approved") is True
                     and evidence.get("telegram_android_qa_approved") is True
                 )
-            except (ValueError,OSError,TypeError):
+            except (ValueError,OSError,TypeError,Image.UnidentifiedImageError):
                 verified=False
         reports[category]={
             "source_reference":str(src.relative_to(ROOT)) if src else None,
