@@ -67,6 +67,7 @@ def image_ok(url, transparent=False):
     if urlparse(url).hostname not in {
         "a.espncdn.com", "resources.premierleague.com", "www.thesportsdb.com",
         "www.fotmob.com", "images.fotmob.com", "upload.wikimedia.org",
+        "r2.thesportsdb.com", "r1.thesportsdb.com",
         "assets.football-logos.cc", "raw.githubusercontent.com",
         "media.api-sports.io", "img.mlbstatic.com", "assets.nhle.com",
         "cdn.nhle.com", "media.gettyimages.com", "static.www.nfl.com",
@@ -211,10 +212,28 @@ def main():
 
     def photo_test(p):
         if args.bot == "netrattler":
-            # Source search is a candidate only, never imply surname-only identity is verified.
+            # Never certify surname-only matches. Verify full name AND team against source.
+            valid_teams = {norm(t) for t in p["teams"]}
+            if not valid_teams:
+                return False, "team_identity_missing"
             try:
-                url = portraits.photo_url(p["name"])
-                return bool(url and image_ok(url)), ("name_only_unverified" if url else "not_found")
+                url = "https://www.thesportsdb.com/api/v1/json/3/searchplayers.php"
+                response = SESSION.get(url, params={"p": p["name"]}, timeout=12)
+                if response.ok:
+                    for item in (response.json().get("player") or []):
+                        if norm(item.get("strPlayer")) != norm(p["name"]):
+                            continue
+                        if norm(item.get("strTeam")) not in valid_teams:
+                            continue
+                        if str(item.get("strSport") or "").lower() != "soccer":
+                            continue
+                        for field in ("strCutout", "strThumb", "strRender"):
+                            candidate = item.get(field)
+                            if candidate and image_ok(candidate):
+                                return True, "verified_team_and_name"
+                # Existing lookup may find a candidate, but without club identity it is unverified.
+                candidate = portraits.photo_url(p["name"])
+                return False, "unverified_candidate" if candidate else "not_found"
             except Exception:
                 return False, "provider_error"
         league = card.league_of(p["sport"])
