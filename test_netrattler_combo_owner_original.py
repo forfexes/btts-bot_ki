@@ -2,6 +2,7 @@
 import io
 import math
 import unittest
+from unittest.mock import patch
 from PIL import Image, ImageChops, ImageDraw
 
 from netrattler_combo_owner_original import W,H,ROOT,render_original_combo
@@ -30,7 +31,9 @@ def render(n,**changes):
         combined_quote_id="SYNTHETIC_TEST_TICKET",
         bookmaker="TEST_BOOKMAKER",crest_provider=crest,status="OFFEN")
     attrs.update(changes)
-    return render_original_combo(sample(n),**attrs)
+    # Historical owner screenshot reconstruction is synthetic QA ONLY.
+    with patch.dict("os.environ",{"NETRATTLER_BLOCK_OVERPAINTED_MASTERS":"0"}):
+        return render_original_combo(sample(n),**attrs)
 
 
 class VerifiedOriginalComboTests(unittest.TestCase):
