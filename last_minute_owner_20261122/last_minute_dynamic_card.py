@@ -69,7 +69,14 @@ def _logo(im,contents,*,x,y):
     logo=logo.crop(visible)
     if min(logo.size)<12:
         raise ValueError('Authentic crest artwork too small')
-    logo.thumbnail((70,65),Image.Resampling.LANCZOS)
+    # Genuine crests FLOAT over the recovered stadium, with no disk or
+    # shield behind them. Scale the visible emblem proportionally; thumbnail
+    # alone leaves small-but-real provider files looking like stickers.
+    scale=min(86/logo.width,82/logo.height)
+    if scale>4:
+        raise ValueError('Authentic crest too small for floating premium slot')
+    size=(max(1,round(logo.width*scale)),max(1,round(logo.height*scale)))
+    logo=logo.resize(size,Image.Resampling.LANCZOS)
     im.paste(logo,(round(x-logo.width/2),round(y-logo.height/2)),
              logo.getchannel('A'))
 
