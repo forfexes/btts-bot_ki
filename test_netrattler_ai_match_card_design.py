@@ -69,6 +69,9 @@ def test_ai_card_settlement_remains_inside_original_image():
 
 
 def test_ai_match_card_dispatch_remains_separate_from_specialist_templates(monkeypatch):
+    # Only this offline routing test may exercise the historical image path.
+    # Production keeps the overpainted-owner master lock enabled by default.
+    monkeypatch.setenv("NETRATTLER_BLOCK_OVERPAINTED_MASTERS", "0")
     monkeypatch.setenv("NETRATTLER_CARD_LAYOUT", "bis")
     monkeypatch.setenv("NETRATTLER_SANDBOX_HARDTEST", "1")
     marker = b"ai_match_card"
