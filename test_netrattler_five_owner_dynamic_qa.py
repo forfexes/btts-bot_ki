@@ -77,8 +77,8 @@ def test_three_single_owner_families(family,market,selection):
 
 
 @pytest.mark.parametrize("family,count", [
-    ("builder",2),("builder",4),("builder",7),
-    ("combo",2),("combo",4),("combo",7),("combo",10),
+    (family, count) for family in ("builder", "combo")
+    for count in range(2, 11)
 ])
 def test_every_multi_leg_remains_visible_and_poster_extends(family,count):
     png = render_owner_reference_qa(family,ticket(family,count),now=NOW)
@@ -138,7 +138,7 @@ def test_no_fake_combined_ticket_and_no_hidden_legs():
 
 
 def test_large_ticket_extends_actual_stadium_rails_not_black_rectangle():
-    for family, count in (("builder",7), ("combo",10)):
+    for family, count in (("builder",10), ("combo",10)):
         rendered=render_owner_reference_qa(family,ticket(family,count),now=NOW)
         with Image.open(BytesIO(rendered)) as image:
             pic=image.convert("RGB")
@@ -176,9 +176,10 @@ def test_cross_match_kickoff_and_brand_provenance_are_explicit():
     assert "NETRATTLER AI" in source
 
 
-def test_combo_rejects_11_legs_instead_of_truncating_to_10():
+@pytest.mark.parametrize("family", ("builder", "combo"))
+def test_multi_rejects_11_legs_instead_of_truncating_to_10(family):
     with pytest.raises(ValueError):
-        render_owner_reference_qa("combo",ticket("combo",11),now=NOW)
+        render_owner_reference_qa(family,ticket(family,11),now=NOW)
 
 
 def test_unapproved_categories_do_not_silently_reuse_owner_art():
