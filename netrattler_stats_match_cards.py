@@ -222,6 +222,10 @@ def _fl_logo(team, league):
     country = _slug(str(league or "").split(" - ")[0])
     country = _FL_ALIAS.get(country, country)
     if not country:
+        # These club-country identities are unambiguous and source-backed;
+        # do not infer countries from generic city names or fuzzy club tokens.
+        country = {"nashvillesc": "usa", "sabahfk": "azerbaijan"}.get(_norm(team), "")
+    if not country:
         return ""
     full = _slug(team)
     from netrattler_crest_identity import identity
