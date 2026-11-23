@@ -175,7 +175,16 @@ def _multi_canvas(base, count):
         return base, 0
     expanded = Image.new("RGBA", (W, H+extra), (3, 16, 29, 255))
     expanded.alpha_composite(base.crop((0, 0, W, BODY_END)), (0, 0))
-    expanded.alpha_composite(base.crop((0, BODY_END, W, H)), (0, BODY_END+extra))
+    # Extend only the already-clean, data-free arena. Match the original
+    # 70px background grid rhythm, preserving its ambient sides and cyan
+    # vertical rails instead of inserting a solid dark rectangle/seam.
+    band = base.crop((0, 882, W, 952))
+    for offset in range(0, extra, 70):
+        height = min(70, extra-offset)
+        expanded.alpha_composite(band.crop((0, 0, W, height)),
+                                 (0, BODY_END+offset))
+    expanded.alpha_composite(base.crop((0, BODY_END, W, H)),
+                             (0, BODY_END+extra))
     return expanded, extra
 
 
@@ -198,8 +207,13 @@ def _multi(category, base, record, now):
         _text(draw, f'{idx}. {leg["home"]} – {leg["away"]}',
               (550,y+27), max_width=440, max_height=32, start_size=18)
         _text(draw, f'{leg["market"]} · {leg["selection"]}',
-              (540,y+68), max_width=430, max_height=34, start_size=17,
+              (540,y+56), max_width=430, max_height=28, start_size=17,
               color="#FFE56C")
+        # Every leg carries its own verified fixture start, not one
+        # invented shared time for a cross-game ticket.
+        leg_time = _stamp(leg["kickoff"]).strftime("%d.%m.%Y %H:%M UTC")
+        _text(draw, leg_time, (540,y+84), max_width=410,
+              max_height=23, start_size=13, color="#AEC8D5")
         _text(draw, f'@{_price(leg["bookmaker_odds"]):.2f}',
               (938,y+49), max_width=96, max_height=37, start_size=20,
               color="#40F58A")
