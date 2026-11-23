@@ -150,6 +150,16 @@ def run(*, feed=None, cycles=None, sleep=time.sleep, fetch=fotmob.common._get) -
         day=dt.datetime.now(dt.timezone.utc).strftime("%Y%m%d")
         feed=fotmob.fetch_fotmob(day)
     candidates=discover(feed,league_filter=leagues)
+    # SportScore is an additional independent discovery cross-check only.
+    # Never promote score-only matches into a Goal Hunter tip: the API may not
+    # contain a verified live minute or UTC kickoff. No Telegram reuse.
+    external_audit=None
+    if os.getenv("LMG_SOURCE_SPORTSCORE_READ_ONLY")=="true":
+        from netrattler_lmg_external_sources import probe_external
+        env={"LMG_EXTERNAL_SOURCES_SHADOW":"true",
+             "LMG_SOURCE_SPORTSCORE_READ_ONLY":"true"}
+        external_audit=probe_external(day=dt.datetime.now(dt.timezone.utc).strftime("%Y-%m-%d"),
+                                     primary=candidates,env=env)
     count=cycles if cycles is not None else int(os.getenv("LMG_DEEP_POLL_CYCLES",str(POLL_CYCLES)))
     if type(count) is not int or not 1 <= count <= POLL_CYCLES:
         raise ValueError("invalid_bounded_poll_cycles")
@@ -157,6 +167,8 @@ def run(*, feed=None, cycles=None, sleep=time.sleep, fetch=fotmob.common._get) -
     observations=[]
     if not candidates:
         report={"discovered":0,"poll_cycles":0,"sent":0,"reason":"no_eligible_live_candidates"}
+        if external_audit is not None:
+            report["external_source_audit"]=external_audit
         print("LMG_TWO_STAGE_SUMMARY",json.dumps(report),flush=True)
         return report
     for i in range(count):
@@ -177,6 +189,7 @@ def run(*, feed=None, cycles=None, sleep=time.sleep, fetch=fotmob.common._get) -
             "sent":sum(x["sent"] for x in reports),
             "snapshots":sum(x["snapshots"] for x in reports),
             "deep_observations_saved":deep_saved["inserted"],
+            "external_source_audit":external_audit,
             "reason":"sent" if any(x["sent"] for x in reports) else
               "no_verified_qualifying_signal",
             "backend":"sqlite_git"}
