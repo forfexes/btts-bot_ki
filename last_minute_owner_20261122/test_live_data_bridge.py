@@ -52,6 +52,33 @@ class BridgeQA(unittest.TestCase):
             with self.subTest(invalid=invalid),self.assertRaises(ValueError):
                 make_settled(FIXTURE,final_score=invalid,won=True,
                              crest_provider=authentic_qa_image)
+    def test_next_goal_grade_needs_observed_order_and_no_blanket_void(self):
+        # Only home scored once: the home next-goal call can be proven.
+        valid=make_settled(FIXTURE,final_score='2:1',won=True,
+                           next_goal_side='home',next_goal_result='won',
+                           crest_provider=authentic_qa_image,preview_only=True)
+        self.assertTrue(valid.startswith(b'\\x89PNG'))
+        # Final scores cannot establish who scored FIRST if both sides did.
+        with self.assertRaisesRegex(ValueError,'evidence not final score'):
+            make_settled(FIXTURE,final_score='2:2',won=True,
+                         next_goal_side='away',next_goal_result='won',
+                         crest_provider=authentic_qa_image)
+        # Zero new goals do not justify a generic sportsbook VOID.
+        with self.assertRaisesRegex(ValueError,'no blanket void'):
+            make_settled(FIXTURE,final_score='1:1',won=False,
+                         next_goal_side='home',next_goal_result='void',
+                         crest_provider=authentic_qa_image)
+        # An outright contradiction cannot be reported as a WIN.
+        with self.assertRaisesRegex(ValueError,'contradicts confirmed'):
+            make_settled(FIXTURE,final_score='1:2',won=True,
+                         next_goal_side='home',next_goal_result='won',
+                         crest_provider=authentic_qa_image)
+        for final,won in (('1:1',False),('2:2',True)):
+            self.assertTrue(make_settled(
+                FIXTURE,final_score=final,won=won,next_goal_side='home',
+                next_goal_result='unverified',crest_provider=authentic_qa_image,
+                preview_only=True).startswith(b'\\x89PNG'))
+
     def test_final_result_must_be_verified_and_cannot_go_backwards(self):
         with self.assertRaisesRegex(ValueError,'Confirmed win/loss'):
             make_settled(FIXTURE,final_score='2:1',won=None,
