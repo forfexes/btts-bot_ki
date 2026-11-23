@@ -38,3 +38,53 @@ def espn_photo(name):
             pass
     _CACHE[name] = url
     return url
+
+
+_ESPN_CACHE = {}
+
+
+def espn_photo_by_id(name, team):
+    """ESPN headshot only for an exact full name AND verified fixture club.
+
+    The stored player_id must come from an ESPN source row, not API-Football.
+    No surname matches, no first search result and no unverified fallback.
+    """
+    name = " ".join(str(name or "").split())
+    team = " ".join(str(team or "").split())
+    if len(name.split()) < 2 or not team:
+        return ""
+    cache_key = (name.casefold(), team.casefold())
+    if cache_key in _ESPN_CACHE:
+        return _ESPN_CACHE[cache_key]
+    base = (os.getenv("SUPABASE_URL") or "").rstrip("/")
+    key = os.getenv("SUPABASE_SERVICE_ROLE_KEY") or os.getenv("SUPABASE_KEY") or ""
+    if not (base.startswith("https://") and key):
+        return ""
+    from netrattler_crest_identity import same_club
+
+    candidates = set()
+    # fplci_player_match carries more provider IDs than the narrower game log.
+    for table in ("fplci_player_match", "player_game_log"):
+        try:
+            response = requests.get(base + "/rest/v1/" + table, timeout=6,
+                headers={"apikey": key, "Authorization": "Bearer " + key},
+                params={"select": "player_name,player_id,team,source",
+                        "source": "eq.espn", "player_name": "eq." + name,
+                        "order": "match_date.desc", "limit": "100"})
+            if not response.ok:
+                continue
+            for row in response.json() or []:
+                if (str(row.get("player_name") or "").casefold() == name.casefold()
+                        and row.get("source") == "espn"
+                        and same_club(team, row.get("team"))
+                        and str(row.get("player_id") or "").isdigit()
+                        and int(row["player_id"]) > 0):
+                    candidates.add(str(row["player_id"]))
+            if candidates:
+                break
+        except (requests.RequestException, ValueError, TypeError, AttributeError):
+            continue
+    url = ("https://a.espncdn.com/i/headshots/soccer/players/full/"
+           + next(iter(candidates)) + ".png") if len(candidates) == 1 else ""
+    _ESPN_CACHE[cache_key] = url
+    return url
