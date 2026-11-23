@@ -18,6 +18,7 @@ on:
       - 'test_void_reconcile.py'
       - 'netrattler_stats_match_cards.py'
       - 'test_netrattler_scorer_card_result_identity.py'
+      - 'test_netrattler_no_cross_market_settlement.py'
       - 'test_netrattler_verified_backlog_replay.py'
 
   schedule:
@@ -59,6 +60,8 @@ jobs:
           python test_netrattler_settlement_runner.py
           python test_settlement_lenient_match.py
           python -m pytest -q test_netrattler_scorer_card_result_identity.py
+          python -m py_compile test_netrattler_no_cross_market_settlement.py
+          python -m unittest -v test_netrattler_no_cross_market_settlement
           python -m py_compile test_netrattler_verified_backlog_replay.py
           python -m unittest -v test_netrattler_verified_backlog_replay
           python -m pytest -q test_netrattler_reviewed_players.py test_netrattler_data_gap_notice.py test_settle_prefers_observed.py test_netrattler_apif_settlement.py test_netrattler_confirmed_void.py test_netrattler_scorer_identity.py
