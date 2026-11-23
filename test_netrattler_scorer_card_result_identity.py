@@ -49,7 +49,10 @@ def test_existing_wrong_scorer_marks_corrected_in_original_photos():
     # Historical identity correction is exercised only in isolated Legacy QA.
     # Production uses SETTLEMENT_TG_ORIGINAL_EDIT_ONLY=1 and must never
     # replace sample-filled scorer artwork. Its blocking test is below.
-    with patch.dict("os.environ", {"SETTLEMENT_TG_ORIGINAL_EDIT_ONLY":"0"}), \
+    with patch.dict("os.environ", {
+            "SETTLEMENT_TG_ORIGINAL_EDIT_ONLY":"0",
+            "NETRATTLER_BLOCK_OVERPAINTED_MASTERS":"0"
+         }), \
          patch.object(cards, "_sb", return_value=("https://example.test/netrattler_match_cards",{})), \
          patch.object(cards.requests, "get", return_value=SimpleNamespace(ok=True,json=lambda:sample)), \
          patch.object(cards.requests, "patch", side_effect=lambda *args,**kwargs: patches.append(kwargs["json"]) or SimpleNamespace(ok=True)), \
@@ -82,7 +85,10 @@ def test_owner_only_in_image_settlement_never_replaces_unapproved_svg_card():
     results=[{"match":match,"status":"win","group":"btts",
               "odds":1.75,"tip_date":"2026-11-21","ft":"2-2"}]
     edits=[]
-    with patch.dict(os.environ,{"SETTLEMENT_TG_ORIGINAL_EDIT_ONLY":"1"}), \
+    with patch.dict(os.environ,{
+            "SETTLEMENT_TG_ORIGINAL_EDIT_ONLY":"1",
+            "NETRATTLER_BLOCK_OVERPAINTED_MASTERS":"0"
+         }), \
          patch.object(cards,"_sb",return_value=("https://example.test/netrattler_match_cards",{})), \
          patch.object(cards.requests,"get",return_value=SimpleNamespace(ok=True,json=lambda:sample)), \
          patch.object(cards.requests,"post",return_value=SimpleNamespace(ok=True)), \
@@ -94,6 +100,29 @@ def test_owner_only_in_image_settlement_never_replaces_unapproved_svg_card():
     assert edits == [112],edits
     render.assert_called_once()
     assert render.call_args.args[0][0][0]=="btts"
+
+
+def test_production_result_cards_cannot_repaint_unapproved_original():
+    # The preceding checks simulate the historical image-edit routing,
+    # with a mock renderer and mock Telegram transport, exclusively offline.
+    # No explicitly approved overlay-free source exists in this test:
+    # an unset/mistyped release gate must prevent every image edit.
+    import os
+    simulated_result=[{"match":"Home FC vs Away FC",
+                       "status":"win","group":"btts","odds":1.75,
+                       "tip_date":"2026-11-21","ft":"2-2"}]
+    for value in (None,"1","true",""):
+        env={"NETRATTLER_BLOCK_OVERPAINTED_MASTERS":value}
+        with patch.dict(os.environ,{},clear=False), \
+             patch.object(cards,"render_card",return_value=b"not-approved") as render, \
+             patch.object(cards,"_edit_photo",return_value=True) as edit:
+            if value is None:
+                os.environ.pop("NETRATTLER_BLOCK_OVERPAINTED_MASTERS",None)
+            else:
+                os.environ["NETRATTLER_BLOCK_OVERPAINTED_MASTERS"]=value
+            assert cards.update_cards_with_results("token",simulated_result)==0
+            render.assert_not_called()
+            edit.assert_not_called()
 
 
 def test_pending_player_can_revert_previous_wrong_win():
