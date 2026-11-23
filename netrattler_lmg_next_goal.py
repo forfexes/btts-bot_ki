@@ -60,7 +60,8 @@ def evaluate_next_goal(next_goal_side, initial_score, final_score):
 
     When exactly one team scored after alert, next scorer is mathematically
     certain from the two scores. If BOTH scored, the final score alone cannot
-    establish order, so return unverified. No goals => void.
+    establish order. No goals also remain unverified: sportsbook settlement
+    rules vary, so a blanket VOID or LOSS must never be invented.
     """
     if next_goal_side not in ("home", "away"):
         return None
@@ -73,7 +74,9 @@ def evaluate_next_goal(next_goal_side, initial_score, final_score):
     if dh < 0 or da < 0:
         return "unverified"
     if dh == da == 0:
-        return "void"
+        # A provider may grade no-next-goal as void OR loss depending on its
+        # actual market terms. No confirmed provider rule => no settlement.
+        return "unverified"
     if dh > 0 and da > 0:
         return "unverified"
     first = "home" if dh > 0 else "away"
