@@ -51,7 +51,15 @@ def _photo_crest(data):
             source.load()
             if min(source.size)<40:
                 raise ValueError("Low-resolution club crest")
-            return source.convert("RGBA").copy()
+            crest=source.convert("RGBA")
+            visible=crest.getchannel("A").point(
+                lambda v: 255 if v>=24 else 0).getbbox()
+            if visible is None:
+                raise ValueError("Club crest has no visible emblem")
+            crest=crest.crop(visible)
+            if min(crest.size)<12:
+                raise ValueError("Real club emblem is too small")
+            return crest
     except OSError as exc:
         raise ValueError("Unreadable club crest") from exc
 
@@ -237,8 +245,13 @@ def render_original_combo(legs,*,combined_odds,probability,ev,confidence,
                      fill="#070C17",outline=GOLD,width=2)
         _label(draw,str(i+1),69,cy,36,22,GOLD)
         for j,team in enumerate((home,away)):
-            icon=ImageOps.contain(badges[team],(57,57),
-                                  method=Image.Resampling.LANCZOS)
+            raw=badges[team]
+            factor=min(57/raw.width,57/raw.height)
+            if factor>4:
+                raise ValueError("Actual team emblem too small for floating Combo row")
+            icon=raw.resize((max(1,round(raw.width*factor)),
+                             max(1,round(raw.height*factor))),
+                            Image.Resampling.LANCZOS)
             px=108 if j==0 else 193
             im.alpha_composite(icon,(px+(57-icon.width)//2,
                                      cy-icon.height//2))
