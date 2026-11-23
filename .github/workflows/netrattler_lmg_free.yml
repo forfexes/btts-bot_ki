@@ -9,6 +9,9 @@ on:
       - netrattler_lmg_fotmob.py
       - netrattler_lmg_two_stage.py
       - test_netrattler_lmg_two_stage.py
+      - netrattler_lmg_external_sources.py
+      - netrattler_lmg_sportscore_probe.py
+      - test_netrattler_lmg_sportscore.py
       - netrattler_lmg_shadow.py
       - netrattler_lmg_store.py
       - netrattler_lmg_api_fallback.py
@@ -61,7 +64,7 @@ jobs:
         if: github.event_name != 'schedule'
         run: |
           python -m py_compile netrattler_last_minute_goal.py netrattler_lmg_free.py netrattler_lmg_fotmob.py netrattler_lmg_card.py netrattler_lmg_settle.py netrattler_lmg_next_goal.py netrattler_lmg_shadow.py netrattler_lmg_store.py netrattler_lmg_api_fallback.py test_netrattler_lmg_api_fallback.py test_netrattler_lmg_store.py test_netrattler_lmg_free.py test_netrattler_lmg_fotmob.py test_netrattler_lmg_card.py test_netrattler_lmg_next_goal.py test_netrattler_lmg_shadow.py netrattler_lmg_source_compare.py test_netrattler_lmg_source_compare.py test_netrattler_lmg_two_stage.py
-          python -m unittest -v test_netrattler_lmg_free.py test_netrattler_lmg_fotmob.py test_netrattler_lmg_card.py test_netrattler_lmg_next_goal.py test_netrattler_lmg_shadow.py test_netrattler_lmg_store.py test_netrattler_lmg_api_fallback.py test_netrattler_lmg_source_compare.py test_netrattler_lmg_two_stage.py
+          python -m unittest -v test_netrattler_lmg_sportscore.py test_netrattler_lmg_free.py test_netrattler_lmg_fotmob.py test_netrattler_lmg_card.py test_netrattler_lmg_next_goal.py test_netrattler_lmg_shadow.py test_netrattler_lmg_store.py test_netrattler_lmg_api_fallback.py test_netrattler_lmg_source_compare.py test_netrattler_lmg_two_stage.py
 
   visual-preview:
     needs: verify
@@ -156,6 +159,10 @@ jobs:
       LMG_SEND: "false"
       LMG_SHADOW_ENABLED: "true"
       LMG_DEEP_POLL_CYCLES: "3"
+      # Official public SportScore API: independent read-only coverage audit.
+      # The complete live-tips job remains disabled until original-card QA.
+      LMG_SOURCE_SPORTSCORE_READ_ONLY: "true"
+      LMG_EXTERNAL_SOURCES_SHADOW: "true"
       TELEGRAM_TOKEN: ""
       TELEGRAM_GROUP_LATE_GOALS: ""
       SUPABASE_URL: ""
