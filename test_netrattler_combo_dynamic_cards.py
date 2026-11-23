@@ -5,6 +5,12 @@ from PIL import Image
 from netrattler_combo_dynamic_cards import render_combo
 from netrattler_combo_owner_original import W, H, ROOT, _owner_canvas
 
+
+@pytest.fixture(autouse=True)
+def _offline_combo_artwork_review_only(monkeypatch):
+    """Do not unlock screenshot repaint in live combo workflows."""
+    monkeypatch.setenv("NETRATTLER_BLOCK_OVERPAINTED_MASTERS","0")
+
 def badge(_):
     b = io.BytesIO()
     Image.new("RGBA", (64, 64), (255, 0, 0, 255)).save(b, "PNG")
