@@ -368,31 +368,47 @@ def _badge_bytes(team):
 
 
 def _paste_badge(im, draw, team, box, font):
-    from PIL import Image
-    x0, y0, x1, y1 = box
-    size = min(x1 - x0, y1 - y0)
-    loaded = False
-    payload = _badge_bytes(team)
-    if payload:
-        try:
-            badge = Image.open(io.BytesIO(payload)).convert("RGBA")
-            badge.thumbnail((size, size), Image.Resampling.LANCZOS)
-            px = x0 + (x1 - x0 - badge.width) // 2
-            py = y0 + (y1 - y0 - badge.height) // 2
-            im.paste(badge, (px, py), badge)
-            loaded = True
-        except Exception:
-            loaded = False
-    if loaded:
-        return
-    STATS["fallback_initials"] += 1
-    # Clean fallback when no public badge is available.
-    draw.ellipse((x0, y0, x1, y1), fill="#172f50", outline="#39b9e7", width=4)
-    initials = "".join(part[:1] for part in re.findall(r"[A-Za-z0-9]+", team)[:3]).upper()[:3] or "FC"
-    bbox = draw.textbbox((0, 0), initials, font=font)
-    tw, th = bbox[2] - bbox[0], bbox[3] - bbox[1]
-    draw.text((x0 + (x1-x0-tw)/2, y0 + (y1-y0-th)/2 - 4), initials, font=font, fill="#ffffff")
+    """Transparent REAL team crest in every match/goal/builder card.
 
+    The original premium stadium owns the background. Do not draw round
+    placeholders, letter disks, new shields, or a rectangular pasted tile.
+    Missing or unrenderable authentic emblems block the card, not the tip.
+    """
+    from PIL import Image
+    x0,y0,x1,y1=map(int,box)
+    width,height=x1-x0,y1-y0
+    if width<=0 or height<=0:
+        raise ValueError("Invalid floating-crest slot")
+    payload=_badge_bytes(team)
+    if not payload:
+        STATS["fallback_initials"] += 1
+        raise ValueError("Missing authentic club crest: "+str(team))
+    try:
+        with Image.open(io.BytesIO(payload)) as raw:
+            raw.load()
+            badge=raw.convert("RGBA")
+        visible=badge.getchannel("A").point(
+            lambda alpha: 255 if alpha>=24 else 0).getbbox()
+        if visible is None:
+            raise ValueError("Transparent club crest has no visible artwork")
+        badge=badge.crop(visible)
+        if min(badge.size)<12:
+            raise ValueError("Authentic crest has insufficient visible detail")
+        scale=min(width/badge.width,height/badge.height)
+        if scale>4:
+            raise ValueError("Club crest too low-resolution for premium slot")
+        size=(max(1,round(badge.width*scale)),
+              max(1,round(badge.height*scale)))
+        badge=badge.resize(size,Image.Resampling.LANCZOS)
+        px=round((x0+x1-badge.width)/2)
+        py=round((y0+y1-badge.height)/2)
+        if im.mode=="RGBA":
+            im.alpha_composite(badge,(px,py))
+        else:
+            im.paste(badge,(px,py),badge.getchannel("A"))
+    except (OSError,ValueError) as exc:
+        STATS["fallback_initials"] += 1
+        raise ValueError("Invalid genuine club crest for "+str(team)) from exc
 
 
 def _neon_bg(w, h):
