@@ -121,7 +121,9 @@ class GoalHunterSQLiteTests(unittest.TestCase):
         row={"provider":"fotmob","fixture_id":123456,
              "observed_at":now,"discovery_minute":70,
              "shots":20,"shots_on_target":7,"corners":5,
-             "home_xg":1.15,"away_xg":0.71}
+             "home_xg":1.15,"away_xg":0.71,
+             "home_shots":12,"away_shots":8,"home_sot":5,"away_sot":2,
+             "home_corners":3,"away_corners":2}
         with patch.dict(os.environ,{"SUPABASE_URL":"","SUPABASE_KEY":""}):
             a=store.write_deep_observations([row])
             b=store.write_deep_observations([row])
@@ -132,10 +134,35 @@ class GoalHunterSQLiteTests(unittest.TestCase):
         self.assertEqual(got["shots"],20)
         self.assertEqual(got["shots_on_target"],7)
         self.assertEqual(got["home_xg"],1.15)
+        self.assertEqual((got["home_shots"],got["away_shots"]),(12,8))
+        self.assertEqual((got["home_sot"],got["away_sot"]),(5,2))
+        self.assertEqual((got["home_corners"],got["away_corners"]),(3,2)
         store.init()
         with store._connect() as conn:
             self.assertEqual(conn.execute(
                 "SELECT COUNT(*) FROM deep_stats_observations").fetchone()[0],1)
+
+    def test_deep_schema_migrates_without_erasing_existing_rows(self):
+        import sqlite3
+        with store._connect() as conn:
+            conn.execute("DROP TABLE deep_stats_observations")
+            conn.execute("""
+              CREATE TABLE deep_stats_observations (
+                provider TEXT, fixture_id INTEGER, observed_at TEXT,
+                discovery_minute INTEGER, shots INTEGER, shots_on_target INTEGER,
+                corners INTEGER, home_xg REAL, away_xg REAL,
+                PRIMARY KEY(provider, fixture_id, observed_at)
+              )
+            """)
+            conn.execute("""INSERT INTO deep_stats_observations
+                VALUES ('fotmob',17,'2026-11-23T12:00:00+00:00',72,20,7,5,1.15,0.71)""")
+        store.init()
+        with store._connect() as conn:
+            row=conn.execute("SELECT * FROM deep_stats_observations").fetchone()
+        self.assertEqual(row["shots"],20)
+        self.assertEqual(row["home_xg"],1.15)
+        self.assertIsNone(row["home_shots"])
+        self.assertIsNone(row["away_sot"])
 
     def test_deep_stats_batch_bound_is_enforced(self):
         with self.assertRaisesRegex(ValueError,"batch_exceeds_limit"):
