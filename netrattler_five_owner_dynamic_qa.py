@@ -183,6 +183,17 @@ def _multi_canvas(base, count):
         height = min(70, extra-offset)
         expanded.alpha_composite(band.crop((0, 0, W, height)),
                                  (0, BODY_END+offset))
+    # The central stadium/grid repeats, but the original OUTER floodlight
+    # vignette must not repeat as a solid greenish stripe. Interpolate its
+    # left/right 78px from the immediately adjoining original rows, so
+    # their colors meet with no visible horizontal color cut.
+    transitions = Image.new("RGBA", (W, 2))
+    transitions.paste(base.crop((0, BODY_END-1, W, BODY_END)), (0, 0))
+    transitions.paste(base.crop((0, BODY_END, W, BODY_END+1)), (0, 1))
+    smooth = transitions.resize((W, extra), Image.Resampling.BILINEAR)
+    for x0, x1 in ((0, 78), (W-78, W)):
+        expanded.paste(smooth.crop((x0, 0, x1, extra)),
+                       (x0, BODY_END))
     expanded.alpha_composite(base.crop((0, BODY_END, W, H)),
                              (0, BODY_END+extra))
     return expanded, extra
