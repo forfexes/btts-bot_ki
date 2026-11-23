@@ -70,22 +70,40 @@ class GoalHunterCards(unittest.TestCase):
 
     def test_verified_espn_crest_url_and_host_rejection(self):
         import io
-        from PIL import Image
+        from PIL import Image, ImageDraw
         buf = io.BytesIO()
-        Image.new("RGBA", (64, 64), (32, 142, 220, 255)).save(buf, "PNG")
+        emblem=Image.new("RGBA",(80,80),(0,0,0,0))
+        ImageDraw.Draw(emblem).ellipse((6,6,73,73),fill=(32,142,220,255))
+        emblem.save(buf,"PNG")
         reply = Mock()
         reply.content = buf.getvalue()
         reply.headers = {"Content-Type": "image/png"}
         with patch.object(card.requests, "get", return_value=reply) as get:
             crest = card.crest("https://a.espncdn.com/i/teamlogos/soccer/500/1.png")
             self.assertIsNotNone(crest)
-            self.assertEqual(crest.size, (64, 64))
+            self.assertEqual(crest.size, (211, 211))
+            self.assertEqual(crest.getpixel((0,0))[3],0)
             self.assertEqual(get.call_count, 1)
             self.assertIsNone(card.crest("https://a.espncdn.com.evil.example/logo.png"))
             self.assertIsNone(card.crest("https://evil.example/logo.png"))
             self.assertIsNone(card.crest("https://a.espncdn.com:abc/logo.png"))
             self.assertIsNone(card.crest(None))
             self.assertEqual(get.call_count, 1)
+
+    def test_provider_opaque_logo_tile_never_floats_on_legacy_stadium(self):
+        import io
+        from PIL import Image
+        for mode in ("RGB","RGBA"):
+            with self.subTest(mode=mode):
+                image=Image.new(mode,(100,100),
+                                (245,245,245) if mode=="RGB" else (245,245,245,255))
+                buf=io.BytesIO();image.save(buf,"PNG")
+                answer=Mock()
+                answer.headers={"Content-Type":"image/png"}
+                answer.content=buf.getvalue()
+                with patch.object(card.requests,"get",return_value=answer):
+                    self.assertIsNone(card.crest(
+                        "https://a.espncdn.com/i/teamlogos/soccer/500/1.png"))
 
     def test_card_prefers_verified_espn_crest_url(self):
         fixture = dict(self.fx, home_logo_url="https://a.espncdn.com/home.png",
