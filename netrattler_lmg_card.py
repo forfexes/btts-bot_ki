@@ -69,8 +69,27 @@ def crest(team_id):
         if (not response.headers.get("Content-Type", "").startswith("image/")
                 or len(response.content) > 1_000_000):
             return None
-        image = Image.open(io.BytesIO(response.content)).convert("RGBA")
-        image.thumbnail((211, 211), Image.Resampling.LANCZOS)
+        with Image.open(io.BytesIO(response.content)) as source:
+            source.load()
+            image = source.convert("RGBA")
+        # ESPN/FotMob can serve JPEG-like logo tiles with an opaque white
+        # rectangle. They are not free-floating team emblems. The original
+        # team artwork must contain transparency, not a painted replacement.
+        alpha=image.getchannel("A")
+        if alpha.getextrema()[0]>=255:
+            return None
+        visible=alpha.point(lambda a:255 if a>=24 else 0).getbbox()
+        if visible is None:
+            return None
+        image=image.crop(visible)
+        if min(image.size)<12:
+            return None
+        scale=min(211/image.width,211/image.height)
+        if scale>4:
+            return None
+        image=image.resize((max(1,round(image.width*scale)),
+                            max(1,round(image.height*scale))),
+                           Image.Resampling.LANCZOS)
         return image
     except (requests.RequestException, OSError, ValueError):
         return None
