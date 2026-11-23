@@ -103,8 +103,15 @@ def parse_highlightly(body: Any) -> list[dict]:
 
 
 def parse_sportscore(body: Any) -> list[dict]:
-    # This provider's website terms require separate review; disabled until
-    # LMG_SOURCE_SPORTSCORE_APPROVED=true, and no Telegram attribution is emitted.
+    """SportScore *documented* widget match format (verified 2026-11-23).
+
+    The live+recent response exposes home, away, home_score, away_score,
+    competition, status, status_text, time and url. It does NOT include an
+    event id or a verified fixture minute field. Only trust a numeric minute
+    explicitly present in status_text and an ISO timezone-aware kickoff in
+    time. Everything else remains unpaired, read-only discovery evidence.
+    """
+    from urllib.parse import urlparse
     rows = body.get("matches") if isinstance(body, dict) else None
     if not isinstance(rows, list):
         return []
@@ -112,16 +119,54 @@ def parse_sportscore(body: Any) -> list[dict]:
     for row in rows:
         if not isinstance(row, dict):
             continue
-        if str(row.get("status") or "").casefold() not in {"live","in_play","second_half"}:
+        if str(row.get("status") or "").casefold() not in {"live", "in_play", "second_half"}:
             continue
-        # Most entries are score-only. Never invent a clock from elapsed time.
-        fixture = _fixture("sportscore",row.get("id") or row.get("slug"),
-                           row.get("home"),row.get("away"),row.get("time"),
-                           row.get("home_score"),row.get("away_score"),
-                           row.get("minute"),row.get("competition") or "")
-        if fixture:
-            out.append(fixture)
+        home,away = row.get("home"),row.get("away")
+        hs,as_ = row.get("home_score"),row.get("away_score")
+        # The public widget returns scores as strings; only integer decimal
+        # strings or true integers are accepted. No guessing from "–".
+        def goals(v):
+            if type(v) is int and 0 <= v <= 99:
+                return v
+            if isinstance(v,str) and re.fullmatch(r"\\d{1,2}",v.strip()):
+                return int(v.strip())
+            return None
+        slug=row.get("url")
+        if not isinstance(slug,str) or not slug.strip():
+            continue
+        parsed=urlparse(slug)
+        if parsed.scheme and (parsed.scheme != "https" or
+                              parsed.hostname not in ("sportscore.com","www.sportscore.com")):
+            continue
+        match_path=parsed.path.strip("/")
+        if not match_path.startswith("football/match/"):
+            continue
+        fx=_fixture("sportscore",match_path,home,away,row.get("time"),
+                    goals(hs),goals(as_),row.get("status_text"),
+                    row.get("competition") or "")
+        if fx:
+            out.append(fx)
     return out
+
+
+def sportscore_discovery_report(body: Any) -> dict:
+    """Report coverage of the score-only feed, even if no safe minute exists."""
+    rows=body.get("matches") if isinstance(body,dict) else None
+    if not isinstance(rows,list):
+        raise ValueError("SportScore widget response has no matches list")
+    live=[r for r in rows if isinstance(r,dict) and
+          str(r.get("status") or "").casefold() in {"live","in_play","second_half"}]
+    return {
+        "provider":"sportscore",
+        "total_matches":len(rows),
+        "live_matches":len(live),
+        "with_explicit_clock":sum(_minute(r.get("status_text")) is not None for r in live),
+        "with_utc_kickoff":sum(_kickoff(r.get("time")) is not None for r in live),
+        "strictly_matchable":len(parse_sportscore(body)),
+        "telegram_messages":0,
+        "sqlite_writes":0,
+        "attribution_url":"https://sportscore.com/",
+    }
 
 
 def parse_pitchapi(body: Any) -> list[dict]:
