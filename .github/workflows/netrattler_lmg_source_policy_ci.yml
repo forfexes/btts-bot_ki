@@ -1,0 +1,29 @@
+name: NETRATTLER Live Sources Policy Sandbox
+on:
+  workflow_dispatch: {}
+  push:
+    branches: [main]
+    paths:
+      - netrattler_lmg_source_policy.py
+      - test_netrattler_lmg_source_policy.py
+      - .github/workflows/netrattler_lmg_source_policy_ci.yml
+permissions:
+  contents: read
+jobs:
+  offline-source-policy:
+    runs-on: ubuntu-latest
+    timeout-minutes: 3
+    env:
+      LMG_SEND: 'false'
+      TELEGRAM_TOKEN: ''
+      SUPABASE_URL: ''
+      LMG_SQLITE_SYNC: 'false'
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+      - name: Check offline source classifications (no network)
+        run: |
+          python -m py_compile netrattler_lmg_source_policy.py test_netrattler_lmg_source_policy.py
+          python -m unittest -v test_netrattler_lmg_source_policy.py
