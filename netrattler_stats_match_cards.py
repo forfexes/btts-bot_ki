@@ -244,8 +244,15 @@ def _fl_logo(team, league):
         cands.insert(0 if best_score >= 0.99 else 1, best)
     for sl in cands[:3]:
         html = _fl_get(f"https://football-logos.cc/{country}/{sl}/")
-        m = re.search(r"https://assets\.football-logos\.cc/logos/[a-z0-9-]+/(?:700x700|512x512|256x256)/[a-z0-9-]+\.[0-9a-f]+\.png", html)
+        m = re.search(r"https://assets\.football-logos\.cc/logos/[a-z0-9-]+/(?:700x700|512x512|256x256)/([a-z0-9-]+)\.[0-9a-f]+\.png", html)
         if m:
+            # Directory pages can return another club's image; validate the
+            # actual image filename before placing a crest in a premium card.
+            from netrattler_crest_identity import same_club
+            asset_club = m.group(1).replace("-", " ")
+            if not same_club(team, asset_club):
+                STATS["fl_wrong_club_rejected"] = STATS.get("fl_wrong_club_rejected", 0) + 1
+                continue
             STATS["fl_ok"] = STATS.get("fl_ok", 0) + 1
             return m.group(0)
     STATS["fl_miss"] = STATS.get("fl_miss", 0) + 1
