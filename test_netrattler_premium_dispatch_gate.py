@@ -16,7 +16,13 @@ def tip(market="over25"):
 
 
 def crest():
-    im=Image.new("RGBA",(120,120),(30,150,220,255))
+    # Genuine team marks are transparent cutouts. A solid blue synthetic
+    # square would now be correctly rejected as a pasted logo sticker.
+    from PIL import ImageDraw
+    im=Image.new("RGBA",(120,120),(0,0,0,0))
+    ImageDraw.Draw(im).polygon(
+        [(60,8),(108,24),(103,77),(60,112),(17,77),(12,24)],
+        fill=(30,150,220,255))
     with io.BytesIO() as f:
         im.save(f,"PNG")
         return f.getvalue()
