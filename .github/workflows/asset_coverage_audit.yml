@@ -5,6 +5,10 @@ name: Asset Coverage Audit (netrattler) - Read Only
     branches: [main]
     paths:
       - "asset_coverage_audit.py"
+      - "netrattler_stats_match_cards.py"
+      - "netrattler_espn_photo.py"
+      - "netrattler_reference_images.py"
+      - "netrattler_crest_identity.py"
       - ".github/workflows/asset_coverage_audit.yml"
   schedule:
     - cron: '21 4 * * 0'
