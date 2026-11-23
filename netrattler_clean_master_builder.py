@@ -125,10 +125,12 @@ def render_clean_master(category):
               stroke_width=2, stroke_fill="#1A1010")
     draw.rounded_rectangle((131, 330, 991, 596), radius=22,
                            fill="#071926", outline="#25DFFF", width=4)
-    # Empty imagery and fixture areas. No generic shield or fake athlete.
-    for x in (153, 775):
-        draw.rounded_rectangle((x, 359, x + 194, 554), radius=20,
-                               fill="#07131F", outline="#F6C947", width=3)
+    # Owner rule for all eleven derived categories: REAL team crests
+    # FLOAT freely over the existing dark fixture stadium. Do NOT
+    # manufacture gold-outlined crest rectangles, circles, shields, or
+    # name-stickers here. These spaces stay EMPTY until genuine provider
+    # PNG/WebP artwork is alpha-composited by the verified card renderer.
+    # The central VS/fixture field is text-only and does not touch them.
     draw.rounded_rectangle((369, 387, 753, 528), radius=16,
                            fill="#0A1A2A", outline="#136B91", width=2)
 
@@ -169,6 +171,13 @@ def render_clean_master(category):
             "verified_selection", "real_bookmaker_odds", "market_statistics",
         ],
         "blank_slots": slots,
+        # These are empty coordinate reservations, not visible logo holders.
+        # No placeholder emblem may be drawn if either authentic crest fails.
+        "floating_crest_slots": [
+            {"center_x": 250, "center_y": 456, "max_width": 194, "max_height": 195},
+            {"center_x": 872, "center_y": 456, "max_width": 194, "max_height": 195},
+        ],
+        "logo_backplates": False,
         "size": [W, H],
     }
 
