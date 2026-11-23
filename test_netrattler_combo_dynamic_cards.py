@@ -1,7 +1,7 @@
 """Tests for dynamic COMBO rows and no-placeholder crest policy."""
 import io
 import pytest
-from PIL import Image
+from PIL import Image, ImageDraw
 from netrattler_combo_dynamic_cards import render_combo
 from netrattler_combo_owner_original import W, H, ROOT, _owner_canvas
 
@@ -13,7 +13,9 @@ def _offline_combo_artwork_review_only(monkeypatch):
 
 def badge(_):
     b = io.BytesIO()
-    Image.new("RGBA", (64, 64), (255, 0, 0, 255)).save(b, "PNG")
+    icon=Image.new("RGBA",(64,64),(0,0,0,0))
+    ImageDraw.Draw(icon).ellipse((4,4,60,60),fill=(255,0,0,255))
+    icon.save(b,"PNG")
     return b.getvalue()
 
 def legs(n):
