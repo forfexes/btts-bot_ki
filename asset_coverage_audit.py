@@ -111,7 +111,7 @@ def main():
     priority = collections.Counter()
     existing_crests = {}
 
-    def person(name, team="", sport="", boost=0):
+    def person(name, team="", sport="", boost=0, provider_id=None):
         n = norm(name)
         if not n or len(n) < 4:
             blank["invalid_player"] += 1
@@ -119,11 +119,13 @@ def main():
         k = (str(sport or "").upper(), n)
         if k not in people:
             people[k] = {"name": str(name).strip(), "sport": str(sport or "").upper(),
-                         "teams": set(), "count": 0}
+                         "teams": set(), "api_football_ids": set(), "count": 0}
         p = people[k]
         p["count"] += 1
         if team and norm(team):
             p["teams"].add(str(team).strip())
+        if provider_id is not None and str(provider_id).isdigit() and int(provider_id) > 0:
+            p["api_football_ids"].add(int(provider_id))
         if boost:
             priority[k] += boost
 
@@ -150,9 +152,10 @@ def main():
         for table in ("player_game_log", "fplci_player_match", "apif_player_match"):
             def add(r):
                 name, team = r.get("player_name"), r.get("team")
-                person(name, team, "SOCCER")
+                person(name, team, "SOCCER", provider_id=r.get("player_id") if table == "apif_player_match" else None)
                 club(team, "SOCCER")
-            load(table, "player_name,team", add)
+            columns = "player_name,team,player_id" if table == "apif_player_match" else "player_name,team"
+            load(table, columns, add)
         def tip(r):
             person(r.get("player_name"), r.get("player_team"), "SOCCER", 15)
             club(r.get("player_team"), "SOCCER", 15)
@@ -203,6 +206,7 @@ def main():
     if args.bot == "netrattler":
         # These are stored references only. HTTP and alpha check performed below.
         report["cached_crest_urls"] = len(existing_crests)
+        report["player_names_with_api_football_id"] = sum(bool(p["api_football_ids"]) for p in people.values())
         report["teams_without_exact_cached_url"] = sum(
             1 for (_, name) in teams if name not in existing_crests)
         import netrattler_stats_match_cards as card
@@ -217,6 +221,12 @@ def main():
             if not valid_teams:
                 return False, "team_identity_missing"
             try:
+                ids = p["api_football_ids"]
+                if len(ids) == 1:
+                    pid = next(iter(ids))
+                    official = f"https://media.api-sports.io/football/players/{pid}.png"
+                    if image_ok(official):
+                        return True, "api_football_verified_id"
                 url = "https://www.thesportsdb.com/api/v1/json/3/searchplayers.php"
                 response = SESSION.get(url, params={"p": p["name"]}, timeout=12)
                 if response.ok:
