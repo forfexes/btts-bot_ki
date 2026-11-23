@@ -187,7 +187,7 @@ def _builder_canvas(legs):
 
 
 def render_builder(pick):
-    if os.getenv("NETRATTLER_BLOCK_OVERPAINTED_MASTERS", "0") == "1":
+    if os.getenv("NETRATTLER_BLOCK_OVERPAINTED_MASTERS", "1") != "0":
         raise ValueError("Original Builder has no approved overlay-free clean source")
     import netrattler_stats_match_cards as cards
     import netrattler_neon_design as nd
@@ -280,7 +280,7 @@ def render_builder(pick):
 
 
 def render_goal(tip,target_date,result=None):
-    if os.getenv("NETRATTLER_BLOCK_OVERPAINTED_MASTERS", "0") == "1":
+    if os.getenv("NETRATTLER_BLOCK_OVERPAINTED_MASTERS", "1") != "0":
         raise ValueError("Original Goal Hunter has no approved overlay-free clean source")
     import netrattler_stats_match_cards as cards
     import netrattler_neon_design as nd
