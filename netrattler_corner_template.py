@@ -87,9 +87,21 @@ def _badge(im, draw, cards, name, area):
         raise ValueError('invalid_verified_crest:' + str(name))
     x0, y0, x1, y1 = area
     s = (x1-x0, y1-y0)
-    badge = ImageOps.contain(img, s, method=Image.Resampling.LANCZOS)
+    visible=img.getchannel("A").point(
+        lambda alpha:255 if alpha>=24 else 0).getbbox()
+    if visible is None:
+        raise ValueError('Real Corner Sniper crest has no visible pixels')
+    img=img.crop(visible)
+    if min(img.size)<12:
+        raise ValueError('Corner Sniper emblem artwork is too small')
+    scale=min(s[0]/img.width,s[1]/img.height)
+    if scale>4:
+        raise ValueError('Corner Sniper emblem resolution too low')
+    badge=img.resize((max(1,round(img.width*scale)),
+                      max(1,round(img.height*scale))),
+                     Image.Resampling.LANCZOS)
     xx, yy = (x0+(s[0]-badge.width)//2, y0+(s[1]-badge.height)//2)
-    im.paste(badge, (xx,yy), badge)
+    im.paste(badge, (xx,yy), badge.getchannel("A"))
 
 
 def _gold_bar(im, area):
