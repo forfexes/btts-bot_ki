@@ -61,6 +61,27 @@ class SettlementV21Tests(unittest.TestCase):
              patch.object(mod.requests, "post", side_effect=edit):
             self.assertTrue(mod.telegram_edit("123", 44, "Original tip\\n\\n⸻⸻ Match Summary ⸻⸻\\n✅ V"))
         self.assertEqual(calls, ["editMessageText", "editMessageCaption"])
+        self.assertEqual(mod._LAST_EDIT_SURFACE.get("last"),"caption")
+
+    def test_caption_edit_is_not_falsely_reported_as_changed_image_pixels(self):
+        settlement={"settlement_id":"QA_RECORD","status":"win","raw":{}}
+        mod._LAST_EDIT_SURFACE["last"]="caption"
+        with patch.object(mod,"sb_patch",return_value=True) as saved:
+            mod._save_tip_edit_receipt(settlement,True)
+        raw=settlement["raw"]
+        self.assertTrue(raw["telegram_edit_ok"])
+        self.assertEqual(raw["telegram_edit_surface"],"caption")
+        self.assertFalse(raw["telegram_image_result_verified"])
+        self.assertNotIn("telegram_edit_error",raw)
+        self.assertEqual(saved.call_args.args[0:3],
+                         ("netrattler_settlements","settlement_id","QA_RECORD"))
+        # Same tip may have a confirmed text edit. Neither type proves the
+        # result text is actually part of the PHOTO's pixel layer.
+        mod._LAST_EDIT_SURFACE["last"]="text"
+        with patch.object(mod,"sb_patch",return_value=True):
+            mod._save_tip_edit_receipt(settlement,True)
+        self.assertEqual(settlement["raw"]["telegram_edit_surface"],"text")
+        self.assertFalse(settlement["raw"]["telegram_image_result_verified"])
 
     def test_oversized_original_photo_caption_is_never_truncated_or_uploaded(self):
         original = "PREMIUM WETTE " + ("ORIGINAL-QUOTE-1.95 " * 65)
@@ -101,6 +122,7 @@ class SettlementV21Tests(unittest.TestCase):
              patch.object(mod.requests, "post",
                           return_value=FakeResponse({"ok":True,"result":{"message_id":55}})) as post:
             self.assertTrue(mod.telegram_edit("123", 55, full_text))
+            self.assertEqual(mod._LAST_EDIT_SURFACE.get("last"),"text")
             self.assertEqual(post.call_args.kwargs["json"]["text"], full_text)
 
     def test_telegram_edit_rejects_success_for_wrong_original_message(self):
