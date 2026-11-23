@@ -863,6 +863,22 @@ def render_card(entries, target_date, result=None):
     return data.getvalue()
 
 
+def _telegram_card_caption(caption):
+    """Put @prophunter BELOW the tip, as Telegram caption, never in PNG.
+
+    Telegram's 1024-character media-caption limit is strict. Do not truncate
+    a verified market, price, result or identifier to make room for branding.
+    """
+    body = str(caption or "").strip()
+    if "@prophunter" in body.casefold():
+        output = body
+    else:
+        output = body + "\n\n@prophunter" if body else "@prophunter"
+    if len(output) > 1024:
+        raise ValueError("Telegram photo caption exceeds 1024 characters")
+    return output
+
+
 def _send_photo(token, chat, caption, payload, log):
     # Telegram draws the time/edited label inside a chat photo's bottom-right.
     # In original-only production, add an EMPTY metadata strip below the
@@ -872,6 +888,11 @@ def _send_photo(token, chat, caption, payload, log):
             and payload.startswith(bytes((137, 80, 78, 71, 13, 10, 26, 10)))):
         from netrattler_telegram_safe_zone import append_safe_margin
         payload = append_safe_margin(payload)
+    try:
+        caption = _telegram_card_caption(caption)
+    except ValueError:
+        log("Match-Card gesperrt: Caption zu lang für @prophunter unter dem Tipp")
+        return False
     url = f"https://api.telegram.org/bot{token}/sendPhoto"
     max_retries = max(1, int(os.getenv("STATS_MATCH_CARDS_RETRIES", "4")))
     for attempt in range(max_retries):
@@ -1130,13 +1151,13 @@ def _edit_photo(token, chat, message_id, payload, log, caption=None):
     import json as _json
     try:
         media = {"type": "photo", "media": "attach://card"}
-        if caption is not None:
-            # Telegram media captions must fit completely. Never silently
-            # cut the original tip/odds to force a settlement result.
-            if len(str(caption)) > 1024:
-                log("Card-Edit blockiert: Original-Caption passt nicht vollständig")
-                return False
-            media["caption"] = str(caption)
+        # Keep the original handle under the tip on settled edits too.
+        # None means "no new caption supplied", NOT "delete the old handle".
+        try:
+            media["caption"] = _telegram_card_caption(caption)
+        except ValueError:
+            log("Card-Edit blockiert: Original-Caption passt nicht vollständig")
+            return False
         r = requests.post(
             f"https://api.telegram.org/bot{token}/editMessageMedia",
             data={"chat_id": chat, "message_id": int(message_id),
