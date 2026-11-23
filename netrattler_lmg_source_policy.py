@@ -52,6 +52,65 @@ DECISIONS = {
 }
 
 
+# Official/first-party provenance. These are POSSIBLE common upstream feeds,
+# not proof that two apps used identical match events for every competition.
+# This table never grants permission to access the app websites automatically.
+UPSTREAM_EVIDENCE = {
+    "flashscore": {
+        "supplier": "opta",
+        "scope": "primary football provider",
+        "url": "https://www.flashscore.com/faq/data/",
+    },
+    "fotmob": {
+        "supplier": "opta",
+        "scope": "live match statistics in official partnership",
+        "url": "https://www.socceraid.org.uk/news/fotmob-partnership/",
+    },
+    "onefootball": {
+        "supplier": "opta",
+        "scope": "selected match coverage / data products",
+        "url": "https://www.statsperform.com/events/what-every-storyteller-and-creator-needs-to-know-about-world-cup-coverage-in-2026/",
+    },
+    "sofascore": {
+        "supplier": "opta",
+        "scope": "some historical and tournament analyses only; NOT all stats",
+        "url": "https://www.statsperform.com/opta-euros-copa-america-2024/",
+    },
+}
+
+
+def shared_upstream_risk(*providers: str) -> dict:
+    """Audit possible common provenance; does NOT declare confirmed duplicates.
+
+    Never count differently branded apps as independent corroboration without
+    comparing actual metric provenance for that event and timestamp.
+    """
+    labels = []
+    seen = set()
+    for provider in providers:
+        label = str(provider or "").strip().casefold().replace(" ", "_")
+        decision(label)  # unregistered sources fail closed
+        if label not in seen:
+            seen.add(label)
+            labels.append(label)
+    by_supplier = {}
+    for label in labels:
+        evidence = UPSTREAM_EVIDENCE.get(label)
+        if evidence:
+            by_supplier.setdefault(evidence["supplier"], []).append(label)
+    return {
+        "possible_common_suppliers": {
+            supplier: group for supplier, group in by_supplier.items()
+            if len(group) >= 2
+        },
+        "unknown_lineage": [
+            label for label in labels if label not in UPSTREAM_EVIDENCE
+        ],
+        "confirmed_independent_feeds": 0,
+        "warning": "shared_supplier_possible_not_event_level_proof",
+    }
+
+
 def decision(provider: str) -> SourceDecision:
     """Fail closed for future unreviewed service names."""
     normalized = str(provider or "").strip().casefold().replace(" ", "_")
