@@ -140,6 +140,44 @@ jobs:
           python netrattler_lmg_source_compare.py
           python netrattler_lmg_fotmob.py
 
+  shadow-deep-poll:
+    # Collect verified Goal Hunter details without changing the disabled
+    # production Telegram scan. Only scheduled runs write Git SQLite state.
+    needs: verify
+    if: github.event_name == 'schedule'
+    runs-on: ubuntu-latest
+    timeout-minutes: 6
+    permissions:
+      contents: write
+    env:
+      LMG_SQLITE_PATH: ${{ github.workspace }}/.lmg-state/data/goal_hunter.sqlite3
+      LMG_STATE_WORKTREE: ${{ github.workspace }}/.lmg-state
+      LMG_SQLITE_SYNC: "true"
+      LMG_SEND: "false"
+      LMG_SHADOW_ENABLED: "true"
+      LMG_DEEP_POLL_CYCLES: "3"
+      TELEGRAM_TOKEN: ""
+      TELEGRAM_GROUP_LATE_GOALS: ""
+      SUPABASE_URL: ""
+      SUPABASE_KEY: ""
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+      - run: python -m pip install --prefer-binary requests Pillow
+      - name: Mount Git-versioned Goal Hunter SQLite
+        run: |
+          git fetch --no-tags origin '+refs/heads/state/goal-hunter:refs/remotes/origin/state/goal-hunter'
+          git worktree add --detach .lmg-state refs/remotes/origin/state/goal-hunter
+      - name: Validate SQLite integrity and initialise deep-stat schema
+        run: python netrattler_lmg_store.py init
+      - name: Discover once and poll verified filtered fixture IDs each 75 seconds
+        run: python netrattler_lmg_two_stage.py
+      - name: Verify SQLite state after polling
+        if: success()
+        run: python netrattler_lmg_store.py status
+
   scan:
     needs: verify
     # TEMPORARILY DISABLED: no live Telegram scans until original cards pass visual acceptance.
