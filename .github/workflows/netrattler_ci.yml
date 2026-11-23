@@ -20,6 +20,7 @@ on:
       - "netrattler_player_log.py"
       - "test_netrattler_player_log_quota.py"
       - "netrattler_crest_identity.py"
+      - "test_netrattler_crest_identity.py"
       - "netrattler_var.py"
       - "netrattler_1x_verified_props.py"
       - "test_netrattler_legacy_builder_speed.py"
