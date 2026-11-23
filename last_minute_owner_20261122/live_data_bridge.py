@@ -34,6 +34,11 @@ def _logos(fixture,provider):
     ids=(fixture.get('home_logo_url') or fixture.get('home_logo_id'),
          fixture.get('away_logo_url') or fixture.get('away_logo_id'))
     if not all(ids):raise ValueError('Both verified crest IDs required')
+    # An accidental duplicated provider ID displays the SAME badge for both
+    # competing clubs. This is a hard identity error, not a layout issue.
+    # Do not substitute an arbitrary team graphic or quietly publish it.
+    if str(ids[0]).strip().casefold()==str(ids[1]).strip().casefold():
+        raise ValueError('Home and away cannot share a verified crest identifier')
     return provider(ids[0]),provider(ids[1])
 
 
