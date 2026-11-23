@@ -7,6 +7,8 @@ on:
     paths:
       - netrattler_lmg_free.py
       - netrattler_lmg_fotmob.py
+      - netrattler_lmg_two_stage.py
+      - test_netrattler_lmg_two_stage.py
       - netrattler_lmg_shadow.py
       - netrattler_lmg_store.py
       - netrattler_lmg_api_fallback.py
@@ -23,7 +25,7 @@ on:
       - test_netrattler_lmg_fotmob.py
       - netrattler_lmg_probe.py
       - netrattler_lmg_source_compare.py
-      - test_netrattler_lmg_source_compare.py
+      - test_netrattler_lmg_source_compare.py test_netrattler_lmg_two_stage.py
       - netrattler_last_minute_goal.py
       - test_netrattler_lmg_free.py
       - .github/workflows/netrattler_lmg_free.yml
@@ -58,8 +60,8 @@ jobs:
       - name: Full syntax and offline regression tests
         if: github.event_name != 'schedule'
         run: |
-          python -m py_compile netrattler_last_minute_goal.py netrattler_lmg_free.py netrattler_lmg_fotmob.py netrattler_lmg_card.py netrattler_lmg_settle.py netrattler_lmg_next_goal.py netrattler_lmg_shadow.py netrattler_lmg_store.py netrattler_lmg_api_fallback.py test_netrattler_lmg_api_fallback.py test_netrattler_lmg_store.py test_netrattler_lmg_free.py test_netrattler_lmg_fotmob.py test_netrattler_lmg_card.py test_netrattler_lmg_next_goal.py test_netrattler_lmg_shadow.py netrattler_lmg_source_compare.py test_netrattler_lmg_source_compare.py
-          python -m unittest -v test_netrattler_lmg_free.py test_netrattler_lmg_fotmob.py test_netrattler_lmg_card.py test_netrattler_lmg_next_goal.py test_netrattler_lmg_shadow.py test_netrattler_lmg_store.py test_netrattler_lmg_api_fallback.py test_netrattler_lmg_source_compare.py
+          python -m py_compile netrattler_last_minute_goal.py netrattler_lmg_free.py netrattler_lmg_fotmob.py netrattler_lmg_card.py netrattler_lmg_settle.py netrattler_lmg_next_goal.py netrattler_lmg_shadow.py netrattler_lmg_store.py netrattler_lmg_api_fallback.py test_netrattler_lmg_api_fallback.py test_netrattler_lmg_store.py test_netrattler_lmg_free.py test_netrattler_lmg_fotmob.py test_netrattler_lmg_card.py test_netrattler_lmg_next_goal.py test_netrattler_lmg_shadow.py netrattler_lmg_source_compare.py test_netrattler_lmg_source_compare.py test_netrattler_lmg_two_stage.py
+          python -m unittest -v test_netrattler_lmg_free.py test_netrattler_lmg_fotmob.py test_netrattler_lmg_card.py test_netrattler_lmg_next_goal.py test_netrattler_lmg_shadow.py test_netrattler_lmg_store.py test_netrattler_lmg_api_fallback.py test_netrattler_lmg_source_compare.py test_netrattler_lmg_two_stage.py
 
   visual-preview:
     needs: verify
@@ -172,6 +174,9 @@ jobs:
           API_FOOTBALL_KEY: ${{ secrets.API_FOOTBALL_KEY }}
         run: |
           python netrattler_lmg_fotmob.py
+          # Shadow-only 75-second polling: persist source-verified observations
+          # to Git-versioned SQLite; NEVER post a second Telegram tip.
+          LMG_SEND=false LMG_SHADOW_ENABLED=true LMG_DEEP_POLL_CYCLES=3 python netrattler_lmg_two_stage.py
           python netrattler_lmg_settle.py
           python netrattler_lmg_shadow.py settle
           python netrattler_lmg_store.py status
