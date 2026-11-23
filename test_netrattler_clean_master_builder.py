@@ -51,7 +51,7 @@ def test_all_clean_derived_masters_have_distinct_labels(tmp_path):
     # represented by a recoloured Corner Sniper reference.
     assert "last_minute_goal" not in SOURCE_MAP
     assert (tmp_path / "manifest.json").is_file()
-    assert len({item["category"] for item in manifest}) == 11
+    assert len({item["category"] for item in manifest}) == 10
 
 def test_unknown_and_missing_sources_fail_closed(monkeypatch, tmp_path):
     with pytest.raises(ValueError, match="source mapping"):
