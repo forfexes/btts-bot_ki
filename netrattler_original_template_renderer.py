@@ -108,12 +108,29 @@ def _portrait(im, cards, player, team, rect, *, circle=False):
 
 
 def _crest(im, cards, team, rect):
+    """Insert a single genuine club crest into its existing owner-art slot.
+
+    Strip the external file's transparent padding BEFORE fitting; otherwise
+    tiny crests drift within the original circle and appear stuck on top.
+    No decorative disk, overpainted old logo, or placeholder is generated.
+    """
     raw=cards._badge_bytes(team)
     badge=_picture(raw,min_size=24)
     x0,y0,x1,y1=map(int,rect)
-    badge.thumbnail((x1-x0,y1-y0),Image.Resampling.LANCZOS)
-    p=(int((x0+x1-badge.width)/2),int((y0+y1-badge.height)/2))
-    im.paste(badge,p,badge)
+    w,h=x1-x0,y1-y0
+    if w<=0 or h<=0 or im.mode!="RGBA":
+        raise ValueError("Invalid original club crest slot")
+    visible=badge.getchannel("A").point(
+        lambda alpha: 255 if alpha>=24 else 0).getbbox()
+    if visible is None:
+        raise ValueError("Club crest has no visible pixels")
+    badge=badge.crop(visible)
+    if min(badge.size)<12:
+        raise ValueError("Club crest artwork too small")
+    badge.thumbnail((w,h),Image.Resampling.LANCZOS)
+    p=(round((x0+x1-badge.width)/2),
+       round((y0+y1-badge.height)/2))
+    im.alpha_composite(badge,p)
 
 
 def _kickoff(value):
