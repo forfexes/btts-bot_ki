@@ -107,6 +107,10 @@ def poll_once(candidates: list[dict], *, first_pass: bool, send: bool,
                     "discovery_minute":fx["minute"],
                     "shots":metrics.get("shots"),"shots_on_target":metrics.get("sot"),
                     "corners":metrics.get("corners"),
+                    "home_shots":home.get("shots"),"away_shots":away.get("shots"),
+                    "home_sot":home.get("sot"),"away_sot":away.get("sot"),
+                    "home_corners":home.get("corners"),
+                    "away_corners":away.get("corners"),
                     "home_xg":home.get("xg"),"away_xg":away.get("xg"),
                 })
         # Historical evidence only: never post from a stale minute/score on
