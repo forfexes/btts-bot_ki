@@ -315,12 +315,49 @@ def main():
     tlist = sorted(teams.items(), key=lambda kv: (-priority[("team",) + kv[0]], -kv[1]["count"], kv[0]))
     report["not_probed_photo"] = max(0, len(plist)-args.max_photos)
     report["not_probed_crest"] = max(0, len(tlist)-args.max_teams)
+    # This lightweight ID-based verifier intentionally differs from the
+    # production card renderer. On missing images, also exercise the ACTUAL
+    # renderer fallback chain (FotMob, ESPN, API-Football, FPL, TheSportsDB,
+    # Wikimedia, SoccerWiki) for a bounded sample, without sending cards.
+    full_chain_max = max(0, min(20, int(os.getenv("ASSET_FULL_CHAIN_SAMPLE", "8"))))
+    report["production_photo_fallback_checked"] = 0
+    report["production_photo_renderable_candidates"] = 0
+    report["production_photo_fallback_missing"] = 0
+    report["production_photo_fallback_skipped_ambiguous_team"] = 0
+    report["production_photo_candidate_samples"] = []
     for _, p in plist[:args.max_photos]:
         ok, evidence = photo_test(p)
         report["photo_checked"] += 1
         report["verified_photos" if ok else "missing_or_unverified_photos"] += 1
         if not ok and len(report["missing_photo_samples"]) < 50:
             report["missing_photo_samples"].append({"name": p["name"], "sport": p["sport"], "status": evidence})
+        if args.bot == "netrattler" and not ok and report["production_photo_fallback_checked"] < full_chain_max:
+            # Don't guess the currently relevant club when historical providers disagree.
+            clubs = {norm(t): t for t in p["teams"] if norm(t)}
+            if len(clubs) != 1:
+                report["production_photo_fallback_skipped_ambiguous_team"] += 1
+                continue
+            report["production_photo_fallback_checked"] += 1
+            try:
+                payload = card._player_photo(p["name"], next(iter(clubs.values())))
+                candidate_ok = False
+                if payload:
+                    with Image.open(io.BytesIO(payload)) as im:
+                        im.load()
+                        candidate_ok = min(im.size) >= 80
+                if candidate_ok:
+                    report["production_photo_renderable_candidates"] += 1
+                    if len(report["production_photo_candidate_samples"]) < 12:
+                        report["production_photo_candidate_samples"].append(p["name"])
+                else:
+                    report["production_photo_fallback_missing"] += 1
+            except Exception:
+                report["production_photo_fallback_missing"] += 1
+    if args.bot == "netrattler":
+        report["production_fallback_source_stats"] = {
+            k: v for k, v in card.STATS.items()
+            if (k.startswith("player_") or k.startswith("espn_")) and isinstance(v, (int, float))
+        }
     for _, t in tlist[:args.max_teams]:
         ok, evidence = crest_test(t)
         report["crest_checked"] += 1
