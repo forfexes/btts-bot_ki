@@ -339,15 +339,16 @@ def render_goal(tip,target_date,result=None):
     label,col=nd._result_text(status)
     _erase(draw,(456,1214,647,1283),fill="#07151D",radius=14)
     _label(draw,label,550,1220,182,size=39,min_size=25,fill=col)
-    # The supplied original footer contains the OLD baked-in @netrattler.
-    # Restore its grass texture from the same real image before overlaying the
-    # user-requested @prophunter. Keep the original cyan frame/logo intact.
+    # The source contains an old, baked-in handle. The owner confirmed that
+    # @prophunter belongs UNDER the tip as Telegram text, never inside this PNG.
+    # Reconstruct this footer from the authentic frame and show the image brand.
+    # Keep the original cyan frame/logo intact.
     crop = im.crop((821, 1327, 1098, 1384)).resize((277, 72),
           Image.Resampling.LANCZOS)
     feather = Image.new("L", (277, 72), 0)
     ImageDraw.Draw(feather).rounded_rectangle((3, 3, 273, 69),
                                                 radius=12, fill=255)
     im.paste(crop, (821, 1232), feather.filter(ImageFilter.GaussianBlur(5)))
-    _label(draw, "@prophunter", 961, 1241, 252, size=34,
+    _label(draw, "NETRATTLER AI", 961, 1241, 252, size=29,
            min_size=22, fill=WHITE)
     return _write(im)
