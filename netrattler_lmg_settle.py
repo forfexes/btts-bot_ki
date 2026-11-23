@@ -163,8 +163,22 @@ def edit_original(row,final,won):
     if resp.status_code==400 and "message is not modified" in resp.text.lower():
         return  # Previous identical edit succeeded; safe to persist settlement.
     resp.raise_for_status()
-    if not resp.json().get("ok"):
-        raise RuntimeError("Telegram edit not confirmed")
+    try:
+        answer=resp.json()
+    except (ValueError,TypeError) as exc:
+        raise RuntimeError("Telegram edit response is not valid JSON") from exc
+    # A transport-level 200 or Telegram's bare 'ok:true' is insufficient:
+    # only a Message object with the EXACT original message_id proves this
+    # was an in-place result update, not a newly published/fallback message.
+    result=answer.get("result") if isinstance(answer,dict) and answer.get("ok") is True else None
+    if not isinstance(result,dict) or str(result.get("message_id"))!=str(row["telegram_message_id"]):
+        raise RuntimeError("Telegram edit acknowledgement lacks exact original message id")
+    # Telegram normally includes chat.id. If given, verify it matches the
+    # target chat, too; do not accept a response for another group.
+    actual_chat=result.get("chat")
+    if isinstance(actual_chat,dict) and actual_chat.get("id") is not None:
+        if str(actual_chat["id"])!=str(chat):
+            raise RuntimeError("Telegram edit response refers to another chat")
 
 def mark_settled(row,score,won):
     from netrattler_lmg_store import mark_settled as sqlite_mark_settled
