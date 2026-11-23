@@ -98,6 +98,23 @@ class LastMinuteOriginalQa(unittest.TestCase):
         with self.assertRaisesRegex(ValueError,'visible pixels'):
             _logo(original,stream.getvalue(),x=96,y=132)
 
+    def test_opaque_logo_sticker_is_rejected_before_editing_original_art(self):
+        try:
+            from .last_minute_dynamic_card import _logo
+        except ImportError:
+            from last_minute_dynamic_card import _logo
+        stadium=Image.new("RGBA",(512,512),(2,16,28,255))
+        before=stadium.copy()
+        for mode in ("RGB","RGBA"):
+            with self.subTest(mode=mode):
+                tile=Image.new(mode,(96,96),
+                               (250,250,250) if mode=="RGB" else (250,250,250,255))
+                ImageDraw.Draw(tile).ellipse((14,14,82,82),fill=(35,115,210))
+                buf=io.BytesIO();tile.save(buf,"PNG")
+                with self.assertRaisesRegex(ValueError,"Opaque team crest sticker"):
+                    _logo(stadium,buf.getvalue(),x=96,y=132)
+                self.assertIsNone(ImageChops.difference(stadium,before).getbbox())
+
     def test_missing_data_are_not_fabricated(self):
         clean={k:v for k,v in DATA.items() if k not in (
             'over_probability','next_probability','next_goal_team','stats')}
