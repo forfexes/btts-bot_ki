@@ -2,6 +2,7 @@
 import unittest
 from netrattler_lmg_source_policy import (
     DECISIONS, decision, may_provide_live_tip_data, may_provide_shadow_discovery,
+    shared_upstream_risk, UPSTREAM_EVIDENCE,
 )
 
 
@@ -28,6 +29,26 @@ class GoalHunterSourcePolicyTests(unittest.TestCase):
             self.assertTrue(may_provide_live_tip_data(source))
         self.assertTrue(may_provide_shadow_discovery("sportscore"))
         self.assertFalse(may_provide_live_tip_data("sportscore"))
+
+    def test_opta_apps_are_not_mistaken_for_independent_proof(self):
+        risk=shared_upstream_risk("FotMob","FLASHScore","OneFootball")
+        self.assertEqual(set(risk["possible_common_suppliers"]["opta"]),
+                         {"fotmob","flashscore","onefootball"})
+        self.assertEqual(risk["confirmed_independent_feeds"],0)
+        for key in ("fotmob","flashscore","onefootball","sofascore"):
+            self.assertTrue(UPSTREAM_EVIDENCE[key]["url"].startswith("https://"))
+
+    def test_sometimes_opta_means_possible_overlap_not_all_sofascore_stats(self):
+        result=shared_upstream_risk("sofascore","flashscore")
+        self.assertEqual(result["possible_common_suppliers"]["opta"],
+                         ["sofascore","flashscore"])
+        self.assertIn("NOT all stats",UPSTREAM_EVIDENCE["sofascore"]["scope"])
+
+    def test_unknown_upstream_is_not_claimed_independent(self):
+        risk=shared_upstream_risk("espn","flashscore","sportscore")
+        self.assertEqual(risk["possible_common_suppliers"],{})
+        self.assertEqual(risk["confirmed_independent_feeds"],0)
+        self.assertEqual(set(risk["unknown_lineage"]),{"espn","sportscore"})
 
     def test_unknown_source_fails_closed(self):
         with self.assertRaisesRegex(ValueError,"unreviewed_source"):
