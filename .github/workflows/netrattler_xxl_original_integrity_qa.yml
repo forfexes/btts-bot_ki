@@ -87,6 +87,13 @@ jobs:
           python netrattler_original_release_inventory.py --json > output/netrattler_qa_inventory.json
           python netrattler_five_owner_reference_qa.py --outdir output/netrattler_five_owner_qa
           echo "FIVE SOURCE-DERIVED DRAFTS ONLY: no Telegram release"
+      - name: Save factual approval inventory for all sixteen card families
+        uses: actions/upload-artifact@v4
+        with:
+          name: NETRATTLER-16-STATUS-QA-NO-TELEGRAM-APPROVAL
+          path: output/netrattler_qa_inventory.json
+          if-no-files-found: error
+          retention-days: 3
       - name: Export five owner-derived drafts for human pixel review
         uses: actions/upload-artifact@v4
         with:
