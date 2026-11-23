@@ -239,3 +239,17 @@ def test_model_builder_requires_its_own_telegram_group():
                 "2026-11-22", "OFFLINE_TEST_ONLY", log=lambda *_: None)
     assert result is None
     publish.assert_not_called()
+
+
+
+def test_goal_hunter_uses_netrattler_ai_brand_inside_image():
+    """Owner rule: Goal Hunter PNG says NETRATTLER AI; handle is below photo."""
+    import inspect
+    from netrattler_original_template_renderer import render_goal
+    from netrattler_stats_match_cards import _telegram_card_caption
+    source=inspect.getsource(render_goal)
+    assert '_label(draw, "NETRATTLER AI"' in source
+    assert '_label(draw, "@prophunter"' not in source
+    assert _telegram_card_caption("") == "@prophunter"
+    assert _telegram_card_caption("GOAL HUNTER · Quote 2.10") == (
+        "GOAL HUNTER · Quote 2.10\n\n@prophunter")
