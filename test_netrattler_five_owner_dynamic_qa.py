@@ -85,8 +85,9 @@ def test_every_multi_leg_remains_visible_and_poster_extends(family,count):
     extra = max(0,count*ROW_H+36-(BODY_END-BODY_TOP))
     with Image.open(BytesIO(png)) as im:
         assert im.format == "PNG" and im.size == (W,H+extra)
-        assert im.convert("RGB").getbbox() is not None
         im.verify()
+    with Image.open(BytesIO(png)) as im:
+        assert im.convert("RGB").getbbox() is not None
     output_dir = os.environ.get("NETRATTLER_FIVE_DYNAMIC_QA")
     if output_dir:
         root = Path(output_dir)
