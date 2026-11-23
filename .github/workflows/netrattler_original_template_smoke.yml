@@ -18,6 +18,7 @@ on:
       - 'test_netrattler_combo_dynamic_cards.py'
       - 'test_netrattler_combo_owner_original.py'
       - 'test_netrattler_btts_owner_original.py'
+      - 'test_netrattler_btts_crest_slots.py'
       - 'assets/original_templates/NETRATTLER_BTTS_originalkarte.png'
       - 'test_netrattler_premium_dispatch_gate.py'
       - 'test_netrattler_premium_verified_cards.py'
@@ -78,7 +79,7 @@ jobs:
       - name: Verify production card renderer with mocked photos and Telegram
         run: |
           python -m pip install --quiet pytest
-          python -m pytest -q test_netrattler_original_templates.py test_netrattler_premium_dispatch_gate.py test_netrattler_btts_owner_original.py test_netrattler_combo_owner_original.py test_netrattler_combo_dynamic_cards.py test_netrattler_premium_verified_cards.py
+          python -m pytest -q test_netrattler_original_templates.py test_netrattler_premium_dispatch_gate.py test_netrattler_btts_owner_original.py test_netrattler_btts_crest_slots.py test_netrattler_combo_owner_original.py test_netrattler_combo_dynamic_cards.py test_netrattler_premium_verified_cards.py
       - name: Verify pixel-exact Telegram safe zone in NEW and EDIT media
         run: |
           python -m py_compile netrattler_telegram_safe_zone.py test_netrattler_telegram_safe_zone.py
