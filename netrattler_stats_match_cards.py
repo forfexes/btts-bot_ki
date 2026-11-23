@@ -1244,6 +1244,15 @@ def update_cards_with_results(token, results, log=print):
             cards = r.json() if r.ok else []
             if not r.ok:
                 diag["err"] = f"get {r.status_code}"
+            # The same two clubs can play again next week. If the archive
+            # contains several distinct dates for this pairing, a result
+            # WITHOUT its own verified fixture date must never color any
+            # older Telegram card just because the club names match.
+            known_days = {
+                str(c.get("card_date") or "")[:10]
+                for c in cards if isinstance(c,dict) and c.get("card_date")
+            } if isinstance(cards,list) else set()
+            ambiguous_pairing = len(known_days) > 1
             for card in cards if isinstance(cards, list) else []:
                 diag["cards_found"] += 1
                 entries = [(m, t) for m, t in (card.get("entries") or [])]
@@ -1268,6 +1277,8 @@ def update_cards_with_results(token, results, log=print):
                 caption = None
                 for res in res_list:
                     result_day = str(res.get("tip_date") or res.get("date") or "")[:10]
+                    if ambiguous_pairing and not result_day:
+                        continue  # Repeated pairing, no proven game date.
                     if result_day and str(card.get("card_date") or "")[:10] != result_day:
                         continue  # Repeated same pairing on another date.
                     matched_this_result = False
