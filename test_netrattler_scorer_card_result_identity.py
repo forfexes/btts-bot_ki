@@ -190,7 +190,7 @@ def test_edit_message_media_preserves_caption_and_original_message_id():
                                  caption="❌ Auswertung: verloren")
     arguments = send.call_args.kwargs
     assert arguments["data"]["message_id"] == 918
-    assert json.loads(arguments["data"]["media"])["caption"] == "❌ Auswertung: verloren"
+    assert json.loads(arguments["data"]["media"])["caption"] == "❌ Auswertung: verloren\n\n@prophunter"
     assert "files" in arguments and "card" in arguments["files"]
 
 
@@ -239,3 +239,40 @@ def test_no_synthetic_void_on_unverified_goal_hunter_result():
     assert 'image_status = "pending"' in source
     assert '_confirmed_scorer_no_appearance(row)' in source
     assert '"caption": caption' in source
+
+
+
+def test_owner_corrected_match_card_caption_is_below_image():
+    """User's screenshot: the PNG footer is NETRATTLER AI, handle is Telegram text."""
+    assert cards._telegram_card_caption("") == "@prophunter"
+    assert cards._telegram_card_caption("OVER 2.5 @2.54") == (
+        "OVER 2.5 @2.54\n\n@prophunter")
+    assert cards._telegram_card_caption("OVER 2.5 @2.54\n\n@prophunter") == (
+        "OVER 2.5 @2.54\n\n@prophunter")
+    assert cards._telegram_card_caption("Already @PROP HUNTER") == (
+        "Already @PROP HUNTER\n\n@prophunter")
+
+
+def test_telegram_photo_caption_is_sent_outside_png_and_kept_on_edit():
+    import json
+    reply=SimpleNamespace(ok=True,status_code=200,text="ok",
+                           json=lambda:{"ok":True,"result":{"message_id":7001}})
+    with patch.object(cards.requests,"post",return_value=reply) as post:
+        assert cards._send_photo("QA_ONLY","test_chat","",b"TEST_PNG",
+                                 lambda *_:None)==7001
+        kwargs=post.call_args.kwargs
+        assert kwargs["data"]["caption"]=="@prophunter"
+        assert kwargs["files"]["photo"][1]==b"TEST_PNG"
+    with patch.object(cards.requests,"post",return_value=reply) as post:
+        assert cards._edit_photo("QA_ONLY","test_chat",7001,b"SETTLED_PNG",
+                                 lambda *_:None,caption=None)
+        media=json.loads(post.call_args.kwargs["data"]["media"])
+        assert media["caption"]=="@prophunter"
+        assert post.call_args.kwargs["data"]["message_id"]==7001
+
+
+def test_caption_overflow_must_fail_before_network_upload():
+    original="REAL TIP " + "a"*1016
+    with patch.object(cards.requests,"post",side_effect=AssertionError("network called")):
+        assert cards._send_photo("QA_ONLY","test_chat",original,b"PNG",lambda *_:None) is False
+        assert cards._edit_photo("QA_ONLY","test_chat",7001,b"PNG",lambda *_:None,caption=original) is False
