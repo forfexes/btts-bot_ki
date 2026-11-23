@@ -115,3 +115,15 @@ def test_ai_group_retains_exact_odds_and_rejects_fake_sources():
         row=dict(ok,**{field:value})
         assert cards.select_cards({"over25":[row]})==[]
     assert cards.select_cards({"over25":[{**ok,"_source":""}]})==[]
+
+
+
+def test_user_image_and_caption_have_separate_branding():
+    import inspect
+    from netrattler_stats_match_cards import _telegram_card_caption
+    visual = inspect.getsource(cards.render_bis_card)
+    assert '"NETRATTLER AI"' in visual
+    assert "@prophunter" not in visual
+    assert _telegram_card_caption("") == "@prophunter"
+    assert _telegram_card_caption("OVER 2.5 · Quote 2.54") == (
+        "OVER 2.5 · Quote 2.54\n\n@prophunter")
