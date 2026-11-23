@@ -83,6 +83,8 @@ def _badge(im, draw, cards, name, area):
     if not raw:
         raise ValueError('missing_verified_crest:' + str(name))
     img = Image.open(io.BytesIO(raw)).convert('RGBA')
+    if img.getchannel('A').getextrema()[0]>=255:
+        raise ValueError('opaque_corner_crest_sticker:' + str(name))
     if img.width < 45 or img.height < 45:
         raise ValueError('invalid_verified_crest:' + str(name))
     x0, y0, x1, y1 = area
