@@ -56,7 +56,7 @@ class NextGoalTests(unittest.TestCase):
         self.assertEqual(grade("home",(1,2),(3,2)),"won")
         self.assertEqual(grade("away",(1,2),(3,2)),"lost")
         self.assertEqual(grade("away",(1,2),(1,4)),"won")
-        self.assertEqual(grade("home",(1,2),(1,2)),"void")
+        self.assertEqual(grade("home",(1,2),(1,2)),"unverified")\n        # Bookmaker rules vary: never auto-VOID an unanswered next-goal team market.
         self.assertEqual(grade("home",(1,2),(3,4)),"unverified")
         self.assertEqual(grade("home",(1,2),(0,4)),"unverified")
         self.assertIsNone(grade(None,(1,2),(3,2)))
