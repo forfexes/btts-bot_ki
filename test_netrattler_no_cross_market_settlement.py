@@ -39,6 +39,25 @@ class NoCrossMarketSettlementQA(unittest.TestCase):
         self.assertTrue(_result_matches_card_entry(
             "btts",{"odds":1.85},{"group":"btts","odds":1.85},entries))
 
+    def test_two_identically_priced_same_market_legs_do_not_both_settle(self):
+        a={"odds":1.85,"selection_id":"line-under-8.5"}
+        b={"odds":1.85,"selection_id":"line-under-9.5"}
+        entries=[("corners",a),("corners",b)]
+        unknown={"group":"corners","odds":1.85}
+        self.assertFalse(_result_matches_card_entry(
+            "corners",a,unknown,entries))
+        self.assertFalse(_result_matches_card_entry(
+            "corners",b,unknown,entries))
+        confirmed={**unknown,"selection_id":"line-under-9.5"}
+        self.assertFalse(_result_matches_card_entry(
+            "corners",a,confirmed,entries))
+        self.assertTrue(_result_matches_card_entry(
+            "corners",b,confirmed,entries))
+        # Repeated IDs cannot establish unique identity either.
+        b["selection_id"]=a["selection_id"]
+        self.assertFalse(_result_matches_card_entry(
+            "corners",a,{**unknown,"selection_id":a["selection_id"]},entries))
+
     def test_missing_result_market_is_not_any_bets_market(self):
         self.assertFalse(_result_matches_card_entry(
             "btts",{"odds":1.85},{"odds":1.85},[("btts",{})]))
