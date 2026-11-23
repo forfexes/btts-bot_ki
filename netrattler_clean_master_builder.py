@@ -156,7 +156,7 @@ def render_clean_master_from_reference(category, source_path, title, labels):
     # Multi-leg cards need a truly EMPTY list area, not three preprinted
     # "AUSWAHL" rails subsequently covered by the live data layer.
     # One-time plate creation is the only place that changes this artwork.
-    multi_layout = category in ("builder", "combo")
+    multi_layout = category in ("builder", "combo", "cross_mix")
     for i, label in enumerate(labels):
         y = 638 + i * 142
         if not multi_layout:
