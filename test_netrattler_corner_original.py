@@ -9,7 +9,7 @@ from netrattler_corner_template import MASTER,render_corner_template,review_corn
 
 
 def badge():
-    pic=Image.new("RGB",(96,96),"#214A6D")
+    pic=Image.new("RGBA",(96,96),(0,0,0,0))
     ImageDraw.Draw(pic).ellipse((12,12,84,84),fill="#E3BD43")
     buf=io.BytesIO();pic.save(buf,"PNG");return buf.getvalue()
 
@@ -68,6 +68,18 @@ def test_corner_missing_metrics_block_telegram_without_fabricating():
     tip=valid_pick();tip.pop("_source")
     with patch.object(cards,"_badge_bytes",return_value=badge()):
         assert "missing_real_bookmaker_quote" in validate_corner(tip,"2026-11-21",cards)
+
+
+def test_corner_opaque_photo_tile_is_not_sent_as_authentic_club_crest():
+    tile=Image.new("RGB",(96,96),(247,247,247))
+    ImageDraw.Draw(tile).ellipse((12,12,84,84),fill="#E3BD43")
+    opaque=io.BytesIO();tile.save(opaque,"PNG")
+    with patch.dict("os.environ",{"NETRATTLER_BLOCK_OVERPAINTED_MASTERS":"0"}), \
+         patch.object(cards,"_badge_bytes",return_value=opaque.getvalue()), \
+         patch.object(cards,"_send_photo") as send:
+        with pytest.raises(ValueError,match="opaque_corner_crest_sticker"):
+            render_corner_template(valid_pick(),"2026-11-21")
+        send.assert_not_called()
 
 
 def test_legacy_screenshot_never_sends_in_production_without_clean_master():
