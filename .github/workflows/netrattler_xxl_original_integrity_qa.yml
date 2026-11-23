@@ -73,6 +73,16 @@ jobs:
           path: output/netrattler_ten_sandbox/*_SANDBOX_NOT_APPROVED.png
           if-no-files-found: ignore
           retention-days: 3
+      - name: Export user-original clean-frame source backgrounds for offline pixel QA
+        uses: actions/upload-artifact@v4
+        with:
+          name: NETRATTLER-SOURCE-BACKGROUNDS-QA-NOT-PRODUCTION
+          path: |
+            assets/goal_hunter_neon_frame.webp
+            assets/goal_hunter_original_header.webp
+            assets/netrattler_template_corner_original.webp
+            assets/original_templates/NETRATTLER_BTTS_originalkarte.png
+          retention-days: 1
       - name: Assert real production uses owner-only gate and caption-only fallback
         run: |
           python - <<'PY'
