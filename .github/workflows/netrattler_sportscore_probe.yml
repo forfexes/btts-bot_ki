@@ -16,6 +16,15 @@ jobs:
       SUPABASE_URL: ''
       LMG_SEND: 'false'
     steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+      - run: python -m pip install --prefer-binary requests
+      - name: Strict SportScore offline parser and identity Hardtest
+        run: python -m unittest -v test_netrattler_lmg_sportscore.py
+      - name: Production-style read-only SportScore coverage audit
+        run: python netrattler_lmg_sportscore_probe.py
       - name: Probe publicly documented SportScore football discovery endpoint
         shell: bash
         run: |
