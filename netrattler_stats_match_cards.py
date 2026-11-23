@@ -1174,10 +1174,36 @@ def _result_matches_card_entry(market, tip, result, entries):
     odds_t = _number(tip.get("odds") or tip.get("oddsYes"))
     odds_r = _number(result.get("odds"))
     same_odds = odds_t is not None and odds_r is not None and abs(odds_t - odds_r) < 0.011
-    if odds_t and odds_r and not same_odds and (
-            sum(aliases.get(str(m).strip().lower(),str(m).strip().lower()) ==
-                canonical_market for m, _ in entries) > 1):
-        return False
+    same_market_entries = [
+        item for item in entries
+        if aliases.get(str(item[0]).strip().lower(),str(item[0]).strip().lower())
+           == canonical_market
+    ]
+    if len(same_market_entries) > 1:
+        if not same_odds:
+            return False
+        # If two different bets in the same market carry the SAME odds,
+        # neither price nor market is enough to decide which card row won.
+        # Use the upstream per-selection ID if available; otherwise refuse
+        # to paint either row rather than marking both green.
+        matching_price_rows = [
+            item for item in same_market_entries
+            if (lambda observed: observed is not None and
+                abs(observed-odds_r)<0.011)(
+                    _number(item[1].get("odds") or item[1].get("oddsYes")))
+        ]
+        if len(matching_price_rows) > 1:
+            def selection_id(record):
+                if not isinstance(record,dict):
+                    return ""
+                return str(record.get("selection_id")
+                           or record.get("leg_id")
+                           or record.get("bet_id") or "").strip()
+            claimed=selection_id(result)
+            matching_id_rows = [item for item in matching_price_rows
+                                if claimed and selection_id(item[1])==claimed]
+            if len(matching_id_rows)!=1 or matching_id_rows[0][1] is not tip:
+                return False
     return True
 
 
