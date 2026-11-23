@@ -82,3 +82,26 @@ def test_football_logos_accept_matching_club_filename(monkeypatch):
     actual = "https://assets.football-logos.cc/logos/germany/700x700/bayer-04-leverkusen.1234abcd.png"
     monkeypatch.setattr(cards, "_fl_get", lambda url: '<img src="' + actual + '">')
     assert cards._fl_logo("Bayer Leverkusen", "Germany - Bundesliga") == actual
+
+
+def test_wrong_named_cached_club_wappen_is_rejected(monkeypatch):
+    from netrattler_crest_identity import named_crest_url_matches_club
+    bad = "https://assets.football-logos.cc/logos/portugal/700x700/sporting-cp.6d17a40c.png"
+    good = "https://assets.football-logos.cc/logos/germany/700x700/bayer-04-leverkusen.0000ffae.png"
+    self_opaque = "https://media.api-sports.io/football/teams/100.png"
+    assert named_crest_url_matches_club("Atletico CP", bad) is False
+    assert named_crest_url_matches_club("Bayer Leverkusen", good) is True
+    assert named_crest_url_matches_club("Atletico CP", self_opaque) is None
+    class Response:
+        ok = True
+        def json(self):
+            return [
+                {"team_key":"v2:atleticocp","team":"Atletico CP","url":bad},
+                {"team_key":"v2:bayerleverkusen","team":"Bayer Leverkusen","url":good},
+            ]
+    monkeypatch.setattr(cards,"_sb",lambda:("https://example/rest/v1/netrattler_match_cards",{}))
+    monkeypatch.setattr(cards,"_LOGO_CACHE",{})
+    monkeypatch.setattr(cards.requests,"get",lambda *a,**k:Response())
+    cards._crest_cache_load()
+    assert "atleticocp" not in cards._LOGO_CACHE
+    assert cards._LOGO_CACHE["bayerleverkusen"] == good
