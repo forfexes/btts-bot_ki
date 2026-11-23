@@ -16,8 +16,10 @@ def test_each_owner_family_clean_blank(family, tmp_path):
     src, title, labels = SPECS[family]
     hash_before = hashlib.sha256(src.read_bytes()).hexdigest()
     png, info = build(family)
+    with Image.open(BytesIO(png)) as verifier:
+        assert verifier.format == "PNG" and verifier.size == (W, H)
+        verifier.verify()
     with Image.open(BytesIO(png)) as image:
-        assert image.format == "PNG" and image.size == (W, H)
         cleaned = image.convert("RGB")
         source = _source(src).convert("RGB")
         # Immutable identity is the crown brand, NOT the sample betting data.
@@ -30,7 +32,6 @@ def test_each_owner_family_clean_blank(family, tmp_path):
             new = list(cleaned.crop(box).getdata())
             same = sum(a == b for a,b in zip(old,new))
             assert same / len(old) < 0.01
-        image.verify()
     assert hashlib.sha256(src.read_bytes()).hexdigest() == hash_before
     assert info["source_sha256"] == hash_before
     assert info["source_reference"].endswith(src.name)
