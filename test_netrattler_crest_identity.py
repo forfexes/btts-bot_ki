@@ -56,6 +56,8 @@ def test_verified_club_aliases_for_real_index_assets():
         ('Lyon', 'Olympique Lyon'),
         ('Nice', 'OGC Nice'),
         ('Sassuolo', 'US Sassuolo'),
+        ('Juventus', 'Juventus FC'),
+        ('Frosinone', 'Frosinone Calcio'),
     ]:
         assert same_club(short_name, official)
     assert not same_club('PSV', 'PSV II')
