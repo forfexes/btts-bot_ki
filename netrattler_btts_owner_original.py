@@ -81,6 +81,8 @@ def _crest(im, img: Image.Image, cx: int):
     if not isinstance(img, Image.Image):
         raise ValueError("Genuine BTTS team crest missing")
     crest = img.convert("RGBA")
+    if crest.getchannel("A").getextrema()[0]>=255:
+        raise ValueError("Opaque BTTS badge tile rejected: original alpha needed")
     # Providers can wrap a genuine logo in hundreds of transparent pixels.
     # Scaling that canvas instead of the visible emblem makes it float too
     # small in the owner's fixed badge slot. Keep the original frame intact.
