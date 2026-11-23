@@ -924,9 +924,15 @@ def retry_unedited_originals(existing: Sequence[Dict[str, Any]], newly_closed: S
     backlog_cutoff = (TODAY - timedelta(days=backlog_days)).isoformat()
     limit = max(0, min(100, int(os.getenv("SETTLEMENT_TG_REPLAY_MAX", "60"))))
     attempts = successes = 0
+    # Always spend the bounded Telegram edit budget on the NEWEST actual
+    # tips first. Historical database backfills often re-stamp a September
+    # tip's settled_at with today's date, which previously placed 50 stale
+    # and deleted messages ahead of current real Telegram receipts.
+    # settled_at is only a tie-breaker within the same original tip date.
     candidates = sorted(
         existing,
-        key=lambda row: str(row.get("settled_at") or ""),
+        key=lambda row: (str(row.get("tip_date") or "")[:10],
+                         str(row.get("settled_at") or "")),
         reverse=True,
     )
     for row in candidates:
