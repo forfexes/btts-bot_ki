@@ -142,6 +142,10 @@ def render_qa_card(plate_png: bytes, metadata: Mapping[str, Any],
     if not isinstance(metadata, Mapping) or not isinstance(record, Mapping):
         raise ValueError("Metadata and verified record are required")
     category = str(metadata.get("category") or "")
+    # CROSS/MIX has multiple independently verified fixtures. Never publish
+    # the former single-row preview that hides its individual selections.
+    if category == "cross_mix":
+        raise ValueError("Cross/Mix requires the full verified multi-leg renderer")
     if (category not in LABELS or
             metadata.get("classification") != "owner-derived_clean_QA_NOT_user_original" or
             metadata.get("production_approved") is not False or
@@ -225,6 +229,37 @@ def render_qa_card(plate_png: bytes, metadata: Mapping[str, Any],
           max_height=50, start_size=33, color="#FFE56C")
     _text(draw, "SANDBOX · KEIN TIPP", (W//2, 1268), max_width=395,
           max_height=45, start_size=25, color="#FCFCFF")
+    output = BytesIO()
+    canvas.convert("RGB").save(output, "PNG", optimize=True)
+    return output.getvalue()
+
+
+
+def render_cross_mix_qa(record: Mapping[str, Any], *, now: datetime | None = None) -> bytes:
+    """Render all 2-10 Cross/Mix legs onto its owner-derived clean reference.
+
+    This is strictly watermarked OFFLINE QA, never a production Telegram
+    renderer. It reuses the proven combo row geometry and independently
+    validates bookmaker receipts, times, each fixture and authentic alpha
+    team crests for every single selection.
+    """
+    from netrattler_clean_master_builder import render_clean_master
+    from netrattler_five_owner_dynamic_qa import _multi
+    if not isinstance(record, Mapping):
+        raise ValueError("Verified Cross/Mix ticket mapping required")
+    plate, metadata = render_clean_master("cross_mix")
+    if (metadata.get("production_approved") is not False
+            or metadata.get("classification") != "owner-derived_clean_QA_NOT_user_original"):
+        raise ValueError("Cross/Mix cannot reuse an unapproved owner screenshot")
+    with Image.open(BytesIO(plate)) as picture:
+        if picture.format != "PNG" or picture.size != (W, H):
+            raise ValueError("Missing clean Cross/Mix QA plate")
+        canvas = picture.convert("RGBA")
+    canvas, extra = _multi("cross_mix", canvas, record,
+                           _stamp(now or datetime.now(timezone.utc)))
+    draw = ImageDraw.Draw(canvas)
+    _text(draw, "SANDBOX · KEIN TIPP", (W//2, 1268+extra),
+          max_width=398, max_height=43, start_size=25, color="#FCFCFF")
     output = BytesIO()
     canvas.convert("RGB").save(output, "PNG", optimize=True)
     return output.getvalue()
