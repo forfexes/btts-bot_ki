@@ -59,9 +59,19 @@ def _logo(im,contents,*,x,y):
             logo=src.convert('RGBA')
     except (OSError,ValueError) as e:
         raise ValueError('Verified authentic team crest unreadable') from e
-    # The genuine crest is a separate transparent layer in the *empty* slot.
+    # Crop the provider's TRANSPARENT outside padding before fitting.
+    # Otherwise genuine crests appear too small/misaligned in the owner's
+    # existing shield fields. Do not draw a replacement circle or sticker.
+    visible=logo.getchannel('A').point(
+        lambda alpha: 255 if alpha>=24 else 0).getbbox()
+    if visible is None:
+        raise ValueError('Authentic crest has no visible pixels')
+    logo=logo.crop(visible)
+    if min(logo.size)<12:
+        raise ValueError('Authentic crest artwork too small')
     logo.thumbnail((70,65),Image.Resampling.LANCZOS)
-    im.paste(logo,(round(x-logo.width/2),round(y-logo.height/2)),logo)
+    im.paste(logo,(round(x-logo.width/2),round(y-logo.height/2)),
+             logo.getchannel('A'))
 
 def _fmt(v,places=0):
     return '–' if v is None else (f'{v:.{places}f}' if places else str(int(v)))
