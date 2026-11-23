@@ -38,6 +38,9 @@ jobs:
           SUPABASE_URL: ${{ secrets.SUPABASE_URL }}
           SUPABASE_KEY: ${{ secrets.SUPABASE_KEY }}
           SUPABASE_SERVICE_ROLE_KEY: ${{ secrets.SUPABASE_SERVICE_ROLE_KEY }}
+          API_FOOTBALL_KEYS: ${{ secrets.API_FOOTBALL_KEYS }}
+          ALLSPORTS_API_KEY: ${{ secrets.ALLSPORTS_API_KEY }}
+          ASSET_FULL_CHAIN_SAMPLE: '8'
           ASSET_MAX_PHOTOS: '80'
           ASSET_MAX_TEAMS: '100'
         run: python -u asset_coverage_audit.py --bot netrattler --max-photos 80 --max-teams 100
