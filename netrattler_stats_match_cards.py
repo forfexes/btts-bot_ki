@@ -531,7 +531,7 @@ def render_card(entries, target_date, result=None):
     # Stop production photo repaint from raw, example-filled owner screenshots.
     # This blocks both first publication AND in-place historical media edits.
     # Offline QA remains available without the production-only release switch.
-    if os.getenv("NETRATTLER_BLOCK_OVERPAINTED_MASTERS", "0") == "1":
+    if os.getenv("NETRATTLER_BLOCK_OVERPAINTED_MASTERS", "1") != "0":
         raise ValueError("premium_owner_original_still_overpainted_no_telegram")
     from PIL import Image, ImageDraw, ImageFont
 
@@ -1171,7 +1171,7 @@ def update_cards_with_results(token, results, log=print):
     the original photo message (no new post)."""
     # Owner images are immutable until the source design is clean.
     # Do not overwrite historical Telegram media with an opaque re-render.
-    if os.getenv("NETRATTLER_BLOCK_OVERPAINTED_MASTERS", "0") == "1":
+    if os.getenv("NETRATTLER_BLOCK_OVERPAINTED_MASTERS", "1") != "0":
         log("NETRATTLER original photo edit deferred: no overlay-free approved master")
         return 0
     if os.getenv("ENABLE_RESULT_IN_CARD", "true").lower() not in ("1", "true", "yes", "on"):
