@@ -2,14 +2,19 @@
 import io
 import unittest
 
-from PIL import Image, ImageChops
+from PIL import Image, ImageChops, ImageDraw
 
 from netrattler_premium_verified_cards import render_verified_png
 from netrattler_premium_telegram_adapter import render, MARKETS
 
 
 def crest():
-    im = Image.new("RGBA", (120, 120), (0, 160, 240, 255))
+    # Real premium emblems have a transparent external boundary. An
+    # opaque, rectangular blue mock would be correctly rejected as a
+    # pasted-on sticker on the original stadium owner artwork.
+    im = Image.new("RGBA", (120, 120), (0, 0, 0, 0))
+    ImageDraw.Draw(im).ellipse((12, 12, 108, 108),
+                               fill=(0, 160, 240, 255))
     im.putpixel((60, 60), (252, 220, 30, 255))
     with io.BytesIO() as out:
         im.save(out, format="PNG")
