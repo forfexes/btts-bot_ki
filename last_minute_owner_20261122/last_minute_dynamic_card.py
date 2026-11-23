@@ -59,9 +59,13 @@ def _logo(im,contents,*,x,y):
             logo=src.convert('RGBA')
     except (OSError,ValueError) as e:
         raise ValueError('Verified authentic team crest unreadable') from e
-    # Crop the provider's TRANSPARENT outside padding before fitting.
-    # Otherwise genuine crests appear too small/misaligned in the owner's
-    # existing shield fields. Do not draw a replacement circle or sticker.
+    # The badge itself must be genuinely transparent. An opaque
+    # rectangular JPEG tile is a sticker and cannot be reconstructed safely
+    # without inventing image pixels. Reject, never put it on the card.
+    if logo.getchannel('A').getextrema()[0]>=255:
+        raise ValueError('Opaque team crest sticker is forbidden')
+    # Crop the provider's transparent padding before fitting the floating
+    # original club emblem; no new shield, circle or background tile.
     visible=logo.getchannel('A').point(
         lambda alpha: 255 if alpha>=24 else 0).getbbox()
     if visible is None:
