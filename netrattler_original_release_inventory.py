@@ -45,6 +45,8 @@ def _hash(path):
 
 def audit(root=ROOT):
     from netrattler_premium_verified_cards import CATEGORIES
+    from netrattler_clean_master_builder import SOURCE_MAP
+    from netrattler_five_owner_reference_qa import SPECS
     root=Path(root)
     def under(rel):
         return root / rel
@@ -56,6 +58,21 @@ def audit(root=ROOT):
         plate=under(clean.relative_to(ROOT)) if clean else None
         reference_exists=bool(source and source.is_file())
         candidate_exists=bool(plate and plate.is_file())
+        # QA preview capability is not an approved original master, and the
+        # ten derived market references are NOT owner originals in themselves.
+        if category in SOURCE_MAP:
+            reference_for_qa=SOURCE_MAP[category]
+            qa_generator="netrattler_clean_master_builder.py"
+        elif category in SPECS:
+            reference_for_qa=SPECS[category][0]
+            qa_generator="netrattler_five_owner_reference_qa.py"
+        else:
+            reference_for_qa=None
+            qa_generator="last_minute_owner_20261122/last_minute_dynamic_card.py" if category=="last_minute_goal" else None
+        qa_source=(under(reference_for_qa.relative_to(ROOT))
+                   if reference_for_qa is not None else None)
+        qa_buildable=bool(qa_source and qa_source.is_file() and
+                          under(Path(qa_generator)).is_file()) if qa_source else candidate_exists
         # A separately approved owner master requires the original source,
         # the exact CLEAN PNG, and a human-signoff attestation matching
         # both file hashes. Merely copying or renaming an SVG is insufficient.
@@ -89,6 +106,10 @@ def audit(root=ROOT):
             "source_reference":str(src.relative_to(ROOT)) if src else None,
             "reference_present":reference_exists,
             "clean_candidate_present":candidate_exists,
+            "qa_preview_generator":qa_generator,
+            "qa_draft_buildable":qa_buildable,
+            "qa_derived_reference":str(reference_for_qa.relative_to(ROOT)) if reference_for_qa else None,
+            "qa_draft_is_not_approved_original":True,
             "approved_for_telegram":verified,
             "state":("approved" if verified else
                      "clean_candidate_not_approved" if candidate_exists else
