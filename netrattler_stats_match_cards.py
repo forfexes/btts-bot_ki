@@ -387,6 +387,11 @@ def _paste_badge(im, draw, team, box, font):
         with Image.open(io.BytesIO(payload)) as raw:
             raw.load()
             badge=raw.convert("RGBA")
+        # A full opaque source rectangle (often a JPEG containing a
+        # white logo tile) cannot float on an authentic dark stadium. Do
+        # not paste it like a sticker or fabricate alpha from its colours.
+        if badge.getchannel("A").getextrema()[0]>=255:
+            raise ValueError("Opaque provider crest tile is not transparent artwork")
         visible=badge.getchannel("A").point(
             lambda alpha: 255 if alpha>=24 else 0).getbbox()
         if visible is None:
