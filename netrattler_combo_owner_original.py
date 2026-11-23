@@ -52,6 +52,8 @@ def _photo_crest(data):
             if min(source.size)<40:
                 raise ValueError("Low-resolution club crest")
             crest=source.convert("RGBA")
+            if crest.getchannel("A").getextrema()[0]>=255:
+                raise ValueError("Opaque Combo club crest sticker rejected")
             visible=crest.getchannel("A").point(
                 lambda v: 255 if v>=24 else 0).getbbox()
             if visible is None:
