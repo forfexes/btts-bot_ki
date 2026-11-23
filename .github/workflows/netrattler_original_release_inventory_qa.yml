@@ -1,0 +1,51 @@
+name: NETRATTLER Genuine Original Release Audit
+"on":
+  workflow_dispatch: {}
+  push:
+    paths:
+      - 'netrattler_original_release_inventory.py'
+      - 'test_netrattler_original_release_inventory.py'
+      - 'last_minute_owner_20261122/**'
+      - 'assets/original_templates/**'
+      - 'assets/approved_original_masters/**'
+      - '.github/workflows/netrattler_original_release_inventory_qa.yml'
+permissions:
+  contents: read
+jobs:
+  genuine-source-audit:
+    runs-on: ubuntu-latest
+    timeout-minutes: 8
+    env:
+      TELEGRAM_TOKEN: ''
+      SUPABASE_URL: ''
+      SUPABASE_KEY: ''
+      NETRATTLER_BLOCK_OVERPAINTED_MASTERS: '1'
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+      - name: Install isolated asset inspection dependencies
+        run: python -m pip install 'Pillow>=10'
+      - name: Verify inventory, exact source hashes and no fake originals
+        run: |
+          python -m py_compile netrattler_original_release_inventory.py test_netrattler_original_release_inventory.py
+          python -m unittest -v test_netrattler_original_release_inventory
+      - name: Show real original readiness, not generic SVG substitutes
+        run: |
+          python netrattler_original_release_inventory.py --json > original-release-audit.json
+          cat original-release-audit.json
+          {
+            echo '## NETRATTLER Real Original Release'
+            echo ''
+            echo 'This is source verification, NOT approval for live Telegram.'
+            echo ''
+            echo '### Family status'
+            python netrattler_original_release_inventory.py
+          } >> "$GITHUB_STEP_SUMMARY"
+      - name: Export test evidence without publishing or overriding original sources
+        uses: actions/upload-artifact@v4
+        with:
+          name: netrattler-original-source-release-evidence
+          path: original-release-audit.json
+          retention-days: 7
