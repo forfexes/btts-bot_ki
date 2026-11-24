@@ -60,7 +60,7 @@ def test_qa_cannot_serve_as_production_card():
 def test_no_calculated_combined_prices_as_genuine_bookmaker():
     data=ticket("builder",10)
     data["combined_odds_observed"]=False
-    with pytest.raises(ValueError,match="bookmaker ticket|book price|ticket ID"):
+    with pytest.raises(ValueError,match="No observed ticket"):
         render_mobile_pages(MASTER_PATH,data,preview_only=True)
 
 
