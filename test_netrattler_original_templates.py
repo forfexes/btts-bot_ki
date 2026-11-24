@@ -17,8 +17,9 @@ def _original_screenshot_render_only_in_offline_qa(monkeypatch):
     monkeypatch.setenv("NETRATTLER_BLOCK_OVERPAINTED_MASTERS","0")
 
 
-def _test_photo():
-    im=Image.new("RGB",(240,260),"#0F5872")
+def _test_photo(transparent=False):
+    im=Image.new("RGBA" if transparent else "RGB",(240,260),
+                 (0,0,0,0) if transparent else "#0F5872")
     d=ImageDraw.Draw(im)
     d.ellipse((70,25,185,155),fill="#BD885E")
     d.polygon(((8,260),(50,155),(194,155),(230,260)),fill="#9D2238")
@@ -80,7 +81,7 @@ def test_builder_rejects_formula_derived_combo_quote():
     with pytest.raises(ValueError,match="Keine bestätigte Buchmacher-Kombiquote"):
         builder.render_builder_card(pick)
     # The verified bookmaker ticket remains renderable in offline QA.
-    photo=_test_photo()
+    photo=_test_photo(transparent=True)
     pick.combined_quote_verified=True
     pick.combined_bookmaker_quote=8.5
     with patch.object(cards,"_player_photo",return_value=photo):
@@ -90,7 +91,7 @@ def test_builder_rejects_formula_derived_combo_quote():
 
 
 def test_goal_hunter_master_and_dry_run_send():
-    photo=_test_photo()
+    photo=_test_photo(transparent=True)
     tip={"match":"Demo United vs Test FC","player":"Beispiel Stürmer",
          "team":"Demo United","league":"Demo League","odds":9.5,
          "probability":26,"fairOdds":3.85,"goals_per_game":.3,
@@ -165,7 +166,7 @@ def test_goal_hunter_kickoff_is_swiss_local_and_visible_in_original_artwork():
     from netrattler_original_template_renderer import _kickoff
     assert _kickoff("2026-11-21T17:30:00+00:00") == "21.11.2026 / 18:30 Uhr"
     assert _kickoff("2026-07-21T17:30:00+00:00") == "21.07.2026 / 19:30 Uhr"
-    photo=_test_photo()
+    photo=_test_photo(transparent=True)
     tip={"match":"Demo United vs Test FC","player":"Beispiel Stürmer",
          "team":"Demo United","odds":9.50,"probability":26,"fairOdds":3.85,
          "goals_per_game":.30,"_kickoff":"2026-11-21T17:30:00+00:00"}
@@ -253,3 +254,23 @@ def test_goal_hunter_uses_netrattler_ai_brand_inside_image():
     assert _telegram_card_caption("") == "@prophunter"
     assert _telegram_card_caption("GOAL HUNTER · Quote 2.10") == (
         "GOAL HUNTER · Quote 2.10\n\n@prophunter")
+
+def test_goal_cutout_does_not_accept_opaque_photo():
+    from netrattler_original_template_renderer import _floating_goal_photo
+    canvas=Image.new("RGB",(1122,1402),"#061623")
+    with patch.object(cards,"_player_photo",return_value=_test_photo()):
+        with pytest.raises(ValueError,match="transparent player cutout"):
+            _floating_goal_photo(canvas,cards,"QA","QA",(326,315,796,731))
+
+
+def test_goal_arena_preserves_header_and_removes_baked_ring():
+    from netrattler_original_template_renderer import _goal_arena
+    original=_base(str(GOAL_IMAGE))
+    candidate=original.copy()
+    _goal_arena(candidate)
+    assert ImageChops.difference(candidate.crop((0,0,1122,310)),
+        original.crop((0,0,1122,310))).getbbox() is None
+    assert ImageChops.difference(candidate.crop((0,755,1122,1402)),
+        original.crop((0,755,1122,1402))).getbbox() is None
+    assert ImageChops.difference(candidate.crop((316,320,780,730)),
+        original.crop((316,320,780,730))).getbbox() is not None

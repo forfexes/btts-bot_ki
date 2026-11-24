@@ -286,6 +286,42 @@ def render_builder(pick):
     return _write(im)
 
 
+
+def _goal_arena(im):
+    """Reconstruct only the baked sample matchup band for offline review.
+
+    The source is flattened, so the hidden stadium pixels cannot be recovered.
+    Use actual unobstructed edge artwork, not the old face or golden halo.
+    """
+    top, bottom = 310, 755
+    size = (im.width, bottom-top)
+    left = im.crop((0,top,50,bottom)).resize(size,Image.Resampling.BICUBIC)
+    right = im.crop((im.width-50,top,im.width,bottom)).resize(size,Image.Resampling.BICUBIC)
+    arena = Image.blend(left,right,.5).filter(ImageFilter.GaussianBlur(8))
+    arena = Image.blend(arena,Image.new("RGB",size,"#061623"),.40)
+    im.paste(arena,(0,top))
+
+
+def _floating_goal_photo(im, cards, player, team, rect):
+    pic = _picture(cards._player_photo(player,team))
+    alpha = pic.getchannel("A")
+    if alpha.getextrema()[0] == 255:
+        raise ValueError("Goal Hunter requires genuine transparent player cutout")
+    bbox = alpha.point(lambda v: 255 if v >= 24 else 0).getbbox()
+    if bbox is None:
+        raise ValueError("Goal Hunter player photo has no visible artwork")
+    pic = pic.crop(bbox)
+    if min(pic.size)<60:
+        raise ValueError("Goal Hunter cutout resolution too low")
+    x0,y0,x1,y1 = rect
+    scale = min((x1-x0)/pic.width,(y1-y0)/pic.height)
+    if scale>4:
+        raise ValueError("Goal Hunter cutout resolution too low")
+    pic = pic.resize((round(pic.width*scale),round(pic.height*scale)),
+                     Image.Resampling.LANCZOS)
+    im.paste(pic,((x0+x1-pic.width)//2,y1-pic.height),pic.getchannel("A"))
+
+
 def render_goal(tip,target_date,result=None):
     if os.getenv("NETRATTLER_BLOCK_OVERPAINTED_MASTERS", "1") != "0":
         raise ValueError("Original Goal Hunter has no approved overlay-free clean source")
@@ -298,19 +334,19 @@ def render_goal(tip,target_date,result=None):
     club=str(tip.get("team") or "").strip()
     if not all((home,away,player,club)):
         raise ValueError("Goal Hunter hat nicht verifizierte Spieler-/Spieldaten")
-    # Original artwork header, stadium, metallic logo and ribbon untouched.
-    for name,logo_box,label_box,cx,crest_rect in [
-        (home,(90,405,274,630),(87,662,347,725),215,(96,430,267,615)),
-        (away,(820,405,1019,630),(778,662,1046,725),901,(830,430,1011,615)),
+    # The header, category ribbon and lower stats are still the original.
+    # Reconstruct the baked face/crest/halo band, then float real cutouts.
+    _goal_arena(im)
+    _floating_goal_photo(im,cards,player,club,(326,315,796,731))
+    for name,label_box,cx,crest_rect in [
+        (home,(48,655,348,725),198,(83,410,285,625)),
+        (away,(774,655,1074,725),924,(837,410,1039,625)),
     ]:
-        _erase(draw,logo_box,fill="#0A1B27",radius=30)
         _crest(im,cards,name,crest_rect)
-        _erase(draw,label_box,fill="#07141B",radius=12)
+        draw.rounded_rectangle(label_box,radius=12,fill="#07141B",
+                               outline=CYAN,width=3)
         _label(draw,name.upper(),cx,668,label_box[2]-label_box[0]-24,size=33,min_size=13)
-    _erase(draw,(340,315,770,727),fill="#061623",radius=200)
-    _portrait(im,cards,player,club,(340,319,769,720),circle=True)
-    # Reapply the golden halo from the master frame rather than replacing logo.
-    draw.arc((316,309,780,738),0,360,fill="#FFDA45",width=8)
+    _label(draw,"VS",561,708,100,size=37,min_size=25,fill=GOLD)
     _erase(draw,(204,761,901,837),fill="#06131B",radius=12)
     _label(draw,player.upper(),555,772,665,size=54,min_size=27)
     # Compact confirmed Swiss kickoff beneath the player's name. Preserve the
