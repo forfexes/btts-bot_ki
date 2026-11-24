@@ -54,10 +54,20 @@ def _book_price(record):
                   "estimated", "odds_calculated", "model_odds"):
         if record.get(label):
             raise ValueError("Unverified or estimated individual quote is not permitted")
-    source = str(record.get("bookmaker") or record.get("odds_source")
-                 or record.get("_source") or record.get("source") or "").strip()
-    if not source:
-        raise ValueError("Bookmaker provenance required for every selection")
+    # Generic feed fields (_source/source) often contain ESPN, API-Football
+    # or another statistical provider. They are NEVER bookmaker evidence.
+    # Accept only explicitly marked sportsbook provenance on real leg prices.
+    kind = str(record.get("price_type") or "").lower().strip()
+    if (record.get("odds_observed") is False
+            or kind in {"synthetic", "estimated", "model", "model_odds",
+                        "calculated_from_leg_odds", "derived_builder"}
+            or record.get("price_calculated") is True):
+        raise ValueError("Unverified synthetic/model leg quote cannot be published")
+    source = str(record.get("bookmaker") or record.get("book")
+                 or record.get("bookie") or record.get("odds_source") or "").strip()
+    if not source or source.casefold() in {"model", "espn", "fotmob", "apifootball",
+                "api-football", "statsbomb", "forebet", "synthetic", "estimated"}:
+        raise ValueError("Named sportsbook/bookmaker provenance required for every selection")
     for field in PRICE_FIELDS:
         raw = record.get(field)
         try:
