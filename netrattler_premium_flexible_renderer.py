@@ -12,6 +12,9 @@ import math
 from pathlib import Path
 from PIL import Image, ImageDraw, ImageFont
 
+MASTER_PATH = Path(__file__).resolve().parent / "assets/premium_master/NETRATTLER_AI_PREMIUM_MASTER.png"
+MASTER_SHA256 = "e87a7a98d284ff5429ac26e6cc59ae37c6ed0dfa0aff690c29368ca386575209"
+
 CATEGORIES = frozenset(("single", "btts", "btts_halftime", "over",
     "over_halftime", "match_result", "goal", "corner", "player_props",
     "fouls_cards", "var", "last_minute_goal", "late_goals",
@@ -117,6 +120,10 @@ def _asset(canvas, path, xy, size):
 
 def render(master_path, data):
     category, legs = validate(data)
+    path = Path(master_path)
+    if path.resolve() == MASTER_PATH.resolve():
+        if not path.is_file() or hashlib.sha256(path.read_bytes()).hexdigest() != MASTER_SHA256:
+            raise ValueError("Immutable NETRATTLER AI PREMIUM source hash mismatch")
     with Image.open(master_path) as source:
         if source.format != "PNG" or source.width != 1080 or source.height < 400:
             raise ValueError("Exact 1080px-wide approved PNG master required")
@@ -178,7 +185,7 @@ def render(master_path, data):
 
 def main():
     parser = argparse.ArgumentParser()
-    parser.add_argument("--master", required=True, type=Path)
+    parser.add_argument("--master", default=MASTER_PATH, type=Path)
     parser.add_argument("--data", required=True, type=Path)
     parser.add_argument("--out", required=True, type=Path)
     args = parser.parse_args()
