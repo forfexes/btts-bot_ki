@@ -21,10 +21,10 @@ from netrattler_visual_review import review_png
 
 
 def fake_headshot():
-    pic = Image.new("RGB", (200, 230), "#194D6B")
+    # Offline geometry fixture only: preserve transparent space around the subject.
+    # Never used by the production photo provider.
+    pic = Image.new("RGBA", (200, 230), (0, 0, 0, 0))
     dr = ImageDraw.Draw(pic)
-    for y in range(230):
-        dr.line((0, y, 200, y), fill=(15 + y // 10, 40 + y // 5, 80 + y // 12))
     dr.ellipse((35, 12, 165, 145), fill="#C68C64", outline="#4A2A25", width=5)
     dr.ellipse((60, 140, 142, 192), fill="#DAA17A")
     dr.polygon(((0, 230), (20, 173), (185, 168), (200, 230)), fill="#C9192E")
