@@ -1,0 +1,32 @@
+name: NETRATTLER Premium Flexible Offline QA
+"on":
+  workflow_dispatch: {}
+  push:
+    paths:
+      - "netrattler_premium_flexible_renderer.py"
+      - "test_netrattler_premium_flexible_renderer.py"
+      - ".github/workflows/netrattler_premium_flexible_offline_qa.yml"
+permissions:
+  contents: read
+jobs:
+  offline-render:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    env:
+      TELEGRAM_TOKEN: ""
+      TELEGRAM_CHAT_ID: ""
+      SUPABASE_URL: ""
+      SUPABASE_KEY: ""
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+      - name: Dependencies
+        run: python -m pip install -q 'Pillow>=10' 'pytest>=8'
+      - name: Compile and test all sizes and categories
+        run: |
+          python -m py_compile netrattler_premium_flexible_renderer.py
+          python -m pytest -q test_netrattler_premium_flexible_renderer.py
+      - name: Confirm offline-only status
+        run: echo 'NO TELEGRAM OR SUPABASE DELIVERY; source PNG visual approval still required'
