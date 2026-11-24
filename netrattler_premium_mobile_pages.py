@@ -18,7 +18,7 @@ from PIL import Image, ImageDraw
 
 from netrattler_premium_flexible_renderer import (
     validate, MASTER_PATH, MASTER_SHA256, CATEGORIES, MULTI, BG, PANEL,
-    GOLD, CYAN, WHITE, _fit, _font, _odds, _asset,
+    GOLD, CYAN, WHITE, _fit, _font, _odds, _asset, combined_quote_info,
 )
 
 MAX_LEGS_PER_IMAGE = 3
@@ -165,11 +165,13 @@ def render_mobile_pages(master_path, ticket, *, max_legs_per_image=MAX_LEGS_PER_
         dr.rounded_rectangle((MARGIN,footer_y,1080-MARGIN,footer_y+foot_h),
                              radius=17,fill=PANEL,outline=GOLD,width=3)
         if on_last:
-            total_quote=_odds(ticket["combined_odds"],"combined") if kind in MULTI else _odds(legs[0]["bookmaker_odds"],"single")
+            quote_data=combined_quote_info(ticket, legs)
+            total_quote=quote_data["odds"]
             prob=ticket.get("model_probability")
             probability="—" if prob is None else f"{float(prob):.1f}%"
             summary=(
-                (f"GESAMTQUOTE @{total_quote:.2f} · BUCHMACHER",29,GOLD,34),
+                ((f"GESAMTQUOTE @{total_quote:.2f} · BUCHMACHER" if quote_data["observed"]
+                  else f"BERECHNET @{total_quote:.2f} · KEINE BUCHMACHERQUOTE"),29,GOLD,34),
                 (f"MODELLWAHRSCHEINLICHKEIT {probability}",81,CYAN,31),
                 ("1 TICKET · 1 UNIT GESAMT",133,WHITE,32),
                 ("AUSWERTUNG: "+status,181,WHITE,31),
