@@ -60,7 +60,7 @@ def test_invalid_quotes_and_fabrication_rejected():
 def test_combined_quote_must_be_bookmaker_observed():
     data = {"category": "builder", "legs": [_leg(1), _leg(2)],
             "combined_odds": 3.24}
-    with pytest.raises(ValueError, match="bookmaker ticket"):
+    with pytest.raises(ValueError, match="No observed ticket"):
         validate(data)
 
 
