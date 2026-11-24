@@ -90,3 +90,15 @@ def test_no_telegram_or_supabase_code():
     source=Path(__file__).with_name('netrattler_premium_mobile_pages.py').read_text()
     assert 'requests.post(' not in source and 'urllib.request.urlopen' not in source
     assert 'supabase.create_client(' not in source
+
+def test_alternative_background_allowed_only_in_offline_qa(tmp_path):
+    img=Image.new("RGB",(1080,608),(2,3,4))
+    another=tmp_path/"replacement.png"
+    img.save(another)
+    render_mobile_pages(another,ticket("single",1),preview_only=True)
+    real=ticket("single",1)
+    real["legs"][0].update(home_logo="must-be-real.png",away_logo="must-be-real-too.png")
+    # Real delivery cannot silently substitute a different master, even
+    # when complete input image data would later become available.
+    with pytest.raises(ValueError):
+        render_mobile_pages(another,real,preview_only=False)
