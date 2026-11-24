@@ -69,3 +69,28 @@ def test_unreadable_long_text_is_rejected(source):
     data["legs"][0]["market"] = "LONG STRING " * 200
     with pytest.raises(ValueError, match="overflow"):
         render(source, data)
+
+
+def test_committed_exact_master_binary_and_live_dimensions():
+    from netrattler_premium_flexible_renderer import MASTER_PATH, MASTER_SHA256
+    import hashlib
+    assert MASTER_PATH.is_file(), "Exact premium PNG missing from repository"
+    assert hashlib.sha256(MASTER_PATH.read_bytes()).hexdigest() == MASTER_SHA256
+    with Image.open(MASTER_PATH) as im:
+        assert im.format == "PNG" and im.size == (1080, 608)
+
+
+def test_real_master_all_categories_keep_header_identical():
+    from netrattler_premium_flexible_renderer import MASTER_PATH
+    with Image.open(MASTER_PATH) as original:
+        top = original.convert("RGB").tobytes()
+    for category in sorted(CATEGORIES):
+        multi = category in {"builder", "combo", "cross_mix", "lottery"}
+        for count in ((2, 5, 10) if multi else (1,)):
+            data = {"category": category, "legs": [_leg(i) for i in range(count)]}
+            if multi:
+                data.update(combined_odds=3.24, combined_odds_observed=True,
+                            combined_ticket_id="SYNTHETIC-QA-ONLY")
+            rendered = render(MASTER_PATH, data)
+            assert rendered.crop((0, 0, 1080, 608)).tobytes() == top
+            assert rendered.width == 1080
