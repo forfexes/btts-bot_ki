@@ -75,6 +75,27 @@ class LogRedirectHandler(urllib.request.HTTPRedirectHandler):
         return redirected
 
 
+def production_jobs_for_coverage(jobs):
+    """Inspect only the Telegram production job, never the offline preflight.
+
+    GitHub's /logs endpoint returns 404 for a skipped job. A run can be green
+    because its standalone QA succeeded while production was intentionally
+    withheld by the owner's original-art approval gate.
+    """
+    if not jobs or len(jobs) > 10:
+        raise ValueError('Incomplete job state for production coverage')
+    production = [job for job in jobs
+                  if str(job.get('name') or '').strip() == 'run-bot']
+    if len(production) != 1:
+        raise ValueError('Production run-bot job not uniquely identified')
+    job = production[0]
+    if job.get('conclusion') == 'skipped':
+        return []
+    if job.get('status') == 'completed' and job.get('conclusion') == 'success':
+        return [job]
+    raise ValueError('Production run-bot has no successful finished delivery')
+
+
 def fetch_job_logs(run):
     token = os.getenv('GITHUB_TOKEN') or ''
     repo = os.getenv('GITHUB_REPOSITORY') or ''
@@ -85,11 +106,12 @@ def fetch_job_logs(run):
     url = f'https://api.github.com/repos/{repo}/actions/runs/{int(run_id)}/jobs?per_page=30'
     with urllib.request.urlopen(urllib.request.Request(url, headers=headers), timeout=20) as response:
         jobs = json.load(response).get('jobs', [])
+    production = production_jobs_for_coverage(jobs)
+    if not production:
+        return ''  # QA-only success; NOT a telegram-publishing run.
     chunks = []
-    if not jobs or len(jobs) > 5:
-        raise ValueError('Incomplete job log coverage')
     opener = urllib.request.build_opener(LogRedirectHandler())
-    for job in jobs:
+    for job in production:
         jid = int(job['id'])
         url = f'https://api.github.com/repos/{repo}/actions/jobs/{jid}/logs'
         with opener.open(urllib.request.Request(url, headers=headers), timeout=30) as response:
@@ -155,10 +177,19 @@ def main():
     ok, message = evaluate(run)
     if ok and run.get('conclusion') == 'success' and run.get('name') == 'NETRATTLER AI Tipp Bot':
         try:
-            warnings = coverage_warnings(fetch_job_logs(run))
-            if warnings:
-                ok = False
-                message = 'NETRATTLER | TIP COVERAGE WARNING\n' + '\n'.join(warnings) + '\n' + (run.get('html_url') or '')
+            production_logs = fetch_job_logs(run)
+            if not production_logs:
+                # The master-image approval gate intentionally skipped
+                # production. Do not falsely alarm or label the run as sent.
+                message = ('NETRATTLER | OFFLINE-QA OK; TELEGRAM NICHT AUSGEFUEHRT\n'
+                           + (run.get('html_url') or ''))
+            else:
+                warnings = coverage_warnings(production_logs)
+                if warnings:
+                    ok = False
+                    message = ('NETRATTLER | TIP COVERAGE WARNING\n'
+                               + '\n'.join(warnings) + '\n'
+                               + (run.get('html_url') or ''))
         except (urllib.error.URLError, ValueError, KeyError, TimeoutError) as exc:
             ok = False
             message = 'NETRATTLER | Coverage log inspection unavailable: ' + type(exc).__name__
