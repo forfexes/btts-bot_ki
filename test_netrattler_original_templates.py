@@ -244,13 +244,13 @@ def test_model_builder_requires_its_own_telegram_group():
 
 
 def test_goal_hunter_uses_netrattler_ai_brand_inside_image():
-    """Owner rule: Goal Hunter PNG says NETRATTLER AI; handle is below photo."""
+    """Owner rule: crown header stays original, footer is Telegram plane and @prophunter."""
     import inspect
     from netrattler_original_template_renderer import render_goal
     from netrattler_stats_match_cards import _telegram_card_caption
     source=inspect.getsource(render_goal)
-    assert '_label(draw, "NETRATTLER AI"' in source
-    assert '_label(draw, "@prophunter"' not in source
+    assert '_label(draw,"@prophunter"' in source
+    assert '_label(draw,"NETRATTLER AI"' not in source
     assert _telegram_card_caption("") == "@prophunter"
     assert _telegram_card_caption("GOAL HUNTER · Quote 2.10") == (
         "GOAL HUNTER · Quote 2.10\n\n@prophunter")
@@ -274,3 +274,24 @@ def test_goal_arena_preserves_header_and_removes_baked_ring():
         original.crop((0,755,1122,1402))).getbbox() is None
     assert ImageChops.difference(candidate.crop((316,320,780,730)),
         original.crop((316,320,780,730))).getbbox() is not None
+
+
+def test_goal_footer_border_and_status_alignment():
+    from netrattler_original_template_renderer import render_goal, _label
+    tip={"match":"Demo United vs Test FC","player":"QA PLAYER","team":"Demo United",
+         "odds":4.5,"probability":27,"fairOdds":3.7,"goals_per_game":.33,
+         "_kickoff":"2026-11-24T18:30:00+00:00"}
+    photo=_test_photo(transparent=True)
+    with patch.object(cards,"_player_photo",return_value=photo), \
+         patch.object(cards,"_badge_bytes",return_value=photo), \
+         patch("netrattler_original_template_renderer._label",wraps=_label) as text:
+        raw=render_goal(tip,"2026-11-24")
+    with Image.open(io.BytesIO(raw)) as output:
+        original=_base(str(GOAL_IMAGE))
+        for box in ((25,1222,650,1246),(25,1304,650,1323),(740,1243,820,1300)):
+            assert ImageChops.difference(output.crop(box).convert("RGB"),
+                original.crop(box)).getbbox() is None
+    entries=[c.args for c in text.call_args_list]
+    assert any(a[1]=="@prophunter" and a[3]>=1249 for a in entries)
+    assert any(a[1]=="OFFEN" and a[3]>=1251 for a in entries)
+    assert any(a[1]=="VS" and a[3]>697 for a in entries)

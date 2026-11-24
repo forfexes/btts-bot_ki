@@ -337,7 +337,7 @@ def render_goal(tip,target_date,result=None):
     # The header, category ribbon and lower stats are still the original.
     # Reconstruct the baked face/crest/halo band, then float real cutouts.
     _goal_arena(im)
-    _floating_goal_photo(im,cards,player,club,(326,315,796,731))
+    _floating_goal_photo(im,cards,player,club,(326,315,796,697))
     for name,label_box,cx,crest_rect in [
         (home,(48,655,348,725),198,(83,410,285,625)),
         (away,(774,655,1074,725),924,(837,410,1039,625)),
@@ -346,7 +346,7 @@ def render_goal(tip,target_date,result=None):
         draw.rounded_rectangle(label_box,radius=12,fill="#07141B",
                                outline=CYAN,width=3)
         _label(draw,name.upper(),cx,668,label_box[2]-label_box[0]-24,size=33,min_size=13)
-    _label(draw,"VS",561,708,100,size=37,min_size=25,fill=GOLD)
+    _label(draw,"VS",561,711,100,size=32,min_size=25,fill=GOLD)
     _erase(draw,(204,761,901,837),fill="#06131B",radius=12)
     _label(draw,player.upper(),555,772,665,size=54,min_size=27)
     # Compact confirmed Swiss kickoff beneath the player's name. Preserve the
@@ -373,18 +373,12 @@ def render_goal(tip,target_date,result=None):
         _label(draw,text,(x0+x1)//2,956,x1-x0-12,size=47,min_size=28,fill=color)
     status=(result.get("marks") or {}).get("0") if isinstance(result,dict) else None
     label,col=nd._result_text(status)
-    _erase(draw,(456,1214,647,1283),fill="#07151D",radius=14)
-    _label(draw,label,550,1220,182,size=39,min_size=25,fill=col)
-    # The source contains an old, baked-in handle. The owner confirmed that
-    # @prophunter belongs UNDER the tip as Telegram text, never inside this PNG.
-    # Reconstruct this footer from the authentic frame and show the image brand.
-    # Keep the original cyan frame/logo intact.
-    crop = im.crop((821, 1327, 1098, 1384)).resize((277, 72),
-          Image.Resampling.LANCZOS)
-    feather = Image.new("L", (277, 72), 0)
-    ImageDraw.Draw(feather).rounded_rectangle((3, 3, 273, 69),
-                                                radius=12, fill=255)
-    im.paste(crop, (821, 1232), feather.filter(ImageFilter.GaussianBlur(5)))
-    _label(draw, "NETRATTLER AI", 961, 1241, 252, size=29,
-           min_size=22, fill=WHITE)
+    # Keep both original frame strokes untouched. The result text sits
+    # on the same baseline as AUSWERTUNG, not above the gold border.
+    draw.rectangle((465,1250,631,1299),fill="#060A0C")
+    _label(draw,label,548,1251,156,size=36,min_size=21,fill=col)
+    # Preserve the original Telegram plane and cyan frame; change ONLY
+    # the old handle text inside the right footer.
+    draw.rectangle((827,1242,1081,1294),fill="#06131B")
+    _label(draw,"@prophunter",954,1249,244,size=30,min_size=22,fill=WHITE)
     return _write(im)

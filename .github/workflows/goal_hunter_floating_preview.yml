@@ -87,4 +87,4 @@ jobs:
           path: goal-preview/*.png
           if-no-files-found: error
       - name: Regression tests
-        run: python -m pytest -q test_netrattler_original_templates.py -k 'goal_cutout or goal_arena or goal_hunter_master or goal_hunter_kickoff'
+        run: python -m pytest -q test_netrattler_original_templates.py -k 'goal_cutout or goal_arena or goal_hunter_master or goal_hunter_kickoff or goal_footer or goal_hunter_uses'
