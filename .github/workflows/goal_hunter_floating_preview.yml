@@ -1,0 +1,90 @@
+name: Goal Hunter floating portrait preview (NO TELEGRAM)
+on:
+  push:
+    branches: ['qa/goal-hunter-floating-portrait']
+    paths: ['.github/workflows/goal_hunter_floating_preview.yml']
+permissions:
+  contents: read
+jobs:
+  render:
+    runs-on: ubuntu-latest
+    timeout-minutes: 4
+    env:
+      NETRATTLER_BLOCK_OVERPAINTED_MASTERS: '0'
+      TELEGRAM_TOKEN: ''
+      TELEGRAM_CHAT_ID: ''
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+      - run: python -m pip install --quiet pillow requests pytest
+      - name: Render original card, no Telegram transport
+        run: |
+          mkdir -p goal-preview
+          python - <<'PY'
+          import io
+          from pathlib import Path
+          from unittest.mock import patch
+          from PIL import Image, ImageDraw, ImageFont
+          import requests
+          import netrattler_stats_match_cards as cards
+          from netrattler_original_template_renderer import render_goal
+          from netrattler_visual_review import review_png
+          from test_netrattler_original_templates import _test_photo
+          out=Path('goal-preview')
+          tip=dict(match='Demo United vs Test FC', player='TEST ONLY', team='Demo United',
+                   odds=4.5, probability=27, fairOdds=3.70, goals_per_game=.33,
+                   _kickoff='2026-11-24T18:30:00+00:00')
+          def save(name, raw):
+              report=review_png(raw,'scorer')
+              print(name, report.describe())
+              with Image.open(io.BytesIO(raw)) as source:
+                  im=source.convert('RGB')
+              canvas=Image.new('RGB',(im.width,im.height+60),'#121B2B')
+              canvas.paste(im,(0,60))
+              d=ImageDraw.Draw(canvas)
+              d.text((20,15),'DESIGN-TEST / KEIN WETTTIPP / OFFLINE-TELEGRAM',fill='white',font=ImageFont.truetype('/usr/share/fonts/truetype/dejavu/DejaVuSans-Bold.ttf',26))
+              canvas.save(out/name)
+          photo=_test_photo(transparent=True)
+          with patch.object(cards,'_player_photo',return_value=photo), patch.object(cards,'_badge_bytes',return_value=photo):
+              save('goal_hunter_fixture.png',render_goal(tip,'2026-11-24'))
+          # Optional genuine example: roster identity + transparent provider cutout.
+          # All market statistics here remain synthetic and explicitly marked.
+          try:
+              def get(url):
+                  r=requests.get(url,timeout=10,headers={'User-Agent':'Mozilla/5.0'})
+                  r.raise_for_status()
+                  return r
+              data=get('https://fantasy.premierleague.com/api/bootstrap-static/').json()
+              teams={t['id']:t for t in data['teams']}
+              for candidate in ('Haaland','Saka','Salah'):
+                  p=next((e for e in data['elements'] if e['web_name']==candidate),None)
+                  if not p: continue
+                  home=teams[p['team']]
+                  away=next(t for t in teams.values() if t['id']!=home['id'])
+                  try:
+                      code=str(p['photo']).split('.')[0]
+                      photo=get(f'https://resources.premierleague.com/premierleague/photos/players/250x250/p{code}.png').content
+                      with Image.open(io.BytesIO(photo)) as im:
+                          assert im.convert('RGBA').getchannel('A').getextrema()[0]<255
+                      logos={t['name']:get(f"https://resources.premierleague.com/premierleague/badges/t{t['code']}.png").content for t in (home,away)}
+                      example={**tip,'player':p['first_name']+' '+p['second_name'],'team':home['name'],'match':home['name']+' vs '+away['name']}
+                      with patch.object(cards,'_player_photo',return_value=photo), patch.object(cards,'_badge_bytes',side_effect=lambda name:logos[name]):
+                          save('goal_hunter_real_assets_demo.png',render_goal(example,'2026-11-24'))
+                      print('Real portrait and crests from FPL roster; demo matchup and odds only')
+                      break
+                  except Exception as e:
+                      print('Candidate unavailable',candidate,type(e).__name__)
+          except Exception as e:
+              print('Real-asset demo unavailable:',type(e).__name__)
+          PY
+      - name: Upload rendered previews
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: goal-hunter-floating-preview-no-telegram
+          path: goal-preview/*.png
+          if-no-files-found: error
+      - name: Regression tests
+        run: python -m pytest -q test_netrattler_original_templates.py -k 'goal_cutout or goal_arena or goal_hunter_master or goal_hunter_kickoff'
