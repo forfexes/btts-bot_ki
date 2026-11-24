@@ -1,5 +1,5 @@
 import unittest
-from netrattler_post_run_check import evaluate, coverage_warnings
+from netrattler_post_run_check import evaluate, coverage_warnings, production_jobs_for_coverage
 
 
 class PostRunTests(unittest.TestCase):
@@ -138,6 +138,73 @@ class PostRunTests(unittest.TestCase):
                'MASTER BUILDER send failed/no message_id: D\n'
                'Builder Engine: 0 Builder aus 3531 Props gesendet')
         self.assertEqual(coverage_warnings(log), ['Builder Engine sent zero builders'])
+
+    def test_green_preflight_skipped_telegram_is_not_coverage_failure(self):
+        jobs = [
+            {'id': 101, 'name': 'Premium source and Telegram send-path QA (NO TELEGRAM)',
+             'status': 'completed', 'conclusion': 'success'},
+            {'id': 102, 'name': 'run-bot',
+             'status': 'completed', 'conclusion': 'skipped'},
+        ]
+        self.assertEqual(production_jobs_for_coverage(jobs), [])
+
+    def test_actual_successful_production_must_still_be_inspected(self):
+        delivery = {'id': 102, 'name': 'run-bot',
+                    'status': 'completed', 'conclusion': 'success'}
+        self.assertEqual(production_jobs_for_coverage([
+            {'id': 101, 'name': 'Premium source and Telegram send-path QA (NO TELEGRAM)',
+             'status': 'completed', 'conclusion': 'success'},
+            delivery,
+        ]), [delivery])
+
+    def test_failed_or_unknown_production_may_not_be_masked(self):
+        for status in ('failure', 'cancelled', 'timed_out', None):
+            with self.subTest(status=status), self.assertRaises(ValueError):
+                production_jobs_for_coverage([
+                    {'id': 102, 'name': 'run-bot',
+                     'status': 'completed', 'conclusion': status}])
+        with self.assertRaisesRegex(ValueError, 'not uniquely'):
+            production_jobs_for_coverage([
+                {'id': 101, 'name': 'Premium source and Telegram send-path QA (NO TELEGRAM)',
+                 'status': 'completed', 'conclusion': 'success'}])
+
+    def test_skipped_telegram_run_never_fetches_nonexistent_logs(self):
+        import io
+        import json
+        from unittest.mock import patch
+        from netrattler_post_run_check import fetch_job_logs
+        jobs = {'jobs': [
+            {'id': 101, 'name': 'Premium source and Telegram send-path QA (NO TELEGRAM)',
+             'status': 'completed', 'conclusion': 'success'},
+            {'id': 102, 'name': 'run-bot',
+             'status': 'completed', 'conclusion': 'skipped'},
+        ]}
+        response = io.BytesIO(json.dumps(jobs).encode())
+        with patch.dict('os.environ', {
+                'GITHUB_TOKEN': 'QA_TOKEN', 'GITHUB_REPOSITORY': 'forfexes/btts-bot_ki'}), \
+             patch('netrattler_post_run_check.urllib.request.urlopen',
+                   return_value=response) as get_jobs, \
+             patch('netrattler_post_run_check.urllib.request.build_opener',
+                   side_effect=AssertionError('No skipped job logs may be fetched')):
+            self.assertEqual(fetch_job_logs({'id': 45482120876}), '')
+            get_jobs.assert_called_once()
+
+    def test_successful_qa_only_run_reports_truth_not_telegram_delivery(self):
+        import json
+        import tempfile
+        from pathlib import Path
+        from unittest.mock import patch
+        import netrattler_post_run_check as monitor
+        event = {'workflow_run': {
+            'id': 45482120876, 'name': 'NETRATTLER AI Tipp Bot',
+            'status': 'completed', 'conclusion': 'success',
+            'html_url': 'https://example.test/qa-only'}}
+        with tempfile.TemporaryDirectory() as d:
+            path = Path(d) / 'event.json'
+            path.write_text(json.dumps(event))
+            with patch.dict('os.environ', {'GITHUB_EVENT_PATH': str(path)}), \
+                 patch.object(monitor, 'fetch_job_logs', return_value=''):
+                self.assertEqual(monitor.main(), 0)
 
     def test_incomplete(self):
         ok, _ = evaluate({"status": "in_progress"})
