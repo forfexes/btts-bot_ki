@@ -11,6 +11,7 @@ import json
 import math
 from pathlib import Path
 from PIL import Image, ImageDraw, ImageFont
+from premium_joint_formula import estimate_combo
 
 MASTER_PATH = Path(__file__).resolve().parent / "assets/premium_master/NETRATTLER_AI_PREMIUM_MASTER.png"
 MASTER_SHA256 = "e87a7a98d284ff5429ac26e6cc59ae37c6ed0dfa0aff690c29368ca386575209"
@@ -58,6 +59,47 @@ def _odds(raw, label):
     return n
 
 
+def combined_quote_info(data, legs=None):
+    """Resolve real book total OR explicitly labelled, recomputed leg product.
+
+    No bookmaker ticket may be inferred from a mathematically calculated
+    product. Correlation in same-match legs makes the product indicative only.
+    """
+    legs = legs if legs is not None else data.get("legs", [])
+    if data.get("category") not in MULTI:
+        return {"odds": _odds(legs[0]["bookmaker_odds"], "single"),
+                "label": "BUCHMACHER", "observed": True,
+                "scope": "single"}
+    observed = data.get("combined_odds_observed") is True
+    calc = (data.get("combined_odds_calculated") is True and
+            str(data.get("price_type") or "") == "calculated_from_leg_odds")
+    if observed:
+        if calc or data.get("combined_odds_calculated") or str(data.get("price_type") or "") in (
+                "estimated", "derived_builder", "calculated_from_leg_odds"):
+            raise ValueError("Calculated quote cannot claim to be an observed bookmaker ticket")
+        if not str(data.get("combined_ticket_id") or "").strip():
+            raise ValueError("Observed full bookmaker ticket ID required")
+        return {"odds": _odds(data.get("combined_odds"), "combined"),
+                "label": "BUCHMACHER", "observed": True,
+                "scope": "confirmed_ticket"}
+    if not calc:
+        raise ValueError("No observed ticket and no explicit formula provenance")
+    if str(data.get("combined_quote_id") or "").strip():
+        raise ValueError("Calculated quote must not carry a bookmaker receipt")
+    estimate = estimate_combo([{"odds": leg["bookmaker_odds"],
+                                "odds_observed": True,
+                                "match": leg["match"]} for leg in legs])
+    if not estimate["individual_prices_observed"]:
+        raise ValueError("Calculated quote requires observed real leg odds")
+    computed = estimate["indicative_leg_product"]
+    asserted = _odds(data.get("combined_odds"), "calculated combined")
+    if computed is None or abs(asserted - computed) > max(0.00011, computed * 1e-8):
+        raise ValueError("Calculated total does not match formula applied to observed leg quotes")
+    return {"odds": computed,
+            "label": "BERECHNET – KEINE BUCHMACHERQUOTE",
+            "observed": False, "scope": estimate["scope"]}
+
+
 def validate(data):
     if not isinstance(data, dict):
         raise ValueError("Data must be an object")
@@ -92,13 +134,10 @@ def validate(data):
                 with Image.open(path) as im:
                     im.verify()
     if category in MULTI:
-        if data.get("combined_odds_observed") is not True or not str(
-                data.get("combined_ticket_id") or "").strip():
-            raise ValueError("Observed full bookmaker ticket required")
-        if data.get("combined_odds_calculated") or data.get("price_type") in (
-                "estimated", "calculated_from_leg_odds"):
-            raise ValueError("Estimated book ticket forbidden")
-        _odds(data.get("combined_odds"), "combined")
+        # Calculated product is permitted ONLY as an explicitly labelled
+        # indicative number from real, individually observed leg prices.
+        # It is never a bookable/settleable bookmaker ticket.
+        combined_quote_info(data, legs)
     p = data.get("model_probability")
     if p is not None and (not math.isfinite(float(p)) or not 0 <= float(p) <= 100):
         raise ValueError("Invalid model probability")
@@ -179,9 +218,10 @@ def render(master_path, data):
         y += row_height + gap
     draw.rounded_rectangle((margin, y+10, w-margin, y+footer_height),
                            radius=18, fill=PANEL, outline=GOLD, width=3)
-    q = _odds(data["combined_odds"], "combined") if category in MULTI else _odds(
-        legs[0]["bookmaker_odds"], "single")
-    quote = "QUOTE: @" + format(q, ".2f") + " (BUCHMACHER)"
+    quote_data = combined_quote_info(data, legs)
+    q = quote_data["odds"]
+    quote = ("QUOTE: @" + format(q, ".2f") + " (BUCHMACHER)") if quote_data["observed"] else (
+        "BERECHNET @" + format(q, ".2f") + " · KEINE BUCHMACHERQUOTE")
     probability = data.get("model_probability")
     textprob = "—" if probability is None else format(float(probability), ".1f") + "%"
     footer = (
