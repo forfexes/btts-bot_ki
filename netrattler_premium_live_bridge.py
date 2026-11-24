@@ -106,14 +106,14 @@ def _market_category(record, forced=None):
         if not display and market in ALIASES:
             _, display = ALIASES[market]
             direction = str(record.get("selection") or record.get("tip") or "").strip().upper()
-            if direction in {"YES", "JA"}:
-                display += " · JA"
-            elif direction in {"NO", "NEIN"}:
-                display += " · NEIN"
-            elif market == "1x2":
+            if market == "1x2":
                 if direction not in {"1", "X", "2", "1X", "X2", "12"}:
                     raise ValueError("Invalid builder 1X2 selection")
                 display += " · " + direction
+            elif direction in {"YES", "JA"}:
+                display += " · JA"
+            elif direction in {"NO", "NEIN"}:
+                display += " · NEIN"
         if not display:
             raise ValueError("Each builder/combo selection needs an actual market label")
         return category, display
