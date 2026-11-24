@@ -123,9 +123,15 @@ for item in sorted(Path("visual_review_previews").glob("TEST_ONLY_*.png")):
     preview(item.stem,buf.getvalue(),"DERIVED_USER_ORIGINAL_WEBP",
             "BLOCKED_SOURCE_HAS_RUNTIME_OVERPAINT")
 
-# Fail closed: production workflow must not be re-enabled by a green mock.
+# Fail closed: an offline mock never approves live Telegram. Production
+# requires BOTH successful owner-art preflight and explicit repository owner
+# approval. A manual run additionally needs the publish_telegram checkbox.
 main=Path(".github/workflows/btts_tips.yml").read_text(encoding="utf-8")
-assert "if: ${{ false }}" in main, "Unsafe LIVE tips resumed without original-art acceptance"
+assert "needs: [owner-card-preflight]" in main, "Premium owner QA must precede release"
+assert "vars.NETRATTLER_TG_PRODUCTION_APPROVED == 'true'" in main, (
+    "Unsafe live release without owner-approved repository gate")
+assert "inputs.publish_telegram == true" in main, (
+    "Manual Telegram release must require explicit publish checkbox")
 assert 'NETRATTLER_BLOCK_OVERPAINTED_MASTERS: "1"' in main
 # Export a full 26-card Telegram contact sheet for actual design review.
 # Producing a PNG and passing geometry does NOT approve the 16 source designs.
