@@ -107,7 +107,20 @@ def estimate_combo(legs, *, conditional_probabilities=None,
         verified = _field(observed_ticket, "combined_odds_observed") is True
         receipt = str(_field(observed_ticket, "combined_quote_id") or "").strip()
         odds = _positive_odds(_field(observed_ticket, "odds"))
-        if verified and receipt and odds:
+        def formula_only(source):
+            return (
+                _field(source, "combined_quote_calculated") is True
+                or _field(source, "builder_odds_estimated_from_legs") is True
+                or str(_field(source, "price_type") or "").strip().lower()
+                in {"estimated", "derived_builder", "calculated_from_leg_odds",
+                    "formula", "formula_only"}
+            )
+        # Conflicting provenance must fail closed, even if a stale observed
+        # flag and ticket ID survived an earlier model-only price update.
+        nested = _field(observed_ticket, "features") or {}
+        if (verified and receipt and odds
+                and not formula_only(observed_ticket)
+                and not formula_only(nested)):
             actual_price = odds
     fair = 1 / probability if probability is not None and probability > 0 else None
     ev = (100 * (probability * actual_price - 1)

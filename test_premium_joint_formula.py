@@ -88,6 +88,23 @@ def test_no_real_ev_from_invalid_ticket(ticket):
     assert r["ev_percent_using_real_ticket_only"] is None
 
 
+@pytest.mark.parametrize("contradiction", [
+    {"combined_quote_calculated": True},
+    {"builder_odds_estimated_from_legs": True},
+    {"price_type": "formula_only"},
+    {"features": {"combined_quote_calculated": True}},
+    {"features": {"price_type": "calculated_from_leg_odds"}},
+])
+def test_formula_price_never_becomes_observed_even_with_stale_ticket_id(contradiction):
+    ticket=dict(combined_odds_observed=True,combined_quote_id="stale",odds=4.0)
+    ticket.update(contradiction)
+    result=estimate_combo([leg("A vs B",1.7,0.6),leg("C vs D",1.8,0.7)],
+                          observed_ticket=ticket)
+    assert result["real_bookmaker_combined_odds"] is None
+    assert result["ev_percent_using_real_ticket_only"] is None
+    assert result["settle_as_bookmaker_ticket"] is False
+
+
 def test_joint_sample_and_conditional_reject_bad_inputs():
     rows=[leg("A vs B",1.7,0.6),leg("A vs B",1.8,0.7)]
     with pytest.raises(ValueError):
