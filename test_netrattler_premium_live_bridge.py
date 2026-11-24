@@ -137,3 +137,26 @@ def test_asset_temporary_files_are_cleaned():
         paths=[Path(ticket["legs"][0][key]) for key in ("home_logo","away_logo")]
         assert all(p.is_file() for p in paths)
     assert all(not p.exists() for p in paths)
+
+
+def test_builder_selection_must_include_real_named_market():
+    t=_multi(2)
+    t["legs"][0].pop("market_label")
+    t["legs"][0].update(market="btts",selection="YES")
+    with prepare_verified_ticket(t,crest_provider=_provider) as (converted,_):
+        assert "BTTS" in converted["legs"][0]["market"]
+        assert converted["legs"][0]["market"] != "YES"
+    t["legs"][0]["market"]="unrecognized_code"
+    with pytest.raises(ValueError,match="market label"):
+        verified_mobile_images(t,crest_provider=_provider)
+
+
+def test_var_and_1x2_builder_legs_need_actual_market_evidence():
+    t=_multi(2)
+    t["legs"][0].pop("market_label")
+    t["legs"][0].update(market="var",selection="YES")
+    with pytest.raises(ValueError,match="VAR settlement"):
+        verified_mobile_images(t,crest_provider=_provider)
+    t["legs"][0].update(market="1x2",selection="YES")
+    with pytest.raises(ValueError,match="1X2"):
+        verified_mobile_images(t,crest_provider=_provider)
