@@ -77,14 +77,24 @@ def test_estimated_individual_quote_refused():
         verified_mobile_images(t,crest_provider=_provider)
 
 
-def test_combined_quote_must_be_verified():
+def test_real_leg_combo_without_bookmaker_total_is_labelled_formula():
     t=_multi()
     t["combined_odds_observed"]=False
-    with pytest.raises(ValueError,match="ticket"):
-        verified_mobile_images(t,crest_provider=_provider)
+    with prepare_verified_ticket(t,crest_provider=_provider) as (converted,_):
+        from netrattler_premium_flexible_renderer import combined_quote_info
+        q=combined_quote_info(converted)
+        assert not q["observed"]
+        assert q["label"]=="BERECHNET – KEINE BUCHMACHERQUOTE"
+        assert converted["combined_odds"]==round(1.82**10,4)
+        assert converted["price_type"]=="calculated_from_leg_odds"
+        assert q["scope"]=="shared_game_correlated"
+    pages=verified_mobile_images(t,crest_provider=_provider)
+    assert len(pages)==4
+
+def test_fake_confirmed_bookmaker_receipt_stays_blocked():
     t=_multi()
     t["features"]={"builder_odds_estimated_from_legs":True}
-    with pytest.raises(ValueError,match="Calculated"):
+    with pytest.raises(ValueError,match="Contradictory"):
         verified_mobile_images(t,crest_provider=_provider)
 
 
