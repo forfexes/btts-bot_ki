@@ -92,7 +92,23 @@ def render_mobile_pages(master_path, ticket, *, max_legs_per_image=MAX_LEGS_PER_
                 raise ValueError(f"Leg {i}: two authentic club crests required")
             if leg.get("player") and not leg.get("player_photo"):
                 raise ValueError(f"Leg {i}: player photo required")
+            for field in ("home_logo", "away_logo", "player_photo"):
+                asset = leg.get(field)
+                if not asset:
+                    continue
+                with Image.open(asset) as found:
+                    found.load()
+                    rgba = found.convert("RGBA")
+                minimum = 80 if field == "player_photo" else 40
+                if min(rgba.size) < minimum or rgba.getchannel("A").getextrema()[0] >= 255:
+                    raise ValueError(f"Leg {i}: authentic transparent {field} required")
+                alpha = rgba.getchannel("A")
+                visible = alpha.point(lambda p: 255 if p >= 24 else 0).getbbox()
+                if not visible:
+                    raise ValueError(f"Leg {i}: empty {field} artwork is forbidden")
     status = _safestatus(ticket.get("status"))
+    if not preview_only and Path(master_path).resolve() != MASTER_PATH.resolve():
+        raise ValueError("Live card requires the exact immutable NETRATTLER AI PREMIUM master")
     master = _source(master_path)
     parts = group_lengths(len(legs), max_legs_per_image)
     pages=[]
