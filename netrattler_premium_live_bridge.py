@@ -93,6 +93,11 @@ def _raw_asset(payload, label, minimum=40):
 
 def _market_category(record, forced=None):
     market = str(record.get("market") or "").strip().lower()
+    # VAR observations are not enough: the same verified rule coverage
+    # is mandatory inside a builder as on a single VAR card.
+    if market == "var" and (record.get("tip_eligible") is not True
+                            or record.get("settlement_rule_verified") is not True):
+        raise ValueError("VAR settlement rules are not verified")
     if forced and forced in MULTI_TYPES:
         category = forced
         display = str(record.get("market_label") or record.get("market_display") or "").strip()
@@ -105,7 +110,7 @@ def _market_category(record, forced=None):
                 display += " · JA"
             elif direction in {"NO", "NEIN"}:
                 display += " · NEIN"
-            elif direction and market == "1x2":
+            elif market == "1x2":
                 if direction not in {"1", "X", "2", "1X", "X2", "12"}:
                     raise ValueError("Invalid builder 1X2 selection")
                 display += " · " + direction
