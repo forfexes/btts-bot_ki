@@ -5,6 +5,8 @@ name: NETRATTLER Premium Flexible Offline QA
     paths:
       - "netrattler_premium_flexible_renderer.py"
       - "test_netrattler_premium_flexible_renderer.py"
+      - "netrattler_premium_mobile_pages.py"
+      - "test_netrattler_premium_mobile_pages.py"
       - ".github/workflows/netrattler_premium_flexible_offline_qa.yml"
 permissions:
   contents: read
@@ -26,7 +28,36 @@ jobs:
         run: python -m pip install -q 'Pillow>=10' 'pytest>=8'
       - name: Compile and test all sizes and categories
         run: |
-          python -m py_compile netrattler_premium_flexible_renderer.py
-          python -m pytest -q test_netrattler_premium_flexible_renderer.py
+          python -m py_compile netrattler_premium_flexible_renderer.py netrattler_premium_mobile_pages.py
+          python -m pytest -q test_netrattler_premium_flexible_renderer.py test_netrattler_premium_mobile_pages.py
+      - name: Render one image per Telegram-mobile page (OFFLINE test values)
+        run: |
+          python - <<'PY'
+          from pathlib import Path
+          from netrattler_premium_mobile_pages import render_mobile_pages, MASTER_PATH
+          out=Path('premium-mobile-qa')
+          out.mkdir(exist_ok=True)
+          def leg(i):
+              return {'match':f'QA SPIEL {i} · KEIN ECHTER TIPP',
+                      'market':'QA BTTS · BEIDE TEAMS TREFFEN',
+                      'bookmaker':'OFFLINE TEST ONLY',
+                      'bookmaker_odds':1.8,'form':'L10 — · L15 —'}
+          for category, count in (('single',1),('builder',8),('builder',10),('combo',10),('cross_mix',6)):
+              data={'category':category,'legs':[leg(i+1) for i in range(count)],
+                    'ticket_id':'QA-NO-BOOK-OR-TELEGRAM','status':'QA – KEIN TIPP'}
+              if count > 1:
+                  data.update({'combined_odds':4.25, 'combined_odds_observed':True,
+                               'combined_ticket_id':'QA-DUMMY-TICKET'})
+              pages=render_mobile_pages(MASTER_PATH,data,preview_only=True)
+              for p in pages:
+                  p.image.save(out/f'{category}_{count:02d}_page_{p.page:02d}_of_{p.pages:02d}.png')
+          print('Generated original-preserving mobile QA PNGs; NO TELEGRAM')
+          PY
+      - uses: actions/upload-artifact@v4
+        with:
+          name: netrattler-mobile-premium-owner-previews
+          path: premium-mobile-qa/*.png
+          if-no-files-found: error
+          retention-days: 7
       - name: Confirm offline-only status
         run: echo 'NO TELEGRAM OR SUPABASE DELIVERY; source PNG visual approval still required'
