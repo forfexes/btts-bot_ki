@@ -86,6 +86,10 @@ def render_mobile_pages(master_path, ticket, *, max_legs_per_image=MAX_LEGS_PER_
     clearly watermarked 'QA / KEIN ECHTER TIPP' on every image.
     """
     kind, legs = validate(ticket)
+    # Check approved master BEFORE resolving any player/club assets. A rejected
+    # new template must not trigger provider reads or uploads.
+    if not preview_only and Path(master_path).resolve() != MASTER_PATH.resolve():
+        raise ValueError("Live card requires the exact immutable NETRATTLER AI PREMIUM master")
     if not preview_only:
         for i, leg in enumerate(legs, 1):
             if not (leg.get("home_logo") and leg.get("away_logo")):
@@ -107,8 +111,6 @@ def render_mobile_pages(master_path, ticket, *, max_legs_per_image=MAX_LEGS_PER_
                 if not visible:
                     raise ValueError(f"Leg {i}: empty {field} artwork is forbidden")
     status = _safestatus(ticket.get("status"))
-    if not preview_only and Path(master_path).resolve() != MASTER_PATH.resolve():
-        raise ValueError("Live card requires the exact immutable NETRATTLER AI PREMIUM master")
     master = _source(master_path)
     parts = group_lengths(len(legs), max_legs_per_image)
     pages=[]
