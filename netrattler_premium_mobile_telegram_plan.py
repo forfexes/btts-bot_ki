@@ -75,9 +75,15 @@ def plan_same_photo_settlement(ticket: dict, saved_state: dict, *,
     """Offline editMessageMedia plans that target ONLY the original photo IDs."""
     if not saved_state or not isinstance(saved_state.get("message_ids"),list):
         raise ValueError("No saved Telegram photo history")
+    ticket_id=str(ticket.get("ticket_id") or ticket.get("combined_ticket_id") or "").strip()
+    original_ticket_id=str(saved_state.get("ticket_id") or "").strip()
+    if not ticket_id or ticket_id != original_ticket_id:
+        raise ValueError("Refusing settlement edit: ticket identity does not match stored Telegram history")
     regenerated=plan_new_ticket(ticket,str(saved_state.get("chat_id") or ""),
                                 master=master,preview_only=preview_only)
     ids=saved_state["message_ids"]
+    if len(ids) != len(set(ids)):
+        raise ValueError("Refusing settlement edit: duplicate original photo IDs")
     if saved_state.get("page_ranges") != [list(p) for p in regenerated.page_ranges]:
         raise ValueError("Selection/page layout changed; old Telegram photo IDs must be preserved")
     if len(ids)!=len(regenerated.page_ranges):
