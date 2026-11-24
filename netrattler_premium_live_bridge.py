@@ -16,6 +16,7 @@ from tempfile import TemporaryDirectory
 from PIL import Image
 
 from netrattler_premium_mobile_pages import render_mobile_pages, MASTER_PATH
+from premium_joint_formula import estimate_combo
 from netrattler_premium_mobile_telegram_plan import plan_new_ticket
 
 ALIASES = {
@@ -151,32 +152,55 @@ def _market_category(record, forced=None):
 
 
 def _ticket_quote(record, multi):
+    """Return observed ticket quote or explicit product of genuine leg odds.
+
+    Never carry an estimated existing total forward as a bookmaker offer.
+    Unverified/correlated builder products are analysis values, not betslips.
+    """
     if not multi:
         return {}
     features = record.get("features") if isinstance(record.get("features"), dict) else {}
-    if not (record.get("combined_odds_observed") is True or features.get("combined_odds_observed") is True):
-        raise ValueError("Observed actual bookmaker ticket missing")
-    quote_id = str(record.get("combined_quote_id") or record.get("combined_ticket_id")
-                   or features.get("combined_quote_id") or "").strip()
-    if not quote_id:
-        raise ValueError("Combined ticket receipt ID missing")
-    for scope in (record, features):
-        if (scope.get("combined_quote_calculated") or scope.get("combined_odds_calculated")
-                or scope.get("builder_odds_estimated_from_legs")
-                or str(scope.get("price_type") or "").lower() in (
-                    "estimated", "derived_builder", "calculated_from_leg_odds")):
-            raise ValueError("Calculated quote cannot be labelled bookmaker total")
-    value = record.get("combined_odds")
-    if value is None:
-        value = record.get("total_odds")
-    try:
-        value = float(value)
-    except (TypeError, ValueError, OverflowError):
-        raise ValueError("Observed combined bookmaker total unavailable") from None
-    if not math.isfinite(value) or not 1 < value < 100000:
-        raise ValueError("Invalid observed bookmaker combined quote")
-    return {"combined_odds": value, "combined_odds_observed": True,
-            "combined_ticket_id": quote_id}
+    observed = (record.get("combined_odds_observed") is True
+                or features.get("combined_odds_observed") is True)
+    receipt = str(record.get("combined_quote_id")
+                  or features.get("combined_quote_id") or "").strip()
+    tainted = any(
+        scope.get("combined_quote_calculated") is True
+        or scope.get("combined_odds_calculated") is True
+        or scope.get("builder_odds_estimated_from_legs") is True
+        or str(scope.get("price_type") or "").lower() in
+        {"estimated", "derived_builder", "calculated_from_leg_odds"}
+        for scope in (record, features)
+    )
+    if observed:
+        if tainted or not receipt:
+            raise ValueError("Contradictory or unverified observed bookmaker ticket receipt")
+        raw = record.get("combined_odds")
+        if raw is None:
+            raw = record.get("total_odds")
+        try:
+            value = float(raw)
+        except (TypeError, ValueError, OverflowError):
+            raise ValueError("Observed bookmaker ticket quote unavailable") from None
+        if not math.isfinite(value) or not 1 < value < 100000:
+            raise ValueError("Invalid observed bookmaker combined quote")
+        return {"combined_odds": value, "combined_odds_observed": True,
+                "combined_ticket_id": receipt}
+    # No confirmed full-ticket receipt: recompute exclusively from independently
+    # verified single-leg bookmaker odds, never record.total_odds.
+    verified = []
+    for leg in record.get("legs") or []:
+        price, _ = _book_price(leg)
+        verified.append({"odds": price, "odds_observed": True,
+                         "match": leg.get("match"), "event_id": leg.get("event_id")})
+    estimate = estimate_combo(verified)
+    product = estimate["indicative_leg_product"]
+    if product is None or not estimate["individual_prices_observed"]:
+        raise ValueError("Formula requires independently observed leg quotes")
+    return {"combined_odds": product, "combined_odds_observed": False,
+            "combined_odds_calculated": True,
+            "price_type": "calculated_from_leg_odds",
+            "combined_scope": estimate["scope"]}
 
 
 @contextmanager
