@@ -88,6 +88,12 @@ def plan_same_photo_settlement(ticket: dict, saved_state: dict, *,
             raise ValueError("Invalid saved photo message ID")
         filename,png,mimetype=(regenerated.files["photo"] if len(ids)==1 else regenerated.files[f"card_{i}"])
         media={"type":"photo","media":"attach://card"}
+        if i == 1 and len(ids) > 1:
+            # Editing a media-group photo must not erase the existing album
+            # caption. The result remains on the original image, not a new post.
+            original_media=json.loads(regenerated.data["media"])
+            if original_media and original_media[0].get("caption"):
+                media["caption"]=original_media[0]["caption"]
         plan=TelegramPlan("editMessageMedia",{
             "chat_id":regenerated.data["chat_id"],
             "message_id":str(message_id),"media":json.dumps(media)},
