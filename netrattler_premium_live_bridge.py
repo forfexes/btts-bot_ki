@@ -95,8 +95,20 @@ def _market_category(record, forced=None):
     market = str(record.get("market") or "").strip().lower()
     if forced and forced in MULTI_TYPES:
         category = forced
-        display = str(record.get("market_label") or record.get("market_display")
-                      or record.get("selection") or "").strip()
+        display = str(record.get("market_label") or record.get("market_display") or "").strip()
+        # A bare selection such as YES / NO is NOT a market. Recover a label
+        # only from a known market identifier, preserving the actual direction.
+        if not display and market in ALIASES:
+            _, display = ALIASES[market]
+            direction = str(record.get("selection") or record.get("tip") or "").strip().upper()
+            if direction in {"YES", "JA"}:
+                display += " · JA"
+            elif direction in {"NO", "NEIN"}:
+                display += " · NEIN"
+            elif direction and market == "1x2":
+                if direction not in {"1", "X", "2", "1X", "X2", "12"}:
+                    raise ValueError("Invalid builder 1X2 selection")
+                display += " · " + direction
         if not display:
             raise ValueError("Each builder/combo selection needs an actual market label")
         return category, display
