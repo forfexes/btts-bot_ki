@@ -85,6 +85,21 @@ class VerifiedOriginalComboTests(unittest.TestCase):
                              combined_odds=None)
                 self.assertTrue(image.startswith(bytes((137,80,78,71))))
 
+    def test_formula_price_is_explicitly_not_a_bookmaker_quote(self):
+        import netrattler_combo_owner_original as original
+        seen=[]
+        real_label=original._label
+        def capture(draw, value, *args, **kwargs):
+            seen.append(str(value))
+            return real_label(draw, value, *args, **kwargs)
+        with patch.object(original, "_label", side_effect=capture):
+            render(7, combined_odds_observed=False, combined_quote_id="",
+                   bookmaker="", combined_odds=None, ev=123.4)
+        self.assertIn("BERECHNET", seen)
+        self.assertIn("KEINE BOOKIE-QUOTE", seen)
+        self.assertNotIn("GESAMTQUOTE", seen)
+        self.assertFalse(any(value.startswith("EV ") for value in seen))
+
     def test_strict_observed_quote_crest_and_settlement(self):
         for kwargs in ({"combined_odds":float("nan")},
                        {"combined_odds":1.0},

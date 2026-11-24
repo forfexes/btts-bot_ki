@@ -20,7 +20,7 @@ Die Originalbilder dienen als visuelle Gestaltungsreferenzen, **nicht** als stat
 
 ## Technische Freigabe
 1. Datencheck vor Rendering: eindeutig zugeordnetes Team, überprüftes Foto, echte Wappen, bestätigte Kickoff-Zeit, gemessene L10/L15-Form.
-2. Wirklich bestätigte **Kombiquote** für Builder; nie selbst multiplizierte Einzelquoten als buchbaren Kurs oder EV ausgeben.
+2. **Kombi, Builder, Cross und Lottery:** gemeinsame Formel für eine ausdrücklich als BERECHNET – KEINE BOOKIE-QUOTE bezeichnete indikative Quote; nie als buchbaren Kurs oder realen EV ausgeben. Historische, tatsächlich belegte Buchmachertickets bleiben separat für die Auswertung nachvollziehbar. Ohne gemeinsame oder bedingte Wahrscheinlichkeitsdaten keine erfundene Modellwahrscheinlichkeit für korrelierte Legs.
 3. Kontrolle **des finalen PNGs** mit `netrattler_visual_review.review_png`; fehlende Pixelbereiche, Texte, Fotos, Statistiken und abgeschnittene Footer blockieren Telegram.
 4. GitHub-Actions-Workflow `netrattler_visual_cards_probe.yml` rendert Testkarten mit 2, 4, 6 Legs und Goal Hunter. Artifacts enthalten vier PNGs + `review.json`, und dienen der manuellen Gegenprüfung gegen die beiden Originalbilder.
 5. Ein grüner Code-/Pixeltest **allein** beweist noch keine 1:1-Übereinstimmung. Der optische Abgleich der Testvorschauen bleibt zwingend und kann weitere Layout-Arbeit auslösen.

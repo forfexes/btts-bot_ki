@@ -277,7 +277,7 @@ def render_original_combo(legs,*,combined_odds,probability,ev,confidence,
                                radius=11,fill="#091523",outline=GOLD,width=2)
         _label(draw,title,cx,1143+shift,296,22,WHITE)
         _label(draw,value,cx,1181+shift,296,37,GOLD)
-    ev_label=("EV "+f"{ev_num:+.1f}%" if ev_num is not None else "EV —") if verified else "QUOTE UNBESTÄTIGT"
+    ev_label=("EV "+f"{ev_num:+.1f}%" if ev_num is not None else "EV —") if verified else "KEINE BOOKIE-QUOTE"
     ev_color=(GREEN if ev_num >= 0 else "#FF7777") if ev_num is not None else WHITE
     _label(draw,ev_label,258,1249+shift,345,22 if not verified else 27,
            ev_color)
