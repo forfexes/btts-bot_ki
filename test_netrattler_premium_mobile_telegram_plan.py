@@ -34,7 +34,7 @@ def test_ten_leg_album_four_pages_and_one_ticket():
 def test_result_is_exactly_four_in_place_edits_not_four_new_tips():
     original=ticket('builder',10)
     upload=plan_new_ticket(original,'CHAT',preview_only=True)
-    state=bind_message_ids(upload,[111,112,113,114],'QATICKET-1')
+    state=bind_message_ids(upload,[111,112,113,114],'QA-ONE-TICKET')
     settled=dict(original,status='GEWONNEN')
     edits=plan_same_photo_settlement(settled,state,preview_only=True)
     assert [x.method for x in edits]==['editMessageMedia']*4
@@ -51,7 +51,7 @@ def test_cannot_bind_missing_or_duplicate_ids():
 
 def test_cannot_edit_if_partition_changed():
     plan=plan_new_ticket(ticket('builder',8),'CHAT',preview_only=True)
-    state=bind_message_ids(plan,[41,42,43],'T1')
+    state=bind_message_ids(plan,[41,42,43],'QA-ONE-TICKET')
     with pytest.raises(ValueError):
         plan_same_photo_settlement(ticket('builder',9),state,preview_only=True)
 
