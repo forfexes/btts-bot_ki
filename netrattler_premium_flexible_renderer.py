@@ -109,10 +109,25 @@ def _asset(canvas, path, xy, size):
     if not path:
         return
     with Image.open(path) as source:
+        source.load()
         rgba = source.convert("RGBA")
-    if rgba.getextrema()[3][0] == 255:
+    alpha = rgba.getchannel("A")
+    if alpha.getextrema()[0] == 255:
         raise ValueError("Player/logo image must have a transparent background")
-    rgba.thumbnail(size, Image.Resampling.LANCZOS)
+    # Provider files often contain large invisible margins. Crop ONLY alpha
+    # transparency, not the artwork, to make crests float in their original
+    # slot at a consistent visible size. Never invent a circle or white tile.
+    bounds = alpha.point(lambda a: 255 if a >= 24 else 0).getbbox()
+    if bounds is None:
+        raise ValueError("Genuine artwork is empty")
+    rgba = rgba.crop(bounds)
+    if min(rgba.size) < 12:
+        raise ValueError("Genuine artwork has insufficient visible detail")
+    factor = min(size[0] / rgba.width, size[1] / rgba.height)
+    if factor > 4:
+        raise ValueError("Too-small image cannot be enlarged as a genuine premium cutout")
+    rgba = rgba.resize((max(1, round(rgba.width * factor)),
+                        max(1, round(rgba.height * factor))), Image.Resampling.LANCZOS)
     x, y = xy
     canvas.paste(rgba, (x + (size[0] - rgba.width) // 2,
                         y + (size[1] - rgba.height) // 2), rgba)
