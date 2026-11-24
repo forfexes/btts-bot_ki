@@ -144,7 +144,9 @@ def test_owner_combo_infers_multigame_model_probability_from_leg_formulas(monkey
     assert output.startswith(bytes((137,80,78,71,13,10,26,10)))
     assert "24.0%" in drawn
     assert "BERECHNET" in drawn
-    assert "QUOTE UNBESTÄTIGT" in drawn
+    assert "KEINE BOOKIE-QUOTE" in drawn
+    assert "GESAMTQUOTE" not in drawn
+    assert not any(value.startswith("EV ") for value in drawn)
 
 
 def test_same_game_builder_needs_joint_or_conditional_evidence(monkeypatch):
