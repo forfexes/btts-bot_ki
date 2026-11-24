@@ -65,3 +65,31 @@ def test_transport_is_offline_only():
     from pathlib import Path
     src=Path(__file__).with_name('netrattler_premium_mobile_telegram_plan.py').read_text()
     assert 'requests.post' not in src and 'urlopen(' not in src
+
+def test_settlement_never_edits_different_ticket_identity():
+    original=ticket("builder",10)
+    sent=plan_new_ticket(original,"CHAT",preview_only=True)
+    state=bind_message_ids(sent,[101,102,103,104],"QA-ONE-TICKET")
+    other=dict(original,ticket_id="DIFFERENT-TICKET",status="GEWONNEN")
+    with pytest.raises(ValueError,match="identity"):
+        plan_same_photo_settlement(other,state,preview_only=True)
+
+
+def test_settlement_rejects_tampered_duplicate_photo_ids():
+    original=ticket("builder",10)
+    sent=plan_new_ticket(original,"CHAT",preview_only=True)
+    state=bind_message_ids(sent,[101,102,103,104],"QA-ONE-TICKET")
+    state["message_ids"]=[101,102,102,104]
+    with pytest.raises(ValueError,match="duplicate"):
+        plan_same_photo_settlement(original,state,preview_only=True)
+
+
+def test_album_caption_survives_settlement_media_edit():
+    original=ticket("builder",10)
+    sent=plan_new_ticket(original,"CHAT",preview_only=True)
+    state=bind_message_ids(sent,[101,102,103,104],"QA-ONE-TICKET")
+    edits=plan_same_photo_settlement(dict(original,status="GEWONNEN"),state,preview_only=True)
+    first=json.loads(edits[0].data["media"])
+    assert "EIN TICKET" in first.get("caption","")
+    for next_edit in edits[1:]:
+        assert "caption" not in json.loads(next_edit.data["media"])
