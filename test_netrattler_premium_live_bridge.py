@@ -170,3 +170,36 @@ def test_var_and_1x2_builder_legs_need_actual_market_evidence():
     t["legs"][0].update(market="1x2",selection="YES")
     with pytest.raises(ValueError,match="1X2"):
         verified_mobile_images(t,crest_provider=_provider)
+
+
+def test_statistical_source_without_bookmaker_is_never_observed_price():
+    t=_single()
+    t.pop("bookmaker")
+    for source in ("ESPN","API-Football","StatsBomb"):
+        with pytest.raises(ValueError,match="sportsbook"):
+            verified_mobile_images(dict(t,source=source,_source=source),
+                                   crest_provider=_provider)
+
+
+def test_legacy_genuine_bookie_field_is_allowed():
+    t=_single()
+    t["bookie"]=t.pop("bookmaker")
+    pages=verified_mobile_images(t,crest_provider=_provider)
+    assert len(pages)==1
+
+
+def test_explicit_synthetic_price_flag_blocks_even_with_bookmaker():
+    t=_single()
+    for changes in ({"odds_observed":False},
+                    {"price_type":"synthetic"},
+                    {"price_type":"model_odds"},
+                    {"price_calculated":True}):
+        with pytest.raises(ValueError,match="synthetic/model"):
+            verified_mobile_images(dict(t,**changes),crest_provider=_provider)
+
+
+def test_unknown_named_bookmaker_not_inferred_from_analytical_provider():
+    t=_single()
+    t["bookmaker"]="fotmob"
+    with pytest.raises(ValueError,match="sportsbook"):
+        verified_mobile_images(t,crest_provider=_provider)
