@@ -186,3 +186,48 @@ def test_unapproved_categories_do_not_silently_reuse_owner_art():
     for category in ("var","cross_mix","last_minute_goal","fake"):
         with pytest.raises(ValueError,match="five"):
             render_owner_reference_qa(category,one(),now=NOW)
+
+
+@pytest.mark.parametrize("family", ("builder", "combo", "cross_mix"))
+def test_formula_only_qa_uses_observed_legs_not_bookmaker_ticket(family):
+    import math
+    from unittest.mock import patch
+    import netrattler_five_owner_dynamic_qa as module
+    from netrattler_clean_card_renderer import render_cross_mix_qa
+    record = ticket(family, 3)
+    for field in ("combined_quote_id", "combined_odds", "bookmaker"):
+        record.pop(field)
+    record.update(formula_only=True, combined_odds_observed=False)
+    record["legs"][1]["bookmaker"] = "SECOND QA SOURCE"
+    def render(row):
+        if family == "cross_mix":
+            return render_cross_mix_qa(row, now=NOW)
+        return render_owner_reference_qa(family, row, now=NOW)
+    with patch.object(module, "_text", wraps=module._text) as drawn:
+        png = render(record)
+        labels = [str(c.args[1]) for c in drawn.call_args_list]
+    assert png.startswith(bytes((137,80,78,71)))
+    expected = math.prod(leg["bookmaker_odds"] for leg in record["legs"])
+    assert any("KEINE BOOKIE-QUOTE" in label for label in labels)
+    assert any(f"BERECHNET {expected:.2f}" in label for label in labels)
+    assert not any("ECHTE GESAMTQUOTE" in label for label in labels)
+    with pytest.raises(ValueError):
+        render(dict(record, combined_quote_id="STALE-ID"))
+    record["legs"][0]["quote_observed"] = False
+    with pytest.raises(ValueError):
+        render(record)
+
+
+def test_builder_renders_each_verified_player_name_and_alpha_photo():
+    from unittest.mock import patch
+    import netrattler_five_owner_dynamic_qa as module
+    record = ticket("builder", 2, True)
+    for i, leg in enumerate(record["legs"]):
+        leg.update(player_name=f"QA PLAYER {i}", player_id=f"P{i}",
+                   player_photo=crest((250, 220, 15, 255)))
+    with patch.object(module, "_text", wraps=module._text) as drawn:
+        png = render_owner_reference_qa("builder", record, now=NOW)
+        labels = [str(c.args[1]) for c in drawn.call_args_list]
+    assert all(any(f"QA PLAYER {i}" in label for label in labels) for i in range(2))
+    with Image.open(BytesIO(png)) as im:
+        assert im.getpixel((300, BODY_TOP+15+48))[:3] == (250,220,15)

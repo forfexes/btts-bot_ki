@@ -141,12 +141,20 @@ def _mini_crest(canvas, logo, center):
 
 
 def _ticket(category, record, now):
-    _required(record, ("bookmaker", "combined_quote_id", "combined_odds",
-                       "kickoff", "quote_observed_at"))
-    if record.get("combined_odds_observed") is not True or record.get("price_estimated") is not False:
-        raise ValueError("Confirmed combined bookmaker ticket required")
-    _observed(dict(record, quote_id=record["combined_quote_id"], quote_observed=True), now)
-    total = _price(record["combined_odds"])
+    formula_only = record.get("formula_only") is True
+    if formula_only:
+        if (record.get("combined_odds_observed") is True
+                or record.get("combined_quote_id")
+                or record.get("combined_odds") is not None):
+            raise ValueError("Formula-only analysis cannot claim a bookmaker ticket")
+        total = None
+    else:
+        _required(record, ("bookmaker", "combined_quote_id", "combined_odds",
+                           "kickoff", "quote_observed_at"))
+        if record.get("combined_odds_observed") is not True or record.get("price_estimated") is not False:
+            raise ValueError("Confirmed combined bookmaker ticket required")
+        _observed(dict(record, quote_id=record["combined_quote_id"], quote_observed=True), now)
+        total = _price(record["combined_odds"])
     legs = record.get("legs")
     max_legs = 10  # Builder, Combo and Cross/Mix: EVERY count 2..10
     if not isinstance(legs, (list, tuple)) or not 2 <= len(legs) <= max_legs:
@@ -157,13 +165,23 @@ def _ticket(category, record, now):
                         "home_crest", "away_crest"), prefix=f"leg {idx}: ")
         _observed(leg, now, prefix=f"leg {idx}: ")
         _price(leg["bookmaker_odds"])
-        if str(leg["bookmaker"]).casefold() != str(record["bookmaker"]).casefold():
+        if not formula_only and str(leg["bookmaker"]).casefold() != str(record["bookmaker"]).casefold():
             raise ValueError("Ticket and legs need same real sportsbook")
         if not all(isinstance(leg[k], Image.Image) for k in ("home_crest", "away_crest")):
             raise ValueError("Each fixture needs real transparent club emblems")
         if (str(leg.get("player_name") or "").strip()
                 and (not leg.get("player_id") or not isinstance(leg.get("player_photo"), Image.Image))):
             raise ValueError("Player builder leg requires authentic athlete photo and player ID")
+    if formula_only:
+        from premium_joint_formula import estimate_combo
+        analysis = estimate_combo([
+            dict(event_id=leg["fixture_id"], odds=leg["bookmaker_odds"],
+                 odds_observed=True, model_probability=leg.get("model_probability"))
+            for leg in legs
+        ])
+        total = analysis["indicative_leg_product"]
+        if total is None:
+            raise ValueError("Formula requires individual observed prices")
     return legs, total
 
 
@@ -207,7 +225,8 @@ def _multi(category, base, record, now):
     match_caption = "MEHRERE SPIELE" if fixture_count > 1 else "EIN SPIEL"
     _text(draw, match_caption, (W//2, 428),
           max_width=346, max_height=45, start_size=26, color="#FFE56C")
-    _text(draw, f"{len(legs)} AUSWAHLEN · ECHTE GESAMTQUOTE",
+    quote_label = "KEINE BOOKIE-QUOTE" if record.get("formula_only") is True else "ECHTE GESAMTQUOTE"
+    _text(draw, f"{len(legs)} AUSWAHLEN · {quote_label}",
           (W//2, 487), max_width=355, max_height=32, start_size=16)
     for idx, leg in enumerate(legs, 1):
         y = BODY_TOP + 15 + (idx-1)*ROW_H
@@ -217,7 +236,14 @@ def _multi(category, base, record, now):
         _mini_crest(canvas, leg["away_crest"], (244,y+48))
         _text(draw, f'{idx}. {leg["home"]} – {leg["away"]}',
               (550,y+27), max_width=440, max_height=32, start_size=18)
-        _text(draw, f'{leg["market"]} · {leg["selection"]}',
+        player_name = str(leg.get("player_name") or "").strip()
+        if player_name:
+            photo = _logo(leg["player_photo"], 48, 78)
+            canvas.alpha_composite(photo, (300-photo.width//2, y+48-photo.height//2))
+        market_text = f'{leg["market"]} · {leg["selection"]}'
+        if player_name:
+            market_text = player_name + " · " + market_text
+        _text(draw, market_text,
               (540,y+56), max_width=430, max_height=28, start_size=17,
               color="#FFE56C")
         # Every leg carries its own verified fixture start, not one
@@ -228,7 +254,8 @@ def _multi(category, base, record, now):
         _text(draw, f'@{_price(leg["bookmaker_odds"]):.2f}',
               (938,y+49), max_width=96, max_height=37, start_size=20,
               color="#40F58A")
-    _text(draw, f'{category.upper()} {len(legs)} · @{total:.2f}',
+    price_text = f'BERECHNET {total:.2f}' if record.get('formula_only') is True else f'@{total:.2f}'
+    _text(draw, f'{category.upper()} {len(legs)} · {price_text}',
           (685, 1169+extra), max_width=470, max_height=45,
           start_size=27, color="#FFE56C")
     return canvas, extra
