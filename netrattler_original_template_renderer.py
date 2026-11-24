@@ -369,14 +369,15 @@ def render_goal(tip,target_date,result=None):
     fields=[(52,269,f"{odds:.2f}",GOLD),(326,539,f"{probability:.0f}%",GREEN),
             (590,793,f"{fair:.2f}",GOLD),(852,1068,f"{gpg:.2f}",GOLD)]
     for i,(x0,x1,text,color) in enumerate(fields):
-        _erase(draw,(x0,953,x1,1023),fill="#03150D",radius=14)
-        _label(draw,text,(x0+x1)//2,956,x1-x0-12,size=47,min_size=28,fill=color)
+        # Only cover the original value area INSIDE the neon outline.
+        _erase(draw,(x0+15,985,x1-15,1037),fill="#03150D",radius=5)
+        _label(draw,text,(x0+x1)//2,984,x1-x0-34,size=43,min_size=24,fill=color)
     status=(result.get("marks") or {}).get("0") if isinstance(result,dict) else None
     label,col=nd._result_text(status)
     # Keep both original frame strokes untouched. The result text sits
     # on the same baseline as AUSWERTUNG, not above the gold border.
-    draw.rectangle((465,1250,631,1299),fill="#060A0C")
-    _label(draw,label,548,1251,156,size=36,min_size=21,fill=col)
+    draw.rectangle((465,1239,640,1299),fill="#060A0C")
+    _label(draw,label,548,1243,156,size=36,min_size=21,fill=col)
     # Preserve the original Telegram plane and cyan frame; change ONLY
     # the old handle text inside the right footer.
     draw.rectangle((827,1242,1081,1294),fill="#06131B")

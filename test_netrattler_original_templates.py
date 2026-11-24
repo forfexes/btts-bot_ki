@@ -288,10 +288,26 @@ def test_goal_footer_border_and_status_alignment():
         raw=render_goal(tip,"2026-11-24")
     with Image.open(io.BytesIO(raw)) as output:
         original=_base(str(GOAL_IMAGE))
-        for box in ((25,1222,650,1246),(25,1304,650,1323),(740,1243,820,1300)):
+        for box in ((25,1222,650,1239),(25,1304,650,1323),(740,1243,820,1300)):
             assert ImageChops.difference(output.crop(box).convert("RGB"),
                 original.crop(box)).getbbox() is None
     entries=[c.args for c in text.call_args_list]
     assert any(a[1]=="@prophunter" and a[3]>=1249 for a in entries)
-    assert any(a[1]=="OFFEN" and a[3]>=1251 for a in entries)
+    assert any(a[1]=="OFFEN" and a[3]==1243 for a in entries)
     assert any(a[1]=="VS" and a[3]>697 for a in entries)
+
+
+def test_goal_stat_values_leave_original_upper_lower_frame_untouched():
+    from netrattler_original_template_renderer import render_goal
+    tip={"match":"Demo United vs Test FC","player":"QA PLAYER","team":"Demo United",
+         "odds":4.5,"probability":27,"fairOdds":3.7,"goals_per_game":.33,
+         "_kickoff":"2026-11-24T18:30:00+00:00"}
+    photo=_test_photo(transparent=True)
+    with patch.object(cards,"_player_photo",return_value=photo), \
+         patch.object(cards,"_badge_bytes",return_value=photo):
+        raw=render_goal(tip,"2026-11-24")
+    with Image.open(io.BytesIO(raw)) as output:
+        original=_base(str(GOAL_IMAGE))
+        for box in ((30,966,1090,984),(30,1039,1090,1064)):
+            assert ImageChops.difference(output.crop(box).convert("RGB"),
+                original.crop(box)).getbbox() is None
