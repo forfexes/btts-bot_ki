@@ -102,3 +102,40 @@ def test_alternative_background_allowed_only_in_offline_qa(tmp_path):
     # when complete input image data would later become available.
     with pytest.raises(ValueError):
         render_mobile_pages(another,real,preview_only=False)
+
+
+
+@pytest.mark.parametrize("category,count", [
+    ("builder",8), ("builder",9), ("builder",10),
+    ("combo",5), ("combo",10), ("cross_mix",6), ("lottery",10)
+])
+def test_calculated_combo_quote_mobile_is_explicit_not_bookmaker(category,count):
+    from netrattler_premium_flexible_renderer import combined_quote_info
+    t=ticket(category,count)
+    q=round(1.85**count,4)
+    t.update(combined_odds=q,combined_odds_observed=False,
+             combined_odds_calculated=True,
+             price_type="calculated_from_leg_odds")
+    t.pop("combined_ticket_id",None)
+    assert combined_quote_info(t)["observed"] is False
+    assert combined_quote_info(t)["odds"] == q
+    pages=render_mobile_pages(MASTER_PATH,t,preview_only=True)
+    assert pages[-1].last_leg == count
+    assert all(p.image.width == 1080 for p in pages)
+
+
+def test_invalid_calculated_total_rejected_even_with_true_leg_odds():
+    t=ticket("builder",10)
+    t.update(combined_odds=99999,combined_odds_observed=False,
+             combined_odds_calculated=True,price_type="calculated_from_leg_odds")
+    t.pop("combined_ticket_id",None)
+    with pytest.raises(ValueError,match="does not match formula"):
+        render_mobile_pages(MASTER_PATH,t,preview_only=True)
+
+
+def test_formula_cannot_claim_real_bookmaker_receipt():
+    t=ticket("combo",5)
+    t.update(combined_odds=round(1.85**5,4),combined_odds_observed=True,
+             combined_odds_calculated=True,price_type="calculated_from_leg_odds")
+    with pytest.raises(ValueError,match="cannot claim"):
+        render_mobile_pages(MASTER_PATH,t,preview_only=True)
