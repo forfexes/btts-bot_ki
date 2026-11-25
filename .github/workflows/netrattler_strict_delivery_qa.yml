@@ -1,6 +1,14 @@
 name: NETRATTLER Strict Card Delivery QA
 "on":
+  pull_request:
+    branches: [main]
+    paths:
+      - btts_bot.py
+      - netrattler_*.py
+      - test_netrattler_*.py
+      - .github/workflows/netrattler_strict_delivery_qa.yml
   push:
+    branches: [qa/strict-card-delivery-no-text-bypass]
     paths:
       - btts_bot.py
       - netrattler_strict_delivery.py
