@@ -46,6 +46,31 @@ jobs:
         run: |
           python netrattler_five_owner_reference_qa.py --outdir output/five-clean-masters
           python -m pytest -q test_netrattler_clean_master_builder.py test_netrattler_five_owner_dynamic_qa.py
+      - name: Render and verify all ten additional clean-master market families
+        env:
+          NETRATTLER_CARD_QA_PREVIEW_DIR: output/ten-clean-dynamic
+        run: |
+          python netrattler_clean_master_builder.py --outdir output/ten-clean-masters
+          python -m pytest -q test_netrattler_clean_card_renderer.py
+          python - <<'PY'
+          import json
+          from pathlib import Path
+          from netrattler_clean_master_builder import SOURCE_MAP
+          from netrattler_five_owner_reference_qa import SPECS
+          five=Path('output/five-clean-masters')
+          ten=Path('output/ten-clean-masters')
+          rows=json.loads((five/'manifest.json').read_text())+json.loads((ten/'manifest.json').read_text())
+          expected=set(SPECS)|set(SOURCE_MAP)
+          assert len(expected)==len(rows)==15
+          assert {row['category'] for row in rows}==expected
+          assert all(row['production_approved'] is False and row['logo_backplates'] is False for row in rows)
+          previews=Path('output/ten-clean-dynamic')
+          assert len(list(previews.glob('*.png')))==10
+          Path('output/clean-master-inventory.json').write_text(json.dumps({
+              'families':sorted(expected), 'missing_from_this_pipeline':['last_minute_goal'],
+              'production_approved':False, 'synthetic_preview_data':True
+          },indent=2)+'\n')
+          PY
       - name: Export calculated-only combo and cross QA cards (no bookie ticket)
         env:
           NETRATTLER_FIVE_DYNAMIC_QA: output/five-clean-dynamic
@@ -70,7 +95,7 @@ jobs:
           python - <<'PY'
           from pathlib import Path
           from netrattler_telegram_safe_zone import append_safe_margin, assert_safe_margin
-          files=sorted(Path('output/five-clean-dynamic').glob('*.png'))
+          files=sorted(Path('output/five-clean-dynamic').glob('*.png'))+sorted(Path('output/ten-clean-dynamic').glob('*.png'))
           assert files, 'No current clean dynamic PNGs available'
           out=Path('output/five-clean-telegram')
           out.mkdir(parents=True,exist_ok=True)
@@ -89,6 +114,9 @@ jobs:
             output/five-clean-masters/*
             output/five-clean-dynamic/*.png
             output/five-clean-telegram/*.png
+            output/ten-clean-masters/*
+            output/ten-clean-dynamic/*.png
+            output/clean-master-inventory.json
           retention-days: 7
           if-no-files-found: warn
   telegram-sandbox:
