@@ -46,6 +46,22 @@ jobs:
         run: |
           python netrattler_five_owner_reference_qa.py --outdir output/five-clean-masters
           python -m pytest -q test_netrattler_clean_master_builder.py test_netrattler_five_owner_dynamic_qa.py
+      - name: Verify Telegram safe margin on current clean-card PNGs
+        run: |
+          python - <<'PY'
+          from pathlib import Path
+          from netrattler_telegram_safe_zone import append_safe_margin, assert_safe_margin
+          files=sorted(Path('output/five-clean-dynamic').glob('*.png'))
+          assert files, 'No current clean dynamic PNGs available'
+          out=Path('output/five-clean-telegram')
+          out.mkdir(parents=True,exist_ok=True)
+          for p in files:
+              data=p.read_bytes()
+              padded=append_safe_margin(data)
+              assert_safe_margin(data,padded)
+              (out/p.name).write_bytes(padded)
+          print('Current clean-card Telegram safe margin verified:',len(files))
+          PY
       - uses: actions/upload-artifact@v4
         if: always()
         with:
@@ -53,5 +69,158 @@ jobs:
           path: |
             output/five-clean-masters/*
             output/five-clean-dynamic/*.png
+            output/five-clean-telegram/*.png
           retention-days: 7
           if-no-files-found: warn
+  telegram-sandbox:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    env:
+      TELEGRAM_TOKEN: ''
+      TELEGRAM_CHAT_ID: ''
+      SUPABASE_URL: ''
+      SUPABASE_KEY: ''
+      NETRATTLER_SANDBOX_HARDTEST: '1'
+      # Explicit test-only override; real Telegram publishing stays blocked.
+      NETRATTLER_BLOCK_OVERPAINTED_MASTERS: '0'
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+      - name: Install isolated render dependencies
+        run: python -m pip install --quiet pillow cairosvg pytest requests beautifulsoup4 python-dotenv numpy
+      - name: Syntax-check actual card entrypoints
+        run: python -m py_compile netrattler_premium_verified_cards.py netrattler_premium_compact.py netrattler_original_template_renderer.py netrattler_neon_design.py netrattler_stats_match_cards.py netrattler_builder_cards.py
+      - name: Test premium masters and 16-category verified render
+        run: python -m unittest -v test_premium_blank_masters test_premium_verified_cards
+      - name: Test actual Telegram renderers with mocked network
+        run: python -m pytest -q test_netrattler_original_templates.py
+      - name: Audit actual premium production route (no unconditional failure)
+        run: |
+          python - <<'PY'
+          import inspect
+          import netrattler_stats_match_cards as stats
+          import netrattler_premium_telegram_adapter as adapter
+          import netrattler_builder_cards as builder
+          import netrattler_neon_design as design
+          from netrattler_premium_verified_cards import render_verified_png
+          source=inspect.getsource(stats.render_card)
+          assert 'netrattler_premium_telegram_adapter' in source, 'Ordinary premium route missing'
+          assert 'crest_provider=_badge_bytes' in source, 'Real crest provider not wired'
+          assert 'NETRATTLER_CARD_LAYOUT' in source, 'Explicit legacy override not guarded'
+          assert callable(adapter.render) and callable(render_verified_png)
+          assert 'netrattler_original_template_renderer' in inspect.getsource(design.render_builder_card)
+          assert 'netrattler_original_template_renderer' in inspect.getsource(design.render_scorer_card)
+          from netrattler_original_template_renderer import (
+              _builder_canvas, BUILDER_IMAGE, GOAL_IMAGE)
+          assert BUILDER_IMAGE.suffix == '.webp' and BUILDER_IMAGE.is_file()
+          assert GOAL_IMAGE.suffix == '.webp' and GOAL_IMAGE.is_file()
+          for n in (2, 3, 4, 5, 6):
+              canvas, shift = _builder_canvas([None] * n)
+              assert canvas.size == (1122, 1402 - 100 * (6 - n))
+              assert shift == -100 * (6 - n)
+          print('PASS: exact owner WebP originals serve Builder and Goal Hunter')
+          print('PASS: ordinary single-market production cards route to premium adapter')
+          print('NOTICE: Builder and Goal Hunter use separate original-template renderers; tested separately')
+          PY
+      - name: Fail if original Builder metrics or settlement overlap rows
+        run: |
+          python - <<'PY'
+          import inspect
+          from netrattler_original_template_renderer import _builder_canvas, render_builder
+          source = inspect.getsource(render_builder)
+          assert '1100+shift' in source, 'Original metric boxes not used'
+          assert '1230+shift' in source, 'Original settlement row not used'
+          for n in range(2, 7):
+              canvas, shift = _builder_canvas([None] * n)
+              last_row_end = 409 + 100 * n
+              metric_start, metric_end = 1100 + shift, 1164 + shift
+              status_start, status_end = 1230 + shift, 1285 + shift
+              assert last_row_end + 20 < metric_start, f'Builder {n}: metrics overlap legs'
+              assert metric_end + 20 < status_start, f'Builder {n}: settlement overlaps metrics'
+              assert status_end < canvas.height - 40, f'Builder {n}: footer clipped'
+          print('PASS: real WebP 2–6 leg metrics and settlement do not overlap')
+          PY
+      - name: Create visual sandbox PNG artifact (never send to Telegram)
+        if: always()
+        run: |
+          mkdir -p sandbox-qa
+          python - <<'PY'
+          from pathlib import Path
+          from netrattler_premium_verified_cards import CATEGORIES, render_verified_png
+          leg={'match':'TEST HOME vs TEST AWAY','market':'TEST MARKET',
+               'bookmaker_odds':2.15,'bookmaker':'offline_test_fixture'}
+          for category in CATEGORIES:
+              count=3 if category in ('combo','builder') else 1
+              Path('sandbox-qa/'+category+'_SANDBOX_ONLY.png').write_bytes(
+                  render_verified_png(category,[leg.copy() for _ in range(count)]))
+          PY
+      - name: Render original WebP Builder 2-7 and Goal Hunter images OFFLINE
+        run: |
+          python -m py_compile netrattler_card_visual_preview.py netrattler_telegram_sandbox_hardtest.py
+          python netrattler_card_visual_preview.py --outdir visual_review_previews
+      - name: Simulate Telegram chat PHOTO thumbnails for all 16 categories and originals
+        run: |
+          python netrattler_telegram_sandbox_hardtest.py
+          python - <<'PY'
+          import json
+          from pathlib import Path
+          x=json.loads(Path('sandbox-telegram-qa/report.json').read_text())
+          assert x['technical_families_rendered']==16
+          assert not x['all_16_owner_artwork_approved']
+          assert all(not v['production_send'] for v in x['individual_results'].values())
+          print('TELEGRAM CHAT PREVIEW OFFLINE PASS',len(x['individual_results']))
+          print('OWNER-ORIGINAL PRODUCTION RELEASE: BLOCKED pending clean art')
+          PY
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: netrattler-telegram-offline-chat-hardtest
+          path: |
+            sandbox-telegram-qa/*.png
+            sandbox-telegram-qa/report.json
+            visual_review_previews/*.png
+          retention-days: 7
+          if-no-files-found: warn
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: netrattler-offline-hardtest-16-categories
+          path: sandbox-qa/*.png
+          if-no-files-found: warn
+          retention-days: 7
+  read-only-asset-audit:
+    if: github.event_name == 'push'
+    runs-on: ubuntu-latest
+    timeout-minutes: 55
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+      - name: Install audit dependencies
+        run: python -m pip install --quiet requests==2.32.5 Pillow==11.3.0 numpy==2.3.2
+      - name: Syntax gate, no Telegram
+        run: |
+          python -m py_compile asset_coverage_audit.py test_asset_coverage_rotation.py
+          python -m unittest -v test_asset_coverage_rotation.py
+      - name: Inventory complete names and verify real images on prioritized samples
+        env:
+          SUPABASE_URL: ${{ secrets.SUPABASE_URL }}
+          SUPABASE_KEY: ${{ secrets.SUPABASE_KEY }}
+          SUPABASE_SERVICE_ROLE_KEY: ${{ secrets.SUPABASE_SERVICE_ROLE_KEY }}
+          API_FOOTBALL_KEYS: ${{ secrets.API_FOOTBALL_KEYS }}
+          ALLSPORTS_API_KEY: ${{ secrets.ALLSPORTS_API_KEY }}
+          ASSET_FULL_CHAIN_SAMPLE: '16'
+          ASSET_MAX_PHOTOS: '100'
+          ASSET_MAX_TEAMS: '120'
+        run: python -u asset_coverage_audit.py --bot netrattler --max-photos 100 --max-teams 120 --rotate
+      - name: Upload private-data-minimized audit report
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: asset-coverage-audit-netrattler
+          path: diagnostics/asset_coverage_audit.json
+          if-no-files-found: warn
+          retention-days: 7
