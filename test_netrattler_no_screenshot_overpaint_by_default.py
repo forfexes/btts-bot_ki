@@ -41,7 +41,11 @@ class NoScreenshotOverpaint(unittest.TestCase):
             notices=[]
             self.assertEqual(cards.update_cards_with_results(
                 None,[],log=notices.append),0)
-            self.assertTrue(any("deferred" in x for x in notices))
+            # Edits stay deferred until the exact stadium master exists; once it is
+            # deployed the call proceeds (and returns 0 here: no token/results).
+            from netrattler_stadium_portrait import master_ready
+            deferred = any("deferred" in x for x in notices)
+            self.assertEqual(deferred, not master_ready())
 
     def test_mistyped_or_explicit_lock_remains_fail_closed(self):
         for flag in ("1","true","YES","", "off"):
