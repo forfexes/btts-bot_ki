@@ -5,6 +5,8 @@ name: NETRATTLER Strict Card Delivery QA
       - btts_bot.py
       - netrattler_strict_delivery.py
       - test_netrattler_strict_delivery.py
+      - test_netrattler_scorer_qualification.py
+      - netrattler_scorer_qualification.py
       - .github/workflows/netrattler_strict_delivery_qa.yml
 permissions:
   contents: read
