@@ -1,0 +1,73 @@
+name: NETRATTLER Portrait Stadium Master QA
+"on":
+  workflow_dispatch: {}
+  push:
+    paths:
+      - 'netrattler_stadium_portrait.py'
+      - 'test_netrattler_stadium_portrait.py'
+      - 'test_netrattler_premium_dispatch_gate.py'
+      - 'netrattler_stats_match_cards.py'
+      - 'netrattler_premium_telegram_adapter.py'
+      - 'assets/premium_master/netrattler_stadium_portrait_20261124.png'
+      - '.github/workflows/netrattler_stadium_portrait_qa.yml'
+permissions:
+  contents: read
+jobs:
+  offline:
+    runs-on: ubuntu-latest
+    timeout-minutes: 8
+    env:
+      TELEGRAM_TOKEN: ''
+      TELEGRAM_CHAT_ID: ''
+      SUPABASE_URL: ''
+      SUPABASE_KEY: ''
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+      - run: pip install pillow pytest requests cairosvg
+      - run: python -m compileall -q netrattler_stadium_portrait.py netrattler_stats_match_cards.py netrattler_premium_telegram_adapter.py
+      - run: python -m pytest -q -rs test_netrattler_stadium_portrait.py
+        env:
+          NETRATTLER_STADIUM_QA_PREVIEW_DIR: qa-stadium-previews
+      - uses: actions/upload-artifact@v4
+        with:
+          name: netrattler-stadium-offline-six-market-previews
+          path: qa-stadium-previews
+          if-no-files-found: error
+          retention-days: 5
+      - name: Verify exact production preflight policy
+        run: python -m pytest -q test_netrattler_premium_flexible_renderer.py test_netrattler_premium_mobile_pages.py test_netrattler_premium_mobile_telegram_plan.py test_netrattler_premium_live_bridge.py test_netrattler_premium_production_gate.py
+      - name: Real master transfer status
+        run: |
+          python - <<'PY'
+          from netrattler_stadium_portrait import master_ready, MASTER
+          print("MASTER_READY" if master_ready() else "MASTER_UPLOAD_REQUIRED: "+str(MASTER))
+          PY
+
+  production-card-contract:
+    runs-on: ubuntu-latest
+    timeout-minutes: 12
+    env:
+      TELEGRAM_TOKEN: ''
+      TELEGRAM_CHAT_ID: ''
+      TELEGRAM_GROUP_MATCH_CARDS: ''
+      SUPABASE_URL: ''
+      SUPABASE_KEY: ''
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+      - run: python -m pip install pillow pytest requests cairosvg beautifulsoup4 python-dotenv numpy
+      - name: Reproduce mandatory production legacy technical suite offline
+        env:
+          NETRATTLER_BLOCK_OVERPAINTED_MASTERS: '0'
+        run: python -m pytest -q -ra test_netrattler_premium_verified_cards.py test_netrattler_premium_dispatch_gate.py test_netrattler_btts_owner_original.py test_netrattler_combo_owner_original.py test_netrattler_combo_dynamic_cards.py test_netrattler_original_templates.py
+      - name: Verify strict original-only production path independently
+        env:
+          NETRATTLER_BLOCK_OVERPAINTED_MASTERS: '1'
+        run: |
+          python -m pytest -q test_netrattler_stadium_portrait.py
+          python -c "from netrattler_stadium_portrait import load_master; load_master()"

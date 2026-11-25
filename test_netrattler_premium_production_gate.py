@@ -48,6 +48,9 @@ class ProductionReleaseGate(unittest.TestCase):
         self.assertIn("needs.owner-card-preflight.outputs.repository_approved == 'true'", cond)
         self.assertIn("github.event_name == 'push' && needs.owner-card-preflight.outputs.explicit_send == 'true'", cond)
         self.assertIn("python netrattler_owner_release.py", preflight)
+        self.assertIn("needs.owner-card-preflight.outputs.stadium_ready == 'true'", cond)
+        self.assertIn("test_netrattler_stadium_portrait.py", preflight)
+        self.assertIn("Validate strict stadium production route", live)
         self.assertIn("needs: [owner-card-preflight]", live)
 
     def test_explicit_owner_push_policy(self):

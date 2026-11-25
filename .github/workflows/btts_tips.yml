@@ -29,6 +29,10 @@ on:
       - 'netrattler_telegram_sandbox_hardtest.py'
       - 'test_netrattler_premium_production_gate.py'
       - 'netrattler_owner_release.py'
+      - 'netrattler_stadium_portrait.py'
+      - 'netrattler_premium_telegram_adapter.py'
+      - 'test_netrattler_stadium_portrait.py'
+      - 'assets/premium_master/netrattler_stadium_portrait_20261124.png'
       - '.github/netrattler-card-release.json'
       - 'netrattler_premium_live_bridge.py'
       - "netrattler_1x_verified_props.py"
@@ -85,6 +89,7 @@ jobs:
     outputs:
       repository_approved: ${{ steps.owner-release.outputs.approved }}
       explicit_send: ${{ steps.owner-release.outputs.explicit_send }}
+      stadium_ready: ${{ steps.stadium-master.outputs.ready }}
     env:
       TELEGRAM_TOKEN: ""
       TELEGRAM_CHAT_ID: ""
@@ -107,6 +112,18 @@ jobs:
         run: |
           python -m py_compile netrattler_premium_flexible_renderer.py netrattler_premium_mobile_pages.py netrattler_premium_mobile_telegram_plan.py netrattler_premium_live_bridge.py
           python -m pytest -q test_netrattler_premium_flexible_renderer.py test_netrattler_premium_mobile_pages.py test_netrattler_premium_mobile_telegram_plan.py test_netrattler_premium_live_bridge.py test_netrattler_premium_production_gate.py
+      - name: Check exact owner stadium PNG (no credentials)
+        id: stadium-master
+        run: |
+          python -m pytest -q -rs test_netrattler_stadium_portrait.py
+          python - <<'PY'
+          import os
+          from netrattler_stadium_portrait import master_ready, MASTER
+          ready=master_ready()
+          with open(os.environ['GITHUB_OUTPUT'],'a',encoding='utf-8') as out:
+              out.write('ready='+str(ready).lower()+'\n')
+          print('MASTER_READY' if ready else 'MASTER_UPLOAD_REQUIRED: '+str(MASTER))
+          PY
       - name: Verify no send capability was granted
         run: echo 'NETRATTLER_OWNER_CARD_QA_PASS - NO TELEGRAM OR DATABASE WRITES'
 
@@ -116,7 +133,7 @@ jobs:
     # other than true overrides the record and prevents all sends.
     # Ordinary pushes never publish; only an explicit changed release request does.
     needs: [owner-card-preflight]
-    if: ${{ github.ref == 'refs/heads/main' && needs.owner-card-preflight.result == 'success' && (vars.NETRATTLER_TG_PRODUCTION_APPROVED == 'true' || (vars.NETRATTLER_TG_PRODUCTION_APPROVED == '' && needs.owner-card-preflight.outputs.repository_approved == 'true')) && (github.event_name == 'schedule' || (github.event_name == 'workflow_dispatch' && inputs.publish_telegram == true) || (github.event_name == 'push' && needs.owner-card-preflight.outputs.explicit_send == 'true')) }}
+    if: ${{ github.ref == 'refs/heads/main' && needs.owner-card-preflight.result == 'success' && needs.owner-card-preflight.outputs.stadium_ready == 'true' && (vars.NETRATTLER_TG_PRODUCTION_APPROVED == 'true' || (vars.NETRATTLER_TG_PRODUCTION_APPROVED == '' && needs.owner-card-preflight.outputs.repository_approved == 'true')) && (github.event_name == 'schedule' || (github.event_name == 'workflow_dispatch' && inputs.publish_telegram == true) || (github.event_name == 'push' && needs.owner-card-preflight.outputs.explicit_send == 'true')) }}
     runs-on: ubuntu-latest
     timeout-minutes: 50
 
@@ -219,8 +236,21 @@ jobs:
           TELEGRAM_GROUP_MATCH_CARDS: ''
           SUPABASE_URL: ''
           SUPABASE_KEY: ''
+          # This legacy technical suite explicitly exercises old renderers in
+          # isolation. Its opt-in is never inherited by the live bot.
+          NETRATTLER_BLOCK_OVERPAINTED_MASTERS: '0'
         run: |
           python -m pytest -q -ra test_netrattler_premium_verified_cards.py test_netrattler_premium_dispatch_gate.py test_netrattler_btts_owner_original.py test_netrattler_combo_owner_original.py test_netrattler_combo_dynamic_cards.py test_netrattler_original_templates.py
+      - name: Validate strict stadium production route (offline)
+        env:
+          TELEGRAM_TOKEN: ''
+          TELEGRAM_CHAT_ID: ''
+          SUPABASE_URL: ''
+          SUPABASE_KEY: ''
+          NETRATTLER_BLOCK_OVERPAINTED_MASTERS: '1'
+        run: |
+          python -m pytest -q test_netrattler_stadium_portrait.py
+          python -c "from netrattler_stadium_portrait import load_master; load_master()"
       - name: Run Tips Bot 🤖
         env:
           NETRATTLER_ORIGINAL_ONLY:   "1"  # fail closed: no unapproved generic COMBO card on Telegram

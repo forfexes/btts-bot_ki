@@ -564,6 +564,10 @@ def render_card(entries, target_date, result=None):
     # This blocks both first publication AND in-place historical media edits.
     # Offline QA remains available without the production-only release switch.
     if os.getenv("NETRATTLER_BLOCK_OVERPAINTED_MASTERS", "1") != "0":
+        from netrattler_stadium_portrait import REGULAR, master_ready
+        if len(entries)==1 and entries[0][0] in REGULAR and master_ready():
+            from netrattler_premium_telegram_adapter import render as render_premium
+            return render_premium(entries,target_date,crest_provider=_badge_bytes,result=result)
         raise ValueError("premium_owner_original_still_overpainted_no_telegram")
     from PIL import Image, ImageDraw, ImageFont
 
@@ -964,14 +968,18 @@ def send_cards(tips_by_market, target_date, token, stats_chat, log=print):
         # This preflight must run BEFORE expensive team-photo/cache requests
         # and BEFORE dedup/signature persistence: unsupported designs are
         # never candidates for a Telegram send in original-only production.
+        allowed = {"btts"}
+        if os.getenv("NETRATTLER_BLOCK_OVERPAINTED_MASTERS","1") != "0":
+            from netrattler_stadium_portrait import REGULAR, master_ready
+            allowed = REGULAR if master_ready() else set()
         blocked = sum(len(entries) for entries in cards
-                      if len(entries) != 1 or str(entries[0][0]) != "btts")
+                      if len(entries) != 1 or str(entries[0][0]) not in allowed)
         if blocked:
             STATS["unapproved_master_blocked"] = (
                 STATS.get("unapproved_master_blocked", 0) + blocked)
             log(f"Premium KI Master Gate: {blocked} unapproved card(s) skipped")
         cards = [entries for entries in cards if len(entries) == 1
-                 and str(entries[0][0]) == "btts"]
+                 and str(entries[0][0]) in allowed]
     if not cards:
         return 0
 
@@ -1068,6 +1076,9 @@ def send_cards(tips_by_market, target_date, token, stats_chat, log=print):
             if mid:
                 sent += 1
                 if mid is not True:
+                    if os.getenv("NETRATTLER_BLOCK_OVERPAINTED_MASTERS","1") != "0":
+                        from netrattler_stadium_portrait import VERSION
+                        entries=[(m,{**t,"card_template_version":VERSION}) for m,t in entries]
                     save_card(stats_chat, mid, entries, target_date, log)
             if pause:
                 time.sleep(pause)
@@ -1266,9 +1277,12 @@ def update_cards_with_results(token, results, log=print):
     the original photo message (no new post)."""
     # Owner images are immutable until the source design is clean.
     # Do not overwrite historical Telegram media with an opaque re-render.
-    if os.getenv("NETRATTLER_BLOCK_OVERPAINTED_MASTERS", "1") != "0":
-        log("NETRATTLER original photo edit deferred: no overlay-free approved master")
-        return 0
+    strict = os.getenv("NETRATTLER_BLOCK_OVERPAINTED_MASTERS", "1") != "0"
+    if strict:
+        from netrattler_stadium_portrait import VERSION, REGULAR, master_ready
+        if not master_ready():
+            log("NETRATTLER original photo edit deferred: no exact stadium master")
+            return 0
     if os.getenv("ENABLE_RESULT_IN_CARD", "true").lower() not in ("1", "true", "yes", "on"):
         return 0
     url, hdr = _sb()
@@ -1311,7 +1325,11 @@ def update_cards_with_results(token, results, log=print):
                 entries = [(m, t) for m, t in (card.get("entries") or [])]
                 if not entries:
                     continue
-                if os.getenv("SETTLEMENT_TG_ORIGINAL_EDIT_ONLY", "0") == "1":
+                if strict:
+                    # Never migrate a historical image to this new layout implicitly.
+                    if len(entries)!=1 or entries[0][0] not in REGULAR or entries[0][1].get("card_template_version")!=VERSION:
+                        continue
+                elif os.getenv("SETTLEMENT_TG_ORIGINAL_EDIT_ONLY", "0") == "1":
                     # Only the BTTS clean, verified owner plate is now
                     # approved for an actual in-image result edit. In
                     # particular, old scorer/corner source screenshots may
