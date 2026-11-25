@@ -94,15 +94,7 @@ def render_regular(market, selection, tip, home, away, first, second, price, res
         raise ValueError("Invalid observed single price")
     original=load_master()
     canvas=original.copy()
-    # All fields occupy genuinely empty stadium artwork below the masthead.
-    # Translucent backgrounds increase contrast without covering an old tip.
-    layer=Image.new("RGBA",canvas.size,(0,0,0,0))
-    d=ImageDraw.Draw(layer)
-    for box, ink in (((205,280,917,370),GOLD),((48,680,1074,805),CYAN),
-                     ((72,826,1050,955),GOLD),((72,982,1050,1140),CYAN),
-                     ((72,1170,1050,1290),GOLD)):
-        d.rounded_rectangle(box,radius=22,fill=(3,15,31,204),outline=(*ink,255),width=3)
-    canvas=Image.alpha_composite(canvas.convert("RGBA"),layer).convert("RGB")
+    # Keep original artwork; draw only data labels and transparent crests.
     _crest(canvas,first,(310,530))
     _crest(canvas,second,(812,530))
     dr=ImageDraw.Draw(canvas)
@@ -126,7 +118,6 @@ def render_regular(market, selection, tip, home, away, first, second, price, res
     state={"win":"GEWONNEN","won":"GEWONNEN","loss":"VERLOREN","lost":"VERLOREN","void":"VOID","push":"PUSH"}.get(str(marks.get("0") or "").lower(),"OFFEN")
     _label(dr,(561,1215),"AUSWERTUNG: "+state,920,38,GOLD if state=="OFFEN" else WHITE)
     _label(dr,(561,1260),str((result or {}).get("ft") or ""),900,28)
-    _label(dr,(920,1344),"@prophunter",340,31)
     if ImageChops.difference(original.crop((0,0,1122,265)),canvas.crop((0,0,1122,265))).getbbox():
         raise AssertionError("Owner masthead pixels changed")
     out=BytesIO()
