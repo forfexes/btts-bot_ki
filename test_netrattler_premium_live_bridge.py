@@ -224,3 +224,14 @@ def test_normalized_builder_preview_recomputes_total_and_blocks_stale_legs():
     p.legs[0].estimated=True
     with pytest.raises(ValueError,match="Unverified"):
         builder_preview_record(p)
+
+
+def test_builder_preview_refuses_unknown_market():
+    from types import SimpleNamespace
+    from netrattler_premium_live_bridge import builder_preview_record
+    leg=SimpleNamespace(player="QA A",team="Club A",match="Club A vs Club B",
+        market="Unknown",category="unverified",line=2,odds=1.8,source="Pinnacle",
+        kickoff="2099-01-01T18:00:00Z",estimated=False)
+    pick=SimpleNamespace(builder_id="QA-UNKNOWN",legs=[leg,leg],total_odds=3.24)
+    with pytest.raises(ValueError,match="verified market"):
+        builder_preview_record(pick)

@@ -35,6 +35,6 @@ jobs:
       - uses: actions/setup-python@v5
         with:
           python-version: '3.11'
-      - run: pip install pillow pytest requests cairosvg
+      - run: pip install pillow pytest requests cairosvg numpy beautifulsoup4 python-dotenv
       - run: python -m py_compile btts_bot.py netrattler_strict_delivery.py
-      - run: python -m pytest -q test_netrattler_strict_delivery.py test_netrattler_stadium_portrait.py test_netrattler_scorer_qualification.py test_netrattler_premium_live_bridge.py
+      - run: python -m pytest -q test_netrattler_strict_delivery.py test_netrattler_stadium_portrait.py test_netrattler_scorer_qualification.py test_netrattler_premium_live_bridge.py test_netrattler_original_release_inventory.py test_netrattler_premium_production_gate.py test_netrattler_premium_mobile_telegram_plan.py

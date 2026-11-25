@@ -331,7 +331,10 @@ def builder_preview_record(pick):
         if not player or team.casefold() not in {home.casefold(), away.casefold()}:
             raise ValueError("Builder requires identity-matched athlete and club")
         label = builder_leg_label(leg)
-        if not label or "Linie prüfen" in label:
+        if (str(getattr(leg, "category", "") or "").lower() not in
+                {"shots", "sot", "fouls", "fouls_won", "tackles", "tackles_committed",
+                 "goalkeeper_saves", "offsides", "yellow_cards", "score", "assist"}
+                or not label or "Linie prüfen" in label):
             raise ValueError("Builder requires verified market and threshold")
         record = {"match": leg.match, "market_label": label, "player": player,
                   "team": team, "bookmaker_odds": leg.odds, "bookmaker": source,
