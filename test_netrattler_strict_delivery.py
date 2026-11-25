@@ -39,8 +39,13 @@ def test_actual_bot_has_no_original_mode_text_fallback():
     assert 'an_drop_post_shrink_' in source
 
 
-def _master_png(alter_header=False):
+def _master_png(alter_header=False, blank=False, incomplete=False):
     image=load_master()
+    if not blank:
+        draw=ImageDraw.Draw(image)
+        draw.rectangle((250,450,350,550),fill=(255,0,255))
+        if not incomplete:
+            draw.rectangle((250,850,350,950),fill=(255,0,255))
     if alter_header:
         ImageDraw.Draw(image).rectangle((0,0,50,50),fill=(255,0,255))
     out=BytesIO()
@@ -52,7 +57,7 @@ def test_outgoing_invalid_or_altered_png_never_sends():
     tip={"match":"QA HOME vs QA AWAY","oddsYes":2.56,"bookmaker":"Pinnacle",
          "commence_time":"2026-11-25T18:00:00Z"}
     assert verified_regular_payload(_master_png())
-    for payload in (b"not PNG",_master_png(True)):
+    for payload in (b"not PNG",_master_png(True),_master_png(blank=True),_master_png(incomplete=True)):
         assert not verified_regular_payload(payload)
         cards.render_card.return_value=payload
         assert send_regular(cards,"QA","QA","over25",tip,"2026-11-25") is None
