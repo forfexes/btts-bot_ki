@@ -55,11 +55,18 @@ def send_regular(cards,token,chat,market,tip,target_date,log=print):
         row=dict(tip)
         _book_price(row)
         # Never reinterpret an unverified local clock as a real fixture.
-        stamp=next((row[k] for k in ("commence_time","kickoff_utc","_kickoff","kickoff","starts","time_utc","time") if _verified_time({"commence_time":row.get(k)})),None)
-        if not stamp:
+        stamps=[row[k] for k in ("commence_time","kickoff_utc","_kickoff","kickoff","starts","time_utc","time")
+                if _verified_time({"commence_time":row.get(k)})]
+        if not stamps:
             log("ORIGINAL_CARD_DEFERRED: unverified kickoff")
             return None
-        kickoff=datetime.fromisoformat(str(stamp).strip().replace("Z","+00:00"))
+        instants={datetime.fromisoformat(str(s).strip().replace("Z","+00:00")).astimezone(timezone.utc)
+                  for s in stamps}
+        if len(instants)!=1:
+            log("ORIGINAL_CARD_DEFERRED: contradictory kickoff evidence")
+            return None
+        stamp=stamps[0]
+        kickoff=next(iter(instants))
         if kickoff.astimezone(timezone.utc) <= datetime.now(timezone.utc):
             log("ORIGINAL_CARD_DEFERRED: prematch fixture already started")
             return None
@@ -69,6 +76,9 @@ def send_regular(cards,token,chat,market,tip,target_date,log=print):
         payload=cards.render_card(entries,target_date)
         if not verified_regular_payload(payload):
             log("ORIGINAL_CARD_DEFERRED: invalid or altered original PNG")
+            return None
+        if kickoff <= datetime.now(timezone.utc):
+            log("ORIGINAL_CARD_DEFERRED: kickoff elapsed during render")
             return None
         mid=cards._send_photo(token,chat,"",payload,log)
         if not isinstance(mid,int) or isinstance(mid,bool) or mid<=0:
