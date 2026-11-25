@@ -1,0 +1,33 @@
+name: NETRATTLER Remaining Stadium Cards QA
+"on":
+  push:
+    paths:
+      - netrattler_remaining_stadium.py
+      - test_netrattler_remaining_stadium.py
+      - .github/workflows/netrattler_remaining_stadium_qa.yml
+  workflow_dispatch: {}
+permissions:
+  contents: read
+jobs:
+  offline:
+    runs-on: ubuntu-latest
+    timeout-minutes: 12
+    env:
+      TELEGRAM_TOKEN: ''
+      TELEGRAM_CHAT_ID: ''
+      SUPABASE_URL: ''
+      SUPABASE_KEY: ''
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+      - run: pip install pillow pytest requests cairosvg
+      - run: python -m pytest -q test_netrattler_remaining_stadium.py
+        env:
+          REMAINING_QA_DIR: qa-remaining-stadium
+      - uses: actions/upload-artifact@v4
+        with:
+          name: remaining-stadium-offline-previews
+          path: qa-remaining-stadium
+          if-no-files-found: error
