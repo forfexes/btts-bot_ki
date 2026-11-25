@@ -5,6 +5,7 @@ name: NETRATTLER Portrait Stadium Master QA
     paths:
       - 'netrattler_stadium_portrait.py'
       - 'test_netrattler_stadium_portrait.py'
+      - 'test_netrattler_premium_dispatch_gate.py'
       - 'netrattler_stats_match_cards.py'
       - 'netrattler_premium_telegram_adapter.py'
       - 'assets/premium_master/netrattler_stadium_portrait_20261124.png'
