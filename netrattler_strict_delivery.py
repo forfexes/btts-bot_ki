@@ -1,0 +1,47 @@
+"""Fail-closed production card transport. No legacy text fallback."""
+from netrattler_premium_live_bridge import _split_match, _book_price
+from netrattler_visual_gate import club_same
+from netrattler_scorer_qualification import qualifies
+from netrattler_stadium_portrait import REGULAR, VERSION, _verified_time
+
+def scorer_eligible(tip):
+    try:
+        home,away=_split_match(tip.get("match"))
+        team=tip.get("team")
+        if sum(club_same(team,t) for t in (home,away))!=1:
+            return False,"unverified_player_team"
+        if not str(tip.get("player") or "").strip():
+            return False,"missing_player"
+        return qualifies(tip.get("odds"),tip.get("probability"),
+                         tip.get("_source") or tip.get("bookmaker") or tip.get("odds_source"))
+    except (ValueError,TypeError,AttributeError):
+        return False,"invalid_scorer"
+
+def send_regular(cards,token,chat,market,tip,target_date,log=print):
+    if not token or not chat or market not in REGULAR:
+        log("ORIGINAL_CARD_DEFERRED: unsupported market or missing destination")
+        return None
+    try:
+        row=dict(tip)
+        _book_price(row)
+        # Never reinterpret an unverified local clock as a real fixture.
+        stamp=next((row[k] for k in ("commence_time","kickoff_utc","_kickoff","kickoff","starts","time_utc","time") if _verified_time({"commence_time":row.get(k)})),None)
+        if not stamp:
+            log("ORIGINAL_CARD_DEFERRED: unverified kickoff")
+            return None
+        row["commence_time"]=stamp
+        row["card_template_version"]=VERSION
+        entries=[(market,row)]
+        payload=cards.render_card(entries,target_date)
+        mid=cards._send_photo(token,chat,"",payload,log)
+        if not isinstance(mid,int) or isinstance(mid,bool) or mid<=0:
+            return None
+        # Do not send the same tip again if secondary card history fails.
+        try:
+            cards.save_card(chat,mid,entries,target_date,log)
+        except Exception as exc:
+            log("ORIGINAL_CARD_HISTORY_FAILED: "+type(exc).__name__)
+        return mid
+    except Exception as exc:
+        log("ORIGINAL_CARD_DEFERRED: "+type(exc).__name__+": "+str(exc)[:100])
+        return None
