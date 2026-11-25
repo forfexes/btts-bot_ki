@@ -12,6 +12,8 @@ name: NETRATTLER Strict Card Delivery QA
     paths:
       - btts_bot.py
       - netrattler_strict_delivery.py
+      - netrattler_clean_master_builder.py
+      - test_netrattler_clean_master_builder.py
       - netrattler_premium_live_bridge.py
       - test_netrattler_premium_live_bridge.py
       - test_netrattler_strict_delivery.py
@@ -23,7 +25,7 @@ permissions:
 jobs:
   offline:
     runs-on: ubuntu-latest
-    timeout-minutes: 8
+    timeout-minutes: 15
     env:
       TELEGRAM_TOKEN: ''
       TELEGRAM_CHAT_ID: ''
@@ -38,3 +40,18 @@ jobs:
       - run: pip install pillow pytest requests cairosvg numpy beautifulsoup4 python-dotenv
       - run: python -m py_compile btts_bot.py netrattler_strict_delivery.py
       - run: python -m pytest -q test_netrattler_strict_delivery.py test_netrattler_stadium_portrait.py test_netrattler_scorer_qualification.py test_netrattler_premium_live_bridge.py test_netrattler_original_release_inventory.py test_netrattler_premium_production_gate.py test_netrattler_premium_mobile_telegram_plan.py
+      - name: Render clean original-reference candidates and populated QA variants
+        env:
+          NETRATTLER_FIVE_DYNAMIC_QA: output/five-clean-dynamic
+        run: |
+          python netrattler_five_owner_reference_qa.py --outdir output/five-clean-masters
+          python -m pytest -q test_netrattler_clean_master_builder.py test_netrattler_five_owner_dynamic_qa.py
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: netrattler-clean-template-review
+          path: |
+            output/five-clean-masters/*
+            output/five-clean-dynamic/*.png
+          retention-days: 7
+          if-no-files-found: warn

@@ -29,7 +29,7 @@ jobs:
         with:
           python-version: "3.11"
       - name: Dependencies
-        run: python -m pip install -q 'Pillow>=10' 'pytest>=8'
+        run: python -m pip install -q 'Pillow>=10' 'pytest>=8' requests python-dotenv
       - name: Compile and test all sizes and categories
         run: |
           python -m py_compile netrattler_premium_flexible_renderer.py netrattler_premium_mobile_pages.py netrattler_premium_mobile_telegram_plan.py netrattler_premium_live_bridge.py
