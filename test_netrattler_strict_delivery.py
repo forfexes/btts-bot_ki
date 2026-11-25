@@ -13,8 +13,8 @@ def test_wrong_player_and_post_shrink_probability():
 def test_missing_source_or_kickoff_never_sends():
     cards=Mock()
     tip={"match":"QA HOME vs QA AWAY","oddsYes":2.56,"probability":56,"time":"21:50"}
-    assert send_regular(cards,"QA","QA","over25",tip,"2026-11-25") is None
-    assert send_regular(cards,"QA","QA","over25",{**tip,"bookmaker":"Pinnacle"},"2026-11-25") is None
+    assert send_regular(cards,"QA","QA","over25",tip,"2099-11-25") is None
+    assert send_regular(cards,"QA","QA","over25",{**tip,"bookmaker":"Pinnacle"},"2099-11-25") is None
     cards.render_card.assert_not_called()
     cards._send_photo.assert_not_called()
 
@@ -22,11 +22,11 @@ def test_photo_receipt_only():
     cards=Mock()
     cards.render_card.return_value=_master_png()
     cards._send_photo.return_value=123
-    tip={"match":"QA HOME vs QA AWAY","oddsYes":2.56,"bookmaker":"Pinnacle","commence_time":"2026-11-25T18:00:00Z"}
-    assert send_regular(cards,"QA","QA","over25",tip,"2026-11-25")==123
+    tip={"match":"QA HOME vs QA AWAY","oddsYes":2.56,"bookmaker":"Pinnacle","commence_time":"2099-11-25T18:00:00Z"}
+    assert send_regular(cards,"QA","QA","over25",tip,"2099-11-25")==123
     cards.save_card.assert_called_once()
     cards._send_photo.return_value=True
-    assert send_regular(cards,"QA","QA","over25",tip,"2026-11-25") is None
+    assert send_regular(cards,"QA","QA","over25",tip,"2099-11-25") is None
 
 def test_actual_bot_has_no_original_mode_text_fallback():
     source=Path("btts_bot.py").read_text()
@@ -55,11 +55,21 @@ def _master_png(alter_header=False, blank=False, incomplete=False):
 def test_outgoing_invalid_or_altered_png_never_sends():
     cards=Mock()
     tip={"match":"QA HOME vs QA AWAY","oddsYes":2.56,"bookmaker":"Pinnacle",
-         "commence_time":"2026-11-25T18:00:00Z"}
+         "commence_time":"2099-11-25T18:00:00Z"}
     assert verified_regular_payload(_master_png())
     for payload in (b"not PNG",_master_png(True),_master_png(blank=True),_master_png(incomplete=True)):
         assert not verified_regular_payload(payload)
         cards.render_card.return_value=payload
-        assert send_regular(cards,"QA","QA","over25",tip,"2026-11-25") is None
+        assert send_regular(cards,"QA","QA","over25",tip,"2099-11-25") is None
+    cards._send_photo.assert_not_called()
+    cards.save_card.assert_not_called()
+
+
+def test_already_started_fixture_never_renders_or_sends():
+    cards=Mock()
+    tip={"match":"QA HOME vs QA AWAY","oddsYes":2.56,"bookmaker":"Pinnacle",
+         "commence_time":"2000-01-01T18:00:00Z"}
+    assert send_regular(cards,"QA","QA","over25",tip,"2000-01-01") is None
+    cards.render_card.assert_not_called()
     cards._send_photo.assert_not_called()
     cards.save_card.assert_not_called()
