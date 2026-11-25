@@ -74,6 +74,13 @@ def test_strict_actual_master_adapter_and_settlement(market,monkeypatch):
     with Image.open(io.BytesIO(raw)) as im, Image.open(io.BytesIO(closed)) as done:
         assert im.size==done.size==stadium.DIMENSIONS
         assert im.crop((0,0,1122,265)).tobytes()==stadium.load_master().crop((0,0,1122,265)).tobytes()
+        # Preserve the original artwork in the former invented frame and footer areas.
+        original = stadium.load_master()
+        for area in ((205,280,250,310),(48,680,90,715),(72,826,120,850),
+                     (72,982,120,1008),(72,1170,120,1195),(0,1300,1122,1402)):
+            assert im.crop(area).tobytes() == original.crop(area).tobytes()
+            assert done.crop(area).tobytes() == original.crop(area).tobytes()
+        assert "@prophunter" not in observed
         assert im.crop((0,0,1122,1170)).tobytes()==done.crop((0,0,1122,1170)).tobytes()
         assert im.crop((0,1170,1122,1295)).tobytes()!=done.crop((0,1170,1122,1295)).tobytes()
     # Test artefacts are deliberately labelled as non-publishable QA examples.
