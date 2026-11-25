@@ -1,5 +1,6 @@
 """Fail-closed production card transport. No legacy text fallback."""
 from io import BytesIO
+from datetime import datetime, timezone
 from PIL import Image, ImageChops
 from netrattler_premium_live_bridge import _split_match, _book_price
 from netrattler_visual_gate import club_same
@@ -57,6 +58,10 @@ def send_regular(cards,token,chat,market,tip,target_date,log=print):
         stamp=next((row[k] for k in ("commence_time","kickoff_utc","_kickoff","kickoff","starts","time_utc","time") if _verified_time({"commence_time":row.get(k)})),None)
         if not stamp:
             log("ORIGINAL_CARD_DEFERRED: unverified kickoff")
+            return None
+        kickoff=datetime.fromisoformat(str(stamp).strip().replace("Z","+00:00"))
+        if kickoff.astimezone(timezone.utc) <= datetime.now(timezone.utc):
+            log("ORIGINAL_CARD_DEFERRED: prematch fixture already started")
             return None
         row["commence_time"]=stamp
         row["card_template_version"]=VERSION
