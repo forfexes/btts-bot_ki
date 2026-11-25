@@ -41,3 +41,51 @@ def test_real_master_if_uploaded():
     if not stadium.MASTER.is_file():
         pytest.skip("Exact owner PNG still needs repository upload")
     assert stadium.load_master().size==stadium.DIMENSIONS
+
+
+def _sample():
+    return {"match":"QA HOME vs QA AWAY","league":"OFFLINE TEST - KEIN ECHTER TIPP",
+            "bookmaker":"QA_TEST_SOURCE","oddsYes":1.8,"odds_observed":True,
+            "probability":0.643,"commence_time":"2026-11-25T18:00:00Z"}
+
+def _crest_bytes(_):
+    out=io.BytesIO()
+    fixture_crest().save(out,format="PNG")
+    return out.getvalue()
+
+@pytest.mark.parametrize("market",sorted(stadium.REGULAR))
+def test_strict_actual_master_adapter_and_settlement(market,monkeypatch):
+    assert stadium.master_ready(), "Exact source image required"
+    monkeypatch.setenv("NETRATTLER_BLOCK_OVERPAINTED_MASTERS","1")
+    item={**_sample(),"selection":"1" if market=="1x2" else "YES",
+          "tip_eligible":True,"settlement_rule_verified":True}
+    observed=[]
+    draw=stadium._label
+    def capture(d,xy,value,*args,**kwargs):
+        observed.append(str(value))
+        return draw(d,xy,value,*args,**kwargs)
+    with patch.object(stadium,"_label",side_effect=capture), patch.object(adapter,"render_verified_png",side_effect=AssertionError("legacy artwork")):
+        raw=adapter.render([(market,item)],"2026-11-25",crest_provider=_crest_bytes)
+        assert "MODELL  64.3%" in observed
+        assert "25.11.2026 · 19:00 Uhr" in observed
+        assert "AUSWERTUNG: OFFEN" in observed
+        closed=adapter.render([(market,item)],"2026-11-25",crest_provider=_crest_bytes,result={"marks":{"0":"won"},"ft":"2-1"})
+        assert "AUSWERTUNG: GEWONNEN" in observed
+    with Image.open(io.BytesIO(raw)) as im, Image.open(io.BytesIO(closed)) as done:
+        assert im.size==done.size==stadium.DIMENSIONS
+        assert im.crop((0,0,1122,265)).tobytes()==stadium.load_master().crop((0,0,1122,265)).tobytes()
+        assert im.crop((0,0,1122,1170)).tobytes()==done.crop((0,0,1122,1170)).tobytes()
+        assert im.crop((0,1170,1122,1295)).tobytes()!=done.crop((0,1170,1122,1295)).tobytes()
+    # Test artefacts are deliberately labelled as non-publishable QA examples.
+    import os
+    directory=os.getenv("NETRATTLER_STADIUM_QA_PREVIEW_DIR")
+    if directory:
+        path=Path(directory)
+        path.mkdir(parents=True,exist_ok=True)
+        (path/(market+"-OFFLINE-QA.png")).write_bytes(raw)
+
+@pytest.mark.parametrize("change",[{"synthetic":True},{"odds_observed":False},{"oddsYes":0},{"bookmaker":"ESPN"},{"probability":float("nan")},{"selection":"NO"}])
+def test_strict_actual_master_refuses_bad_payload(change,monkeypatch):
+    monkeypatch.setenv("NETRATTLER_BLOCK_OVERPAINTED_MASTERS","1")
+    with pytest.raises(ValueError):
+        adapter.render([("btts",{**_sample(),**change})],"2026-11-25",crest_provider=_crest_bytes)

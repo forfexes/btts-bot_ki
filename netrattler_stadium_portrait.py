@@ -43,7 +43,12 @@ def master_ready():
         return False
 
 def font(size):
-    return ImageFont.truetype("/usr/share/fonts/truetype/dejavu/DejaVuSansCondensed-Bold.ttf", size)
+    for name in ("DejaVuSansCondensed-Bold.ttf", "DejaVuSans-Bold.ttf"):
+        try:
+            return ImageFont.truetype(name, size)
+        except OSError:
+            pass
+    raise ValueError("Required scalable stadium card font missing")
 
 def _label(draw, xy, value, width, size, color=WHITE):
     value = str(value or "").strip()
@@ -111,18 +116,14 @@ def render_regular(market, selection, tip, home, away, first, second, price, res
     _label(dr,(561,865),selection,925,44)
     _label(dr,(561,923),f"QUOTE  @{price:.2f}",925,43,GOLD)
     prob=tip.get("probability")
-    if prob is not None:
-        try:
-            value=float(prob)
-            if math.isfinite(value) and 0<=value<=100:
-                _label(dr,(561,1025),f"MODELL  {value:.1f}%",900,38,CYAN)
-        except (TypeError,ValueError):
-            pass
+    if prob is not None and prob != "":
+        from netrattler_btts_owner_original import _percent
+        _label(dr,(561,1025),"MODELL  "+_percent(prob,strict=True),900,38,CYAN)
     league=str(tip.get("league") or "").strip()
     if league:
         _label(dr,(561,1090),league,920,31)
     marks=(result or {}).get("marks") or {}
-    state={"win":"GEWONNEN","loss":"VERLOREN","void":"VOID","push":"PUSH"}.get(str(marks.get("0") or "").lower(),"OFFEN")
+    state={"win":"GEWONNEN","won":"GEWONNEN","loss":"VERLOREN","lost":"VERLOREN","void":"VOID","push":"PUSH"}.get(str(marks.get("0") or "").lower(),"OFFEN")
     _label(dr,(561,1215),"AUSWERTUNG: "+state,920,38,GOLD if state=="OFFEN" else WHITE)
     _label(dr,(561,1260),str((result or {}).get("ft") or ""),900,28)
     _label(dr,(920,1344),"@prophunter",340,31)

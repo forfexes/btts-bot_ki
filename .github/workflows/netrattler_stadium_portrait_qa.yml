@@ -28,6 +28,16 @@ jobs:
       - run: pip install pillow pytest requests cairosvg
       - run: python -m compileall -q netrattler_stadium_portrait.py netrattler_stats_match_cards.py netrattler_premium_telegram_adapter.py
       - run: python -m pytest -q -rs test_netrattler_stadium_portrait.py
+        env:
+          NETRATTLER_STADIUM_QA_PREVIEW_DIR: qa-stadium-previews
+      - uses: actions/upload-artifact@v4
+        with:
+          name: netrattler-stadium-offline-six-market-previews
+          path: qa-stadium-previews
+          if-no-files-found: error
+          retention-days: 5
+      - name: Verify exact production preflight policy
+        run: python -m pytest -q test_netrattler_premium_flexible_renderer.py test_netrattler_premium_mobile_pages.py test_netrattler_premium_mobile_telegram_plan.py test_netrattler_premium_live_bridge.py test_netrattler_premium_production_gate.py
       - name: Real master transfer status
         run: |
           python - <<'PY'
