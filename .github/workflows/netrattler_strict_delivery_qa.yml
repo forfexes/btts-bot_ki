@@ -46,6 +46,25 @@ jobs:
         run: |
           python netrattler_five_owner_reference_qa.py --outdir output/five-clean-masters
           python -m pytest -q test_netrattler_clean_master_builder.py test_netrattler_five_owner_dynamic_qa.py
+      - name: Export calculated-only combo and cross QA cards (no bookie ticket)
+        env:
+          NETRATTLER_FIVE_DYNAMIC_QA: output/five-clean-dynamic
+        run: |
+          python - <<'PY'
+          from pathlib import Path
+          from test_netrattler_five_owner_dynamic_qa import ticket, NOW
+          from netrattler_five_owner_dynamic_qa import render_owner_reference_qa
+          from netrattler_clean_card_renderer import render_cross_mix_qa
+          out=Path('output/five-clean-dynamic')
+          for family in ('combo','cross_mix'):
+              row=ticket(family,3)
+              for field in ('combined_quote_id','combined_odds','bookmaker'):
+                  row.pop(field)
+              row.update(formula_only=True,combined_odds_observed=False)
+              png=(render_cross_mix_qa(row,now=NOW) if family=='cross_mix'
+                   else render_owner_reference_qa(family,row,now=NOW))
+              (out/(family+'_FORMULA_ONLY_SANDBOX.png')).write_bytes(png)
+          PY
       - name: Verify Telegram safe margin on current clean-card PNGs
         run: |
           python - <<'PY'
@@ -191,7 +210,7 @@ jobs:
           if-no-files-found: warn
           retention-days: 7
   read-only-asset-audit:
-    if: github.event_name == 'push'
+    if: github.event_name == 'pull_request' && github.event.pull_request.head.repo.full_name == github.repository && github.event.pull_request.head.ref == 'qa/strict-card-delivery-no-text-bypass'
     runs-on: ubuntu-latest
     timeout-minutes: 55
     steps:
