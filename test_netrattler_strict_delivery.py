@@ -1,7 +1,10 @@
 import ast
+from io import BytesIO
+from PIL import ImageDraw
+from netrattler_stadium_portrait import load_master
 from pathlib import Path
 from unittest.mock import Mock
-from netrattler_strict_delivery import send_regular,scorer_eligible
+from netrattler_strict_delivery import send_regular,scorer_eligible,verified_regular_payload
 
 def test_wrong_player_and_post_shrink_probability():
     assert not scorer_eligible({"match":"Bolton Wanderers FC vs West Bromwich Albion FC","player":"Felix Horn Myhre","team":"","odds":5.2,"probability":22,"_source":"Pinnacle"})[0]
@@ -17,7 +20,7 @@ def test_missing_source_or_kickoff_never_sends():
 
 def test_photo_receipt_only():
     cards=Mock()
-    cards.render_card.return_value=b"QA"
+    cards.render_card.return_value=_master_png()
     cards._send_photo.return_value=123
     tip={"match":"QA HOME vs QA AWAY","oddsYes":2.56,"bookmaker":"Pinnacle","commence_time":"2026-11-25T18:00:00Z"}
     assert send_regular(cards,"QA","QA","over25",tip,"2026-11-25")==123
@@ -34,3 +37,24 @@ def test_actual_bot_has_no_original_mode_text_fallback():
     assert 'if not _smid and env("NETRATTLER_ORIGINAL_ONLY", "0") != "1"' in source
     assert 'if not _cmid and env("NETRATTLER_ORIGINAL_ONLY", "0") != "1"' in source
     assert 'an_drop_post_shrink_' in source
+
+
+def _master_png(alter_header=False):
+    image=load_master()
+    if alter_header:
+        ImageDraw.Draw(image).rectangle((0,0,50,50),fill=(255,0,255))
+    out=BytesIO()
+    image.save(out,format="PNG")
+    return out.getvalue()
+
+def test_outgoing_invalid_or_altered_png_never_sends():
+    cards=Mock()
+    tip={"match":"QA HOME vs QA AWAY","oddsYes":2.56,"bookmaker":"Pinnacle",
+         "commence_time":"2026-11-25T18:00:00Z"}
+    assert verified_regular_payload(_master_png())
+    for payload in (b"not PNG",_master_png(True)):
+        assert not verified_regular_payload(payload)
+        cards.render_card.return_value=payload
+        assert send_regular(cards,"QA","QA","over25",tip,"2026-11-25") is None
+    cards._send_photo.assert_not_called()
+    cards.save_card.assert_not_called()
