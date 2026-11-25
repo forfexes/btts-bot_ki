@@ -1,0 +1,35 @@
+name: NETRATTLER Portrait Stadium Master QA
+"on":
+  workflow_dispatch: {}
+  push:
+    paths:
+      - 'netrattler_stadium_portrait.py'
+      - 'test_netrattler_stadium_portrait.py'
+      - 'netrattler_stats_match_cards.py'
+      - 'netrattler_premium_telegram_adapter.py'
+      - 'assets/premium_master/netrattler_stadium_portrait_20261124.png'
+      - '.github/workflows/netrattler_stadium_portrait_qa.yml'
+permissions:
+  contents: read
+jobs:
+  offline:
+    runs-on: ubuntu-latest
+    timeout-minutes: 8
+    env:
+      TELEGRAM_TOKEN: ''
+      TELEGRAM_CHAT_ID: ''
+      SUPABASE_URL: ''
+      SUPABASE_KEY: ''
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+      - run: pip install pillow pytest requests cairosvg
+      - run: python -m pytest -q -rs test_netrattler_stadium_portrait.py
+      - name: Real master transfer status
+        run: |
+          python - <<'PY'
+          from netrattler_stadium_portrait import master_ready, MASTER
+          print("MASTER_READY" if master_ready() else "MASTER_UPLOAD_REQUIRED: "+str(MASTER))
+          PY

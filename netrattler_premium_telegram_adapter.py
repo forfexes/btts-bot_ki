@@ -106,8 +106,11 @@ def _fit(draw, text, maxwidth, size=26):
 def render(entries, target_date, *, crest_provider, result=None):
     # Central direct-call guard: SVG skeletons and patched owner screenshots
     # are not equivalent to visually accepted user-original Telegram masters.
-    if os.getenv("NETRATTLER_BLOCK_OVERPAINTED_MASTERS", "1") != "0":
-        raise ValueError("premium_master_not_visually_approved")
+    strict = os.getenv("NETRATTLER_BLOCK_OVERPAINTED_MASTERS", "1") != "0"
+    if strict:
+        from netrattler_stadium_portrait import REGULAR, master_ready
+        if len(entries)!=1 or entries[0][0] not in REGULAR or not master_ready():
+            raise ValueError("premium_master_not_visually_approved")
     if len(entries) != 1:
         raise ValueError("Premium single-market card needs one real selection")
     market, tip = entries[0]
@@ -182,6 +185,15 @@ def render(entries, target_date, *, crest_provider, result=None):
         if len(canonical_selections) != 1:
             raise ValueError("Conflicting 1X2 selections")
         selection = canonical_selections.pop()
+    if strict:
+        from netrattler_stadium_portrait import render_regular
+        from netrattler_premium_live_bridge import _book_price
+        price, _book = _book_price(tip)
+        if price != _price(tip, market):
+            raise ValueError("Conflicting source quote")
+        return render_regular(market, selection, tip, home, away,
+                              _crest(crest_provider(home)), _crest(crest_provider(away)),
+                              price, result)
     # Owner-provided authentic BTTS image is now the primary renderer,
     # never a generic substitute SVG. Always clear its baked-in example odds.
     if market == "btts":
