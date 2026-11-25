@@ -44,3 +44,29 @@ jobs:
           from netrattler_stadium_portrait import master_ready, MASTER
           print("MASTER_READY" if master_ready() else "MASTER_UPLOAD_REQUIRED: "+str(MASTER))
           PY
+
+  production-card-contract:
+    runs-on: ubuntu-latest
+    timeout-minutes: 12
+    env:
+      TELEGRAM_TOKEN: ''
+      TELEGRAM_CHAT_ID: ''
+      TELEGRAM_GROUP_MATCH_CARDS: ''
+      SUPABASE_URL: ''
+      SUPABASE_KEY: ''
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+      - run: python -m pip install pillow pytest requests cairosvg beautifulsoup4 python-dotenv numpy
+      - name: Reproduce mandatory production legacy technical suite offline
+        env:
+          NETRATTLER_BLOCK_OVERPAINTED_MASTERS: '0'
+        run: python -m pytest -q -ra test_netrattler_premium_verified_cards.py test_netrattler_premium_dispatch_gate.py test_netrattler_btts_owner_original.py test_netrattler_combo_owner_original.py test_netrattler_combo_dynamic_cards.py test_netrattler_original_templates.py
+      - name: Verify strict original-only production path independently
+        env:
+          NETRATTLER_BLOCK_OVERPAINTED_MASTERS: '1'
+        run: |
+          python -m pytest -q test_netrattler_stadium_portrait.py
+          python -c "from netrattler_stadium_portrait import load_master; load_master()"
