@@ -324,7 +324,8 @@ class PremiumTelegramDispatchTests(unittest.TestCase):
 
     def test_direct_premium_adapter_cannot_render_unapproved_svg_skeleton(self):
         import netrattler_premium_telegram_adapter as adapter
-        with patch.dict(os.environ, {"NETRATTLER_BLOCK_OVERPAINTED_MASTERS": "1"}):
+        with patch.dict(os.environ, {"NETRATTLER_BLOCK_OVERPAINTED_MASTERS": "1"}), \
+             patch("netrattler_stadium_portrait.master_ready", return_value=False):
             with self.assertRaisesRegex(ValueError, "not_visually_approved"):
                 adapter.render([("over25", tip("over25"))],
                     "2026-11-21",
@@ -350,8 +351,16 @@ class PremiumTelegramDispatchTests(unittest.TestCase):
         with patch.dict(os.environ, {"NETRATTLER_BLOCK_OVERPAINTED_MASTERS":"1"}):
             with patch.object(cards, "render_bis_card",
                               side_effect=AssertionError("legacy fallback")):
-                with self.assertRaisesRegex(ValueError, "overpainted"):
-                    cards.render_card([("btts", tip("btts"))], "2026-11-21")
+                with patch("netrattler_stadium_portrait.master_ready", return_value=False):
+                    with self.assertRaisesRegex(ValueError, "overpainted"):
+                        cards.render_card([("btts", tip("btts"))], "2026-11-21")
+                buf = io.BytesIO()
+                Image.new("RGB", (120, 120), (12, 60, 150)).save(buf, "PNG")
+                with patch("netrattler_stadium_portrait.master_ready", return_value=True), \
+                     patch.object(cards, "_badge_bytes", return_value=buf.getvalue()):
+                    with self.assertRaisesRegex(ValueError, "Invalid genuine team crest") as err:
+                        cards.render_card([("btts", tip("btts"))], "2026-11-21")
+                    self.assertIn("opaque rectangular tile", str(err.exception.__cause__))
             from netrattler_original_template_renderer import render_builder, render_goal
             with self.assertRaisesRegex(ValueError, "overlay-free"):
                 render_builder(None)
