@@ -26,6 +26,7 @@ jobs:
         with:
           python-version: '3.11'
       - run: pip install pillow pytest requests cairosvg
+      - run: python -m compileall -q netrattler_stadium_portrait.py netrattler_stats_match_cards.py netrattler_premium_telegram_adapter.py
       - run: python -m pytest -q -rs test_netrattler_stadium_portrait.py
       - name: Real master transfer status
         run: |
