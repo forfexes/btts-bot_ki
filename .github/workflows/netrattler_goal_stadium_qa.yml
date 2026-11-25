@@ -1,0 +1,33 @@
+name: NETRATTLER Goal Exact Stadium QA
+"on":
+  push:
+    paths:
+      - netrattler_goal_stadium.py
+      - test_netrattler_goal_stadium.py
+      - .github/workflows/netrattler_goal_stadium_qa.yml
+  workflow_dispatch: {}
+permissions:
+  contents: read
+jobs:
+  offline:
+    runs-on: ubuntu-latest
+    timeout-minutes: 8
+    env:
+      TELEGRAM_TOKEN: ''
+      TELEGRAM_CHAT_ID: ''
+      SUPABASE_URL: ''
+      SUPABASE_KEY: ''
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+      - run: pip install pillow pytest requests cairosvg
+      - run: python -m pytest -q test_netrattler_goal_stadium.py
+        env:
+          GOAL_QA_DIR: qa-goal-stadium
+      - uses: actions/upload-artifact@v4
+        with:
+          name: goal-exact-stadium-offline-preview
+          path: qa-goal-stadium
+          if-no-files-found: error
