@@ -1,0 +1,22 @@
+name: NETRATTLER Corner History Offline QA
+"on":
+  pull_request:
+    branches: [main]
+    paths:
+      - netrattler_api_corner_store.py
+      - test_netrattler_corner_history_pagination.py
+      - .github/workflows/netrattler_corner_history_offline_qa.yml
+permissions:
+  contents: read
+jobs:
+  offline:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+      - run: pip install pytest requests
+      - run: python -m py_compile netrattler_api_corner_store.py
+      - run: python -m pytest -q --confcutdir=/tmp test_netrattler_corner_history_pagination.py
