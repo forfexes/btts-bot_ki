@@ -43,8 +43,26 @@ class ProductionReleaseGate(unittest.TestCase):
         self.assertIn("github.event_name == 'schedule'", cond)
         self.assertIn("github.event_name == 'workflow_dispatch'", cond)
         self.assertIn("inputs.publish_telegram == true", cond)
-        self.assertNotIn("github.event_name == 'push'", cond)
+        self.assertIn("github.ref == 'refs/heads/main'", cond)
+        self.assertIn("vars.NETRATTLER_TG_PRODUCTION_APPROVED == ''", cond)
+        self.assertIn("needs.owner-card-preflight.outputs.repository_approved == 'true'", cond)
+        self.assertIn("github.event_name == 'push' && needs.owner-card-preflight.outputs.explicit_send == 'true'", cond)
+        self.assertIn("python netrattler_owner_release.py", preflight)
         self.assertIn("needs: [owner-card-preflight]", live)
+
+    def test_explicit_owner_push_policy(self):
+        from netrattler_owner_release import approved, explicit_send, RECORD, SEND_MARKER, SCOPE
+        record = {"approved": True, "scope": SCOPE, "request_id": "2026-11-25-test"}
+        args = {"event_name": "push", "ref": "refs/heads/main",
+                "message": SEND_MARKER, "changed": [RECORD]}
+        self.assertTrue(approved(record))
+        self.assertTrue(explicit_send(record, **args))
+        self.assertFalse(approved({**record, "approved": "true"}))
+        self.assertFalse(explicit_send({**record, "approved": False}, **args))
+        for overrides in ({"event_name": "schedule"}, {"ref": "refs/heads/qa"},
+                          {"message": "ordinary change"}, {"changed": []},
+                          {"changed": ["btts_bot.py"]}):
+            self.assertFalse(explicit_send(record, **{**args, **overrides}))
 
     def test_manual_release_defaults_off(self):
         raw, _, live = workflow_parts()

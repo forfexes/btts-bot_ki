@@ -28,6 +28,8 @@ on:
       - '.github/workflows/btts_tips.yml'
       - 'netrattler_telegram_sandbox_hardtest.py'
       - 'test_netrattler_premium_production_gate.py'
+      - 'netrattler_owner_release.py'
+      - '.github/netrattler-card-release.json'
       - 'netrattler_premium_live_bridge.py'
       - "netrattler_1x_verified_props.py"
   schedule:
@@ -59,7 +61,7 @@ on:
           - settlement
           - both
       publish_telegram:
-        description: "Publish approved original cards to Telegram (requires owner release variable)"
+        description: "Publish owner-approved original cards to Telegram"
         required: false
         default: false
         type: boolean
@@ -80,6 +82,9 @@ jobs:
     timeout-minutes: 12
     permissions:
       contents: read
+    outputs:
+      repository_approved: ${{ steps.owner-release.outputs.approved }}
+      explicit_send: ${{ steps.owner-release.outputs.explicit_send }}
     env:
       TELEGRAM_TOKEN: ""
       TELEGRAM_CHAT_ID: ""
@@ -87,9 +92,15 @@ jobs:
       SUPABASE_KEY: ""
     steps:
       - uses: actions/checkout@v4
+        with:
+          fetch-depth: 2
+          persist-credentials: false
       - uses: actions/setup-python@v5
         with:
           python-version: "3.11"
+      - name: Read version-controlled owner release (no Telegram credentials)
+        id: owner-release
+        run: python netrattler_owner_release.py
       - name: Install offline QA dependencies
         run: python -m pip install -q 'Pillow>=10' 'pytest>=8' 'cairosvg>=2.7' 'requests>=2.32'
       - name: Validate original assets, real quote gates and album layouts
@@ -100,12 +111,12 @@ jobs:
         run: echo 'NETRATTLER_OWNER_CARD_QA_PASS - NO TELEGRAM OR DATABASE WRITES'
 
   run-bot:
-    # A successful offline test is NOT owner approval. Publishing requires
-    # the repository variable to be explicitly set after card acceptance.
-    # Manual dispatch additionally needs the publish_telegram checkbox;
-    # pushes never send. Once explicitly approved, schedules may resume.
+    # The owner can authorize release via the repository variable or an
+    # explicit version-controlled release record. Any nonempty variable
+    # other than true overrides the record and prevents all sends.
+    # Ordinary pushes never publish; only an explicit changed release request does.
     needs: [owner-card-preflight]
-    if: ${{ needs.owner-card-preflight.result == 'success' && vars.NETRATTLER_TG_PRODUCTION_APPROVED == 'true' && (github.event_name == 'schedule' || (github.event_name == 'workflow_dispatch' && inputs.publish_telegram == true)) }}
+    if: ${{ github.ref == 'refs/heads/main' && needs.owner-card-preflight.result == 'success' && (vars.NETRATTLER_TG_PRODUCTION_APPROVED == 'true' || (vars.NETRATTLER_TG_PRODUCTION_APPROVED == '' && needs.owner-card-preflight.outputs.repository_approved == 'true')) && (github.event_name == 'schedule' || (github.event_name == 'workflow_dispatch' && inputs.publish_telegram == true) || (github.event_name == 'push' && needs.owner-card-preflight.outputs.explicit_send == 'true')) }}
     runs-on: ubuntu-latest
     timeout-minutes: 50
 
