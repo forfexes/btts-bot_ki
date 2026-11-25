@@ -59,7 +59,7 @@ def _label(draw, xy, value, width, size, color=WHITE):
     for n in range(size, 21, -1):
         f=font(n)
         if draw.textlength(value,font=f)+4<=width:
-            draw.text(xy,value,font=f,anchor="mm",fill=color,stroke_width=1,stroke_fill=(3,13,26))
+            draw.text(xy,value,font=f,anchor="mm",fill=color,stroke_width=3,stroke_fill=(3,13,26))
             return
     raise ValueError("Verified label does not fit original stadium slot")
 
@@ -100,17 +100,17 @@ def render_regular(market, selection, tip, home, away, first, second, price, res
     dr=ImageDraw.Draw(canvas)
     _label(dr,(561,325),TITLES[market],660,50,GOLD)
     _label(dr,(561,530),"VS",110,52,GOLD)
-    _label(dr,(310,716),home,470,35)
-    _label(dr,(812,716),away,470,35)
+    _label(dr,(310,670),home,470,39)
+    _label(dr,(812,670),away,470,39)
     kickoff=_verified_time(tip)
     if kickoff:
-        _label(dr,(561,773),kickoff,960,30,CYAN)
+        _label(dr,(561,800),kickoff,960,34,WHITE)
     _label(dr,(561,865),selection,925,44)
     _label(dr,(561,923),f"QUOTE  @{price:.2f}",925,43,GOLD)
     prob=tip.get("probability")
     if prob is not None and prob != "":
         from netrattler_btts_owner_original import _percent
-        _label(dr,(561,1025),"MODELL  "+_percent(prob,strict=True),900,38,CYAN)
+        _label(dr,(561,1025),"MODELL  "+_percent(prob,strict=True),900,42,WHITE)
     league=str(tip.get("league") or "").strip()
     if league:
         _label(dr,(561,1090),league,920,31)
