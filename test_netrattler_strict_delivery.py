@@ -104,3 +104,30 @@ def test_wrong_fixture_day_blocks_before_render():
     cards.render_card.return_value=_master_png()
     cards._send_photo.return_value=123
     assert send_regular(cards,"QA","QA","over25",tip,"2099-11-26")==123
+
+
+def test_builder_pool_keeps_complete_quote_and_club_evidence():
+    import ast
+    from pathlib import Path
+    source = Path("btts_bot.py").read_text()
+    tree = ast.parse(source)
+    node = next(n for n in tree.body if isinstance(n, ast.FunctionDef)
+                and n.name == "_ntr_collect_prop")
+    ns = {"_NTR_BUILDER_PROP_POOL": [], "normalize_team_name": lambda x: str(x or "").lower()}
+    exec(compile(ast.Module(body=[node], type_ignores=[]), "<pool>", "exec"), ns)
+    collect = ns["_ntr_collect_prop"]
+    evidence = dict(fixture_id="f1", home_id="h1", away_id="a1",
+                    player_id="p1", player_team_id="h1", quote_id="q1",
+                    quote_observed_at="2099-11-26T18:00:00Z",
+                    quote_observed=True, odds_observed=True, price_estimated=False)
+    args = ("QA Player", "QA Home", "QA Home vs QA Away", "QA", "Shots 2+")
+    collect(*args, category="shots", line=2, odds=1.8, source="Pinnacle",
+            kickoff="2099-11-26T19:00:00Z", source_receipt=evidence)
+    collect(*args, category="shots", line=2, odds=2.1, source="anonymous")
+    row, = ns["_NTR_BUILDER_PROP_POOL"]
+    assert row["odds"] == 1.8 and row["source"] == "Pinnacle"
+    assert all(row[k] == v for k, v in evidence.items())
+    collect("QA Player", "QA Away", "QA Home vs QA Away", "QA", "Shots 2+",
+            category="shots", line=2, odds=1.9, source="Pinnacle")
+    assert len(ns["_NTR_BUILDER_PROP_POOL"]) == 2
+    assert row["team"] == "QA Home"
