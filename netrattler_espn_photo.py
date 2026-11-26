@@ -32,11 +32,13 @@ def espn_photo(name):
                              params={"select": "player_id,source", "player_name": "eq." + name,
                                      "source": "like.apif*", "limit": "100"})
             if r.ok:
-                pid = unique_id(r.json())
+                pid = unique_id([row for row in (r.json() or [])
+                                 if isinstance(row, dict) and str(row.get("source") or "").startswith("apif")])
                 url = _URL.format(pid) if pid else ""
         except (requests.RequestException, ValueError):
             pass
-    _CACHE[name] = url
+    if url:
+        _CACHE[name] = url
     return url
 
 
@@ -80,11 +82,10 @@ def espn_photo_by_id(name, team):
                         and str(row.get("player_id") or "").isdigit()
                         and int(row["player_id"]) > 0):
                     candidates.add(str(row["player_id"]))
-            if candidates:
-                break
         except (requests.RequestException, ValueError, TypeError, AttributeError):
             continue
     url = ("https://a.espncdn.com/i/headshots/soccer/players/full/"
            + next(iter(candidates)) + ".png") if len(candidates) == 1 else ""
-    _ESPN_CACHE[cache_key] = url
+    if url:
+        _ESPN_CACHE[cache_key] = url
     return url

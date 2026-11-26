@@ -58,7 +58,7 @@ def test_stored_espn_id_requires_player_and_matching_club():
     assert photo == "https://a.espncdn.com/i/headshots/soccer/players/full/43210.png"
     assert req.call_args.kwargs["params"]["source"]=="eq.espn"
     assert req.call_args.kwargs["params"]["player_name"]=="eq.Jude Bellingham"
-    assert req.call_count == 1
+    assert req.call_count == 2
     e._ESPN_CACHE.clear()
 
 
@@ -84,3 +84,34 @@ def test_stored_espn_id_does_not_guess_wrong_club_or_ambiguous_ids():
 def test_stored_espn_id_requires_full_name_and_club():
     assert e.espn_photo_by_id("Messi","Inter Miami")==""
     assert e.espn_photo_by_id("Lionel Messi","")==""
+
+
+def test_provider_id_conflict_across_tables_is_rejected():
+    e._ESPN_CACHE.clear()
+    def response(pid):
+        return SimpleNamespace(ok=True, json=lambda: [
+            {"player_name":"QA Player","player_id":pid,"team":"QA Club","source":"espn"}])
+    with patch.dict("os.environ", {"SUPABASE_URL":"https://example.supabase.co","SUPABASE_KEY":"fake"}):
+        with patch.object(e.requests,"get",side_effect=[response(123),response(456)]) as req:
+            assert e.espn_photo_by_id("QA Player","QA Club") == ""
+            assert req.call_count == 2
+        with patch.object(e.requests,"get",side_effect=[response(123),response(123)]) as req:
+            assert e.espn_photo_by_id("QA Player","QA Club").endswith("/123.png")
+            assert e.espn_photo_by_id("QA Player","QA Club").endswith("/123.png")
+            assert req.call_count == 2
+    e._ESPN_CACHE.clear()
+
+
+def test_apif_failure_is_retryable_and_wrong_source_is_rejected():
+    e._CACHE.clear()
+    failed=SimpleNamespace(ok=False)
+    wrong=SimpleNamespace(ok=True,json=lambda:[{"player_id":456,"source":"espn"}])
+    good=SimpleNamespace(ok=True,json=lambda:[{"player_id":123,"source":"apif"}])
+    with patch.dict("os.environ", {"SUPABASE_URL":"https://example.supabase.co","SUPABASE_KEY":"fake"}):
+        with patch.object(e.requests,"get",side_effect=[failed,wrong,good]) as req:
+            assert e.espn_photo("QA Player") == ""
+            assert e.espn_photo("QA Player") == ""
+            assert e.espn_photo("QA Player").endswith("/123.png")
+            assert e.espn_photo("QA Player").endswith("/123.png")
+            assert req.call_count == 3
+    e._CACHE.clear()
