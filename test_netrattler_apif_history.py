@@ -95,13 +95,16 @@ def test_corner_store_does_not_modify_elo_or_ml_csv_loader():
     response=Mock()
     response.json.return_value=[dict(match_date='2026-10-20',home_team='Home',away_team='Away',
         home_corners=0,away_corners=4,home_goals=2,away_goals=1)]
+    empty=Mock()
+    empty.json.return_value=[]
+    # Store paginates until an empty page (PostgREST may cap pages), so end with [].
     with patch.dict(os.environ,{'SUPABASE_URL':'https://example.invalid','SUPABASE_KEY':'test'}), \
-         patch('netrattler_api_corner_store.requests.get',return_value=response) as get:
+         patch('netrattler_api_corner_store.requests.get',side_effect=[response,empty]) as get:
         store.install(bot)
         assert bot._fd_co_uk_load_csv is original
         assert len(bot._ntr_corner_history('League'))==2
         assert len(bot._fd_co_uk_load_csv('League'))==1
         bot._ntr_corner_history('League')
-        assert get.call_count==1
+        assert get.call_count==2
         store.install(bot)
         assert bot._fd_co_uk_load_csv is original
