@@ -107,7 +107,7 @@ def select_batch(items, cap, *, rotate=False, anchor=20, ordinal=None):
     cap = max(1, min(int(cap), 500))
     if not rotate or len(items) <= cap:
         return items[:cap], {"mode": "priority", "slice": 0, "slices": 1}
-    anchors = items[:min(anchor, cap)]
+    anchors = items[:max(0, min(anchor, cap - 1))]
     rest = items[len(anchors):]
     width = max(1, cap - len(anchors))
     slices = (len(rest) + width - 1) // width
@@ -116,6 +116,13 @@ def select_batch(items, cap, *, rotate=False, anchor=20, ordinal=None):
     batch = anchors + rest[index*width:(index+1)*width]
     return batch, {"mode": "daily_rotation", "slice": index+1, "slices": slices,
                    "priority_count": len(anchors), "rotation_capacity": width}
+
+
+def full_chain_budget(sample, batch_size):
+    """Explicit all mode checks the current bounded batch, not the entire roster."""
+    if str(sample).strip().lower() == "all":
+        return batch_size
+    return max(0, min(batch_size, 30, int(sample)))
 
 
 def fallback_club(person):
@@ -365,7 +372,8 @@ def main():
     # production card renderer. On missing images, also exercise the ACTUAL
     # renderer fallback chain (FotMob, ESPN, API-Football, FPL, TheSportsDB,
     # Wikimedia, SoccerWiki) for a bounded sample, without sending cards.
-    full_chain_max = max(0, min(30, int(os.getenv("ASSET_FULL_CHAIN_SAMPLE", "8"))))
+    full_chain_max = full_chain_budget(os.getenv("ASSET_FULL_CHAIN_SAMPLE", "8"), len(photo_batch))
+    report["production_photo_fallback_budget"] = full_chain_max
     report["production_photo_fallback_checked"] = 0
     report["production_photo_renderable_candidates"] = 0
     report["production_photo_fallback_missing"] = 0
@@ -379,12 +387,12 @@ def main():
         if not ok and len(report["missing_photo_samples"]) < 50:
             report["missing_photo_samples"].append({"name": p["name"], "sport": p["sport"], "status": evidence})
         if args.bot == "netrattler" and not ok:
-            if report["production_photo_fallback_checked"] >= full_chain_max:
-                report["production_photo_fallback_not_probed_budget"] += 1
-                continue
             club_name = fallback_club(p)
             if club_name is None:
                 report["production_photo_fallback_skipped_ambiguous_team"] += 1
+                continue
+            if report["production_photo_fallback_checked"] >= full_chain_max:
+                report["production_photo_fallback_not_probed_budget"] += 1
                 continue
             report["production_photo_fallback_checked"] += 1
             try:
