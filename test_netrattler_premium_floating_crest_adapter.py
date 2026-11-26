@@ -71,8 +71,18 @@ class OriginalCrestsFloatWithoutPastedDiscs(unittest.TestCase):
             with self.subTest(size=len(data)),self.assertRaises(ValueError):
                 adapter._crest(data)
 
-    def test_premium_originals_stay_blocked_for_real_telegram(self):
+    def test_unapproved_legacy_artwork_stays_blocked_for_real_telegram(self):
+        # The pinned stadium Over master is released; a legacy COMBO bitmap
+        # is not. The new combination sender is a separate verified adapter.
         with patch.dict(os.environ,{"NETRATTLER_BLOCK_OVERPAINTED_MASTERS":"1"}):
+            with self.assertRaisesRegex(ValueError,"premium_master_not_visually_approved"):
+                adapter.render([("combo",self.sample_tip())],"2026-11-23",
+                               crest_provider=lambda t: (_ for _ in ()).throw(
+                                   AssertionError("Should not fetch club crests")))
+
+    def test_released_stadium_still_rejects_missing_master_before_fetch(self):
+        import netrattler_stadium_portrait as stadium
+        with patch.dict(os.environ,{"NETRATTLER_BLOCK_OVERPAINTED_MASTERS":"1"}),patch.object(stadium,"master_ready",return_value=False):
             with self.assertRaisesRegex(ValueError,"premium_master_not_visually_approved"):
                 adapter.render([("over25",self.sample_tip())],"2026-11-23",
                                crest_provider=lambda t: (_ for _ in ()).throw(

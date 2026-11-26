@@ -47,6 +47,10 @@ def test_scorer_void_without_legs_edits_original_telegram_post(monkeypatch):
     edits = []
     monkeypatch.setattr(s, "telegram_edit", lambda chat, mid, text: edits.append((chat, mid, text)) or True)
     monkeypatch.setattr(s, "sb_patch", lambda *args, **kwargs: True)
+    # Offline legacy receipt lookup must explicitly establish absence of a
+    # new candidate card; an unavailable ledger is NOT absence.
+    import netrattler_candidate_dispatch as dispatch
+    monkeypatch.setattr(dispatch,"candidate_state",lambda *a:None)
     assert s.retry_unedited_originals([r], []) == (1, 1)
     assert len(edits) == 1 and edits[0][1] == 789
     assert "VOID" in edits[0][2]
@@ -85,3 +89,17 @@ def test_pending_scorer_image_can_revert_bad_old_result():
     import inspect
     code=inspect.getsource(s.send_result_cards)
     assert 'st not in {"void", "pending"}' in code
+
+
+def test_candidate_ledger_unavailable_never_falls_back_to_legacy_caption(monkeypatch):
+    import netrattler_candidate_dispatch as dispatch
+    def unavailable(*args):
+        raise RuntimeError("ledger unavailable")
+    monkeypatch.setattr(dispatch,"candidate_state",unavailable)
+    edits=[]
+    monkeypatch.setattr(s,"telegram_edit",lambda *args:edits.append(args) or True)
+    r=dict(status="win",market_group="scorer",tip_payload={
+        "telegram_msg_id":123,"telegram_chat_id":"-123","message_text":"Original pick"})
+    assert s.edit_original_tip(r) is False
+    assert not edits
+    assert s._LAST_EDIT_ERROR["last"]=="candidate original image update deferred"

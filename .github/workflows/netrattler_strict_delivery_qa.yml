@@ -40,6 +40,8 @@ jobs:
       - run: pip install pillow pytest requests cairosvg numpy beautifulsoup4 python-dotenv
       - run: python -m py_compile btts_bot.py netrattler_strict_delivery.py
       - run: python -m pytest -q test_netrattler_strict_delivery.py test_netrattler_stadium_portrait.py test_netrattler_scorer_qualification.py test_netrattler_premium_live_bridge.py test_netrattler_original_release_inventory.py test_netrattler_premium_production_gate.py test_netrattler_premium_mobile_telegram_plan.py
+      - name: Verify legacy artwork lock and original settlement receipt compatibility
+        run: python -m pytest -q test_netrattler_premium_floating_crest_adapter.py test_netrattler_data_gap_notice.py
       - name: Render clean original-reference candidates and populated QA variants
         env:
           NETRATTLER_FIVE_DYNAMIC_QA: output/five-clean-dynamic
