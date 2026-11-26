@@ -396,3 +396,26 @@ def test_legacy_model_live_tip_cannot_send_without_exact_observed_quote():
     tip={"match":"QA Home vs QA Away","score":"1:1","fair_odds":1.4}
     assert send_live(fake,"OFFLINE","-1",match,tip,"late_goals") is None
     fake._send_photo.assert_not_called()
+
+
+def test_corner_provider_receipt_keeps_exact_fixture_book_and_timestamp(monkeypatch):
+    from datetime import timedelta
+    import netrattler_apif_corner_quotes as apif
+    now=FIVE_NOW
+    day=now.date().isoformat()
+    fixture={"fixture":{"id":1234567,"date":(now+timedelta(minutes=30)).isoformat(),"status":{"short":"NS"}},
+             "teams":{"home":{"id":11,"name":"QA Home"},"away":{"id":22,"name":"QA Away"}}}
+    offered={"fixture":{"id":1234567},"update":(now-timedelta(minutes=1)).isoformat(),
+             "bookmakers":[{"id":5,"name":"Bet365","bets":[{"id":45,"name":"Corners Over Under",
+               "values":[{"value":"Over 9.5","odd":"1.85"},{"value":"Under 9.5","odd":"2.00"}]}]}]}
+    monkeypatch.setattr(apif,"_fixtures",lambda _: [fixture])
+    monkeypatch.setattr(apif,"_ODDS_CACHE",{1234567:[offered]})
+    record=apif.observed_corner_receipts("QA Home","QA Away",day,now=now)[9.5]
+    assert record["fixture_id"]=="1234567" and record["quote_id"]=="1234567:5:45:over:9.5"
+    assert record["quote_observed_at"]==offered["update"] and record["bookmaker_odds"]==1.85
+    assert record["quote_observed"] is True and record["price_estimated"] is False
+    assert not apif.observed_corner_receipts("QA Away","QA Home",day,now=now)
+    monkeypatch.setattr(apif,"_ODDS_CACHE",{1234567:[dict(offered,update=(now-timedelta(minutes=16)).isoformat())]})
+    assert not apif.observed_corner_receipts("QA Home","QA Away",day,now=now)
+    monkeypatch.setattr(apif,"_ODDS_CACHE",{1234567:[dict(offered,fixture={"id":999})]})
+    assert not apif.observed_corner_receipts("QA Home","QA Away",day,now=now)
