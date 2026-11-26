@@ -21515,20 +21515,19 @@ def run_corners_and_scorer_bots(target_date, active_leagues, odds_data_cache, fi
     # Header + Tipps senden
     if corners_tips and group_corners:
         for tip in corners_tips:
-            _cmsg = format_corners_message(tip)
             try:
                 from netrattler_corner_cards import send_corner_card
                 _cmid = send_corner_card(TELEGRAM_TOKEN, group_corners, tip, target_date, log=log)
             except Exception:
                 _cmid = None
-            if not _cmid and env("NETRATTLER_ORIGINAL_ONLY", "0") != "1":
-                _cmid = send_telegram(_cmsg, group_corners)
+            # Corner Sniper is photo-only, even if original-only mode is unset.
             if not _cmid:
                 log(f"   ⚠️ Corner Telegram nicht zugestellt — nicht als gesendet markieren: {tip.get('match','?')}", "WARN")
                 continue
             mark_tip_sent(tip.get("match",""), "corners", target_date)
-            # Für Settlement speichern
+            # Für Settlement speichern; formatting must not mutate preflight evidence.
             try:
+                _cmsg = format_corners_message(dict(tip))
                 save_to_supabase({
                     **tip,
                     "tip_id": f"corners_{tip.get('match','?')}_{target_date}".replace(" ","_"),
