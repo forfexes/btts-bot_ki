@@ -135,7 +135,7 @@ def _market_guard(category: str, record: Mapping[str, Any]) -> bool:
 
 
 def render_qa_card(plate_png: bytes, metadata: Mapping[str, Any],
-                   record: Mapping[str, Any], *, now: datetime | None = None, settlement=None) -> bytes:
+                   record: Mapping[str, Any], *, now: datetime | None = None, settlement=None, production=False) -> bytes:
     """Render one strictly labeled SANDBOX PNG; never produce a publishable tip.
 
     The record needs verified fixture/team IDs, observed bookmaker quote ID,
@@ -145,6 +145,13 @@ def render_qa_card(plate_png: bytes, metadata: Mapping[str, Any],
     if not isinstance(metadata, Mapping) or not isinstance(record, Mapping):
         raise ValueError("Metadata and verified record are required")
     category = str(metadata.get("category") or "")
+    if production:
+        from netrattler_candidate_production import validate_release_and_data
+        from netrattler_clean_master_builder import render_clean_master
+        validate_release_and_data(category,record,now=now,settlement=settlement)
+        actual,actual_meta=render_clean_master(category)
+        if plate_png!=actual or metadata!=actual_meta:
+            raise ValueError("Production plate does not match the pinned source-derived master")
     # CROSS/MIX has multiple independently verified fixtures. Never publish
     # the former single-row preview that hides its individual selections.
     if category == "cross_mix":
@@ -194,26 +201,29 @@ def render_qa_card(plate_png: bytes, metadata: Mapping[str, Any],
     for slot, source in zip(slots, (record.get("home_crest"), record.get("away_crest"))):
         _crest(canvas, source, slot)
     draw = ImageDraw.Draw(canvas)
-    if category == "player_props":
+    if category == "player_props" or (production and category=="fouls_cards" and record.get("player_name")):
         # A real alpha-cutout photo floats between the actual club crests
         # on the data-free original stadium. Never draw a circular avatar,
         # sticker, opaque portrait box, or substitute generic sports icon.
         photo = _logo(record["player_photo"], 128, 158)
         canvas.alpha_composite(photo, (
             W//2-photo.width//2, 433-photo.height//2))
-        _text(draw, str(record["fixture_id"]), (W//2, 563),
+        _text(draw, _stamp(record["kickoff"]).strftime("%d.%m. %H:%M UTC") if production else str(record["fixture_id"]), (W//2, 563),
               max_width=330, max_height=29, start_size=16)
         _text(draw, str(record["player_name"]), (W//2, 602),
               max_width=395, max_height=31, start_size=23, color="#FFE56C")
     else:
         _text(draw, "VS", (W//2, 420), max_width=165, max_height=72,
               start_size=48, color="#FFE56C")
-        _text(draw, str(record["fixture_id"]), (W//2, 479),
+        _text(draw, _stamp(record["kickoff"]).strftime("%d.%m. %H:%M UTC") if production else str(record["fixture_id"]), (W//2, 479),
               max_width=355, max_height=38, start_size=19)
     _text(draw, str(record["home"]), (250, 564),
           max_width=250, max_height=44, start_size=24)
     _text(draw, str(record["away"]), (872, 564),
           max_width=250, max_height=44, start_size=24)
+    if production and live:
+        _text(draw, f\'{record["match_minute"]}′ · {record["current_score"]}\', (W//2, 523),
+              max_width=300, max_height=30, start_size=24, color="#FFE56C")
     stats = record.get("stats") or {}
     if not isinstance(stats, Mapping):
         raise ValueError("Only source-verified statistics mappings accepted")
@@ -245,7 +255,7 @@ def render_qa_card(plate_png: bytes, metadata: Mapping[str, Any],
     _text(draw, selection, (682, 1169), max_width=465,
           max_height=50, start_size=33, color="#FFE56C")
     from netrattler_candidate_settlement import footer
-    _text(draw, footer(record, settlement), (W//2, 1268), max_width=395,
+    _text(draw, footer(record, settlement,production=production), (W//2, 1268), max_width=395,
           max_height=45, start_size=25, color="#FCFCFF")
     output = BytesIO()
     canvas.convert("RGB").save(output, "PNG", optimize=True)
@@ -253,7 +263,7 @@ def render_qa_card(plate_png: bytes, metadata: Mapping[str, Any],
 
 
 
-def render_cross_mix_qa(record: Mapping[str, Any], *, now: datetime | None = None, settlement=None) -> bytes:
+def render_cross_mix_qa(record: Mapping[str, Any], *, now: datetime | None = None, settlement=None, production=False) -> bytes:
     """Render all 2-10 Cross/Mix legs onto its owner-derived clean reference.
 
     This is strictly watermarked OFFLINE QA, never a production Telegram
@@ -265,6 +275,9 @@ def render_cross_mix_qa(record: Mapping[str, Any], *, now: datetime | None = Non
     from netrattler_five_owner_dynamic_qa import _multi
     if not isinstance(record, Mapping):
         raise ValueError("Verified Cross/Mix ticket mapping required")
+    if production:
+        from netrattler_candidate_production import validate_release_and_data
+        validate_release_and_data("cross_mix",record,now=now,settlement=settlement)
     plate, metadata = render_clean_master("cross_mix")
     if (metadata.get("production_approved") is not False
             or metadata.get("classification") != "owner-derived_clean_QA_NOT_user_original"):
@@ -277,7 +290,7 @@ def render_cross_mix_qa(record: Mapping[str, Any], *, now: datetime | None = Non
                            _stamp(now or datetime.now(timezone.utc)), settlement=settlement)
     draw = ImageDraw.Draw(canvas)
     from netrattler_candidate_settlement import footer
-    _text(draw, footer(record, settlement), (W//2, 1268+extra),
+    _text(draw, footer(record, settlement,production=production), (W//2, 1268+extra),
           max_width=398, max_height=43, start_size=25, color="#FCFCFF")
     output = BytesIO()
     canvas.convert("RGB").save(output, "PNG", optimize=True)

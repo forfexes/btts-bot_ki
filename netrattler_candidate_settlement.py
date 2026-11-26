@@ -39,13 +39,13 @@ def grades(record, settlement):
         raise ValueError("Incomplete settlement")
     return [by_key[k] for k in expected]
 
-def footer(record, settlement):
+def footer(record, settlement, *, production=False):
     states=grades(record,settlement)
     if states is None:
-        return "SANDBOX · KEIN TIPP"
+        return "AUSWERTUNG: OFFEN" if production else "SANDBOX · KEIN TIPP"
     if len(states)==1:
         label=LABELS[states[0]]
     else:
         label=" · ".join(str(states.count(s))+" "+LABELS[s] for s in LABELS if s in states)
     # Do not infer a combined bet's cash settlement from theoretical odds.
-    return "SANDBOX · "+label
+    return ("AUSWERTUNG: " if production else "SANDBOX · ")+label

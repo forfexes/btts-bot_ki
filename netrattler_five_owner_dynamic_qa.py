@@ -104,7 +104,7 @@ def _stat(row, key, now, fixture_id):
     return str(item["value"])
 
 
-def _single(category, canvas, meta, record, now):
+def _single(category, canvas, meta, record, now, *, production=False):
     fixture = _fixture(record)
     _observed(record, now)
     _required(record, ("selection", "market", "bookmaker_odds"))
@@ -116,7 +116,18 @@ def _single(category, canvas, meta, record, now):
     if not any(word in str(record["market"]).upper() for word in allowed):
         raise ValueError("Wrong market on original family card")
     value = _price(record["bookmaker_odds"])
-    _draw_match(canvas, meta, record)
+    if production and category=="goal" and record.get("player_name"):
+        for slot, crest in zip(meta["floating_crest_slots"],(record["home_crest"],record["away_crest"])):
+            _crest(canvas,crest,slot)
+        photo=_logo(record["player_photo"],128,158)
+        canvas.alpha_composite(photo,(W//2-photo.width//2,433-photo.height//2))
+        d=ImageDraw.Draw(canvas)
+        for key,x in (("home",250),("away",872)):
+            _text(d,record[key],(x,559),max_width=248,max_height=42,start_size=23)
+        _text(d,record["player_name"],(W//2,602),max_width=395,max_height=31,start_size=23,color="#FFE56C")
+        _text(d,_stamp(record["kickoff"]).strftime("%d.%m. %H:%M UTC"),(W//2,563),max_width=330,max_height=29,start_size=16)
+    else:
+        _draw_match(canvas, meta, record)
     d = ImageDraw.Draw(canvas)
     for index in (1, 2, 3):
         name = f"stat_{index}"
@@ -267,19 +278,22 @@ def _multi(category, base, record, now, *, settlement=None):
     return canvas, extra
 
 
-def render_owner_reference_qa(category, record, *, now=None, settlement=None):
+def render_owner_reference_qa(category, record, *, now=None, settlement=None, production=False):
     """Return a watermarked synthetic-data preview only, never an approved tip."""
     if not isinstance(record, Mapping):
         raise ValueError("Strict verified fixture or ticket mapping required")
     now = _stamp(now or datetime.now(timezone.utc))
+    if production:
+        from netrattler_candidate_production import validate_release_and_data
+        validate_release_and_data(category,record,now=now,settlement=settlement)
     image, meta = _open_source(category)
     if category in ("builder", "combo"):
         image, extra = _multi(category, image, record, now, settlement=settlement)
     else:
-        image, extra = _single(category, image, meta, record, now)
+        image, extra = _single(category, image, meta, record, now, production=production)
     d = ImageDraw.Draw(image)
     from netrattler_candidate_settlement import footer
-    _text(d, footer(record, settlement), (W//2, 1268+extra),
+    _text(d, footer(record, settlement,production=production), (W//2, 1268+extra),
           max_width=398, max_height=43, start_size=25, color="#FFFFFF")
     buffer = BytesIO()
     image.convert("RGB").save(buffer, "PNG", optimize=True)

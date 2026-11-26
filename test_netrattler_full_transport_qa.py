@@ -238,3 +238,61 @@ def test_last_minute_master_scope_and_pinned_pixels(monkeypatch,tmp_path):
         free.reserve_alert({}, {})
     with pytest.raises(RuntimeError,match="visual_release_required"):
         free.send_alert({}, {})
+
+
+def test_nine_authorized_production_adapters_send_and_edit_exact_receipt(monkeypatch):
+    from datetime import timedelta
+    from netrattler_candidate_production import FAMILIES,send,edit
+    from test_netrattler_five_owner_dynamic_qa import crest
+    from unittest.mock import Mock
+    for family in sorted(FAMILIES):
+        now=FIVE_NOW if family in ("goal","corner","builder","combo") else TEN_NOW
+        if family in ("builder","combo"):
+            row=formula(ticket(family,3,same_game=family=="builder"))
+            for i,leg in enumerate(row["legs"]):
+                leg["quote_id"]="qa-receipt-"+str(i)
+        elif family=="cross_mix":
+            row=formula(_cross_ticket(3))
+        elif family in ("goal","corner"):
+            row=one()
+            row.update(market="GOAL SCORER" if family=="goal" else "CORNERS OVER 9.5",
+                       selection="PLAYER TO SCORE" if family=="goal" else "OVER 9.5")
+        else:
+            row=_for_category(family)
+        row["ticket_id"]="OFFLINE-ONLY-"+family
+        legs=row.get("legs") or [row]
+        for leg in legs:
+            leg.update(bookmaker="Pinnacle",quote_observed=True,price_estimated=False,
+                       home_crest=crest(),away_crest=crest((10,100,230,255)))
+            if family in ("goal","player_props"):
+                leg.update(player_id="p10",player_name="QA Player",
+                     confirmed_starter=True,player_team_id=leg["home_id"],
+                     player_photo_source="OFFLINE-MOCK-ASSET",player_photo=crest((100,200,20,255)))
+            if family in ("late_goals","live_halftime"):
+                leg["live_event_id"]=leg["fixture_id"]
+        evidence={"verified":True,"legs":[dict(fixture_id=l["fixture_id"],quote_id=l["quote_id"],
+                  source="OFFLINE-RESULT-MOCK",status="won") for l in legs]}
+        fake=Mock()
+        fake._send_photo.return_value=12345
+        fake._edit_photo.return_value=True
+        states=[]
+        def reserve(state):
+            if states:
+                return False
+            states.append(state)
+            return True
+        def confirm(state):
+            states[0]=state
+            return True
+        assert send(fake,"OFFLINE","OFFLINE",family,row,reserve=reserve,confirm=confirm,now=now)==12345
+        assert states[0]["message_id"]==12345
+        assert edit(fake,"OFFLINE",states[0],row,evidence)
+        assert fake._edit_photo.call_args.args[2]==12345
+        assert fake._send_photo.call_count==1
+        assert send(fake,"OFFLINE","OFFLINE",family,row,reserve=reserve,confirm=confirm,now=now) is None
+        assert fake._send_photo.call_count==1
+        with pytest.raises(ValueError):
+            edit(fake,"OFFLINE",states[0],dict(row,ticket_id="other"),evidence)
+        with pytest.raises(ValueError):
+            send(fake,"OFFLINE","OFFLINE",family,dict(row,synthetic=True),reserve=reserve,confirm=confirm,now=now)
+        assert fake._edit_photo.call_count==1
