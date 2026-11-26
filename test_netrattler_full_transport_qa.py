@@ -223,3 +223,18 @@ def test_last_minute_accepts_real_fixture_ids_and_rejects_naive_quote_time():
         assert fixture_info(dict(row,fixture={**row["fixture"],"id":bad})) is None
     assert _utc_time("2026-11-26T17:00:00") is None
     assert _utc_time("2026-11-26T17:00:00Z") is not None
+
+
+def test_last_minute_master_scope_and_pinned_pixels(monkeypatch,tmp_path):
+    import netrattler_lmg_owner_release as release
+    assert release.check_release()
+    changed=tmp_path/"changed.png"
+    changed.write_bytes(release.PLATE.read_bytes()+b"changed")
+    monkeypatch.setattr(release,"PLATE",changed)
+    assert not release.check_release()
+    import netrattler_lmg_free as free
+    monkeypatch.setenv("LMG_OWNER_CLEAN_RELEASED","1")
+    with pytest.raises(RuntimeError,match="visual_release_required"):
+        free.reserve_alert({}, {})
+    with pytest.raises(RuntimeError,match="visual_release_required"):
+        free.send_alert({}, {})

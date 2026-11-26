@@ -185,7 +185,8 @@ def reserve_alert(fixture, metrics=None):
     A disabled send must not leave a durable SQLite 'reserved' record that
     prevents the fixture being sent once its design is approved.
     """
-    if os.getenv("LMG_OWNER_CLEAN_RELEASED", "0") != "1":
+    from netrattler_lmg_owner_release import check_release
+    if os.getenv("LMG_OWNER_CLEAN_RELEASED", "0") != "1" or not check_release():
         raise RuntimeError("last_minute_original_visual_release_required")
     from netrattler_lmg_next_goal import select_next_goal
     claimed=(metrics or {}).get("next_goal_side")
@@ -201,7 +202,8 @@ def send_alert(fixture, metrics):
     The owner-derived clean plate is a distinct PNG renderer with real data
     layers; no text caption, no fallback to the legacy JPEG compositor.
     """
-    if os.getenv("LMG_OWNER_CLEAN_RELEASED", "0") != "1":
+    from netrattler_lmg_owner_release import check_release
+    if os.getenv("LMG_OWNER_CLEAN_RELEASED", "0") != "1" or not check_release():
         raise RuntimeError("last_minute_original_visual_release_required")
     from io import BytesIO
     from netrattler_lmg_card import crest
@@ -235,8 +237,12 @@ def send_alert(fixture, metrics):
     resp.raise_for_status()
     payload=resp.json()
     message_id=(payload.get("result") or {}).get("message_id")
-    if not payload.get("ok") or message_id is None:
+    if payload.get("ok") is not True or type(message_id) is not int or message_id <= 0:
         raise RuntimeError("Telegram photo delivery not confirmed")
+    acknowledged_chat=(payload.get("result") or {}).get("chat")
+    if isinstance(acknowledged_chat,dict) and acknowledged_chat.get("id") is not None:
+        if str(acknowledged_chat["id"]) != str(chat):
+            raise RuntimeError("Telegram returned another chat")
     return message_id
 
 

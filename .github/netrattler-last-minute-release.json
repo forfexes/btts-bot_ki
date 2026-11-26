@@ -1,0 +1,9 @@
+{
+  "owner_authorized": true,
+  "scope": "last_minute_goal",
+  "source_kind": "owner-derived clean PNG",
+  "source_git_blob": "5f5f0895b82b297684eb195f5e29928d6835670e",
+  "plate_git_blob": "7386c75bbd32ba78ebeac3d4169a5104e2173741",
+  "approved_on": "2026-11-26",
+  "note": "Owner explicitly requested remaining ten master releases and production integration. Only Last Minute Goal's existing clean PNG sender is wired by this release; other families are not implicitly approved for delivery."
+}
