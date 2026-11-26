@@ -35,7 +35,7 @@ def test_actual_bot_has_no_original_mode_text_fallback():
         code=ast.get_source_segment(source,node)
         assert "msg_id = send_regular" in code
     assert 'if not _smid and env("NETRATTLER_ORIGINAL_ONLY", "0") != "1"' in source
-    assert 'if not _cmid and env("NETRATTLER_ORIGINAL_ONLY", "0") != "1"' in source
+    assert "_cmid = send_telegram(_cmsg, group_corners)" not in source
     assert 'an_drop_post_shrink_' in source
 
 
@@ -104,3 +104,31 @@ def test_wrong_fixture_day_blocks_before_render():
     cards.render_card.return_value=_master_png()
     cards._send_photo.return_value=123
     assert send_regular(cards,"QA","QA","over25",tip,"2099-11-26")==123
+
+
+def test_corner_photo_failure_never_sends_legacy_text(monkeypatch):
+    import sys
+    from types import SimpleNamespace
+    source = Path("btts_bot.py").read_text()
+    tree = ast.parse(source)
+    branches = [n for n in ast.walk(tree) if isinstance(n, ast.If)
+                and ast.unparse(n.test) == "corners_tips and group_corners"]
+    assert len(branches) == 1
+    block = compile(ast.Module(body=branches, type_ignores=[]), "<corner-transport>", "exec")
+    for original_only in ("0", "1"):
+        monkeypatch.setenv("NETRATTLER_ORIGINAL_ONLY", original_only)
+        for failed in (False, True):
+            send = Mock(side_effect=RuntimeError("render failed") if failed else None,
+                        return_value=None)
+            monkeypatch.setitem(sys.modules, "netrattler_corner_cards",
+                                SimpleNamespace(send_corner_card=send))
+            tip = {"match": "Watford FC vs Blackburn Rovers FC", "time": "Zeit nicht bestätigt"}
+            namespace = dict(corners_tips=[tip], group_corners="QA",
+                             TELEGRAM_TOKEN="QA", target_date="2099-11-26",
+                             log=Mock(), send_telegram=Mock(), mark_tip_sent=Mock(),
+                             format_corners_message=Mock(), save_to_supabase=Mock())
+            exec(block, namespace)
+            send.assert_called_once()
+            for name in ("send_telegram", "mark_tip_sent", "format_corners_message", "save_to_supabase"):
+                namespace[name].assert_not_called()
+            assert tip["time"] == "Zeit nicht bestätigt"
