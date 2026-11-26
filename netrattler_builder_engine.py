@@ -220,7 +220,7 @@ class BuilderPick:
             "estimated_odds": self.estimated_odds,
             "leg_count": self.leg_count,
             "legs": [asdict(x) for x in self.legs],
-            "source": "NETRATTLER_BUILDER_ENGINE",
+            "source": "calculated_builder_leg_product" if getattr(self,"formula_only",False) else "NETRATTLER_BUILDER_ENGINE",
         }
 
 

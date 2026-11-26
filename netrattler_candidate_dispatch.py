@@ -89,12 +89,14 @@ def dispatch(cards,token,chat,family,record,log=print,*,now=None):
 
 def single_record(cards,tip,family,target_date,*,now=None):
     """Use the original source receipt; never invent a missing provider ID."""
-    if family not in ("goal","corner","player_props","fouls_cards","late_goals","live_halftime"):
+    if family not in ("goal","corner","player_props","fouls_cards","late_goals","live_halftime","combo"):
         raise ValueError("Not a single selection")
     require_release(family)
     row=dict(tip)
     home,away=_split_match(row.get("match") or (str(row.get("home") or "")+" vs "+str(row.get("away") or "")))
     row.update(home=home,away=away)
+    if not any(row.get(k) for k in ("bookmaker","book","bookie","odds_source")):
+        row["bookmaker"]=row.get("_source") or row.get("source")
     price,book=_book_price(row)
     row.update(bookmaker=book,bookmaker_odds=price)
     if row.get("quote_observed") is not True or row.get("price_estimated") is not False:
@@ -107,7 +109,7 @@ def single_record(cards,tip,family,target_date,*,now=None):
     if start.astimezone(ZoneInfo("Europe/Zurich")).date().isoformat()!=str(target_date)[:10]:
         raise ValueError("Wrong Swiss fixture day")
     row["kickoff"]=start
-    if family=="goal":
+    if family=="goal" or (family=="combo" and str(row.get("market"))=="scorer"):
         from netrattler_strict_delivery import scorer_eligible
         ok,reason=scorer_eligible(tip)
         if not ok:
@@ -117,6 +119,8 @@ def single_record(cards,tip,family,target_date,*,now=None):
         row["player_name"]=row.get("player_name") or row.get("player")
     else:
         row["selection"]=row.get("selection") or row.get("tip")
+    if family in ("player_props","fouls_cards"):
+        row["player_name"]=row.get("player_name") or row.get("player")
     if not row.get("selection"):
         raise ValueError("Actual selection is missing")
     # Stable selection identity is local deduplication, not a bookmaker receipt.
@@ -248,3 +252,82 @@ def try_edit_settlement(cards,token,chat,message_id,settled,log=print):
     except (ValueError,RuntimeError,KeyError,TypeError,AttributeError,OSError,requests.RequestException) as exc:
         log("CANDIDATE_EDIT_DEFERRED: "+str(exc)[:150])
         return False
+
+
+# The caller must pass one actual source observation, not a mixture of the
+# best price from one bookmaker and identity/timestamp fields from another.
+RECEIPT_FIELDS=("fixture_id","home_id","away_id","player_id","player_team_id",
+    "quote_id","quote_observed_at","quote_observed","odds_observed","price_estimated",
+    "confirmed_starter","player_photo_source","fixture_provider","kickoff","commence_time",
+    "_kickoff","bookmaker","odds_source","_no_real_odds","synthetic","estimated_odds")
+
+def receipt_fields(row):
+    return {k:row[k] for k in RECEIPT_FIELDS if k in row and row[k] is not None}
+
+def combo_record(cards,combo,ticket_id,target_date,*,now=None):
+    if not isinstance(combo,dict) or not str(ticket_id or "").strip():
+        raise ValueError("Original combination identity required")
+    legs=combo.get("tips")
+    if not isinstance(legs,list) or not 2<=len(legs)<=10:
+        raise ValueError("Unsupported original combination leg count")
+    rows=[]
+    for tip in legs:
+        row=single_record(cards,tip,"combo",target_date,now=now)
+        # Keep the original direction, not the default display label.
+        market=str(row.get("market") or "").strip().lower()
+        direction=str(row.get("selection") or "").strip().upper()
+        expected={"btts":"BTTS YES","over25":"OVER 2.5",
+                  "btts_ht":"BTTS YES HT","over15_ht":"OVER 1.5 HT"}
+        if market in expected:
+            if direction not in ("YES","JA",expected[market]):
+                raise ValueError("Contradictory combination selection")
+            row["selection"]=expected[market]
+        elif market=="1x2":
+            if direction not in ("1","X","2","1X","X2","12","HOME","AWAY","DRAW"):
+                raise ValueError("Unsupported 1X2 selection")
+        elif market not in ("corners","goal scorer"):
+            raise ValueError("Unsupported combination market")
+        rows.append(row)
+    return {"ticket_id":str(ticket_id),"formula_only":True,
+            "combined_odds_observed":False,"legs":rows}
+
+def send_combo(cards,token,chat,combo,ticket_id,target_date,log=print):
+    try:
+        record=combo_record(cards,combo,ticket_id,target_date)
+        return dispatch(cards,token,chat,"combo",record,log)
+    except (ValueError,RuntimeError,OSError,TypeError,KeyError) as exc:
+        log("COMBO_CARD_DEFERRED: "+str(exc)[:150])
+        return None
+
+def send_prop(cards,token,chat,tip,target_date,log=print):
+    category=str(tip.get("category") or "").lower()
+    contact={"fouls","fouls_won","tackles","tackles_committed","tackles_received",
+             "yellow_cards","booked","cards"}
+    family="fouls_cards" if category in contact else "player_props"
+    return send_single(cards,token,chat,family,tip,target_date,log)
+
+def send_live(cards,token,chat,match,tip,family,log=print):
+    """The old live model contains fair odds only, not an offered price.
+    Require a separate exact, fresh live quote observation from the feed.
+    """
+    quote=match.get("live_quote")
+    if not isinstance(quote,dict):
+        log("LIVE_CARD_DEFERRED: no observed in-play bookmaker receipt")
+        return None
+    fixture=str(match.get("fixture_id") or match.get("match_id") or "")
+    if (not fixture or str(quote.get("fixture_id"))!=fixture
+        or quote.get("match_minute")!=match.get("minute")
+        or str(quote.get("current_score"))!=str(tip.get("score"))
+        or quote.get("market_scope")!=("remaining_first_half" if family=="live_halftime" else "remaining_match")
+        or quote.get("selection")!=("OVER 0.5 HT" if family=="live_halftime" else "OVER 0.5 RESTSPIELZEIT")):
+        log("LIVE_CARD_DEFERRED: wrong fixture, score or market scope")
+        return None
+    row={**tip,**quote,"match":tip["match"],"live_event_id":fixture,
+         "live_source":match.get("live_source"),"current_score":tip["score"],
+         "match_minute":match["minute"]}
+    try:
+        day=_stamp(row.get("kickoff")).astimezone(ZoneInfo("Europe/Zurich")).date().isoformat()
+        return send_single(cards,token,chat,family,row,day,log)
+    except (ValueError,TypeError,KeyError) as exc:
+        log("LIVE_CARD_DEFERRED: "+str(exc)[:150])
+        return None

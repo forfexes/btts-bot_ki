@@ -2362,7 +2362,7 @@ def settle_tip(tip: Dict[str, Any], results: Sequence[Dict[str, Any]], player_st
     odds = odds_of(tip)
     # Same-game builders with only individual-leg prices are informational.
     # Zero provided stake MUST NOT be replaced with an invented 0.01-unit bet.
-    unpriced_builder = group == "builder" and bool(data.get("estimated_odds")) and not odds
+    unpriced_builder = group == "builder" and bool(data.get("estimated_odds")) and (not odds or str(data.get("source") or "")=="calculated_builder_leg_product")
     # A calculated Combo remains sportingly settleable, but without a real
     # bookmaker combined ticket its profit and ROI MUST remain unpriced.
     calculated_combo = (group in {"combo", "combo_multi"}

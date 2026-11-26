@@ -360,3 +360,39 @@ def test_builder_normalization_retains_explicit_starting_xi_and_photo_source():
     assert leg.confirmed_starter is True and leg.player_photo_source=="provider-image-id"
     leg=normalize_prop(dict(row,confirmed_starter="true",player_photo_source=""))
     assert leg.confirmed_starter is None and not leg.player_photo_source
+
+
+def test_combo_preserves_source_receipts_and_never_fakes_combined_price():
+    from netrattler_candidate_dispatch import combo_record,receipt_fields
+    from test_netrattler_five_owner_dynamic_qa import crest
+    from unittest.mock import Mock
+    def img(team):
+        buf=BytesIO()
+        crest((20,80,230,255) if "AWAY" in team else (230,20,80,255)).save(buf,"PNG")
+        return buf.getvalue()
+    fake=Mock()
+    fake._badge_bytes.side_effect=img
+    rows=[]
+    for i in range(3):
+        row=one("provider-"+str(i),i+1)
+        row.update(match=row["home"]+" vs "+row["away"],bookmaker="Pinnacle",
+                   market="btts",selection="YES")
+        rows.append(row)
+    combo={"tips":rows,"total_odds":9999}
+    result=combo_record(fake,combo,"original-combo",FIVE_NOW.date().isoformat(),now=FIVE_NOW)
+    assert result["formula_only"] is True and "combined_odds" not in result
+    assert [r["quote_id"] for r in result["legs"]]==[r["quote_id"] for r in rows]
+    assert receipt_fields(rows[0])["quote_observed"] is True
+    bad=dict(combo,tips=[dict(rows[0],quote_id=""),*rows[1:]])
+    with pytest.raises(ValueError):
+        combo_record(fake,bad,"original-combo",FIVE_NOW.date().isoformat(),now=FIVE_NOW)
+
+
+def test_legacy_model_live_tip_cannot_send_without_exact_observed_quote():
+    from netrattler_candidate_dispatch import send_live
+    from unittest.mock import Mock
+    fake=Mock()
+    match={"match_id":"one","minute":75}
+    tip={"match":"QA Home vs QA Away","score":"1:1","fair_odds":1.4}
+    assert send_live(fake,"OFFLINE","-1",match,tip,"late_goals") is None
+    fake._send_photo.assert_not_called()

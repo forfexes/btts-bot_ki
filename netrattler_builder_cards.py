@@ -134,7 +134,13 @@ def send_builder_card(token,chat,pick,log=print):
             for out,leg in zip(record["legs"],checked.legs):
                 out["confirmed_starter"]=getattr(leg,"confirmed_starter",None)
                 out["player_photo_source"]=getattr(leg,"player_photo_source","")
-            return dispatch(cards,token,chat,record["category"],record,log)
+            mid=dispatch(cards,token,chat,record["category"],record,log)
+            if mid:
+                # The image uses a calculated combination, not an accepted
+                # bookmaker ticket. Keep this provenance on the original pick.
+                pick.estimated_odds=True
+                pick.formula_only=True
+            return mid
         except (ValueError,RuntimeError,OSError,TypeError,KeyError) as exc:
             log("BUILDER_CARD_DEFERRED: "+str(exc)[:150])
             return None
