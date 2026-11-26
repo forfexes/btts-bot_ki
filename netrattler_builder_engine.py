@@ -166,6 +166,7 @@ class PropLeg:
     odds_observed: Optional[bool] = None
     confirmed_starter: Optional[bool] = None
     player_photo_source: str = ""
+    player_team_id: str = ""
 
     def key(self) -> Tuple[str, str, str, float]:
         return (norm(self.player), norm(self.match), self.category, round(self.line, 2))
@@ -463,7 +464,7 @@ def normalize_prop(row: Dict[str, Any]) -> Optional[PropLeg]:
         odds=round(odds, 2),
         probability=round(probability, 4),
         source=quote_source[:80],
-        kickoff=str(row.get("ko") or row.get("kickoff") or row.get("kickoff_at") or "")[:40],
+        kickoff=str(row.get("kickoff") or row.get("commence_time") or row.get("_kickoff") or row.get("kickoff_at") or row.get("ko") or "")[:40],
         hit_rate=as_float(row.get("hit_rate")),
         games=as_int(row.get("games") or row.get("sb_games")),
         quality=quality_score(row),
@@ -479,6 +480,7 @@ def normalize_prop(row: Dict[str, Any]) -> Optional[PropLeg]:
         odds_observed=(True if row.get("odds_observed") is True or row.get("quote_observed") is True else None),
         confirmed_starter=row.get("confirmed_starter") if type(row.get("confirmed_starter")) is bool else None,
         player_photo_source=str(row.get("player_photo_source") or ""),
+        player_team_id=str(row.get("player_team_id") or ""),
     )
 
 
@@ -497,7 +499,12 @@ def deduplicate_props(rows: Iterable[Dict[str, Any]]) -> List[PropLeg]:
         # "Gimnasia y Esgrima de La Plata") is one leg, not two.
         dkey = ("P", norm(leg.player), leg.category, leg.line) if leg.category in PLAYER_CATEGORIES else leg.key()
         old = best.get(dkey)
-        if old is None or (leg.quality, not leg.estimated, leg.odds) > (old.quality, not old.estimated, old.odds):
+        def rank(item):
+            has_receipt = (item.odds_observed is True and all(
+                (item.fixture_id, item.home_id, item.away_id, item.player_id,
+                 item.quote_id, item.quote_observed_at, item.kickoff)))
+            return (has_receipt, item.quality, not item.estimated, item.odds)
+        if old is None or rank(leg) > rank(old):
             best[dkey] = leg
     return sorted(best.values(), key=lambda x: (x.quality, x.probability), reverse=True)
 
