@@ -22402,14 +22402,33 @@ def _ntr_collect_prop(player, team, match_name, league, market, category=None,
             float(old.get("line", 0)),
         )
         if old_key == key:
-            # Prefer real odds and stronger probability.
-            if row["odds"] > 1:
+            # Do not merge homonymous players with conflicting club evidence.
+            if old.get("team") and row.get("team"):
+                from netrattler_visual_gate import club_same
+                if not club_same(old["team"], row["team"]):
+                    continue
+            # Keep quote and original source identity together. An anonymous
+            # later price cannot erase a complete source observation.
+            def _receipt_rank(item):
+                if (item.get("quote_observed") is not True
+                        or item.get("odds_observed") is False
+                        or item.get("price_estimated") is not False):
+                    return 0
+                keys = ("fixture_id", "home_id", "away_id", "player_id",
+                        "player_team_id", "quote_id", "quote_observed_at")
+                return int(all(str(item.get(k) or "").strip() for k in keys))
+            if row["odds"] > 1 and _receipt_rank(row) >= _receipt_rank(old):
                 old["odds"] = row["odds"]
                 old["source"] = row["source"]
                 old["real_observed_line"] = True
+                old["market"] = row["market"]
                 for _field in RECEIPT_FIELDS:
                     old.pop(_field,None)
                 old.update(receipt_fields(row))
+                if row.get("team"):
+                    old["team"] = row["team"]
+            elif not old.get("team") and row.get("team") and not _receipt_rank(old):
+                old["team"] = row["team"]
             old["probability"] = max(float(old.get("probability", 0)), row["probability"])
             old["hit_rate"] = max(float(old.get("hit_rate", 0)), row["hit_rate"])
             old["games"] = max(int(old.get("games", 0)), row["games"])
@@ -23151,7 +23170,7 @@ def run_advanced_props_bot(active_leagues: list, fixtures_cache: dict, target_da
                     _hit_rate2 = sum(1 for v in _recent2 if v >= _line2) / _games2
                     _ntr_collect_prop(
                         _player_name2, _team_name2, _match2, _league2,
-                        _market2, category="shots", line=_line2,
+                        _market2, category="sot", line=_line2,
                         probability=round(_hit_rate2 * 100),
                         source="supabase_l20", kickoff=_kickoff2,
                         hit_rate=_hit_rate2, games=_games2,
@@ -23161,7 +23180,7 @@ def run_advanced_props_bot(active_leagues: list, fixtures_cache: dict, target_da
                     _hit_rate2 = sum(1 for v in _recent2 if v >= 1.0) / _games2
                     _ntr_collect_prop(
                         _player_name2, _team_name2, _match2, _league2,
-                        "Anytime Goalscorer", category="shots", line=1.0,
+                        "Anytime Goalscorer", category="score", line=1.0,
                         probability=round(_hit_rate2 * 100),
                         source="supabase_l20", kickoff=_kickoff2,
                         hit_rate=_hit_rate2, games=_games2,
