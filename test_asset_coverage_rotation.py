@@ -1,6 +1,6 @@
 """Daily image QA scans every name over time without repeating one fixed sample."""
 import unittest
-from asset_coverage_audit import select_batch, fallback_club
+from asset_coverage_audit import select_batch, fallback_club, full_chain_budget
 
 
 class CoverageRotation(unittest.TestCase):
@@ -23,6 +23,22 @@ class CoverageRotation(unittest.TestCase):
             self.assertEqual(len(selected), len(set(selected)))
             covered.update(selected)
         self.assertEqual(covered, set(items))
+
+    def test_small_rotating_batch_respects_cap_and_covers_roster(self):
+        items = list(range(9))
+        covered = set()
+        for day in range(9):
+            selected, _ = select_batch(items, 2, rotate=True, anchor=20, ordinal=day)
+            self.assertLessEqual(len(selected), 2)
+            covered.update(selected)
+        self.assertEqual(covered, set(items))
+
+    def test_full_chain_budget_all_is_bounded_by_batch(self):
+        self.assertEqual(full_chain_budget("all", 100), 100)
+        self.assertEqual(full_chain_budget("ALL", 0), 0)
+        self.assertEqual(full_chain_budget("16", 8), 8)
+        self.assertEqual(full_chain_budget("100", 100), 30)
+        self.assertEqual(full_chain_budget("-1", 100), 0)
 
     def test_priority_mode_backwards_compatible(self):
         selected, meta = select_batch(list(range(12)), 5)
