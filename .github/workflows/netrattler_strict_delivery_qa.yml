@@ -167,7 +167,7 @@ jobs:
       - name: Test premium masters and 16-category verified render
         run: python -m unittest -v test_premium_blank_masters test_premium_verified_cards
       - name: Test actual Telegram renderers with mocked network
-        run: python -m pytest -q test_netrattler_original_templates.py
+        run: python -m pytest -q test_netrattler_original_templates.py test_netrattler_crest_retry.py
       - name: Audit actual premium production route (no unconditional failure)
         run: |
           python - <<'PY'
