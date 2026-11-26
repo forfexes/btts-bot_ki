@@ -131,3 +131,20 @@ def test_builder_pool_keeps_complete_quote_and_club_evidence():
             category="shots", line=2, odds=1.9, source="Pinnacle")
     assert len(ns["_NTR_BUILDER_PROP_POOL"]) == 2
     assert row["team"] == "QA Home"
+
+
+def test_builder_normalization_prefers_original_receipt(monkeypatch):
+    from netrattler_builder_engine import normalize_prop, deduplicate_props
+    monkeypatch.setenv("NETRATTLER_BUILDER_STRICT_EDGE", "false")
+    base = dict(player="QA Athlete", team="QA Home", match="QA Home vs QA Away",
+                market="Shots 2+", category="shots", line=2, odds=1.8,
+                source="Pinnacle", probability=0.8)
+    verified = dict(base, fixture_id="f1", home_id="h1", away_id="a1",
+                    player_id="p1", player_team_id="h1", quote_id="q1",
+                    quote_observed_at="2099-11-26T18:00:00Z",
+                    commence_time="2099-11-26T19:00:00Z", odds_observed=True)
+    leg = normalize_prop(verified)
+    assert leg is not None and leg.player_team_id == "h1"
+    assert leg.kickoff == verified["commence_time"]
+    selected, = deduplicate_props([verified, dict(base, odds=2.1)])
+    assert selected.quote_id == "q1" and selected.odds == 1.8
