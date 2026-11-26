@@ -52,18 +52,34 @@ def render_family(family):
                           crest_provider=authentic_qa_image,preview_only=True)
         return raw,done,"clean_last_minute_candidate"
     if family in ("builder","combo"):
-        raw=render_owner_reference_qa(family,formula(ticket(family,3)),now=FIVE_NOW)
+        row=formula(ticket(family,3))
+        render=lambda settlement=None:render_owner_reference_qa(family,row,now=FIVE_NOW,settlement=settlement)
     elif family in ("goal","corner"):
         row=one()
         row.update(market="GOALS OVER 2.5" if family=="goal" else "CORNERS OVER 9.5",
                    selection="OVER 2.5" if family=="goal" else "OVER 9.5")
-        raw=render_owner_reference_qa(family,row,now=FIVE_NOW)
+        render=lambda settlement=None:render_owner_reference_qa(family,row,now=FIVE_NOW,settlement=settlement)
     elif family=="cross_mix":
-        raw=render_cross_mix_qa(formula(_cross_ticket(3)),now=TEN_NOW)
+        row=formula(_cross_ticket(3))
+        render=lambda settlement=None:render_cross_mix_qa(row,now=TEN_NOW,settlement=settlement)
     else:
+        row=_for_category(family)
         plate,meta=render_clean_master(family)
-        raw=render_qa_card(plate,meta,_for_category(family),now=TEN_NOW)
-    return raw,None,"owner_derived_candidate"
+        render=lambda settlement=None:render_qa_card(plate,meta,row,now=TEN_NOW,settlement=settlement)
+    raw=render()
+    settlement={"verified":True,"legs":[{"fixture_id":leg["fixture_id"],"quote_id":leg["quote_id"],
+          "source":"OFFLINE_QA_RESULT","status":"lost" if i%2 else "won"}
+          for i,leg in enumerate(row.get("legs") or [row])]}
+    done=render(settlement)
+    assert done!=raw
+    with pytest.raises(ValueError):
+        render({**settlement,"verified":False})
+    wrong={**settlement,"legs":[{**settlement["legs"][0],"quote_id":"WRONG"},
+                                 *settlement["legs"][1:]]}
+    with pytest.raises(ValueError):
+        render(wrong)
+    return raw,done,"owner_derived_candidate"
+
 
 def test_all_sixteen_actual_pngs_reach_mocked_transport(monkeypatch):
     monkeypatch.setenv("NETRATTLER_ORIGINAL_ONLY","1")
@@ -110,5 +126,24 @@ def test_all_sixteen_actual_pngs_reach_mocked_transport(monkeypatch):
                         "production_eligible":family in REGULAR,
                         "real_telegram_sent":False}
     assert len(report)==16
+    assert all(r['edit_original_mock']=='PASS' for r in report.values())
     (out/"transport_report.json").write_text(json.dumps(report,indent=2)+"\n")
     print("ALL_16_ACTUAL_PNG_TRANSPORT_QA_PASS",len(report))
+
+
+def test_candidate_settlement_never_infers_or_reuses_wrong_grade():
+    from netrattler_candidate_settlement import grades,footer
+    row=formula(ticket("combo",3))
+    evidence={"verified":True,"legs":[dict(fixture_id=leg["fixture_id"],quote_id=leg["quote_id"],
+        source="OFFLINE",status="void") for leg in row["legs"]]}
+    assert grades(row,evidence)==["void","void","void"]
+    assert "3 VOID" in footer(row,evidence)
+    assert "GEWINN" not in footer(row,evidence)
+    for bad in (
+        {**evidence,"legs":evidence["legs"][:2]},
+        {**evidence,"legs":[evidence["legs"][0]]*3},
+        {**evidence,"legs":[{**evidence["legs"][0],"source":""},*evidence["legs"][1:]]},
+        {**evidence,"legs":[{**evidence["legs"][0],"status":"pending"},*evidence["legs"][1:]]},
+    ):
+        with pytest.raises(ValueError):
+            grades(row,bad)
