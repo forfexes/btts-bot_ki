@@ -18,7 +18,7 @@ class PlayerForm(unittest.TestCase):
                      'os': __import__('os'), 'requests': None}
         exec(compile(ast.Module(body=[fn], type_ignores=[]), '<scorer>', 'exec'), namespace)
         fixture = dict(home='Home', away='Away', home_id=1, away_id=2)
-        scorers = [dict(name='Test Player', team_id=1, goals_per_game=1, goals_total=30)]
+        scorers = [dict(name='Test Player', team='Home', team_id=1, goals_per_game=1, goals_total=30)]
         quotes = [dict(player='Test Player', market='anytime goalscorer', odds=2.0,
                        home='Home', away='Away', source='pinnacle')]
         self.history = {'goals': {'series': [0]*10, 'avg': 1, 'games': 30}}
