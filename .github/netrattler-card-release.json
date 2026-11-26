@@ -1,6 +1,6 @@
 {
   "approved": true,
   "scope": "netrattler-verified-original-cards",
-  "request_id": "2026-11-26-tested-strict-delivery",
-  "approval_note": "Owner requested NETRATTLER production release on 2026-11-26. Release only verified original cards through existing preflight, source, artwork, quote, fixture and deduplication checks. Unapproved families remain blocked. Repository variable false disables release."
+  "request_id": "2026-11-26-confirmed-original-release-verification",
+  "approval_note": "Owner requested a NETRATTLER production run on 2026-11-26 after the all-family original card release. Verified original cards only. Keep source, quote, fixture, artwork and duplicate checks. Repository variable false disables release."
 }
