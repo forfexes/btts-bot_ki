@@ -155,6 +155,15 @@ class PropLeg:
     estimated: bool = False
     edge: float = 0.0
     fair_odds: float = 0.0
+    # Keep original provider evidence available to the strict image/settlement
+    # bridge. Empty fields stay unknown; never generate replacement receipt IDs.
+    fixture_id: str = ""
+    home_id: str = ""
+    away_id: str = ""
+    player_id: str = ""
+    quote_id: str = ""
+    quote_observed_at: str = ""
+    odds_observed: Optional[bool] = None
 
     def key(self) -> Tuple[str, str, str, float]:
         return (norm(self.player), norm(self.match), self.category, round(self.line, 2))
@@ -397,8 +406,12 @@ def normalize_prop(row: Dict[str, Any]) -> Optional[PropLeg]:
     if not is_bookmaker_source(quote_source):
         _LAST_REJECT[0] = 'r4'
         return None
-    estimated = bool(row.get("estimated") or row.get("estimated_odds"))
-    if estimated:
+    estimated = bool(row.get("estimated") or row.get("estimated_odds") or
+                     row.get("synthetic") or row.get("_synthetic") or row.get("model_odds") or
+                     row.get("price_estimated") or row.get("price_calculated") or
+                     str(row.get("price_type") or "").lower() in
+                     {"synthetic", "estimated", "model", "model_odds", "calculated_from_leg_odds", "derived_builder"})
+    if estimated or row.get("odds_observed") is False or row.get("quote_observed") is False:
         _LAST_REJECT[0] = 'r5'
         return None
     fair_odds = as_float(row.get("fair_odds")) or (1.0 / probability if probability > 0 else 0.0)
@@ -455,6 +468,13 @@ def normalize_prop(row: Dict[str, Any]) -> Optional[PropLeg]:
         estimated=estimated,
         edge=round(edge, 2),
         fair_odds=round(fair_odds, 2),
+        fixture_id=str(row.get("fixture_id") or row.get("event_id") or ""),
+        home_id=str(row.get("home_id") or ""),
+        away_id=str(row.get("away_id") or ""),
+        player_id=str(row.get("player_id") or ""),
+        quote_id=str(row.get("quote_id") or ""),
+        quote_observed_at=str(row.get("quote_observed_at") or ""),
+        odds_observed=(True if row.get("odds_observed") is True or row.get("quote_observed") is True else None),
     )
 
 

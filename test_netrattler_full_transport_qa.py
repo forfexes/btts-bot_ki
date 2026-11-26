@@ -147,3 +147,24 @@ def test_candidate_settlement_never_infers_or_reuses_wrong_grade():
     ):
         with pytest.raises(ValueError):
             grades(row,bad)
+
+
+def test_builder_normalization_retains_actual_provider_evidence():
+    from netrattler_builder_engine import normalize_prop
+    row={"player":"QA Player","team":"QA Home","match":"QA Home vs QA Away",
+         "market":"Shots 2+","category":"shots","odds":1.8,"source":"Pinnacle",
+         "probability":0.8,"ko":"2099-11-25T18:00:00Z",
+         "fixture_id":"fixture-123","home_id":"home-2","away_id":"away-9",
+         "player_id":"player-10","quote_id":"receipt-19",
+         "quote_observed_at":"2099-11-25T17:59:00Z","odds_observed":True}
+    leg=normalize_prop(row)
+    assert leg is not None
+    for key in ("fixture_id","home_id","away_id","player_id","quote_id",
+                "quote_observed_at","odds_observed"):
+        assert getattr(leg,key)==row[key]
+    without={k:v for k,v in row.items() if k not in ("quote_id","quote_observed_at","odds_observed")}
+    leg=normalize_prop(without)
+    assert leg is not None and leg.quote_id=="" and leg.quote_observed_at=="" and leg.odds_observed is None
+    for bad in ({"odds_observed":False},{"quote_observed":False},{"price_calculated":True},
+                {"synthetic":True},{"price_type":"calculated_from_leg_odds"}):
+        assert normalize_prop(dict(row,**bad)) is None
