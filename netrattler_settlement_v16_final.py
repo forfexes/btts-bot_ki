@@ -873,6 +873,16 @@ def edit_original_tip(settlement: Dict[str, Any]) -> bool:
         original = recover_legacy_builder_text(data)
     stored_chat = str(anyv(data, ["telegram_chat_id", "chat_id", "tg_chat_id", "channel_id"], "") or anyv(settlement, ["telegram_chat_id"], "") or "")
     canonical_chat = str(GROUPS.get(group) or GROUPS.get("default") or "")
+    if group in {"builder","combo","combo_multi","scorer","corners","props","fouls_cards","late_goals","live_halftime","cross_mix"} and message_id and stored_chat:
+        import netrattler_stats_match_cards as candidate_cards
+        from netrattler_candidate_dispatch import try_edit_settlement
+        candidate = try_edit_settlement(candidate_cards,TG_TOKEN,stored_chat,message_id,settlement,log=log)
+        if candidate is not None:
+            if candidate:
+                _LAST_EDIT_SURFACE["last"]="image"
+            else:
+                _LAST_EDIT_ERROR["last"]="candidate original image update deferred"
+            return candidate
     edited = (_strip_old_direct_summary(original) + "\n\n" + format_direct_summary(settlement)).strip()
 
     if message_id and original:
@@ -2332,7 +2342,10 @@ def settle_tip(tip: Dict[str, Any], results: Sequence[Dict[str, Any]], player_st
             losses += status == "loss"
             pending += status == "pending"
             voids += status == "void"
-            leg_payload.append({"leg": leg, "status": status, "reason": reason})
+            raw_leg_result = unpack((leg_result or {}).get("raw") or {})
+            leg_payload.append({"leg": leg, "status": status, "reason": reason,
+                                "result_source": str((leg_result or {}).get("result_source") or raw_leg_result.get("_result_table") or raw_leg_result.get("source") or ""),
+                                "result_fixture_id": str(raw_leg_result.get("fixture_id") or raw_leg_result.get("event_id") or "")})
         # void-Beine (Spieler ohne Einsatz) zaehlen nicht; nur voids -> void statt faelschlich "win"
         status = "loss" if losses else "pending" if pending else "void" if not wins else "win"
         reason = f"{wins}/{len(legs)} Legs gewonnen · {losses} verloren · {pending} offen" + (f" · {voids} void" if voids else "")
@@ -2349,7 +2362,7 @@ def settle_tip(tip: Dict[str, Any], results: Sequence[Dict[str, Any]], player_st
     odds = odds_of(tip)
     # Same-game builders with only individual-leg prices are informational.
     # Zero provided stake MUST NOT be replaced with an invented 0.01-unit bet.
-    unpriced_builder = group == "builder" and bool(data.get("estimated_odds")) and not odds
+    unpriced_builder = group == "builder" and bool(data.get("estimated_odds")) and (not odds or str(data.get("source") or "")=="calculated_builder_leg_product")
     # A calculated Combo remains sportingly settleable, but without a real
     # bookmaker combined ticket its profit and ROI MUST remain unpriced.
     calculated_combo = (group in {"combo", "combo_multi"}
@@ -2411,7 +2424,8 @@ def settle_tip(tip: Dict[str, Any], results: Sequence[Dict[str, Any]], player_st
         "group_key": str(data.get("group_key") or group),
         "telegram_chat_id": anyv(data, ["telegram_chat_id", "chat_id", "tg_chat_id", "channel_id"], None),
         "telegram_msg_id": anyv(data, ["telegram_msg_id", "telegram_message_id", "message_id", "tg_message_id"], None),
-        "raw": {"result_source": result_source, "strict_match": True},
+        "raw": {"result_source": result_source, "strict_match": True,
+                "result_fixture_id": str(unpack(raw_result).get("fixture_id") or unpack(raw_result).get("event_id") or "")},
         "settled_at": NOW.isoformat() if status in {"win", "loss", "void"} else None,
     }
 
@@ -3088,12 +3102,11 @@ def main() -> None:
         _recent = list(_recent_by_tip.values())
     except Exception:
         _recent = list(newly_closed)
-    # The in-image updater can repaint ONLY approved BTTS, scorer and
-    # corner owner-original families in original-only mode. Any unapproved
-    # category keeps its bitmap and receives an edit of its existing caption.
+    # Legacy stadium cards use the historical card-history updater. New
+    # candidate receipts are edited by exact chat/message/fixture/quote IDs.
     send_result_cards(_recent or newly_closed)
     if os.getenv("SETTLEMENT_TG_ORIGINAL_EDIT_ONLY", "1") == "1":
-        log("Owner-only: In-Image-Ergebnis nur BTTS/Scorer/Corners; andere Karten unverändert")
+        log("Owner-only: exakte Candidate-Bildbelege plus freigegebene Stadionkarten")
 
     history = dedup_history(existing + settled)
     EXISTING_FOR_REPORTS[:] = list(existing)

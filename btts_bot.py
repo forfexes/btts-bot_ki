@@ -7213,7 +7213,9 @@ def generate_multi_combo_bets(all_tips, num_tips=3):
             if market != "scorer" and ev_pct > 200.0:
                 continue
 
+            from netrattler_candidate_dispatch import receipt_fields
             normalized.append({
+                **receipt_fields(t),
                 "match": t.get("match", ""),
                 "league": t.get("league", ""),
                 "market": market,
@@ -17308,7 +17310,9 @@ def generate_multi_combo_bets(all_tips, num_tips=3):
             if market != "scorer" and ev_pct > 200.0:
                 continue
 
+            from netrattler_candidate_dispatch import receipt_fields
             normalized.append({
+                **receipt_fields(t),
                 "match": t.get("match", ""),
                 "league": t.get("league", ""),
                 "market": market,
@@ -20261,7 +20265,14 @@ def run_live_bots():
             tip = analyze_hz_live_tip(match)
             if tip:
                 msg = format_live_tip_message(tip, "hz")
-                send_telegram(msg, TELEGRAM_GROUP_HZ_LIVE)
+                if env("NETRATTLER_ORIGINAL_ONLY", "0") == "1":
+                    import netrattler_stats_match_cards as _live_cards
+                    from netrattler_candidate_dispatch import send_live
+                    _live_mid=send_live(_live_cards,TELEGRAM_TOKEN,TELEGRAM_GROUP_HZ_LIVE,match,tip,"live_halftime",log)
+                else:
+                    _live_mid=send_telegram(msg, TELEGRAM_GROUP_HZ_LIVE)
+                if not _live_mid:
+                    continue
                 LIVE_MATCH_CACHE[cache_key_hz] = True
                 hz_tips += 1
                 log(f"   ⚽ HZ Tip: {tip['match']} Minute {tip['minute']}' ({tip['probability']}%)")
@@ -20271,7 +20282,14 @@ def run_live_bots():
             tip = analyze_late_goal_tip(match)
             if tip:
                 msg = format_live_tip_message(tip, "late")
-                send_telegram(msg, TELEGRAM_GROUP_LATE_GOALS)
+                if env("NETRATTLER_ORIGINAL_ONLY", "0") == "1":
+                    import netrattler_stats_match_cards as _live_cards
+                    from netrattler_candidate_dispatch import send_live
+                    _live_mid=send_live(_live_cards,TELEGRAM_TOKEN,TELEGRAM_GROUP_LATE_GOALS,match,tip,"late_goals",log)
+                else:
+                    _live_mid=send_telegram(msg, TELEGRAM_GROUP_LATE_GOALS)
+                if not _live_mid:
+                    continue
                 LIVE_MATCH_CACHE[cache_key_late] = True
                 late_tips += 1
                 log(f"   🔥 Late Tip: {tip['match']} Minute {tip['minute']}' ({tip['probability']}%)")
@@ -20884,6 +20902,7 @@ def analyze_scorer_tips(fixture, league, scorers, observed_props=None, diag=None
         return a == b or a in b or b in a or (len(a) >= 6 and len(b) >= 6 and a[:6] == b[:6])
     quote_by_player = {}
     quote_source_by_player = {}
+    quote_receipt_by_player = {}
     quote_surname_index = {}
     for prop in observed_props or []:
         market = str(prop.get("market") or "").lower()
@@ -20907,6 +20926,8 @@ def analyze_scorer_tips(fixture, league, scorers, observed_props=None, diag=None
         if player_key and q > quote_by_player.get(player_key, 0):
             quote_by_player[player_key] = q
             quote_source_by_player[player_key] = str(prop.get("_source") or prop.get("source") or "observed")
+            from netrattler_candidate_dispatch import receipt_fields
+            quote_receipt_by_player[player_key] = receipt_fields(prop)
         parts = [x for x in _re.split(r"[^A-Za-zÀ-ÿ0-9]+", player_raw.lower()) if x]
         if parts:
             surname = _pn(parts[-1])
@@ -21006,6 +21027,7 @@ def analyze_scorer_tips(fixture, league, scorers, observed_props=None, diag=None
             "edge": round(prob / 100.0 - 1.0 / quote, 4), "market": "scorer",
             "confidence": 3, "units": 0.75, "valueRating": "VALUE",
             "_no_real_odds": False, "_source": quote_source_by_player.get(quote_key, "observed"),
+            **quote_receipt_by_player.get(quote_key, {}),
         })
     tips.sort(key=lambda x: (x.get("edge", 0), x["probability"]), reverse=True)
     return tips[:3]
@@ -22345,7 +22367,8 @@ def _ntr_extract_player_raw(description, selection=""):
 
 def _ntr_collect_prop(player, team, match_name, league, market, category=None,
                       line=None, odds=0, probability=0, source="unknown",
-                      kickoff="", hit_rate=0, games=0):
+                      kickoff="", hit_rate=0, games=0, source_receipt=None):
+    from netrattler_candidate_dispatch import receipt_fields, RECEIPT_FIELDS
     category = category or _ntr_prop_category(market)
     if category == "other" or not match_name or " vs " not in match_name:
         return
@@ -22364,6 +22387,7 @@ def _ntr_collect_prop(player, team, match_name, league, market, category=None,
         "kickoff": str(kickoff or ""),
         "hit_rate": float(hit_rate or 0),
         "games": int(games or 0),
+        **receipt_fields(source_receipt or {}),
     }
     key = (
         normalize_team_name(row["match"]),
@@ -22384,6 +22408,9 @@ def _ntr_collect_prop(player, team, match_name, league, market, category=None,
                 old["odds"] = row["odds"]
                 old["source"] = row["source"]
                 old["real_observed_line"] = True
+                for _field in RECEIPT_FIELDS:
+                    old.pop(_field,None)
+                old.update(receipt_fields(row))
             old["probability"] = max(float(old.get("probability", 0)), row["probability"])
             old["hit_rate"] = max(float(old.get("hit_rate", 0)), row["hit_rate"])
             old["games"] = max(int(old.get("games", 0)), row["games"])
@@ -23438,6 +23465,9 @@ Antworte NUR JSON:
         f"━━━━━━━━━━━━━━━━━━━━{nl}"
         f"<i>📊 {total} Kandidaten · {len(combos)} Kombis · {source}</i>"
     )
+    if env("NETRATTLER_ORIGINAL_ONLY", "0") == "1":
+        log("ADVANCED_MODEL_BUILDER_DEFERRED: no original observed individual receipt set")
+        return
     send_telegram(header, props_chat)
 
     for i, combo in enumerate(combos, 1):
@@ -24669,7 +24699,7 @@ def run_pinnacle_props_bot(win_start_utc=None, win_end_utc=None, ch_tz=None, top
             probability=p.get("prob", 0),
             source=str(p.get("source") or "pinnacle"),
             kickoff=p.get("starts", ""),
-            games=0,
+            games=0, source_receipt=p,
         )
         if len(_NTR_BUILDER_PROP_POOL) > _before_pool and p.get("_cat") in _REAL_PLAYER_BUILDER_CATS:
             try:
@@ -24831,7 +24861,15 @@ def run_pinnacle_props_bot(win_start_utc=None, win_end_utc=None, ch_tz=None, top
                                 f"━━━━━━━━━━━━━━━━━━\n"
                                 f"💰 @ {_leg_odds} · 0.5u"
                             )
-                            send_telegram(_msg, chat_id=_prop_chat)
+                            if env("NETRATTLER_ORIGINAL_ONLY", "0") == "1":
+                                import netrattler_stats_match_cards as _prop_cards
+                                from netrattler_candidate_dispatch import send_prop
+                                _row={**_leg,"match":match_name,"selection":_leg.get("selection") or _leg_name,"odds":_leg_odds}
+                                _mid=send_prop(_prop_cards,TELEGRAM_TOKEN,_prop_chat,_row,datetime.now(timezone.utc).date(),log)
+                            else:
+                                _mid=send_telegram(_msg, chat_id=_prop_chat)
+                            if not _mid:
+                                continue
                             log(f"   🎯 WM Single Prop: {_leg_name} @ {_leg_odds}")
                     else:
                         _send_stat_insight_fallback(match_name, legs)
@@ -24907,7 +24945,8 @@ def run_pinnacle_props_bot(win_start_utc=None, win_end_utc=None, ch_tz=None, top
                 )
 
                 if prop_chat:
-                    send_telegram(msg, chat_id=prop_chat)
+                    if env("NETRATTLER_ORIGINAL_ONLY", "0") != "1":
+                        send_telegram(msg, chat_id=prop_chat)
                     log(f"   ✅ BTTS Bet Builder: {t1['match']} + {t2['match']} @ {combo_odds}")
                 break  # Pro t1 nur ein bestes Paar
             if len(_btts_sent) >= 3:  # Max 3 Paare
@@ -24948,7 +24987,16 @@ def run_pinnacle_props_bot(win_start_utc=None, win_end_utc=None, ch_tz=None, top
                         f"━━━━━━━━━━━━━━━━━━\n"
                         f"💰 0.5u ✅"
                     )
-                    send_telegram(_msg, chat_id=_value_chat)
+                    if env("NETRATTLER_ORIGINAL_ONLY", "0") == "1":
+                        import netrattler_stats_match_cards as _prop_cards
+                        from netrattler_candidate_dispatch import send_prop
+                        _row={**prop,**value_info,"match":match_key.replace("_vs_"," vs "),"player_name":player,
+                              "selection":value_info["market"]}
+                        _mid=send_prop(_prop_cards,TELEGRAM_TOKEN,_value_chat,_row,datetime.now(timezone.utc).date(),log)
+                    else:
+                        _mid=send_telegram(_msg, chat_id=_value_chat)
+                    if not _mid:
+                        continue
                     _value_sent += 1
                     log(f"   🎯 Value Alert: {player} {value_info['market']} +{value_info['edge_pct']}%")
 
@@ -25085,7 +25133,12 @@ def run_pinnacle_props_bot(win_start_utc=None, win_end_utc=None, ch_tz=None, top
         msg += f"\n🧠 <b>PROP BUILDER READ:</b> {_risk} · Score {_builder_score}/10"
         msg += "\n<i>Player-, Team- und Match-Props werden klein gespielt, wenn die Gesamtquote hoch ist.</i>"
 
+        if env("NETRATTLER_ORIGINAL_ONLY", "0") == "1":
+            log("LEGACY_PINNACLE_BUILDER_DEFERRED: use verified master Builder engine")
+            continue
         _mid = send_telegram(msg, chat_id=prop_chat)
+        if not _mid:
+            continue
         sent += 1
 
         # Supabase speichern für Settlement — deterministische ID (verhindert Duplikate über mehrere Runs)
@@ -28057,7 +28110,7 @@ def main():
             for _r in _sgo_rows:
                 _ntr_collect_prop(_r["player"], _r["team"], _r["match"], _r["league"], _r["market"],
                                   category=_r["category"], line=_r["line"], odds=_r["odds"],
-                                  probability=0, source=_r["source"], kickoff=_r["kickoff"], games=0)
+                                  probability=0, source=_r["source"], kickoff=_r["kickoff"], games=0, source_receipt=_r)
             if _sgo_rows:
                 log(f"   🌎 SportsGameOdds: {len(_sgo_rows)} Spieler-Props (MLS/CL) in den Builder-Pool")
         except Exception as _sgo_exc:
@@ -28291,12 +28344,14 @@ def main():
                 msg = format_combo_telegram_message(combo)
                 if msg:
                     if env("NETRATTLER_ORIGINAL_ONLY", "0") == "1":
-                        log("COMBO_CARD_DEFERRED: no verified production formula image sender", "WARN")
-                        continue
-                    if not _combo_header_sent:
-                        send_telegram(combo_header, combo_chat)
-                        _combo_header_sent = True
-                    _combo_mid = send_telegram(msg, combo_chat)
+                        import netrattler_stats_match_cards as _combo_cards
+                        from netrattler_candidate_dispatch import send_combo
+                        _combo_mid = send_combo(_combo_cards,TELEGRAM_TOKEN,combo_chat,combo,_combo_tip_id,target_date,log)
+                    else:
+                        if not _combo_header_sent:
+                            send_telegram(combo_header, combo_chat)
+                            _combo_header_sent = True
+                        _combo_mid = send_telegram(msg, combo_chat)
                     if _combo_mid is None:
                         log(f"   ⚠️ Combo {n} Telegram nicht zugestellt — nicht speichern", "WARN")
                         continue
@@ -28325,6 +28380,7 @@ def main():
                             "builder_total_legs": n,
                             "builder_legs": [
                                 {
+                                    **{k:t[k] for k in ("fixture_id","quote_id","fixture_provider","home_id","away_id","player_id","quote_observed_at","kickoff") if k in t},
                                     "match": t.get("match", ""),
                                     "market": t.get("market", ""),
                                     "tip": t.get("tip", t.get("selection", "YES")),

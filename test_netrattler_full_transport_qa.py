@@ -238,3 +238,161 @@ def test_last_minute_master_scope_and_pinned_pixels(monkeypatch,tmp_path):
         free.reserve_alert({}, {})
     with pytest.raises(RuntimeError,match="visual_release_required"):
         free.send_alert({}, {})
+
+
+def test_nine_authorized_production_adapters_send_and_edit_exact_receipt(monkeypatch):
+    from datetime import timedelta
+    from netrattler_candidate_production import FAMILIES,send,edit
+    from test_netrattler_five_owner_dynamic_qa import crest
+    from unittest.mock import Mock
+    for family in sorted(FAMILIES):
+        now=FIVE_NOW if family in ("goal","corner","builder","combo") else TEN_NOW
+        if family in ("builder","combo"):
+            row=formula(ticket(family,3,same_game=family=="builder"))
+            for i,leg in enumerate(row["legs"]):
+                leg["quote_id"]="qa-receipt-"+str(i)
+        elif family=="cross_mix":
+            row=formula(_cross_ticket(3))
+        elif family in ("goal","corner"):
+            row=one()
+            row.update(market="GOAL SCORER" if family=="goal" else "CORNERS OVER 9.5",
+                       selection="PLAYER TO SCORE" if family=="goal" else "OVER 9.5")
+        else:
+            row=_for_category(family)
+        row["ticket_id"]="OFFLINE-ONLY-"+family
+        legs=row.get("legs") or [row]
+        for leg in legs:
+            leg.update(bookmaker="Pinnacle",quote_observed=True,price_estimated=False,
+                       home_crest=crest(),away_crest=crest((10,100,230,255)))
+            if family in ("goal","player_props"):
+                leg.update(player_id="p10",player_name="QA Player",
+                     confirmed_starter=True,player_team_id=leg["home_id"],
+                     player_photo_source="OFFLINE-MOCK-ASSET",player_photo=crest((100,200,20,255)))
+            if family in ("late_goals","live_halftime"):
+                leg["live_event_id"]=leg["fixture_id"]
+        evidence={"verified":True,"legs":[dict(fixture_id=l["fixture_id"],quote_id=l["quote_id"],
+                  source="OFFLINE-RESULT-MOCK",status="won") for l in legs]}
+        fake=Mock()
+        fake._send_photo.return_value=12345
+        fake._edit_photo.return_value=True
+        states=[]
+        def reserve(state):
+            if states:
+                return False
+            states.append(state)
+            return True
+        def confirm(state):
+            states[0]=state
+            return True
+        assert send(fake,"OFFLINE","OFFLINE",family,row,reserve=reserve,confirm=confirm,now=now)==12345
+        assert states[0]["message_id"]==12345
+        assert edit(fake,"OFFLINE",states[0],row,evidence)
+        assert fake._edit_photo.call_args.args[2]==12345
+        assert fake._send_photo.call_count==1
+        assert send(fake,"OFFLINE","OFFLINE",family,row,reserve=reserve,confirm=confirm,now=now) is None
+        assert fake._send_photo.call_count==1
+        with pytest.raises(ValueError):
+            edit(fake,"OFFLINE",states[0],dict(row,ticket_id="other"),evidence)
+        with pytest.raises(ValueError):
+            send(fake,"OFFLINE","OFFLINE",family,dict(row,synthetic=True),reserve=reserve,confirm=confirm,now=now)
+        assert fake._edit_photo.call_count==1
+
+
+def test_candidate_existing_db_atomic_reservation_and_receipt(monkeypatch):
+    from netrattler_candidate_dispatch import Ledger,_card_id,ExactTransport
+    from unittest.mock import Mock
+    fake=Mock()
+    fake._sb.return_value=("https://offline.invalid/rest/v1/netrattler_match_cards",{})
+    with pytest.raises(ValueError):
+        Ledger(fake)
+    fake._sb.return_value=("https://offline.invalid/rest/v1/netrattler_match_cards",{"Prefer":"return=minimal"})
+    ledger=Ledger(fake)
+    state={"family":"corner","chat_id":"-123","ticket_id":"one",
+           "original":{"home":"QA Home","away":"QA Away","kickoff":FIVE_NOW.isoformat()}}
+    cid=_card_id(state)
+    def response(rows):
+        return SimpleNamespace(ok=True,json=lambda:rows)
+    with patch("netrattler_candidate_dispatch.requests.post",side_effect=[
+         response([{"card_id":cid,"message_id":0}]),response([])]) as post:
+        assert ledger.reserve(state)
+        assert not ledger.reserve(state)
+        assert post.call_args.kwargs["params"]=={"on_conflict":"card_id"}
+        assert post.call_args.kwargs["json"]["match_key"]==cid
+    with patch("netrattler_candidate_dispatch.requests.patch",return_value=response(
+         [{"card_id":cid,"message_id":99}])) as patcher:
+        assert ledger.confirm(dict(state,message_id=99))
+        assert patcher.call_args.kwargs["params"]["message_id"]=="eq.0"
+    transport=ExactTransport(cards)
+    raw,_,_=render_family("corner")
+    with patch("netrattler_candidate_dispatch.requests.post",return_value=SimpleNamespace(ok=True,
+         json=lambda:{"ok":True,"result":{"message_id":88,"chat":{"id":-999}}})) as post:
+        assert transport._send_photo("OFFLINE","-123","",raw,print) is None
+        assert post.call_count==1
+    with patch("netrattler_candidate_dispatch.requests.post",side_effect=__import__("requests").Timeout) as post:
+        assert transport._send_photo("OFFLINE","-123","",raw,print) is None
+        assert post.call_count==1
+
+
+def test_candidate_settlement_exact_provider_grade_and_receipt():
+    from netrattler_candidate_dispatch import settlement_evidence
+    state={"original":{"fixture_id":"123","quote_id":"Q-1"}}
+    settled={"tip_payload":{"fixture_id":"123","quote_id":"Q-1"},
+             "raw":{"strict_match":True,"result_source":"provider","result_fixture_id":"123"},
+             "status":"win"}
+    assert settlement_evidence(state,settled)=={"verified":True,"legs":[
+        {"fixture_id":"123","quote_id":"Q-1","source":"provider","status":"won"}]}
+    for bad in (
+         {**settled,"raw":{**settled["raw"],"result_fixture_id":"456"}},
+         {**settled,"tip_payload":{"fixture_id":"123","quote_id":"Q-2"}},
+         {**settled,"raw":{**settled["raw"],"result_source":""}},
+         {**settled,"status":"pending"},
+         {**settled,"status":"void","reason":"missing data"}):
+        with pytest.raises(ValueError):
+            settlement_evidence(state,bad)
+
+
+def test_builder_normalization_retains_explicit_starting_xi_and_photo_source():
+    from netrattler_builder_engine import normalize_prop
+    row=dict(player="QA Player",team="QA Home",match="QA Home vs QA Away",
+         market="Shots 2+",category="shots",odds=1.8,source="Pinnacle",
+         probability=0.8,confirmed_starter=True,player_photo_source="provider-image-id")
+    leg=normalize_prop(row)
+    assert leg.confirmed_starter is True and leg.player_photo_source=="provider-image-id"
+    leg=normalize_prop(dict(row,confirmed_starter="true",player_photo_source=""))
+    assert leg.confirmed_starter is None and not leg.player_photo_source
+
+
+def test_combo_preserves_source_receipts_and_never_fakes_combined_price():
+    from netrattler_candidate_dispatch import combo_record,receipt_fields
+    from test_netrattler_five_owner_dynamic_qa import crest
+    from unittest.mock import Mock
+    def img(team):
+        buf=BytesIO()
+        crest((20,80,230,255) if "AWAY" in team else (230,20,80,255)).save(buf,"PNG")
+        return buf.getvalue()
+    fake=Mock()
+    fake._badge_bytes.side_effect=img
+    rows=[]
+    for i in range(3):
+        row=one("provider-"+str(i),i+1)
+        row.update(match=row["home"]+" vs "+row["away"],bookmaker="Pinnacle",
+                   market="btts",selection="YES")
+        rows.append(row)
+    combo={"tips":rows,"total_odds":9999}
+    result=combo_record(fake,combo,"original-combo",FIVE_NOW.date().isoformat(),now=FIVE_NOW)
+    assert result["formula_only"] is True and "combined_odds" not in result
+    assert [r["quote_id"] for r in result["legs"]]==[r["quote_id"] for r in rows]
+    assert receipt_fields(rows[0])["quote_observed"] is True
+    bad=dict(combo,tips=[dict(rows[0],quote_id=""),*rows[1:]])
+    with pytest.raises(ValueError):
+        combo_record(fake,bad,"original-combo",FIVE_NOW.date().isoformat(),now=FIVE_NOW)
+
+
+def test_legacy_model_live_tip_cannot_send_without_exact_observed_quote():
+    from netrattler_candidate_dispatch import send_live
+    from unittest.mock import Mock
+    fake=Mock()
+    match={"match_id":"one","minute":75}
+    tip={"match":"QA Home vs QA Away","score":"1:1","fair_odds":1.4}
+    assert send_live(fake,"OFFLINE","-1",match,tip,"late_goals") is None
+    fake._send_photo.assert_not_called()

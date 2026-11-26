@@ -120,8 +120,30 @@ def send_builder_card(token,chat,pick,log=print):
     import os
     import netrattler_stats_match_cards as cards
     if os.getenv("NETRATTLER_ORIGINAL_ONLY", "0") == "1":
-        log("Builder-Premiumbild gesperrt: clean_owner_master_not_approved")
-        return None
+        from netrattler_candidate_dispatch import dispatch
+        from netrattler_premium_live_bridge import builder_candidate_record
+        from netrattler_visual_gate import validate_builder
+        try:
+            checked,reasons=validate_builder(pick)
+            if reasons:
+                log("BUILDER_CARD_DEFERRED: "+",".join(reasons))
+                return None
+            record=builder_candidate_record(checked,crest_provider=cards._badge_bytes,
+                                           player_provider=cards._player_photo)
+            # Preserve only source-supplied XI and photo evidence. Unknown is not true.
+            for out,leg in zip(record["legs"],checked.legs):
+                out["confirmed_starter"]=getattr(leg,"confirmed_starter",None)
+                out["player_photo_source"]=getattr(leg,"player_photo_source","")
+            mid=dispatch(cards,token,chat,record["category"],record,log)
+            if mid:
+                # The image uses a calculated combination, not an accepted
+                # bookmaker ticket. Keep this provenance on the original pick.
+                pick.estimated_odds=True
+                pick.formula_only=True
+            return mid
+        except (ValueError,RuntimeError,OSError,TypeError,KeyError) as exc:
+            log("BUILDER_CARD_DEFERRED: "+str(exc)[:150])
+            return None
     if not token or not chat:return None
     from netrattler_visual_gate import validate_builder
     checked, reasons = validate_builder(pick)

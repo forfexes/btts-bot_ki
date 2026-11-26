@@ -38,7 +38,7 @@ def _line_to_n_plus(over_under: Any) -> Optional[float]:
         return None
 
 
-def parse_event(ev: Dict[str, Any], league_label: str) -> List[Dict[str, Any]]:
+def parse_event(ev: Dict[str, Any], league_label: str, *, observed_at=None) -> List[Dict[str, Any]]:
     """Ein Event -> Zeilen {player, team, match, league, category, line, odds, source, kickoff}."""
     teams = ev.get("teams") or {}
     home = ((teams.get("home") or {}).get("names") or {}).get("long") or ""
@@ -74,7 +74,22 @@ def parse_event(ev: Dict[str, Any], league_label: str) -> List[Dict[str, Any]]:
                 continue
             key = (pid, cat, line)
             if key not in best or dec > best[key]["odds"]:
-                best[key] = {"player": name, "team": team, "match": match, "league": league_label, "category": cat,
+                evidence={}
+                # eventID and odds-map key are actual provider identities.
+                # A timestamp is the observation of a successful live HTTP
+                # response, not a fabricated historical bookmaker update.
+                event_id=ev.get("eventID")
+                home_id=(teams.get("home") or {}).get("teamID")
+                away_id=(teams.get("away") or {}).get("teamID")
+                if (event_id and oid and book and pid and home_id and away_id and team_id
+                        and team and observed_at and bd.get("available") is True):
+                    evidence={"fixture_id":str(event_id),"fixture_provider":"sportsgameodds",
+                              "home_id":str(home_id),"away_id":str(away_id),"player_id":str(pid),
+                              "player_team_id":str(team_id),
+                              "quote_id":str(event_id)+":"+str(oid)+":"+str(book),
+                              "quote_observed_at":observed_at,"quote_observed":True,
+                              "odds_observed":True,"price_estimated":False,"bookmaker":f"sgo_{book}"}
+                best[key] = {**evidence,"player": name, "team": team, "match": match, "league": league_label, "category": cat,
                              "line": line, "odds": dec, "source": f"sgo_{book}", "kickoff": kickoff,
                              "market": f"{stat} {'1+' if bt == 'yn' else 'Over ' + str(bd.get('overUnder'))}"}
     return list(best.values())
@@ -95,7 +110,7 @@ def fetch_rows(hours_ahead: int = 36, limit: int = 10) -> List[Dict[str, Any]]:
             if not r.ok:
                 continue
             for ev in (r.json().get("data") or []):
-                rows.extend(parse_event(ev, label))
+                rows.extend(parse_event(ev, label, observed_at=datetime.now(timezone.utc).isoformat()))
         except Exception:
             continue
     return rows

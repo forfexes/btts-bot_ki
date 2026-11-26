@@ -164,6 +164,8 @@ class PropLeg:
     quote_id: str = ""
     quote_observed_at: str = ""
     odds_observed: Optional[bool] = None
+    confirmed_starter: Optional[bool] = None
+    player_photo_source: str = ""
 
     def key(self) -> Tuple[str, str, str, float]:
         return (norm(self.player), norm(self.match), self.category, round(self.line, 2))
@@ -218,7 +220,7 @@ class BuilderPick:
             "estimated_odds": self.estimated_odds,
             "leg_count": self.leg_count,
             "legs": [asdict(x) for x in self.legs],
-            "source": "NETRATTLER_BUILDER_ENGINE",
+            "source": "calculated_builder_leg_product" if getattr(self,"formula_only",False) else "NETRATTLER_BUILDER_ENGINE",
         }
 
 
@@ -475,6 +477,8 @@ def normalize_prop(row: Dict[str, Any]) -> Optional[PropLeg]:
         quote_id=str(row.get("quote_id") or ""),
         quote_observed_at=str(row.get("quote_observed_at") or ""),
         odds_observed=(True if row.get("odds_observed") is True or row.get("quote_observed") is True else None),
+        confirmed_starter=row.get("confirmed_starter") if type(row.get("confirmed_starter")) is bool else None,
+        player_photo_source=str(row.get("player_photo_source") or ""),
     )
 
 

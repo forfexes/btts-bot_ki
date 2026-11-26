@@ -1769,8 +1769,10 @@ def send_scorer_card(token, chat, tip, target_date, log=print, return_id=False):
     # Legacy scorer cards are not blank, pixel-approved owner masters yet.
     # The regular match-card route and this direct sender share the same gate.
     if os.getenv("NETRATTLER_ORIGINAL_ONLY", "0") == "1":
-        log("Goal-Hunter-Premiumbild gesperrt: clean_owner_master_not_approved")
-        return False
+        import sys
+        from netrattler_candidate_dispatch import send_single
+        mid=send_single(sys.modules[__name__],token,chat,"goal",tip,target_date,log)
+        return mid if return_id else bool(mid)
     if os.getenv("ENABLE_SCORER_CARDS", "true").lower() not in ("1", "true", "yes", "on"):
         return False
     if not token or not chat or not _valid(tip) or not tip.get("player"):
