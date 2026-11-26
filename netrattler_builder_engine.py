@@ -118,7 +118,18 @@ def weak_leg(leg: "PropLeg") -> bool:
     if hr is None:
         # A real bookmaker quote alone does not establish recent player form.
         return leg.category in PLAYER_CATEGORIES - TEAM_CATEGORIES
-    return hr < as_float(os.getenv("NETRATTLER_BUILDER_MIN_HIT", "0.70"), 0.70)
+    minimum = as_float(os.getenv("NETRATTLER_BUILDER_MIN_HIT", "0.70"), 0.70)
+    if hr < minimum:
+        return True
+    # L15 guards against short-lived form spikes when 15 real games exist.
+    # With 5-14 observed games retain the existing L10 behavior.
+    series = LEG_HISTORY.get((norm(leg.player), leg.category)) or []
+    if len(series) >= 15:
+        l15_min = as_float(os.getenv("NETRATTLER_BUILDER_MIN_L15_HIT", "0.60"), 0.60)
+        l15 = leg_hit_rate(leg, n=15)
+        if l15 is None or l15 < l15_min:
+            return True
+    return False
 
 
 def history_text(leg: "PropLeg", n: int = 10) -> str:

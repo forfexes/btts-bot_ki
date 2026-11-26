@@ -147,7 +147,10 @@ def build_report(
         if key in EXPECTED_MARKETS:
             count = max(0, int(value or 0))
             before[key] = max(before.get(key, 0), count)
-            after[key] = max(after.get(key, 0), count)
+            # External counts are candidate-only unless the caller supplies
+            # independently measured post-filter lists. Never fabricate sent counts.
+            if after_filter is not None and key in after_filter:
+                after[key] = len(after_filter[key] or [])
     props = [dict(row) for row in (prop_rows or []) if isinstance(row, Mapping)]
     unknown = discover_unknown_markets(props)
     problems: Dict[str, str] = {}
@@ -161,7 +164,7 @@ def build_report(
             elif int(stat.get("below_min", 0) or 0) > 0:
                 problems[market] = "edge_or_probability_filter"
             else:
-                problems[market] = "filtered_out"
+                problems[market] = "post_filter_unreported" if after_filter is None or market not in after_filter else "filtered_out"
     return {
         "version": "V37",
         "run_id": run_id or _hash(_utc())[:24],
