@@ -422,8 +422,12 @@ def builder_candidate_record(pick, *, crest_provider, player_provider, now=None)
         label = builder_leg_label(leg)
         if not label or "Linie prüfen" in label:
             raise ValueError("Missing verified selection threshold")
+        expected_team_id=data["home_id"] if same_club(team,home) else data["away_id"]
+        supplied_team_id=str(getattr(leg,"player_team_id","") or "").strip()
+        if supplied_team_id and supplied_team_id!=expected_team_id:
+            raise ValueError("Original player-team ID contradicts fixture side")
         data.update(home=home,away=away,player_name=player,player_team=team,
-                    player_team_id=data["home_id"] if same_club(team,home) else data["away_id"],
+                    player_team_id=supplied_team_id or expected_team_id,
                     market=str(getattr(leg,"market","") or "").strip(),selection=label,
                     bookmaker=source,bookmaker_odds=getattr(leg,"odds",None),
                     kickoff=kickoff,quote_observed_at=seen,quote_observed=True,price_estimated=False)
