@@ -118,6 +118,21 @@ def select_batch(items, cap, *, rotate=False, anchor=20, ordinal=None):
                    "priority_count": len(anchors), "rotation_capacity": width}
 
 
+def fallback_club(person):
+    """Prefer an unambiguous tip club over conflicting historical affiliations.
+
+    This is a renderer probe, not a certification of current player identity.
+    Never choose arbitrarily among multiple clubs in the tip data.
+    """
+    priority = {norm(t): t for t in person.get("tip_teams", ()) if norm(t)}
+    if len(priority) == 1:
+        return next(iter(priority.values()))
+    if priority:
+        return None
+    clubs = {norm(t): t for t in person.get("teams", ()) if norm(t)}
+    return next(iter(clubs.values())) if len(clubs) == 1 else None
+
+
 def main():
     ap = argparse.ArgumentParser()
     ap.add_argument("--bot", choices=("netrattler", "prop"), required=True)
@@ -150,11 +165,13 @@ def main():
         k = (str(sport or "").upper(), n)
         if k not in people:
             people[k] = {"name": raw, "sport": str(sport or "").upper(),
-                         "teams": set(), "api_football_ids": set(), "espn_ids": set(), "count": 0}
+                         "teams": set(), "tip_teams": set(), "api_football_ids": set(), "espn_ids": set(), "count": 0}
         p = people[k]
         p["count"] += 1
         if team and norm(team):
             p["teams"].add(str(team).strip())
+            if boost:
+                p["tip_teams"].add(str(team).strip())
         if provider_id is not None and str(provider_id).isdigit() and int(provider_id) > 0:
             if provider_kind == "espn":
                 p["espn_ids"].add(int(provider_id))
@@ -354,21 +371,24 @@ def main():
     report["production_photo_fallback_missing"] = 0
     report["production_photo_fallback_skipped_ambiguous_team"] = 0
     report["production_photo_candidate_samples"] = []
+    report["production_photo_fallback_not_probed_budget"] = 0
     for _, p in photo_batch:
         ok, evidence = photo_test(p)
         report["photo_checked"] += 1
         report["verified_photos" if ok else "missing_or_unverified_photos"] += 1
         if not ok and len(report["missing_photo_samples"]) < 50:
             report["missing_photo_samples"].append({"name": p["name"], "sport": p["sport"], "status": evidence})
-        if args.bot == "netrattler" and not ok and report["production_photo_fallback_checked"] < full_chain_max:
-            # Don't guess the currently relevant club when historical providers disagree.
-            clubs = {norm(t): t for t in p["teams"] if norm(t)}
-            if len(clubs) != 1:
+        if args.bot == "netrattler" and not ok:
+            if report["production_photo_fallback_checked"] >= full_chain_max:
+                report["production_photo_fallback_not_probed_budget"] += 1
+                continue
+            club_name = fallback_club(p)
+            if club_name is None:
                 report["production_photo_fallback_skipped_ambiguous_team"] += 1
                 continue
             report["production_photo_fallback_checked"] += 1
             try:
-                payload = card._player_photo(p["name"], next(iter(clubs.values())))
+                payload = card._player_photo(p["name"], club_name)
                 candidate_ok = False
                 if payload:
                     with Image.open(io.BytesIO(payload)) as im:
