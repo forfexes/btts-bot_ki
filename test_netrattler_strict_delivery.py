@@ -92,3 +92,15 @@ def test_equivalent_timezone_offsets_do_not_conflict():
          "commence_time":"2099-11-25T18:00:00Z",
          "kickoff_utc":"2099-11-25T19:00:00+01:00"}
     assert send_regular(cards,"QA","QA","over25",tip,"2099-11-25")==123
+
+
+def test_wrong_fixture_day_blocks_before_render():
+    cards=Mock()
+    tip={"match":"QA HOME vs QA AWAY","oddsYes":2.56,"bookmaker":"Pinnacle",
+         "commence_time":"2099-11-25T23:30:00Z"}
+    assert send_regular(cards,"QA","QA","over25",tip,"2099-11-25") is None
+    cards.render_card.assert_not_called()
+    cards._send_photo.assert_not_called()
+    cards.render_card.return_value=_master_png()
+    cards._send_photo.return_value=123
+    assert send_regular(cards,"QA","QA","over25",tip,"2099-11-26")==123

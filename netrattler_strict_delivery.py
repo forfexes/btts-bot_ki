@@ -70,6 +70,12 @@ def send_regular(cards,token,chat,market,tip,target_date,log=print):
         if kickoff.astimezone(timezone.utc) <= datetime.now(timezone.utc):
             log("ORIGINAL_CARD_DEFERRED: prematch fixture already started")
             return None
+        from zoneinfo import ZoneInfo
+        # target_date is the publication's intended Swiss fixture day. Never
+        # send a valid but wrong-day fixture from a stale candidate batch.
+        if kickoff.astimezone(ZoneInfo("Europe/Zurich")).date().isoformat() != str(target_date)[:10]:
+            log("ORIGINAL_CARD_DEFERRED: fixture day differs from target date")
+            return None
         row["commence_time"]=stamp
         row["card_template_version"]=VERSION
         entries=[(market,row)]

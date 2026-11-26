@@ -48,9 +48,12 @@ def _sample():
             "bookmaker":"QA_TEST_SOURCE","oddsYes":1.8,"odds_observed":True,
             "probability":0.643,"commence_time":"2026-11-25T18:00:00Z"}
 
-def _crest_bytes(_):
+def _crest_bytes(team):
     out=io.BytesIO()
-    fixture_crest().save(out,format="PNG")
+    im=fixture_crest()
+    if team == "QA AWAY":
+        ImageDraw.Draw(im).rectangle((38,38,62,62),fill=(200,40,80,255))
+    im.save(out,format="PNG")
     return out.getvalue()
 
 @pytest.mark.parametrize("market",sorted(stadium.REGULAR))
@@ -96,3 +99,13 @@ def test_strict_actual_master_refuses_bad_payload(change,monkeypatch):
     monkeypatch.setenv("NETRATTLER_BLOCK_OVERPAINTED_MASTERS","1")
     with pytest.raises(ValueError):
         adapter.render([("btts",{**_sample(),**change})],"2026-11-25",crest_provider=_crest_bytes)
+
+
+def test_strict_adapter_rejects_identical_crests_and_club_aliases(monkeypatch):
+    monkeypatch.setenv("NETRATTLER_BLOCK_OVERPAINTED_MASTERS","1")
+    item={**_sample(),"selection":"YES"}
+    with pytest.raises(ValueError,match="Duplicate visible club crest"):
+        adapter.render([("btts",item)],"2026-11-25",crest_provider=lambda _: _crest_bytes("QA HOME"))
+    item["match"]="Bayern Munich vs Bayern München"
+    with pytest.raises(ValueError,match="Duplicate club identity"):
+        adapter.render([("btts",item)],"2026-11-25",crest_provider=lambda _: pytest.fail("Duplicate club fetched"))
