@@ -135,7 +135,7 @@ def _market_guard(category: str, record: Mapping[str, Any]) -> bool:
 
 
 def render_qa_card(plate_png: bytes, metadata: Mapping[str, Any],
-                   record: Mapping[str, Any], *, now: datetime | None = None) -> bytes:
+                   record: Mapping[str, Any], *, now: datetime | None = None, settlement=None) -> bytes:
     """Render one strictly labeled SANDBOX PNG; never produce a publishable tip.
 
     The record needs verified fixture/team IDs, observed bookmaker quote ID,
@@ -244,7 +244,8 @@ def render_qa_card(plate_png: bytes, metadata: Mapping[str, Any],
     selection = f'{record["selection"]}  @{price:.2f}'
     _text(draw, selection, (682, 1169), max_width=465,
           max_height=50, start_size=33, color="#FFE56C")
-    _text(draw, "SANDBOX · KEIN TIPP", (W//2, 1268), max_width=395,
+    from netrattler_candidate_settlement import footer
+    _text(draw, footer(record, settlement), (W//2, 1268), max_width=395,
           max_height=45, start_size=25, color="#FCFCFF")
     output = BytesIO()
     canvas.convert("RGB").save(output, "PNG", optimize=True)
@@ -252,7 +253,7 @@ def render_qa_card(plate_png: bytes, metadata: Mapping[str, Any],
 
 
 
-def render_cross_mix_qa(record: Mapping[str, Any], *, now: datetime | None = None) -> bytes:
+def render_cross_mix_qa(record: Mapping[str, Any], *, now: datetime | None = None, settlement=None) -> bytes:
     """Render all 2-10 Cross/Mix legs onto its owner-derived clean reference.
 
     This is strictly watermarked OFFLINE QA, never a production Telegram
@@ -273,9 +274,10 @@ def render_cross_mix_qa(record: Mapping[str, Any], *, now: datetime | None = Non
             raise ValueError("Missing clean Cross/Mix QA plate")
         canvas = picture.convert("RGBA")
     canvas, extra = _multi("cross_mix", canvas, record,
-                           _stamp(now or datetime.now(timezone.utc)))
+                           _stamp(now or datetime.now(timezone.utc)), settlement=settlement)
     draw = ImageDraw.Draw(canvas)
-    _text(draw, "SANDBOX · KEIN TIPP", (W//2, 1268+extra),
+    from netrattler_candidate_settlement import footer
+    _text(draw, footer(record, settlement), (W//2, 1268+extra),
           max_width=398, max_height=43, start_size=25, color="#FCFCFF")
     output = BytesIO()
     canvas.convert("RGB").save(output, "PNG", optimize=True)

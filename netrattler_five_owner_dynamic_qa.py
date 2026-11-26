@@ -217,8 +217,10 @@ def _multi_canvas(base, count):
     return expanded, extra
 
 
-def _multi(category, base, record, now):
+def _multi(category, base, record, now, *, settlement=None):
     legs, total = _ticket(category, record, now)
+    from netrattler_candidate_settlement import grades, LABELS, COLORS
+    states = grades(record, settlement)
     canvas, extra = _multi_canvas(base, len(legs))
     draw = ImageDraw.Draw(canvas)
     fixture_count = len({str(leg["fixture_id"]) for leg in legs})
@@ -252,8 +254,12 @@ def _multi(category, base, record, now):
         _text(draw, leg_time, (540,y+84), max_width=410,
               max_height=23, start_size=17, color="#AEC8D5")
         _text(draw, f'@{_price(leg["bookmaker_odds"]):.2f}',
-              (938,y+49), max_width=96, max_height=37, start_size=20,
+              (938,y+36 if states else y+49), max_width=96, max_height=37, start_size=20,
               color="#40F58A")
+        if states:
+            state=states[idx-1]
+            _text(draw, LABELS[state], (938,y+74), max_width=96,
+                  max_height=24, start_size=14, color=COLORS[state])
     price_text = f'BERECHNET {total:.2f}' if record.get('formula_only') is True else f'@{total:.2f}'
     _text(draw, f'{category.upper()} {len(legs)} · {price_text}',
           (685, 1169+extra), max_width=470, max_height=45,
@@ -261,18 +267,19 @@ def _multi(category, base, record, now):
     return canvas, extra
 
 
-def render_owner_reference_qa(category, record, *, now=None):
+def render_owner_reference_qa(category, record, *, now=None, settlement=None):
     """Return a watermarked synthetic-data preview only, never an approved tip."""
     if not isinstance(record, Mapping):
         raise ValueError("Strict verified fixture or ticket mapping required")
     now = _stamp(now or datetime.now(timezone.utc))
     image, meta = _open_source(category)
     if category in ("builder", "combo"):
-        image, extra = _multi(category, image, record, now)
+        image, extra = _multi(category, image, record, now, settlement=settlement)
     else:
         image, extra = _single(category, image, meta, record, now)
     d = ImageDraw.Draw(image)
-    _text(d, "SANDBOX · KEIN TIPP", (W//2, 1268+extra),
+    from netrattler_candidate_settlement import footer
+    _text(d, footer(record, settlement), (W//2, 1268+extra),
           max_width=398, max_height=43, start_size=25, color="#FFFFFF")
     buffer = BytesIO()
     image.convert("RGB").save(buffer, "PNG", optimize=True)

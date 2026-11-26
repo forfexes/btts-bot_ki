@@ -130,6 +130,12 @@ jobs:
               (out/p.name).write_bytes(padded)
           print('Current clean-card Telegram safe margin verified:',len(files))
           PY
+      - name: Actual original and clean-candidate PNG to Telegram transport (all 16, mocked HTTP)
+        env:
+          NETRATTLER_ORIGINAL_ONLY: '1'
+          NETRATTLER_BLOCK_OVERPAINTED_MASTERS: '1'
+          NETRATTLER_FULL_TRANSPORT_QA: output/full-transport-qa
+        run: python -m pytest -q test_netrattler_full_transport_qa.py
       - uses: actions/upload-artifact@v4
         if: always()
         with:
@@ -142,6 +148,7 @@ jobs:
             output/ten-clean-dynamic/*.png
             output/clean-master-inventory.json
             output/last-minute-clean/*.png
+            output/full-transport-qa/*
           retention-days: 7
           if-no-files-found: warn
   telegram-sandbox:
