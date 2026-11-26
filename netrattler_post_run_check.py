@@ -36,7 +36,10 @@ def coverage_warnings(log_text):
     # fallback) are a data gap as well, not a delivery failure.
     quality_stops = len(re.findall(r'Builder-Karte Qualit[a\u00e4]tsstopp: ', log_text))
     send_failed = len(re.findall(r'MASTER BUILDER send failed/no message_id', log_text))
-    gated_failures = send_failed if (send_failed and quality_stops >= send_failed) else 0
+    # Builders held back by the fail-closed visual gate (unverified photo/crest/kickoff) are
+    # intentional withholds, not delivery failures.
+    deferred = len(re.findall(r'BUILDER_CARD_DEFERRED: ', log_text))
+    gated_failures = send_failed if (send_failed and quality_stops + deferred >= send_failed) else 0
     mixed_exhausted = count_generated > 0 and (limit_hits + len(duplicate_ids) + gated_failures) >= count_generated
     all_already_delivered = (count_generated > 0 and len(duplicate_ids) >= count_generated) or limit_exhausted or mixed_exhausted
     # Model builders are an explicitly supported style in the same group.

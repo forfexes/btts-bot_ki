@@ -213,3 +213,15 @@ class PostRunTests(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class DeferredBuilderGateTests(unittest.TestCase):
+    def test_gate_deferred_builders_are_not_a_zero_builder_alert(self):
+        import netrattler_post_run_check as m
+        log = ("MASTER BUILDER normalized=129 · matches=8 · same-match≥2=7 · generated=2\n"
+               "BUILDER_CARD_DEFERRED: missing_verified_photo\n"
+               "MASTER BUILDER send failed/no message_id: A\n"
+               "BUILDER_CARD_DEFERRED: missing_confirmed_kickoff\n"
+               "MASTER BUILDER send failed/no message_id: B\n"
+               "Builder Engine: 0 Builder gesendet\n")
+        self.assertEqual(m.coverage_warnings(log), [])
