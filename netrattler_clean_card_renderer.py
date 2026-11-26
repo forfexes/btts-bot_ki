@@ -222,7 +222,7 @@ def render_qa_card(plate_png: bytes, metadata: Mapping[str, Any],
     _text(draw, str(record["away"]), (872, 564),
           max_width=250, max_height=44, start_size=24)
     if production and live:
-        _text(draw, f\'{record["match_minute"]}′ · {record["current_score"]}\', (W//2, 523),
+        _text(draw, f'{record["match_minute"]}′ · {record["current_score"]}', (W//2, 523),
               max_width=300, max_height=30, start_size=24, color="#FFE56C")
     stats = record.get("stats") or {}
     if not isinstance(stats, Mapping):
