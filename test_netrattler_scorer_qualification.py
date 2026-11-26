@@ -43,13 +43,12 @@ def analyze(scorers, props):
                                          'League',scorers,props)
 
 
-def test_real_analysis_allows_configured_26_percent_candidate():
+def test_real_analysis_rejects_candidate_below_26_after_market_shrink():
     scorers=[{'name':'Player Alpha','team':'Home','team_id':1,'goals_per_game':0.31}]
     props=[{'player':'Player Alpha','market':'Anytime Goalscorer','odds':4.0,
             'home':'Home','away':'Away','source':'kambi_ub'}]
     tips=analyze(scorers,props)
-    assert len(tips)==1
-    assert 24<=tips[0]['probability']<=26  # nach Marktkorrektur
+    assert tips == []  # final probability falls below configured minimum
 
 
 def test_invalid_top_three_do_not_crowd_out_valid_scorer():
@@ -59,3 +58,4 @@ def test_invalid_top_three_do_not_crowd_out_valid_scorer():
             'home':'Home','away':'Away','source':'kambi_ub'} for i,n in enumerate(names)]
     tips=analyze(scorers,props)
     assert [t['player'] for t in tips]==['Player Delta']
+    assert tips[0]['probability'] >= 26

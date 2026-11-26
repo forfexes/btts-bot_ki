@@ -8107,7 +8107,13 @@ def send_top_tips(tips_by_market, target_date):
             if best_bookie and best_odds:
                 msg += f"\n🏆 Empfehlung: <b>{best_bookie}</b> · Quote {best_odds}"
 
-            msg_id = send_telegram(msg, target_chat)
+            if env("NETRATTLER_ORIGINAL_ONLY", "0") == "1":
+                from netrattler_strict_delivery import send_regular
+                import netrattler_stats_match_cards as _cards
+                msg_id = send_regular(_cards, TELEGRAM_TOKEN, target_chat, market_id, r,
+                                      target_date, log)
+            else:
+                msg_id = send_telegram(msg, target_chat)
             if msg_id is None:
                 log(f"   ⚠️ Telegram nicht zugestellt — Tipp bleibt ungesendet: {match_name} [{market_id}]", "WARN")
                 continue
@@ -18028,7 +18034,13 @@ def send_top_tips(tips_by_market, target_date):
             if best_bookie and best_odds:
                 msg += f"\n🏆 Empfehlung: <b>{best_bookie}</b> · Quote {best_odds}"
 
-            msg_id = send_telegram(msg, target_chat)
+            if env("NETRATTLER_ORIGINAL_ONLY", "0") == "1":
+                from netrattler_strict_delivery import send_regular
+                import netrattler_stats_match_cards as _cards
+                msg_id = send_regular(_cards, TELEGRAM_TOKEN, target_chat, market_id, r,
+                                      target_date, log)
+            else:
+                msg_id = send_telegram(msg, target_chat)
             if msg_id is None:
                 log(f"   ⚠️ Telegram nicht zugestellt — Tipp bleibt ungesendet: {match_name} [{market_id}]", "WARN")
                 continue
@@ -20879,11 +20891,11 @@ def analyze_scorer_tips(fixture, league, scorers, observed_props=None, diag=None
             continue
         # Exact fixture check avoids player quotes from another match in same league.
         ph, pa = str(prop.get("home") or ""), str(prop.get("away") or "")
-        if ph and pa:
-            direct = _team_match(ph, fixture_home_key) and _team_match(pa, fixture_away_key)
-            reverse = _team_match(ph, fixture_away_key) and _team_match(pa, fixture_home_key)
-            if not (direct or reverse):
-                continue
+        from netrattler_visual_gate import club_same
+        if not ph or not pa or not ((club_same(ph, fixture.get("home")) and club_same(pa, fixture.get("away")))
+                                    or (club_same(ph, fixture.get("away")) and club_same(pa, fixture.get("home")))):
+            _d("an_drop_unverified_quote_fixture")
+            continue
         try:
             q = float(prop.get("odds") or 0)
         except Exception:
@@ -20927,6 +20939,10 @@ def analyze_scorer_tips(fixture, league, scorers, observed_props=None, diag=None
             )
         if not is_playing:
             continue
+        from netrattler_visual_gate import club_same
+        if sum(club_same(scorer.get("team"), side) for side in (fixture.get("home"), fixture.get("away"))) != 1:
+            _d("an_drop_unverified_player_team")
+            continue
         _d("an_playing")
         # Selection must use observed recent scoring form, not season goals/game.
         from netrattler_player_form import recent_form as _recent_player_form
@@ -20956,12 +20972,8 @@ def analyze_scorer_tips(fixture, league, scorers, observed_props=None, diag=None
             pass
         quote_key = scorer_key if scorer_key in quote_by_player else ""
         if not quote_key:
-            scorer_parts = [x for x in _re.split(r"[^A-Za-zÀ-ÿ0-9]+", str(scorer_name).lower()) if x]
-            surname = _pn(scorer_parts[-1]) if scorer_parts else ""
-            matches = quote_surname_index.get(surname, []) if len(surname) >= 4 else []
-            unique_keys = list(dict.fromkeys(k for k, _ in matches if k))
-            if len(unique_keys) == 1:
-                quote_key = unique_keys[0]
+            _d("an_drop_no_exact_player_quote")
+            continue
         quote = float(quote_by_player.get(quote_key, 0) or 0)
         if quote <= 1:
             _d("an_drop_no_quote")
@@ -20977,6 +20989,10 @@ def analyze_scorer_tips(fixture, league, scorers, observed_props=None, diag=None
         _shr = float(os.getenv("NETRATTLER_SCORER_MARKET_SHRINK", "0.5"))
         _mkt_p = min(0.95, 0.93 / quote) * 100.0
         prob = max(1, round((1 - _shr) * prob + _shr * _mkt_p))
+        accepted, reason = scorer_qualifies(quote, prob, quote_source_by_player.get(quote_key))
+        if not accepted:
+            _d("an_drop_post_shrink_" + reason)
+            continue
         _d("an_final")
         tips.append({
             "match": f"{fixture.get('home','')} vs {fixture.get('away','')}", "league": league,
@@ -21483,9 +21499,9 @@ def run_corners_and_scorer_bots(target_date, active_leagues, odds_data_cache, fi
                 _cmid = send_corner_card(TELEGRAM_TOKEN, group_corners, tip, target_date, log=log)
             except Exception:
                 _cmid = None
-            if not _cmid:
+            if not _cmid and env("NETRATTLER_ORIGINAL_ONLY", "0") != "1":
                 _cmid = send_telegram(_cmsg, group_corners)
-            if _cmid is None:
+            if not _cmid:
                 log(f"   ⚠️ Corner Telegram nicht zugestellt — nicht als gesendet markieren: {tip.get('match','?')}", "WARN")
                 continue
             mark_tip_sent(tip.get("match",""), "corners", target_date)
@@ -21517,8 +21533,10 @@ def run_corners_and_scorer_bots(target_date, active_leagues, odds_data_cache, fi
                 _clean = lambda x: re.sub(r"[^a-z0-9 ]", "", _ud.normalize("NFKD", str(x or "").lower()).encode("ascii", "ignore").decode())
                 _team = _clean(_t.get("team", ""))
                 _m = _clean(_t.get("match", ""))
-                if _team and _team[:5] not in _m:
-                    return False, "Team nicht im Spiel"
+                from netrattler_strict_delivery import scorer_eligible
+                _ok, _reason = scorer_eligible(_t)
+                if not _ok:
+                    return False, _reason
                 _src = str(_t.get("_source") or "").strip().lower()
                 if _t.get("_no_real_odds") or _src in ("", "observed", "estimated", "model"):
                     return False, "keine Bookmaker-Quelle"
@@ -21562,9 +21580,9 @@ def run_corners_and_scorer_bots(target_date, active_leagues, odds_data_cache, fi
                 _smid = _nsc.send_scorer_card(TELEGRAM_TOKEN, group_late, tip, target_date, log=log, return_id=True)
             except Exception as _sce:
                 log(f"   Scorer-Card optional übersprungen: {type(_sce).__name__}")
+            if not _smid and env("NETRATTLER_ORIGINAL_ONLY", "0") != "1":
+                _smid = send_telegram(_smsg, group_late)
             if not _smid:
-                _smid = send_telegram(_smsg, group_late)  # Fallback: Text nur wenn Karte fehlschlägt
-            if _smid is None:
                 log(f"   ⚠️ Scorer Telegram nicht zugestellt — nicht als gesendet markieren: {tip.get('match','?')}", "WARN")
                 continue
             _scorer_seen.add(tip)
@@ -28272,6 +28290,9 @@ def main():
                                     if (r.get("match"), str(r.get("market")), str(r.get("tip", r.get("selection", "")))) not in _used_keys]
                 msg = format_combo_telegram_message(combo)
                 if msg:
+                    if env("NETRATTLER_ORIGINAL_ONLY", "0") == "1":
+                        log("COMBO_CARD_DEFERRED: no verified production formula image sender", "WARN")
+                        continue
                     if not _combo_header_sent:
                         send_telegram(combo_header, combo_chat)
                         _combo_header_sent = True

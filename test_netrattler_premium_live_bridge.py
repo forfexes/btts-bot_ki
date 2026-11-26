@@ -203,3 +203,35 @@ def test_unknown_named_bookmaker_not_inferred_from_analytical_provider():
     t["bookmaker"]="fotmob"
     with pytest.raises(ValueError,match="sportsbook"):
         verified_mobile_images(t,crest_provider=_provider)
+
+
+def test_normalized_builder_preview_recomputes_total_and_blocks_stale_legs():
+    from types import SimpleNamespace
+    from netrattler_premium_live_bridge import builder_preview_record, _ticket_quote
+    def leg(player,odds):
+        return SimpleNamespace(player=player, team="Club A",match="Club A vs Club B",
+             market="Shots", category="shots", line=2.0, odds=odds, source="Pinnacle",
+             kickoff="2099-01-01T18:00:00Z",estimated=False)
+    p=SimpleNamespace(builder_id="QA-BUILDER",legs=[leg("QA A",1.8),leg("QA B",2.0)],total_odds=99)
+    record=builder_preview_record(p)
+    quote=_ticket_quote(record,True)
+    assert quote["combined_odds"]==3.6
+    assert quote["combined_odds_observed"] is False
+    p.legs[0].kickoff="2000-01-01T18:00:00Z"
+    with pytest.raises(ValueError,match="future kickoff"):
+        builder_preview_record(p)
+    p.legs[0].kickoff="2099-01-01T18:00:00Z"
+    p.legs[0].estimated=True
+    with pytest.raises(ValueError,match="Unverified"):
+        builder_preview_record(p)
+
+
+def test_builder_preview_refuses_unknown_market():
+    from types import SimpleNamespace
+    from netrattler_premium_live_bridge import builder_preview_record
+    leg=SimpleNamespace(player="QA A",team="Club A",match="Club A vs Club B",
+        market="Unknown",category="unverified",line=2,odds=1.8,source="Pinnacle",
+        kickoff="2099-01-01T18:00:00Z",estimated=False)
+    pick=SimpleNamespace(builder_id="QA-UNKNOWN",legs=[leg,leg],total_odds=3.24)
+    with pytest.raises(ValueError,match="verified market"):
+        builder_preview_record(pick)

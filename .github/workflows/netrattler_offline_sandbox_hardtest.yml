@@ -2,7 +2,7 @@ name: NETRATTLER Offline Sandbox Hardtest
 on:
   workflow_dispatch: {}
   push:
-    branches: [main]
+    branches: [main, qa/strict-card-delivery-no-text-bypass]
     paths:
       - '.github/workflows/netrattler_offline_sandbox_hardtest.yml'
       - 'netrattler_premium_verified_cards.py'
@@ -17,6 +17,9 @@ on:
       - 'netrattler_telegram_sandbox_hardtest.py'
       - 'netrattler_card_visual_preview.py'
       - 'netrattler_telegram_safe_zone.py'
+      - 'netrattler_strict_delivery.py'
+      - 'netrattler_premium_live_bridge.py'
+      - 'test_netrattler_strict_delivery.py'
 permissions:
   contents: read
 jobs:

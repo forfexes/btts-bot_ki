@@ -191,9 +191,19 @@ def render(entries, target_date, *, crest_provider, result=None):
         price, _book = _book_price(tip)
         if price != _price(tip, market):
             raise ValueError("Conflicting source quote")
-        return render_regular(market, selection, tip, home, away,
-                              _crest(crest_provider(home)), _crest(crest_provider(away)),
-                              price, result)
+        from netrattler_crest_identity import same_club
+        if same_club(home, away):
+            raise ValueError("Duplicate club identity in verified fixture")
+        first, second = _crest(crest_provider(home)), _crest(crest_provider(away))
+        # Compare visible emblems, not file names or provider URLs. A provider
+        # may return the same club image for both different fixture teams.
+        def fingerprint(crest):
+            im = crest.copy()
+            im.thumbnail((96, 96), Image.Resampling.LANCZOS)
+            return im.size, im.tobytes()
+        if fingerprint(first) == fingerprint(second):
+            raise ValueError("Duplicate visible club crest in verified fixture")
+        return render_regular(market, selection, tip, home, away, first, second, price, result)
     # Owner-provided authentic BTTS image is now the primary renderer,
     # never a generic substitute SVG. Always clear its baked-in example odds.
     if market == "btts":

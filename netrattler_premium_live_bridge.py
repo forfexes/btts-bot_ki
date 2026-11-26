@@ -299,3 +299,54 @@ def verified_telegram_payload_plan(record, chat_id, *, crest_provider,
     with prepare_verified_ticket(record, crest_provider=crest_provider,
                                  player_provider=player_provider) as (data, master):
         return plan_new_ticket(data, chat_id, master=master, preview_only=False)
+
+
+def builder_preview_record(pick):
+    """Convert normalized BuilderPick into the original-card QA contract.
+
+    No Telegram transport, receipt synthesis, or master approval occurs here.
+    Recompute the formula from observed legs; ignore the cached total_odds.
+    """
+    from datetime import datetime, timezone
+    from netrattler_builder_engine import is_bookmaker_source
+    from netrattler_builder_cards import builder_leg_label
+    legs = list(getattr(pick, "legs", []) or [])
+    if not 2 <= len(legs) <= 7:
+        raise ValueError("Builder requires 2-7 verified legs")
+    ticket_id = str(getattr(pick, "builder_id", "") or "").strip()
+    if not ticket_id:
+        raise ValueError("Missing builder identity")
+    result = []
+    for leg in legs:
+        source = str(getattr(leg, "source", "") or "").strip()
+        if (not is_bookmaker_source(source) or getattr(leg, "estimated", False)
+                or ":derived" in source.lower()):
+            raise ValueError("Unverified individual builder price")
+        kickoff = datetime.fromisoformat(str(getattr(leg, "kickoff", "")).replace("Z", "+00:00"))
+        if kickoff.tzinfo is None or kickoff.utcoffset() is None or kickoff <= datetime.now(timezone.utc):
+            raise ValueError("Builder requires verified future kickoff")
+        home, away = _split_match(getattr(leg, "match", ""))
+        player = str(getattr(leg, "player", "") or "").strip()
+        team = str(getattr(leg, "team", "") or "").strip()
+        if not player or team.casefold() not in {home.casefold(), away.casefold()}:
+            raise ValueError("Builder requires identity-matched athlete and club")
+        label = builder_leg_label(leg)
+        if (str(getattr(leg, "category", "") or "").lower() not in
+                {"shots", "sot", "fouls", "fouls_won", "tackles", "tackles_committed",
+                 "goalkeeper_saves", "offsides", "yellow_cards", "score", "assist"}
+                or not label or "Linie prüfen" in label):
+            raise ValueError("Builder requires verified market and threshold")
+        record = {"match": leg.match, "market_label": label, "player": player,
+                  "team": team, "bookmaker_odds": leg.odds, "bookmaker": source,
+                  "odds_observed": True, "commence_time": kickoff.isoformat()}
+        _book_price(record)
+        result.append(record)
+    category = "cross_mix" if len({r["match"].casefold() for r in result}) > 1 else "builder"
+    return {"ticket_id": ticket_id, "category": category, "legs": result,
+            "stake_units": 1, "combined_odds_observed": False, "status": "OFFEN"}
+
+
+def builder_offline_payload_plan(pick, chat_id, *, crest_provider, player_provider):
+    """Plan original-style Builder images only; never dispatch or approve."""
+    return verified_telegram_payload_plan(builder_preview_record(pick), chat_id,
+        crest_provider=crest_provider, player_provider=player_provider)

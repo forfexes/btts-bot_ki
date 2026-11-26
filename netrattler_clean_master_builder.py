@@ -104,10 +104,14 @@ def render_clean_master_from_reference(category, source_path, title, labels):
     # category banner. Rebuild an ambient, source-derived arena ONCE, before
     # adding empty slots. Do not use the original screenshot under a live
     # renderer; this file remains offline QA only, never approved Telegram art.
-    bokeh = original.filter(ImageFilter.GaussianBlur(radius=75))
-    result = Image.blend(
-        bokeh, Image.new("RGBA", (W, H), (3, 16, 30, 255)), 0.62
-    )
+    # Build the stadium independently of all sample-data pixels. Even blurred
+    # screenshots can retain ghost portraits, text and old market frames.
+    ambient = Image.new("RGB", (W, H), (3, 16, 30))
+    brush = ImageDraw.Draw(ambient)
+    for y in range(H):
+        glow = round(14 * (1 - abs(y-H/2)/(H/2)))
+        brush.line((0,y,W-1,y), fill=(3, 16+glow, 30+glow))
+    result = ambient.convert("RGBA")
     # Top 112px are the actual immutable crown/NETRATTLER mark. The category
     # banner begins below this boundary and MUST NOT leak through.
     result.paste(original.crop((0, 0, W, 112)), (0, 0))
@@ -149,8 +153,7 @@ def render_clean_master_from_reference(category, source_path, title, labels):
     # name-stickers here. These spaces stay EMPTY until genuine provider
     # PNG/WebP artwork is alpha-composited by the verified card renderer.
     # The central VS/fixture field is text-only and does not touch them.
-    draw.rounded_rectangle((369, 387, 753, 528), radius=16,
-                           fill="#0A1A2A", outline="#136B91", width=2)
+    # No VS tile: the fixture text is drawn directly on the empty stadium.
 
     slots = {}
     # Multi-leg cards need a truly EMPTY list area, not three preprinted

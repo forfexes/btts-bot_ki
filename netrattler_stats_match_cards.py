@@ -211,7 +211,8 @@ def _fl_country_slugs(country):
         return _FL_COUNTRY[country]
     html = _fl_get(f"https://football-logos.cc/{country}/")
     slugs = sorted(set(re.findall(r'href="(?:https://football-logos\.cc)?/%s/([a-z0-9-]+)/"' % re.escape(country), html)))
-    _FL_COUNTRY[country] = slugs
+    if slugs:
+        _FL_COUNTRY[country] = slugs
     return slugs
 
 
@@ -306,7 +307,7 @@ def _search_badge(query, api_key, key):
     return "", True
 
 
-def _logo_url(team):
+def _logo_url(team, accept=None):
     original_key = _norm(team)
     team = {"swanseacityafc":"Swansea", "blackburnroversfc":"Blackburn", "stuttgart":"VfB Stuttgart", "unliondesantafe":"Union Santa Fe", "uniondesantafe":"Union Santa Fe", "colondesantafe":"Colon Santa Fe", "inunsanjuan":"San Juan", "athleticopr":"Athletico Paranaense", "atleticopr":"Athletico Paranaense", "atleticoparanaense":"Athletico Paranaense"}.get(original_key, team)
     key = _norm(team)
@@ -314,34 +315,44 @@ def _logo_url(team):
         _TEAM_LEAGUE.setdefault(key, _TEAM_LEAGUE[original_key])
     if not key:
         return ""
-    if key in _LOGO_CACHE:
-        return _LOGO_CACHE[key]
+    seen = set()
+
+    def accepted(url):
+        if not url or url in seen:
+            return False
+        seen.add(url)
+        if accept is not None and not accept(url):
+            return False
+        _LOGO_CACHE[key] = url
+        _LOGO_CACHE[original_key] = url
+        return True
+
+    cached = _LOGO_CACHE.get(original_key) or _LOGO_CACHE.get(key)
+    if accepted(cached):
+        return cached
+    _LOGO_CACHE.pop(key, None)
+    _LOGO_CACHE.pop(original_key, None)
     try:
         from netrattler_flags import flag_url
         url = flag_url(team)
     except Exception:
         url = ""
-    if url:
-        _LOGO_CACHE[key] = url
+    if accepted(url):
         return url
     url = _crest_from_index(team)
-    if url:
+    if accepted(url):
         STATS["index_ok"] = STATS.get("index_ok", 0) + 1
-        _LOGO_CACHE[key] = url
         return url
     url = _fl_logo(team, _TEAM_LEAGUE.get(key, ""))
-    if url:
-        _LOGO_CACHE[key] = url
+    if accepted(url):
         return url
     for src in (_wikidata_logo, _apifootball_logo, _allsports_logo, _sofascore_logo, _espn_logo):
         try:
             url = src(team, _TEAM_LEAGUE.get(key, ""))
         except Exception:
             url = ""
-        if url:
-            _LOGO_CACHE[key] = url
+        if accepted(url):
             return url
-    limited = False
     api_key = os.getenv("THESPORTSDB_API_KEY", "3").strip() or "3"
     for query in _query_variants(team):
         try:
@@ -350,31 +361,48 @@ def _logo_url(team):
             url, limited = "", False
             STATS["tsdb_err"] += 1
             STATS["err_sample"] = f"tsdb:{type(exc).__name__}"
-        if url or limited:
+        if accepted(url):
+            return url
+        if limited:
             break
-    if not url:
-        url = _wiki_badge(team)
-    if url or not limited:  # do not cache a rate-limit failure
-        _LOGO_CACHE[key] = url
-    return url
+    url = _wiki_badge(team)
+    return url if accepted(url) else ""
 
 
 def _badge_bytes(team):
     key = _norm(team)
     if not key:
         return b""
-    if key in _BADGE_CACHE:
+    if _BADGE_CACHE.get(key):
         return _BADGE_CACHE[key]
     payload = b""
-    url = _logo_url(team)
-    if url:
+
+    def accept(url):
+        nonlocal payload
         try:
+            from PIL import Image
             r = requests.get(url, timeout=8, headers={"User-Agent": "Mozilla/5.0 (NETRATTLER match cards; crest lookup)"})
-            if r.ok and r.content and not r.content[:15].lstrip().lower().startswith((b"<!doctype", b"<html")):
-                payload = r.content
+            if not r.ok or not r.content or len(r.content) > 8_000_000:
+                return False
+            with Image.open(io.BytesIO(r.content)) as image:
+                image.load()
+                alpha = image.convert("RGBA").getchannel("A")
+                if alpha.getextrema()[0] == 255:
+                    return False
+                visible = alpha.point(lambda a: 255 if a >= 24 else 0).getbbox()
+                if visible is None or min(visible[2]-visible[0], visible[3]-visible[1]) < 12:
+                    return False
+                corners = ((0, 0), (image.width-1, 0), (0, image.height-1), (image.width-1, image.height-1))
+                if all(alpha.getpixel(c) >= 24 for c in corners):
+                    return False
+            payload = r.content
+            return True
         except Exception:
-            payload = b""
-    _BADGE_CACHE[key] = payload
+            return False
+
+    _logo_url(team, accept=accept)
+    if payload:
+        _BADGE_CACHE[key] = payload
     return payload
 
 
@@ -1602,7 +1630,9 @@ def _player_photo(name, team=""):
             continue
     flag = "player_photo_ok" if payload else "player_photo_missing"
     STATS[flag] = STATS.get(flag, 0) + 1
-    _PLAYER_CACHE[key] = payload
+    # A transient provider failure must not poison the cache for later cards.
+    if payload:
+        _PLAYER_CACHE[key] = payload
     return payload
 
 

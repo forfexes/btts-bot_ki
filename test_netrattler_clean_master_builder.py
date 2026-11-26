@@ -79,3 +79,15 @@ def test_unknown_and_missing_sources_fail_closed(monkeypatch, tmp_path):
     monkeypatch.setitem(SOURCE_MAP, "var", tmp_path / "missing.webp")
     with pytest.raises(FileNotFoundError):
         render_clean_master("var")
+
+
+def test_old_screenshot_body_cannot_leak_into_new_plate(tmp_path):
+    from netrattler_clean_master_builder import render_clean_master_from_reference
+    from PIL import ImageDraw
+    a=Image.new("RGB",(W,H),(15,30,45)); b=a.copy()
+    ImageDraw.Draw(b).rectangle((0,112,W-1,H-1),fill=(255,0,155))
+    pa=tmp_path/"source_a.png"; pb=tmp_path/"source_b.png"
+    a.save(pa); b.save(pb)
+    x,_=render_clean_master_from_reference("builder",pa,"BUILDER",("A","B","C"))
+    y,_=render_clean_master_from_reference("builder",pb,"BUILDER",("A","B","C"))
+    assert x==y, "No pixels below the source masthead may enter the clean template"
