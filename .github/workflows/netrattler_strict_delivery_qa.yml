@@ -117,6 +117,9 @@ jobs:
           from pathlib import Path
           from netrattler_telegram_safe_zone import append_safe_margin, assert_safe_margin
           files=sorted(Path('output/five-clean-dynamic').glob('*.png'))+sorted(Path('output/ten-clean-dynamic').glob('*.png'))
+          last_minute=Path('output/last-minute-clean/last_minute_render_test.png')
+          assert last_minute.is_file(), 'Missing Last Minute Goal render'
+          files.append(last_minute)
           assert files, 'No current clean dynamic PNGs available'
           out=Path('output/five-clean-telegram')
           out.mkdir(parents=True,exist_ok=True)
