@@ -32,7 +32,10 @@ on:
       - netrattler_last_minute_goal.py
       - test_netrattler_lmg_free.py
       - .github/workflows/netrattler_lmg_free.yml
-  # Schedule paused pending approved premium card templates.
+      - .github/netrattler-last-minute-release.json
+      - netrattler_lmg_owner_release.py
+  schedule:
+    - cron: "*/5 * * * *"
 
 permissions:
   contents: read
@@ -147,7 +150,7 @@ jobs:
     # Collect verified Goal Hunter details without changing the disabled
     # production Telegram scan. Only scheduled runs write Git SQLite state.
     needs: verify
-    if: github.event_name == 'schedule'
+    if: github.event_name == 'schedule' && vars.NETRATTLER_TG_PRODUCTION_APPROVED == 'false'
     runs-on: ubuntu-latest
     timeout-minutes: 6
     permissions:
@@ -187,8 +190,9 @@ jobs:
 
   scan:
     needs: verify
-    # TEMPORARILY DISABLED: no live Telegram scans until original cards pass visual acceptance.
-    if: ${{ false }}
+    # Scope-specific owner approval is checked again against both pinned PNGs
+    # at runtime. An explicit repository false still kills production delivery.
+    if: ${{ (github.event_name == 'schedule' || github.event_name == 'workflow_dispatch') && vars.NETRATTLER_TG_PRODUCTION_APPROVED != 'false' }}
     runs-on: ubuntu-latest
     timeout-minutes: 8
     permissions:
@@ -212,12 +216,14 @@ jobs:
       - name: Goal Hunter live scan and original-card settlement
         env:
           LMG_SEND: "true"
+          LMG_OWNER_CLEAN_RELEASED: "1"
           LMG_SHADOW_ENABLED: "true"
           TELEGRAM_TOKEN: ${{ secrets.TELEGRAM_TOKEN }}
           TELEGRAM_GROUP_LATE_GOALS: ${{ secrets.TELEGRAM_GROUP_LATE_GOALS }}
           API_FOOTBALL_KEYS: ${{ secrets.API_FOOTBALL_KEYS }}
           API_FOOTBALL_KEY: ${{ secrets.API_FOOTBALL_KEY }}
         run: |
+          python -c "from netrattler_lmg_owner_release import check_release; assert check_release(), 'Pinned owner master release required'"
           python netrattler_lmg_fotmob.py
           # Shadow-only 75-second polling: persist source-verified observations
           # to Git-versioned SQLite; NEVER post a second Telegram tip.
