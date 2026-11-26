@@ -30,8 +30,8 @@ def send_corner_card(token,chat,tip,target_date,log=print):
     import os
     import netrattler_stats_match_cards as cards
     if os.getenv("NETRATTLER_ORIGINAL_ONLY", "0") == "1":
-        log("Corner-Sniper-Premiumbild gesperrt: clean_owner_master_not_approved")
-        return None
+        from netrattler_candidate_dispatch import send_single
+        return send_single(cards,token,chat,"corner",tip,target_date,log)
     if not token or not chat or not cards._valid(tip):return None
     try:
         cards._crest_cache_load()

@@ -296,3 +296,38 @@ def test_nine_authorized_production_adapters_send_and_edit_exact_receipt(monkeyp
         with pytest.raises(ValueError):
             send(fake,"OFFLINE","OFFLINE",family,dict(row,synthetic=True),reserve=reserve,confirm=confirm,now=now)
         assert fake._edit_photo.call_count==1
+
+
+def test_candidate_existing_db_atomic_reservation_and_receipt(monkeypatch):
+    from netrattler_candidate_dispatch import Ledger,_card_id,ExactTransport
+    from unittest.mock import Mock
+    fake=Mock()
+    fake._sb.return_value=("https://offline.invalid/rest/v1/netrattler_match_cards",{})
+    with pytest.raises(ValueError):
+        Ledger(fake)
+    fake._sb.return_value=("https://offline.invalid/rest/v1/netrattler_match_cards",{"Prefer":"return=minimal"})
+    ledger=Ledger(fake)
+    state={"family":"corner","chat_id":"-123","ticket_id":"one",
+           "original":{"home":"QA Home","away":"QA Away","kickoff":FIVE_NOW.isoformat()}}
+    cid=_card_id(state)
+    def response(rows):
+        return SimpleNamespace(ok=True,json=lambda:rows)
+    with patch("netrattler_candidate_dispatch.requests.post",side_effect=[
+         response([{"card_id":cid,"message_id":0}]),response([])]) as post:
+        assert ledger.reserve(state)
+        assert not ledger.reserve(state)
+        assert post.call_args.kwargs["params"]=={"on_conflict":"card_id"}
+        assert post.call_args.kwargs["json"]["match_key"]==cid
+    with patch("netrattler_candidate_dispatch.requests.patch",return_value=response(
+         [{"card_id":cid,"message_id":99}])) as patcher:
+        assert ledger.confirm(dict(state,message_id=99))
+        assert patcher.call_args.kwargs["params"]["message_id"]=="eq.0"
+    transport=ExactTransport(cards)
+    raw,_,_=render_family("corner")
+    with patch("netrattler_candidate_dispatch.requests.post",return_value=SimpleNamespace(ok=True,
+         json=lambda:{"ok":True,"result":{"message_id":88,"chat":{"id":-999}}})) as post:
+        assert transport._send_photo("OFFLINE","-123","",raw,print) is None
+        assert post.call_count==1
+    with patch("netrattler_candidate_dispatch.requests.post",side_effect=__import__("requests").Timeout) as post:
+        assert transport._send_photo("OFFLINE","-123","",raw,print) is None
+        assert post.call_count==1
