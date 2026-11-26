@@ -1,0 +1,120 @@
+{
+  "owner_release_requested": true,
+  "request_date": "2026-11-26",
+  "scope": "all-16-netrattler-card-families",
+  "note": "Explicit user authorization to release all 16 existing designs. This records approval of the intended design direction and permission to complete and deploy tested routes, not evidence of actual Android visual QA, verified live deliveries, independent original masters, or completed sender wiring. Retain production gates until each route passes its real-data and settlement preflight.",
+  "families": {
+    "btts": {
+      "source_path": "assets/premium_master/netrattler_stadium_portrait_20261124.png",
+      "source_git_blob": "c46d4989f966834ec20136fc78aac8cc23a349c1",
+      "source_kind": "pinned_stadium_master",
+      "owner_release_authorized": true,
+      "live_route_status": "previously_released"
+    },
+    "over": {
+      "source_path": "assets/premium_master/netrattler_stadium_portrait_20261124.png",
+      "source_git_blob": "c46d4989f966834ec20136fc78aac8cc23a349c1",
+      "source_kind": "pinned_stadium_master",
+      "owner_release_authorized": true,
+      "live_route_status": "previously_released"
+    },
+    "btts_halftime": {
+      "source_path": "assets/premium_master/netrattler_stadium_portrait_20261124.png",
+      "source_git_blob": "c46d4989f966834ec20136fc78aac8cc23a349c1",
+      "source_kind": "pinned_stadium_master",
+      "owner_release_authorized": true,
+      "live_route_status": "previously_released"
+    },
+    "over_halftime": {
+      "source_path": "assets/premium_master/netrattler_stadium_portrait_20261124.png",
+      "source_git_blob": "c46d4989f966834ec20136fc78aac8cc23a349c1",
+      "source_kind": "pinned_stadium_master",
+      "owner_release_authorized": true,
+      "live_route_status": "previously_released"
+    },
+    "match_result": {
+      "source_path": "assets/premium_master/netrattler_stadium_portrait_20261124.png",
+      "source_git_blob": "c46d4989f966834ec20136fc78aac8cc23a349c1",
+      "source_kind": "pinned_stadium_master",
+      "owner_release_authorized": true,
+      "live_route_status": "previously_released"
+    },
+    "var": {
+      "source_path": "assets/premium_master/netrattler_stadium_portrait_20261124.png",
+      "source_git_blob": "c46d4989f966834ec20136fc78aac8cc23a349c1",
+      "source_kind": "pinned_stadium_master",
+      "owner_release_authorized": true,
+      "live_route_status": "previously_released"
+    },
+    "goal": {
+      "source_path": "assets/original_templates/NETRATTLER_GOAL_HUNTER_originalkarte.png",
+      "source_git_blob": "0827f43418e7c809cc53773117e884feb3524260",
+      "source_kind": "source_reference_for_derived_master",
+      "owner_release_authorized": true,
+      "live_route_status": "production_wiring_pending"
+    },
+    "corner": {
+      "source_path": "assets/original_templates/corner_sniper_original.webp",
+      "source_git_blob": "5730e9c7f4574db511393ee02a28923e69f5c240",
+      "source_kind": "source_reference_for_derived_master",
+      "owner_release_authorized": true,
+      "live_route_status": "production_wiring_pending"
+    },
+    "builder": {
+      "source_path": "assets/original_templates/prop_builder_original.webp",
+      "source_git_blob": "1223da0cf5f5a0e69bd046a29b520af888f9b746",
+      "source_kind": "source_reference_for_derived_master",
+      "owner_release_authorized": true,
+      "live_route_status": "production_wiring_pending"
+    },
+    "combo": {
+      "source_path": "assets/original_templates/NETRATTLER_COMBO_7_originalkarte.png",
+      "source_git_blob": "eb290f06373d70d34e10b7bc63e4e58f7f216744",
+      "source_kind": "source_reference_for_derived_master",
+      "owner_release_authorized": true,
+      "live_route_status": "production_wiring_pending"
+    },
+    "player_props": {
+      "source_path": "assets/original_templates/goal_hunter_original.webp",
+      "source_git_blob": "38e285043ab9500792d88a91c27262e7a30edadb",
+      "source_kind": "source_reference_for_derived_master",
+      "owner_release_authorized": true,
+      "live_route_status": "production_wiring_pending"
+    },
+    "fouls_cards": {
+      "source_path": "assets/original_templates/goal_hunter_original.webp",
+      "source_git_blob": "38e285043ab9500792d88a91c27262e7a30edadb",
+      "source_kind": "source_reference_for_derived_master",
+      "owner_release_authorized": true,
+      "live_route_status": "production_wiring_pending"
+    },
+    "last_minute_goal": {
+      "source_path": "last_minute_owner_20261122/last_minute_clean_plate.png",
+      "source_git_blob": "7386c75bbd32ba78ebeac3d4169a5104e2173741",
+      "source_kind": "pinned_clean_candidate",
+      "owner_release_authorized": true,
+      "live_route_status": "release_commit_pending_CI"
+    },
+    "late_goals": {
+      "source_path": "assets/netrattler_template_corner_original.webp",
+      "source_git_blob": "5730e9c7f4574db511393ee02a28923e69f5c240",
+      "source_kind": "source_reference_for_derived_master",
+      "owner_release_authorized": true,
+      "live_route_status": "production_wiring_pending"
+    },
+    "live_halftime": {
+      "source_path": "assets/original_templates/NETRATTLER_BTTS_originalkarte.png",
+      "source_git_blob": "4dcc2a93a09dfbd26067363116d22ddf67e38e42",
+      "source_kind": "source_reference_for_derived_master",
+      "owner_release_authorized": true,
+      "live_route_status": "production_wiring_pending"
+    },
+    "cross_mix": {
+      "source_path": "assets/original_templates/NETRATTLER_COMBO_7_originalkarte.png",
+      "source_git_blob": "eb290f06373d70d34e10b7bc63e4e58f7f216744",
+      "source_kind": "source_reference_for_derived_master",
+      "owner_release_authorized": true,
+      "live_route_status": "production_wiring_pending"
+    }
+  }
+}
