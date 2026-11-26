@@ -1,6 +1,6 @@
 """Daily image QA scans every name over time without repeating one fixed sample."""
 import unittest
-from asset_coverage_audit import select_batch
+from asset_coverage_audit import select_batch, fallback_club
 
 
 class CoverageRotation(unittest.TestCase):
@@ -32,6 +32,19 @@ class CoverageRotation(unittest.TestCase):
     def test_empty_and_small_rosters(self):
         self.assertEqual(select_batch([], 10, rotate=True)[0], [])
         self.assertEqual(select_batch([1, 2, 3], 10, rotate=True)[0], [1, 2, 3])
+
+
+    def test_tip_club_resolves_historical_transfer_for_probe(self):
+        self.assertEqual(fallback_club({"teams": {"Old Club", "New Club"},
+                                       "tip_teams": {"New Club"}}), "New Club")
+
+    def test_conflicting_tip_clubs_are_not_guessed(self):
+        self.assertIsNone(fallback_club({"teams": {"A", "B"}, "tip_teams": {"A", "B"}}))
+
+    def test_no_tip_club_requires_unique_historical_club(self):
+        self.assertEqual(fallback_club({"teams": {"Only Club"}}), "Only Club")
+        self.assertIsNone(fallback_club({"teams": {"A", "B"}}))
+        self.assertIsNone(fallback_club({"teams": set()}))
 
 
 if __name__ == "__main__":
