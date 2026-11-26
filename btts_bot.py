@@ -20530,7 +20530,13 @@ def analyze_corners_tip_simple(fixture, league, target_date=None):
         cum = sum((math.exp(-expected) * expected**k) / math.factorial(k) for k in range(k_max + 1))
         return round((1 - cum) * 100)
 
-    _corner_quotes = _ntr_observed_corner_quotes(fixture, target_date)
+    _corner_receipts = {}
+    if env("NETRATTLER_ORIGINAL_ONLY", "0") == "1":
+        from netrattler_apif_corner_quotes import observed_corner_receipts
+        _corner_receipts=observed_corner_receipts(fixture["home"],fixture["away"],target_date or date.today().isoformat())
+        _corner_quotes={ln:(r["bookmaker_odds"],r["bookmaker"]) for ln,r in _corner_receipts.items()}
+    else:
+        _corner_quotes = _ntr_observed_corner_quotes(fixture, target_date)
     candidates = []
     from netrattler_corner_history import observed_corner_lines
     for line in observed_corner_lines(_corner_quotes):
@@ -20557,6 +20563,7 @@ def analyze_corners_tip_simple(fixture, league, target_date=None):
         "edge": round(edge, 4), "expected_corners": round(expected, 1),
         "market": "corners", "confidence": 3, "units": 1.0,
         "valueRating": "VALUE", "_no_real_odds": False, "_source": quote_source,
+        **_corner_receipts.get(line,{}),
     }
 
 
@@ -20591,7 +20598,13 @@ def analyze_corners_tip(fixture, league, target_date=None):
     diag = getattr(analyze_corners_tip, "diagnostics", {})
     diag["with_team_history"] = diag.get("with_team_history", 0) + 1
     analyze_corners_tip.diagnostics = diag
-    _corner_quotes = _ntr_observed_corner_quotes(fixture, target_date)
+    _corner_receipts = {}
+    if env("NETRATTLER_ORIGINAL_ONLY", "0") == "1":
+        from netrattler_apif_corner_quotes import observed_corner_receipts
+        _corner_receipts=observed_corner_receipts(fixture["home"],fixture["away"],target_date or date.today().isoformat())
+        _corner_quotes={ln:(r["bookmaker_odds"],r["bookmaker"]) for ln,r in _corner_receipts.items()}
+    else:
+        _corner_quotes = _ntr_observed_corner_quotes(fixture, target_date)
     if not _corner_quotes:
         diag["missing_observed_quotes"] = diag.get("missing_observed_quotes", 0) + 1
     candidates = []
@@ -20626,6 +20639,7 @@ def analyze_corners_tip(fixture, league, target_date=None):
         "home_avg_corners_against": round(home_stats["avg_corners_against"], 2) if home_stats else None,
         "away_avg_corners_against": round(away_stats["avg_corners_against"], 2) if away_stats else None, "valueRating": "VALUE",
         "_no_real_odds": False, "_source": quote_source,
+        **_corner_receipts.get(line_used,{}),
     }
 
 
