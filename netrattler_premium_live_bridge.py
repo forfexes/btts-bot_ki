@@ -320,6 +320,7 @@ def builder_preview_record(pick):
     for leg in legs:
         source = str(getattr(leg, "source", "") or "").strip()
         if (not is_bookmaker_source(source) or getattr(leg, "estimated", False)
+                or getattr(leg, "odds_observed", None) is False
                 or ":derived" in source.lower()):
             raise ValueError("Unverified individual builder price")
         kickoff = datetime.fromisoformat(str(getattr(leg, "kickoff", "")).replace("Z", "+00:00"))
@@ -338,7 +339,14 @@ def builder_preview_record(pick):
             raise ValueError("Builder requires verified market and threshold")
         record = {"match": leg.match, "market_label": label, "player": player,
                   "team": team, "bookmaker_odds": leg.odds, "bookmaker": source,
-                  "odds_observed": True, "commence_time": kickoff.isoformat()}
+                  "odds_observed": getattr(leg, "odds_observed", None),
+                  "commence_time": kickoff.isoformat()}
+        # Preview compatibility does not turn missing source receipts into proof.
+        for field in ("fixture_id", "home_id", "away_id", "player_id",
+                      "quote_id", "quote_observed_at"):
+            value = getattr(leg, field, None)
+            if value not in (None, ""):
+                record[field] = value
         _book_price(record)
         result.append(record)
     category = "cross_mix" if len({r["match"].casefold() for r in result}) > 1 else "builder"
@@ -350,3 +358,109 @@ def builder_offline_payload_plan(pick, chat_id, *, crest_provider, player_provid
     """Plan original-style Builder images only; never dispatch or approve."""
     return verified_telegram_payload_plan(builder_preview_record(pick), chat_id,
         crest_provider=crest_provider, player_provider=player_provider)
+
+
+def builder_candidate_record(pick, *, crest_provider, player_provider, now=None):
+    """Connect the normalized source legs to the existing individual-card layout.
+
+    Unlike the historical mobile preview bridge, this contract requires actual
+    provider IDs and observed quote timestamps. No receipt or identity is
+    synthesized. All evidence is checked before any asset retrieval.
+    """
+    from datetime import datetime, timezone, timedelta
+    from zoneinfo import ZoneInfo
+    from netrattler_clean_card_renderer import _stamp
+    from netrattler_crest_identity import same_club
+    from netrattler_builder_cards import builder_leg_label
+    from netrattler_builder_engine import is_bookmaker_source
+    clock = _stamp(now or datetime.now(timezone.utc))
+    day = str(getattr(pick, "match_date", "") or "")
+    ticket_id = str(getattr(pick, "builder_id", "") or "").strip()
+    legs = list(getattr(pick, "legs", None) or [])
+    if not ticket_id or not 2 <= len(legs) <= 10:
+        raise ValueError("Stable builder identity and 2..10 selections required")
+    records = []
+    receipts = set()
+    fixtures = {}
+    club_ids = {}
+    for leg in legs:
+        data = {key: str(getattr(leg, key, "") or "").strip() for key in
+                ("fixture_id", "home_id", "away_id", "player_id", "quote_id")}
+        if not all(data.values()) or data["home_id"] == data["away_id"]:
+            raise ValueError("Missing or contradictory original provider identity")
+        key = (data["fixture_id"], data["quote_id"])
+        if key in receipts:
+            raise ValueError("Repeated original selection receipt")
+        receipts.add(key)
+        source = str(getattr(leg, "source", "") or "")
+        if (not is_bookmaker_source(source) or ":derived" in source.lower()
+                or getattr(leg, "estimated", False)
+                or getattr(leg, "odds_observed", None) is not True):
+            raise ValueError("Explicit observed individual bookmaker price required")
+        kickoff, seen = _stamp(getattr(leg, "kickoff", None)), _stamp(getattr(leg, "quote_observed_at", None))
+        if not seen <= clock < kickoff or clock-seen > timedelta(minutes=15):
+            raise ValueError("Missing or stale original quote/kickoff evidence")
+        if kickoff.astimezone(ZoneInfo("Europe/Zurich")).date().isoformat() != day:
+            raise ValueError("Builder leg differs from Swiss target fixture day")
+        home, away = _split_match(getattr(leg, "match", ""))
+        if same_club(home, away):
+            raise ValueError("Contradictory opponent identity")
+        player, team = (str(getattr(leg,k,"") or "").strip() for k in ("player","team"))
+        if not player or sum(same_club(team,x) for x in (home,away)) != 1:
+            raise ValueError("Exact athlete club required")
+        identity = (data["home_id"],data["away_id"],home.casefold(),away.casefold(),kickoff)
+        if fixtures.setdefault(data["fixture_id"],identity) != identity:
+            raise ValueError("Contradictory source fixture")
+        for name, team_id in ((home,data["home_id"]),(away,data["away_id"])):
+            if club_ids.setdefault(team_id,name.casefold()) != name.casefold():
+                raise ValueError("Provider club ID maps to contradictory names")
+        category = str(getattr(leg,"category","") or "").lower()
+        if category not in {"shots","sot","fouls","fouls_won","tackles",
+                            "tackles_committed","goalkeeper_saves","offsides",
+                            "yellow_cards","score","assist"}:
+            raise ValueError("Unsupported verified player market")
+        label = builder_leg_label(leg)
+        if not label or "Linie prüfen" in label:
+            raise ValueError("Missing verified selection threshold")
+        data.update(home=home,away=away,player_name=player,player_team=team,
+                    player_team_id=data["home_id"] if same_club(team,home) else data["away_id"],
+                    market=str(getattr(leg,"market","") or "").strip(),selection=label,
+                    bookmaker=source,bookmaker_odds=getattr(leg,"odds",None),
+                    kickoff=kickoff,quote_observed_at=seen,quote_observed=True,price_estimated=False)
+        if not data["market"]:
+            raise ValueError("Original market label missing")
+        _book_price(data)
+        records.append(data)
+    def fingerprint(image):
+        bbox=image.getchannel("A").point(lambda a:255 if a>=24 else 0).getbbox()
+        crop=image.crop(bbox)
+        crop.thumbnail((96,96),Image.Resampling.LANCZOS)
+        return crop.size,crop.tobytes()
+    crests,photos={},{}
+    for row in records:
+        for side in ("home","away"):
+            key=row[side+"_id"]
+            if key not in crests:
+                crests[key]=_raw_asset(crest_provider(row[side]),"club:"+key,40)
+            row[side+"_crest"]=crests[key]
+        if fingerprint(row["home_crest"])==fingerprint(row["away_crest"]):
+            raise ValueError("Identical opponent crest pixels")
+        key=(row["player_id"],row["player_team_id"])
+        if key not in photos:
+            photos[key]=_raw_asset(player_provider(row["player_name"],row["player_team"]),"player:"+key[0],80)
+        row["player_photo"]=photos[key]
+    return {"ticket_id":ticket_id,"category":"cross_mix" if len(fixtures)>1 else "builder",
+            "formula_only":True,"combined_odds_observed":False,"legs":records}
+
+
+def render_builder_candidate_qa(pick, *, crest_provider, player_provider, now=None, settlement=None):
+    """Actual source-record -> existing category-specific QA poster, not a live send."""
+    from datetime import datetime, timezone
+    from netrattler_five_owner_dynamic_qa import render_owner_reference_qa
+    from netrattler_clean_card_renderer import render_cross_mix_qa
+    now=now or datetime.now(timezone.utc)
+    record=builder_candidate_record(pick,crest_provider=crest_provider,
+                                    player_provider=player_provider,now=now)
+    if record["category"]=="cross_mix":
+        return render_cross_mix_qa(record,now=now,settlement=settlement)
+    return render_owner_reference_qa("builder",record,now=now,settlement=settlement)

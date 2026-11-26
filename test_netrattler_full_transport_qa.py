@@ -168,3 +168,58 @@ def test_builder_normalization_retains_actual_provider_evidence():
     for bad in ({"odds_observed":False},{"quote_observed":False},{"price_calculated":True},
                 {"synthetic":True},{"price_type":"calculated_from_leg_odds"}):
         assert normalize_prop(dict(row,**bad)) is None
+
+
+def test_actual_builder_source_receipts_reach_existing_candidate_renderer():
+    from datetime import timedelta
+    from types import SimpleNamespace as Pick
+    from netrattler_premium_live_bridge import builder_candidate_record, render_builder_candidate_qa
+    from netrattler_builder_engine import normalize_prop
+    from test_netrattler_five_owner_dynamic_qa import NOW,crest
+    def raw(i):
+        return dict(player="QA Player "+str(i),team="QA HOME",match="QA HOME vs QA AWAY",
+            market="Shots 2+",category="shots",line=2,odds=1.8,source="Pinnacle",
+            probability=0.8,ko=(NOW+timedelta(minutes=30)).isoformat(),
+            fixture_id="fixture-123",home_id="home-2",away_id="away-9",
+            player_id="p"+str(i),quote_id="receipt-"+str(i),
+            quote_observed_at=(NOW-timedelta(seconds=30)).isoformat(),odds_observed=True)
+    def png(color):
+        b=BytesIO();crest(color).save(b,"PNG");return b.getvalue()
+    def badge(team):
+        return png((255,30,50,255) if team=="QA HOME" else (10,160,240,255))
+    def player(*args):
+        return png((20,210,150,255))
+    rows=[raw(1),raw(2)]
+    pick=Pick(builder_id="QA-original",match_date=NOW.date().isoformat(),
+              legs=[normalize_prop(row) for row in rows],total_odds=99)
+    record=builder_candidate_record(pick,crest_provider=badge,player_provider=player,now=NOW)
+    assert record["formula_only"] is True and "combined_odds" not in record
+    assert [x["quote_id"] for x in record["legs"]]==["receipt-1","receipt-2"]
+    assert record["category"]=="builder"
+    image=render_builder_candidate_qa(pick,crest_provider=badge,player_provider=player,now=NOW)
+    with Image.open(BytesIO(image)) as im:
+        assert im.format=="PNG"
+        im.verify()
+    def unexpected(*args):
+        pytest.fail("Invalid original source fetched an image")
+    for edit in ({"quote_id":""},{"odds_observed":None},{"player_id":""},
+                 {"quote_observed_at":(NOW-timedelta(minutes=16)).isoformat()},
+                 {"fixture_id":"fixture-123","away_id":"wrong"},
+                 {"quote_id":"receipt-1"}):
+        bad=Pick(**{**vars(pick),"legs":[normalize_prop(rows[0]),normalize_prop(dict(rows[1],**edit))]})
+        with pytest.raises(ValueError):
+            builder_candidate_record(bad,crest_provider=unexpected,player_provider=unexpected,now=NOW)
+    with pytest.raises(ValueError,match="Identical"):
+        builder_candidate_record(pick,crest_provider=lambda _:badge("QA HOME"),player_provider=player,now=NOW)
+
+
+def test_last_minute_accepts_real_fixture_ids_and_rejects_naive_quote_time():
+    from netrattler_last_minute_goal import fixture_info,_utc_time
+    row={"fixture":{"id":1934567,"status":{"short":"2H","elapsed":72}},
+         "teams":{"home":{"id":100,"name":"QA Home"},"away":{"id":200,"name":"QA Away"}},
+         "goals":{"home":1,"away":1},"league":{"name":"QA League"}}
+    assert fixture_info(row)["fixture_id"]==1934567
+    for bad in (0,True,-1,"1.5",""):
+        assert fixture_info(dict(row,fixture={**row["fixture"],"id":bad})) is None
+    assert _utc_time("2026-11-26T17:00:00") is None
+    assert _utc_time("2026-11-26T17:00:00Z") is not None

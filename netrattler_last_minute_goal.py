@@ -60,7 +60,12 @@ def fixture_info(row):
     st = f.get("status") or {}
     minute = _integer(st.get("elapsed"))
     h, a = t.get("home") or {}, t.get("away") or {}
-    hs, az, fid = _integer(g.get("home")), _integer(g.get("away")), _integer(f.get("id"))
+    hs, az = _integer(g.get("home")), _integer(g.get("away"))
+    # Fixture IDs are identifiers, not bounded sporting statistics. Modern
+    # API-Football fixtures routinely exceed 999; do not discard the entire feed.
+    raw_id = f.get("id")
+    fid = int(raw_id) if (not isinstance(raw_id, bool) and
+                         re.fullmatch(r"[1-9][0-9]{0,17}", str(raw_id or ""))) else None
     if (st.get("short") not in LIVE_STATUSES or minute is None
             or not MIN_MINUTE <= minute <= MAX_MINUTE
             or hs is None or az is None or fid is None
@@ -125,7 +130,7 @@ def _utc_time(value):
         return None
     try:
         x = dt.datetime.fromisoformat(value.replace("Z", "+00:00"))
-        return x if x.tzinfo else x.replace(tzinfo=dt.timezone.utc)
+        return x if x.tzinfo is not None and x.utcoffset() is not None else None
     except ValueError:
         return None
 
