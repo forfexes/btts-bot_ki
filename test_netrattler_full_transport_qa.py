@@ -331,3 +331,32 @@ def test_candidate_existing_db_atomic_reservation_and_receipt(monkeypatch):
     with patch("netrattler_candidate_dispatch.requests.post",side_effect=__import__("requests").Timeout) as post:
         assert transport._send_photo("OFFLINE","-123","",raw,print) is None
         assert post.call_count==1
+
+
+def test_candidate_settlement_exact_provider_grade_and_receipt():
+    from netrattler_candidate_dispatch import settlement_evidence
+    state={"original":{"fixture_id":"123","quote_id":"Q-1"}}
+    settled={"tip_payload":{"fixture_id":"123","quote_id":"Q-1"},
+             "raw":{"strict_match":True,"result_source":"provider","result_fixture_id":"123"},
+             "status":"win"}
+    assert settlement_evidence(state,settled)=={"verified":True,"legs":[
+        {"fixture_id":"123","quote_id":"Q-1","source":"provider","status":"won"}]}
+    for bad in (
+         {**settled,"raw":{**settled["raw"],"result_fixture_id":"456"}},
+         {**settled,"tip_payload":{"fixture_id":"123","quote_id":"Q-2"}},
+         {**settled,"raw":{**settled["raw"],"result_source":""}},
+         {**settled,"status":"pending"},
+         {**settled,"status":"void","reason":"missing data"}):
+        with pytest.raises(ValueError):
+            settlement_evidence(state,bad)
+
+
+def test_builder_normalization_retains_explicit_starting_xi_and_photo_source():
+    from netrattler_builder_engine import normalize_prop
+    row=dict(player="QA Player",team="QA Home",match="QA Home vs QA Away",
+         market="Shots 2+",category="shots",odds=1.8,source="Pinnacle",
+         probability=0.8,confirmed_starter=True,player_photo_source="provider-image-id")
+    leg=normalize_prop(row)
+    assert leg.confirmed_starter is True and leg.player_photo_source=="provider-image-id"
+    leg=normalize_prop(dict(row,confirmed_starter="true",player_photo_source=""))
+    assert leg.confirmed_starter is None and not leg.player_photo_source

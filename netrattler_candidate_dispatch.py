@@ -140,3 +140,111 @@ def send_single(cards,token,chat,family,tip,target_date,log=print):
     except (ValueError,RuntimeError,OSError,TypeError,KeyError) as exc:
         log("CANDIDATE_CARD_DEFERRED "+family+": "+str(exc)[:150])
         return None
+
+
+def candidate_state(cards,chat,message_id):
+    """Find only the exact original ledger receipt. None means no candidate card.
+    DB failure or ambiguity must not trigger a caption/legacy image fallback.
+    """
+    if not str(chat or "") or not str(message_id or "").isdigit() or int(message_id)<=0:
+        return None
+    ledger=Ledger(cards)
+    response=requests.get(ledger.url,headers=ledger.headers,params={
+        "card_id":"like.candidate-v1-*","chat_id":"eq."+str(chat),
+        "message_id":"eq."+str(message_id),"select":"card_id,chat_id,message_id,entries,result",
+        "limit":"2"},timeout=15)
+    if not response.ok:
+        raise RuntimeError("Candidate receipt lookup failed")
+    rows=response.json()
+    if not isinstance(rows,list) or len(rows)>1:
+        raise ValueError("Ambiguous candidate receipt")
+    if not rows:
+        return None
+    row=rows[0]
+    entries=row.get("entries")
+    if not isinstance(entries,list) or len(entries)!=1 or entries[0][0]!="candidate_v1":
+        raise ValueError("Invalid original candidate receipt")
+    state=entries[0][1]["state"]
+    if (state.get("version")!=VERSION or row["card_id"]!=_card_id(state)
+            or str(state.get("chat_id"))!=str(chat) or state.get("message_id")!=int(message_id)):
+        raise ValueError("Contradictory candidate receipt")
+    return row
+
+def restore_record(cards,state):
+    """Recover original metadata; never substitute different image pixels."""
+    import copy
+    from netrattler_candidate_production import _asset_signature
+    record=copy.deepcopy(state["original"])
+    for row in record.get("legs") or [record]:
+        assets={"home_crest":lambda:cards._badge_bytes(row["home"]),
+                "away_crest":lambda:cards._badge_bytes(row["away"])}
+        if "player_photo" in row:
+            assets["player_photo"]=lambda:cards._player_photo(row["player_name"],row["player_team"])
+        for field,provider in assets.items():
+            old=row.get(field)
+            image=_raw_asset(provider(),field,80 if field=="player_photo" else 40)
+            if not isinstance(old,dict) or old.get("asset_digest")!=_asset_signature(image):
+                raise ValueError("Original asset cannot be recovered unchanged")
+            row[field]=image
+    return record
+
+def settlement_evidence(state,settled):
+    """Only exact original provider fixture/quote IDs and independently sourced final grades."""
+    from netrattler_candidate_settlement import grades
+    from collections.abc import Mapping
+    original=state["original"]
+    expected=original.get("legs") or [original]
+    data=settled.get("tip_payload") or {}
+    raw=settled.get("raw") or {}
+    if raw.get("strict_match") is not True:
+        raise ValueError("No strict settlement evidence")
+    items=settled.get("legs_payload") if original.get("legs") else [
+        {"leg":data,"status":settled.get("status"),"result_source":raw.get("result_source"),
+         "result_fixture_id":raw.get("result_fixture_id")}]
+    if not isinstance(items,list) or len(items)!=len(expected):
+        raise ValueError("Incomplete original selection grades")
+    result=[]
+    status_map={"win":"won","loss":"lost","void":"void","push":"push"}
+    for item in items:
+        leg=item.get("leg") or {}
+        fixture=str(leg.get("fixture_id") or "")
+        quote=str(leg.get("quote_id") or "")
+        # An independent result must match the exact original fixture, not
+        # merely a date/team fuzzy match or another match in the ticket.
+        if not fixture or str(item.get("result_fixture_id") or "")!=fixture:
+            raise ValueError("Result does not carry exact original fixture identity")
+        source=str(item.get("result_source") or "").strip()
+        status=status_map.get(item.get("status"))
+        if not quote or not source or not status:
+            raise ValueError("Final grade/quote/source is incomplete")
+        if status=="void" and not str(item.get("reason") or settled.get("reason") or "").startswith("void: Spieler ohne Einsatz"):
+            raise ValueError("Unverified sporting void")
+        result.append(dict(fixture_id=fixture,quote_id=quote,source=source,status=status))
+    evidence={"verified":True,"legs":result}
+    grades(original,evidence)
+    return evidence
+
+def try_edit_settlement(cards,token,chat,message_id,settled,log=print):
+    """True/False for a known candidate; None only for a confirmed absent receipt."""
+    from netrattler_candidate_production import edit
+    try:
+        row=candidate_state(cards,chat,message_id)
+        if row is None:
+            return None
+        state=row["entries"][0][1]["state"]
+        evidence=settlement_evidence(state,settled)
+        if (row.get("result") or {}).get("candidate_grades")==evidence:
+            return True
+        record=restore_record(cards,state)
+        if not edit(cards,token,state,record,evidence,log=log):
+            return False
+        ledger=Ledger(cards)
+        response=requests.patch(ledger.url,headers={**ledger.headers,"Prefer":"return=representation"},
+            params={"card_id":"eq."+row["card_id"],"message_id":"eq."+str(message_id)},
+            json={"result":{"candidate_grades":evidence}},timeout=15)
+        if not response.ok:
+            log("CANDIDATE_EDIT_RECEIPT_FAILED: original image updated")
+        return True
+    except (ValueError,RuntimeError,KeyError,TypeError,AttributeError,OSError,requests.RequestException) as exc:
+        log("CANDIDATE_EDIT_DEFERRED: "+str(exc)[:150])
+        return False
