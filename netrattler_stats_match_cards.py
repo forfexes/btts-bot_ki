@@ -1602,7 +1602,9 @@ def _player_photo(name, team=""):
             continue
     flag = "player_photo_ok" if payload else "player_photo_missing"
     STATS[flag] = STATS.get(flag, 0) + 1
-    _PLAYER_CACHE[key] = payload
+    # A transient provider failure must not poison the cache for later cards.
+    if payload:
+        _PLAYER_CACHE[key] = payload
     return payload
 
 
