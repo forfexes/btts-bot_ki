@@ -12,10 +12,10 @@ import math
 
 from PIL import Image, ImageDraw, ImageFont, ImageChops
 
-MASTER = Path(__file__).resolve().parent / "assets/premium_master/netrattler_stadium_portrait_20261124.png"
-DIGEST = "9bcbaec6083297aec9c8ae7c341d633c115bc78c28e5f526d7eb2bd7d587cd72"
+MASTER = Path(__file__).resolve().parent / "assets/premium_master/netrattler_master_background_20261127.png"
+DIGEST = "b240ae8aafd192a2ee4bd39c30add32e6bcccd7aa2110ea9bfb7e42d488cae3b"
 DIMENSIONS = (1122, 1402)
-VERSION = "stadium-portrait-20261124"
+VERSION = "master-background-20261127"
 REGULAR = frozenset({"btts", "over25", "btts_ht", "over15_ht", "1x2", "var"})
 TITLES = {"btts":"BTTS", "over25":"OVER 2.5", "btts_ht":"BTTS · 1. HALBZEIT",
           "over15_ht":"OVER 1.5 · 1. HALBZEIT", "1x2":"1X2", "var":"VAR"}
@@ -87,39 +87,25 @@ def _verified_time(tip):
         return ""
 
 def render_regular(market, selection, tip, home, away, first, second, price, result=None):
+    """Regular single-market card on the pinned master background."""
     if market not in REGULAR:
-        raise ValueError("No stadium master layout for this category")
-    price=float(price)
-    if not math.isfinite(price) or not 1<price<100:
+        raise ValueError("No master layout for this category")
+    price = float(price)
+    if not math.isfinite(price) or not 1 < price < 100:
         raise ValueError("Invalid observed single price")
-    original=load_master()
-    canvas=original.copy()
-    # Keep original artwork; draw only data labels and transparent crests.
-    _crest(canvas,first,(310,530))
-    _crest(canvas,second,(812,530))
-    dr=ImageDraw.Draw(canvas)
-    _label(dr,(561,325),TITLES[market],660,50,GOLD)
-    _label(dr,(561,530),"VS",110,52,GOLD)
-    _label(dr,(310,670),home,470,39)
-    _label(dr,(812,670),away,470,39)
-    kickoff=_verified_time(tip)
-    if kickoff:
-        _label(dr,(561,800),kickoff,960,34,WHITE)
-    _label(dr,(561,865),selection,925,44)
-    _label(dr,(561,923),f"QUOTE  @{price:.2f}",925,43,GOLD)
-    prob=tip.get("probability")
+    load_master()  # pinned digest check
+    import netrattler_master_cards as M
+    prob = tip.get("probability")
     if prob is not None and prob != "":
         from netrattler_btts_owner_original import _percent
-        _label(dr,(561,1025),"MODELL  "+_percent(prob,strict=True),900,42,WHITE)
-    league=str(tip.get("league") or "").strip()
-    if league:
-        _label(dr,(561,1090),league,920,31)
-    marks=(result or {}).get("marks") or {}
-    state={"win":"GEWONNEN","won":"GEWONNEN","loss":"VERLOREN","lost":"VERLOREN","void":"VOID","push":"PUSH"}.get(str(marks.get("0") or "").lower(),"OFFEN")
-    _label(dr,(561,1215),"AUSWERTUNG: "+state,920,38,GOLD if state=="OFFEN" else WHITE)
-    _label(dr,(561,1260),str((result or {}).get("ft") or ""),900,28)
-    if ImageChops.difference(original.crop((0,0,1122,265)),canvas.crop((0,0,1122,265))).getbbox():
-        raise AssertionError("Owner masthead pixels changed")
-    out=BytesIO()
-    canvas.save(out,format="PNG",optimize=True)
-    return out.getvalue()
+        prob = float(_percent(prob, strict=True).rstrip("%").replace(",", "."))
+    else:
+        prob = None
+    marks = (result or {}).get("marks") or {}
+    state = {"win": "GEWONNEN", "won": "GEWONNEN", "loss": "VERLOREN", "lost": "VERLOREN",
+             "void": "VOID", "push": "PUSH"}.get(str(marks.get("0") or "").lower(), "OFFEN")
+    kick = _verified_time(tip).replace(" Uhr", "")
+    spec = dict(title=TITLES[market], tip=selection, odds=price, prob=prob, optional_prob=True,
+                league=str(tip.get("league") or "").strip() or None,
+                kickoff=kick or None, result=state, stats=[])
+    return M.render_match(spec, home, away, first, second)

@@ -230,10 +230,17 @@ def _tip(im, y, tip, h=104):
     _text(d, (700, y + h // 2), _need(tip, "tip"), 700, 48, (14, 10, 0))
 
 
-def _trio(im, y, odds, prob, h=118):
-    o, p = _odds(odds), _pct(prob)
-    ev = (p / 100 * o - 1) * 100
+def _trio(im, y, odds, prob, h=118, optional_prob=False):
+    o = _odds(odds)
     d = ImageDraw.Draw(im)
+    if optional_prob and prob is None:
+        # Real bookmaker quote only: never show an invented probability / EV.
+        _glow(im, (45, y, 1077, y + h), GOLD, 26)
+        _text(d, (561, y + round(h * .27)), "QUOTE", 300, 22, CYAN)
+        _text(d, (561, y + round(h * .68)), f"{o:.2f}", 400, 50, GOLD)
+        return
+    p = _pct(prob)
+    ev = (p / 100 * o - 1) * 100
     boxes = ((45, 372), (388, 730), (746, 1077))
     items = (("QUOTE", f"{o:.2f}", GOLD), ("WAHRSCHEINLICHKEIT", f"{p:.0f}%", GREEN),
              ("EV", f"{ev:+.1f}%", GREEN if ev >= 0 else RED))
@@ -287,15 +294,19 @@ def render_match(spec, home, away, home_img, away_img):
     im = _master()
     _head(im, spec["title"], spec.get("subtitle"))
     _versus(im, home, away, home_img, away_img, 462, spec.get("league"), spec.get("kickoff"))
-    heights = [150] + ([130] if spec.get("stats2") else []) + [104, 118]
+    opt = bool(spec.get("optional_prob"))
+    stats = spec.get("stats") or []
+    heights = ([150] if stats else []) + ([130] if spec.get("stats2") else []) + [104, 118]
     ys = _flow(598, 1170, heights)
-    _cells(im, ys[0], spec["stats"], 150)
-    k = 1
+    k = 0
+    if stats:
+        _cells(im, ys[0], stats, 150)
+        k = 1
     if spec.get("stats2"):
-        _cells(im, ys[1], spec["stats2"], 130)
-        k = 2
+        _cells(im, ys[k], spec["stats2"], 130)
+        k += 1
     _tip(im, ys[k], spec["tip"])
-    _trio(im, ys[k + 1], spec["odds"], spec["prob"])
+    _trio(im, ys[k + 1], spec["odds"], spec["prob"], optional_prob=opt)
     _foot(im, 1196, spec.get("conf"), spec.get("result", "OFFEN"))
     return _png(im)
 
