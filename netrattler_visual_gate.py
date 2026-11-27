@@ -104,7 +104,7 @@ def _iso_future(value, match_date):
         return ""
 
 
-@lru_cache(maxsize=3)
+@lru_cache(maxsize=8)
 def _day_fixtures(day):
     """At most one bounded date request per process; only confirmed provider dates."""
     keys = (os.getenv("API_FOOTBALL_KEYS") or "").replace("\n", ",").split(",")
@@ -130,7 +130,16 @@ def kickoff_for_match(match, day):
     if not (home and away and day):
         return ""
     possibilities = []
-    for x in _day_fixtures(day[:10]):
+    # The tip day is often earlier than the kickoff (overnight / next-day games):
+    # search the tip day and the following three days.
+    rows = []
+    try:
+        base = dt.date.fromisoformat(day[:10])
+        for off in range(0, 4):
+            rows.extend(_day_fixtures((base + dt.timedelta(days=off)).isoformat()))
+    except ValueError:
+        rows = list(_day_fixtures(day[:10]))
+    for x in rows:
         if not isinstance(x, dict):
             continue
         teams = x.get("teams") or {}
@@ -143,6 +152,18 @@ def kickoff_for_match(match, day):
         if stamp:
             possibilities.append(stamp)
     return possibilities[0] if len(set(possibilities)) == 1 else ""
+
+
+def _real_player_photo(payload):
+    """A real photo: valid image and not a provider's grey default avatar."""
+    if not _picture_ok(payload):
+        return False
+    try:
+        from netrattler_visual_review import _looks_like_grey_placeholder
+        with Image.open(io.BytesIO(payload)) as im:
+            return not _looks_like_grey_placeholder(im, (0, 0, im.width, im.height))
+    except Exception:
+        return False
 
 
 def _picture_ok(payload):
@@ -204,7 +225,7 @@ def validate_builder(pick):
         if len(series) < 15:
             reasons.add("missing_measured_l15")
         # Explicit images rather than any generic initials/FC fallback.
-        if not _picture_ok(cards._player_photo(player, club)):
+        if not _real_player_photo(cards._player_photo(player, club)):
             reasons.add("missing_verified_photo")
         if not _picture_ok(cards._badge_bytes(club)):
             reasons.add("missing_verified_crest")
@@ -292,7 +313,7 @@ def validate_scorer(tip, day):
         reasons.append("missing_confirmed_kickoff")
     if not name or not team or not (club_same(team, home) or club_same(team, away)):
         reasons.append("unverified_scorer_team")
-    if not (_picture_ok(cards._player_photo(name, team))):
+    if not (_real_player_photo(cards._player_photo(name, team))):
         reasons.append("missing_scorer_photo")
     if any(not _picture_ok(cards._badge_bytes(s)) for s in (home, away)):
         reasons.append("missing_scorer_crest")
