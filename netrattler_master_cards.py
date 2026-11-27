@@ -380,7 +380,7 @@ def render_builder(legs, home, away, home_img, away_img, kickoff=None, league=No
         _text(d, (1007, y + (rh - 8) // 2), f"{odds:.2f}", 96, 30, (14, 10, 0))
     yb = top + len(legs) * rh + 6
     _glow(im, (45, yb, 1077, yb + 84), GOLD, 26)
-    _text(d, (330, yb + 42), f"EINZELQUOTEN ×  {total:.2f}", 520, 36, GOLD)
+    _text(d, (561, yb + 42), f"EINZELQUOTEN ×  {total:.2f}", 900, 38, GOLD)
     if legs[0].get("combined_prob"):
         _text(d, (850, yb + 42), f"MODELL {_pct(legs[0]['combined_prob']):.0f}%", 380, 34, GREEN)
     _foot(im, 1200, None, result or "OFFEN")
