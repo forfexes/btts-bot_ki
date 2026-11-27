@@ -66,6 +66,23 @@ def club_for_player(name, match, day):
     home, away = _match_teams(match)
     if not (name and home and away and day):
         return ""
+    found = _club_from_log(name, home, away, day)
+    if found:
+        return found
+    # Nicknames, long legal names or a club change: use the CURRENT squads of the
+    # two teams (API-Football). Exactly one squad entry must match, else blocked.
+    try:
+        from netrattler_player_club import club_from_squads
+        rows = []
+        base = dt.date.fromisoformat(day[:10])
+        for off in range(0, 4):
+            rows.extend(_day_fixtures((base + dt.timedelta(days=off)).isoformat()))
+        return club_from_squads(name, home, away, rows, club_same)
+    except (ValueError, TypeError, requests.RequestException):
+        return ""
+
+
+def _club_from_log(name, home, away, day):
     url, key = _credentials()
     if not (url.startswith("https://") and key):
         return ""
@@ -104,7 +121,7 @@ def _iso_future(value, match_date):
         return ""
 
 
-@lru_cache(maxsize=3)
+@lru_cache(maxsize=8)
 def _day_fixtures(day):
     """At most one bounded date request per process; only confirmed provider dates."""
     keys = (os.getenv("API_FOOTBALL_KEYS") or "").replace("\n", ",").split(",")
