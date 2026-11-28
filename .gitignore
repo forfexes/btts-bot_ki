@@ -5,3 +5,6 @@ __pycache__/
 *.key
 secrets.*
 .lmg-state/
+
+# Test-/QA-Renderings (generiert)
+output/
