@@ -224,9 +224,23 @@ class SupabaseRest:
             if order:
                 params["order"] = order
             params.update(filters or {})
-            response = requests.get(
-                f"{self.url}/rest/v1/{table}", headers=self.headers(), params=params, timeout=HTTP_TIMEOUT
-            )
+            response = None
+            for attempt in range(4):
+                try:
+                    response = requests.get(
+                        f"{self.url}/rest/v1/{table}", headers=self.headers(), params=params, timeout=HTTP_TIMEOUT
+                    )
+                    if response.status_code < 500 and response.status_code != 429:
+                        break
+                except (requests.exceptions.Timeout, requests.exceptions.ConnectionError) as exc:
+                    log(f"Supabase GET {table} offset={offset} attempt={attempt + 1}: {type(exc).__name__}", "WARN")
+                    response = None
+                # Heavy rows (payload/raw columns) time out on big pages: shrink and retry.
+                params["limit"] = max(25, int(params["limit"]) // 2)
+                time.sleep(min(2 * (attempt + 1), 6))
+            if response is None:
+                log(f"Supabase GET {table}: giving up at offset={offset} after retries", "WARN")
+                break
             if not response.ok:
                 if response.status_code not in (404, 400):
                     log(f"Supabase GET {table} {response.status_code}: {response.text[:240]}", "WARN")
@@ -910,7 +924,7 @@ def run_learning_cycle(db: Optional[SupabaseRest] = None) -> Dict[str, Any]:
     for table in ("tips", "ml_tips", "prop_picks", "netrattler_builder_picks"):
         rows = db.get(table, limit_total=100000)
         tips.extend(rows)
-    settlements = db.get("netrattler_settlements", limit_total=100000)
+    settlements = db.get("netrattler_settlements", order="settlement_id", limit_total=100000, page_size=250)
     tips.extend(settlement_as_tip(row) for row in settlements)
     clv_rows = db.get("netrattler_clv_events", limit_total=100000)
     events = build_learning_events(tips, clv_rows)
