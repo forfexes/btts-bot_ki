@@ -33,13 +33,13 @@ def verified_regular_payload(payload):
         with Image.open(BytesIO(payload)) as source:
             image = source.convert("RGB")
         # The masthead is reserved artwork, never a data overlay.
-        region = (0, 0, DIMENSIONS[0], 265)
+        region = (0, 0, DIMENSIONS[0], 225)
         if ImageChops.difference(master.crop(region), image.crop(region)).getbbox() is not None:
             return False
         # A blank owner master is not a rendered tip. Both the matchup area
         # and the selection/price area must contain actual data overlays.
-        for box in ((75, 350, DIMENSIONS[0]-75, 740),
-                    (75, 835, DIMENSIONS[0]-75, 970)):
+        for box in ((40, 400, DIMENSIONS[0]-40, 520),
+                    (40, 900, DIMENSIONS[0]-40, 1170)):
             if ImageChops.difference(master.crop(box), image.crop(box)).getbbox() is None:
                 return False
         return True

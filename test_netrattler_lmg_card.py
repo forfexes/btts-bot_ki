@@ -166,7 +166,7 @@ class GoalHunterCards(unittest.TestCase):
                    side_effect=AssertionError("Old JPEG fallback")), \
              patch("netrattler_lmg_card.crest",
                    return_value=Image.new("RGBA",(100,100),(10,20,30,255))), \
-             patch("last_minute_owner_20261122.live_data_bridge.make_live",
+             patch("netrattler_lmg_free._master_live_png",
                    return_value=b"synthetic-clean-owner-png") as renderer, \
              patch("requests.post",return_value=reply) as post:
             message_id=send_alert(self.fx,self.metrics)

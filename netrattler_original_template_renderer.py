@@ -193,7 +193,7 @@ def _builder_canvas(legs):
     return canvas, shift
 
 
-def render_builder(pick):
+def _render_builder_legacy(pick):
     if os.getenv("NETRATTLER_BLOCK_OVERPAINTED_MASTERS", "1") != "0":
         raise ValueError("Original Builder has no approved overlay-free clean source")
     import netrattler_stats_match_cards as cards
@@ -300,6 +300,42 @@ def _goal_arena(im):
     arena = Image.blend(left,right,.5).filter(ImageFilter.GaussianBlur(8))
     arena = Image.blend(arena,Image.new("RGB",size,"#061623"),.40)
     im.paste(arena,(0,top))
+
+
+def render_builder(pick):
+    """Prop Builder on the master background. Real data only; fails closed."""
+    import netrattler_stats_match_cards as cards
+    import netrattler_neon_design as nd
+    import netrattler_master_cards as M
+    from netrattler_builder_cards import builder_leg_label
+    from netrattler_neon_design import _stat_series, _number
+    legs = list(getattr(pick, "legs", None) or [])
+    if not 2 <= len(legs) <= 6:
+        raise ValueError("Builder requires 2-6 verified legs")
+    if len({str(l.match) for l in legs}) != 1:
+        raise ValueError("Builder card needs exactly one fixture")
+    home, away = cards._teams(legs[0].match)
+    if not home or not away:
+        raise ValueError("Two verified club names required")
+    rows = []
+    for leg in legs:
+        series = _stat_series(leg, __import__("netrattler_builder_engine"), getattr(pick, "match_date", ""))
+        if len(series) < 15:
+            raise ValueError("Real L15 history missing for " + str(leg.player))
+        need = math.ceil(_number(leg.line))
+        hits = [(f"L{n}", sum(x >= need for x in series[:n]), n) for n in (5, 10, 15)]
+        rows.append(dict(player=leg.player, market=builder_leg_label(leg), odds=leg.odds,
+                         photo=cards._player_photo(leg.player, leg.team),
+                         crest=cards._badge_bytes(leg.team), hits=hits))
+    prob = nd._percent(getattr(pick, "joint_probability", None))
+    if prob is not None:
+        rows[0]["combined_prob"] = prob
+    from netrattler_corner_cards import kickoff_label
+    day, clock = kickoff_label({"_kickoff": legs[0].kickoff}, getattr(pick, "match_date", ""))
+    status, _col = nd._result_text(getattr(pick, "status", None))
+    return M.render_builder(rows, home, away, cards._badge_bytes(home), cards._badge_bytes(away),
+                            kickoff=f"{day} · {clock}", league=getattr(legs[0], "league", None),
+                            result=status if status in ("GEWONNEN", "VERLOREN", "VOID") else None)
 
 
 def _floating_goal_photo(im, cards, player, team, rect):

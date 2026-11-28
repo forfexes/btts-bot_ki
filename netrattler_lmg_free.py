@@ -196,6 +196,28 @@ def reserve_alert(fixture, metrics=None):
     return sqlite_reserve(fixture, metrics)
 
 
+def _master_live_png(fixture, metrics, crest_png):
+    """Last Minute Goal card on the master background; real observed stats only."""
+    import netrattler_master_cards as M
+    teams = metrics.get("teams") or {}
+    rows = []
+    for label, key in (("SCHÜSSE", "shots"), ("AUFS TOR", "sot"), ("ECKEN", "corners")):
+        a = (teams.get("home") or {}).get(key)
+        b = (teams.get("away") or {}).get(key)
+        if a is not None and b is not None:
+            rows.append((label, a, b))
+    xa, xb = (teams.get("home") or {}).get("xg"), (teams.get("away") or {}).get("xg")
+    if xa is not None and xb is not None:
+        rows.append(("xG", f"{float(xa):.2f}", f"{float(xb):.2f}"))
+    if not rows:
+        raise ValueError("No observed per-team live stats for the card")
+    spec = dict(title="LAST MINUTE GOAL", subtitle="Tor in der Schlussphase",
+                home_goals=fixture["hg"], away_goals=fixture["ag"], minute=fixture["minute"],
+                live_stats=rows, tip="OVER 0.5 RESTSPIELZEIT", odds=None)
+    return M.render_live(spec, fixture["home"], fixture["away"],
+                         crest_png(fixture["home"]), crest_png(fixture["away"]))
+
+
 def send_alert(fixture, metrics):
     """Never send the old sample-painted card or an unapproved replacement.
 
@@ -229,7 +251,7 @@ def send_alert(fixture, metrics):
         # Recomputed from the same provider-observed stats, not accepted as a
         # caller-supplied directional claim or calibrated probability.
         vetted_metrics["next_goal_verified"]=True
-    photo=make_live(fixture,vetted_metrics,crest_provider=verified_crest_png)
+    photo=_master_live_png(fixture,vetted_metrics,verified_crest_png)
     resp=requests.post(
         f"https://api.telegram.org/bot{token}/sendPhoto",
         data={"chat_id":chat},
