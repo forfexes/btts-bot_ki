@@ -355,7 +355,8 @@ def render_live(spec, home, away, home_img, away_img):
     y = 624 + 58 * len(rows) + 52
     _gold(im, (45, y, 1077, y + 92), 26, skew=44)
     _text(d, (561, y + 46), _need(spec["tip"], "tip"), 940, 40, (14, 10, 0))
-    _trio(im, y + 112, spec["odds"], spec["prob"], 104)
+    if spec.get("odds") is not None:
+        _trio(im, y + 112, spec["odds"], spec.get("prob"), 104, optional_prob=True)
     _foot(im, 1196, spec.get("conf"), spec.get("result", "OFFEN"))
     return _png(im)
 

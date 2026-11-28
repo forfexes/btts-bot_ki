@@ -93,3 +93,19 @@ def test_handle_is_never_drawn_into_the_image():
 def test_text_overflow_raises_instead_of_shrinking_to_unreadable():
     with pytest.raises(ValueError, match="too long"):
         M.render_match({**BASE, "tip": "X" * 400}, "A", "B", H, A)
+
+
+def test_lmg_master_card_without_quote_renders_and_needs_stats():
+    import netrattler_lmg_free as L
+    from PIL import Image as I
+    import io as _io
+    def crest(_):
+        im = I.new("RGBA", (120, 120), (0, 0, 0, 0))
+        from PIL import ImageDraw as D
+        D.Draw(im).ellipse((6, 6, 114, 114), fill=(40, 100, 190, 255))
+        b = _io.BytesIO(); im.save(b, "PNG"); return b.getvalue()
+    fx = {"home": "A", "away": "B", "hg": 1, "ag": 1, "minute": 78}
+    png = L._master_live_png(fx, {"teams": {"home": {"shots": 10, "sot": 4}, "away": {"shots": 5, "sot": 2}}}, crest)
+    assert I.open(_io.BytesIO(png)).size == (1122, 1402)
+    with pytest.raises(ValueError):
+        L._master_live_png(fx, {"teams": {}}, crest)
