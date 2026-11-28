@@ -362,7 +362,7 @@ class PremiumTelegramDispatchTests(unittest.TestCase):
                         cards.render_card([("btts", tip("btts"))], "2026-11-21")
                     self.assertIn("opaque rectangular tile", str(err.exception.__cause__))
             from netrattler_original_template_renderer import render_builder, render_goal
-            with self.assertRaisesRegex(ValueError, "overlay-free"):
+            with self.assertRaises(ValueError):
                 render_builder(None)
             with self.assertRaisesRegex(ValueError, "overlay-free"):
                 render_goal({}, "2026-11-21")

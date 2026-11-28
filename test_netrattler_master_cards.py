@@ -109,3 +109,34 @@ def test_lmg_master_card_without_quote_renders_and_needs_stats():
     assert I.open(_io.BytesIO(png)).size == (1122, 1402)
     with pytest.raises(ValueError):
         L._master_live_png(fx, {"teams": {}}, crest)
+
+
+def _png_bytes(kind):
+    from PIL import Image as I, ImageDraw as D
+    import io as _io
+    im = I.new("RGBA", (300, 300), (0, 0, 0, 0))
+    D.Draw(im).ellipse((10, 10, 290, 290), fill=(40, 100, 190, 255) if kind == "c" else (200, 150, 120, 255))
+    b = _io.BytesIO(); im.save(b, "PNG"); return b.getvalue()
+
+
+def test_builder_pick_renders_on_master(monkeypatch):
+    from types import SimpleNamespace as NS
+    import netrattler_stats_match_cards as cards
+    import netrattler_original_template_renderer as R
+    monkeypatch.setattr(cards, "_player_photo", lambda p, t: _png_bytes("p"))
+    monkeypatch.setattr(cards, "_badge_bytes", lambda t: _png_bytes("c"))
+    legs = [NS(match="FC Alpha vs Beta United", player=f"Spieler {i}", team="FC Alpha", category="shots",
+               line=1.5, odds=1.5 + i / 10, series=[2] * 15, league="Liga", kickoff="2026-11-29T18:00:00Z")
+            for i in range(3)]
+    pick = NS(legs=legs, match_date="2026-11-29", joint_probability=0.31, status=None)
+    png = R.render_builder(pick)
+    assert I_open(png).size == (1122, 1402)
+    legs[1].series = [2] * 10
+    with pytest.raises(ValueError):
+        R.render_builder(pick)
+
+
+def I_open(b):
+    import io as _io
+    from PIL import Image as I
+    return I.open(_io.BytesIO(b))
